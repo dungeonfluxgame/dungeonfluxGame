@@ -1456,11 +1456,20 @@ mod tests {
                         }
                     }
                 }
-                for &hero in &layout.heroes {
+                for (seat, &hero) in layout.heroes.iter().enumerate() {
+                    // REF-062: only the added seats in these constrained scans may be closer.
+                    let minimum_steps = if (4..6).contains(&seat)
+                        && ((id == "scan-valley-bridges-voxel-v1" && layout.id == "north-south")
+                            || id == "scan-village-voxel-v1")
+                    {
+                        2
+                    } else {
+                        3
+                    };
                     for &enemy in &layout.enemies {
                         let steps = scan_distance(&grid, &free, hero, enemy).unwrap_or(0);
                         assert!(
-                            steps >= 3,
+                            steps >= minimum_steps,
                             "{id}/{}: starts are only {steps} steps apart",
                             layout.id
                         );
@@ -1513,7 +1522,7 @@ mod tests {
             };
             let mut seen = Vec::new();
             for layout in &scene.layouts {
-                assert!(layout.heroes.len() >= 4 && layout.enemies.len() >= 4);
+                assert!(layout.heroes.len() >= 6 && layout.enemies.len() >= 4);
                 assert_eq!(layout.validate(&scene.grid), Ok(()), "{id}/{}", layout.id);
                 let shape = signature(layout);
                 assert!(

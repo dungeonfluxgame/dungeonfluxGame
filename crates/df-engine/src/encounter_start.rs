@@ -1,4 +1,4 @@
-//! Pure, source-bound initiative for the existing three-actor local journey subset.
+//! Pure, source-bound initiative for the admitted local journey party.
 use df_encounter::participants::ValidatedParticipants;
 use df_model::checkpoint::{
     Basis, Checkpoint, CheckpointError, EntityId, GameInput, GameState, ResolutionId,
@@ -20,7 +20,7 @@ pub enum EncounterStartError {
     Rules(JourneyRuleError),
 }
 
-/// Order the exact admitted local party using three already-observed d20 draws.
+/// Order the exact admitted local party using already-observed d20 draws.
 ///
 /// The caller admits the working state and participants through their canonical
 /// owner and supplies a trusted source inventory. This neither authenticates a
@@ -35,7 +35,7 @@ pub fn local_journey_turn_order(
     admitted: &ValidatedParticipants<'_, EntityId, Basis>,
     staged: &GameState,
     source: &RuleReference,
-) -> Result<[EntityId; 3], EncounterStartError> {
+) -> Result<Vec<EntityId>, EncounterStartError> {
     current
         .validate_resume(context.current_basis, context.admitted_pins)
         .map_err(EncounterStartError::Checkpoint)?;
@@ -53,19 +53,19 @@ pub fn local_journey_turn_order(
     {
         return Err(EncounterStartError::InvalidParticipants);
     }
-    let actors: &[EntityId; 3] = admitted
-        .actors()
-        .try_into()
-        .map_err(|_| EncounterStartError::InvalidParticipants)?;
+    let actors = admitted.actors();
+    if !(2..=df_rules::local_journey::MAXIMUM_PARTY + 1).contains(&actors.len()) {
+        return Err(EncounterStartError::InvalidParticipants);
+    }
     if source.catalog != context.admitted_pins.rules.catalog
         || !context.inventory.rules.contains(source)
     {
         return Err(EncounterStartError::InvalidSource);
     }
-    let draws: &[_; 3] = input
-        .supplied_draws
-        .try_into()
-        .map_err(|_| EncounterStartError::InvalidDraws)?;
+    let draws = input.supplied_draws;
+    if draws.len() != actors.len() {
+        return Err(EncounterStartError::InvalidDraws);
+    }
     let resolution = ResolutionId::from_bytes(command.operation.as_bytes())
         .map_err(|_| EncounterStartError::InvalidDraws)?;
     let window = WindowId::from_bytes(command.operation.as_bytes())
@@ -74,7 +74,7 @@ pub fn local_journey_turn_order(
     if staged.resources.len() > context.inventory.resources.len() {
         return Err(EncounterStartError::InvalidDexterity);
     }
-    let mut supplied = [(0, 0); 3];
+    let mut supplied = vec![(0, 0); actors.len()];
     for (ordinal, ((values, actor), draw)) in supplied.iter_mut().zip(actors).zip(draws).enumerate()
     {
         if draw.operation != command.operation
@@ -117,9 +117,25 @@ pub fn local_journey_turn_order(
             u8::try_from(resource.value).map_err(|_| EncounterStartError::InvalidDexterity)?;
         *values = (draw.value, dexterity);
     }
-    let order = initiative_order(supplied).map_err(EncounterStartError::Rules)?;
-    // Rules returns a permutation of this fixed three-element array.
-    Ok(order.map(|index| actors[index]))
+    // Keep initiative mechanics and the existing authored-order tie decision in df-rules.
+    fn order<const N: usize>(values: &[(u32, u8)]) -> Result<Vec<usize>, EncounterStartError> {
+        let values = values
+            .try_into()
+            .map_err(|_| EncounterStartError::InvalidParticipants)?;
+        initiative_order::<N>(values)
+            .map(|indices| indices.to_vec())
+            .map_err(EncounterStartError::Rules)
+    }
+    let indices = match supplied.len() {
+        2 => order::<2>(&supplied),
+        3 => order::<3>(&supplied),
+        4 => order::<4>(&supplied),
+        5 => order::<5>(&supplied),
+        6 => order::<6>(&supplied),
+        7 => order::<7>(&supplied),
+        _ => return Err(EncounterStartError::InvalidParticipants),
+    }?;
+    Ok(indices.into_iter().map(|index| actors[index]).collect())
 }
 
 use df_encounter::challenge::{

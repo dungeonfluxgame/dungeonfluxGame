@@ -790,7 +790,10 @@ pub fn encode_owned_demo_checkpoint(
     checkpoint: &Checkpoint,
     limits: NativeCodecLimits,
 ) -> Result<Vec<u8>, RepositoryError> {
-    encode_checkpoint(checkpoint, limits).map_err(|_| RepositoryError::InvalidCandidate)
+    encode_checkpoint(checkpoint, limits).map_err(|error| {
+        df_observe::record_audit_line("persistence.checkpoint_encode", format!("CHECKPOINT encode_refused cause={error:?} limit_bytes={} limit_items={} limit_text_bytes={}", limits.maximum_document_bytes, limits.maximum_collection_items, limits.maximum_text_bytes));
+        RepositoryError::InvalidCandidate
+    })
 }
 
 /// Decode an owned demo checkpoint for an offline recovery audit. The same bounded

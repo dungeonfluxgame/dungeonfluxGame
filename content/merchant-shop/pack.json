@@ -14,6 +14,46 @@
             "id": "dwarf",
             "label": "Dwarf",
             "description": "Dwarves are hardy, resilient, and can see in the dark."
+          },
+          {
+            "id": "dragonborn",
+            "label": "Dragonborn",
+            "description": "SRD 5.2.1 Dragonborn species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "elf",
+            "label": "Elf",
+            "description": "SRD 5.2.1 Elf species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "gnome",
+            "label": "Gnome",
+            "description": "SRD 5.2.1 Gnome species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "goliath",
+            "label": "Goliath",
+            "description": "SRD 5.2.1 Goliath species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "halfling",
+            "label": "Halfling",
+            "description": "SRD 5.2.1 Halfling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "human",
+            "label": "Human",
+            "description": "SRD 5.2.1 Human species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "orc",
+            "label": "Orc",
+            "description": "SRD 5.2.1 Orc species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "tiefling",
+            "label": "Tiefling",
+            "description": "SRD 5.2.1 Tiefling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
           }
         ]
       },

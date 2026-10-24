@@ -15,6 +15,18 @@ pub fn begin_dispatched(context: &OperationContext, method: &'static str) -> Ope
     )
 }
 
+/// Begin dispatched work with an owned diagnostic snapshot, including when no SDK is installed.
+/// The snapshot is provenance only and must be captured by the dispatch owner.
+pub fn begin_dispatched_with_audit(
+    context: &OperationContext,
+    audit: &crate::AuditContext,
+    method: &'static str,
+) -> OperationSpan {
+    let mut span = begin_dispatched(context, method);
+    span.audit = audit.clone();
+    span
+}
+
 fn begin_with_tracer(
     tracer: &global::BoxedTracer,
     context: &OperationContext,
@@ -32,10 +44,19 @@ fn begin_with_tracer(
         span,
         finished: false,
         build: context.build.clone(),
+        method,
+        audit: crate::AUDIT_CONTEXT.with_borrow(Clone::clone),
+        #[cfg(not(target_arch = "wasm32"))]
+        started: std::time::Instant::now(),
     }
 }
 
 impl OperationSpan {
+    /// Own the safe audit correlation at dispatch, independently of SDK trace sampling.
+    pub fn capture_audit_context(&self) -> crate::AuditContext {
+        self.audit.clone()
+    }
+
     /// Capture diagnostic correlation and admitted build before dispatch. The returned
     /// owned context contains this span's SDK identity, never raw incoming metadata.
     /// It carries no authorization, job lifetime, deadline, or cancellation ownership;

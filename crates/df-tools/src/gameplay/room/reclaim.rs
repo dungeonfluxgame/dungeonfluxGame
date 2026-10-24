@@ -52,6 +52,16 @@ impl SeatClock {
             >= Duration::from_millis(SEAT_AWAY_MILLIS as u64);
         let debounce_elapsed =
             now.saturating_duration_since(activity.last_write) >= Duration::from_secs(5);
+        if reactivated {
+            actor::record_audit_line(
+                "seat.returned",
+                format!(
+                    "SEAT returned seat={} away_s={}",
+                    df_observe::seat_hash(credential),
+                    now.saturating_duration_since(activity.last_seen).as_secs()
+                ),
+            );
+        }
         activity.last_seen = now;
         if reactivated || debounce_elapsed {
             activity.last_write = now;
@@ -189,14 +199,7 @@ fn hero_name(
 }
 
 fn seat_event(line: &str, event: &'static str) {
-    println!("{line}");
-    let context = df_observe::OperationContext {
-        trace_parent: String::new(),
-        build: crate::BUILD_ID.to_owned(),
-    };
-    let mut span = df_observe::begin(&context, event);
-    span.event(event, &[("message", line.to_owned())]);
-    span.finish_unmeasured("recorded");
+    actor::record_audit_line(event, line.to_owned());
 }
 
 impl actor::Actor {
@@ -246,7 +249,8 @@ impl actor::Actor {
                 if seat.newly_away {
                     seat_event(
                         &format!(
-                            "SEAT away hero={name:?} silent_s={}",
+                            "SEAT away member_hash={} silent_s={}",
+                            df_observe::seat_hash(&seat.member),
                             (now - seat.last_seen_millis) / 1000
                         ),
                         "seat.away",
@@ -338,9 +342,18 @@ impl actor::Actor {
                     .as_ref()
                     .is_some_and(|receipt| receipt.replayed)
                 {
-                    let name =
+                    let _name =
                         hero_name(self.owner.checkpoint(), &member).map_err(actor::unavailable)?;
-                    seat_event(&format!("SEAT reclaimed hero={name:?}"), "seat.reclaimed");
+                    seat_event(
+                        &format!(
+                            "SEAT reclaimed seat={}",
+                            crate::gameplay::parse_binding(&joined.local_binding).map_or_else(
+                                || "none".to_owned(),
+                                |credential| df_observe::seat_hash(&credential).to_string()
+                            )
+                        ),
+                        "seat.reclaimed",
+                    );
                     self.recovery_wakeup
                         .send_replace(self.owner.checkpoint().clone());
                 }

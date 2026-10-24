@@ -11,6 +11,13 @@ use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, http::Head
 
 use super::{PageState, socket};
 
+// Run the actual browser's admission and wait policies on native too, with controlled
+// stream/deadline signals instead of browser timers or a gameplay database.
+#[path = "../gameplay_browser/live_tv_status.rs"]
+mod live_tv;
+#[path = "../gameplay_browser/view_delivery.rs"]
+mod view_delivery;
+
 const CAP: usize = 2;
 const ORIGIN: &str = "http://127.0.0.1";
 
@@ -115,4 +122,57 @@ async fn sockets_held_open_at_the_cap_are_refused_until_one_ends() {
     drop(held);
     let _again = connect_soon(address).await;
     server.abort();
+}
+
+#[tokio::test]
+async fn presentation_timing_stalled_upload_retries_immutable_batch_and_reports_overflow() {
+    use df_observe::presentation::{MAX_BUFFER_EVENTS, TimingBuffer, TimingEvent};
+    use futures::channel::oneshot;
+
+    let mut buffer = TimingBuffer::default();
+    buffer
+        .push(TimingEvent::lifecycle("scene", "ready", 1, 1, 0))
+        .unwrap();
+    let pending = buffer.batch().unwrap();
+    let (expire, expired) = oneshot::channel::<()>();
+    let upload = view_delivery::bounded_view_wait(futures::future::pending::<()>(), async {
+        expired.await.unwrap();
+    });
+    futures::pin_mut!(upload);
+    assert!(futures::poll!(upload.as_mut()).is_pending());
+    for at_ms in 1..=MAX_BUFFER_EVENTS + 4 {
+        let _overflow = buffer.push(TimingEvent::lifecycle("scene", "ready", 1, 1, at_ms as u64));
+    }
+    expire.send(()).unwrap();
+    assert_eq!(upload.await, Err(view_delivery::ViewWaitExpired));
+    assert_eq!(
+        buffer.batch().unwrap(),
+        pending,
+        "retry identity and bytes survive timeout"
+    );
+    assert!(buffer.acknowledge(pending.sequence));
+    let next = buffer.batch().unwrap();
+    assert!(next.sequence > pending.sequence);
+    assert_eq!(next.dropped, 5);
+    assert!(
+        !buffer.acknowledge(pending.sequence),
+        "late receipts cannot release a newer batch"
+    );
+    assert!(buffer.acknowledge(next.sequence));
+    assert!(
+        buffer
+            .push(TimingEvent::lifecycle("scene", "ready", 2, 2, 1_000))
+            .is_ok()
+    );
+    let mut drained = 0;
+    while let Ok(batch) = buffer.batch() {
+        drained += 1;
+        assert!(
+            drained <= 4,
+            "recovery must drain rather than retry an acknowledged prefix"
+        );
+        assert_eq!(batch.dropped, 5);
+        assert!(buffer.acknowledge(batch.sequence));
+    }
+    assert!(drained > 0);
 }

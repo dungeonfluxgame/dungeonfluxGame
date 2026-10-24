@@ -90,6 +90,7 @@ fn encounter(archer: bool) -> Battle {
         savage_attacker: true,
         second_wind_uses: 2,
         species: Some(df_rules::local_journey::HeroSpecies::Orc),
+        species_options: Default::default(),
         healers_kit_uses: 0,
         relentless_endurance_available: true,
         shield: false,

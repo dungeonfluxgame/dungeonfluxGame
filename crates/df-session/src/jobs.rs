@@ -7,7 +7,7 @@ use std::mem::{size_of, size_of_val};
 use std::pin::Pin;
 
 use df_model::checkpoint::{Basis, DurableIntent, DurableStatus, EffectId, EffectKind};
-use df_observe::{OperationContext, begin_dispatched};
+use df_observe::OperationContext;
 use df_types::{RunId, SessionId};
 use tokio::task::{AbortHandle, Id, JoinSet};
 use tokio::time::{Instant, timeout_at};
@@ -395,7 +395,23 @@ impl JobRegistry {
         if self.registrations.is_empty() {
             self.registrations = Vec::new();
         }
-        let mut span = begin_dispatched(&entry.context, "session.job.terminal");
+        let revision = entry.identity.basis.revision;
+        let audit = df_observe::AuditContext {
+            operation: Some(df_observe::operation_hash(
+                entry.identity.completion.operation.as_bytes(),
+            )),
+            seat: None,
+            room: Some(df_observe::operation_hash(
+                entry.identity.basis.session.as_bytes(),
+            )),
+            revision: Some(format!(
+                "{}:{}",
+                revision.epoch().get(),
+                revision.sequence()
+            )),
+        };
+        let mut span =
+            df_observe::begin_dispatched_with_audit(&entry.context, &audit, "session.job.terminal");
         span.finish_unmeasured(match outcome {
             JobOutcome::Completed => "completed",
             JobOutcome::Failed(_) => "failed",

@@ -79,7 +79,6 @@ pub(super) const SERVED_SCENE_ASSETS: &[&str] = &[
 ];
 /// Single-option creation groups and the one option id the compiled validator accepts for each.
 const FIXED_GROUPS: &[(&str, &str)] = &[
-    ("species", "dwarf"),
     ("class", "fighter-1"),
     ("background", "soldier"),
     ("equipment", "fighter-a-soldier-a"),
@@ -1959,7 +1958,11 @@ fn validate_creation(creation: &CreationPack) -> Result<(), PackError> {
     for (index, group) in creation.groups.iter().enumerate() {
         validate_group(index, group)?;
     }
-    for required in FIXED_GROUPS.iter().map(|(id, _)| *id).chain([ARRAY_GROUP]) {
+    for required in FIXED_GROUPS
+        .iter()
+        .map(|(id, _)| *id)
+        .chain([ARRAY_GROUP, "species"])
+    {
         let occurrences = creation
             .groups
             .iter()
@@ -2030,7 +2033,7 @@ fn validate_group(index: usize, group: &CreationGroup) -> Result<(), PackError> 
         .iter()
         .find(|(id, _)| *id == group.id)
         .map(|(_, option)| *option);
-    if fixed_option.is_none() && group.id != ARRAY_GROUP {
+    if fixed_option.is_none() && group.id != ARRAY_GROUP && group.id != "species" {
         return Err(cross_reference(
             FILE,
             &format!("{at}.id"),
@@ -2096,7 +2099,10 @@ fn validate_group(index: usize, group: &CreationGroup) -> Result<(), PackError> 
                 TEXT_CHARACTERS_MAX,
             )?;
         }
-        if fixed_option.is_some_and(|accepted| accepted != option.id) {
+        if fixed_option.is_some_and(|accepted| accepted != option.id)
+            || (group.id == "species"
+                && df_rules::local_journey::HeroSpecies::from_choice(&option.id).is_none())
+        {
             return Err(cross_reference(
                 FILE,
                 &format!("{option_at}.id"),
@@ -3058,12 +3064,20 @@ fn validate_character_inner(
     for &(group, value) in choices {
         if group == "build-package" {
             if package.replace(value).is_some() {
+                super::refusal_detail::cause(
+                    "character-catalog",
+                    "DuplicateGroup group=build-package".to_owned(),
+                );
                 return Err(Error::InvalidChoice);
             }
         } else if group == "portrait" {
             if portrait.replace(value).is_some()
                 || !["portrait-hero-1", "portrait-hero-2", "portrait-hero-3"].contains(&value)
             {
+                super::refusal_detail::cause(
+                    "character-catalog",
+                    "InvalidGroup group=portrait".to_owned(),
+                );
                 return Err(Error::InvalidChoice);
             }
         } else {
@@ -3076,12 +3090,22 @@ fn validate_character_inner(
                 .iter()
                 .any(|(key, _)| ["array", "equipment", "style-masteries"].contains(&key.as_str()))
         {
+            super::refusal_detail::cause(
+                "character-catalog",
+                "PackageConflict group=build-package".to_owned(),
+            );
             return Err(Error::InvalidChoice);
         }
         let selected = build_packages()?
             .into_iter()
             .find(|candidate| candidate.id == package)
-            .ok_or(Error::InvalidChoice)?;
+            .ok_or_else(|| {
+                super::refusal_detail::cause(
+                    "character-catalog",
+                    "UnknownPackage group=build-package".to_owned(),
+                );
+                Error::InvalidChoice
+            })?;
         expanded.extend(selected.choices);
     }
     let borrowed = expanded
@@ -3093,6 +3117,10 @@ fn validate_character_inner(
         .any(|(key, value)| *key == "array" && *value == "dexterous");
     if archer {
         if package != Some("archer") {
+            super::refusal_detail::cause(
+                "character-catalog",
+                "PackageRequired group=array".to_owned(),
+            );
             return Err(Error::InvalidChoice);
         }
         return df_rules::tactical::validate_archer(name, &borrowed)
@@ -3101,6 +3129,9 @@ fn validate_character_inner(
     }
     let allowed = with_content(|pack| {
         borrowed.iter().all(|(group, option)| {
+            if df_rules::species::choice_option_is_known(group, option) {
+                return true;
+            }
             let list = match *group {
                 "alignment" => Some(&pack.creation.pick_lists.alignment),
                 "language-1" | "language-2" => Some(&pack.creation.pick_lists.language),
@@ -3108,7 +3139,7 @@ fn validate_character_inner(
                 "gaming-set" => Some(&pack.creation.pick_lists.gaming_set),
                 _ => None,
             };
-            match list {
+            let permitted = match list {
                 Some(list) => list.iter().any(|value| value == option),
                 None => pack.creation.groups.iter().any(|candidate| {
                     candidate.id == *group
@@ -3117,7 +3148,28 @@ fn validate_character_inner(
                             .iter()
                             .any(|candidate| candidate.id == *option)
                 }),
+            };
+            if !permitted {
+                let group_id = match *group {
+                    "alignment" => "alignment",
+                    "language-1" => "language-1",
+                    "language-2" => "language-2",
+                    "skill-1" => "skill-1",
+                    "skill-2" => "skill-2",
+                    "gaming-set" => "gaming-set",
+                    _ => pack
+                        .creation
+                        .groups
+                        .iter()
+                        .find(|candidate| candidate.id == *group)
+                        .map_or("unknown", |candidate| candidate.id.as_str()),
+                };
+                super::refusal_detail::cause(
+                    "character-catalog",
+                    format!("InvalidSelection group={group_id}"),
+                );
             }
+            permitted
         })
     });
     if !allowed {
@@ -3411,4 +3463,78 @@ fn validate_tempo(tempo: TempoTuning) -> Result<(), PackError> {
             "ordered thresholds and bounded fatigue/hysteresis",
         )
     })
+}
+
+#[cfg(test)]
+mod character_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn character_catalog_refusals_preserve_causes_without_untrusted_text() {
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "fixtures/harbor-journey-tuning-baseline.json"
+        ))
+        .unwrap();
+        tuning["tactical"] =
+            serde_json::json!({"enemies":[{"srd_id":"bandit","count":3,"ammunition":20}]});
+        let loaded = load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        with_test_pack(loaded, || {
+            let cases: &[(&[(&str, &str)], &str)] = &[
+                (
+                    &[
+                        ("build-package", "secret-option"),
+                        ("build-package", "secret-option"),
+                    ],
+                    "DuplicateGroup group=build-package",
+                ),
+                (
+                    &[("portrait", "secret-option")],
+                    "InvalidGroup group=portrait",
+                ),
+                (
+                    &[
+                        ("portrait", "portrait-hero-1"),
+                        ("portrait", "portrait-hero-1"),
+                    ],
+                    "InvalidGroup group=portrait",
+                ),
+                (
+                    &[("build-package", "secret-option"), ("array", "strong")],
+                    "PackageConflict group=build-package",
+                ),
+                (
+                    &[("build-package", "secret-option")],
+                    "UnknownPackage group=build-package",
+                ),
+                (&[("array", "dexterous")], "PackageRequired group=array"),
+                (
+                    &[("alignment", "secret-option")],
+                    "InvalidSelection group=alignment",
+                ),
+                (
+                    &[("secret-group", "secret-option")],
+                    "InvalidSelection group=unknown",
+                ),
+                (
+                    &[("array", "secret-option")],
+                    "InvalidSelection group=array",
+                ),
+            ];
+            for (choices, expected) in cases {
+                super::super::refusal_detail::begin_action();
+                assert!(matches!(
+                    validate_character("secret-name", choices),
+                    Err(df_rules::local_journey::JourneyRuleError::InvalidChoice),
+                ));
+                let diagnostic = df_session::submission::take_refusal_diagnostic().unwrap();
+                assert_eq!(diagnostic.step, "character-catalog");
+                assert_eq!(diagnostic.cause, *expected);
+                assert!(!diagnostic.cause.contains("secret"));
+            }
+        });
+    }
 }

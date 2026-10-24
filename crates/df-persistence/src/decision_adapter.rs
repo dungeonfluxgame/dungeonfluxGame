@@ -107,7 +107,21 @@ impl DecisionAdapter {
                 ReadRequest::Checkpoint => "persistence.load_current",
             },
         );
+        let started = Instant::now();
         let result = self.read_bounded(scope, request, context).await;
+        df_observe::record_audit_line(
+            "persistence.read",
+            format!(
+                "SAVE read kind={} outcome={} ms={} op={}",
+                match request {
+                    ReadRequest::Lookup => "lookup",
+                    ReadRequest::Checkpoint => "checkpoint",
+                },
+                if result.is_ok() { "ready" } else { "refused" },
+                started.elapsed().as_millis(),
+                df_observe::operation_hash(scope.operation().as_bytes()),
+            ),
+        );
         span.finish_unmeasured(match &result {
             Ok(ReadValue::Lookup(OperationLookup::Committed(_))) => "operation_retained",
             Ok(ReadValue::Lookup(_)) => "operation_lookup",
@@ -222,6 +236,22 @@ impl DecisionAdapter {
         let result = self
             .commit_bounded(scope, checkpoint, expected, deadline, context)
             .await;
+        df_observe::record_audit_line(
+            "persistence.commit",
+            format!(
+                "SAVE commit outcome={} ms={} rev={}:{} op={}",
+                match &result {
+                    Ok(CommitOutcome::Confirmed(_)) => "confirmed",
+                    Ok(CommitOutcome::PreviouslyCommitted(_)) => "retained",
+                    Ok(CommitOutcome::Indeterminate) => "indeterminate",
+                    Err(_) => "refused",
+                },
+                started.elapsed().as_millis(),
+                expected.revision.epoch().get(),
+                expected.revision.sequence(),
+                df_observe::operation_hash(scope.operation().as_bytes()),
+            ),
+        );
         span.finish_unmeasured(match &result {
             Ok(CommitOutcome::Confirmed(_)) => "commit_confirmed",
             Ok(CommitOutcome::PreviouslyCommitted(_)) => "operation_retained",
@@ -352,16 +382,26 @@ impl DecisionAdapter {
         &mut self,
         context: &OperationContext,
     ) -> Result<(), RepositoryError> {
+        let started = Instant::now();
         let mut span = df_observe::begin(context, "persistence.connection_discard");
         let result = self.connection.discard().await;
-        span.finish_unmeasured(match self.connection.discard_state() {
+        let state = match self.connection.discard_state() {
             DiscardState::NotStarted => "driver_absent",
             DiscardState::Joined => "driver_joined",
             DiscardState::JoinedWithDriverError => "driver_joined_io_error",
             DiscardState::JoinedCancelled => "driver_joined_cancelled",
             DiscardState::JoinedFailed => "driver_join_failed",
             DiscardState::JoinPending => "driver_poisoned_join_pending",
-        });
+        };
+        df_observe::record_audit_line(
+            "persistence.connection",
+            format!(
+                "DATABASE connection event=discard outcome={} state={state} ms={}",
+                if result.is_ok() { "closed" } else { "pending" },
+                started.elapsed().as_millis()
+            ),
+        );
+        span.finish_unmeasured(state);
         result
     }
 
@@ -513,6 +553,7 @@ impl RecoverySource {
         codec_limits: crate::checkpoint_codec::CodecLimits,
     ) -> Result<Vec<u8>, RepositoryError> {
         let document = encode_checkpoint(checkpoint, codec_limits).map_err(|error| {
+            df_observe::record_audit_line("persistence.checkpoint_encode", format!("CHECKPOINT encode_refused cause={error:?} limit_bytes={} limit_items={} limit_text_bytes={}", codec_limits.maximum_document_bytes, codec_limits.maximum_collection_items, codec_limits.maximum_text_bytes));
             df_session::submission::note_refusal_diagnostic(
                 "candidate-encode",
                 format!("{error:?}"),

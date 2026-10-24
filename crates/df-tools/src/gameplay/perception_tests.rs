@@ -417,7 +417,9 @@ fn current_canonical_audience_removal_omits_saved_cue_even_with_a_knowledge_gran
     assert!(expected_second.private_clue.is_empty());
     for view in [&expected_first, &expected_second] {
         assert!(view.action_available);
-        assert_eq!(view.offers.len(), 1);
+        assert_eq!(view.offers.len(), 2);
+        assert_eq!(view.offers[1].offer_id, "opening-talk:bandit");
+        assert_eq!(view.offers[1].label, "Talk to Dain Rusk");
         assert_eq!(
             view.offers[0].action_kind,
             rpc::GameplayActionKind::DefendCourier as i32
@@ -426,10 +428,11 @@ fn current_canonical_audience_removal_omits_saved_cue_even_with_a_knowledge_gran
     // Removing current disclosure also removes its encounter prerequisite for either player.
     // Exact expected views retain every other narration, character, scene and journey field.
     expected_first.private_clue.clear();
-    expected_first.offers.clear();
-    expected_first.action_available = false;
-    expected_second.offers.clear();
-    expected_second.action_available = false;
+    // RP-03 adds public talk independently of the private fight prerequisite.
+    for view in [&mut expected_first, &mut expected_second] {
+        view.offers
+            .retain(|offer| offer.action_kind != rpc::GameplayActionKind::DefendCourier as i32);
+    }
     let expected_display = display(&current);
     for audience in [
         AudienceScope::Host,
@@ -454,8 +457,9 @@ fn current_canonical_audience_removal_omits_saved_cue_even_with_a_knowledge_gran
             };
             assert_eq!(&view, expected);
             assert!(view.private_clue.is_empty());
-            assert!(view.offers.is_empty());
-            assert!(!view.action_available);
+            assert_eq!(view.offers.len(), 1);
+            assert_eq!(view.offers[0].offer_id, "opening-talk:bandit");
+            assert!(view.action_available);
         }
         assert_eq!(display(&removed), expected_display);
         // A fresh projection, including a reconnect snapshot, never uses the old cue.

@@ -3,7 +3,11 @@ use df_persistence::hero_library::{HeroLibrary, HeroRevision, IdentityRecord, Ph
 use df_protocol::common as rpc;
 use prost::Message;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::Mutex, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+    time::Duration,
+};
 use tonic::{Request, Response, Status};
 
 static DATABASE: Mutex<Option<tokio_postgres::Config>> = Mutex::new(None);
@@ -15,14 +19,105 @@ struct PortraitImport {
     attachment: super::creator_portraits::Attachment,
 }
 const RECORD_PREFIX: &str = "identity-portrait:creator-v1:";
-pub(super) fn configure(database: tokio_postgres::Config) {
-    if let Ok(mut configured) = DATABASE.lock() {
-        *configured = Some(database);
-    }
-    if let Ok(mut imports) = PORTRAIT_IMPORTS.lock() {
-        imports.clear();
+static LIBRARY: tokio::sync::Mutex<Option<HeroLibrary>> = tokio::sync::Mutex::const_new(None);
+static ACCESS: tokio::sync::Mutex<Option<DatabaseAccess>> = tokio::sync::Mutex::const_new(None);
+static PORTRAIT_KEYS: Mutex<BTreeSet<[u8; 32]>> = Mutex::new(BTreeSet::new());
+struct Connection {
+    client: tokio_postgres::Client,
+    driver: tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.driver.abort();
     }
 }
+struct DatabaseAccess {
+    library: Connection,
+    campaign: Connection,
+}
+async fn connect(config: &tokio_postgres::Config) -> Result<Connection, Status> {
+    let (client, connection) = tokio::time::timeout(
+        Duration::from_secs(5),
+        config.connect(tokio_postgres::NoTls),
+    )
+    .await
+    .map_err(|_| unavailable_at("connect"))?
+    .map_err(|_| unavailable_at("connect"))?;
+    let connection = Connection {
+        client,
+        driver: tokio::spawn(connection),
+    };
+    connection.client.batch_execute("SET statement_timeout='5s'; SET lock_timeout='5s'; SET idle_in_transaction_session_timeout='5s'").await.map_err(|_| unavailable_at("connect"))?;
+    Ok(connection)
+}
+// Revisions stay immutable during ordinary operation. Only a transaction that first
+// tombstones the owning hero can erase them; profile locking serializes that with saves.
+const DELETE_SCHEMA: &str = "
+CREATE OR REPLACE FUNCTION df_library_immutable_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN
+  IF TG_OP = 'DELETE' AND EXISTS (SELECT 1 FROM heroes WHERE id=OLD.hero AND deleted) THEN
+   RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'hero revisions are immutable';
+ END $$;";
+
+pub(super) async fn configure(database: tokio_postgres::Config) {
+    // A new campaign must never retain the previous campaign's grant connection.
+    LIBRARY.lock().await.take();
+    ACCESS.lock().await.take();
+    let result = async {
+        PORTRAIT_KEYS.lock().map_err(|_| unavailable_at("configure"))?.clear();
+        *DATABASE.lock().map_err(|_| unavailable_at("configure"))? = Some(database.clone());
+        PORTRAIT_IMPORTS.lock().map_err(|_| unavailable_at("configure"))?.clear();
+        let library = HeroLibrary::open(&database).await.map_err(failure)?;
+        let campaign = connect(&database).await?;
+        let mut library_config = database.clone();
+        library_config.dbname(df_persistence::hero_library::DATABASE);
+        let access = connect(&library_config).await?;
+        access.client.batch_execute(DELETE_SCHEMA).await.map_err(|_| unavailable_at("configure"))?;
+        let rows = access.client.query("SELECT DISTINCT r.portrait_sha256 FROM hero_revisions r JOIN heroes h ON h.id=r.hero WHERE NOT h.deleted AND octet_length(r.portrait)>0 LIMIT 100001", &[]).await.map_err(|_| unavailable_at("configure"))?;
+        if rows.len() > 100000 { return Err(unavailable_at("configure")); }
+        let mut keys = BTreeSet::new();
+        for row in rows {
+            let bytes: Vec<u8> = row.try_get(0).map_err(|_| unavailable_at("configure"))?;
+            keys.insert(bytes.try_into().map_err(|_| unavailable_at("configure"))?);
+        }
+        *PORTRAIT_KEYS.lock().map_err(|_| unavailable_at("configure"))? = keys;
+        *LIBRARY.lock().await = Some(library);
+        *ACCESS.lock().await = Some(DatabaseAccess { library: access, campaign });
+        Ok::<_, Status>(())
+    }.await;
+    super::actor::record_audit_line(
+        "hero_library.startup",
+        format!(
+            "HERO_LIBRARY operation=startup seat_hash=unscoped outcome={} reason={}",
+            if result.is_ok() { "ready" } else { "failed" },
+            if result.is_ok() {
+                "success"
+            } else {
+                "database"
+            }
+        ),
+    );
+}
+
+/// Checks the current native grant, not merely the shape of credential metadata.
+async fn authenticate(service: &super::Service, credential: [u8; 32]) -> Result<(), Status> {
+    let session = service.updates.borrow().basis().session;
+    let access = ACCESS.lock().await;
+    let access = access
+        .as_ref()
+        .ok_or_else(|| unavailable_at("authenticate"))?;
+    let row = access.campaign.client.query_opt(
+        "SELECT 1 FROM df_local_demo.grants WHERE credential=$1 AND session_id=$2 AND effective_role=$3 AND active AND expires_at>clock_timestamp() AND principal_id<>$4",
+        &[&credential.as_slice(), &session.as_bytes().as_slice(), &b"player".as_slice(), &df_persistence::local_demo_scope::PLAYER.as_slice()],
+    ).await.map_err(|_| unavailable_at("authenticate"))?;
+    if row.is_none() {
+        return Err(Status::permission_denied("Player seat required"));
+    }
+    Ok(())
+}
+
 pub(super) fn config() -> Result<tokio_postgres::Config, Status> {
     DATABASE
         .lock()
@@ -30,12 +125,21 @@ pub(super) fn config() -> Result<tokio_postgres::Config, Status> {
         .clone()
         .ok_or_else(unavailable)
 }
+fn unavailable_at(step: &'static str) -> Status {
+    let _captured = LIBRARY_STEP.try_with(|slot| {
+        if slot.get().is_none() {
+            slot.set(Some(step));
+        }
+    });
+    unavailable()
+}
 fn unavailable() -> Status {
     Status::unavailable("Your hero is safe in this game. Not yet saved to your heroes.")
 }
 tokio::task_local! {
     // Request-local diagnostic classification survives async thread migration.
     static LIBRARY_FAILURE: std::cell::RefCell<Option<&'static str>>;
+    static LIBRARY_STEP: std::cell::Cell<Option<&'static str>>;
 }
 
 fn failure(error: df_persistence::hero_library::LibraryError) -> Status {
@@ -52,9 +156,104 @@ fn failure(error: df_persistence::hero_library::LibraryError) -> Status {
     });
     unavailable()
 }
-pub(super) async fn open() -> Result<HeroLibrary, Status> {
-    HeroLibrary::open(&config()?).await.map_err(failure)
+pub(super) async fn open() -> Result<tokio::sync::MappedMutexGuard<'static, HeroLibrary>, Status> {
+    tokio::sync::MutexGuard::try_map(LIBRARY.lock().await, |library| library.as_mut())
+        .map_err(|_| unavailable())
 }
+
+/// Erases library bytes only; campaign snapshots and campaign-local links are untouched.
+pub(super) async fn delete_saved_hero(key: Option<&[u8]>, hero_id: i64) -> Result<bool, Status> {
+    // Keep local saves and portrait-key publication ordered with erasure.
+    let _library = LIBRARY.lock().await;
+    let mut access = ACCESS.lock().await;
+    let access = access.as_mut().ok_or_else(unavailable)?;
+    delete_from(&mut access.library.client, key, hero_id).await
+}
+async fn delete_from(
+    client: &mut tokio_postgres::Client,
+    key: Option<&[u8]>,
+    hero_id: i64,
+) -> Result<bool, Status> {
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| unavailable_at("delete-from"))?;
+    let profile = match key {
+        Some(key) => transaction.query_opt("SELECT id FROM profiles WHERE key_sha256=sha256($1) FOR UPDATE", &[&key]).await,
+        None => transaction.query_opt("SELECT p.id FROM profiles p JOIN heroes h ON h.profile=p.id WHERE h.id=$1 FOR UPDATE OF p", &[&hero_id]).await,
+    }.map_err(|_| unavailable_at("delete-from"))?;
+    let Some(profile) = profile else {
+        super::actor::record_audit_line(
+            "hero_library.delete",
+            format!(
+                "HERO_LIBRARY operation=delete outcome=not_found removed=false hero_id={hero_id} forgotten_portraits=0"
+            ),
+        );
+        return Ok(false);
+    };
+    let profile: i64 = profile
+        .try_get(0)
+        .map_err(|_| unavailable_at("delete-from"))?;
+    let removed = transaction
+        .execute(
+            "UPDATE heroes SET deleted=true WHERE id=$1 AND profile=$2 AND NOT deleted",
+            &[&hero_id, &profile],
+        )
+        .await
+        .map_err(|_| unavailable_at("delete-from"))?
+        == 1;
+    let mut forgotten_portraits: Vec<[u8; 32]> = Vec::new();
+    if removed {
+        // A digest shared by another active library hero remains a valid route key.
+        let rows = transaction.query("SELECT DISTINCT r.portrait_sha256 FROM hero_revisions r WHERE r.hero=$1 AND NOT EXISTS (SELECT 1 FROM hero_revisions other JOIN heroes h ON h.id=other.hero WHERE other.portrait_sha256=r.portrait_sha256 AND NOT h.deleted) LIMIT 100001", &[&hero_id]).await.map_err(|_| unavailable_at("delete-from"))?;
+        if rows.len() > 100000 {
+            return Err(unavailable_at("delete-from"));
+        }
+        for row in rows {
+            let bytes: Vec<u8> = row.try_get(0).map_err(|_| unavailable_at("delete-from"))?;
+            forgotten_portraits.push(
+                bytes
+                    .try_into()
+                    .map_err(|_| unavailable_at("delete-from"))?,
+            );
+        }
+        transaction
+            .execute("DELETE FROM hero_save_receipts WHERE hero=$1", &[&hero_id])
+            .await
+            .map_err(|_| unavailable_at("delete-from"))?;
+        transaction
+            .execute("DELETE FROM hero_sources WHERE hero=$1", &[&hero_id])
+            .await
+            .map_err(|_| unavailable_at("delete-from"))?;
+        transaction
+            .execute("DELETE FROM hero_revisions WHERE hero=$1", &[&hero_id])
+            .await
+            .map_err(|_| unavailable_at("delete-from"))?;
+        transaction
+            .execute("DELETE FROM heroes WHERE id=$1", &[&hero_id])
+            .await
+            .map_err(|_| unavailable_at("delete-from"))?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| unavailable_at("delete-from"))?;
+    super::actor::record_audit_line(
+        "hero_library.delete",
+        format!(
+            "HERO_LIBRARY operation=delete outcome={} removed={removed} hero_id={hero_id} forgotten_portraits={}",
+            if removed { "removed" } else { "not_found" },
+            forgotten_portraits.len()
+        ),
+    );
+    if let Ok(mut keys) = PORTRAIT_KEYS.lock() {
+        for digest in forgotten_portraits {
+            keys.remove(&digest);
+        }
+    }
+    Ok(removed)
+}
+
 /// Full approved creator data shares the existing non-rules identity attachment namespace.
 /// Each checkpoint label is <=128 bytes; the record is bounded before chunking.
 pub(super) fn identity_choices(
@@ -256,8 +455,8 @@ async fn seat(
         .map_err(|_| Status::resource_exhausted("Seat is busy; retry after reconnect"))?;
     tokio::time::timeout(super::timing::active().reply, wait)
         .await
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable_at("seat"))?
+        .map_err(|_| unavailable_at("seat"))?
 }
 fn cache_root() -> Result<std::path::PathBuf, Status> {
     Ok(std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
@@ -266,7 +465,7 @@ fn cache_root() -> Result<std::path::PathBuf, Status> {
         .map(std::path::PathBuf::from)
         .unwrap_or(
             std::env::current_dir()
-                .map_err(|_| unavailable())?
+                .map_err(|_| unavailable_at("cache-root"))?
                 .join("artifacts/tmp/play/imagery-cache"),
         ))
 }
@@ -280,30 +479,41 @@ async fn portrait_bytes(
         || !attachment.key.bytes().all(|byte| byte.is_ascii_hexdigit())
         || attachment.bytes > df_persistence::hero_library::MAX_PORTRAIT_BYTES as u64
     {
-        return Err(unavailable());
+        return Err(unavailable_at("portrait-bytes"));
     }
     let path = cache_root()?.join(format!("{}.jpg", attachment.key));
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
-        let file = std::fs::File::open(path).map_err(|_| unavailable())?;
-        if file.metadata().map_err(|_| unavailable())?.len() != attachment.bytes {
-            return Err(unavailable());
+        let file = std::fs::File::open(path).map_err(|_| unavailable_at("portrait-bytes"))?;
+        if file
+            .metadata()
+            .map_err(|_| unavailable_at("portrait-bytes"))?
+            .len()
+            != attachment.bytes
+        {
+            return Err(unavailable_at("portrait-bytes"));
         }
         let mut bytes = Vec::new();
         file.take(df_persistence::hero_library::MAX_PORTRAIT_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
-            .map_err(|_| unavailable())?;
+            .map_err(|_| unavailable_at("portrait-bytes"))?;
         if bytes.len() as u64 != attachment.bytes
             || Sha256::digest(&bytes).as_slice() != attachment.digest
         {
-            return Err(unavailable());
+            return Err(unavailable_at("portrait-bytes"));
         }
         Ok(bytes)
     })
     .await
-    .map_err(|_| unavailable())?
+    .map_err(|_| unavailable_at("portrait-bytes"))?
 }
 fn summary(row: &HeroRevision) -> rpc::LibraryHeroSummary {
+    if !row.record.portrait.is_empty()
+        && let Ok(digest) = row.portrait_sha256.as_slice().try_into()
+        && let Ok(mut keys) = PORTRAIT_KEYS.lock()
+    {
+        keys.insert(digest);
+    }
     rpc::LibraryHeroSummary {
         hero_id: row.reference.hero_id,
         revision: row.reference.revision as u64,
@@ -365,6 +575,8 @@ impl super::Service {
         &self,
         request: Request<rpc::ListMyHeroesRequest>,
     ) -> Result<Response<rpc::ListMyHeroesResponse>, Status> {
+        let credential = super::credential(&request)?;
+        authenticate(self, credential).await?;
         let body = request.into_inner();
         let key = PhoneKey::from_bytes(&body.key)
             .map_err(|_| Status::invalid_argument("Library key invalid"))?;
@@ -388,6 +600,7 @@ impl super::Service {
         request: Request<rpc::LoadHeroRequest>,
     ) -> Result<Response<rpc::LoadHeroResponse>, Status> {
         let credential = super::credential(&request)?;
+        authenticate(self, credential).await?;
         let body = request.into_inner();
         let key = PhoneKey::from_bytes(&body.key)
             .map_err(|_| Status::invalid_argument("Library key invalid"))?;
@@ -466,6 +679,23 @@ impl super::Service {
             summary: Some(summary(&row)),
         }))
     }
+    async fn delete_hero_inner(
+        &self,
+        request: Request<rpc::DeleteHeroRequest>,
+    ) -> Result<Response<rpc::DeleteHeroResponse>, Status> {
+        let credential = super::credential(&request)?;
+        authenticate(self, credential).await?;
+        let body = request.into_inner();
+        PhoneKey::from_bytes(&body.key)
+            .map_err(|_| Status::invalid_argument("Library key invalid"))?;
+        let removed = tokio::time::timeout(
+            Duration::from_secs(15),
+            delete_saved_hero(Some(&body.key), body.hero_id),
+        )
+        .await
+        .map_err(|_| failure(df_persistence::hero_library::LibraryError::Deadline))??;
+        Ok(Response::new(rpc::DeleteHeroResponse { removed }))
+    }
     async fn save_my_seat_hero_inner(
         &self,
         request: Request<rpc::SaveMySeatHeroRequest>,
@@ -486,7 +716,10 @@ impl super::Service {
                 Err(df_persistence::hero_library::LibraryError::NotFound) => {
                     super::actor::record_audit_line(
                         "hero_library.origin_ignored",
-                        "HERO_LIBRARY origin_ignored".into(),
+                        format!(
+                            "HERO_LIBRARY origin_ignored hero_id={} revision={}",
+                            reference.hero_id, reference.revision
+                        ),
                     );
                     None
                 }
@@ -558,6 +791,12 @@ impl super::Service {
         })
         .await
         .map_err(|_| failure(df_persistence::hero_library::LibraryError::Deadline))??;
+        if !record.portrait.is_empty() {
+            PORTRAIT_KEYS
+                .lock()
+                .map_err(|_| unavailable())?
+                .insert(Sha256::digest(&record.portrait).into());
+        }
         Ok(Response::new(rpc::SaveMySeatHeroResponse {
             hero_id: reference.hero_id,
             revision: reference.revision as u64,
@@ -565,20 +804,24 @@ impl super::Service {
     }
 }
 async fn observe_library<T>(
+    audit: df_observe::AuditContext,
     operation: &'static str,
     seat_hash: String,
     work: impl std::future::Future<Output = Result<T, Status>>,
 ) -> Result<T, Status> {
-    LIBRARY_FAILURE.scope(std::cell::RefCell::new(None), async {
+    let started = std::time::Instant::now();
+    LIBRARY_FAILURE.scope(std::cell::RefCell::new(None), LIBRARY_STEP.scope(std::cell::Cell::new(None), async {
         let result = work.await;
+        let step = LIBRARY_STEP.with(|slot| slot.get()).unwrap_or(operation);
         let cause = LIBRARY_FAILURE.with(|slot| *slot.borrow());
         let (outcome, reason) = match &result {
-            Ok(_) => ("ready", "success".to_owned()),
+            Ok(_) => (if operation == "delete" { "answered" } else { "ready" }, "success".to_owned()),
             Err(status) => ("failed", cause.map_or_else(|| format!("{:?}", status.code()), str::to_owned)),
         };
-        super::actor::record_audit_line("hero_library.outcome", format!("HERO_LIBRARY operation={operation} seat_hash={seat_hash} outcome={outcome} reason={reason}"));
+        let _scope = df_observe::audit_scope(audit);
+        super::actor::record_audit_line("hero_library.outcome", format!("HERO_LIBRARY operation={operation} seat_hash={seat_hash} outcome={outcome} reason={reason} step={step} ms={}", started.elapsed().as_millis()));
         result
-    }).await
+    })).await
 }
 
 #[tonic::async_trait]
@@ -589,9 +832,15 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
     ) -> Result<Response<rpc::ListMyHeroesResponse>, Status> {
         let seat_hash = super::credential(&request)
             .ok()
-            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .map(|binding| df_observe::seat_hash(&binding).to_string())
             .unwrap_or_else(|| "unscoped".to_owned());
-        observe_library("list", seat_hash, self.list_my_heroes_inner(request)).await
+        observe_library(
+            super::service_audit_context(self, super::credential(&request).ok().as_ref()),
+            "list",
+            seat_hash,
+            self.list_my_heroes_inner(request),
+        )
+        .await
     }
     async fn load_hero(
         &self,
@@ -599,9 +848,31 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
     ) -> Result<Response<rpc::LoadHeroResponse>, Status> {
         let seat_hash = super::credential(&request)
             .ok()
-            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .map(|binding| df_observe::seat_hash(&binding).to_string())
             .unwrap_or_else(|| "unscoped".to_owned());
-        observe_library("load", seat_hash, self.load_hero_inner(request)).await
+        observe_library(
+            super::service_audit_context(self, super::credential(&request).ok().as_ref()),
+            "load",
+            seat_hash,
+            self.load_hero_inner(request),
+        )
+        .await
+    }
+    async fn delete_hero(
+        &self,
+        request: Request<rpc::DeleteHeroRequest>,
+    ) -> Result<Response<rpc::DeleteHeroResponse>, Status> {
+        let seat_hash = super::credential(&request)
+            .ok()
+            .map(|binding| df_observe::seat_hash(&binding).to_string())
+            .unwrap_or_else(|| "unscoped".to_owned());
+        observe_library(
+            super::service_audit_context(self, super::credential(&request).ok().as_ref()),
+            "delete",
+            seat_hash,
+            self.delete_hero_inner(request),
+        )
+        .await
     }
     async fn save_my_seat_hero(
         &self,
@@ -609,9 +880,15 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
     ) -> Result<Response<rpc::SaveMySeatHeroResponse>, Status> {
         let seat_hash = super::credential(&request)
             .ok()
-            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .map(|binding| df_observe::seat_hash(&binding).to_string())
             .unwrap_or_else(|| "unscoped".to_owned());
-        observe_library("save", seat_hash, self.save_my_seat_hero_inner(request)).await
+        observe_library(
+            super::service_audit_context(self, super::credential(&request).ok().as_ref()),
+            "save",
+            seat_hash,
+            self.save_my_seat_hero_inner(request),
+        )
+        .await
     }
 }
 
@@ -637,18 +914,22 @@ mod tests {
                 "invalid_record",
             ),
         ] {
-            let result: Result<(), Status> =
-                observe_library("test", format!("synthetic-seat-{reason}"), async {
+            let result: Result<(), Status> = observe_library(
+                df_observe::AuditContext::default(),
+                "test",
+                format!("synthetic-seat-{reason}"),
+                async {
                     tokio::task::yield_now().await;
                     Err(failure(error))
-                })
-                .await;
+                },
+            )
+            .await;
             assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
             let lines = super::super::actor::audit_lines_containing(&format!(
                 "HERO_LIBRARY operation=test seat_hash=synthetic-seat-{reason}"
             ));
             assert_eq!(lines.len(), 1);
-            assert!(lines[0].ends_with(&format!("outcome=failed reason={reason}")));
+            assert!(lines[0].contains(&format!("outcome=failed reason={reason} step=test ms=")));
         }
     }
 
@@ -821,24 +1102,51 @@ pub(super) fn router() -> axum::Router {
         axum::routing::get(serve_portrait),
     )
 }
+fn imported_portrait(digest: &[u8; 32]) -> Option<super::creator_portraits::Attachment> {
+    PORTRAIT_IMPORTS
+        .lock()
+        .ok()?
+        .values()
+        .find(|import| &import.attachment.digest == digest)
+        .map(|import| import.attachment.clone())
+}
+fn known_portrait_key(key: &str) -> Option<[u8; 32]> {
+    let digest = super::parse_binding(key)?;
+    (PORTRAIT_KEYS.lock().ok()?.contains(&digest) || imported_portrait(&digest).is_some())
+        .then_some(digest)
+}
 async fn serve_portrait(
     axum::extract::Path(key): axum::extract::Path<String>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let Some(digest) = known_portrait_key(&key) else {
+        super::actor::record_audit_line(
+            "hero_library.portrait",
+            "HERO_LIBRARY operation=portrait outcome=not_found reason=unknown-key".to_owned(),
+        );
         return axum::http::StatusCode::NOT_FOUND.into_response();
-    }
+    };
     let result = async {
-        let digest: [u8; 32] = super::journey::unhex(&key)
-            .map_err(super::actor::unavailable)?
-            .try_into()
-            .map_err(|_| unavailable())?;
-        let bytes = open()
-            .await?
-            .portrait_by_digest(&digest)
-            .await
-            .map_err(failure)?
-            .ok_or_else(unavailable)?;
+        // A loaded creator owns an approved draft copy independently of its library row.
+        // Keep that bounded cache copy usable after deletion, including a phone reload.
+        if let Some(attachment) = imported_portrait(&digest) {
+            match portrait_bytes(Some(attachment)).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => {
+                    if !PORTRAIT_KEYS
+                        .lock()
+                        .map_err(|_| unavailable())?
+                        .contains(&digest)
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        let access = ACCESS.lock().await;
+        let access = access.as_ref().ok_or_else(unavailable)?;
+        let row = access.library.client.query_opt("SELECT r.portrait FROM hero_revisions r JOIN heroes h ON h.id=r.hero WHERE r.portrait_sha256=$1 AND r.portrait_media_type='image/jpeg' AND NOT h.deleted LIMIT 1", &[&digest.as_slice()]).await.map_err(|_| unavailable())?.ok_or_else(unavailable)?;
+        let bytes: Vec<u8> = row.try_get(0).map_err(|_| unavailable())?;
         if Sha256::digest(&bytes).as_slice() != digest {
             return Err(unavailable());
         }
@@ -856,7 +1164,18 @@ async fn serve_portrait(
             bytes,
         )
             .into_response(),
-        _ => axum::http::StatusCode::NOT_FOUND.into_response(),
+        result => {
+            let reason = match result {
+                Err(_) => "deadline",
+                Ok(Err(_)) => "cache-or-database",
+                Ok(Ok(_)) => "unavailable",
+            };
+            super::actor::record_audit_line(
+                "hero_library.portrait",
+                format!("HERO_LIBRARY operation=portrait outcome=not_found reason={reason}"),
+            );
+            axum::http::StatusCode::NOT_FOUND.into_response()
+        }
     }
 }
 
@@ -865,14 +1184,14 @@ fn thumbnail(portrait: &[u8]) -> Result<Vec<u8>, Status> {
         return Ok(Vec::new());
     }
     let image = image::load_from_memory_with_format(portrait, image::ImageFormat::Jpeg)
-        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable_at("thumbnail"))?
         .thumbnail(96, 144);
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 65)
         .encode_image(&image)
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable_at("thumbnail"))?;
     if bytes.len() > 32768 {
-        return Err(unavailable());
+        return Err(unavailable_at("thumbnail"));
     }
     Ok(bytes)
 }
@@ -944,4 +1263,29 @@ fn summaries_page(rows: &[HeroRevision]) -> rpc::ListMyHeroesResponse {
         response.next_cursor = response.heroes.last().map(|hero| hero.hero_id).unwrap_or(0);
     }
     response
+}
+
+#[cfg(test)]
+#[path = "hero_library_tests.rs"]
+mod regression_tests;
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    #[tokio::test]
+    async fn library_failure_records_request_local_step_and_elapsed_time() {
+        let result: Result<(), Status> = observe_library(
+            df_observe::AuditContext::default(),
+            "synthetic-audit",
+            "71".to_owned(),
+            async { Err(unavailable_at("thumbnail-decode")) },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
+        let lines =
+            super::super::actor::audit_lines_containing("HERO_LIBRARY operation=synthetic-audit");
+        assert!(lines.iter().any(|line| line.contains("outcome=failed")
+            && line.contains("step=thumbnail-decode")
+            && line.contains("ms=")));
+    }
 }

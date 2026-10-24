@@ -89,6 +89,8 @@ pub(in crate::gameplay) enum ResourceKind {
     CharacterClip,
     /// Reserved for the music worker.
     MusicSet,
+    /// One independently cached environmental loop, separate from pacing variants.
+    AmbientLayer,
     /// Reserved for the voice migration.
     VoiceLine,
     /// Reserved for the video migration.
@@ -108,6 +110,7 @@ impl ResourceKind {
             Self::SplatWorld => "splat_world",
             Self::CharacterClip => "character_clip",
             Self::MusicSet => "music_set",
+            Self::AmbientLayer => "ambient_layer",
             Self::VoiceLine => "voice_line",
             Self::VideoClip => "video_clip",
         }
@@ -245,6 +248,7 @@ impl Limits {
             ResourceKind::SplatWorld => 1_620,
             ResourceKind::CharacterClip => 2_400,
             ResourceKind::MusicSet => 600,
+            ResourceKind::AmbientLayer => 180,
             ResourceKind::VoiceLine => 90,
             ResourceKind::VideoClip => 900,
         };

@@ -246,7 +246,9 @@ pub(super) fn supported_designs(
             .unwrap_or(&[])
     };
     let mut result = Vec::new();
-    for species in values("species") {
+    for species in values("species").iter().filter(|option| {
+        df_rules::local_journey::HeroSpecies::from_choice(&option.option_id).is_some()
+    }) {
         for class in values("class") {
             for background in values("background") {
                 result.push(rpc::SupportedCharacterDesign {
@@ -460,6 +462,57 @@ mod tests {
         assert!(portrait_design("elf", "unknown", "sage").is_none());
         assert!(portrait_design("elf", "wizard-1", "invented").is_none());
         assert!(portrait_design("dwarf", "", "").is_some());
+    }
+
+    #[test]
+    fn source_species_are_playable_only_when_the_pack_offers_them_and_aasimar_is_never_playable() {
+        let groups = [
+            rpc::JourneyGroup {
+                group_id: "species".to_owned(),
+                options: [
+                    "dragonborn",
+                    "dwarf",
+                    "elf",
+                    "gnome",
+                    "goliath",
+                    "halfling",
+                    "human",
+                    "orc",
+                    "tiefling",
+                    "aasimar",
+                ]
+                .into_iter()
+                .map(|id| rpc::JourneyOption {
+                    option_id: id.to_owned(),
+                    ..Default::default()
+                })
+                .collect(),
+                ..Default::default()
+            },
+            rpc::JourneyGroup {
+                group_id: "class".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "fighter-1".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            rpc::JourneyGroup {
+                group_id: "background".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "soldier".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+        let supported = supported_designs(&groups);
+        assert_eq!(supported.len(), 9);
+        assert!(
+            !supported
+                .iter()
+                .any(|design| design.species_id == "aasimar")
+        );
     }
 
     #[test]

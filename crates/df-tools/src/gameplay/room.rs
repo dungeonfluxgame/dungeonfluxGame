@@ -18,6 +18,7 @@ pub(super) async fn actor_view(
     credential: [u8; 32],
     request: rpc::WatchViewRequest,
 ) -> Result<(super::LocalDemoRole, rpc::ViewMessage), Status> {
+    let started = std::time::Instant::now();
     let (reply, wait) = tokio::sync::oneshot::channel();
     let reply_deadline = tokio::time::Instant::now() + super::timing::active().reply;
     let mut pending = actor::Call::View {
@@ -37,6 +38,13 @@ pub(super) async fn actor_view(
                 pending = refused.input;
                 let now = tokio::time::Instant::now();
                 if now >= reply_deadline {
+                    actor::record_audit_line(
+                        "gameplay.view_admission",
+                        format!(
+                            "VIEW admission_refused reason=queue-full waited_ms={}",
+                            started.elapsed().as_millis()
+                        ),
+                    );
                     return Err(Status::resource_exhausted(
                         "gameplay actor queue remained full",
                     ));
@@ -46,12 +54,27 @@ pub(super) async fn actor_view(
                 )
                 .await;
                 if tokio::time::Instant::now() >= reply_deadline {
+                    actor::record_audit_line(
+                        "gameplay.view_admission",
+                        format!(
+                            "VIEW admission_refused reason=queue-full waited_ms={}",
+                            started.elapsed().as_millis()
+                        ),
+                    );
                     return Err(Status::resource_exhausted(
                         "gameplay actor queue remained full",
                     ));
                 }
             }
             Err(refused) => {
+                actor::record_audit_line(
+                    "gameplay.view_admission",
+                    format!(
+                        "VIEW admission_refused reason={:?} waited_ms={}",
+                        refused.reason,
+                        started.elapsed().as_millis()
+                    ),
+                );
                 return Err(match refused.reason {
                     AdmissionRefusal::Closed => Status::unavailable("gameplay actor stopped"),
                     AdmissionRefusal::ItemCapacity | AdmissionRefusal::ByteCapacity => {
@@ -83,7 +106,30 @@ pub(super) async fn actor_view(
 
 mod reclaim;
 pub(in crate::gameplay) use reclaim::{AwayHero, ReclaimRefusal, ReclaimRequest, SeatClock};
+fn rpc_failure(call: &'static str, step: &'static str, status: Status) -> Status {
+    actor::record_audit_line(
+        "seat.rpc_refused",
+        format!(
+            "SEAT rpc_refused call={call} code={:?} step={step}",
+            status.code()
+        ),
+    );
+    status
+}
 fn refused(code: rpc::RejectionCode) -> rpc::JoinRoomResponse {
+    let step = match code {
+        rpc::RejectionCode::InvalidSelection => "room-code",
+        rpc::RejectionCode::StaleOffer => "phase",
+        rpc::RejectionCode::ResourceMissing => "capacity",
+        rpc::RejectionCode::OperationConflict => "conflict",
+        rpc::RejectionCode::OperationExpired => "expired",
+        rpc::RejectionCode::RecoveryRequired => "recovery",
+        _ => "grant",
+    };
+    actor::record_audit_line(
+        "seat.join_refused",
+        format!("SEAT join_refused code={code:?} step={step}"),
+    );
     rpc::JoinRoomResponse {
         outcome: Some(rpc::join_room_response::Outcome::Refused(
             rpc::JoinRefusal { code: code as i32 },
@@ -240,6 +286,30 @@ impl actor::Actor {
         &mut self,
         request: rpc::JoinRoomRequest,
     ) -> Result<rpc::JoinRoomResponse, Status> {
+        let started = std::time::Instant::now();
+        let op = request
+            .operation_id
+            .as_ref()
+            .and_then(|id| id.value.as_deref())
+            .map(crate::client_diagnostics::operation_hash);
+        let result = self.join_inner(request);
+        if let Err(status) = &result {
+            actor::record_audit_line(
+                "seat.join_refused",
+                format!(
+                    "SEAT join_refused code={:?} step=admission op={} ms={}",
+                    status.code(),
+                    op.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                    started.elapsed().as_millis()
+                ),
+            );
+        }
+        result
+    }
+    fn join_inner(
+        &mut self,
+        request: rpc::JoinRoomRequest,
+    ) -> Result<rpc::JoinRoomResponse, Status> {
         if self.session_lost() {
             return Err(actor::session_lost_status());
         }
@@ -322,7 +392,9 @@ impl actor::Actor {
                     {
                         return Ok(refused(rpc::RejectionCode::StaleOffer));
                     }
-                    if journey::participants(self.owner.checkpoint()).len() >= 2 {
+                    if journey::participants(self.owner.checkpoint()).len()
+                        >= journey::MAXIMUM_PARTY
+                    {
                         return Ok(refused(rpc::RejectionCode::ResourceMissing));
                     }
                 }
@@ -411,7 +483,7 @@ impl actor::Actor {
                 .send_replace(self.owner.checkpoint().clone());
         }
         if let Some(joins) = self.qualification_joins.as_mut()
-            && joins.len() < 2
+            && joins.len() < journey::MAXIMUM_PARTY
             && !joins
                 .iter()
                 .any(|(saved, _, _)| saved.operation_id == request.operation_id)
@@ -426,6 +498,21 @@ impl actor::Actor {
                 ..Default::default()
             })),
             replaying_uncertain || receipt.basis().revision <= prior,
+        );
+        let revision = receipt.basis().revision;
+        actor::record_audit_line(
+            "seat.joined",
+            format!(
+                "SEAT joined seat={} op={} rev={}:{} party={}/{} replayed={} ms={}",
+                df_observe::seat_hash(&grant),
+                crate::client_diagnostics::operation_hash(operation.as_bytes()),
+                revision.epoch().get(),
+                revision.sequence(),
+                journey::participants(self.owner.checkpoint()).len(),
+                journey::MAXIMUM_PARTY,
+                replaying_uncertain || receipt.basis().revision <= prior,
+                commit_started.elapsed().as_millis(),
+            ),
         );
         Ok(rpc::JoinRoomResponse {
             outcome: Some(rpc::join_room_response::Outcome::Joined(Box::new(
@@ -466,11 +553,17 @@ impl rpc::room_service_server::RoomService for Service {
     ) -> Result<Response<rpc::ReclaimRoomResponse>, Status> {
         let body = request.into_inner();
         if body.room_code.len() > 32 || !matches!(body.seat_token.len(), 0 | 32) {
-            return Err(Status::invalid_argument(
-                "bounded reclaim identity required",
+            return Err(rpc_failure(
+                "reclaim",
+                "shape",
+                Status::invalid_argument("bounded reclaim identity required"),
             ));
         }
         let refused = |reason: rpc::SeatReclaimRefusal| {
+            actor::record_audit_line(
+                "seat.rpc_refused",
+                format!("SEAT rpc_refused call=reclaim code={reason:?} step=seat-admission"),
+            );
             Response::new(rpc::ReclaimRoomResponse {
                 outcome: Some(rpc::reclaim_room_response::Outcome::Refused(reason as i32)),
                 away_heroes: Vec::new(),
@@ -478,7 +571,11 @@ impl rpc::room_service_server::RoomService for Service {
         };
         if body.seat_token.is_empty() {
             if body.operation_id.is_some() {
-                return Err(Status::invalid_argument("seat read has no operation"));
+                return Err(rpc_failure(
+                    "reclaim",
+                    "read-operation",
+                    Status::invalid_argument("seat read has no operation"),
+                ));
             }
             if !matches_room_code(&body.room_code) {
                 return Ok(refused(rpc::SeatReclaimRefusal::SeatRoomCodeWrong));
@@ -489,11 +586,29 @@ impl rpc::room_service_server::RoomService for Service {
                     room_code: body.room_code,
                     reply,
                 })
-                .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
+                .map_err(|_| {
+                    rpc_failure(
+                        "room",
+                        "actor-or-proof",
+                        Status::resource_exhausted("room actor queue full"),
+                    )
+                })?;
             let away = tokio::time::timeout(super::timing::active().reply, wait)
                 .await
-                .map_err(|_| Status::deadline_exceeded("away seat read deadline"))?
-                .map_err(|_| Status::unavailable("room owner stopped"))??;
+                .map_err(|_| {
+                    rpc_failure(
+                        "room",
+                        "actor-or-proof",
+                        Status::deadline_exceeded("away seat read deadline"),
+                    )
+                })?
+                .map_err(|_| {
+                    rpc_failure(
+                        "room",
+                        "actor-or-proof",
+                        Status::unavailable("room owner stopped"),
+                    )
+                })??;
             return Ok(Response::new(rpc::ReclaimRoomResponse {
                 outcome: None,
                 away_heroes: away
@@ -505,13 +620,20 @@ impl rpc::room_service_server::RoomService for Service {
                     .collect(),
             }));
         }
-        let operation = df_api::operation_id(body.operation_id.as_ref())
-            .map_err(|_| Status::invalid_argument("reclaim operation required"))?;
-        let token = body
-            .seat_token
-            .as_slice()
-            .try_into()
-            .map_err(|_| Status::invalid_argument("reclaim token required"))?;
+        let operation = df_api::operation_id(body.operation_id.as_ref()).map_err(|_| {
+            rpc_failure(
+                "room",
+                "actor-or-proof",
+                Status::invalid_argument("reclaim operation required"),
+            )
+        })?;
+        let token = body.seat_token.as_slice().try_into().map_err(|_| {
+            rpc_failure(
+                "room",
+                "actor-or-proof",
+                Status::invalid_argument("reclaim token required"),
+            )
+        })?;
         let (reply, wait) = tokio::sync::oneshot::channel();
         self.actor
             .try_submit(actor::Call::Reclaim {
@@ -522,11 +644,29 @@ impl rpc::room_service_server::RoomService for Service {
                 },
                 reply,
             })
-            .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::resource_exhausted("room actor queue full"),
+                )
+            })?;
         let answer = tokio::time::timeout(super::timing::active().reply, wait)
             .await
-            .map_err(|_| Status::deadline_exceeded("retain your original reclaim proof"))?
-            .map_err(|_| Status::unavailable("room owner stopped"))??;
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::deadline_exceeded("retain your original reclaim proof"),
+                )
+            })?
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::unavailable("room owner stopped"),
+                )
+            })??;
         Ok(match answer {
             Ok(joined) => Response::new(rpc::ReclaimRoomResponse {
                 outcome: Some(rpc::reclaim_room_response::Outcome::Joined(Box::new(
@@ -562,7 +702,11 @@ impl rpc::room_service_server::RoomService for Service {
                 .and_then(|id| id.value.as_ref())
                 .is_none_or(|bytes| bytes.len() != 16)
         {
-            return Err(Status::invalid_argument("bounded join identity required"));
+            return Err(rpc_failure(
+                "join",
+                "shape",
+                Status::invalid_argument("bounded join identity required"),
+            ));
         }
         let (reply, wait) = tokio::sync::oneshot::channel();
         self.actor
@@ -570,11 +714,45 @@ impl rpc::room_service_server::RoomService for Service {
                 request: body,
                 reply,
             })
-            .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::resource_exhausted("room actor queue full"),
+                )
+            })?;
         let response = tokio::time::timeout(super::timing::active().reply, wait)
             .await
-            .map_err(|_| Status::deadline_exceeded("retain your original room join proof"))?
-            .map_err(|_| Status::unavailable("room owner stopped"))??;
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::deadline_exceeded("retain your original room join proof"),
+                )
+            })?
+            .map_err(|_| {
+                rpc_failure(
+                    "room",
+                    "actor-or-proof",
+                    Status::unavailable("room owner stopped"),
+                )
+            })??;
         Ok(Response::new(response))
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    #[test]
+    fn capacity_refusal_keeps_the_response_and_records_its_admission_step() {
+        let result = refused(rpc::RejectionCode::ResourceMissing);
+        assert!(
+            matches!(result.outcome, Some(rpc::join_room_response::Outcome::Refused(rpc::JoinRefusal { code })) if code == rpc::RejectionCode::ResourceMissing as i32)
+        );
+        assert!(
+            !actor::audit_lines_containing("SEAT join_refused code=ResourceMissing step=capacity")
+                .is_empty()
+        );
     }
 }

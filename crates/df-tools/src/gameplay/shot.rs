@@ -28,8 +28,8 @@ pub(super) mod scene_graph;
 const VOCABULARY_JSON: &str = include_str!("shot/place_families.json");
 const VOCABULARY_SCHEMA: &str = "df-shot-vocabulary/1";
 
-/// The most heroes a plate shows: reference art exists for three.
-pub(super) const MAXIMUM_HEROES: usize = 3;
+/// Every accepted hero has their own reference on the party sheet (REF-058/062).
+pub(super) const MAXIMUM_HEROES: usize = 6;
 const MAXIMUM_EXTRAS: usize = 3;
 const MAXIMUM_DRESSING: usize = 2;
 const MAXIMUM_LIGHTS: usize = 3;
@@ -368,7 +368,7 @@ pub(in crate::gameplay) struct SpeakerShot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) struct HeroShot {
-    /// The hero's art number, 1 to [`MAXIMUM_HEROES`]: the cut-out is `sprite-hero-<n>`.
+    /// The hero's seat number, 1 to [`MAXIMUM_HEROES`], bound to their own canonical figure.
     pub(in crate::gameplay) art: u8,
     pub(in crate::gameplay) slot: HeroSlot,
     pub(in crate::gameplay) activity: &'static str,
@@ -903,7 +903,7 @@ fn mood_of(scene_key: SceneKey, text: &str) -> Mood {
     }
 }
 
-fn hero_order(camera: Camera) -> [HeroSlot; 5] {
+fn hero_order(camera: Camera) -> [HeroSlot; 6] {
     use HeroSlot::{BackLeft, BackRight, LeftForeground, LeftMid, RightForeground, RightMid};
     match camera {
         Camera::OverShoulderRight | Camera::DutchOverShoulderRight => [
@@ -912,6 +912,7 @@ fn hero_order(camera: Camera) -> [HeroSlot; 5] {
             RightMid,
             BackRight,
             BackLeft,
+            LeftMid,
         ],
         Camera::OverShoulderLeft
         | Camera::WideEstablishing
@@ -923,6 +924,7 @@ fn hero_order(camera: Camera) -> [HeroSlot; 5] {
             LeftMid,
             BackLeft,
             BackRight,
+            RightMid,
         ],
     }
 }
@@ -972,6 +974,7 @@ pub(in crate::gameplay) struct PlatePlacement {
     pub(in crate::gameplay) speaker: PlateLayout,
     pub(in crate::gameplay) heroes: Vec<HeroHead>,
     pub(in crate::gameplay) actors: Vec<ActorHead>,
+    pub(in crate::gameplay) figure_masks: Vec<super::imagery::figure_masks::FigureGeometry>,
 }
 
 /// The layout for a head that was found in the finished plate (fractions of the picture): the
@@ -1024,7 +1027,7 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         .heroes
         .iter()
         .copied()
-        .filter(|art| (1..=3).contains(art))
+        .filter(|art| (1..=6).contains(art))
         .take(MAXIMUM_HEROES)
         .collect();
     let person = match &input.speaker {
@@ -1092,13 +1095,16 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
     let blocked = speaker
         .as_ref()
         .map(|speaker| speaker.slot.blocked_hero_slot());
-    // The first hero stands on the left and the second on the right in every plate of a place.
+    // A full table uses both middle-distance side slots (heads at 20% and 80%), outside the
+    // speaker at 30% or 70%. The bubble calm-space check still protects the conversation.
+    // Smaller parties leave the speaker's side slot clear.
     let mut slots: Vec<HeroSlot> = hero_order(camera)
         .into_iter()
-        .filter(|slot| Some(*slot) != blocked)
+        .filter(|slot| heroes_present.len() == MAXIMUM_HEROES || Some(*slot) != blocked)
         .collect();
     slots.truncate(heroes_present.len());
-    slots.sort_by_key(|slot| slot.is_right());
+    let foreground = slots.len().min(2);
+    slots[..foreground].sort_by_key(|slot| slot.is_right());
     let mut order = heroes_present;
     order.sort_unstable();
     let mut used_activities: Vec<&str> = Vec::new();
@@ -1217,7 +1223,7 @@ pub(in crate::gameplay) enum Invalid {
 
 impl ShotSpec {
     /// Checks the spec against the closed vocabulary and the staging rules: no two heroes in a
-    /// slot, nobody in the speaker's slot, every phrase from the family's lists, and nobody's
+    /// slot, the smaller party leaves the speaker's side clear, every phrase from the family's lists, and nobody's
     /// head inside the space kept calm for the bubble.
     pub(in crate::gameplay) fn validate(&self) -> Result<(), Invalid> {
         let vocabulary = vocabulary().map_err(|_| Invalid::Vocabulary)?;
@@ -1240,9 +1246,12 @@ impl ShotSpec {
             .speaker
             .as_ref()
             .map(|speaker| speaker.slot.blocked_hero_slot());
+        if self.heroes.len() > MAXIMUM_HEROES {
+            return Err(Invalid::HeroSlot);
+        }
         for (index, hero) in self.heroes.iter().enumerate() {
-            if !(1..=3).contains(&hero.art)
-                || Some(hero.slot) == blocked
+            if !(1..=6).contains(&hero.art)
+                || (self.heroes.len() < MAXIMUM_HEROES && Some(hero.slot) == blocked)
                 || self.heroes[..index]
                     .iter()
                     .any(|other| other.slot == hero.slot || other.art == hero.art)

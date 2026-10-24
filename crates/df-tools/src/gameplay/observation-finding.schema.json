@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "observation-finding-jev-answer",
+  "description": "SchemaFlux answers.q1; the supplied criteria close the eligible option IDs for each call. o1 always means no further fact.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "choice"
+    },
+    "choice": {
+      "type": "string",
+      "enum": [
+        "o1",
+        "o2",
+        "o3",
+        "o4",
+        "o5",
+        "o6",
+        "o7",
+        "o8",
+        "o9",
+        "o10",
+        "o11",
+        "o12",
+        "o13"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "type",
+    "choice"
+  ],
+  "additionalProperties": false
+}

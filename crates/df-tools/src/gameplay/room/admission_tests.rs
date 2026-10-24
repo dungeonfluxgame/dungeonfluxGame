@@ -543,16 +543,28 @@ fn ambiguous_join_exact_retry_preserves_member_and_receipt_before_second_join() 
         (2, 2, 1, 1)
     );
     drop(calls);
-    let third = retry_scope(&submission.initial, 0x33, 5);
+    for index in 2..df_rules::local_journey::MAXIMUM_PARTY {
+        let next = retry_scope(&submission.initial, 0x31 + index as u8, 3 + index as u8);
+        assert!(matches!(
+            submit_again(&mut submission.owner, next),
+            SubmissionOutcome::Confirmed(_)
+        ));
+    }
+    let stable = submission.owner.checkpoint().clone();
     assert_eq!(
-        submit_again(&mut submission.owner, third),
+        journey::participants(&stable).len(),
+        df_rules::local_journey::MAXIMUM_PARTY
+    );
+    let seventh = retry_scope(&submission.initial, 0x37, 9);
+    assert_eq!(
+        submit_again(&mut submission.owner, seventh),
         SubmissionOutcome::Refused(RepositoryError::Capacity)
     );
     assert_eq!(submission.owner.checkpoint(), &stable);
     let calls = submission.calls.borrow();
     assert_eq!(
         (calls.commit, calls.publication, calls.intent_wakeup),
-        (2, 1, 1)
+        (6, 5, 5)
     );
 }
 

@@ -2,6 +2,115 @@
 use opentelemetry::trace::{Span, SpanContext, SpanId, TraceFlags, TraceId, TraceState, Tracer};
 use opentelemetry::{Context, KeyValue, global};
 
+/// Shared content-free operation identity, also used by browser PHONE diagnostics.
+pub fn operation_hash(bytes: &[u8]) -> u64 {
+    let label = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    presentation::local_identity(&label)
+}
+
+/// Seat identifiers use one diagnostic hash across native and browser records.
+pub fn seat_hash(bytes: &[u8]) -> u64 {
+    operation_hash(bytes)
+}
+
+/// Synchronous owner correlation. Async callers pass explicit fields at their boundary.
+#[derive(Clone, Default)]
+pub struct AuditContext {
+    pub operation: Option<u64>,
+    pub seat: Option<u64>,
+    pub room: Option<u64>,
+    pub revision: Option<String>,
+}
+thread_local! {
+    static AUDIT_CONTEXT: std::cell::RefCell<AuditContext> = std::cell::RefCell::new(AuditContext::default());
+    static AUDIT_FORWARDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+static AUDIT_SINK: std::sync::OnceLock<fn(&'static str, String)> = std::sync::OnceLock::new();
+
+/// Restore correlation even when an owner returns early or unwinds.
+pub struct AuditScope(AuditContext, std::marker::PhantomData<std::rc::Rc<()>>);
+impl Drop for AuditScope {
+    fn drop(&mut self) {
+        AUDIT_CONTEXT.with_borrow_mut(|context| *context = std::mem::take(&mut self.0));
+    }
+}
+/// Set correlation for synchronous work on the current thread only.
+/// Never hold this guard across `.await`, including local browser futures: another task
+/// may run on the same thread. Capture owned AuditContext for asynchronous dispatch instead.
+pub fn audit_scope(context: AuditContext) -> AuditScope {
+    AuditScope(
+        AUDIT_CONTEXT.with_borrow_mut(|current| std::mem::replace(current, context)),
+        std::marker::PhantomData,
+    )
+}
+
+/// Install the application audit/timeline bridge once, before admission.
+pub fn install_audit_sink(sink: fn(&'static str, String)) {
+    let _installed = AUDIT_SINK.set(sink);
+}
+
+/// Add explicit missing-context markers rather than silently attaching stale identities.
+pub fn audit_line(mut line: String) -> String {
+    AUDIT_CONTEXT.with_borrow(|context| {
+        let numeric_alias = |key: &str| {
+            line.split_ascii_whitespace()
+                .find_map(|field| {
+                    field
+                        .strip_prefix(key)
+                        .and_then(|value| value.parse::<u64>().ok())
+                })
+                .map(|value| value.to_string())
+        };
+        let operation = numeric_alias("operation_hash=")
+            .or_else(|| context.operation.map(|value| value.to_string()));
+        let seat =
+            numeric_alias("seat_hash=").or_else(|| context.seat.map(|value| value.to_string()));
+        let elapsed = numeric_alias("elapsed_ms=")
+            .or_else(|| numeric_alias("duration_ms="))
+            .or_else(|| numeric_alias("commit_ms="));
+        for (key, value) in [
+            ("op", operation),
+            ("seat", seat),
+            ("room", context.room.map(|value| value.to_string())),
+            ("rev", context.revision.clone()),
+            ("ms", elapsed.or_else(|| Some("unmeasured".to_owned()))),
+        ] {
+            if !line
+                .split_ascii_whitespace()
+                .any(|field| field.starts_with(&format!("{key}=")))
+            {
+                line.push_str(&format!(" {key}={}", value.as_deref().unwrap_or("none")));
+            }
+        }
+    });
+    line
+}
+
+/// Audit delivery is independent of whether OTEL has a provider or samples the span.
+pub fn record_audit_line(event: &'static str, line: String) {
+    let line = audit_line(line);
+    if let Some(sink) = AUDIT_SINK.get() {
+        AUDIT_FORWARDING.with(|forwarding| {
+            if forwarding.replace(true) {
+                return;
+            }
+            struct ForwardingReset<'a>(&'a std::cell::Cell<bool>);
+            impl Drop for ForwardingReset<'_> {
+                fn drop(&mut self) {
+                    self.0.set(false);
+                }
+            }
+            let _reset = ForwardingReset(forwarding);
+            sink(event, line);
+        });
+    } else {
+        println!("{line}");
+    }
+}
+
 /// Correlation is diagnostic provenance, never authorization.
 #[derive(Clone)]
 pub struct OperationContext {
@@ -52,6 +161,10 @@ pub struct OperationSpan {
     span: global::BoxedSpan,
     finished: bool,
     build: String,
+    method: &'static str,
+    audit: AuditContext,
+    #[cfg(not(target_arch = "wasm32"))]
+    started: std::time::Instant,
 }
 /// Begin an operation using explicit correlation across asynchronous dispatch.
 pub fn begin(context: &OperationContext, method: &'static str) -> OperationSpan {
@@ -72,6 +185,10 @@ fn begin_with_tracer(
         span,
         finished: false,
         build: context.build.clone(),
+        method,
+        audit: crate::AUDIT_CONTEXT.with_borrow(Clone::clone),
+        #[cfg(not(target_arch = "wasm32"))]
+        started: std::time::Instant::now(),
     }
 }
 impl OperationSpan {
@@ -87,13 +204,18 @@ impl OperationSpan {
     }
     /// Finish exactly once with a safe classification and actual observed byte count.
     pub fn finish(&mut self, status: &str, bytes: usize) {
-        self.end(status, Some(bytes));
+        self.end(status, Some(bytes), true);
     }
     /// Finish without inventing a byte count when measurement is unavailable.
     pub fn finish_unmeasured(&mut self, status: &str) {
-        self.end(status, None);
+        self.end(status, None, true);
     }
-    fn end(&mut self, status: &str, bytes: Option<usize>) {
+    /// Finish a span only after its fact was already emitted through the shared audit sink.
+    /// This explicit path avoids recursion without discarding ordinary `recorded` outcomes.
+    pub fn finish_audit_record(&mut self) {
+        self.end("recorded", None, false);
+    }
+    fn end(&mut self, status: &str, bytes: Option<usize>, emit_audit: bool) {
         if self.finished {
             return;
         }
@@ -109,6 +231,24 @@ impl OperationSpan {
         }
         self.span.end();
         self.finished = true;
+        // Audit-line spans explicitly opt out; ordinary classifications, including
+        // "recorded", must remain visible even with no SDK or an unsampled trace.
+        if emit_audit && !AUDIT_FORWARDING.with(std::cell::Cell::get) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let elapsed = self.started.elapsed().as_millis().to_string();
+            #[cfg(target_arch = "wasm32")]
+            let elapsed = "unmeasured";
+            let _scope = audit_scope(self.audit.clone());
+            record_audit_line(
+                self.method,
+                format!(
+                    "OUTCOME operation={} outcome={status} ms={} bytes={}",
+                    self.method,
+                    elapsed,
+                    bytes.map_or_else(|| "unmeasured".to_owned(), |bytes| bytes.to_string()),
+                ),
+            );
+        }
     }
 }
 
@@ -441,7 +581,7 @@ mod producer;
 pub use producer::{AnyValue, CapturedBatch, LogInput, NativeProducer, Severity, SpanInput};
 
 mod dispatch_context;
-pub use dispatch_context::begin_dispatched;
+pub use dispatch_context::{begin_dispatched, begin_dispatched_with_audit};
 
 mod capture;
 pub use capture::{CaptureKey, ProducerId, RecordId, Signal, SourceSequence, TelemetryError};
@@ -450,3 +590,86 @@ pub mod presentation;
 pub use browser::{
     BrowserBuffer, BrowserLog, BufferError, BufferSnapshot, UploadFailure, UploadLease,
 };
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod audit_tests {
+    use super::*;
+    static LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn sink(event: &'static str, line: String) {
+        if event == "test.audit-terminal" {
+            LINES.lock().unwrap().push(line);
+        }
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: "test".to_owned(),
+        };
+        begin(&context, "test.audit-record").finish_unmeasured("recorded");
+    }
+    #[test]
+    fn terminal_audit_survives_no_sdk_and_keeps_dispatch_correlation_without_recursion() {
+        install_audit_sink(sink);
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: "test".to_owned(),
+        };
+        let owner = audit_scope(AuditContext {
+            operation: Some(71),
+            seat: Some(72),
+            room: Some(73),
+            revision: Some("1:4".to_owned()),
+        });
+        let mut operation = begin(&context, "test.audit-terminal");
+        drop(owner);
+        let _other = audit_scope(AuditContext {
+            operation: Some(99),
+            ..AuditContext::default()
+        });
+        operation.finish_unmeasured("retained");
+        operation.finish_unmeasured("duplicate");
+        let lines = LINES.lock().unwrap();
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert!(line.contains("outcome=retained"));
+        assert!(line.contains("op=71 seat=72 room=73 rev=1:4"));
+        assert!(!line.contains("op=99"));
+        drop(lines);
+        let parent_scope = audit_scope(AuditContext {
+            operation: Some(81),
+            seat: Some(82),
+            room: Some(83),
+            revision: Some("2:5".to_owned()),
+        });
+        let parent = begin(&context, "test.dispatch-parent");
+        let dispatch = parent.capture_context();
+        let audit = parent.capture_audit_context();
+        drop(parent_scope);
+        std::thread::spawn(move || {
+            begin_dispatched_with_audit(&dispatch, &audit, "test.audit-terminal")
+                .finish_unmeasured("worker-finished");
+        })
+        .join()
+        .unwrap();
+        let lines = LINES.lock().unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("outcome=worker-finished"));
+        assert!(lines[1].contains("op=81 seat=82 room=83 rev=2:5"));
+        drop(lines);
+        begin(&context, "test.audit-terminal").finish_unmeasured("recorded");
+        let lines = LINES.lock().unwrap();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[2].contains("outcome=recorded"));
+    }
+    #[test]
+    fn audit_scope_restores_context_and_explicit_fields_win() {
+        let original = audit_line("TEST outcome=before".to_owned());
+        {
+            let _owner = audit_scope(AuditContext {
+                operation: Some(7),
+                ..AuditContext::default()
+            });
+            assert!(audit_line("TEST op=8 ms=4".to_owned()).contains("op=8 ms=4"));
+            assert!(audit_line("TEST".to_owned()).contains("op=7"));
+        }
+        assert_eq!(audit_line("TEST outcome=before".to_owned()), original);
+    }
+}

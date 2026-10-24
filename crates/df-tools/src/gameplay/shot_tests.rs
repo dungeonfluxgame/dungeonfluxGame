@@ -13,7 +13,17 @@ const SPEAKER_STEMS: [&str; 8] = [
     "assets/ui/generated/sprite-unknown-newcomer",
 ];
 
-const PARTIES: [&[u8]; 6] = [&[], &[1], &[1, 2], &[1, 2, 3], &[2, 3], &[1, 3]];
+const PARTIES: [&[u8]; 9] = [
+    &[],
+    &[1],
+    &[1, 2],
+    &[1, 2, 3],
+    &[2, 3],
+    &[1, 3],
+    &[1, 2, 3, 4],
+    &[1, 2, 3, 4, 5],
+    &[1, 2, 3, 4, 5, 6],
+];
 
 fn all_place_kinds() -> Vec<&'static str> {
     vocabulary()
@@ -369,13 +379,13 @@ fn hero_numbers_outside_the_art_are_ignored_and_a_party_is_capped() {
         "inn",
         SceneKey::Opening,
         None,
-        &[0, 1, 2, 3, 9],
+        &[0, 1, 2, 3, 4, 5, 6, 9],
         "x",
     ))
     .unwrap();
     let mut arts: Vec<u8> = spec.heroes.iter().map(|hero| hero.art).collect();
     arts.sort_unstable();
-    assert_eq!(arts, [1, 2, 3]);
+    assert_eq!(arts, [1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
@@ -521,5 +531,33 @@ fn the_embedded_vocabulary_is_complete_for_every_family() {
                 .any(|a| a.tags.iter().any(|tag| tag == "fighter")),
             "{name}"
         );
+    }
+}
+
+#[test]
+fn six_hero_staging_keeps_the_first_pair_on_their_original_sides() {
+    for speaker in [None, Some(SPEAKER_STEMS[0]), Some(SPEAKER_STEMS[5])] {
+        let pair = direct(&input(
+            "inn",
+            SceneKey::DialogueSeal,
+            speaker,
+            &[1, 2],
+            "Quiet.",
+        ))
+        .unwrap();
+        let party = direct(&input(
+            "inn",
+            SceneKey::DialogueSeal,
+            speaker,
+            &[1, 2, 3, 4, 5, 6],
+            "Quiet.",
+        ))
+        .unwrap();
+        for art in [1, 2] {
+            let original = pair.heroes.iter().find(|hero| hero.art == art).unwrap();
+            let crowded = party.heroes.iter().find(|hero| hero.art == art).unwrap();
+            assert_eq!(original.slot, crowded.slot);
+        }
+        assert_eq!(party.heroes.len(), 6);
     }
 }

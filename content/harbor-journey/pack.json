@@ -14,6 +14,46 @@
             "id": "dwarf",
             "label": "Dwarf",
             "description": "Dwarves are hardy, resilient, and can see in the dark."
+          },
+          {
+            "id": "dragonborn",
+            "label": "Dragonborn",
+            "description": "SRD 5.2.1 Dragonborn species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "elf",
+            "label": "Elf",
+            "description": "SRD 5.2.1 Elf species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "gnome",
+            "label": "Gnome",
+            "description": "SRD 5.2.1 Gnome species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "goliath",
+            "label": "Goliath",
+            "description": "SRD 5.2.1 Goliath species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "halfling",
+            "label": "Halfling",
+            "description": "SRD 5.2.1 Halfling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "human",
+            "label": "Human",
+            "description": "SRD 5.2.1 Human species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "orc",
+            "label": "Orc",
+            "description": "SRD 5.2.1 Orc species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "tiefling",
+            "label": "Tiefling",
+            "description": "SRD 5.2.1 Tiefling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
           }
         ]
       },
@@ -217,7 +257,7 @@
       "key": "opening",
       "title": "The Broken Seal",
       "narration": "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.",
-      "speaker": "Courier",
+      "speaker": "Finn Alder",
       "dialogue": "Please. I can't deliver this alone. The seal was broken before the ship reached port.",
       "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
@@ -226,12 +266,344 @@
         "short": "the rain-soaked wharf",
         "kind": "quay",
         "exterior": true,
-        "art_key": "loc-salt-quay-arrival"
+        "art_key": "loc-salt-quay-arrival",
+        "model": {
+          "inventory_version": 1,
+          "time_of_day": "evening",
+          "weather": "rain over the harbor",
+          "people": [
+            {
+              "id": "courier",
+              "name": "Finn Alder",
+              "role": "frightened courier",
+              "description": "The young courier clutches a packet to his rain-dark coat and keeps glancing behind him.",
+              "relation_to_speaker": "the courier",
+              "position": "beside the lantern post",
+              "aliases": [
+                "courier",
+                "messenger"
+              ],
+              "is_background": false,
+              "present_in": [
+                "opening",
+                "dialogue-seal",
+                "dialogue-escort"
+              ],
+              "attitude": "friendly",
+              "attitudes": {},
+              "knowledge": [
+                {
+                  "fact_id": "courier-manner",
+                  "statement": "His hurried speech and backward glances show fear of being followed."
+                },
+                {
+                  "fact_id": "courier-private-destination",
+                  "statement": "The packet is addressed to Vell at the Harbor Inn."
+                },
+                {
+                  "fact_id": "courier-wants",
+                  "statement": "He needs companions to help deliver the packet safely."
+                }
+              ],
+              "wants": "Get help delivering the packet and escape the person following him.",
+              "coin_cp": 0,
+              "passive_perception": 10
+            },
+            {
+              "id": "bandit",
+              "name": "Dain Rusk",
+              "role": "dockside enforcer",
+              "description": "The enforcer approaches with one hand close to the scimitar at his side.",
+              "relation_to_speaker": "pursuing the courier",
+              "position": "approaching along the boards",
+              "aliases": [
+                "bandit",
+                "enforcer"
+              ],
+              "is_background": false,
+              "present_in": [
+                "dialogue-seal",
+                "dialogue-escort",
+                "combat"
+              ],
+              "attitude": "hostile",
+              "attitudes": {},
+              "knowledge": [
+                {
+                  "fact_id": "enforcer-manner",
+                  "statement": "He keeps his attention on the packet and approaches with his hand near his weapon."
+                },
+                {
+                  "fact_id": "enforcer-withheld-employer",
+                  "statement": "He has not identified an employer or explained who sent him."
+                },
+                {
+                  "fact_id": "enforcer-wants",
+                  "statement": "He means to seize the packet and stop the courier leaving."
+                }
+              ],
+              "wants": "Take the packet from the courier and prevent him from leaving.",
+              "coin_cp": 0,
+              "passive_perception": 10
+            }
+          ],
+          "things": [
+            {
+              "id": "sealed-packet",
+              "name": "the courier's sealed packet",
+              "short": "the courier's sealed packet",
+              "detail": "The courier holds a rain-spotted packet against his coat. The packet is wrapped tightly; its damaged wax seal no longer closes it securely.",
+              "picture_description": "The courier holds a rain-spotted packet against his coat.",
+              "closer_look": "The packet is wrapped tightly; its damaged wax seal no longer closes it securely.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": true,
+              "value_cp": null,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "against the courier's coat",
+              "owner_id": "courier",
+              "in_use": true,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": "courier",
+              "open": false,
+              "lit": false,
+              "broken": false,
+              "searched_by": [],
+              "aliases": [
+                "sealed packet",
+                "sealed packet"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-sealed-packet"
+              }
+            },
+            {
+              "id": "broken-seal",
+              "name": "the broken wax seal",
+              "short": "the broken wax seal",
+              "detail": "A broken wax seal is still attached to the courier's packet. The split in the wax leaves the seal visibly broken, just as the courier reported.",
+              "picture_description": "A broken wax seal is still attached to the courier's packet.",
+              "closer_look": "The split in the wax leaves the seal visibly broken, just as the courier reported.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": false,
+              "value_cp": null,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "against the courier's coat",
+              "owner_id": "courier",
+              "in_use": false,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": null,
+              "open": false,
+              "lit": false,
+              "broken": true,
+              "searched_by": [],
+              "aliases": [
+                "broken wax seal",
+                "broken seal"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-broken-seal"
+              }
+            },
+            {
+              "id": "salted-fish-crates",
+              "name": "crates of salted fish",
+              "short": "crates of salted fish",
+              "detail": "Lidded fish crates stand stacked on the wet boards. Salt crusts the crate edges; the marked dockside price is 5 gp per crate.",
+              "picture_description": "Lidded fish crates stand stacked on the wet boards.",
+              "closer_look": "Salt crusts the crate edges; the marked dockside price is 5 gp per crate.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": false,
+              "value_cp": 500,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "on the wharf",
+              "owner_id": null,
+              "in_use": false,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": null,
+              "open": false,
+              "lit": false,
+              "broken": false,
+              "searched_by": [],
+              "aliases": [
+                "crates of salted fish",
+                "salted fish crates"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-salted-fish-crates"
+              }
+            },
+            {
+              "id": "moored-boat",
+              "name": "the moored boat",
+              "short": "the moored boat",
+              "detail": "A small boat is moored alongside the quay. The boat rises against its mooring line as the harbor water moves beneath it.",
+              "picture_description": "A small boat is moored alongside the quay.",
+              "closer_look": "The boat rises against its mooring line as the harbor water moves beneath it.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": false,
+              "value_cp": null,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "on the wharf",
+              "owner_id": null,
+              "in_use": false,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": null,
+              "open": false,
+              "lit": false,
+              "broken": false,
+              "searched_by": [],
+              "aliases": [
+                "moored boat",
+                "moored boat"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-moored-boat"
+              }
+            },
+            {
+              "id": "rope-coils",
+              "name": "coils of rope",
+              "short": "coils of rope",
+              "detail": "Coils of hempen rope lie beside the mooring. Each intact coil holds fifty feet of hempen rope, damp from the rain, priced at 1 gp.",
+              "picture_description": "Coils of hempen rope lie beside the mooring.",
+              "closer_look": "Each intact coil holds fifty feet of hempen rope, damp from the rain, priced at 1 gp.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": true,
+              "value_cp": 100,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "on the wharf",
+              "owner_id": null,
+              "in_use": false,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": null,
+              "open": false,
+              "lit": false,
+              "broken": false,
+              "searched_by": [],
+              "aliases": [
+                "coils of rope",
+                "rope coils"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-rope-coils"
+              }
+            },
+            {
+              "id": "lantern-post",
+              "name": "the lantern post",
+              "short": "the lantern post",
+              "detail": "A lantern hangs from a post over the rain-soaked wharf. Rain beads on the lantern housing; its flame shelters behind the glass.",
+              "picture_description": "A lantern hangs from a post over the rain-soaked wharf.",
+              "closer_look": "Rain beads on the lantern housing; its flame shelters behind the glass.",
+              "skill": "investigation",
+              "dc": 10,
+              "finding_id": null,
+              "clue_fact_id": null,
+              "portable": false,
+              "value_cp": null,
+              "use_effect": "An inspection changes no ownership or custody.",
+              "position": "on the wharf",
+              "owner_id": null,
+              "in_use": false,
+              "in_scene": true,
+              "publicly_visible": true,
+              "holder_id": null,
+              "open": false,
+              "lit": true,
+              "broken": false,
+              "searched_by": [],
+              "aliases": [
+                "lantern post",
+                "lantern post"
+              ],
+              "provenance": {
+                "kind": "authored_location",
+                "source_id": "salt-quay-lantern-post"
+              }
+            }
+          ],
+          "ways_out": [
+            {
+              "id": "quay-walkway",
+              "name": "the quay walkway",
+              "position": "along the wet boards",
+              "beyond": "the harbor walk beyond the lanterns",
+              "beyond_place_id": "place-harbor-walk",
+              "open": true,
+              "aliases": [
+                "walkway",
+                "quay path"
+              ]
+            },
+            {
+              "id": "market-road",
+              "name": "the road to the market square",
+              "position": "up the slope beyond the lantern post",
+              "beyond": "the market square, where traveling merchants gather before the road to the next town",
+              "beyond_place_id": "place-market-square",
+              "open": true,
+              "aliases": [
+                "market road",
+                "market square"
+              ]
+            }
+          ],
+          "offers": [],
+          "services": []
+        }
       },
+      "findings": [
+        {
+          "id": "courier-manner",
+          "sentence": "His hurried speech and backward glances show fear of being followed.",
+          "skill": "insight",
+          "dc": 10,
+          "private": false
+        },
+        {
+          "id": "courier-wants",
+          "sentence": "He needs companions to help deliver the packet safely.",
+          "skill": "insight",
+          "dc": 10,
+          "private": false
+        },
+        {
+          "id": "enforcer-manner",
+          "sentence": "He keeps his attention on the packet and approaches with his hand near his weapon.",
+          "skill": "insight",
+          "dc": 10,
+          "private": false
+        }
+      ],
       "cast": [
         {
           "id": "courier",
-          "name": "Courier",
+          "name": "Finn Alder",
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
           "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
@@ -245,7 +617,7 @@
       "key": "dialogue-seal",
       "title": "A Whisper in the Rain",
       "narration": "The courier presses the packet against his coat. A dockside enforcer approaches, one hand on a scimitar.",
-      "speaker": "Courier",
+      "speaker": "Finn Alder",
       "dialogue": "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
       "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
@@ -259,7 +631,7 @@
       "cast": [
         {
           "id": "courier",
-          "name": "Courier",
+          "name": "Finn Alder",
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
           "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
@@ -269,7 +641,7 @@
         },
         {
           "id": "bandit",
-          "name": "Bandit",
+          "name": "Dain Rusk",
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
           "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
@@ -283,7 +655,7 @@
       "key": "dialogue-escort",
       "title": "An Oath at the Wharf",
       "narration": "The courier steadies himself behind you. The approaching enforcer draws a scimitar and demands the packet.",
-      "speaker": "Courier",
+      "speaker": "Finn Alder",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
       "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
@@ -297,7 +669,7 @@
       "cast": [
         {
           "id": "courier",
-          "name": "Courier",
+          "name": "Finn Alder",
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
           "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
@@ -307,7 +679,7 @@
         },
         {
           "id": "bandit",
-          "name": "Bandit",
+          "name": "Dain Rusk",
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
           "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
@@ -322,7 +694,7 @@
       "title": "Steel Beneath the Lanterns",
       "narration": "The Bandit steps out of the rain, blade drawn, and bars the way to the packet.",
       "rules_note": "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die.",
-      "speaker": "Bandit",
+      "speaker": "Dain Rusk",
       "dialogue": "Hand over the packet. Last warning.",
       "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
@@ -336,7 +708,7 @@
       "cast": [
         {
           "id": "bandit",
-          "name": "Bandit",
+          "name": "Dain Rusk",
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
           "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
@@ -350,7 +722,7 @@
       "key": "inn",
       "title": "The Harbor Inn",
       "narration": "Warm lamplight frames the next chapter with your party and the courier. The sealed packet remains unresolved.",
-      "speaker": "Courier",
+      "speaker": "Finn Alder",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
       "asset": "live-room-photo",
       "setting": {
@@ -364,7 +736,7 @@
       "cast": [
         {
           "id": "courier",
-          "name": "Courier",
+          "name": "Finn Alder",
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
           "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
@@ -380,7 +752,7 @@
       "narration": "The courier lowers his shaking hands. The packet—and its secret—remain with your party.",
       "rules_note": "The opposing combatants are defeated. Dying heroes still need their timed death saves; victory does not wake or heal them.",
       "narration_rested": "The opposition was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. The original victory and the courier's unresolved journey remain.",
-      "speaker": "Courier",
+      "speaker": "Finn Alder",
       "dialogue": "You stood your ground. Come on. There's a light waiting for us at the inn.",
       "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
@@ -394,7 +766,7 @@
       "cast": [
         {
           "id": "courier",
-          "name": "Courier",
+          "name": "Finn Alder",
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
           "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
@@ -429,17 +801,18 @@
   ],
   "speakers": [
     {
-      "name": "Courier",
-      "role": "a frightened courier who needs the heroes' help to deliver a sealed packet",
-      "voice": "hurried and anxious",
-      "identity_reply": "You can call me the courier. My name can wait.",
+      "name": "Finn Alder",
+      "role": "Finn Alder, anxious courier; wants the packet delivered, guards its destination and his dignity",
+      "voice": "Quick, dry, self-deprecating; shy wit at a flirt, guarded under threats; rubs his cuffs",
+      "identity_reply": "Finn Alder. Finn will do.",
       "gender": "he",
       "age": "young"
     },
     {
-      "name": "Bandit",
-      "role": "a dockside bandit who attacks the heroes to take the packet",
-      "voice": "sneering and rough",
+      "name": "Dain Rusk",
+      "role": "Dain Rusk, dockside enforcer; wants the packet without losing face; guards his employer",
+      "voice": "Low, unhurried, sardonic; needling courtesy, dry wit; stills his hand at the scimitar",
+      "identity_reply": "Dain Rusk. We can keep this civil.",
       "withheld_subjects": ["motive", "employer"],
       "gender": "he",
       "age": "adult"

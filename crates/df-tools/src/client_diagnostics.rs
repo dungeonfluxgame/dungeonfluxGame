@@ -32,6 +32,24 @@ pub(crate) enum Diagnostic {
     ReconnectFailed = 22,
     ReconnectCancelled = 23,
     PortraitImageLoaded = 24,
+    JoinStarted = 25,
+    JoinFailed = 26,
+    JoinRefused = 27,
+    JoinRetry = 28,
+    CurrentAdventureFailed = 29,
+    WatchRefused = 30,
+    StreamInterrupted = 31,
+    SavedSeatForgotten = 32,
+    ViewRenderFailed = 33,
+    SubmitSent = 34,
+    SubmitAnswered = 35,
+    SubmitFailed = 36,
+    LocalStorageFailed = 37,
+    LibraryFailed = 38,
+    TelemetryUploadFailed = 39,
+    TelemetryReceiptMismatch = 40,
+    TelemetryCaptureFailed = 41,
+    PageStarted = 42,
 }
 
 impl Diagnostic {
@@ -61,6 +79,24 @@ impl Diagnostic {
             Self::ReconnectFailed => "reconnect-failed",
             Self::ReconnectCancelled => "reconnect-cancelled",
             Self::PortraitImageLoaded => "portrait-image-loaded",
+            Self::JoinStarted => "join-started",
+            Self::JoinFailed => "join-failed",
+            Self::JoinRefused => "join-refused",
+            Self::JoinRetry => "join-retry",
+            Self::CurrentAdventureFailed => "current-adventure-failed",
+            Self::WatchRefused => "watch-refused",
+            Self::StreamInterrupted => "stream-interrupted",
+            Self::SavedSeatForgotten => "saved-seat-forgotten",
+            Self::ViewRenderFailed => "view-render-failed",
+            Self::SubmitSent => "submit-sent",
+            Self::SubmitAnswered => "submit-answered",
+            Self::SubmitFailed => "submit-failed",
+            Self::LocalStorageFailed => "local-storage-failed",
+            Self::LibraryFailed => "library-failed",
+            Self::TelemetryUploadFailed => "telemetry-upload-failed",
+            Self::TelemetryReceiptMismatch => "telemetry-receipt-mismatch",
+            Self::TelemetryCaptureFailed => "telemetry-capture-failed",
+            Self::PageStarted => "page-started",
         }
     }
 
@@ -97,6 +133,24 @@ impl Diagnostic {
             Self::ReconnectFailed => "failed",
             Self::ReconnectCancelled => "replaced",
             Self::PortraitImageLoaded => "ready",
+            Self::JoinStarted => "changed",
+            Self::JoinFailed => "failed",
+            Self::JoinRefused => "failed",
+            Self::JoinRetry => "changed",
+            Self::CurrentAdventureFailed => "failed",
+            Self::WatchRefused => "failed",
+            Self::StreamInterrupted => "failed",
+            Self::SavedSeatForgotten => "failed",
+            Self::ViewRenderFailed => "failed",
+            Self::SubmitSent => "changed",
+            Self::SubmitAnswered => "ready",
+            Self::SubmitFailed => "failed",
+            Self::LocalStorageFailed => "failed",
+            Self::LibraryFailed => "failed",
+            Self::TelemetryUploadFailed => "failed",
+            Self::TelemetryReceiptMismatch => "failed",
+            Self::TelemetryCaptureFailed => "failed",
+            Self::PageStarted => "changed",
         };
         TimingEvent::lifecycle(
             "usable",
@@ -111,13 +165,7 @@ impl Diagnostic {
     }
 }
 
-pub(crate) fn operation_hash(bytes: &[u8]) -> u64 {
-    let label = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    df_observe::presentation::local_identity(&label)
-}
+pub(crate) use df_observe::operation_hash;
 
 pub(crate) fn decoded(event: &TimingEvent) -> Option<(Diagnostic, u32, u32)> {
     if event.kind != "usable" || event.id & 0xff00_0000_0000_0000 != MARKER {
@@ -148,6 +196,25 @@ pub(crate) fn decoded(event: &TimingEvent) -> Option<(Diagnostic, u32, u32)> {
         22 => Diagnostic::ReconnectFailed,
         23 => Diagnostic::ReconnectCancelled,
         24 => Diagnostic::PortraitImageLoaded,
+        25 => Diagnostic::JoinStarted,
+        26 => Diagnostic::JoinFailed,
+        27 => Diagnostic::JoinRefused,
+        28 => Diagnostic::JoinRetry,
+        29 => Diagnostic::CurrentAdventureFailed,
+        30 => Diagnostic::WatchRefused,
+        31 => Diagnostic::StreamInterrupted,
+        32 => Diagnostic::SavedSeatForgotten,
+        33 => Diagnostic::ViewRenderFailed,
+        34 => Diagnostic::SubmitSent,
+        35 => Diagnostic::SubmitAnswered,
+        36 => Diagnostic::SubmitFailed,
+        37 => Diagnostic::LocalStorageFailed,
+        38 => Diagnostic::LibraryFailed,
+        39 => Diagnostic::TelemetryUploadFailed,
+        40 => Diagnostic::TelemetryReceiptMismatch,
+        41 => Diagnostic::TelemetryCaptureFailed,
+        42 => Diagnostic::PageStarted,
+
         _ => return None,
     };
     Some((
@@ -160,9 +227,32 @@ pub(crate) fn decoded(event: &TimingEvent) -> Option<(Diagnostic, u32, u32)> {
 pub(crate) fn log_suffix(event: &TimingEvent) -> String {
     decoded(event).map_or_else(String::new, |(diagnostic, attempt, delay_ms)| {
         format!(
-            " diagnostic={} operation_hash={} attempt={attempt} delay_ms={delay_ms}{}",
+            " diagnostic={} operation_hash={} attempt={attempt} delay_ms={delay_ms} op={}{}{}",
             diagnostic.label(),
             event.scene,
+            event.scene,
+            match diagnostic {
+                Diagnostic::JoinFailed
+                | Diagnostic::JoinRefused
+                | Diagnostic::CurrentAdventureFailed
+                | Diagnostic::WatchRefused
+                | Diagnostic::StreamInterrupted
+                | Diagnostic::SubmitFailed
+                | Diagnostic::SubmitAnswered
+                | Diagnostic::TelemetryUploadFailed =>
+                    format!(" code={attempt} elapsed_ms={delay_ms}"),
+                Diagnostic::LibraryFailed => format!(
+                    " code={attempt} library_operation={}",
+                    match delay_ms {
+                        1 => "list",
+                        2 => "load",
+                        3 => "delete",
+                        4 => "save",
+                        _ => "unknown",
+                    }
+                ),
+                _ => String::new(),
+            },
             if diagnostic == Diagnostic::PortraitDisplayed {
                 " evidence=visible-paint-opportunity"
             } else {
@@ -211,6 +301,24 @@ mod tests {
             Diagnostic::ReconnectFailed,
             Diagnostic::ReconnectCancelled,
             Diagnostic::PortraitImageLoaded,
+            Diagnostic::JoinStarted,
+            Diagnostic::JoinFailed,
+            Diagnostic::JoinRefused,
+            Diagnostic::JoinRetry,
+            Diagnostic::CurrentAdventureFailed,
+            Diagnostic::WatchRefused,
+            Diagnostic::StreamInterrupted,
+            Diagnostic::SavedSeatForgotten,
+            Diagnostic::ViewRenderFailed,
+            Diagnostic::SubmitSent,
+            Diagnostic::SubmitAnswered,
+            Diagnostic::SubmitFailed,
+            Diagnostic::LocalStorageFailed,
+            Diagnostic::LibraryFailed,
+            Diagnostic::TelemetryUploadFailed,
+            Diagnostic::TelemetryReceiptMismatch,
+            Diagnostic::TelemetryCaptureFailed,
+            Diagnostic::PageStarted,
         ] {
             let event = diagnostic.event(12345, 240, 30_000, 123456);
             let bytes = df_observe::presentation::encode(&[event.clone()]).unwrap();
@@ -219,5 +327,50 @@ mod tests {
             assert!(log_suffix(&decoded[0]).contains(diagnostic.label()));
             assert!(log_suffix(&decoded[0]).contains("attempt=240 delay_ms=30000"));
         }
+    }
+}
+
+/// Page-start diagnostics retain the earliest failures until authenticated upload exists.
+/// New records beyond the bound are counted explicitly in the first connected batch.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+pub(crate) struct PreconnectBuffer {
+    events: std::collections::VecDeque<TimingEvent>,
+    dropped: u64,
+}
+#[cfg(any(target_arch = "wasm32", test))]
+impl PreconnectBuffer {
+    pub(crate) fn push(&mut self, event: TimingEvent) {
+        if self.events.len() == 128 {
+            self.dropped = self.dropped.saturating_add(1);
+        } else {
+            self.events.push_back(event);
+        }
+    }
+    pub(crate) fn drain(&mut self) -> (Vec<TimingEvent>, u64) {
+        (
+            self.events.drain(..).collect(),
+            std::mem::take(&mut self.dropped),
+        )
+    }
+}
+#[cfg(test)]
+mod preconnect_tests {
+    use super::*;
+    #[test]
+    fn page_start_failures_flush_once_with_explicit_overflow() {
+        let mut buffer = PreconnectBuffer::default();
+        for attempt in 0..130 {
+            buffer.push(Diagnostic::JoinFailed.event(71, attempt, 0, attempt.into()));
+        }
+        let (events, dropped) = buffer.drain();
+        assert_eq!(events.len(), 128);
+        assert_eq!(dropped, 2);
+        assert_eq!(decoded(&events[0]), Some((Diagnostic::JoinFailed, 0, 0)));
+        assert_eq!(
+            decoded(&events[127]),
+            Some((Diagnostic::JoinFailed, 127, 0))
+        );
+        assert_eq!(buffer.drain(), (Vec::new(), 0));
     }
 }

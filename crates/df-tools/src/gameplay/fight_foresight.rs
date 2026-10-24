@@ -560,6 +560,27 @@ fn subscribe(
                     continue;
                 }
                 let place = context.place;
+                let opening_resolved =
+                    match super::beat_script_runtime::opening_threat_resolved(checkpoint.state()) {
+                        Ok(resolved) => resolved,
+                        Err(error) => {
+                            super::actor::record_unavailable(
+                                "fight-forecast-opening",
+                                &format!("{error:?}"),
+                            );
+                            continue;
+                        }
+                    };
+                if place.id == "salt-quay" && opening_resolved {
+                    let mut state = director
+                        .state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    state.arenas.remove(&place.id);
+                    state.selected_exits.remove(&place.id);
+                    recent.clear();
+                    continue;
+                }
                 if previous_place != place.id {
                     recent.clear();
                     previous_place.clone_from(&place.id);

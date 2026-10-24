@@ -10,7 +10,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
             "Hand over the coin you owe us or I will break your arm.",
         ),
     ] {
-        let decision = FakeEndpoint::start(vec![answer("o7"), answer("o9")]);
+        let decision = ref069_existing_facts(vec![answer("o7"), answer("o9")]);
         let reply = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": "Keep your voice down. Dangerous people are listening.",
             "approach": "bribe",
@@ -65,7 +65,19 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
                 .iter()
                 .any(|line| line.text.ends_with("cools toward Brannoch."))
         );
-        assert_eq!(decision.connections(), 3);
+        assert_eq!(decision.connections(), 7);
+        assert_eq!(
+            decision
+                .bodies()
+                .iter()
+                .filter(|body| {
+                    body["state"].get("listener_facts").is_some()
+                        || body["state"].get("recorded_facts").is_some()
+                })
+                .count(),
+            2,
+            "one fact decision and one final-wording validation"
+        );
         assert_eq!(
             decision.bodies()[0]["state"]["public_scene"],
             "The party meets Perrin in a tavern."
@@ -75,13 +87,16 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_reply_models_label_cannot_override_a_neutral_reading_when_jev_is_silent() {
+async fn a_reply_models_label_cannot_override_a_neutral_reading_when_approach_judgement_is_silent()
+{
     let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
         "reply": "Keep your voice down. Dangerous people are listening.",
         "approach": "intimidation",
         "local_fact": "none"
     }))]);
     let (voice, cache) = voice(&endpoint, "jev-off-reply-label");
+    let fact_jev = ref069_existing_facts(vec![]);
+    let voice = voice.with_approach_model(model(&fact_jev));
     let adventure = crate::gameplay::npc_dossier_tests::adventure(1);
     let patron = adventure
         .dossiers

@@ -222,9 +222,23 @@ where
     type Scope = NativeScope<A>;
 
     fn recover_connection(&mut self, context: &OperationContext) -> Result<(), RepositoryError> {
+        let started = std::time::Instant::now();
         let mut span = df_observe::begin(context, "persistence.native_connection_recovery");
         let runtime = self.runtime.clone();
         let result = actor_block_on(&runtime, self.reconnect_owned()).and_then(|result| result);
+        df_observe::record_audit_line(
+            "persistence.connection",
+            format!(
+                "DATABASE connection event=recovery outcome={} state={} ms={}",
+                if result.is_ok() { "ready" } else { "pending" },
+                if self.adapter.connection_usable() {
+                    "usable"
+                } else {
+                    "unusable"
+                },
+                started.elapsed().as_millis()
+            ),
+        );
         span.finish_unmeasured(if result.is_ok() {
             "connection_ready"
         } else {

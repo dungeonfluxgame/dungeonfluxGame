@@ -40,6 +40,7 @@ const KINDS: &[&str] = &[
     "plate-loaded",
     "plate-decoded",
     "plate-shown",
+    "plate-crossfade",
     "plate-kept",
     "visual-source",
     "component",
@@ -57,6 +58,7 @@ const KINDS: &[&str] = &[
 ];
 const REASONS: &[&str] = &[
     "ready",
+    "started",
     "read",
     "voice-ended",
     "skipped",
@@ -75,12 +77,31 @@ const REASONS: &[&str] = &[
     "successor",
     "decode-fail",
     "visibility-lost",
+    // Canonical component causes emitted by the HUD, check and ordinary attack presenters.
+    "settled",
+    "battle-begin",
+    "phase-change",
+    "dev-pause-capacity-resumed",
+    "attack-rolled",
+    "attack-settled",
+    "face-dwell-complete",
+    "attack-breakdown",
+    "damage-rolled",
+    "damage-settled",
+    "attack-clearing",
+    "read-complete",
+    "damage-clearing",
+    "attack-cleared",
+    "card-closed",
+    "damage-cleared",
+    "attack-cancelled",
 ];
 const NUMERIC_FIELDS: &[&str] = &[
     "id",
     "scene",
     "at_ms",
     "slot",
+    "table_sequence",
     "chars",
     "read_ms",
     "opened_ms",
@@ -425,6 +446,8 @@ pub struct TimingEvent {
     pub scene: u64,
     pub at_ms: u64,
     pub slot: Option<u32>,
+    /// Public server table-line sequence; absent for scene-only and combat captions.
+    pub table_sequence: Option<u64>,
     pub chars: u32,
     pub read_ms: u32,
     pub opened_ms: Option<u64>,
@@ -466,6 +489,7 @@ impl TimingEvent {
             scene,
             at_ms,
             slot: None,
+            table_sequence: None,
             chars: 0,
             read_ms: 0,
             opened_ms: None,
@@ -511,6 +535,9 @@ impl TimingEvent {
             || self.scene > i64::MAX as u64
             || self.at_ms > MAX_PAGE_MS
             || self.slot.is_some_and(|slot| slot > 31)
+            || self
+                .table_sequence
+                .is_some_and(|sequence| sequence == 0 || sequence > i64::MAX as u64)
             || self.chars > 16_384
             || self.read_ms > 120_000
             || self.crossfade_ms > 30_000
@@ -588,6 +615,9 @@ impl TimingEvent {
             self.crossfade_ms,
             self.reason,
         );
+        if let Some(sequence) = self.table_sequence {
+            line.push_str(&format!(" table_sequence={sequence}"));
+        }
         if let Some(details) = &self.visual_source {
             line.push_str(&format!(
                 " requested_source={} effective_source={} shot={} plate_state={} requested_asset_id={} effective_asset_id={}",
@@ -636,6 +666,7 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
             ("scene", Some(event.scene)),
             ("at_ms", Some(event.at_ms)),
             ("slot", event.slot.map(u64::from)),
+            ("table_sequence", event.table_sequence),
             ("chars", Some(u64::from(event.chars))),
             ("read_ms", Some(u64::from(event.read_ms))),
             ("opened_ms", event.opened_ms),
@@ -877,6 +908,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
             reason: reason.ok_or(TimingError::Invalid)?,
             id: required("id")?,
             scene: required("scene")?,
+            table_sequence: values.get("table_sequence").copied(),
             at_ms: required("at_ms")?,
             slot: values
                 .get("slot")
@@ -1059,6 +1091,7 @@ mod tests {
             scene: 7,
             at_ms: 10_000,
             slot: Some(2),
+            table_sequence: Some(41),
             chars: 89,
             read_ms: 8_285,
             opened_ms: Some(1_000),
@@ -1453,5 +1486,43 @@ mod tests {
         assert!(text.contains("voice_start_ms=none"));
         assert!(text.contains("chars=89 read_ms=8285"));
         assert!(text.contains("reason=read"));
+    }
+}
+
+#[cfg(test)]
+mod hs48_tests {
+    use super::*;
+
+    #[test]
+    fn hs48_capture_rejects_uncatalogued_close_causes_and_backdated_voice_reports() {
+        for reason in ["dice", "check"] {
+            assert_eq!(
+                TimingBuffer::default().push(TimingEvent::lifecycle("line", reason, 1, 7, 2000)),
+                Err(TimingError::Invalid)
+            );
+        }
+        let mut voice = TimingEvent::lifecycle("voice-start", "ready", 1, 7, 950);
+        voice.opened_ms = Some(1000);
+        voice.voice_start_ms = Some(950);
+        voice.table_sequence = Some(42);
+        assert_eq!(
+            TimingBuffer::default().push(voice.clone()),
+            Err(TimingError::Invalid)
+        );
+        voice.at_ms = voice.at_ms.max(voice.opened_ms.unwrap());
+        let mut buffer = TimingBuffer::default();
+        buffer.push(voice).unwrap();
+        let mut crossfade = TimingEvent::lifecycle("plate-crossfade", "started", 8, 7, 1200);
+        crossfade.crossfade_ms = 1000;
+        buffer.push(crossfade).unwrap();
+        buffer
+            .push(TimingEvent::lifecycle("line", "successor", 1, 7, 2000))
+            .unwrap();
+        let batch = buffer.batch().unwrap();
+        let decoded = decode(&batch.bytes).unwrap();
+        assert_eq!(decoded[0].voice_start_ms, Some(950));
+        assert_eq!(decoded[0].opened_ms, Some(1000));
+        assert_eq!(decoded[0].table_sequence, Some(42));
+        assert_eq!(batch.dropped, 0);
     }
 }

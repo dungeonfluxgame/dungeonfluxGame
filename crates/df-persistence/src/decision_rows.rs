@@ -498,23 +498,23 @@ pub(crate) fn decode_current_row(
         // The caller only learns "invalid candidate": say here which check of the stored
         // document refused, and how large it was against the limits, so a session that
         // will not load can be diagnosed from the server's log alone.
-        eprintln!(
-            "CHECKPOINT decode refused: {error:?} document_bytes={} limit_bytes={} limit_items={} limit_text_bytes={}",
+        df_observe::record_audit_line("persistence.checkpoint_decode", format!(
+            "CHECKPOINT decode outcome=refused cause={error:?} document_bytes={} limit_bytes={} limit_items={} limit_text_bytes={}",
             document.len(),
             codec_limits.maximum_document_bytes,
             codec_limits.maximum_collection_items,
             codec_limits.maximum_text_bytes,
-        );
+        ));
         // A pin mismatch means the document was written under other rules, content or
         // build than this server admits: print both sides of each pin that differs.
         if let Ok(stored) = crate::checkpoint_codec::decode_checkpoint_pins(&document, codec_limits)
         {
-            if let Some(message) = development_rules_pin_recovery_message(
+            if development_rules_pin_recovery_message(
                 stored.rules != pins.rules,
                 cfg!(debug_assertions),
                 std::env::var_os("DF_GAMEPLAY_DEMO_DATABASE").is_some(),
-            ) {
-                eprintln!("CHECKPOINT development recovery: {message}");
+            ).is_some() {
+                df_observe::record_audit_line("persistence.checkpoint_decode", "CHECKPOINT recovery cause=rules-pin-mismatch action=new-game".to_owned());
             }
             // One line per rules pin that differs, so the cause can be read at a glance
             // (a digest that differs means that part of the rules source changed between
@@ -548,22 +548,22 @@ pub(crate) fn decode_current_row(
             ];
             for (name, stored_value, admitted_value) in fields {
                 if stored_value != admitted_value {
-                    eprintln!(
-                        "CHECKPOINT rules pin differs: {name} stored={stored_value} admitted={admitted_value}"
-                    );
+                    df_observe::record_audit_line("persistence.checkpoint_decode", format!(
+                        "CHECKPOINT pin_mismatch kind=rules field={name} stored={stored_value} admitted={admitted_value}"
+                    ));
                 }
             }
             if stored.content != pins.content {
-                eprintln!(
-                    "CHECKPOINT content pins differ: stored={:?} admitted={:?}",
+                df_observe::record_audit_line("persistence.checkpoint_decode", format!(
+                    "CHECKPOINT pin_mismatch kind=content stored={:?} admitted={:?}",
                     stored.content, pins.content
-                );
+                ));
             }
             if stored.build != pins.build {
-                eprintln!(
-                    "CHECKPOINT build pins differ: stored={:?} admitted={:?}",
+                df_observe::record_audit_line("persistence.checkpoint_decode", format!(
+                    "CHECKPOINT pin_mismatch kind=build stored={:?} admitted={:?}",
                     stored.build, pins.build
-                );
+                ));
             }
         }
         RepositoryError::InvalidCandidate

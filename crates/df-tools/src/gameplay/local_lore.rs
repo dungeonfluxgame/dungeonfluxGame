@@ -1,9 +1,8 @@
 //! Local lore: the facts an NPC has established about a scene's town, kept as canon.
 //!
-//! When a hero asks something local that the canon and the speaker's role do not answer, the
-//! speaker's reply may propose ONE new fact in its `local_fact` slot, as `kind|name|content`. The
-//! server checks the proposal here and only then records it, so the same question asked later is
-//! answered from canon, not invented again. Canon is bounded per scene and per file, saved in the
+//! REF-069 decides missing answers before wording and atomically appends its accepted facts and
+//! blank decisions here. The legacy proposal validator remains for explicit development authoring;
+//! spoken replies cannot admit new canon. Canon is bounded per scene and per file, saved in the
 //! run directory beside `social.json` for one adventure seed, and never moves coin, items or
 //! rules: a fact is talk about the world, and the mechanics stay with the rules.
 
@@ -44,18 +43,6 @@ const TRAVEL_KNOWLEDGE: &str = "You know the roads, the inns and waystations alo
 places lie, and the dangers on the way.";
 const NEIGHBOUR_KNOWLEDGE: &str = "You know your own street and neighbours, the places people \
 nearby use, and the local talk you have overheard.";
-
-/// The fields of a reply's `local_fact` rules the storyteller reads with the facts.
-pub(super) const LOCAL_FACT_RULES: &str = "Local questions (places, roads, people, customs, \
-services, rumours) and questions about you (how long you have kept your trade, your past, your \
-habits, what you would do in trouble) are answered in character from facts.local_canon, \
-facts.local_knowledge and facts.things_described; say only what a described thing's text says. \
-Canon is true: repeat it the same way and never contradict it. If neither answers and \
-facts.may_establish_local_fact is true, you may establish ONE plausible fact in slot local_fact \
-as kind|name|content: kind is place, person, rumour, custom, service or history; name is short; \
-content is one sentence with no digits, coin, prices, items, rules or the hero's name; a rumour \
-begins with They say. Fit the scene and the facts. Otherwise write none. Decline out of character \
-only from wariness or a grievance.";
 
 /// Why a proposal was refused. The label is a closed vocabulary for the audit line; it never
 /// carries the proposal's text.
@@ -165,6 +152,7 @@ pub(in crate::gameplay) struct Names<'a> {
 pub(in crate::gameplay) struct LocalLore {
     adventure_seed: String,
     scenes: Mutex<BTreeMap<String, Vec<LocalFact>>>,
+    decisions: Mutex<Vec<super::fact_backfill::FactDecision>>,
     file: Option<PathBuf>,
     /// Serialises saves so the newest snapshot is always the last one written.
     writing: Mutex<()>,
@@ -200,6 +188,8 @@ struct SavedFile {
     schema: String,
     adventure_seed: String,
     scenes: Vec<SavedScene>,
+    #[serde(default)]
+    decisions: Vec<super::fact_backfill::FactDecision>,
 }
 
 impl LocalLore {
@@ -208,6 +198,7 @@ impl LocalLore {
         Self {
             adventure_seed: String::new(),
             scenes: Mutex::new(BTreeMap::new()),
+            decisions: Mutex::new(Vec::new()),
             file: None,
             writing: Mutex::new(()),
         }
@@ -221,6 +212,7 @@ impl LocalLore {
     ) -> Result<Self, LoreError> {
         let file = directory.map(|directory| directory.join(FILE_NAME));
         let mut scenes = BTreeMap::new();
+        let mut decisions = Vec::new();
         if let Some(file) = &file {
             match read_saved(file) {
                 Ok(saved) => {
@@ -230,6 +222,12 @@ impl LocalLore {
                     if saved.scenes.len() > SCENES {
                         return Err(LoreError::Invalid("too many scenes"));
                     }
+                    if saved.decisions.len() > 1024
+                        || saved.decisions.iter().any(|decision| !decision.bounded())
+                    {
+                        return Err(LoreError::Invalid("fact decision journal out of bounds"));
+                    }
+                    decisions = saved.decisions;
                     for entry in saved.scenes {
                         if entry.facts.len() > FACTS_PER_SCENE
                             || entry.scene.is_empty()
@@ -244,15 +242,32 @@ impl LocalLore {
                 Err(error) => return Err(error),
             }
         }
+        if decisions.iter().any(|decision| {
+            decision.fact.as_ref().is_some_and(|fact| {
+                !scenes
+                    .get(&decision.scene)
+                    .is_some_and(|facts| facts.contains(fact))
+                    || fact.established_by
+                        != decision
+                            .speaker
+                            .chars()
+                            .take(NAME_CHARACTERS)
+                            .collect::<String>()
+            })
+        }) {
+            return Err(LoreError::Invalid("fact decision canon mismatch"));
+        }
         Ok(Self {
             adventure_seed: adventure_seed.to_owned(),
             scenes: Mutex::new(scenes),
+            decisions: Mutex::new(decisions),
             file,
             writing: Mutex::new(()),
         })
     }
 
     /// Whether `scene` can take one more fact: it has room, or the run still has a scene to spare.
+    #[cfg(test)]
     pub(super) fn has_room(&self, scene: &str) -> bool {
         let scenes = self.lock();
         match scenes.get(scene) {
@@ -365,9 +380,131 @@ impl LocalLore {
             schema: SCHEMA.to_owned(),
             adventure_seed: self.adventure_seed.clone(),
             scenes,
+            decisions: self.development_decisions(),
         })
         .map_err(|_| LoreError::Invalid("serialization"))?;
         write_atomically(file, &bytes).map_err(|error| LoreError::Io(error.kind()))
+    }
+
+    /// Listener-safe canon for this actual place and person. Personal facts follow their
+    /// stable NPC identity across scene keys; other people's facts remain local to their place.
+    pub(super) fn canon_for_person(
+        &self,
+        scene: &str,
+        place: &str,
+        npc_id: &str,
+        names: &Names<'_>,
+        withheld: &dyn Fn(&str) -> bool,
+    ) -> Value {
+        let decisions = self.development_decisions();
+        let legacy = self.canon_for_listener(scene, names, withheld);
+        let mut shown: Vec<Value> = legacy["facts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|fact| {
+                !decisions.iter().any(|decision| {
+                    decision.fact.as_ref().is_some_and(|kept| {
+                        fact["content"] == kept.content
+                            && fact["name"] == kept.name
+                            && fact["established_by"] == kept.established_by
+                    })
+                })
+            })
+            .cloned()
+            .collect();
+        for decision in decisions {
+            if (decision.place == place || decision.npc_id == npc_id)
+                && let Some(fact) = decision.fact
+                && fact_fits_listener(&fact, names, withheld)
+            {
+                shown.push(json!({
+                    "kind":fact.kind.label(), "name":fact.name, "content":fact.content,
+                    "established_by":fact.established_by,
+                    "person_id":decision.npc_id, "place_id":decision.place,
+                }));
+            }
+        }
+        json!({"meaning":CANON_MEANING, "facts":shown})
+    }
+
+    /// Append a REF-069 decision and its optional fact atomically, before a reply can use it.
+    /// Save failure leaves both the in-memory canon and the durable journal unchanged.
+    pub(in crate::gameplay) fn commit_fact_decision(
+        &self,
+        decision: super::fact_backfill::FactDecision,
+        fact: Option<LocalFact>,
+    ) -> Result<(), LoreError> {
+        if !decision.bounded() || decision.fact != fact {
+            return Err(LoreError::Invalid("fact decision"));
+        }
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut scenes = self.lock();
+        let mut decisions = self
+            .decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if decisions.len() >= 1024 {
+            return Err(LoreError::Invalid("fact decision journal full"));
+        }
+        if decisions.contains(&decision) {
+            return Ok(());
+        }
+        let mut next_scenes = scenes.clone();
+        if let Some(fact) = &fact {
+            if !stored_fact_fits(fact) {
+                return Err(LoreError::Invalid("fact out of bounds"));
+            }
+            if !next_scenes.contains_key(&decision.scene) && next_scenes.len() >= SCENES {
+                return Err(LoreError::Invalid("fact scenes full"));
+            }
+            let existing = next_scenes.entry(decision.scene.clone()).or_default();
+            if existing.len() >= FACTS_PER_SCENE
+                || decisions.iter().any(|kept| {
+                    kept.npc_id == decision.npc_id
+                        && kept
+                            .fact
+                            .as_ref()
+                            .is_some_and(|kept| kept.name.eq_ignore_ascii_case(&fact.name))
+                })
+            {
+                return Err(LoreError::Invalid("fact slot unavailable"));
+            }
+            existing.push(fact.clone());
+        }
+        let mut next_decisions = decisions.clone();
+        next_decisions.push(decision);
+        if let Some(file) = &self.file {
+            let bytes = serde_json::to_vec_pretty(&SavedFile {
+                schema: SCHEMA.to_owned(),
+                adventure_seed: self.adventure_seed.clone(),
+                scenes: next_scenes
+                    .iter()
+                    .map(|(scene, facts)| SavedScene {
+                        scene: scene.clone(),
+                        facts: facts.clone(),
+                    })
+                    .collect(),
+                decisions: next_decisions.clone(),
+            })
+            .map_err(|_| LoreError::Invalid("fact decision serialization"))?;
+            if bytes.len() as u64 > MAXIMUM_FILE_BYTES {
+                return Err(LoreError::Invalid("fact decision file full"));
+            }
+            write_atomically(file, &bytes).map_err(|error| LoreError::Io(error.kind()))?;
+        }
+        *scenes = next_scenes;
+        *decisions = next_decisions;
+        Ok(())
+    }
+
+    pub(in crate::gameplay) fn development_decisions(
+        &self,
+    ) -> Vec<super::fact_backfill::FactDecision> {
+        self.decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Vec<LocalFact>>> {
@@ -526,8 +663,8 @@ fn parse_proposal(text: &str) -> Result<Option<(FactKind, String, String)>, Reje
     )))
 }
 
-fn check_text(
-    kind: FactKind,
+pub(super) fn check_text(
+    _kind: FactKind,
     name: &str,
     content: &str,
     names: &Names<'_>,
@@ -1147,5 +1284,33 @@ mod tests {
             canon["facts"][0]["content"],
             "The Lantern Inn stands two streets east of the square."
         );
+    }
+    #[test]
+    fn hs50_ref069_loader_refuses_a_journal_fact_missing_from_canon() {
+        use super::super::fact_backfill::{Decision, FactDecision, Reason};
+        let dir = directory("hs50-journal-mismatch");
+        let fact = LocalFact {
+            kind: FactKind::History,
+            name: "Shop name".into(),
+            content: "Bram's shop is called The Last Stitch.".into(),
+            established_by: "Bram".into(),
+        };
+        let decision = FactDecision {
+            scene: "Opening".into(),
+            place: "north-lane".into(),
+            npc_id: "bram".into(),
+            speaker: "Bram".into(),
+            question_hash: "a".repeat(64),
+            decision: Decision::Backfill,
+            reason: Reason::HarmlessMissingDetail,
+            fact: Some(fact),
+        };
+        let saved = json!({"schema":SCHEMA, "adventure_seed":"seed-a", "scenes":[], "decisions":[decision]});
+        fs::write(dir.join(FILE_NAME), saved.to_string()).unwrap();
+        assert!(matches!(
+            LocalLore::open("seed-a", Some(dir.clone())),
+            Err(LoreError::Invalid("fact decision canon mismatch"))
+        ));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

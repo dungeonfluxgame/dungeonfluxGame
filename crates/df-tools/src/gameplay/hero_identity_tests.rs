@@ -458,3 +458,23 @@ async fn model_output_cannot_inject_picture_instructions_or_change_unrequested_f
     .await;
     assert_eq!(outcome, Err(IdentityError::UnexpectedChange));
 }
+
+#[test]
+fn canonical_appearance_includes_catalog_species_morphology() {
+    let identity = Identity::from_menus(&[]).unwrap();
+    for (species, morphology) in [
+        ("dragonborn", "continuous overlapping scales"),
+        ("tiefling", "natural tail"),
+        ("orc", "lower tusks"),
+        ("elf", "pointed ears"),
+        ("gnome", "small adult frame"),
+        ("goliath", "giant-kin"),
+        ("halfling", "short adult frame"),
+        ("dwarf", "compact adult frame"),
+        ("human", "adult human"),
+        ("aasimar", "celestial presence"),
+    ] {
+        let appearance = identity.appearance_description(species).unwrap();
+        assert!(appearance.contains(morphology), "{species}: {appearance}");
+    }
+}

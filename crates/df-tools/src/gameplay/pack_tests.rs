@@ -157,6 +157,7 @@ fn shipped_files_load_with_only_disclosed_tactical_cover_policy() {
                 "tactical.cover-representative-height",
                 "tactical.initiative-ties-input-order",
                 "tactical.dead-space-passable",
+                "tactical.area-cell-centres-eight-directions",
             ],
         "departures: {:?}",
         loaded.departures
@@ -1124,7 +1125,7 @@ fn creation_groups_must_be_the_supported_set() {
     let foreign_option = set(
         &shipped_pack(),
         "/creation/groups/0/options/0/id",
-        json!("elf"),
+        json!("aasimar"),
     );
 
     assert_cross_ref(
@@ -1364,10 +1365,22 @@ fn shipped_courier_clue_equals_the_prepared_recording() {
 #[test]
 fn shipped_creation_content_equals_the_wire_creation_offer() {
     let loaded = load(&shipped_directory()).expect("shipped files must load");
-    let offer = wire::creation_offer().unwrap();
+    let offer = super::pack::with_test_pack(loaded.clone(), || wire::creation_offer().unwrap());
 
     assert_eq!(loaded.pack.creation.description, offer.description);
     for group in &loaded.pack.creation.groups {
+        // Tactical creation replaces these three source groups with one validated package.
+        if loaded.tuning.tactical.is_some()
+            && ["array", "equipment", "style-masteries"].contains(&group.id.as_str())
+        {
+            assert!(
+                !offer
+                    .groups
+                    .iter()
+                    .any(|candidate| candidate.group_id == group.id)
+            );
+            continue;
+        }
         let wire_group = offer
             .groups
             .iter()
@@ -1457,7 +1470,8 @@ fn shipped_resource_bounds_equal_the_journey_resource_constraints() {
         .max()
         .expect("at least one array");
     let hero_hit_point_maximum =
-        i64::from(loaded.tuning.hero.base_hit_points) + i64::from(hero_constitution_modifier);
+        // The tuning's legacy Dwarf +1 becomes Human Tough +2 at the shared upper bound.
+        i64::from(loaded.tuning.hero.base_hit_points) + 1 + i64::from(hero_constitution_modifier);
     let armor_class = i64::from(loaded.tuning.hero.armor_class);
 
     for hero in [[0x63; 16], [0x64; 16]] {
@@ -1559,18 +1573,18 @@ fn shipped_pack_puts_its_characters_on_stage_and_unknown_sprites_are_just_string
     };
     assert_eq!(
         cast(SceneKey::Opening),
-        [("Courier".to_owned(), CastRole::Patron, true)]
+        [("Finn Alder".to_owned(), CastRole::Patron, true)]
     );
     assert_eq!(
         cast(SceneKey::DialogueSeal),
         [
-            ("Courier".to_owned(), CastRole::Patron, true),
-            ("Bandit".to_owned(), CastRole::Antagonist, false)
+            ("Finn Alder".to_owned(), CastRole::Patron, true),
+            ("Dain Rusk".to_owned(), CastRole::Antagonist, false)
         ]
     );
     assert_eq!(
         cast(SceneKey::Combat),
-        [("Bandit".to_owned(), CastRole::Antagonist, true)]
+        [("Dain Rusk".to_owned(), CastRole::Antagonist, true)]
     );
     assert_eq!(cast(SceneKey::Inn).len(), 1);
     assert!(cast(SceneKey::Room).is_empty());
@@ -1605,7 +1619,7 @@ fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
         .iter()
         .map(|speaker| speaker.name.as_str())
         .collect();
-    assert_eq!(names, ["Courier", "Bandit"]);
+    assert_eq!(names, ["Finn Alder", "Dain Rusk"]);
     for scene in &loaded.pack.scenes {
         assert!(
             scene.speaker.is_empty() || names.contains(&scene.speaker.as_str()),

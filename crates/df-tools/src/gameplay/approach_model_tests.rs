@@ -1529,3 +1529,64 @@ fn const_or_static_item(line: &str) -> Option<(&str, &str)> {
     }
     Some((name, after_colon.split('=').next()?))
 }
+
+#[tokio::test]
+async fn hs25_flirt_is_not_a_literal_bargain_and_scimitar_address_uses_narration() {
+    let words = "Such nervous eyes, sweetheart. Tell you what: let a girl with horns walk beside you, and nobody on this wharf will dare look twice. What do I call you, and what does a smile cost around here?";
+    let endpoint = FakeEndpoint::start(vec![answer("o4"), answer("o9"), answer("o5")]);
+    let reader = model(&endpoint);
+    let reading = reader
+        .classify(words, "Courier", "Salt Quay", "Vesper, tiefling")
+        .await
+        .unwrap();
+    assert_eq!(reading.approach, Approach::Flirting);
+    let scene = "A dockside enforcer approaches, one hand on a scimitar.";
+    let decision = reader
+        .resolve_addressee_in_scene(
+            "Friend with the scimitar, what brings you here?",
+            &routing_cast(),
+            &[],
+            "Courier",
+            scene,
+        )
+        .await;
+    assert_eq!(
+        decision.target,
+        super::super::npc_target::Target::Actor("bandit".to_owned())
+    );
+    let bodies = endpoint.bodies();
+    let instructions = bodies[0]["questions"]["q1"]["instructions"]
+        .as_str()
+        .unwrap();
+    assert!(instructions.contains("what a smile costs"));
+    assert!(instructions.contains("genuine proposed exchange"));
+    assert_eq!(bodies[2]["state"]["public_scene"], scene);
+    assert!(
+        bodies[2]["questions"]["q1"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("friend with the scimitar")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn approach_model_travel_intent_uses_jev_without_matching_player_words() {
+    for words in [
+        "Let's go to the market square.",
+        "Courier, you walk with us up to the market square.",
+        "We set off for the next town.",
+    ] {
+        let endpoint = FakeEndpoint::start(vec![answer("o15")]);
+        let reading = model(&endpoint)
+            .classify_input(
+                words,
+                "The enforcer has stepped aside. The market road is open.",
+                &[],
+            )
+            .await;
+        assert_eq!(reading.intent, LineIntent::Travel);
+        assert_eq!(reading.label(), "travel");
+        assert!(reading.skill.is_none() && reading.physical_kind.is_none());
+        assert_eq!(endpoint.connections(), 1);
+    }
+}

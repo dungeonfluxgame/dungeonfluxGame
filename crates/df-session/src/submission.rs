@@ -36,14 +36,23 @@ pub enum RepositoryError {
 pub struct RefusalDiagnostic {
     pub step: &'static str,
     pub cause: String,
+    pub outer: Option<&'static str>,
 }
 thread_local! {
     static REFUSAL_DIAGNOSTIC: std::cell::RefCell<Option<RefusalDiagnostic>> = const { std::cell::RefCell::new(None) };
 }
 pub fn note_refusal_diagnostic(step: &'static str, cause: String) {
     REFUSAL_DIAGNOSTIC.with_borrow_mut(|slot| {
-        if slot.is_none() {
-            *slot = Some(RefusalDiagnostic { step, cause });
+        if let Some(detail) = slot {
+            if detail.step != step && detail.outer.is_none() {
+                detail.outer = Some(step);
+            }
+        } else {
+            *slot = Some(RefusalDiagnostic {
+                step,
+                cause,
+                outer: None,
+            });
         }
     });
 }
@@ -53,6 +62,17 @@ pub fn take_refusal_diagnostic() -> Option<RefusalDiagnostic> {
 
 fn refused(step: &'static str, error: RepositoryError) -> SubmissionOutcome {
     note_refusal_diagnostic(step, format!("{error:?}"));
+    REFUSAL_DIAGNOSTIC.with_borrow_mut(|slot| {
+        if let Some(detail) = slot
+            && detail.step != step
+        {
+            detail.outer = Some(step);
+        }
+    });
+    df_observe::record_audit_line(
+        "session.commit_refused",
+        format!("COMMIT refused step={step} cause={error:?}"),
+    );
     SubmissionOutcome::Refused(error)
 }
 
@@ -424,6 +444,20 @@ where
         self.reload(operation, context, None)
     }
 
+    fn audit_uncertain(&self, operation: &R::Scope, cause: &'static str) {
+        note_refusal_diagnostic("session-commit-uncertain", cause.to_owned());
+        let revision = self.checkpoint.basis().revision;
+        df_observe::record_audit_line(
+            "session.commit_uncertain",
+            format!(
+                "COMMIT uncertain op={} cause={cause} rev={}:{}",
+                df_observe::operation_hash(operation.operation().as_bytes()),
+                revision.epoch().get(),
+                revision.sequence(),
+            ),
+        );
+    }
+
     fn reload(
         &mut self,
         operation: &R::Scope,
@@ -431,7 +465,28 @@ where
         receipt: Option<&DecisionReceipt>,
     ) -> Result<(), RepositoryError> {
         let mut span = df_observe::begin(context, "session.reload");
+        let before = self.checkpoint.basis().revision;
+        let started = std::time::Instant::now();
         let result = self.reload_scoped(operation, context, receipt);
+        let after = self.checkpoint.basis().revision;
+        df_observe::record_audit_line(
+            "session.reload",
+            format!(
+                "SESSION reload outcome={} cause={:?} rev_before={}:{} rev_after={}:{} op={} ms={}",
+                if result.is_ok() {
+                    "reloaded"
+                } else {
+                    "pending"
+                },
+                result.as_ref().err(),
+                before.epoch().get(),
+                before.sequence(),
+                after.epoch().get(),
+                after.sequence(),
+                df_observe::operation_hash(operation.operation().as_bytes()),
+                started.elapsed().as_millis(),
+            ),
+        );
         span.finish_unmeasured(if result.is_ok() {
             "reloaded"
         } else {
@@ -615,10 +670,12 @@ where
             }
             Ok(OperationLookup::Conflict) => return SubmissionOutcome::OperationConflict,
             Ok(OperationLookup::InProgress) => {
+                self.audit_uncertain(operation, "in-progress");
                 self.fence_uncertain(key);
                 return SubmissionOutcome::LookupRequired;
             }
             Ok(OperationLookup::ExpiredOrIndeterminate) => {
+                self.audit_uncertain(operation, "expired-or-indeterminate");
                 self.fence_uncertain(key);
                 return SubmissionOutcome::ExpiredOrIndeterminate;
             }
@@ -629,10 +686,12 @@ where
             }
         }
         if operation.is_lookup_only() {
+            self.audit_uncertain(operation, "lookup-only");
             self.fence_uncertain(key);
             return SubmissionOutcome::LookupRequired;
         }
         if !matches!(&self.cache, CacheState::Current) {
+            self.audit_uncertain(operation, "cache-stale");
             return SubmissionOutcome::LookupRequired;
         }
         if operation.session() != self.checkpoint.basis().session {
@@ -697,29 +756,57 @@ where
                         .find(|d| d.operation == operation.operation())
                         != Some(receipt.decision())
                 {
+                    let check = if self.check_receipt(&receipt, operation).is_err() {
+                        "scope"
+                    } else if receipt.basis() != candidate.basis() {
+                        "basis"
+                    } else {
+                        "decision"
+                    };
+                    let revision = self.checkpoint.basis().revision;
+                    let retained = receipt.basis().revision;
+                    df_observe::record_audit_line(
+                        "session.receipt_mismatch",
+                        format!(
+                            "COMMIT receipt_mismatch op={} rev={}:{} receipt_rev={}:{} check={check} mode={mode:?}",
+                            df_observe::operation_hash(operation.operation().as_bytes()),
+                            revision.epoch().get(),
+                            revision.sequence(),
+                            retained.epoch().get(),
+                            retained.sequence(),
+                        ),
+                    );
+                    note_refusal_diagnostic("session-receipt-mismatch", check.to_owned());
                     self.fence_uncertain(key);
                     return SubmissionOutcome::LookupRequired;
                 }
                 self.checkpoint = candidate.clone();
                 let mut span = df_observe::begin(context, "session.publication");
-                span.finish_unmeasured(
-                    if self
-                        .publication
-                        .publish_committed(operation, &self.checkpoint)
-                        .is_ok()
-                    {
-                        "published"
-                    } else {
-                        "committed_publication_pending"
-                    },
-                );
+                let published = self
+                    .publication
+                    .publish_committed(operation, &self.checkpoint)
+                    .is_ok();
+                span.finish_unmeasured(if published {
+                    "published"
+                } else {
+                    "committed_publication_pending"
+                });
                 let mut span = df_observe::begin(context, "session.intent_wakeup");
-                span.finish_unmeasured(
-                    if self.publication.wake_committed_intents(operation).is_ok() {
-                        "durable_intents_woken"
-                    } else {
-                        "durable_intents_pending"
-                    },
+                let intents_woken = self.publication.wake_committed_intents(operation).is_ok();
+                span.finish_unmeasured(if intents_woken {
+                    "durable_intents_woken"
+                } else {
+                    "durable_intents_pending"
+                });
+                let revision = self.checkpoint.basis().revision;
+                df_observe::record_audit_line(
+                    "session.publication",
+                    format!(
+                        "COMMIT published={published} intents_woken={intents_woken} op={} rev={}:{}",
+                        df_observe::operation_hash(operation.operation().as_bytes()),
+                        revision.epoch().get(),
+                        revision.sequence(),
+                    ),
                 );
                 SubmissionOutcome::Confirmed(receipt)
             }
@@ -733,6 +820,7 @@ where
                 SubmissionOutcome::Confirmed(receipt)
             }
             Ok(CommitOutcome::Indeterminate) => {
+                self.audit_uncertain(operation, "indeterminate");
                 self.fence_uncertain(key);
                 SubmissionOutcome::LookupRequired
             }
@@ -814,10 +902,12 @@ where
             }
             Ok(OperationLookup::Conflict) => return SubmissionOutcome::OperationConflict,
             Ok(OperationLookup::InProgress) => {
+                self.audit_uncertain(operation, "in-progress");
                 self.fence_uncertain(key);
                 return SubmissionOutcome::LookupRequired;
             }
             Ok(OperationLookup::ExpiredOrIndeterminate) => {
+                self.audit_uncertain(operation, "expired-or-indeterminate");
                 self.fence_uncertain(key);
                 return SubmissionOutcome::ExpiredOrIndeterminate;
             }
@@ -831,10 +921,12 @@ where
             }
         }
         if operation.is_lookup_only() {
+            self.audit_uncertain(operation, "lookup-only");
             self.fence_uncertain(key);
             return SubmissionOutcome::LookupRequired;
         }
         if !matches!(&self.cache, CacheState::Current) {
+            self.audit_uncertain(operation, "cache-stale");
             return SubmissionOutcome::LookupRequired;
         }
         if operation.session() != self.checkpoint.basis().session {
@@ -903,29 +995,57 @@ where
                         .find(|d| d.operation == operation.operation())
                         != Some(receipt.decision())
                 {
+                    let check = if self.check_receipt(&receipt, operation).is_err() {
+                        "scope"
+                    } else if receipt.basis() != candidate.basis() {
+                        "basis"
+                    } else {
+                        "decision"
+                    };
+                    let revision = self.checkpoint.basis().revision;
+                    let retained = receipt.basis().revision;
+                    df_observe::record_audit_line(
+                        "session.receipt_mismatch",
+                        format!(
+                            "COMMIT receipt_mismatch op={} rev={}:{} receipt_rev={}:{} check={check} mode=submit",
+                            df_observe::operation_hash(operation.operation().as_bytes()),
+                            revision.epoch().get(),
+                            revision.sequence(),
+                            retained.epoch().get(),
+                            retained.sequence(),
+                        ),
+                    );
+                    note_refusal_diagnostic("session-receipt-mismatch", check.to_owned());
                     self.fence_uncertain(key);
                     return SubmissionOutcome::LookupRequired;
                 }
                 self.checkpoint = candidate;
                 let mut span = df_observe::begin(context, "session.publication");
-                span.finish_unmeasured(
-                    if self
-                        .publication
-                        .publish_committed(operation, &self.checkpoint)
-                        .is_ok()
-                    {
-                        "published"
-                    } else {
-                        "committed_publication_pending"
-                    },
-                );
+                let published = self
+                    .publication
+                    .publish_committed(operation, &self.checkpoint)
+                    .is_ok();
+                span.finish_unmeasured(if published {
+                    "published"
+                } else {
+                    "committed_publication_pending"
+                });
                 let mut span = df_observe::begin(context, "session.intent_wakeup");
-                span.finish_unmeasured(
-                    if self.publication.wake_committed_intents(operation).is_ok() {
-                        "durable_intents_woken"
-                    } else {
-                        "durable_intents_pending"
-                    },
+                let intents_woken = self.publication.wake_committed_intents(operation).is_ok();
+                span.finish_unmeasured(if intents_woken {
+                    "durable_intents_woken"
+                } else {
+                    "durable_intents_pending"
+                });
+                let revision = self.checkpoint.basis().revision;
+                df_observe::record_audit_line(
+                    "session.publication",
+                    format!(
+                        "COMMIT published={published} intents_woken={intents_woken} op={} rev={}:{}",
+                        df_observe::operation_hash(operation.operation().as_bytes()),
+                        revision.epoch().get(),
+                        revision.sequence(),
+                    ),
                 );
                 SubmissionOutcome::Confirmed(receipt)
             }
@@ -939,6 +1059,7 @@ where
                 SubmissionOutcome::Confirmed(receipt)
             }
             Ok(CommitOutcome::Indeterminate) => {
+                self.audit_uncertain(operation, "indeterminate");
                 self.fence_uncertain(key);
                 SubmissionOutcome::LookupRequired
             }
@@ -1193,10 +1314,18 @@ where
         let result = self.submit(&item);
         if let Err(error) = item.receipt.try_send(result) {
             let mut span = df_observe::begin(&item.context, "session.receipt_delivery");
-            span.finish_unmeasured(match error {
+            let reason = match error {
                 std::sync::mpsc::TrySendError::Disconnected(_) => "receipt_wait_dropped",
                 std::sync::mpsc::TrySendError::Full(_) => "receipt_channel_contract_failure",
-            });
+            };
+            df_observe::record_audit_line(
+                "session.receipt_delivery",
+                format!(
+                    "COMMIT receipt_undelivered reason={reason} op={}",
+                    df_observe::operation_hash(item.operation.operation().as_bytes()),
+                ),
+            );
+            span.finish_unmeasured(reason);
         }
     }
 }
@@ -1245,5 +1374,30 @@ mod rewind_tests {
         // A buried dev decision is history, not a tail: it stays.
         let decisions = vec![decision(Some("dev:restore:back 1")), decision(None)];
         assert_eq!(strip_trailing_dev(&decisions).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    static LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn sink(_: &'static str, line: String) {
+        if line.contains("step=session-audit-test") {
+            LINES.lock().unwrap().push(line);
+        }
+    }
+    #[test]
+    fn refusal_has_a_shared_audit_record_and_preserves_its_typed_outcome() {
+        df_observe::install_audit_sink(sink);
+        assert_eq!(
+            refused("session-audit-test", RepositoryError::Capacity),
+            SubmissionOutcome::Refused(RepositoryError::Capacity)
+        );
+        let lines = LINES.lock().unwrap();
+        assert!(lines.iter().any(|line| {
+            line.starts_with("COMMIT refused step=session-audit-test cause=Capacity")
+                && line.contains("op=")
+                && line.contains("rev=")
+        }));
     }
 }

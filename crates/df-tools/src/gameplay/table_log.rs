@@ -144,7 +144,7 @@ pub(super) const LINE_CHARACTERS: usize = 420;
 /// closed tab never leaves a stuck bubble on the table. The phone refreshes about every 2 s.
 pub(super) const PRESENCE_EXPIRY: Duration = Duration::from_secs(5);
 /// Hero seats a presence mark can name.
-const PRESENCE_HEROES: u32 = 2;
+const PRESENCE_HEROES: u32 = df_rules::local_journey::MAXIMUM_PARTY as u32;
 
 /// The longest one commit may hold the phones without a display report, however many
 /// beats it resolved: a missing or frozen display can never block play past this
@@ -296,6 +296,7 @@ impl CommittedContext {
 struct Ring {
     next_sequence: u64,
     lines: VecDeque<rpc::TableLine>,
+    transcript: VecDeque<serde_json::Value>,
     committed_contexts: BTreeMap<u64, CommittedContext>,
     /// Counts every change a view shows (a line appended, a reply starting or ending), so a
     /// view whose game revision did not move can still be told from the one before it.
@@ -371,6 +372,7 @@ impl TableLog {
             ring: Mutex::new(Ring {
                 next_sequence: 1,
                 lines: VecDeque::new(),
+                transcript: VecDeque::new(),
                 committed_contexts: BTreeMap::new(),
                 version: 0,
                 presence_version: 0,
@@ -524,6 +526,11 @@ impl TableLog {
         let version = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             ring.lines.retain(|line| line.sequence < floor);
+            ring.transcript.retain(|line| {
+                line["seq"]
+                    .as_u64()
+                    .is_some_and(|sequence| sequence < floor)
+            });
             ring.committed_contexts
                 .retain(|sequence, _| *sequence < floor);
             ring.next_sequence = floor.min(ring.next_sequence);
@@ -766,7 +773,10 @@ impl TableLog {
         }
         super::actor::record_audit_line(
             "gameplay.table_line",
-            format!("LINE queued speaker={speaker:?} role={role:?} kind={kind:?} text={text:?}"),
+            format!(
+                "LINE queued hero_index={hero_index} role={role:?} kind={kind:?} chars={}",
+                text.chars().count()
+            ),
         );
         let (version, sequence, tapped) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
@@ -793,6 +803,23 @@ impl TableLog {
                 .unwrap_or_else(PoisonError::into_inner)
                 .as_ref()
                 .and_then(|checkpoints| CommittedContext::at(&checkpoints.borrow()));
+            let unix_ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(time) => time.as_millis() as i128,
+                Err(time) => -(time.duration().as_millis() as i128),
+            };
+            let place = context.as_ref().map(|context| context.place.id.clone());
+            let record = serde_json::json!({"unix_ms":unix_ms,"seq":sequence,"place":place,
+                "speaker":entry.speaker,"actor_id":entry.actor_id,"role":role.as_str_name(),
+                "kind":kind.as_str_name(),"hero_index":hero_index,"text":entry.text,
+                "exchange_id":null,"reply_ms":null,"voice":{"start":null,"end":null},
+                "subtitle":{"shown":null,"hidden":null}});
+            let transcript_position = ring
+                .transcript
+                .partition_point(|line| line["seq"].as_u64().is_some_and(|seq| seq < sequence));
+            ring.transcript.insert(transcript_position, record);
+            while ring.transcript.len() > 4096 {
+                ring.transcript.pop_front();
+            }
             if let Some(context) = context {
                 ring.committed_contexts.insert(sequence, context);
             }
@@ -1256,7 +1283,17 @@ impl TableLog {
         });
     }
 
-    #[cfg(test)]
+    /// Timestamped development transcript, independent of the short screen window.
+    pub(super) fn development_transcript(&self) -> Vec<serde_json::Value> {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .transcript
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn lines(&self) -> Vec<rpc::TableLine> {
         self.ring
             .lock()
@@ -1857,27 +1894,30 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
     };
     match rpc::OutcomeKind::try_from(outcome.kind) {
         Ok(rpc::OutcomeKind::Move) => format!(
-            "COMBAT move actor={:?} squares={} path={} cost_ft={} movement_left_ft={}",
-            outcome.actor_name,
+            "COMBAT move actor_hash={} squares={} path={} cost_ft={} movement_left_ft={}",
+            df_observe::seat_hash(outcome.actor_name.as_bytes()),
             outcome.path.len(),
             squares(&outcome.path),
             outcome.cost_ft,
             outcome.remaining_ft
         ),
         Ok(rpc::OutcomeKind::Recovery) => format!(
-            "COMBAT stable_recovery actor={:?} hours={}",
-            outcome.actor_name, outcome.recovery_hours
+            "COMBAT stable_recovery actor_hash={} hours={}",
+            df_observe::seat_hash(outcome.actor_name.as_bytes()),
+            outcome.recovery_hours
         ),
         Ok(rpc::OutcomeKind::Stabilisation) => match &outcome.stabilization {
             Some(result) => match rpc::StabilizationMethod::try_from(result.method) {
                 Ok(rpc::StabilizationMethod::HealersKit) => format!(
-                    "COMBAT stabilise actor={:?} target={:?} method=kit uses_left={}",
-                    outcome.actor_name, outcome.target_name, result.uses_left
+                    "COMBAT stabilise actor_hash={} target_hash={} method=kit uses_left={}",
+                    df_observe::seat_hash(outcome.actor_name.as_bytes()),
+                    df_observe::seat_hash(outcome.target_name.as_bytes()),
+                    result.uses_left
                 ),
                 Ok(rpc::StabilizationMethod::Medicine) => format!(
-                    "COMBAT stabilise actor={:?} target={:?} method=medicine die={} modifier={} dc={} result={}",
-                    outcome.actor_name,
-                    outcome.target_name,
+                    "COMBAT stabilise actor_hash={} target_hash={} method=medicine die={} modifier={} dc={} result={}",
+                    df_observe::seat_hash(outcome.actor_name.as_bytes()),
+                    df_observe::seat_hash(outcome.target_name.as_bytes()),
                     result.die,
                     result.wisdom_modifier,
                     result.dc,
@@ -1888,18 +1928,20 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
                     }
                 ),
                 _ => format!(
-                    "COMBAT stabilise actor={:?} target={:?} method=unspecified",
-                    outcome.actor_name, outcome.target_name
+                    "COMBAT stabilise actor_hash={} target_hash={} method=unspecified",
+                    df_observe::seat_hash(outcome.actor_name.as_bytes()),
+                    df_observe::seat_hash(outcome.target_name.as_bytes())
                 ),
             },
             None => format!(
-                "COMBAT stabilise actor={:?} target={:?} method=unspecified",
-                outcome.actor_name, outcome.target_name
+                "COMBAT stabilise actor_hash={} target_hash={} method=unspecified",
+                df_observe::seat_hash(outcome.actor_name.as_bytes()),
+                df_observe::seat_hash(outcome.target_name.as_bytes())
             ),
         },
         Ok(rpc::OutcomeKind::DeathSave) => format!(
-            "COMBAT death_save actor={:?} die={} result={:?} successes={} failures={}",
-            outcome.actor_name,
+            "COMBAT death_save actor_hash={} die={} result={:?} successes={} failures={}",
+            df_observe::seat_hash(outcome.actor_name.as_bytes()),
             outcome.attack_die,
             rpc::DeathSaveResult::try_from(outcome.death_save_result)
                 .unwrap_or(rpc::DeathSaveResult::Unspecified),
@@ -1907,9 +1949,9 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
             outcome.death_failures
         ),
         kind => format!(
-            "COMBAT attack actor={:?} target={:?} weapon={} mode={}{} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={}{} reasons={:?}",
-            outcome.actor_name,
-            outcome.target_name,
+            "COMBAT attack actor_hash={} target_hash={} weapon={} mode={}{} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={}{} reasons={:?}",
+            df_observe::seat_hash(outcome.actor_name.as_bytes()),
+            df_observe::seat_hash(outcome.target_name.as_bytes()),
             outcome.weapon,
             if outcome.attack_style == 2 {
                 "ranged"
@@ -1943,7 +1985,13 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
 pub(super) fn initiative_audit_line(rolls: &[rpc::InitiativeRoll], policy: &str) -> String {
     let order = rolls
         .iter()
-        .map(|roll| format!("{}:{}", roll.name, roll.total))
+        .map(|roll| {
+            format!(
+                "{}:{}",
+                df_observe::seat_hash(roll.name.as_bytes()),
+                roll.total
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!("{policy} order=[{order}]")
@@ -2002,7 +2050,8 @@ fn advance_audit_round(actor: &str, next: &str, order: &[&str], round: &mut u32)
 }
 
 pub(super) fn turn_audit_line(actor: &str, round: u32) -> String {
-    format!("COMBAT turn actor={actor:?} round={round}")
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    format!("COMBAT turn actor_hash={actor} round={round}")
 }
 
 pub(super) fn second_wind_audit_line(
@@ -2011,17 +2060,20 @@ pub(super) fn second_wind_audit_line(
     hit_points: u32,
     uses_left: u32,
 ) -> String {
+    let actor = df_observe::seat_hash(actor.as_bytes());
     format!(
-        "COMBAT second-wind actor={actor:?} healed={healed} hit_points={hit_points} uses_left={uses_left}"
+        "COMBAT second-wind actor_hash={actor} healed={healed} hit_points={hit_points} uses_left={uses_left}"
     )
 }
 
 pub(super) fn end_turn_audit_line(actor: &str) -> String {
-    format!("COMBAT end-turn actor={actor:?}")
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    format!("COMBAT end-turn actor_hash={actor}")
 }
 
 pub(super) fn combat_action_audit_line(action: &str, actor: &str) -> String {
-    format!("COMBAT {action} actor={actor:?}")
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    format!("COMBAT {action} actor_hash={actor}")
 }
 
 pub(super) fn fight_end_audit_line(outcome: &str, rounds: u32) -> String {
@@ -2035,13 +2087,16 @@ pub(super) fn story_choice_audit_line(
     phase_before: &str,
     phase_after: &str,
 ) -> String {
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    let label = df_observe::operation_hash(label.as_bytes());
     format!(
-        "STORY choice actor={actor:?} action={action} label={label:?} phase={phase_before}->{phase_after}"
+        "STORY choice actor_hash={actor} action={action} label_hash={label} phase={phase_before}->{phase_after}"
     )
 }
 
 pub(super) fn story_rest_audit_line(actor: &str) -> String {
-    format!("STORY rest actor={actor:?}")
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    format!("STORY rest actor_hash={actor}")
 }
 
 pub(super) fn story_rest_hit_die_audit_line(
@@ -2051,13 +2106,18 @@ pub(super) fn story_rest_hit_die_audit_line(
     healed: u32,
     hit_points: u32,
 ) -> String {
+    let actor = df_observe::seat_hash(actor.as_bytes());
     format!(
-        "STORY rest actor={actor:?} hit_die={hit_die} modifier={modifier} healed={healed} hit_points={hit_points}"
+        "STORY rest actor_hash={actor} hit_die={hit_die} modifier={modifier} healed={healed} hit_points={hit_points}"
     )
 }
 
 pub(super) fn story_say_audit_line(actor: &str, chars: usize, target: &str) -> String {
-    format!("STORY say actor={actor:?} chars={chars} target={target:?}")
+    let actor = df_observe::seat_hash(actor.as_bytes());
+    format!(
+        "STORY say actor_hash={actor} chars={chars} target_hash={}",
+        df_observe::operation_hash(target.as_bytes())
+    )
 }
 
 fn is_attack(outcome: &rpc::CombatOutcome) -> bool {
@@ -2173,15 +2233,22 @@ mod tests {
                 &rolls,
                 "COMBAT initiative policy=identical-monster-groups group=giant-weasel",
             ),
-            "COMBAT initiative policy=identical-monster-groups group=giant-weasel order=[Sigrun:18, Giant Weasel:12]"
+            format!(
+                "COMBAT initiative policy=identical-monster-groups group=giant-weasel order=[{}:18, {}:12]",
+                df_observe::seat_hash(b"Sigrun"),
+                df_observe::seat_hash(b"Giant Weasel")
+            )
         );
     }
 
     #[test]
-    fn turn_audit_formatter_quotes_the_actor_and_names_the_round() {
+    fn turn_audit_formatter_hashes_the_actor_and_names_the_round() {
         assert_eq!(
             turn_audit_line("Brakka", 3),
-            "COMBAT turn actor=\"Brakka\" round=3"
+            format!(
+                "COMBAT turn actor_hash={} round=3",
+                df_observe::seat_hash(b"Brakka")
+            )
         );
     }
 
@@ -2189,15 +2256,21 @@ mod tests {
     fn second_wind_audit_formatter_records_the_heal_hp_and_uses() {
         assert_eq!(
             second_wind_audit_line("Brakka", 4, 12, 0),
-            "COMBAT second-wind actor=\"Brakka\" healed=4 hit_points=12 uses_left=0"
+            format!(
+                "COMBAT second-wind actor_hash={} healed=4 hit_points=12 uses_left=0",
+                df_observe::seat_hash(b"Brakka")
+            )
         );
     }
 
     #[test]
-    fn end_turn_audit_formatter_quotes_the_actor() {
+    fn end_turn_audit_formatter_hashes_the_actor() {
         assert_eq!(
             end_turn_audit_line("Brakka"),
-            "COMBAT end-turn actor=\"Brakka\""
+            format!(
+                "COMBAT end-turn actor_hash={}",
+                df_observe::seat_hash(b"Brakka")
+            )
         );
     }
 
@@ -2205,7 +2278,10 @@ mod tests {
     fn combat_action_audit_formatter_records_the_action_and_actor() {
         assert_eq!(
             combat_action_audit_line("dash", "Brakka"),
-            "COMBAT dash actor=\"Brakka\""
+            format!(
+                "COMBAT dash actor_hash={}",
+                df_observe::seat_hash(b"Brakka")
+            )
         );
     }
 
@@ -2227,7 +2303,11 @@ mod tests {
                 "character_creation",
                 "opening"
             ),
-            "STORY choice actor=\"Brakka\" action=begin_story label=\"Begin the story\" phase=character_creation->opening"
+            format!(
+                "STORY choice actor_hash={} action=begin_story label_hash={} phase=character_creation->opening",
+                df_observe::seat_hash(b"Brakka"),
+                df_observe::operation_hash(b"Begin the story")
+            )
         );
     }
 
@@ -2259,24 +2339,25 @@ mod tests {
             lines
                 .iter()
                 .map(|(_, line)| line
-                    .split("actor=")
+                    .split("actor_hash=")
                     .nth(1)
-                    .and_then(|actor| actor.split_whitespace().next()))
+                    .and_then(|actor| actor.split_whitespace().next())
+                    .and_then(|actor| actor.parse::<u64>().ok()))
                 .collect::<Vec<_>>(),
             [
-                Some("\"Brakka\""),
-                Some("\"Brakka\""),
-                Some("\"Weasel\""),
-                Some("\"Weasel\""),
+                Some(df_observe::seat_hash(b"Brakka")),
+                Some(df_observe::seat_hash(b"Brakka")),
+                Some(df_observe::seat_hash(b"Weasel")),
+                Some(df_observe::seat_hash(b"Weasel")),
             ]
         );
     }
 
     #[test]
-    fn story_rest_audit_formatter_quotes_the_actor() {
+    fn story_rest_audit_formatter_hashes_the_actor() {
         assert_eq!(
             story_rest_audit_line("Brakka"),
-            "STORY rest actor=\"Brakka\""
+            format!("STORY rest actor_hash={}", df_observe::seat_hash(b"Brakka"))
         );
     }
 
@@ -2284,7 +2365,10 @@ mod tests {
     fn story_rest_hit_die_audit_formatter_records_the_spend_result_srd_p187() {
         assert_eq!(
             story_rest_hit_die_audit_line("Brakka", 8, 2, 4, 13),
-            "STORY rest actor=\"Brakka\" hit_die=8 modifier=2 healed=4 hit_points=13"
+            format!(
+                "STORY rest actor_hash={} hit_die=8 modifier=2 healed=4 hit_points=13",
+                df_observe::seat_hash(b"Brakka")
+            )
         );
     }
 
@@ -2293,7 +2377,11 @@ mod tests {
         let line = story_say_audit_line("Brakka", 17, "Perrin");
         assert_eq!(
             line,
-            "STORY say actor=\"Brakka\" chars=17 target=\"Perrin\""
+            format!(
+                "STORY say actor_hash={} chars=17 target_hash={}",
+                df_observe::seat_hash(b"Brakka"),
+                df_observe::operation_hash(b"Perrin")
+            )
         );
         assert!(!line.contains("typed words"));
     }
@@ -2328,6 +2416,18 @@ mod tests {
         assert!(wake.has_changed().unwrap());
         log.set_composing_at(0, rpc::ComposeKind::Stopped, now);
         assert!(composing(&log).is_empty());
+    }
+
+    #[test]
+    fn all_six_heroes_can_hold_independent_presence_marks() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        for hero in 0..PRESENCE_HEROES {
+            log.set_composing_at(hero, rpc::ComposeKind::Typing, now);
+        }
+        assert_eq!(composing(&log).len(), PRESENCE_HEROES as usize);
+        log.set_composing_at(5, rpc::ComposeKind::Stopped, now);
+        assert_eq!(composing(&log).len(), 5);
     }
 
     #[test]
@@ -2385,7 +2485,10 @@ mod tests {
     fn unknown_seats_and_a_disabled_log_record_no_presence() {
         let log = TableLog::new();
         let now = Instant::now();
-        assert_eq!(log.set_composing_at(2, rpc::ComposeKind::Typing, now), None);
+        assert_eq!(
+            log.set_composing_at(PRESENCE_HEROES, rpc::ComposeKind::Typing, now),
+            None
+        );
         assert!(composing(&log).is_empty());
         let disabled = TableLog::disabled();
         disabled.set_composing_at(0, rpc::ComposeKind::Typing, now);
@@ -4154,5 +4257,34 @@ mod tests {
         let mut view = fight_view(true, 0, &[]);
         settled.attach(&mut view);
         assert_eq!(player_offers(&view), (true, 1, 0, 0));
+    }
+}
+
+#[cfg(test)]
+mod development_transcript_tests {
+    use super::*;
+    #[test]
+    fn transcript_outlives_the_screen_window_and_preserves_append_time() {
+        let table = TableLog::new();
+        for _ in 0..RING_LINES + 4 {
+            table.push(
+                "Brynn",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "A public line.",
+            );
+        }
+        let transcript = table.development_transcript();
+        assert_eq!(transcript.len(), RING_LINES + 4);
+        assert_eq!(table.lines().len(), RING_LINES);
+        assert_eq!(transcript[0]["seq"], 1);
+        assert!(transcript[0]["unix_ms"].as_i64().unwrap() > 0);
+        assert_eq!(
+            table.development_transcript()[0]["unix_ms"],
+            transcript[0]["unix_ms"]
+        );
+        table.rewind_to(3);
+        assert_eq!(table.development_transcript().len(), 2);
     }
 }

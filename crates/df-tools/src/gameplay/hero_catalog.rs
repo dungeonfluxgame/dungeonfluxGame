@@ -1,9 +1,11 @@
 //! Source-pinned creation cards. These describe SRD choices; only the rules engine can admit one.
 //! SRD 5.2.1 printed pp.83-86 (backgrounds and species); pp.87-88 (Origin feats).
 
+#[cfg(test)]
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[cfg(test)]
 pub(crate) struct Catalog {
     pub(crate) source: String,
     pub(crate) species: Vec<Species>,
@@ -14,6 +16,7 @@ pub(crate) struct Catalog {
 /// A gear entry. Only packs use `contents`; `kit_item` names the pack by the id the hero's
 /// starting kit uses when that id differs from the catalog id.
 #[derive(Debug, Deserialize)]
+#[cfg(test)]
 pub(crate) struct Item {
     pub(crate) id: String,
     pub(crate) kind: String,
@@ -24,12 +27,14 @@ pub(crate) struct Item {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct PackContent {
     pub(crate) item: String,
     pub(crate) quantity: u8,
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg(test)]
 pub(crate) struct Species {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -38,6 +43,7 @@ pub(crate) struct Species {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg(test)]
 pub(crate) struct Background {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -50,15 +56,100 @@ pub(crate) struct Background {
     pub(crate) equipment_b_gp: u16,
 }
 
+#[cfg(test)]
 pub(crate) fn catalog() -> Result<Catalog, serde_json::Error> {
     serde_json::from_str(include_str!(
         "../../../../content/hero-tables/catalog-srd.json"
     ))
 }
 
+/// Species-dependent source choices. The wire owner appends these to the creation offer.
+pub(crate) fn species_choice_groups() -> Vec<df_protocol::common::JourneyGroup> {
+    use df_protocol::common as rpc;
+    use df_rules::local_journey::HeroSpecies;
+    let mut groups: Vec<rpc::JourneyGroup> = Vec::new();
+    for species in [
+        HeroSpecies::Dragonborn,
+        HeroSpecies::Elf,
+        HeroSpecies::Gnome,
+        HeroSpecies::Goliath,
+        HeroSpecies::Human,
+        HeroSpecies::Tiefling,
+    ] {
+        for group in df_rules::species::choice_groups(species) {
+            if let Some(existing) = groups
+                .iter_mut()
+                .find(|existing| existing.group_id == group.id)
+            {
+                for option in &mut existing.options {
+                    option.requires_options.push(species.choice_id().to_owned());
+                }
+            } else {
+                groups.push(rpc::JourneyGroup {
+                    group_id: group.id.to_owned(),
+                    label: group.label.to_owned(),
+                    options: group
+                        .options
+                        .iter()
+                        .map(|id| rpc::JourneyOption {
+                            option_id: (*id).to_owned(),
+                            label: id.replace('-', " "),
+                            description: if *id == "cloud" {
+                                "Not in play yet: Cloud's Jaunt".to_owned()
+                            } else {
+                                String::new()
+                            },
+                            requires_group: "species".to_owned(),
+                            requires_options: vec![species.choice_id().to_owned()],
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
+    groups
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_choice_groups_require_their_species_and_human_origin_feat_is_tough() {
+        let groups = species_choice_groups();
+        assert_eq!(
+            groups
+                .iter()
+                .find(|group| group.group_id == "versatile")
+                .unwrap()
+                .options
+                .iter()
+                .map(|option| option.option_id.as_str())
+                .collect::<Vec<_>>(),
+            ["tough"]
+        );
+        for group in &groups {
+            assert!(!group.options.is_empty());
+            for option in &group.options {
+                assert_eq!(option.requires_group, "species");
+                assert!(!option.requires_options.is_empty());
+                assert!(
+                    !option
+                        .requires_options
+                        .iter()
+                        .any(|species| species == "aasimar")
+                );
+            }
+        }
+        let spell = groups
+            .iter()
+            .find(|group| group.group_id == "species-spellcasting")
+            .unwrap();
+        assert_eq!(
+            spell.options[0].requires_options,
+            ["elf", "gnome", "tiefling"]
+        );
+    }
 
     #[test]
     fn every_srd_species_card_has_its_real_traits_and_printed_page() {

@@ -167,6 +167,12 @@ pub(in crate::gameplay) fn build(
     let speaker_layout = input
         .measured_speaker_layout
         .or_else(|| input.shot.speaker.as_ref().map(|speaker| speaker.layout));
+    let hero_ids: Vec<&str> = input
+        .actors
+        .iter()
+        .filter(|actor| actor.hero_art.is_some())
+        .map(|actor| actor.id)
+        .collect();
     let mut other_cast_index = 0usize;
     let mut actors = Vec::with_capacity(input.actors.len());
     for actor in input.actors {
@@ -192,7 +198,17 @@ pub(in crate::gameplay) fn build(
             spot
         };
         let live_art = actor.live_art.filter(|art| !art.trim().is_empty());
-        let look_at = if Some(actor.id) == input.speaker_id {
+        let hero_look_at = if actor.hero_art.is_some() && hero_ids.len() >= 2 {
+            hero_ids
+                .iter()
+                .position(|id| *id == actor.id)
+                .map(|index| hero_ids[(index + 1) % hero_ids.len()])
+        } else {
+            None
+        };
+        let look_at = if let Some(other_hero) = hero_look_at {
+            Some(other_hero)
+        } else if Some(actor.id) == input.speaker_id {
             input.listener_id
         } else {
             input.speaker_id
@@ -382,6 +398,7 @@ pub(in crate::gameplay) fn with_model(
                     &actor.spot,
                     &actor.pose,
                     &actor.expression,
+                    &actor.look_at,
                 )
             })
             .collect::<Vec<_>>(),
@@ -825,12 +842,20 @@ mod tests {
                         assert_eq!(long_line.camera, CameraFraming::Speaker);
                     }
                     assert_eq!(speaker.look_at.as_deref(), Some("hero-1"));
-                    assert!(
-                        graph
-                            .actors
-                            .iter()
-                            .filter(|actor| actor.id.starts_with("hero-"))
-                            .all(|actor| actor.look_at.as_deref() == Some(speaker.id.as_str()))
+                    // REF-060: with two heroes present they look at each other, not
+                    // both at the speaker; the speaker (an NPC) is unchanged.
+                    let hero_look: std::collections::BTreeMap<&str, Option<&str>> = graph
+                        .actors
+                        .iter()
+                        .filter(|actor| actor.id.starts_with("hero-"))
+                        .map(|actor| (actor.id.as_str(), actor.look_at.as_deref()))
+                        .collect();
+                    assert_eq!(
+                        hero_look,
+                        std::collections::BTreeMap::from([
+                            ("hero-1", Some("hero-2")),
+                            ("hero-2", Some("hero-1")),
+                        ])
                     );
                 }
                 let graph_json = serde_json::to_string(&graph).expect("graph serializes");
@@ -866,6 +891,96 @@ mod tests {
                 assert_eq!(graph.revision, repeated.revision);
             }
         }
+    }
+
+    #[test]
+    fn a_lone_hero_keeps_looking_at_the_speaker() {
+        let generated = crate::gameplay::npc_dossier_tests::adventure(43);
+        let scene = generated
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::Opening)
+            .unwrap()
+            .clone();
+        let setting = scene.setting.as_ref().expect("story fixture has a setting");
+        let place_kind = serde_json::to_value(setting.kind)
+            .expect("setting kind serializes")
+            .as_str()
+            .expect("setting kind is a string")
+            .to_owned();
+        let speaker = scene
+            .cast
+            .iter()
+            .find(|actor| !scene.speaker.is_empty() && actor.name == scene.speaker)
+            .expect("opening fixture has a speaker");
+        let story = format!("{} {}", scene.narration, scene.dialogue);
+        let shot = shot::direct(&ShotInput {
+            scene_key: scene.key,
+            place_id: &setting.place_id,
+            place_kind: &place_kind,
+            exterior: setting.exterior,
+            title: &scene.title,
+            story_text: &story,
+            speaker: Some(SpeakerInput {
+                sprite: &speaker.sprite,
+                gender: speaker.gender,
+                age: speaker.age,
+            }),
+            others: &[],
+            heroes: &[1],
+        })
+        .expect("lone hero stages");
+        let actors = [
+            ActorInput {
+                id: "hero-1",
+                name: "Brakka",
+                fallback_art: "hero-art",
+                live_art: None,
+                expression: Some(Expression::Neutral),
+                hero_art: Some(1),
+                speaking: false,
+            },
+            ActorInput {
+                id: &speaker.id,
+                name: &speaker.name,
+                fallback_art: "speaker-art",
+                live_art: None,
+                expression: Some(Expression::Neutral),
+                hero_art: None,
+                speaking: true,
+            },
+        ];
+        let graph = build(&SceneGraphInput {
+            scene_key: scene.key,
+            place_id: &setting.place_id,
+            place_name: &setting.name,
+            fallback_set: &scene.asset,
+            refreshed_set: None,
+            exterior: setting.exterior,
+            weather: None,
+            shot: &shot,
+            actors: &actors,
+            speaker_id: Some(&speaker.id),
+            listener_id: Some("hero-1"),
+            measured_speaker_layout: shot.speaker.as_ref().map(|speaker| speaker.layout),
+            scene_open: false,
+            narrator_speaks: false,
+            line_length: 40,
+        })
+        .expect("lone hero graph builds");
+        let hero = graph
+            .actors
+            .iter()
+            .find(|actor| actor.id == "hero-1")
+            .unwrap();
+        assert_eq!(hero.look_at.as_deref(), Some(speaker.id.as_str()));
+        let speaker_actor = graph
+            .actors
+            .iter()
+            .find(|actor| actor.id == speaker.id)
+            .unwrap();
+        assert_eq!(speaker_actor.look_at.as_deref(), Some("hero-1"));
     }
 
     #[test]

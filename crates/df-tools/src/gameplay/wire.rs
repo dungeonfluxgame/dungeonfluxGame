@@ -244,7 +244,7 @@ pub(super) fn journey_input(
         ));
     }
     if let Some(character) = &request.character {
-        if character.name.len() > 48 || character.choices.len() > 16 {
+        if character.name.len() > 48 || character.choices.len() > 17 {
             super::refusal_detail::cause(
                 "wire-creation-validation",
                 "character choices exceed bound".to_owned(),
@@ -475,6 +475,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                     .collect(),
             });
         }
+        groups.extend(super::hero_catalog::species_choice_groups());
         let supported_designs = super::creator_catalog::supported_designs(&groups);
         super::creator_catalog::expand_groups(&mut groups);
         Ok(rpc::CharacterCreationOffer {
@@ -1063,6 +1064,82 @@ fn table_choices(
     Ok(labels)
 }
 
+/// A local dialogue affordance, not a native action: the phone opens raw dialogue
+/// with the server's explicit actor id. A native Submit of it is never admitted.
+pub(super) fn opening_talk_offer(
+    current: &Checkpoint,
+) -> Result<Option<rpc::GameplayActionOffer>, RepositoryError> {
+    if !matches!(
+        super::journey::phase(current)?,
+        rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue
+    ) || !current.state().encounters.is_empty()
+        || super::beat_script_runtime::opening_threat_resolved(current.state())?
+    {
+        return Ok(None);
+    }
+    let available = super::beat_script::with_script(|script| {
+        Ok::<_, RepositoryError>(
+            script.is_canonical()
+                && matches!(
+                    script.current(current.state())?.state.durable.as_str(),
+                    "opening" | "courier-answer-seal" | "courier-answer-escort"
+                ),
+        )
+    })?;
+    if !available {
+        return Ok(None);
+    }
+    Ok(Some(rpc::GameplayActionOffer {
+        // The request carries the observed basis; private-only revisions must not
+        // change this public affordance's identity.
+        offer_id: "opening-talk:bandit".to_owned(),
+        action_kind: rpc::GameplayActionKind::Unspecified as i32,
+        label: if super::beat_script_runtime::previous_opening_social(current)?.is_some() {
+            "Try another offer"
+        } else {
+            "Talk to Dain Rusk"
+        }
+        .to_owned(),
+        input_groups: vec![rpc::JourneyGroup {
+            group_id: "dialogue-addressee".to_owned(),
+            label: "Talk to".to_owned(),
+            options: vec![rpc::JourneyOption {
+                option_id: "bandit".to_owned(),
+                label: "Dain Rusk".to_owned(),
+                ..Default::default()
+            }],
+        }],
+        ..Default::default()
+    }))
+}
+
+pub(super) fn travel_offer(
+    current: &Checkpoint,
+) -> Result<Option<rpc::GameplayActionOffer>, RepositoryError> {
+    let options = super::place_move::travel_options(current)?;
+    if options.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(rpc::GameplayActionOffer {
+        offer_id: "travel:party".to_owned(),
+        action_kind: rpc::GameplayActionKind::Travel as i32,
+        label: "Travel".to_owned(),
+        input_groups: vec![rpc::JourneyGroup {
+            group_id: "travel".to_owned(),
+            label: "Where do you go?".to_owned(),
+            options: options
+                .into_iter()
+                .map(|option| rpc::JourneyOption {
+                    option_id: option.id,
+                    label: option.label,
+                    ..Default::default()
+                })
+                .collect(),
+        }],
+        ..Default::default()
+    }))
+}
+
 pub(super) fn project_journey(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
@@ -1223,6 +1300,14 @@ pub(super) fn project_journey(
                     Vec::new()
                 },
             });
+        }
+        if own.is_some() {
+            if let Some(talk) = opening_talk_offer(current)? {
+                offers.push(talk);
+            }
+            if let Some(travel) = travel_offer(current)? {
+                offers.push(travel);
+            }
         }
         let source = model::content("private-courier-note")?;
         if perceived.facts().iter().any(|fact| {
@@ -1709,6 +1794,8 @@ pub(super) fn project_journey(
         .filter(|decision| decision.revision == current.basis().revision)
         .filter(|decision| {
             decision.source_policy.as_str() == journey::THREAD_POLICY
+                || journey::living_scene::observation_record(decision)
+                    .is_ok_and(|record| record.is_some())
                 || journey::tactical::development_receipt(decision)
                     .is_ok_and(|receipt| receipt.is_some())
         })
@@ -1720,10 +1807,14 @@ pub(super) fn project_journey(
     if role == LocalDemoRole::Player
         && let Some(check) = &latest_check
         && let Some(hero) = journey.own_character.as_ref()
-        && let Some(observation) = super::investigation::observation(&authored, check)
+        && super::investigation::observation(&authored, check).is_some()
     {
-        let pronouns = super::investigation::hero_pronouns(hero);
-        narration = observation.public_view().fallback_for(&hero.name, pronouns);
+        narration = super::beat_script_runtime::observation_finding(&authored, check)
+            .filter(|finding| finding.id.starts_with("observation-"))
+            .map_or_else(
+                || format!("{} takes a closer look.", hero.name),
+                |finding| finding.sentence.clone(),
+            );
     }
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
@@ -1758,51 +1849,35 @@ pub(super) fn project_journey(
     })
 }
 
-/// The look-around choices: the scene's findings, then watching each person still on stage, at
-/// most eight; `None` when there is nothing to look at.
+/// Look-around choices share the canonical investigation catalog with free-text input.
 fn observation_group(current: &Checkpoint) -> Result<Option<rpc::JourneyGroup>, RepositoryError> {
     let scene = stage(
         "view-observation-scene",
         super::beat_script_runtime::scene(current.state()),
     )?;
-    let mut options = scene
-        .findings
-        .iter()
-        .map(|finding| {
-            let label = finding
-                .id
-                .split('-')
-                .map(|word| {
-                    let mut characters = word.chars();
-                    characters.next().map_or_else(String::new, |first| {
-                        first.to_uppercase().chain(characters).collect()
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            rpc::JourneyOption {
-                option_id: finding.id.clone(),
-                label,
-                description: format!("Examine the {}.", finding.id.replace('-', " ")),
-                requires_group: String::new(),
-                requires_options: Vec::new(),
-            }
+    let options = super::investigation::offered_targets(&scene)
+        .into_iter()
+        .map(|target| rpc::JourneyOption {
+            option_id: target.id,
+            label: if target.person {
+                format!(
+                    "Study {}'s manner",
+                    super::investigation::the_phrase(&target.name)
+                )
+            } else {
+                format!("Inspect {}", super::investigation::the_phrase(&target.name))
+            },
+            description: target.description,
+            requires_group: String::new(),
+            requires_options: Vec::new(),
         })
         .collect::<Vec<_>>();
-    options.extend(scene.cast.iter().map(|actor| rpc::JourneyOption {
-        option_id: format!("watch-{}", actor.id),
-        label: format!("Watch {}", actor.name),
-        description: format!("Watch {} for a change in expression or manner.", actor.name),
-        requires_group: String::new(),
-        requires_options: Vec::new(),
-    }));
     if options.is_empty() {
         return Ok(None);
     }
-    options.truncate(8);
     Ok(Some(rpc::JourneyGroup {
-        group_id: "finding".to_owned(),
-        label: "Look around".to_owned(),
+        group_id: "attempt-thing".to_owned(),
+        label: "What catches your eye?".to_owned(),
         options,
     }))
 }
@@ -2067,6 +2142,35 @@ mod r2_action_surge_tests {
         assert_eq!(
             action_kind("second-wind"),
             Some(rpc::GameplayActionKind::SecondWind)
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "../gameplay_browser/phone_choices.rs"]
+mod hs28_phone_choices;
+
+#[cfg(test)]
+mod hs28_action_contract_tests {
+    use super::*;
+    use prost::Message;
+
+    #[test]
+    fn hs28_travel_preserves_existing_numbers_and_uses_the_typed_choice_list() {
+        assert_eq!(rpc::GameplayActionKind::Travel as i32, 43);
+        assert_eq!(rpc::GameplayActionKind::ActionSurge as i32, 42);
+        let request = rpc::SubmitActionRequest {
+            action_kind: rpc::GameplayActionKind::Travel as i32,
+            offer_id: "travel:1:42".into(),
+            action_choices: vec![rpc::JourneyChoice {
+                group_id: "travel".into(),
+                option_id: "exit:market-road".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            rpc::SubmitActionRequest::decode(request.encode_to_vec().as_slice()).unwrap(),
+            request
         );
     }
 }

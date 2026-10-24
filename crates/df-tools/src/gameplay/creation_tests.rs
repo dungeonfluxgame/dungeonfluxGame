@@ -1,5 +1,92 @@
 use super::*;
 
+#[path = "../gameplay_browser/hero_creation_choices.rs"]
+mod hero_creation_choices;
+
+#[test]
+fn revision_label_inner_cause_reaches_the_creation_refusal_without_player_text() {
+    super::super::refusal_detail::begin_action();
+    assert_eq!(
+        model::label("private player text"),
+        Err(RepositoryError::InvalidCandidate)
+    );
+    super::super::actor::record_refusal(
+        rpc::GameplayActionKind::CreateCharacter as i32,
+        "CapabilityUnavailable",
+        "refused",
+    );
+    let lines = super::super::actor::audit_lines_containing(
+        "step=model-revision-label outer=model-revision-label cause=RevisionLabel::InvalidCharacter { byte_index: 7 }",
+    );
+    assert!(!lines.is_empty());
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("private player text"))
+    );
+}
+
+#[test]
+fn full_species_form_accepts_seventeen_choices_and_refuses_eighteen() {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        include_bytes!("../../../../content/harbor-journey/tuning.json"),
+    )
+    .unwrap();
+    pack::with_test_pack(loaded, || {
+        let current = joined_room();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let build = super::tests::build("Maren Coast");
+        let mut choices = build
+            .iter()
+            .filter(|(key, _)| key.as_str() != "name")
+            .map(|(key, value)| {
+                (
+                    key.as_str(),
+                    if key.as_str() == "species" {
+                        "human"
+                    } else {
+                        value.as_str()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        choices.extend([
+            ("species-size", "medium"),
+            ("human-skill", "arcana"),
+            ("versatile", "tough"),
+            ("portrait", "portrait-hero-1"),
+        ]);
+        assert_eq!(choices.len(), 17);
+        let mut request = phone_create(&current, 3, "Maren Coast", &choices);
+        let input = wire::journey_input(&request, member, &current).unwrap();
+        let next = model::HarborEngine
+            .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+            .unwrap();
+        assert_eq!(
+            character_sheet(next.state(), player_entity(member, &next).unwrap())
+                .unwrap()
+                .maximum_hit_points,
+            14
+        );
+        request
+            .character
+            .as_mut()
+            .unwrap()
+            .choices
+            .push(rpc::JourneyChoice {
+                group_id: "versatile".to_owned(),
+                option_id: "tough".to_owned(),
+            });
+        assert_eq!(
+            wire::journey_input(&request, member, &current)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    });
+}
+
 #[test]
 fn duplicate_name_offer_is_rejected_by_the_registered_creation_stage() {
     let mut current = initial().expect("empty room");
@@ -522,7 +609,12 @@ fn every_package_completes_creation_without_a_stock_portrait_choice() {
             let input = creator_input(&current, member, &request);
             let next = model::HarborEngine
                 .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "lock-in refused: {error:?}; {:?}",
+                        df_session::submission::take_refusal_diagnostic()
+                    )
+                });
             let entity = player_entity(member, &next).unwrap();
             let character = next
                 .state()
@@ -548,6 +640,91 @@ fn every_package_completes_creation_without_a_stock_portrait_choice() {
                     .public_description
                     .contains("silver horns")
             );
+        }
+    });
+}
+
+#[test]
+fn lock_in_creation_keeps_the_checked_attachment_and_no_portrait_failures_still_create() {
+    live_pack(|| {
+        for with_portrait in [true, false] {
+            let current = joined_room();
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let mut choices = PHONE_SHARED.to_vec();
+            choices.push(("build-package", "melee-stalwart"));
+            let mut request = phone_create(&current, 3, "Thorin Ashbeard", &choices);
+            let mut identity = super::super::hero_identity::Identity::from_menus(&[])
+                .unwrap()
+                .to_rpc();
+            identity.appearance.as_mut().unwrap().public_description =
+                "A broad dwarf with an ash-grey beard, bronze braids and a weathered mail coat."
+                    .to_owned();
+            request.character.as_mut().unwrap().identity = Some(identity.clone());
+            let mut input = creator_input(&current, member, &request);
+            if with_portrait {
+                let GameInput::Game(command) = &mut input else {
+                    panic!("game input")
+                };
+                let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+                    panic!("creation")
+                };
+                choices.extend(
+                    super::super::creator_portraits::Attachment {
+                        key: "a".repeat(64),
+                        digest: [0x12; 32],
+                        bytes: 128,
+                        revision: 7,
+                    }
+                    .choices()
+                    .unwrap(),
+                );
+            }
+            let next = model::HarborEngine
+                .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+                .unwrap();
+            let entity = player_entity(member, &next).unwrap();
+            let sheet = character_sheet(next.state(), entity).unwrap();
+            assert_eq!(sheet.name, "Thorin Ashbeard");
+            assert_eq!(
+                super::super::hero_library::snapshot(&next, member)
+                    .unwrap()
+                    .hero
+                    .unwrap()
+                    .identity,
+                Some(identity)
+            );
+            if with_portrait {
+                let expected = format!("/gameplay/creator-portrait/{}", "a".repeat(64));
+                assert_eq!(sheet.portrait_uri, expected);
+                assert_eq!(sheet.portrait_draft_revision, 7);
+                assert_eq!(
+                    super::super::hero_identity::approved_portrait_uri(next.state(), entity),
+                    Some(expected)
+                );
+            } else {
+                assert!(sheet.portrait_uri.is_empty());
+                assert_eq!(sheet.portrait_draft_revision, 0);
+            }
+            for role in [
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+            ] {
+                let view = wire::journey_view(&next, role, member).unwrap();
+                let journey = match view.audience.unwrap() {
+                    rpc::view_message::Audience::Player(player) => player.journey.unwrap(),
+                    rpc::view_message::Audience::Display(display) => display.journey.unwrap(),
+                };
+                let party = journey
+                    .party
+                    .iter()
+                    .find(|hero| hero.name == "Thorin Ashbeard")
+                    .unwrap();
+                assert_eq!(party.portrait, sheet.portrait_uri);
+                if let Some(own) = journey.own_character {
+                    assert_eq!(own.portrait_uri, sheet.portrait_uri);
+                }
+            }
+            assert_eq!(next.state().characters.len(), 1);
         }
     });
 }
@@ -621,7 +798,7 @@ fn creator_catalog_unsupported_design_is_rejected_at_the_live_wire_boundary() {
         let before = current.clone();
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         for (species, class, background) in [
-            ("aasimar", "wizard-1", "sage"),
+            ("aasimar", "fighter-1", "soldier"),
             ("elf", "rogue-1", "criminal"),
             ("dragonborn", "ranger-1", "guide"),
             ("dwarf", "fighter-1", "noble"),
@@ -827,7 +1004,7 @@ fn stalwart_then_every_package_with_maximal_creator_identity_fits_and_saves_loss
                     });
                 // SaveMySeatHero snapshots the committed seat, never the phone's identity.
                 // Recover both after the second acceptance, and round-trip the actual library bytes.
-                for (index, seat) in MEMBERS.iter().enumerate() {
+                for (index, seat) in MEMBERS.iter().take(2).enumerate() {
                     let member = MemberId::from_bytes(seat).unwrap();
                     let saved = super::super::hero_library::snapshot(&current, member)
                         .unwrap()
@@ -921,6 +1098,185 @@ fn legacy_public_look_and_48_byte_creator_chunks_still_recover_the_full_identity
                 .unwrap()
                 .identity,
             Some(identity)
+        );
+    });
+}
+
+#[test]
+fn every_srd_521_species_creates_through_decide_admitted_and_projects_its_own_sheet() {
+    live_pack(|| {
+        for (species, extra, hp, speed, sight, gap) in [
+            (
+                "dragonborn",
+                vec![("draconic-ancestry", "red")],
+                12,
+                "30 ft",
+                "60 ft",
+                "Draconic Flight",
+            ),
+            ("dwarf", vec![], 13, "30 ft", "120 ft", "Stonecunning"),
+            (
+                "elf",
+                vec![
+                    ("elven-lineage", "drow"),
+                    ("keen-senses", "insight"),
+                    ("species-spellcasting", "wisdom"),
+                ],
+                12,
+                "30 ft",
+                "120 ft",
+                "Trance",
+            ),
+            (
+                "gnome",
+                vec![
+                    ("gnomish-lineage", "rock-gnome"),
+                    ("species-spellcasting", "intelligence"),
+                ],
+                12,
+                "30 ft",
+                "60 ft",
+                "Gnomish Lineage",
+            ),
+            (
+                "goliath",
+                vec![("giant-ancestry", "fire")],
+                12,
+                "35 ft",
+                "None",
+                "Large Form",
+            ),
+            ("halfling", vec![], 12, "30 ft", "None", "Brave"),
+            (
+                "human",
+                vec![
+                    ("species-size", "small"),
+                    ("human-skill", "arcana"),
+                    ("versatile", "tough"),
+                ],
+                14,
+                "30 ft",
+                "None",
+                "Resourceful",
+            ),
+            ("orc", vec![], 12, "30 ft", "120 ft", "Adrenaline Rush"),
+            (
+                "tiefling",
+                vec![
+                    ("fiendish-legacy", "chthonic"),
+                    ("species-size", "small"),
+                    ("species-spellcasting", "charisma"),
+                ],
+                12,
+                "30 ft",
+                "60 ft",
+                "Thaumaturgy",
+            ),
+        ] {
+            let current = joined_room();
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let mut choices = PHONE_SHARED.to_vec();
+            choices
+                .iter_mut()
+                .find(|(key, _)| *key == "species")
+                .unwrap()
+                .1 = species;
+            choices.extend(extra);
+            choices.extend([
+                ("build-package", "melee-stalwart"),
+                ("portrait", "portrait-hero-1"),
+            ]);
+            assert!(choices.len() <= 16);
+            let request = phone_create(&current, 3, "Maren Coast", &choices);
+            let input = wire::journey_input(&request, member, &current).unwrap();
+            let next = model::HarborEngine
+                .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+                .unwrap_or_else(|error| panic!("{species}: {error:?}"));
+            let sheet = accepted(next.state().decisions.last().unwrap())
+                .unwrap()
+                .character
+                .unwrap();
+            assert_eq!(sheet.maximum_hit_points, hp, "{species}");
+            assert_eq!(sheet.name, "Maren Coast", "{species}");
+            let who = player_entity(member, &next).unwrap();
+            for (group, skill) in [("human-skill", "arcana"), ("keen-senses", "insight")] {
+                if choices.iter().any(|(key, _)| *key == group) {
+                    assert_eq!(
+                        super::super::beat_script_runtime::skill_check_modifiers(
+                            next.state(),
+                            who,
+                            skill
+                        )
+                        .unwrap()
+                        .1,
+                        2,
+                        "{species}: source-selected skill proficiency"
+                    );
+                }
+            }
+            assert!(sheet.facts.iter().any(|fact|fact.label=="Species" && fact.value.eq_ignore_ascii_case(species)),"{species}");
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Speed" && fact.value == speed),
+                "{species}"
+            );
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Darkvision" && fact.value == sight),
+                "{species}"
+            );
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Not in play yet" && fact.value.contains(gap)),
+                "{species}"
+            );
+            if species != "dwarf" {
+                assert!(
+                    !sheet
+                        .facts
+                        .iter()
+                        .any(|fact| fact.value.contains("Dwarven Toughness"))
+                );
+            }
+        }
+    });
+}
+#[test]
+fn all_nine_srd_species_are_supported_fighter_soldier_designs_and_aasimar_stays_design_only() {
+    live_pack(|| {
+        let offer = wire::creation_offer().unwrap();
+        assert_eq!(offer.supported_designs.len(), 9);
+        for species in [
+            "dragonborn",
+            "dwarf",
+            "elf",
+            "gnome",
+            "goliath",
+            "halfling",
+            "human",
+            "orc",
+            "tiefling",
+        ] {
+            assert!(
+                offer
+                    .supported_designs
+                    .iter()
+                    .any(|design| design.species_id == species
+                        && design.class_id == "fighter-1"
+                        && design.background_id == "soldier")
+            );
+        }
+        assert!(
+            !offer
+                .supported_designs
+                .iter()
+                .any(|design| design.species_id == "aasimar")
         );
     });
 }

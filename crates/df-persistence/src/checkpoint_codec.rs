@@ -45,6 +45,10 @@ pub(crate) enum CodecError {
 }
 
 fn budget_failure(budget: &'static str, actual: usize, limit: usize) -> CodecError {
+    df_observe::record_audit_line(
+        "persistence.checkpoint_budget",
+        format!("CHECKPOINT capacity_refused budget={budget} actual={actual} limit={limit}"),
+    );
     df_session::submission::note_refusal_diagnostic(
         "checkpoint-codec-budget",
         format!("Capacity budget={budget} actual={actual} limit={limit}"),

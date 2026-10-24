@@ -647,23 +647,18 @@ impl ValidatedIdentity {
 
     /// Only public visual data reaches picture prompts; story and mechanical grants stay out.
     pub(crate) fn appearance_description(&self, species: &str) -> Result<String, IdentityError> {
-        if !matches!(
-            species,
-            "aasimar"
-                | "dragonborn"
-                | "dwarf"
-                | "elf"
-                | "gnome"
-                | "goliath"
-                | "halfling"
-                | "human"
-                | "orc"
-                | "tiefling"
-        ) {
-            return Err(IdentityError::InvalidOption);
-        }
+        let design = super::creator_catalog::portrait_design(species, "", "")
+            .ok_or(IdentityError::InvalidOption)?;
         let groups = menu_groups()?;
         let mut phrases = vec![format!("An adult {species}")];
+        // Share the catalog anatomy without maintaining another species morphology table.
+        // This API is species-only; accepted Draconic Ancestry colour belongs to its caller.
+        let morphology = design
+            .split_once("Ancestry visual anatomy: ")
+            .and_then(|(_, anatomy)| anatomy.split_once(". Explicit custom appearance details"))
+            .map(|(anatomy, _)| anatomy)
+            .ok_or(IdentityError::InvalidOption)?;
+        phrases.push(morphology.to_owned());
         for (field, selected) in self.0.appearance.fields() {
             if field == "pronouns" {
                 continue;
@@ -962,6 +957,11 @@ fn preview_error(error: IdentityError) -> tonic::Status {
     }
 }
 
+fn record_preview_audit(audit: &df_observe::AuditContext, line: String) {
+    let _scope = df_observe::audit_scope(audit.clone());
+    crate::gameplay::actor::record_audit_line("gameplay.hero_identity_preview", line);
+}
+
 /// Authenticated, non-mutating preview. The keyless path advertises local menu matching;
 /// the configured model adapter must replace that read when its owner integrates read_with.
 pub(in crate::gameplay) async fn preview(
@@ -969,12 +969,28 @@ pub(in crate::gameplay) async fn preview(
     request: tonic::Request<df_protocol::common::PreviewHeroIdentityRequest>,
 ) -> Result<tonic::Response<df_protocol::common::PreviewHeroIdentityResponse>, tonic::Status> {
     use df_protocol::common as rpc;
-    let binding = crate::gameplay::credential(&request)?;
+    let started = std::time::Instant::now();
+    let mut audit = crate::gameplay::service_audit_context(service, None);
+    let binding = crate::gameplay::credential(&request).inspect_err(|status| {
+        record_preview_audit(&audit, format!("HERO_IDENTITY operation=preview outcome=refused step=credential cause={:?} source=none ms={}", status.code(), started.elapsed().as_millis()));
+    })?;
+    audit.seat = Some(df_observe::seat_hash(&binding));
     let request = request.into_inner();
     let expected = request
         .observed_revision
-        .ok_or_else(|| tonic::Status::invalid_argument("Current hero options are required."))?;
+        .ok_or_else(|| {
+            record_preview_audit(&audit, format!("HERO_IDENTITY operation=preview outcome=refused step=revision cause=InvalidArgument source=none ms={} seat={}", started.elapsed().as_millis(), df_observe::seat_hash(&binding)));
+            tonic::Status::invalid_argument("Current hero options are required.")
+        })?;
     if request.session_id.is_none() || request.run_id.is_none() {
+        record_preview_audit(
+            &audit,
+            format!(
+                "HERO_IDENTITY operation=preview outcome=refused step=scope cause=InvalidArgument source=none ms={} seat={}",
+                started.elapsed().as_millis(),
+                df_observe::seat_hash(&binding)
+            ),
+        );
         return Err(tonic::Status::invalid_argument(
             "Join the table before making a hero.",
         ));
@@ -1016,6 +1032,26 @@ pub(in crate::gameplay) async fn preview(
         tonic::Status::deadline_exceeded("Reading took too long. Your text is still editable.")
     })
     .and_then(|result| result);
+    record_preview_audit(
+        &audit,
+        format!(
+            "HERO_IDENTITY operation=preview outcome={} step=reading cause={} source={} ms={} seat={}",
+            if result.is_ok() {
+                "proposed"
+            } else {
+                "refused"
+            },
+            result.as_ref().err().map_or_else(
+                || "none".to_owned(),
+                |status| format!("{:?}", status.code())
+            ),
+            result
+                .as_ref()
+                .map_or("none", |response| response.get_ref().source.as_str()),
+            started.elapsed().as_millis(),
+            df_observe::seat_hash(&binding),
+        ),
+    );
     span.finish_unmeasured(if result.is_ok() {
         "proposed"
     } else {
