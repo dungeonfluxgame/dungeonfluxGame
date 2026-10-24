@@ -101,6 +101,10 @@ pub struct RunRecord {
     /// Set by whoever is stopping the game, so other launchers read its end as a clean stop.
     #[serde(default)]
     pub stopping: bool,
+    /// The secret this game's server answers launcher status requests with (REF-064); games
+    /// started by an older launcher have none and show no table details.
+    #[serde(default)]
+    pub status_token: Option<String>,
     /// The server's `DEV CONTROL on url=… token_file=…` line, when developer control is on.
     #[serde(default)]
     pub dev_control: Option<String>,
@@ -434,6 +438,7 @@ impl App {
             adventure,
             created: now.timestamp(),
             last_played: now.timestamp(),
+            played_seconds: 0,
         }
     }
 
@@ -625,6 +630,13 @@ impl App {
             stop_postgres();
             return Err(failed("The game couldn't start", error.to_string()));
         }
+        let status_token = match status_token() {
+            Ok(token) => token,
+            Err(error) => {
+                stop_postgres();
+                return Err(failed("The game couldn't start", error.to_string()));
+            }
+        };
         let launch = server::Launch {
             install: &install,
             settings: &settings,
@@ -633,6 +645,7 @@ impl App {
             database: &game.database,
             adventure: game.adventure,
             stop_dir: &stop_dir,
+            status_token: &status_token,
         };
         // Names only: values may be keys.
         let names: Vec<String> = server::environment(&launch)
@@ -679,6 +692,7 @@ impl App {
             database_port: settings.database_port,
             stopping: false,
             dev_control: None,
+            status_token: Some(status_token.clone()),
         };
         // Written before the wait, so a launcher closed during startup still finds the game.
         let _ = self.write_run(&run);
@@ -914,6 +928,10 @@ impl App {
                 if run.postgres_started {
                     let _ = postgres::stop(&run.postgres_install());
                 }
+                let _ = saves::record(
+                    &app.data,
+                    &saves::after_session(&run.game, chrono::Utc::now().timestamp()),
+                );
                 app.clear_run();
                 app.set_phase(Phase::Failed(Failure {
                 title: format!("{} stopped unexpectedly", run.game.name),
@@ -1137,8 +1155,7 @@ impl App {
             "GAME_STOPPED",
             format!("name={}", log::value(&run.game.name)),
         );
-        let mut played = run.game.clone();
-        played.last_played = chrono::Utc::now().timestamp();
+        let played = saves::after_session(&run.game, chrono::Utc::now().timestamp());
         let _ = saves::record(&self.data, &played);
         self.clear_run();
         self.set_phase(Phase::Idle {
@@ -1344,6 +1361,13 @@ impl App {
     }
 }
 
+/// 32 random bytes in hex: the secret a started server answers launcher status requests with.
+fn status_token() -> io::Result<String> {
+    let mut secret = [0_u8; 32];
+    getrandom::getrandom(&mut secret).map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(secret.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 fn log_phase(phase: &Phase) {
     let (name, game) = match phase {
         Phase::Idle { .. } => ("idle", None),
@@ -1449,6 +1473,7 @@ mod tests {
                 adventure: Adventure::Harbor,
                 created: 1,
                 last_played: 1,
+                played_seconds: 0,
             },
             pid: u32::MAX - 1,
             server_exe: data.join("missing.exe"),
@@ -1462,6 +1487,7 @@ mod tests {
             database_port: 55517,
             stopping: false,
             dev_control: None,
+            status_token: None,
         };
         std::fs::write(data.join(RUN_FILE), toml::to_string(&run).unwrap()).unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));

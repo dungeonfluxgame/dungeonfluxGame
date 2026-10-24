@@ -304,6 +304,8 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   opacity: .7;
   animation: motes-rise 34s linear infinite, motes-sway 11s ease-in-out infinite alternate;
 }
+.ambience.wide .motes { -webkit-mask-image: radial-gradient(ellipse 75% 70% at 52% 45%, #000 30%, transparent 85%); mask-image: radial-gradient(ellipse 75% 70% at 52% 45%, #000 30%, transparent 85%); opacity: .55; }
+.ambience.wide .motes.far { opacity: .28; }
 .motes.far { background-size: 240px 300px; opacity: .3; filter: blur(.6px); animation-duration: 58s, 17s; }
 .fog {
   left: -40%; right: -40%; bottom: -8vh; height: 38vh;
@@ -327,15 +329,40 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 .vigil-state { color: var(--brass-bright); font: italic 18px/1.3 var(--serif); text-shadow: 0 1px 14px rgba(0, 0, 0, .8); }
 .vigil h1 { margin-top: 6px; font-size: clamp(40px, 5.6vw, 68px); line-height: 1.04; letter-spacing: -1px; overflow-wrap: anywhere; text-shadow: 0 2px 34px rgba(0, 0, 0, .8); }
 .vigil-lede { margin-top: 12px; color: #d7d9d2; font-size: 17px; text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
-.room-tablet {
-  display: inline-flex; align-items: baseline; gap: 18px; margin-top: 30px; padding: 14px 22px 14px 26px;
-  border: 1px solid rgba(198, 163, 107, .55); border-radius: 10px;
+/* Three brass tablets in a row: the room code and two clocks that count on by themselves. */
+.tablets { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 30px; }
+.tablet {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 168px; padding: 12px 22px 14px;
+  border: 1px solid rgba(198, 163, 107, .5); border-radius: 10px;
   background: linear-gradient(180deg, rgba(23, 49, 59, .78), rgba(9, 19, 29, .86));
   box-shadow: inset 0 1px 0 rgba(230, 201, 146, .22), 0 18px 50px rgba(0, 0, 0, .5);
   backdrop-filter: blur(6px);
+  transition: transform .35s cubic-bezier(.2, .8, .2, 1), border-color .3s, box-shadow .35s;
 }
-.room-label { color: var(--muted); font-size: 13px; }
-.room-code { color: var(--brass-bright); font: 34px/1 var(--serif); letter-spacing: .26em; margin-right: -.26em; text-shadow: 0 0 22px rgba(242, 178, 92, .35); }
+.tablet:hover { transform: translateY(-3px); border-color: rgba(230, 201, 146, .85); box-shadow: inset 0 1px 0 rgba(230, 201, 146, .3), 0 24px 60px rgba(0, 0, 0, .55), 0 0 30px rgba(242, 178, 92, .16); }
+.tablet-label { color: var(--muted); font-size: 12px; }
+.room-code { color: var(--brass-bright); font: 30px/1 var(--serif); letter-spacing: .26em; margin-right: -.26em; text-shadow: 0 0 22px rgba(242, 178, 92, .35); transition: text-shadow .3s, color .3s; }
+.room-tablet:hover .room-code { color: #fbe2b0; text-shadow: 0 0 26px rgba(242, 178, 92, .7); }
+/* The clocks: a registered integer counts up from --start for ten days; hours, minutes and
+   seconds are derived from it and printed by CSS counters. No script. */
+@property --tick { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --hours { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --minutes { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --seconds { syntax: "<integer>"; inherits: false; initial-value: 0; }
+.clock {
+  --tick: var(--start);
+  --hours: calc(round(down, var(--tick) / 3600, 1));
+  --minutes: calc(mod(round(down, var(--tick) / 60, 1), 60));
+  --seconds: calc(mod(var(--tick), 60));
+  counter-reset: hours var(--hours) minutes var(--minutes) seconds var(--seconds);
+  color: var(--ivory); font: 30px/1 var(--serif); font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  animation: clock-run 864000s linear forwards;
+}
+.clock::after { content: counter(hours) ":" counter(minutes, decimal-leading-zero) ":" counter(seconds, decimal-leading-zero); }
+@keyframes clock-run { from { --tick: var(--start); } to { --tick: calc(var(--start) + 864000); } }
+
+/* The heroes at the table: a frame that reloads itself, so the page around it never does. */
+.table-frame { display: block; width: min(760px, 100%); height: 172px; margin-top: 22px; border: 0; background: transparent; color-scheme: dark; }
 .vigil-facts { display: flex; justify-content: center; margin: 28px 0 0; }
 .vigil-facts > div { padding: 2px 24px; }
 .vigil-facts > div + div { border-left: 1px solid var(--line); }
@@ -373,11 +400,95 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   .masthead nav a { padding: 6px 12px; }
   .vigil .lantern { width: 76px; height: 76px; }
   .vigil .lantern img { width: 34px; height: 34px; }
-  .room-tablet { flex-direction: column; align-items: center; gap: 6px; padding: 12px 22px; }
-  .room-code { font-size: 30px; }
+  .tablets { gap: 10px; }
+  .tablet { min-width: 0; flex: 1 1 140px; padding: 10px 14px 12px; }
+  .room-code, .clock { font-size: 24px; }
+  .table-frame { height: 380px; }
   .vigil-facts { flex-direction: column; gap: 10px; }
   .vigil-facts > div + div { border-left: 0; padding-top: 10px; border-top: 1px solid var(--line); }
 }
+/* Touch and focus: everything that can be pressed answers the pointer. Controls lift a little
+   on hover and press in on click; primary buttons catch a sweep of lantern light; focus rings
+   settle in from a wider ring and drift back out when focus leaves. The Gentle and Follow
+   Windows motion settings keep the colour changes and drop the movement (end of this file). */
+a, button, input, select, textarea, summary, .adventure { outline: 3px solid transparent; outline-offset: 9px; }
+a { transition: color .2s, outline-color .25s, outline-offset .25s; }
+:focus-visible { outline-color: var(--brass-bright); outline-offset: 3px; }
+button { position: relative; overflow: hidden; transition: transform .2s cubic-bezier(.2, .8, .2, 1), filter .15s, background-color .2s, border-color .2s, box-shadow .3s, outline-color .25s, outline-offset .25s, text-underline-offset .2s; }
+button:not(:disabled):hover { transform: translateY(-2px); }
+button:not(:disabled):active { transform: translateY(1px) scale(.97); transition-duration: .06s; }
+button.primary:not(:disabled):hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 12px 30px rgba(0, 0, 0, .5), 0 0 26px rgba(242, 178, 92, .32); }
+button.primary::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(105deg, transparent 30%, rgba(255, 250, 235, .55) 48%, transparent 66%); transform: translateX(-130%); }
+button.primary:not(:disabled):hover::after { transform: translateX(130%); transition: transform .75s cubic-bezier(.3, .6, .2, 1); }
+button.secondary:not(:disabled):hover { box-shadow: 0 10px 26px rgba(0, 0, 0, .45), 0 0 18px rgba(198, 163, 107, .18); }
+button.danger:not(:disabled):hover { box-shadow: 0 10px 26px rgba(0, 0, 0, .45), 0 0 22px rgba(224, 144, 92, .3); }
+button.quiet:not(:disabled):hover { text-underline-offset: 6px; transform: none; }
+input, select, textarea { transition: border-color .2s, box-shadow .3s, background-color .2s, outline-color .25s, outline-offset .25s; }
+input:focus, select:focus, textarea:focus { border-color: var(--brass); box-shadow: 0 0 0 4px rgba(242, 178, 92, .14); }
+.brand img { transition: filter .35s, transform .35s cubic-bezier(.2, .8, .2, 1); }
+.brand:hover img { filter: drop-shadow(0 0 14px rgba(242, 178, 92, .5)); transform: scale(1.03); }
+.masthead nav a { transition: color .2s, background-color .2s, text-shadow .25s, outline-color .25s, outline-offset .25s; }
+.masthead nav a:not([aria-current="page"]):hover { text-shadow: 0 0 14px rgba(230, 201, 146, .55); }
+.lantern { transition: transform .45s cubic-bezier(.2, .8, .2, 1); }
+.lantern:hover { transform: scale(1.07); }
+.lantern[data-state="lit"]:hover img { animation-duration: 1.3s; }
+
+/* The new-game cards and saved games lean in under the pointer. */
+.adventure { transition: border-color .2s, transform .3s cubic-bezier(.2, .8, .2, 1), box-shadow .3s, outline-color .25s, outline-offset .25s; }
+.adventure:hover { transform: translateY(-4px); box-shadow: 0 18px 44px rgba(0, 0, 0, .55), 0 0 30px rgba(242, 178, 92, .12); }
+.adventure:active { transform: translateY(-1px) scale(.99); }
+.adventure-art img { transition: transform .6s cubic-bezier(.2, .8, .2, 1), filter .4s; }
+.adventure:hover .adventure-art img { transform: scale(1.07); filter: saturate(1) brightness(1); }
+.continue .shot img { transition: transform 1.4s cubic-bezier(.2, .8, .2, 1), filter .5s; }
+.continue:hover .shot img { transform: scale(1.04); filter: brightness(1.08); }
+.saves li { transition: background-color .25s, transform .3s cubic-bezier(.2, .8, .2, 1); border-radius: 8px; }
+.saves li:hover { transform: translateX(5px); background-color: rgba(23, 49, 59, .35); }
+.saves .shot img { transition: transform .5s cubic-bezier(.2, .8, .2, 1), filter .4s; }
+.saves li:hover .shot img { transform: scale(1.08); filter: brightness(1.12); }
+.readiness li { transition: background-color .2s, transform .25s cubic-bezier(.2, .8, .2, 1); }
+.readiness li:hover { transform: translateX(3px); }
+
+/* One entrance per page: the parts rise into place in order. The idle page and the running
+   page only; starting and stopping refresh themselves and stay put. */
+@keyframes rise-in { from { opacity: 0; transform: translateY(14px); filter: blur(2px); } }
+.home:not(.solo) .play > *, .home:not(.solo) .ledger { animation: rise-in .7s cubic-bezier(.2, .8, .2, 1) backwards; }
+.home:not(.solo) .play > :nth-child(2) { animation-delay: .1s; }
+.home:not(.solo) .ledger { animation-delay: .18s; }
+.vigil-stage > :not(.lantern) { animation: rise-in .8s cubic-bezier(.2, .8, .2, 1) backwards; }
+.vigil-stage > .vigil-state { animation-delay: .1s; }
+.vigil-stage > h1 { animation-delay: .16s; }
+.vigil-stage > .vigil-lede { animation-delay: .22s; }
+.vigil-stage > .tablets { animation-delay: .3s; }
+.vigil-stage > .table-frame { animation-delay: .38s; }
+.vigil-stage > .vigil-facts { animation-delay: .44s; }
+.vigil-stage > .actions { animation-delay: .5s; }
+.vigil-stage > .hint { animation-delay: .54s; }
+.vigil-stage > .stop-row { animation-delay: .58s; }
+
+/* The table frame's own page: transparent over the hall, a live dot, then the heroes. */
+.table-page { margin: 0; overflow: hidden; background: transparent; font: 15px/1.5 var(--sans); }
+.table-now { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 2px 0 12px; color: #d7d9d2; font-size: 14px; text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 14px rgba(0, 0, 0, .8); }
+.table-now strong { color: var(--ivory); font-weight: 600; }
+.table-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 0 0 rgba(156, 196, 166, .6); animation: live-pulse 2.4s ease-out infinite; }
+@keyframes live-pulse { 70% { box-shadow: 0 0 0 9px rgba(156, 196, 166, 0); } 100% { box-shadow: 0 0 0 0 rgba(156, 196, 166, 0); } }
+.table-empty { color: var(--muted); font-size: 14px; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 14px rgba(0, 0, 0, .8); }
+.table-empty strong { color: var(--brass-bright); letter-spacing: .12em; }
+.heroes { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin: 0; padding: 4px 4px 8px; list-style: none; }
+.hero { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 108px; transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.hero:hover { transform: translateY(-4px); }
+.hero-face { position: relative; display: grid; place-items: center; width: 64px; height: 80px; overflow: hidden; border-radius: 32px 32px 4px 4px; background: radial-gradient(ellipse at 50% 32%, #23414b, #0b1820 74%); box-shadow: inset 0 0 0 1px rgba(198, 163, 107, .6), 0 10px 24px rgba(0, 0, 0, .5); transition: box-shadow .3s; }
+.hero:hover .hero-face { box-shadow: inset 0 0 0 2px var(--brass-bright), 0 14px 30px rgba(0, 0, 0, .55), 0 0 24px rgba(242, 178, 92, .25); }
+.hero-initial { color: var(--brass); font: 30px/1 var(--serif); }
+.hero-face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; transform: scale(1.45); transform-origin: 50% 3%; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
+.hero:hover .hero-face img { transform: scale(1.55); }
+.hero[data-ready="false"] .hero-face { opacity: .7; box-shadow: inset 0 0 0 1px rgba(169, 183, 183, .4); }
+.hero-name { max-width: 100%; overflow: hidden; color: var(--ivory); font: 15px/1.2 var(--serif); text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 12px rgba(0, 0, 0, .8); }
+.hero-state { color: var(--brass-bright); font: italic 12px/1.3 var(--serif); text-shadow: 0 1px 3px rgba(0, 0, 0, .9); }
+.hero-health { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 76px; }
+.health-bar { position: relative; display: block; width: 100%; height: 4px; overflow: hidden; border-radius: 2px; background: rgba(9, 19, 29, .8); box-shadow: inset 0 0 0 1px rgba(198, 163, 107, .25); }
+.health-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: calc(var(--health) * 100%); border-radius: inherit; background: color-mix(in oklab, var(--sage) calc(var(--health) * 100%), var(--ember)); }
+.health-text { color: var(--muted); font-size: 11px; white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, .9); }
+
 /* Moving between Play and Settings: the brass pill slides to its new tab while the arriving
    page is revealed by a widening circle of lantern light from that tab; the leaving page dims
    and sinks away. The circle is sized to the window, not the page: Settings is several
@@ -422,6 +533,11 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   :root.motion-gentle .adventure, :root.motion-gentle .adventure-art img, :root.motion-gentle button { transition: none; }
   :root.motion-gentle .adventure:has(input:checked) .adventure-art img { transform: none; }
   :root.motion-gentle .running-page::before, :root.motion-gentle .ambience span { animation: none; }
+  :root.motion-gentle button:hover, :root.motion-gentle button:active, :root.motion-gentle .adventure:hover, :root.motion-gentle .adventure:active, :root.motion-gentle .saves li:hover, :root.motion-gentle .readiness li:hover, :root.motion-gentle .tablet:hover, :root.motion-gentle .lantern:hover, :root.motion-gentle .hero:hover, :root.motion-gentle .brand:hover img, :root.motion-gentle .adventure:hover .adventure-art img, :root.motion-gentle .continue:hover .shot img, :root.motion-gentle .saves li:hover .shot img, :root.motion-gentle .hero:hover .hero-face img { transform: none; }
+  :root.motion-gentle .hero:hover .hero-face img { transform: scale(1.45); }
+  :root.motion-gentle button.primary::after { display: none; }
+  :root.motion-gentle .home:not(.solo) .play > *, :root.motion-gentle .home:not(.solo) .ledger, :root.motion-gentle .vigil-stage > :not(.lantern), :root.motion-gentle .table-pulse { animation: none; }
+  :root.motion-gentle a, :root.motion-gentle button, :root.motion-gentle input, :root.motion-gentle select, :root.motion-gentle textarea, :root.motion-gentle summary, :root.motion-gentle .adventure { outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) {
   :root.motion-follow-windows::view-transition-group(*) { animation-duration: .18s; animation-timing-function: ease; }
   :root.motion-follow-windows::view-transition-new(settings-page):only-child, :root.motion-follow-windows::view-transition-new(play-page):only-child { animation: gentle-in .22s ease both; }
@@ -432,4 +548,9 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   :root.motion-follow-windows .adventure, :root.motion-follow-windows .adventure-art img, :root.motion-follow-windows button { transition: none; }
   :root.motion-follow-windows .adventure:has(input:checked) .adventure-art img { transform: none; }
   :root.motion-follow-windows .running-page::before, :root.motion-follow-windows .ambience span { animation: none; }
+  :root.motion-follow-windows button:hover, :root.motion-follow-windows button:active, :root.motion-follow-windows .adventure:hover, :root.motion-follow-windows .adventure:active, :root.motion-follow-windows .saves li:hover, :root.motion-follow-windows .readiness li:hover, :root.motion-follow-windows .tablet:hover, :root.motion-follow-windows .lantern:hover, :root.motion-follow-windows .hero:hover, :root.motion-follow-windows .brand:hover img, :root.motion-follow-windows .adventure:hover .adventure-art img, :root.motion-follow-windows .continue:hover .shot img, :root.motion-follow-windows .saves li:hover .shot img, :root.motion-follow-windows .hero:hover .hero-face img { transform: none; }
+  :root.motion-follow-windows .hero:hover .hero-face img { transform: scale(1.45); }
+  :root.motion-follow-windows button.primary::after { display: none; }
+  :root.motion-follow-windows .home:not(.solo) .play > *, :root.motion-follow-windows .home:not(.solo) .ledger, :root.motion-follow-windows .vigil-stage > :not(.lantern), :root.motion-follow-windows .table-pulse { animation: none; }
+  :root.motion-follow-windows a, :root.motion-follow-windows button, :root.motion-follow-windows input, :root.motion-follow-windows select, :root.motion-follow-windows textarea, :root.motion-follow-windows summary, :root.motion-follow-windows .adventure { outline-offset: 3px; }
 }

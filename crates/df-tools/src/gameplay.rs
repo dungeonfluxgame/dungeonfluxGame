@@ -46,6 +46,7 @@ mod inn_qualification;
 mod investigation;
 mod join_link;
 mod journey;
+mod launcher_status;
 mod line_cleanup;
 mod living_scenes;
 mod media_policy;
@@ -2206,6 +2207,7 @@ async fn serve_run(
         .merge(imagery::router(imagery.clone()))
         .merge(creator_portraits::router(service.clone()))
         .merge(hero_library::router())
+        .merge(launcher_status::router(service.clone()))
         .merge(music_routes)
         .merge(home_video::router())
         .merge(speech_input::router(

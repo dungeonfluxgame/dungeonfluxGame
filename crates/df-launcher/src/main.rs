@@ -23,6 +23,7 @@ mod preview;
 mod saves;
 mod server;
 mod settings;
+mod table;
 mod ui;
 
 use std::{net::SocketAddr, path::PathBuf, process::ExitCode};

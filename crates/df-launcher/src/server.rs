@@ -107,6 +107,8 @@ pub struct Launch<'a> {
     pub database: &'a str,
     pub adventure: Adventure,
     pub stop_dir: &'a Path,
+    /// The secret the server answers `/gameplay/launcher-status` with (REF-064).
+    pub status_token: &'a str,
 }
 
 pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
@@ -120,6 +122,10 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
             launch.settings.database_port.to_string(),
         ),
         ("DF_GAMEPLAY_STOP_FILE".into(), path(launch.stop_dir.into())),
+        (
+            "DF_GAMEPLAY_LAUNCHER_TOKEN".into(),
+            launch.status_token.to_owned(),
+        ),
         ("DF_GAMEPLAY_LISTEN".into(), launch.network.listen.clone()),
         (
             "DF_GAMEPLAY_ALLOWED_ORIGINS".into(),
@@ -483,6 +489,7 @@ mod tests {
                 database: "df_gameplay_demo_play_x",
                 adventure: Adventure::Harbor,
                 stop_dir: Path::new("/game/play/run/stop.1"),
+                status_token: "0123456789abcdef0123456789abcdef",
             })
         };
         let value = |environment: &[(String, String)], name: &str| {
@@ -503,6 +510,10 @@ mod tests {
         assert_eq!(value(&plain, "DF_GAMEPLAY_CREATOR_OPENAI_KEY"), None);
         assert_eq!(value(&plain, "FAL_KEY"), None);
         assert_eq!(value(&plain, "DF_GAMEPLAY_PUBLIC_URL"), None);
+        assert_eq!(
+            value(&plain, "DF_GAMEPLAY_LAUNCHER_TOKEN").as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
         assert_eq!(missing_keys(&settings, &keys), None);
         settings.creator_portraits = true;
         settings.creator_alternate_route = true;
@@ -571,6 +582,7 @@ mod tests {
                 database: "df_gameplay_demo_play_x",
                 adventure: Adventure::Harbor,
                 stop_dir: Path::new("/game/play/run/stop.1"),
+                status_token: "0123456789abcdef0123456789abcdef",
             })
         };
         let environment = launch(&off);

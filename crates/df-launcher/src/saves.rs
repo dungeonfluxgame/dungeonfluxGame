@@ -46,6 +46,10 @@ pub struct SavedGame {
     pub created: i64,
     /// Unix seconds of the last start or resume.
     pub last_played: i64,
+    /// Seconds played across every session (REF-064). Games saved before this was kept start
+    /// at zero.
+    #[serde(default)]
+    pub played_seconds: u64,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -70,18 +74,32 @@ pub fn load(data: &Path) -> Result<Vec<SavedGame>, io::Error> {
     Ok(games)
 }
 
-/// Adds the game or updates its last-played time.
+/// Adds the game or updates its last-played time and play time.
 pub fn record(data: &Path, game: &SavedGame) -> Result<(), io::Error> {
     let mut games = load(data)?;
     match games
         .iter_mut()
         .find(|known| known.database == game.database)
     {
-        Some(known) => known.last_played = game.last_played,
+        Some(known) => {
+            known.last_played = game.last_played;
+            known.played_seconds = game.played_seconds;
+        }
         None => games.push(game.clone()),
     }
     let text = toml::to_string_pretty(&SavedGames { games }).map_err(io::Error::other)?;
     crate::files::write_atomic(&data.join(SAVES_FILE), text.as_bytes())
+}
+
+/// The game after a session that began at its `last_played` and ended `now`: the session's
+/// length is added to its play time and `now` becomes its last-played time.
+pub fn after_session(game: &SavedGame, now: i64) -> SavedGame {
+    let session = u64::try_from(now.saturating_sub(game.last_played)).unwrap_or(0);
+    SavedGame {
+        played_seconds: game.played_seconds.saturating_add(session),
+        last_played: now,
+        ..game.clone()
+    }
 }
 
 /// The game server's database rule (see `run-gameplay.sh`): `df_gameplay_demo_` followed by
@@ -191,6 +209,7 @@ mod tests {
             adventure: Adventure::Harbor,
             created: 1,
             last_played,
+            played_seconds: 0,
         }
     }
 
@@ -232,6 +251,38 @@ mod tests {
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].name, "The Amber Bell");
         assert_eq!(games[0].last_played, 30);
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn a_session_adds_its_length_to_the_play_time_and_survives_a_save() {
+        let data =
+            std::env::temp_dir().join(format!("df-launcher-playtime-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let started = game("df_gameplay_demo_a", "The Amber Bell", 1_000);
+        let ended = after_session(&started, 1_000 + 3_725);
+        assert_eq!((ended.played_seconds, ended.last_played), (3_725, 4_725));
+        let again = after_session(
+            &SavedGame {
+                last_played: 9_000,
+                ..ended.clone()
+            },
+            9_060,
+        );
+        assert_eq!(again.played_seconds, 3_785);
+        // A clock that went backwards adds nothing.
+        assert_eq!(after_session(&again, 0).played_seconds, 3_785);
+        record(&data, &started).unwrap();
+        record(&data, &again).unwrap();
+        assert_eq!(load(&data).unwrap()[0].played_seconds, 3_785);
+        // A saves file written before play time was kept still loads, at zero.
+        std::fs::write(
+            data.join(SAVES_FILE),
+            "[[game]]\ndatabase = \"df_gameplay_demo_old\"\nname = \"The Old Gate\"\n\
+             adventure = \"harbor\"\ncreated = 1\nlast_played = 2\n",
+        )
+        .unwrap();
+        assert_eq!(load(&data).unwrap()[0].played_seconds, 0);
         std::fs::remove_dir_all(data).unwrap();
     }
 }

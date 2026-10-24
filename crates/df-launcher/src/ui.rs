@@ -166,6 +166,8 @@ pub fn handle(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Page {
             }
         }
         ("GET", screen) if screen.starts_with("/screen/") => screenshot(app, screen),
+        ("GET", "/table") => Page::html(200, table_frame(&app.snapshot())),
+        ("GET", "/table/portrait") => table_portrait(&app.snapshot(), query),
         ("GET", "/") => {
             app.viewing(View::Home);
             app.refresh_from_disk();
@@ -438,12 +440,12 @@ fn home(snapshot: &Snapshot) -> String {
     // While a game is in play the page is about that game alone: no saved-games list.
     let main = match &snapshot.phase {
         Phase::Idle { .. } | Phase::Failed(_) => format!(
-            "<main class=\"home\"><div class=\"play\">{state}</div>{}</main>",
+            "{DUST}<main class=\"home\"><div class=\"play\">{state}</div>{}</main>",
             saved_games(snapshot)
         ),
         Phase::Running(_) => format!("{AMBIENCE}<main class=\"home solo vigil\">{state}</main>"),
         Phase::Starting { .. } | Phase::Stopping(_) | Phase::Connected { .. } => {
-            format!("<main class=\"home solo\"><div class=\"play\">{state}</div></main>")
+            format!("{DUST}<main class=\"home solo\"><div class=\"play\">{state}</div></main>")
         }
     };
     let page = if matches!(snapshot.phase, Phase::Running(_)) {
@@ -463,6 +465,9 @@ fn home(snapshot: &Snapshot) -> String {
 /// The running page's ambience, drawn by CSS alone: a pool of lantern light, two layers of
 /// rising motes and a band of harbor fog. The Gentle and Follow Windows motion settings still it.
 const AMBIENCE: &str = "<div class=\"ambience\" aria-hidden=\"true\"><span class=\"light-pool\"></span><span class=\"motes\"></span><span class=\"motes far\"></span><span class=\"fog\"></span></div>";
+/// The other Play pages share the dust and the harbor haze, spread across the whole hall
+/// because their content is not centred; the pool of lantern light belongs to a running game.
+const DUST: &str = "<div class=\"ambience wide\" aria-hidden=\"true\"><span class=\"motes\"></span><span class=\"motes far\"></span><span class=\"fog\"></span></div>";
 
 /// The room code in the player link (`...?room=ABCDEF`), when it is a plain code.
 fn room_code(player_url: &str) -> Option<&str> {
@@ -716,7 +721,8 @@ fn display_controls(snapshot: &Snapshot) -> String {
     actions.concat()
 }
 
-/// The running game, centred: its lantern, name and room code, a few facts, then the actions.
+/// The running game, centred: its lantern and name, the room code and two live clocks, the
+/// heroes at the table (a frame that refreshes itself), a few facts, then the actions.
 fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     let display_state = if snapshot.display_open {
         "Open"
@@ -731,13 +737,21 @@ fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     let room = room_code(&run.player_url)
         .map(|code| {
             format!(
-                "<div class=\"room-tablet\"><span class=\"room-label\">Room code</span><span class=\"room-code\">{}</span></div>",
+                "<div class=\"tablet room-tablet\"><span class=\"tablet-label\">Room code</span><span class=\"room-code\">{}</span></div>",
                 escape(code)
             )
         })
         .unwrap_or_default();
+    let session = elapsed_since(run.game.last_played);
+    let total = run.game.played_seconds.saturating_add(session);
+    let table = if run.status_token.is_some() {
+        "<iframe class=\"table-frame\" src=\"/table\" title=\"The heroes at the table\"></iframe>"
+    } else {
+        ""
+    };
     format!(
-        "<section class=\"vigil-stage\" aria-labelledby=\"running-name\">{}<p class=\"vigil-state\">Now playing</p><h1 id=\"running-name\">{}</h1><p class=\"vigil-lede\">{}, running since {}.</p>{room}\
+        "<section class=\"vigil-stage\" aria-labelledby=\"running-name\">{}<p class=\"vigil-state\">Now playing</p><h1 id=\"running-name\">{}</h1><p class=\"vigil-lede\">{}, running since {}.</p>\
+<div class=\"tablets\">{room}{}{}</div>{table}\
 <dl class=\"vigil-facts\"><div><dt>Table display</dt><dd>{display_state}</dd></div><div><dt>Players join</dt><dd>{joining}</dd></div><div><dt>First played</dt><dd>{}</dd></div></dl>\
 <div class=\"actions\">{}</div><p class=\"hint\">{}</p>\
 <div class=\"stop-row\">{}<p class=\"hint\">Closing this window keeps the game running. Stop saves the game and ends it.</p></div></section>",
@@ -745,11 +759,169 @@ fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
         escape(&run.game.name),
         escape(run.game.adventure.label()),
         escape(&since(run.game.last_played)),
+        clock_tablet("This session", session),
+        clock_tablet("All sessions", total),
         escape(&first_played(run.game.created)),
         display_controls(snapshot),
         joining_line(&snapshot.settings),
         button("/stop", "Stop and save", "danger", &[])
     )
+}
+
+/// Seconds from `start` (Unix seconds) until now; never negative.
+fn elapsed_since(start: i64) -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp().saturating_sub(start)).unwrap_or(0)
+}
+
+/// A clock that keeps counting on the page with CSS alone (`.clock` in ui.css counts on from
+/// `--start`); its spoken name is the time when the page was drawn.
+fn clock_tablet(label: &str, seconds: u64) -> String {
+    format!(
+        "<div class=\"tablet clock-tablet\"><span class=\"tablet-label\">{label}</span><span class=\"clock\" style=\"--start: {seconds}\" role=\"timer\" aria-label=\"{}\"></span></div>",
+        duration_words(seconds)
+    )
+}
+
+/// "2 hours 5 minutes", "12 minutes", "under a minute".
+fn duration_words(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let minutes = seconds % 3600 / 60;
+    let unit = |count: u64, one: &str| {
+        if count == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{count} {one}s")
+        }
+    };
+    match (hours, minutes) {
+        (0, 0) => "under a minute".to_owned(),
+        (0, minutes) => unit(minutes, "minute"),
+        (hours, 0) => unit(hours, "hour"),
+        (hours, minutes) => format!("{} {}", unit(hours, "hour"), unit(minutes, "minute")),
+    }
+}
+
+/// The heroes at the table, for the running page's frame: it reloads itself every few seconds
+/// so the main page and its ambience never do.
+fn table_frame(snapshot: &Snapshot) -> String {
+    let content = match &snapshot.phase {
+        Phase::Running(run) => match run.status_token.as_deref() {
+            None => {
+                "<p class=\"table-empty\">Table details appear for games this launcher started.</p>"
+                    .to_owned()
+            }
+            Some(token) => match crate::table::fetch(&run.display_url, token) {
+                Ok(status) => table_content(&status, room_code(&run.player_url)),
+                Err(_) => "<p class=\"table-empty\">Checking the table…</p>".to_owned(),
+            },
+        },
+        _ => String::new(),
+    };
+    format!(
+        "<!doctype html><html lang=\"en\" class=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"dark\"><meta http-equiv=\"refresh\" content=\"5\"><title>The table</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"table-page\">{content}</body></html>",
+        snapshot.settings.animations.class()
+    )
+}
+
+fn table_content(status: &crate::table::TableStatus, room: Option<&str>) -> String {
+    // The lobby is its own place; elsewhere the short place name reads best ("the Lantern
+    // Wharf"), the scene title when there is none.
+    let where_ = if status.place.is_empty() {
+        &status.scene
+    } else {
+        &status.place
+    };
+    let place = if status.phase == "room" || where_.is_empty() {
+        String::new()
+    } else {
+        format!(", at <strong>{}</strong>", escape(where_))
+    };
+    let heading = format!(
+        "<p class=\"table-now\"><span class=\"table-pulse\" aria-hidden=\"true\"></span>{}{place}</p>",
+        status.moment()
+    );
+    if status.heroes.is_empty() {
+        let join = room
+            .map(|code| {
+                format!(
+                    " Players join with room code <strong>{}</strong>.",
+                    escape(code)
+                )
+            })
+            .unwrap_or_default();
+        return format!("{heading}<p class=\"table-empty\">No heroes yet.{join}</p>");
+    }
+    let heroes: String = status
+        .heroes
+        .iter()
+        .map(|hero| {
+            let initial: String = hero.name.chars().take(1).collect();
+            let face = if crate::table::portrait_path(&hero.portrait) {
+                format!(
+                    "<img src=\"/table/portrait?p={}\" alt=\"\">",
+                    escape(&hero.portrait)
+                )
+            } else {
+                String::new()
+            };
+            let state = if !hero.ready {
+                "<span class=\"hero-state\">Creating their hero</span>".to_owned()
+            } else if hero.maximum_hit_points > 0 {
+                let share = f64::from(hero.hit_points.min(hero.maximum_hit_points))
+                    / f64::from(hero.maximum_hit_points);
+                format!(
+                    "<span class=\"hero-health\" style=\"--health: {share:.3}\"><span class=\"health-bar\"></span><span class=\"health-text\">{} of {} hit points</span></span>",
+                    hero.hit_points, hero.maximum_hit_points
+                )
+            } else {
+                "<span class=\"hero-state\">Ready</span>".to_owned()
+            };
+            format!(
+                "<li class=\"hero\" data-ready=\"{}\"><span class=\"hero-face\"><span class=\"hero-initial\" aria-hidden=\"true\">{}</span>{face}</span><span class=\"hero-name\">{}</span>{state}</li>",
+                hero.ready,
+                escape(&initial),
+                escape(&hero.name)
+            )
+        })
+        .collect();
+    format!(
+        "{heading}<ul class=\"heroes\" aria-label=\"{} at the table\">{heroes}</ul>",
+        if status.heroes.len() == 1 {
+            "1 hero".to_owned()
+        } else {
+            format!("{} heroes", status.heroes.len())
+        }
+    )
+}
+
+/// A hero portrait passed through from the game server, so the launcher page shows it from its
+/// own origin.
+fn table_portrait(snapshot: &Snapshot, query: &str) -> Page {
+    let Phase::Running(run) = &snapshot.phase else {
+        return Page::not_found();
+    };
+    let (Some(token), Some(path)) = (run.status_token.as_deref(), query.strip_prefix("p=")) else {
+        return Page::not_found();
+    };
+    let Ok(bytes) = crate::table::portrait(&run.display_url, token, path) else {
+        return Page::not_found();
+    };
+    let content_type = if bytes.starts_with(b"\x89PNG") {
+        "image/png"
+    } else if bytes.starts_with(&[0xff, 0xd8]) {
+        "image/jpeg"
+    } else if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        return Page::not_found();
+    };
+    Page {
+        status: 200,
+        content_type,
+        body: bytes,
+        location: None,
+        cache_control: "max-age=300",
+    }
 }
 
 fn connected(snapshot: &Snapshot, origin: &str) -> String {
@@ -1341,7 +1513,8 @@ mod tests {
             name: "The Iron Crown".to_owned(),
             adventure: Adventure::Harbor,
             created: 1,
-            last_played: 2,
+            last_played: chrono::Utc::now().timestamp() - 125,
+            played_seconds: 3_600,
         };
         snapshot.saves = vec![game.clone()];
         snapshot.phase = Phase::Running(RunRecord {
@@ -1358,6 +1531,7 @@ mod tests {
             database_port: 0,
             stopping: false,
             dev_control: None,
+            status_token: Some("0123456789abcdef0123456789abcdef".to_owned()),
         });
         let page = home(&snapshot);
         assert!(page.contains("<h1 id=\"running-name\">The Iron Crown</h1>"));
@@ -1365,9 +1539,41 @@ mod tests {
         assert!(page.contains("class=\"ambience\" aria-hidden=\"true\""));
         assert!(page.contains("Stop and save"));
         assert!(!page.contains("Saved games"));
+        // Two clocks that count on from the session and the whole game, and the table frame.
+        assert!(page.contains("<span class=\"tablet-label\">This session</span><span class=\"clock\" style=\"--start: 12"));
+        assert!(page.contains("<span class=\"tablet-label\">All sessions</span><span class=\"clock\" style=\"--start: 37"));
+        assert!(page.contains("aria-label=\"2 minutes\""));
+        assert!(page.contains("<iframe class=\"table-frame\" src=\"/table\""));
+        assert_eq!(duration_words(0), "under a minute");
+        assert_eq!(duration_words(3_660), "1 hour 1 minute");
+        assert_eq!(duration_words(7_500), "2 hours 5 minutes");
         assert_eq!(room_code("http://x/gameplay/player?room=AB%3Cx"), None);
         assert_eq!(room_code("http://x/gameplay/player"), None);
         std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn the_table_panel_names_the_moment_the_place_and_each_hero() {
+        let lobby = crate::table::parse(
+            "phase\troom\nscene\tGather at the Lantern Wharf\nplace\tthe Lantern Wharf",
+        );
+        let empty = table_content(&lobby, Some("MEFEMU"));
+        assert!(empty.contains("Gathering in the lobby</p>"));
+        assert!(
+            empty.contains("No heroes yet. Players join with room code <strong>MEFEMU</strong>.")
+        );
+        let story = crate::table::parse(
+            "phase\tdialogue\nplace\tthe Lantern Wharf\n\
+             hero\t1\t6\t12\t/gameplay/imagery/abc\tVix <Ashlantern>\n\
+             hero\t0\t0\t0\t\tMossgrave",
+        );
+        let panel = table_content(&story, None);
+        assert!(panel.contains("In the story, at <strong>the Lantern Wharf</strong>"));
+        assert!(panel.contains("aria-label=\"2 heroes at the table\""));
+        assert!(panel.contains("<img src=\"/table/portrait?p=/gameplay/imagery/abc\""));
+        assert!(panel.contains("style=\"--health: 0.500\""));
+        assert!(panel.contains("Vix &lt;Ashlantern&gt;"));
+        assert!(panel.contains("Creating their hero"));
     }
 
     #[test]
