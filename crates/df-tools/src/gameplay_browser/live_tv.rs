@@ -39,9 +39,8 @@ pub(super) const GENERATED: &str = "/assets/ui/generated";
 const JOIN_QR: &str = "/gameplay/join-qr.svg";
 /// The party cards a scene shows.
 const PARTY_SLOTS: usize = 2;
-/// The seats the lobby row always shows (open seats pad a smaller party), and the most it draws,
-/// all in one row.
-const LOBBY_SEATS_MIN: usize = 4;
+/// The lobby row always shows every seat of the table (open seats pad a smaller party), all in one
+/// row (REF-062).
 const PARTY_MAX: usize = 6;
 const GATHERED_SOUND_DELAY: Duration = Duration::from_millis(700);
 
@@ -2954,13 +2953,9 @@ impl TvStage {
             _ => set_hidden(&self.speaker, true)?,
         }
         let announce = self.drawn.get() && lobby;
-        // The lobby shows four seats at least, with open seats for the empty ones, up to six in one
-        // row; a scene keeps its two cards.
-        let shown = if lobby {
-            model.party.len().clamp(LOBBY_SEATS_MIN, PARTY_MAX)
-        } else {
-            PARTY_SLOTS
-        };
+        // The lobby shows all six seats, with open seats for the empty ones, in one row; a scene
+        // keeps its two cards.
+        let shown = if lobby { PARTY_MAX } else { PARTY_SLOTS };
         self.roster
             .set_attribute("data-count", &shown.to_string())?;
         let mut newly_ready = false;
