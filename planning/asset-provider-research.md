@@ -222,3 +222,22 @@ models have a 2027-02-26 removal date; use current replacements for a new integr
 Gemini 2.5 Flash Image retires 2026-10-02; avoid starting on it. Keep preview routes
 optional with a prepared fallback. [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations),
 [Google price/lifecycle notice](https://ai.google.dev/gemini-api/docs/pricing).
+
+## Observed OpenAI spend, 2026-10-18 to 2026-10-24 (owner's billing page, mostly 2026-10-24 play-testing)
+
+| Line item | Week total | Of which 2026-10-24 |
+|---|---|---|
+| gpt-image-2.5-flare image input (reference images) | $14.852 | $14.852 |
+| gpt-image-2.5-flare image output | $16.165 | $15.898 |
+| gpt-image-2.5-flare text input (prompts) | $10.38 | - |
+| gpt-image-2.5-flare text / image cached input | $0 | $0 |
+| gpt-image-2.5-sunburst image input | $1.829 | $1.776 |
+| gpt-image-2.5-sunburst image output | $2.201 | $1.954 |
+| gpt-image-2.5-sunburst text input | $0.157 | $0.15 |
+| text-embedding-3-small, gpt-5.4-mini, gpt-5.6-luna (all lines) | $0 | $0 |
+
+Total about $45.6, almost all GPT Image 2.5 on 2026-10-24. Inputs (reference images $16.7, prompt text $10.5)
+cost more than outputs ($18.4): plate edits send 2-4 high-fidelity reference images and 17-20k-character prompts.
+Smaller output sizes and low quality (the dev picture profile, commit 422f2d11) only cut the output share; the
+next levers are fewer and smaller reference images per edit, shorter plate prompts, and fewer plate renders
+(the REF-068 cadence starts a render about every 30 s while people talk).
