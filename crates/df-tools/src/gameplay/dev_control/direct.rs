@@ -90,9 +90,10 @@ pub(super) async fn direct(
         }
         _ => return Err(bad_request("direct kind must be plate or clear")),
     };
-    let seats = state.seats.lock().await;
-    let (session, run) = scope_of(&seats)?;
-    drop(seats);
+    // A table-level direction acts as the display, like `display_view`: the scope comes from the
+    // current game, so it works while phones (not CLI seats) hold every seat.
+    let basis = state.service.updates.borrow().basis();
+    let (session, run) = display_scope(basis);
     let (reply, receive) = oneshot::channel();
     state
         .service
