@@ -120,7 +120,11 @@ pub use image_edit::{
     ReferenceImage,
 };
 #[cfg(not(target_arch = "wasm32"))]
+mod bfl_image;
+#[cfg(not(target_arch = "wasm32"))]
 mod fal_image;
+#[cfg(not(target_arch = "wasm32"))]
+pub use bfl_image::{BFL_FLUX3_IMAGE, BflImageConfig, BflImageFailure, NativeBflImageProvider};
 #[cfg(not(target_arch = "wasm32"))]
 pub use fal_image::{
     BACKGROUND_REMOVAL, FLUX_KONTEXT_MULTI, FLUX_ULTRA, FalImageConfig, NativeFalImageProvider,

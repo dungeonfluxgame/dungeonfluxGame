@@ -304,6 +304,37 @@ fn json_body(response: &NativeHttpResponse) -> Result<Value, ImageEditError> {
     .map_err(|_| ImageEditError::Output)
 }
 
+/// The documented fal error message, kept separate from the request and other response fields.
+fn fal_error_message(body: &[u8], credential: &str) -> Option<String> {
+    let value = parse_unique_json(
+        body,
+        TextSchemaLimits {
+            maximum_schema_bytes: MAXIMUM_RESPONSE_BYTES,
+            maximum_depth: 16,
+            maximum_nodes: 65_536,
+        },
+    )
+    .ok()?;
+    let message = value.get("error")?.as_str()?.trim();
+    if message.is_empty() {
+        return None;
+    }
+
+    let safe_message = message.replace(credential, "[redacted]");
+    let safe_message: String = safe_message
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(240)
+        .collect();
+    (!safe_message.trim().is_empty()).then_some(safe_message)
+}
+
 /// A 422 from fal whose detail names its content checker.
 fn is_content_refusal(body: &[u8]) -> bool {
     [&b"content_policy"[..], &b"nsfw"[..], &b"safety"[..]]
@@ -440,6 +471,28 @@ fn facts(format: ImageFormat, bytes: &[u8]) -> Result<(u32, u32, bool), ImageEdi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    fn fixture_response(status: u16, body: &'static str) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("fixture request");
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            write!(
+                stream,
+                "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("fixture response write");
+        });
+        address
+    }
 
     #[test]
     fn the_live_provider_starts_within_the_transport_limits() {
@@ -451,6 +504,74 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn submit_failure_fixture_extracts_only_bounded_fal_error_message() {
+        let body = r#"{"error":"provider overloaded"}"#;
+        let provider = NativeFalImageProvider::new(
+            FalImageConfig::loopback_fixture(fixture_response(500, body)).expect("fixture config"),
+            "test-secret",
+            Duration::from_secs(5),
+        )
+        .expect("fixture provider");
+
+        let response = provider
+            .exchange(
+                HttpMethod::Post,
+                "/fal-ai/flux-pro/v1.1-ultra",
+                b"{}".to_vec(),
+                Duration::from_secs(5),
+            )
+            .await;
+
+        assert!(matches!(response, Err(ImageEditError::Provider(500))));
+        assert_eq!(
+            fal_error_message(body.as_bytes(), "test-secret").as_deref(),
+            Some("provider overloaded")
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_status_error_fixture_extracts_fal_error_and_keeps_provider_classification() {
+        let body = r#"{"status":"FAILED","error":"GPU worker unavailable"}"#;
+        let provider = NativeFalImageProvider::new(
+            FalImageConfig::loopback_fixture(fixture_response(200, body)).expect("fixture config"),
+            "test-secret",
+            Duration::from_secs(5),
+        )
+        .expect("fixture provider");
+
+        let response = provider
+            .exchange(
+                HttpMethod::Get,
+                "/fal-ai/flux-pro/requests/request-1/status",
+                Vec::new(),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("successful status HTTP response");
+        let value = json_body(&response).expect("status JSON");
+
+        assert!(matches!(
+            status_of(&value),
+            Err(ImageEditError::Provider(500))
+        ));
+        assert_eq!(
+            fal_error_message(body.as_bytes(), "test-secret").as_deref(),
+            Some("GPU worker unavailable")
+        );
+    }
+
+    #[test]
+    fn fal_error_message_redacts_credentials_and_is_limited_to_240_characters() {
+        let body = json!({"error": format!("bad credential test-secret {}", "x".repeat(300))});
+
+        let message =
+            fal_error_message(body.to_string().as_bytes(), "test-secret").expect("fal message");
+
+        assert!(!message.contains("test-secret"));
+        assert!(message.chars().count() <= 240);
     }
 
     #[test]

@@ -47,6 +47,23 @@ pub struct HttpRequest {
 
 impl HttpRequest {
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn bfl_native(
+        method: HttpMethod,
+        endpoint: &str,
+        credential: &str,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            method,
+            url: endpoint.to_owned(),
+            headers: vec![
+                ("x-key", credential.to_owned()),
+                ("Content-Type", "application/json".to_owned()),
+            ],
+            body,
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn fal_native(
         method: HttpMethod,
         endpoint: &str,

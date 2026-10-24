@@ -47,6 +47,8 @@ pub(crate) struct NativeMediaFetch {
     limits: NativeHttpLimits,
     pins: Vec<FalCdnPin>,
     fixture: Option<SocketAddr>,
+    bfl: bool,
+    observed_status: std::sync::atomic::AtomicU16,
 }
 
 impl NativeMediaFetch {
@@ -73,6 +75,69 @@ impl NativeMediaFetch {
             limits,
             pins,
             fixture,
+            bfl: false,
+            observed_status: std::sync::atomic::AtomicU16::new(0),
+        })
+    }
+
+    pub(crate) fn observed_status(&self) -> Option<u16> {
+        match self
+            .observed_status
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            value => Some(value),
+        }
+    }
+    /// Resolves an allowlisted BFL delivery URL once and pins only public addresses.
+    pub(crate) async fn bfl(
+        limits: NativeHttpLimits,
+        locator: &str,
+        fixture: Option<SocketAddr>,
+    ) -> Result<Self, (NativeHttpRefusal, &'static str)> {
+        if !strict_bfl_delivery(locator) {
+            return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+        }
+        let url = reqwest::Url::parse(locator)
+            .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "url_parse"))?;
+        let host = url
+            .host_str()
+            .ok_or((NativeHttpRefusal::InvalidEndpoint, "missing_host"))?;
+        let addresses = if fixture.is_some() {
+            vec![]
+        } else {
+            let resolved =
+                tokio::time::timeout(limits.connect_timeout, tokio::net::lookup_host((host, 443)))
+                    .await
+                    .map_err(|_| (NativeHttpRefusal::Deadline, "dns_deadline"))?
+                    .map_err(|_| (NativeHttpRefusal::Unknown, "dns_failure"))?;
+            let mut addresses = Vec::new();
+            for socket in resolved {
+                if !addresses.contains(&socket.ip()) {
+                    addresses.push(socket.ip());
+                }
+                if addresses.len() > 16 {
+                    return Err((NativeHttpRefusal::InvalidEndpoint, "dns_answer_limit"));
+                }
+            }
+            inspect_dns_answers(&addresses)
+                .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "dns_target_refused"))?;
+            addresses
+        };
+        crate::native_http::NativeHttp::new(limits, fixture.is_some())
+            .map_err(|error| (error, "transport_configuration"))?;
+        if fixture.is_some_and(|socket| !socket.ip().is_loopback() || socket.port() == 0) {
+            return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
+        }
+        Ok(Self {
+            limits,
+            pins: vec![FalCdnPin {
+                host: host.to_owned(),
+                addresses,
+            }],
+            fixture,
+            bfl: true,
+            observed_status: std::sync::atomic::AtomicU16::new(0),
         })
     }
 
@@ -84,7 +149,44 @@ impl NativeMediaFetch {
         deadline: Duration,
         cancellation: impl Future<Output = ()>,
     ) -> Result<Vec<u8>, NativeHttpRefusal> {
-        if !strict_fal_locator(locator) || locator.len() > 8192 || remaining_bytes == 0 {
+        self.fetch_checked(locator, mime, remaining_bytes, deadline, cancellation)
+            .await
+            .map(|(bytes, _)| bytes)
+    }
+
+    pub(crate) async fn fetch_bfl_image(
+        &self,
+        locator: &str,
+        remaining_bytes: usize,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
+        if !self.bfl {
+            return Err(NativeHttpRefusal::InvalidEndpoint);
+        }
+        self.fetch_checked(
+            locator,
+            "image/png,image/jpeg",
+            remaining_bytes,
+            deadline,
+            std::future::pending(),
+        )
+        .await
+    }
+
+    async fn fetch_checked(
+        &self,
+        locator: &str,
+        mime: &str,
+        remaining_bytes: usize,
+        deadline: Duration,
+        cancellation: impl Future<Output = ()>,
+    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
+        let allowed = if self.bfl {
+            strict_bfl_delivery(locator)
+        } else {
+            strict_fal_locator(locator)
+        };
+        if !allowed || locator.len() > 8192 || remaining_bytes == 0 {
             return Err(NativeHttpRefusal::InvalidEndpoint);
         }
         let url = reqwest::Url::parse(locator).map_err(|_| NativeHttpRefusal::InvalidEndpoint)?;
@@ -139,8 +241,14 @@ impl NativeMediaFetch {
         addresses: &[SocketAddr],
         mime: &str,
         remaining_bytes: usize,
-    ) -> Result<Vec<u8>, NativeHttpRefusal> {
+    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
         let mut response = client.get(target).send().await.map_err(transport_error)?;
+        if self.bfl {
+            self.observed_status.store(
+                response.status().as_u16(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         if !response
             .remote_addr()
             .is_some_and(|address| addresses.contains(&address))
@@ -177,7 +285,17 @@ impl NativeMediaFetch {
             .next()
             .and_then(|v| v.to_str().ok())
             .ok_or(NativeHttpRefusal::ContentType)?;
-        if types.next().is_some() || observed.split(';').next().map(str::trim) != Some(mime) {
+        let observed = observed
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_owned();
+        let allowed = observed == mime
+            || (self.bfl
+                && mime == "image/png,image/jpeg"
+                && matches!(observed.as_str(), "image/png" | "image/jpeg"));
+        if types.next().is_some() || !allowed {
             return Err(NativeHttpRefusal::ContentType);
         }
         let mut lengths = response
@@ -222,7 +340,71 @@ impl NativeMediaFetch {
         if body.is_empty() || declared.is_some_and(|length| length != body.len() as u64) {
             return Err(NativeHttpRefusal::Unknown);
         }
-        Ok(body)
+        Ok((body, observed))
+    }
+}
+
+fn strict_bfl_delivery(locator: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(locator) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.fragment().is_none()
+        && !url.path().is_empty()
+        && url.host_str().is_some_and(|host| {
+            // Official outpainting example also uses the exact nonregional delivery host:
+            // https://docs.bfl.ml/flux_tools/flux_outpainting
+            host == "delivery.bfl.ai"
+                || (host.starts_with("delivery.")
+                    && host.ends_with(".bfl.ai")
+                    && host.len() > "delivery..bfl.ai".len())
+        })
+        && !locator.contains(['\\', '\0'])
+        && locator.len() <= 8192
+}
+
+#[cfg(test)]
+mod bfl_tests {
+    use super::*;
+    #[tokio::test]
+    async fn rejected_delivery_has_closed_admission_reason_without_network() {
+        let limits = crate::ProviderLimits::new(Duration::from_secs(1), 1, 1024).build();
+        let error = NativeMediaFetch::bfl(
+            limits,
+            "https://untrusted.example/signed-path?secret=value",
+            None,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(error, (NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+    }
+    #[test]
+    fn delivery_allowlist_excludes_private_or_credentialed_urls() {
+        assert!(strict_bfl_delivery(
+            "https://delivery.bfl.ai/image.png?signature=synthetic"
+        ));
+        assert!(strict_bfl_delivery(
+            "https://delivery.us1.bfl.ai/image.png?signature=synthetic"
+        ));
+        for locator in [
+            "http://delivery.us1.bfl.ai/image.png",
+            "https://delivery.bfl.ai.evil.test/image.png",
+            "https://delivery.bfl.ai:444/image.png",
+            "https://user@delivery.bfl.ai/image.png",
+            "https://delivery-bfl.ai/image.png",
+            "https://api.bfl.ai/image.png",
+            "https://127.0.0.1/image.png",
+            "https://delivery.us1.bfl.ai.evil.test/image.png",
+            "https://delivery.us1.bfl.ai:444/image.png",
+            "https://user@delivery.us1.bfl.ai/image.png",
+            "https://delivery.us1.bfl.ai/image.png#fragment",
+        ] {
+            assert!(!strict_bfl_delivery(locator));
+        }
     }
 }
 

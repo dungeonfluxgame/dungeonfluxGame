@@ -476,8 +476,56 @@ fn public_v6(ip: Ipv6Addr) -> bool {
         || ip.is_unicast_link_local()
         || segments[0] & 0xffc0 == 0xfe80
         || segments[0] & 0xff00 == 0xff00
-        || segments[0] & 0xfe00 != 0x2000
+        // Global unicast is 2000::/3; /7 incorrectly rejects allocated 2600::/12.
+        // https://www.iana.org/assignments/ipv6-unicast-address-assignments/
+        || segments[0] & 0xe000 != 0x2000
         || segments[0] == 0x2001 && (segments[1] <= 0x01ff || segments[1] == 0x0db8)
         || segments[0] == 0x2002
         || segments[0] == 0x3fff)
+}
+
+#[cfg(test)]
+mod dns_global_unicast_tests {
+    use super::*;
+    #[test]
+    fn bfl_azure_dual_stack_public_answers_are_admitted() {
+        let answers = [
+            "150.171.109.117".parse().unwrap(),
+            "2603:1061:14:46::1".parse().unwrap(),
+        ];
+        assert!(inspect_dns_answers(&answers).is_ok());
+        for address in [
+            "2606:4700:4700::1111",
+            "2a00:1450:4001:800::200e",
+            "2404:6800:4001::1",
+        ] {
+            assert!(inspect_dns_answers(&[address.parse().unwrap()]).is_ok());
+        }
+    }
+    #[test]
+    fn mixed_private_and_reserved_dns_answers_still_fail_closed() {
+        let public = "2603:1061:14:46::1".parse::<IpAddr>().unwrap();
+        for denied in [
+            "::",
+            "::1",
+            "fc00::1",
+            "fd00::1",
+            "fe80::1",
+            "ff02::1",
+            "2001:db8::1",
+            "2001::1",
+            "2002:0808:0808::1",
+            "3fff::1",
+            "4000::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+        ] {
+            let denied = denied.parse().unwrap();
+            assert!(inspect_dns_answers(&[denied]).is_err());
+            assert!(inspect_dns_answers(&[public, denied]).is_err());
+        }
+        assert!(inspect_dns_answers(&[]).is_err());
+    }
 }
