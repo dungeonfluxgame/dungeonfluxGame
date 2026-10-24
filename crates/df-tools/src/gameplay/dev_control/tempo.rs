@@ -127,6 +127,7 @@ mod tests {
         let (shutdown, _) = watch::channel(false);
         let state = Arc::new(Shared {
             service: Service {
+                look_ahead: Default::default(),
                 portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
                 actor: sender,
                 display_credential: DISPLAY_CREDENTIAL,

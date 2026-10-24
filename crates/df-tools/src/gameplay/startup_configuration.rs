@@ -1217,6 +1217,7 @@ pub(super) struct ImageryInputs {
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
     pub(super) quality: Result<String, VarError>,
+    pub(super) profile: Result<String, VarError>,
     pub(super) interval_seconds: Result<String, VarError>,
     pub(super) deadline_seconds: Result<String, VarError>,
     pub(super) cache: Result<String, VarError>,
@@ -1230,10 +1231,44 @@ impl ImageryInputs {
                 .input(crate::gameplay::media_policy::Capability::Pictures),
             model: std::env::var("DF_GAMEPLAY_IMAGERY_MODEL"),
             quality: std::env::var("DF_GAMEPLAY_IMAGERY_QUALITY"),
+            profile: std::env::var("DF_GAMEPLAY_IMAGERY_PROFILE"),
             interval_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS"),
             deadline_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_DEADLINE_SECONDS"),
             cache: std::env::var("DF_GAMEPLAY_IMAGERY_CACHE"),
         }
+    }
+}
+
+/// How much each picture costs to draw (`DF_GAMEPLAY_IMAGERY_PROFILE`). `dev` is for play-testing:
+/// scene plates are drawn at 1536x864 at medium quality, rooms and close-ups at low quality, and
+/// people stay at medium so identities hold; `production` (the default) draws every kind at the
+/// configured quality and full size.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::gameplay) enum ImageryProfile {
+    #[default]
+    Production,
+    Dev,
+}
+
+impl ImageryProfile {
+    pub(in crate::gameplay) fn label(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Dev => "dev",
+        }
+    }
+
+    /// The profile from the environment; an invalid value is refused without echoing it.
+    pub(in crate::gameplay) fn from_environment() -> Result<Self, io::Error> {
+        imagery_profile(std::env::var("DF_GAMEPLAY_IMAGERY_PROFILE"))
+    }
+}
+
+fn imagery_profile(input: Result<String, VarError>) -> Result<ImageryProfile, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("" | "production") => Ok(ImageryProfile::Production),
+        Some("dev") => Ok(ImageryProfile::Dev),
+        Some(_) => Err(refused("DF_GAMEPLAY_IMAGERY_PROFILE")),
     }
 }
 
@@ -1289,6 +1324,8 @@ pub(super) struct ImageryConfiguration {
     pub(super) credential: ImageryCredential,
     pub(super) model: df_providers::ImageEditModel,
     pub(super) quality: df_providers::ImageQuality,
+    /// Production draws every kind at `quality` and full size; dev trades fidelity for cost.
+    pub(super) profile: ImageryProfile,
     /// The least time between two scene refreshes.
     pub(super) interval: Duration,
     /// How long one provider call may take.
@@ -1345,6 +1382,7 @@ pub(super) fn imagery_settings(
         Some("high") => df_providers::ImageQuality::High,
         Some(_) => return Err(refused("DF_GAMEPLAY_IMAGERY_QUALITY")),
     };
+    let profile = imagery_profile(inputs.profile)?;
     let interval = bounded_seconds(
         inputs.interval_seconds,
         DEFAULT_IMAGERY_INTERVAL_SECONDS,
@@ -1376,6 +1414,7 @@ pub(super) fn imagery_settings(
         credential: ImageryCredential(credential),
         model,
         quality,
+        profile,
         interval: Duration::from_secs(interval),
         deadline: Duration::from_secs(deadline),
         cache_dir: if cache.is_absolute() {

@@ -212,6 +212,13 @@ impl Lines {
     /// Remembers `line`, or refreshes its recency; the oldest line is dropped at capacity.
     fn register(&mut self, line: VoiceLine) {
         if line.role.len() > MAXIMUM_ROLE_BYTES {
+            super::actor::record_audit_line(
+                "gameplay.voice.cast",
+                format!(
+                    "VOICE unregistered reason=role_capacity bytes={} limit={MAXIMUM_ROLE_BYTES}",
+                    line.role.len()
+                ),
+            );
             return;
         }
         let key = line.key();
@@ -480,6 +487,10 @@ enum Mode {
 struct Inner {
     lines: Mutex<Lines>,
     mode: Mode,
+    people_inputs: Mutex<Option<(df_model::checkpoint::GameState, super::pack::CacheIdentity)>>,
+    /// Bounded prewarming waiters, aborted on drop. Dispatched paid hub flights retain their
+    /// existing deadline and finish/store policy even when their waiters disappear.
+    prefetch: Mutex<tokio::task::JoinSet<()>>,
 }
 
 /// Registry of speakable lines plus, when enabled, the cached ElevenLabs synthesis.
@@ -500,6 +511,8 @@ impl Voice {
         Self {
             inner: Arc::new(Inner {
                 lines: Mutex::new(Lines::default()),
+                people_inputs: Mutex::new(None),
+                prefetch: Mutex::new(tokio::task::JoinSet::new()),
                 mode: Mode::Off(reason),
             }),
         }
@@ -624,6 +637,8 @@ impl Voice {
         Ok(Self {
             inner: Arc::new(Inner {
                 lines: Mutex::new(Lines::default()),
+                people_inputs: Mutex::new(None),
+                prefetch: Mutex::new(tokio::task::JoinSet::new()),
                 mode: Mode::On {
                     synthesis: Arc::new(synthesis),
                     summary,
@@ -675,6 +690,14 @@ impl Voice {
         let Mode::On { synthesis, .. } = &self.inner.mode else {
             return Ok(());
         };
+        let source = super::pack::cache_identity();
+        let mut inputs = locked(&self.inner.people_inputs);
+        if inputs
+            .as_ref()
+            .is_some_and(|(known, pack)| *pack == source && known == state)
+        {
+            return Ok(());
+        }
         if let Some(world) = super::adventure::free_roam::world() {
             synthesis
                 .casting
@@ -689,6 +712,7 @@ impl Voice {
                     .map_err(|_| df_session::submission::RepositoryError::InvalidCandidate)?;
             }
         }
+        *inputs = Some((state.clone(), source));
         Ok(())
     }
 
@@ -698,9 +722,55 @@ impl Voice {
         let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
             return;
         };
-        let mut lines = locked(&self.inner.lines);
-        for line in crate::voice_line::display_lines(display) {
-            lines.register(line);
+        let fresh = {
+            let mut lines = locked(&self.inner.lines);
+            crate::voice_line::display_lines(display)
+                .into_iter()
+                .filter_map(|line| {
+                    let key = line.key();
+                    let fresh = !lines.by_key.contains_key(&key);
+                    lines.register(line.clone());
+                    (fresh && lines.by_key.contains_key(&key)).then_some(line)
+                })
+                .collect::<Vec<_>>()
+        };
+        let (Mode::On { synthesis, .. }, Ok(runtime)) =
+            (&self.inner.mode, tokio::runtime::Handle::try_current())
+        else {
+            return;
+        };
+        let mut prefetch = locked(&self.inner.prefetch);
+        while let Some(result) = prefetch.try_join_next() {
+            if result.is_err() {
+                super::actor::record_audit_line(
+                    "gameplay.voice.prefetch",
+                    "VOICE prefetch status=interrupted".into(),
+                );
+            }
+        }
+        for line in fresh {
+            for text in voice_segments(&line.text) {
+                if prefetch.len() >= 8 {
+                    return;
+                }
+                let synthesis = Arc::clone(synthesis);
+                let segment = VoiceLine {
+                    role: line.role.clone(),
+                    text,
+                };
+                prefetch.spawn_on(
+                    async move {
+                        // The cache/flight and shared ledger are identical to the later clip request.
+                        if synthesis.audio(segment).await.0.is_err() {
+                            super::actor::record_audit_line(
+                                "gameplay.voice.prefetch",
+                                "VOICE prefetch status=unavailable".into(),
+                            );
+                        }
+                    },
+                    &runtime,
+                );
+            }
         }
     }
 
@@ -1492,6 +1562,81 @@ mod tests {
             )),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn hs54_registered_display_voice_prewarms_before_audio_request_and_is_not_paid_twice() {
+        let cache = scratch("hs54-prefetch");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_cast(&fake, configuration(&cache), &[], "hs54");
+        let message = display_message("A quiet cart crosses the square.");
+        voice.register_view(&message);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if fake.calls() > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        voice.register_view(&message);
+        assert_eq!(
+            voice
+                .audio(&narrator("A quiet cart crosses the square.").key())
+                .await,
+            Lookup::Audio(Bytes::from_static(AUDIO))
+        );
+        assert_eq!(fake.calls(), 1);
+        assert_eq!(
+            charged(&voice),
+            "A quiet cart crosses the square.".chars().count() as u64
+        );
+        assert!(locked(&voice.inner.prefetch).len() <= 8);
+    }
+
+    #[tokio::test]
+    async fn hs54_dispatched_voice_prewarm_finishes_in_the_shared_cache_after_waiter_drop() {
+        let cache = scratch("hs54-prefetch-drop");
+        let fake = FakeEleven::start(Duration::from_millis(100), true);
+        let line = narrator("The distant bell rings once.");
+        let voice = voice_cast(&fake, configuration(&cache), &[], "hs54");
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice on");
+        };
+        let file = cache.join(file_name(
+            &synthesis.casting.voice_for(&line).voice_id,
+            &line,
+        ));
+        let message = display_message(&line.text);
+        voice.register_view(&message);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while fake.calls() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(voice);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !file.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let resumed = voice_cast(&fake, configuration(&cache), &[], "hs54");
+        register(&resumed, &line);
+        assert_eq!(
+            resumed.audio(&line.key()).await,
+            Lookup::Audio(Bytes::from_static(AUDIO))
+        );
+        assert_eq!(
+            fake.calls(),
+            1,
+            "the dispatched paid flight finishes once and its cache survives the waiter"
+        );
     }
 
     #[tokio::test]

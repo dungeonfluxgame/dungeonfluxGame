@@ -244,28 +244,27 @@ fn source_of(line: &str) -> Option<&str> {
 impl Timeline {
     /// The newest `last` audit lines, optionally only those of one kind, oldest first.
     fn audit(&self, last: usize, line_kind_filter: Option<&str>) -> Value {
-        let matched: Vec<Value> = self
+        let wanted = |event: &&Event| {
+            line_kind_filter.is_none_or(|kind| same_kind(&line_kind(&event.line), kind))
+        };
+        let total = self.events.iter().filter(wanted).count();
+        let mut events: Vec<Value> = self
             .events
             .iter()
-            .filter_map(|event| {
-                let kind = line_kind(&event.line);
-                if line_kind_filter.is_some_and(|wanted| !same_kind(&kind, wanted)) {
-                    return None;
-                }
-                Some(json!({
+            .rev()
+            .filter(wanted)
+            .take(last)
+            .map(|event| {
+                json!({
                     "sequence": event.sequence,
                     "unix_ms": event.unix_ms,
                     "event": event.event,
-                    "type": kind,
+                    "type": line_kind(&event.line),
                     "line": event.line,
-                }))
+                })
             })
             .collect();
-        let total = matched.len();
-        let events: Vec<Value> = matched
-            .into_iter()
-            .skip(total.saturating_sub(last))
-            .collect();
+        events.reverse();
         json!({
             "events": events,
             "matched": total,
@@ -281,19 +280,23 @@ impl Timeline {
     /// first. An event with `source=rules` (or `plan=unavailable`) is a neutral outcome: the model
     /// did not decide it.
     fn decisions(&self, last: usize, kind_filter: Option<&str>) -> Value {
-        let matched: Vec<Value> = self
-            .events
-            .iter()
-            .filter_map(|event| {
-                let kind = DECISION_KINDS
-                    .iter()
-                    .find(|(_, name)| *name == event.event)?
-                    .0;
-                if kind_filter.is_some_and(|wanted| wanted != kind) {
-                    return None;
-                }
+        let matched = self.events.iter().filter_map(|event| {
+            let kind = DECISION_KINDS
+                .iter()
+                .find(|(_, name)| *name == event.event)?
+                .0;
+            if kind_filter.is_some_and(|wanted| wanted != kind) {
+                return None;
+            }
+            Some((event, kind))
+        });
+        let total = matched.clone().count();
+        let mut decisions: Vec<Value> = matched
+            .rev()
+            .take(last)
+            .map(|(event, kind)| {
                 let source = source_of(&event.line);
-                Some(json!({
+                json!({
                     "sequence": event.sequence,
                     "unix_ms": event.unix_ms,
                     "kind": kind,
@@ -301,14 +304,10 @@ impl Timeline {
                     "source": source,
                     "neutral": source == Some("rules") || event.line.contains("plan=unavailable"),
                     "line": event.line,
-                }))
+                })
             })
             .collect();
-        let total = matched.len();
-        let decisions: Vec<Value> = matched
-            .into_iter()
-            .skip(total.saturating_sub(last))
-            .collect();
+        decisions.reverse();
         json!({
             "decisions": decisions,
             "matched": total,

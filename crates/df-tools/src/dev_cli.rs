@@ -1366,7 +1366,10 @@ async fn round_trip(
     let mut raw = Vec::new();
     timeout(client.timeout, reader.read_to_end(&mut raw))
         .await
-        .map_err(|_| "server read timed out".to_owned())?
+        .map_err(|_| {
+            "server read timed out; a write may still have committed, so run dev state before retrying"
+                .to_owned()
+        })?
         .map_err(|error| format!("server read failed ({error})"))?;
     let text = String::from_utf8_lossy(&raw);
     let (head, body) = text
@@ -1410,6 +1413,11 @@ async fn wait(client: &Client, options: &[(String, String)]) -> CommandResult {
     loop {
         let state = match round_trip(client, "GET", "/dev/state", None).await {
             Ok((status, document)) if (200..300).contains(&status) => document,
+            // The owner was busy for this one read: keep waiting until the deadline.
+            Ok((503, _)) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                continue;
+            }
             Ok((_, document)) => return client.print(&document, true),
             Err(message) => return CommandResult::Transport(message),
         };

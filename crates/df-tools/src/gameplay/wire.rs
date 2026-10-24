@@ -943,14 +943,102 @@ fn project_scene_rules_note(
     }
 }
 
+struct ProjectionMemo {
+    current: Checkpoint,
+    pack: super::pack::CacheIdentity,
+    views: Vec<(
+        df_persistence::local_demo_scope::LocalDemoRole,
+        df_types::MemberId,
+        rpc::ViewMessage,
+    )>,
+}
+thread_local! {
+    static PROJECTIONS: std::cell::RefCell<Option<ProjectionMemo>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Only the pure audience projection is remembered. Authentication and the actor's per-call
+/// social/notebook/pacing/tempo attachments remain outside this memo. A Basis is not a content
+/// digest: recovery/fixtures can construct different checkpoints with the same Basis.
 pub(super) fn journey_view(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
     principal: df_types::MemberId,
 ) -> Result<rpc::ViewMessage, RepositoryError> {
-    project_journey(current, role, principal)
-        .inspect_err(|_| super::refusal_detail::note("view-projection"))
-        .map(|projection| projection.view)
+    let phase = super::journey::phase(current)?;
+    // Lobby media and combat worlds can become ready without a gameplay commit. Keep those
+    // projections live; only encounter-free story views have immutable pre-attachment inputs.
+    if !current.state().encounters.is_empty()
+        || !matches!(
+            phase,
+            rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue | rpc::JourneyPhase::Complete
+        )
+    {
+        return project_journey(current, role, principal)
+            .inspect_err(|_| super::refusal_detail::note("view-projection"))
+            .map(|projection| projection.view);
+    }
+    let source = super::pack::cache_identity();
+    let remembered = PROJECTIONS.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|memo| memo.pack == source && memo.current == *current)
+            .and_then(|memo| {
+                memo.views
+                    .iter()
+                    .find(|(who, member, _)| *who == role && *member == principal)
+            })
+            .map(|(_, _, view)| view.clone())
+    });
+    if let Some(view) = remembered {
+        return Ok(view);
+    }
+    let view = project_journey(current, role, principal)
+        .inspect_err(|_| super::refusal_detail::note("view-projection"))?
+        .view;
+    PROJECTIONS.with(|cache| {
+        let mut slot = cache.borrow_mut();
+        if slot
+            .as_ref()
+            .is_none_or(|memo| memo.pack != source || memo.current != *current)
+        {
+            *slot = Some(ProjectionMemo {
+                current: current.clone(),
+                pack: source,
+                views: Vec::new(),
+            });
+        }
+        if let Some(memo) = slot.as_mut() {
+            if memo.views.len() == 16 {
+                memo.views.remove(0);
+            }
+            memo.views.push((role, principal, view.clone()));
+        }
+    });
+    Ok(view)
+}
+
+pub(super) fn validate_view_size(view: &rpc::ViewMessage) -> Result<(), RepositoryError> {
+    use prost::Message;
+    let bytes = view.encoded_len();
+    let limit = df_rpc_bridge::RPC_MESSAGE_BYTES;
+    if bytes >= limit * 3 / 4 {
+        df_observe::record_audit_line(
+            "gameplay.view_payload",
+            format!(
+                "VIEW payload_size status={} bytes={bytes} limit_bytes={limit}",
+                if bytes > limit {
+                    "over_limit"
+                } else {
+                    "near_limit"
+                },
+            ),
+        );
+    }
+    if bytes > limit {
+        return Err(RepositoryError::Capacity);
+    }
+    Ok(())
 }
 
 pub(super) fn attach_notebook(
@@ -1231,6 +1319,7 @@ pub(super) fn project_journey(
             creation = Some(stage("view-creation-offer", creation_offer())?);
         }
         let mut observation_added = false;
+        let mut observation_options = None;
         for (kind, label, offer_id) in stage(
             "view-offers",
             super::beat_script_runtime::view_offers(current, principal),
@@ -1240,9 +1329,13 @@ pub(super) fn project_journey(
             {
                 // Nothing left to look at (everyone fled or fell, no findings): no offer, rather
                 // than a view that cannot be built (B-11).
-                if observation_added || observation_group(current)?.is_none() {
+                if observation_added {
                     continue;
                 }
+                let Some(options) = observation_group(current)? else {
+                    continue;
+                };
+                observation_options = Some(options);
                 observation_added = true;
             }
             offers.push(rpc::GameplayActionOffer {
@@ -1293,8 +1386,9 @@ pub(super) fn project_journey(
                 {
                     vec![stage(
                         "view-observation-options",
-                        observation_group(current)
-                            .and_then(|group| group.ok_or(RepositoryError::InvalidCandidate)),
+                        observation_options
+                            .clone()
+                            .ok_or(RepositoryError::InvalidCandidate),
                     )?]
                 } else {
                     Vec::new()
@@ -1344,15 +1438,21 @@ pub(super) fn project_journey(
         let outcomes = state
             .decisions
             .iter()
-            .filter(|decision| {
-                decision.source_policy.as_str() == journey::THREAD_POLICY
-                    || journey::tactical::development_receipt(decision)
-                        .is_ok_and(|receipt| receipt.is_some())
-            })
-            .map(journey::accepted)
+            .map(
+                |decision| -> Result<Option<rpc::AcceptedAction>, RepositoryError> {
+                    if decision.source_policy.as_str() == journey::THREAD_POLICY
+                        || journey::tactical::development_receipt(decision)?.is_some()
+                    {
+                        journey::accepted(decision).map(Some)
+                    } else {
+                        Ok(None)
+                    }
+                },
+            )
             .collect::<Result<Vec<_>, _>>()
             .inspect_err(|_| super::refusal_detail::note("view-combat-outcomes"))?
             .into_iter()
+            .flatten()
             .flat_map(|accepted| accepted.combat)
             .collect::<Vec<_>>();
         // The Dungeon Master closing line for a finished fight, picked deterministically
@@ -1546,8 +1646,8 @@ pub(super) fn project_journey(
         if key == SceneKey::Inn
             && let Some(epilogue) = &content.campaign_epilogue
         {
-            return if state.facts.iter().any(|fact| matches!(&fact.value,
-                FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == "private-courier-note")) {
+            return if perceived.facts().iter().any(|fact| matches!(&fact.value,
+                FactValue::ContentEvent { definition, subjects } if definition.entry.as_str() == "private-courier-note" && subjects.is_empty())) {
                 epilogue.asked.clone()
             } else {
                 epilogue.escorted.clone()
@@ -1672,7 +1772,7 @@ pub(super) fn project_journey(
         // The room's setting is attached to every view by the owner (see `TableSettings::attach`).
         choice_hints_hidden: false,
         // PLAY-V12: the opening scene's title is the adventure's own title on every view.
-        adventure_name: pack::scene(SceneKey::Opening).title,
+        adventure_name: pack::scene_title(SceneKey::Opening),
         composing: Vec::new(),
         // PLAY-V10: set per view for the display's lobby by `home_video::apply`; none here.
         home_video_state: rpc::HomeVideoState::None as i32,
@@ -1792,15 +1892,20 @@ pub(super) fn project_journey(
         .decisions
         .last()
         .filter(|decision| decision.revision == current.basis().revision)
-        .filter(|decision| {
-            decision.source_policy.as_str() == journey::THREAD_POLICY
-                || journey::living_scene::observation_record(decision)
-                    .is_ok_and(|record| record.is_some())
-                || journey::tactical::development_receipt(decision)
-                    .is_ok_and(|receipt| receipt.is_some())
-        })
-        .map(journey::accepted)
+        .map(
+            |decision| -> Result<Option<rpc::AcceptedAction>, RepositoryError> {
+                if decision.source_policy.as_str() == journey::THREAD_POLICY
+                    || journey::living_scene::observation_record(decision)?.is_some()
+                    || journey::tactical::development_receipt(decision)?.is_some()
+                {
+                    journey::accepted(decision).map(Some)
+                } else {
+                    Ok(None)
+                }
+            },
+        )
         .transpose()?
+        .flatten()
         .and_then(|accepted| accepted.check);
     // The display stages a check's finding through its dedicated result card and voice.
     // Keep its scene narration stable when a later interaction clears the current check.
@@ -1839,11 +1944,13 @@ pub(super) fn project_journey(
             journey: Some(journey),
         }),
     };
+    let view = rpc::ViewMessage {
+        revision: Some(revision(current.basis().revision)),
+        audience: Some(audience),
+    };
+    validate_view_size(&view)?;
     Ok(PublicJourneyProjection {
-        view: rpc::ViewMessage {
-            revision: Some(revision(current.basis().revision)),
-            audience: Some(audience),
-        },
+        view,
         scene: key,
         rested,
     })
@@ -2172,5 +2279,28 @@ mod hs28_action_contract_tests {
             rpc::SubmitActionRequest::decode(request.encode_to_vec().as_slice()).unwrap(),
             request
         );
+    }
+}
+
+#[cfg(test)]
+mod hs54_payload_tests {
+    use super::*;
+    #[test]
+    fn full_view_budget_includes_private_player_payload_and_rejects_oversize() {
+        let mut view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    private_clue: "a".repeat(df_rpc_bridge::RPC_MESSAGE_BYTES * 3 / 4),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert_eq!(validate_view_size(&view), Ok(()));
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_mut() else {
+            panic!("player")
+        };
+        player.private_clue = "b".repeat(df_rpc_bridge::RPC_MESSAGE_BYTES);
+        assert_eq!(validate_view_size(&view), Err(RepositoryError::Capacity));
     }
 }

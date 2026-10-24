@@ -79,13 +79,17 @@ pub(super) async fn game_state(State(state): State<Arc<Shared>>, headers: Header
 }
 
 async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Json<Value>)> {
-    let (_, display) = display_view(state).await?;
-    let revision = revision_json(display.revision.as_ref());
+    // One detached checkpoint for the entire read. A busy owner cannot block this snapshot.
     let current = state.service.updates.borrow().clone();
+    let revision = checkpoint_revision_json(&current);
+    let display_member = df_types::MemberId::from_bytes(&[0x72; 16])
+        .map_err(|_| super::failed("display scope unavailable"))?;
+    let display = wire::journey_view(&current, LocalDemoRole::Display, display_member)
+        .map_err(|_| super::failed("display projection unavailable"))?;
     let journey = display_journey_with(&display, Some(&current));
     let mut seats = Vec::new();
     for index in 0..df_rules::local_journey::MAXIMUM_PARTY {
-        if let Some(seat) = seat_json(state, index).await? {
+        if let Some(seat) = seat_json(state, index, &current).await? {
             seats.push(seat);
         }
     }
@@ -97,6 +101,7 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
         .map_err(|_| super::failed("history lock poisoned"))?;
     Ok(json!({
         "revision": revision,
+        "source": "last_published_checkpoint",
         "room": journey.get("room_code"),
         "phase": journey.get("phase"),
         "scene": journey.get("scene"),
@@ -106,6 +111,8 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
         "table_choices": journey.get("table_choices"),
         "budget": checkpoint.state().narrative.remaining_budget,
         "npc_facts": state.lore.development_decisions(),
+        "item_story_decisions": super::super::journey::living_scene::item_story_journal(checkpoint.state())
+            .map_err(|_| super::failed("item story journal unavailable"))?,
         "edited": !overrides.is_empty(),
         "override_count": overrides.len(),
         "redo_depth": history.redo_len(),
@@ -117,24 +124,46 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
 async fn seat_json(
     state: &Shared,
     index: usize,
+    current: &Checkpoint,
 ) -> Result<Option<Value>, (axum::http::StatusCode, Json<Value>)> {
     let (hero, member) = {
-        let seats = state.seats.lock().await;
+        let mut seats = state.seats.lock().await;
+        let before = seats.seats.get(index).and_then(|seat| seat.hero.clone());
+        let name = super::actions::reconcile_hero_name(&mut seats, current, index);
+        if name.is_some() && name != before {
+            super::persist_seats(state, &seats)
+                .map_err(|_| super::failed("dev control seat state unavailable"))?;
+        }
         let Some(seat) = seats.seats.get(index) else {
             return Ok(None);
         };
-        (seat.hero.clone(), seat.member.clone())
+        let same_scope = seats.session_id.as_deref()
+            == Some(current.basis().session.as_bytes().as_slice())
+            && seats.run_id.as_deref() == Some(current.basis().run.as_bytes().as_slice());
+        (
+            seat.hero.clone(),
+            seat.member.clone().filter(|_| same_scope),
+        )
     };
     if member.is_none() {
         return Ok(None);
     }
-    let (_, view) = match seat_view(state, index).await {
-        Ok(view) => view,
-        Err(error) if super::is_stale_seat_binding(&error) => {
-            return Ok(Some(stale_seat_json(index, hero.as_deref(), &error.1.0)));
-        }
-        Err(error) => return Err(error),
+    let member_id = member
+        .as_deref()
+        .and_then(|bytes| df_types::MemberId::from_bytes(bytes).ok());
+    let Some(member_id) = member_id.filter(|member| {
+        current
+            .state()
+            .members
+            .iter()
+            .any(|link| link.member == *member)
+    }) else {
+        let error = super::stale_seat_binding(index, hero.as_deref(), "checkpoint_member_missing");
+        return Ok(Some(stale_seat_json(index, hero.as_deref(), &error.1.0)));
     };
+    let mut view = wire::journey_view(current, LocalDemoRole::Player, member_id)
+        .map_err(|_| super::failed("seat projection unavailable"))?;
+    state.social.attach(&mut view, member_id);
     let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_ref() else {
         return Err(super::failed("player view required"));
     };
@@ -149,7 +178,7 @@ async fn seat_json(
     Ok(Some(json!({
         "seat": index + 1,
         "hero": hero,
-        "binding_status": "active",
+        "binding_status": "checkpoint_member",
         "offer_id": player.offer_id,
         "action_available": player.action_available,
         "offers": player.offers.iter().map(|offer| json!({
@@ -1105,6 +1134,7 @@ fn source_ledger(state: &GameState) -> Result<Vec<LedgerItem>, RepositoryError> 
         );
     }
     let mut rows = Vec::new();
+    let quantities = living_scene::source_custody_quantities(state)?;
     for thing in living_scene::source_custody(state)? {
         let owner = thing
             .owner_id
@@ -1123,7 +1153,8 @@ fn source_ledger(state: &GameState) -> Result<Vec<LedgerItem>, RepositoryError> 
             owner_ref: owner.clone(),
             holder_ref: holder.clone(),
             json: json!({
-                "item_id": thing.id, "source_id": thing.provenance.source_id,
+                "item_id": thing.id, "quantity": quantities.get(&thing.id).copied().unwrap_or(1),
+                "source_id": thing.provenance.source_id,
                 "name": thing.name, "provenance_kind": "source_starting_equipment",
                 "owner_id": owner, "owner": thing.owner_id,
                 "holder_id": holder, "holder": thing.holder_id,
@@ -1146,6 +1177,7 @@ fn scene_ledger(
 ) -> Result<(Vec<LedgerItem>, Market), RepositoryError> {
     let (stock_revisions, purse_revisions) = trade_revisions(current, hero_names)?;
     let authored = model.inventory();
+    let quantities = living_scene::source_custody_quantities(current.state())?;
     let mut items = Vec::new();
     for entry in living_scene::inventory_projection(current.state(), model, place_id)? {
         let local = authored
@@ -1154,6 +1186,7 @@ fn scene_ledger(
             .ok_or(RepositoryError::InvalidCandidate)?;
         let json = json!({
             "item_id": entry.item_id,
+            "quantity": quantities.get(&entry.item_id).copied().unwrap_or(1),
             "source_id": entry.source_id,
             "name": item_name(model, &entry.item_id),
             "provenance_kind": entry.provenance_kind,
@@ -2069,6 +2102,54 @@ mod ledger_tests {
                     .as_u64()
                     .unwrap()
             );
+            let stack = row(&hero_after["items"], "source_id", "javelin");
+            let stack_id = stack["item_id"].as_str().unwrap();
+            let quantity_before = stack["quantity"].as_u64().unwrap();
+            assert!(quantity_before > 1);
+            let vale_before = row(&after["party"], "name", "Vale")["items"].clone();
+            let one_sold = living_scene::stage_exchange(
+                &sold,
+                sold.basis(),
+                df_types::OperationId::from_bytes(&[85; 16]).unwrap(),
+                "Brynn",
+                "hs45-ledger-stack-fake",
+                ExchangeJudgement {
+                    merchant_id: merchant.into(),
+                    offer: ExchangeOffer {
+                        hero_items: vec![ExchangeItem {
+                            item_id: stack_id.into(),
+                            catalog_id: "javelin".into(),
+                        }],
+                        merchant_items: vec![],
+                        hero_cp: 0,
+                        merchant_cp: 25,
+                    },
+                    counter: None,
+                    hero_commits_now: true,
+                    choice: ExchangeChoice::Accept,
+                    stance: MerchantStance::Fair,
+                },
+            )
+            .unwrap();
+            journey::validate_script_characters(one_sold.state()).unwrap();
+            let ledger = ledger_json(&one_sold).unwrap();
+            let remaining = row(
+                &row(&ledger["party"], "name", "Brynn")["items"],
+                "source_id",
+                "javelin",
+            );
+            assert_eq!(remaining["quantity"], quantity_before - 1);
+            assert_ne!(remaining["item_id"], stack_id);
+            let transferred = row(&ledger["scene_items"], "item_id", stack_id);
+            assert_eq!(transferred["quantity"], 1);
+            assert_eq!(transferred["owner"], merchant);
+            assert_eq!(row(&ledger["party"], "name", "Vale")["items"], vale_before);
+            assert_eq!(
+                row(&ledger["party"], "name", "Brynn")["coin_cp"]
+                    .as_u64()
+                    .unwrap(),
+                hero_after["coin_cp"].as_u64().unwrap() + 25
+            );
         });
     }
 
@@ -2094,6 +2175,21 @@ mod ledger_tests {
                 coin_before
             );
             let starting = brynn["items"].as_array().unwrap();
+            let javelins = starting
+                .iter()
+                .filter(|item| item["source_id"] == "javelin")
+                .collect::<Vec<_>>();
+            assert_eq!(javelins.len(), 1, "one ledger row per carried source stack");
+            let native_javelins = opening
+                .state()
+                .inventory
+                .iter()
+                .find(|item| item.owner == actor && item.origin.entry.as_str() == "javelin")
+                .unwrap()
+                .quantity;
+            assert_eq!(javelins[0]["quantity"], native_javelins);
+            assert!(native_javelins > 1);
+            assert_eq!(javelins[0]["location"]["kind"], "scene");
             assert!(
                 starting
                     .iter()
@@ -2288,12 +2384,26 @@ fn join_transcript_timings(lines: &mut [Value], snapshot: &Value, run: &[u8]) {
     let Some(events) = snapshot["events"].as_array() else {
         return;
     };
+    // One pass over the ring; each transcript line then reads only its own sequence's events.
+    let mut by_sequence: HashMap<u64, Vec<&Value>> = HashMap::new();
+    for event in events {
+        let fields = &event["fields"];
+        if fields["run_id_hash"].as_str() == Some(&run_hash)
+            && fields["audience"].as_str() == Some("display")
+            && let Some(sequence) = fields["table_sequence"].as_u64()
+        {
+            by_sequence.entry(sequence).or_default().push(event);
+        }
+    }
     let mut hero_lines = HashMap::new();
     for line in lines {
         let sequence = line["seq"].as_u64();
         let committed_ms = line["unix_ms"].as_i64();
-        let matching: Vec<_> = events
-            .iter()
+        let matching: Vec<_> = sequence
+            .and_then(|sequence| by_sequence.get(&sequence))
+            .into_iter()
+            .flatten()
+            .copied()
             // Rewind can reuse a public sequence. Earlier accepted reports cannot time the new row.
             .filter(|event| {
                 committed_ms.is_none_or(|committed| {
@@ -2303,12 +2413,6 @@ fn join_transcript_timings(lines: &mut [Value], snapshot: &Value, run: &[u8]) {
                 })
             })
             .map(|event| &event["fields"])
-            .filter(|fields| {
-                fields["run_id_hash"].as_str() == Some(&run_hash)
-                    && fields["audience"].as_str() == Some("display")
-                    && sequence.is_some()
-                    && fields["table_sequence"].as_u64() == sequence
-            })
             .collect();
         // A reconnect/new display owns a different clock. Never join its end to another start.
         if let Some(producer) = matching

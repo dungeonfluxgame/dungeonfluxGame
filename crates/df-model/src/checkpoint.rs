@@ -979,6 +979,16 @@ fn validate_state(
     let members = unique(state.members.iter().map(|x| x.member))?;
     let entities = unique(state.entities.iter().map(|x| x.id))?;
     let facts = unique(state.facts.iter().map(|x| x.id))?;
+    let fact_index = state
+        .facts
+        .iter()
+        .map(|fact| (fact.id, (fact.operation, fact.revision)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let intent_operations = state
+        .intents
+        .iter()
+        .map(|intent| (intent.id, intent.operation))
+        .collect::<std::collections::BTreeMap<_, _>>();
     unique(state.pending.iter().map(|x| x.id))?;
     unique(state.intents.iter().map(|x| x.id))?;
     let timers = unique(state.timers.iter().map(|x| x.id))?;
@@ -1190,11 +1200,7 @@ fn validate_state(
         unique(x.effects.iter().copied())?;
         for id in &x.facts {
             require(
-                state.facts.iter().any(|record| {
-                    record.id == *id
-                        && record.operation == x.operation
-                        && record.revision == x.revision
-                }),
+                fact_index.get(id) == Some(&(x.operation, x.revision)),
                 CheckpointError::InvalidReference,
             )?;
         }
@@ -1206,10 +1212,7 @@ fn validate_state(
         }
         for id in &x.effects {
             require(
-                state
-                    .intents
-                    .iter()
-                    .any(|record| record.id == *id && record.operation == x.operation),
+                intent_operations.get(id) == Some(&x.operation),
                 CheckpointError::InvalidReference,
             )?;
         }

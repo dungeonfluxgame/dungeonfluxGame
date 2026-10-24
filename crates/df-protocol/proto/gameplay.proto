@@ -75,6 +75,8 @@ message PlateFigureMask {
   PlateSide free_side = 11;
   bool inferred = 12;
   uint32 mask_index = 13;
+  // The figure's feathered alpha mask under /gameplay/imagery/<plate>/figure/<index>; empty when none.
+  string mask_url = 14;
 }
 // actor_id is the exact current SceneActor.id; the permille head box belongs to GameplayScene.live_plate.
 message PlateActorHead { string actor_id = 1; PlateSide bubble_side = 2; uint32 head_x_permille = 3; uint32 head_y_permille = 4; uint32 head_width_permille = 5; uint32 head_height_permille = 6; }

@@ -60,17 +60,42 @@ pub(super) fn social_document(
     requested: &str,
     hero: Option<&str>,
 ) -> Result<Value, (StatusCode, Json<Value>)> {
-    let id = super::reads::feelings_identity(scene, requested);
-    let (profile, emotions) = social
-        .development_feelings(&id)
-        .ok_or_else(|| bad_request(format!("NPC {requested:?} has no social profile here")))?;
-    let (role_label, person_id) = id
+    let mut id = super::reads::feelings_identity(scene, requested);
+    let dossier = id
         .split_once(':')
-        .ok_or_else(|| bad_request(format!("NPC {requested:?} has no social profile here")))?;
-    let role = role_of(role_label).ok_or_else(|| bad_request("NPC role unknown"))?;
-    let dossier = social
-        .dossier_of(role, person_id)
-        .ok_or_else(|| bad_request("NPC profile not found"))?;
+        .and_then(|(role, person)| role_of(role).and_then(|role| social.dossier_of(role, person)));
+    let person = scene
+        .setting
+        .as_ref()
+        .and_then(|setting| setting.model.as_ref())
+        .and_then(|model| {
+            model.people.iter().find(|person| {
+                person.id.eq_ignore_ascii_case(requested)
+                    || person.name.eq_ignore_ascii_case(requested)
+            })
+        });
+    if dossier.is_none() {
+        let actor_id = person
+            .map(|person| person.id.as_str())
+            .or_else(|| {
+                scene
+                    .cast
+                    .iter()
+                    .find(|actor| {
+                        actor.id.eq_ignore_ascii_case(requested)
+                            || actor.name.eq_ignore_ascii_case(requested)
+                    })
+                    .map(|actor| actor.id.as_str())
+            })
+            .ok_or_else(|| bad_request(format!("NPC {requested:?} is not present")))?;
+        id = crate::gameplay::npc_event_classifier::scene_person_binding(actor_id);
+    }
+    let feelings = social.development_feelings(&id);
+    let profile = feelings.as_ref().map(|(profile, _)| profile);
+    let emotions = feelings
+        .as_ref()
+        .map(|(_, emotions)| emotions.as_slice())
+        .unwrap_or_default();
     let mut relationships = Vec::new();
     for character in &game.characters {
         let name =
@@ -79,7 +104,7 @@ pub(super) fn social_document(
             continue;
         }
         let member = character.owner;
-        let standing = social.standing(member, dossier);
+        let standing = dossier.map(|dossier| social.standing(member, dossier));
         let key = member_hex(member);
         let emotional = emotions
             .iter()
@@ -88,16 +113,18 @@ pub(super) fn social_document(
         relationships.push(json!({
             "hero": name,
             "details": social.development_relationship(member, &id),
-            "attitude": standing.attitude.label(),
-            "trust": standing.trust,
+            "acquaintance": social.acquaintance(&name, &id),
+            "attitude": standing.map(|standing| standing.attitude.label()),
+            "trust": standing.map(|standing| standing.trust),
             "emotion": emotional.map(emotional_json),
-            "grievances": social.grievance_lines(member, dossier),
+            "grievances": dossier.map(|dossier| social.grievance_lines(member, dossier)).unwrap_or_default(),
         }));
     }
     Ok(json!({
         "npc": requested,
         "npc_id": id,
         "profile": profile,
+        "persona": person.and_then(|person| person.persona.as_ref()),
         "dossier": dossier,
         "count": relationships.len(),
         "relationships": relationships,
@@ -125,6 +152,24 @@ pub(super) async fn read(
         )
         .map_err(|_| failed("opening social standing unavailable"))?
     {
+        let mut document = document;
+        let npc_key = state
+            .social
+            .dossier_of(rpc::SceneRole::Antagonist, "bandit")
+            .map(|dossier| dossier.npc_id.clone())
+            .unwrap_or_else(|| {
+                crate::gameplay::npc_event_classifier::scene_person_binding("bandit")
+            });
+        if let Some(rows) = document
+            .get_mut("relationships")
+            .and_then(Value::as_array_mut)
+        {
+            for row in rows {
+                if let Some(hero) = row["hero"].as_str() {
+                    row["acquaintance"] = json!(state.social.acquaintance(hero, &npc_key));
+                }
+            }
+        }
         return Ok((StatusCode::OK, Json(document)));
     }
     let scene = beat_script_runtime::scene(checkpoint.state())
@@ -358,6 +403,7 @@ mod tests {
             let layout = layout::LayoutState::new();
             let (shutdown, _) = watch::channel(false);
             let service = Service {
+                look_ahead: Default::default(),
                 portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
                 actor,
                 display_credential: [0x82; 32],
@@ -443,6 +489,48 @@ mod tests {
                 .unwrap();
             assert_eq!(again, document);
             assert_eq!(state.service.updates.borrow().basis(), before);
+        });
+    }
+
+    #[test]
+    fn hs68_npc_show_hero_reports_acquaintance_and_the_public_source_without_a_dossier() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = record::reload(&documents).unwrap();
+        let social = SocialLedger::none();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let game = opening.state();
+            let scene = beat_script_runtime::scene(game).unwrap();
+            let before = social_document(game, &social, &scene, "merchant", Some("Brynn")).unwrap();
+            assert_eq!(before["count"], 1);
+            assert_eq!(
+                before["relationships"][0]["acquaintance"]["state"],
+                "unknown"
+            );
+            social.learn_name(
+                "Brynn",
+                &["person:merchant".into()],
+                &crate::gameplay::social::Acquaintance {
+                    state: crate::gameplay::social::AcquaintanceState::Introduced,
+                    speaker: "Brynn".into(),
+                    place: "Basket Court".into(),
+                    line: "I'm Brynn".into(),
+                },
+            );
+            let after = social_document(game, &social, &scene, "merchant", Some("brynn")).unwrap();
+            assert_eq!(
+                after["relationships"][0]["acquaintance"]["state"],
+                "introduced"
+            );
+            assert_eq!(
+                after["relationships"][0]["acquaintance"]["line"],
+                "I'm Brynn"
+            );
+            assert_eq!(
+                after["relationships"][0]["acquaintance"]["place"],
+                "Basket Court"
+            );
         });
     }
 

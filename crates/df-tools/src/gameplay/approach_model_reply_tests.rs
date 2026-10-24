@@ -72,7 +72,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
                 .iter()
                 .filter(|body| {
                     body["state"].get("listener_facts").is_some()
-                        || body["state"].get("recorded_facts").is_some()
+                        || body["state"]["context"].get("listener_facts").is_some()
                 })
                 .count(),
             2,

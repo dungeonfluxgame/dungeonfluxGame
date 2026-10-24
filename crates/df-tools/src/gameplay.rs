@@ -22,6 +22,7 @@ mod dialogue;
 mod dialogue_tests;
 mod dice;
 mod display_effects;
+mod display_tuning;
 mod freeform_action;
 // DEVCTL-001: development-only agent control surface (off by default).
 mod creator_catalog;
@@ -153,6 +154,7 @@ struct Service {
     social: Arc<social::SocialLedger>,
     /// Follows the story's mood with generated scene art; presentation only.
     living: living_scenes::LivingScenes,
+    look_ahead: Arc<place_move::LookAhead>,
     layout: dev_control::layout::LayoutState,
     portraits: creator_portraits::Portraits,
 }
@@ -270,6 +272,7 @@ impl Service {
             .attach(&mut message)
             .await
             .map_err(|error| Status::internal(error.to_string()))?;
+        wire::validate_view_size(&message).map_err(actor::unavailable)?;
         Ok((role, message))
     }
 }
@@ -1088,6 +1091,11 @@ async fn display(State(state): State<PageState>) -> Result<Html<String>, axum::h
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
         .run
         .as_bytes());
+    // Hand-tuned TV values persist in a stylesheet beside the play data (no rebuild to change).
+    let body = body.replace(
+        "</head>",
+        &format!("{}</head>", display_tuning::style_element().await),
+    );
     Ok(Html(body.replace(
         "id=\"display\"",
         &format!(
@@ -1430,6 +1438,7 @@ async fn serve_run(
                     &database,
                     &std::env::current_dir()?,
                     &storyteller,
+                    &approach_model,
                 )
                 .await?;
                 actor::record_audit_line(
@@ -2032,7 +2041,8 @@ async fn serve_run(
     // pack and adventures saved before dossiers existed have none and keep today's behaviour.
     startup.step("social-state");
     let social = match &generated_adventure {
-        Some(prepared) if !prepared.record.dossiers.is_empty() => {
+        // A run with no dossiers (free roam) still keeps who learned whose name (HS68).
+        Some(prepared) => {
             println!(
                 "ADVENTURE npc dossiers={} (attitude saved in {})",
                 prepared.record.dossiers.len(),
@@ -2056,8 +2066,35 @@ async fn serve_run(
         }
         _ => {
             // The built-in pack authors its own scene models; install their rooms before the
-            // first view projects them.
-            let social = social::SocialLedger::none();
+            // first view projects them. An interactive run keeps its social memory (names learned,
+            // attitudes) in its own run directory, as local lore and the notebook do.
+            let social = if interactive {
+                let run = hex(initial.basis().run.as_bytes());
+                let directory = std::env::current_dir()?
+                    .join("development/runs/social")
+                    .join(&run);
+                if let Err(error) = std::fs::create_dir_all(&directory) {
+                    return startup_failure_after_admission(
+                        error,
+                        close_admitted_startup(&mut repository, &mut issuer, "social directory"),
+                    )
+                    .await
+                    .map_err(Into::into);
+                }
+                match social::SocialLedger::open(Vec::new(), &run, Some(directory)) {
+                    Ok(social) => social,
+                    Err(error) => {
+                        return startup_failure_after_admission(
+                            io::Error::other(error.to_string()),
+                            close_admitted_startup(&mut repository, &mut issuer, "social ledger"),
+                        )
+                        .await
+                        .map_err(Into::into);
+                    }
+                }
+            } else {
+                social::SocialLedger::none()
+            };
             let scenes = pack::with_content(|content| {
                 content
                     .scenes
@@ -2099,6 +2136,33 @@ async fn serve_run(
                 .map_err(Into::into);
             }
         },
+        // An interactive run keeps the facts the narrative engine backfilled (REF-069) in its own
+        // run directory, as the notebook does, so they survive a server restart.
+        None if interactive => {
+            let run = hex(initial.basis().run.as_bytes());
+            let directory = std::env::current_dir()?
+                .join("development/runs/lore")
+                .join(&run);
+            if let Err(error) = std::fs::create_dir_all(&directory) {
+                return startup_failure_after_admission(
+                    error,
+                    close_admitted_startup(&mut repository, &mut issuer, "local lore directory"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+            match npc_reply::local_lore::LocalLore::open(&run, Some(directory)) {
+                Ok(lore) => Arc::new(lore),
+                Err(error) => {
+                    return startup_failure_after_admission(
+                        io::Error::other(error.to_string()),
+                        close_admitted_startup(&mut repository, &mut issuer, "local lore"),
+                    )
+                    .await
+                    .map_err(Into::into);
+                }
+            }
+        }
         None => Arc::new(npc_reply::local_lore::LocalLore::in_memory()),
     };
     startup.step("notebook");
@@ -2223,10 +2287,10 @@ async fn serve_run(
         image_fixture,
     )?;
     startup.step("living-scenes");
-    let living = living_scenes::LivingScenes::start(
+    let living = living_scenes::LivingScenes::start_with_local_lore(
         imagery.clone(),
         imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
-        social.clone(),
+        (social.clone(), local_lore.clone()),
         rating,
         living_scenes::Timing::from_interval(living_interval),
         plates_enabled,
@@ -2616,6 +2680,7 @@ async fn serve_run(
         table_log: table_log.clone(),
         social: social.clone(),
         living,
+        look_ahead: Arc::default(),
         layout: dev_control::layout::LayoutState::new(),
         portraits,
     };
@@ -2742,6 +2807,8 @@ async fn serve_run(
     if let Some(routes) = dev_control.router {
         router = router.merge(routes);
     }
+    // Kept before `service` moves into qualification so shutdown can stop free-roam look-ahead.
+    let free_roam_look_ahead = service.look_ahead.clone();
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
@@ -2908,6 +2975,7 @@ async fn serve_run(
             }=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=dev_shutdown uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
         }
     };
+    free_roam_look_ahead.cancel();
     let mut shutdown = AuditStage::new("SERVER shutdown", "consumer");
     let qualification_outcome = if let Some((cancel, task)) = qualification {
         let _ = cancel.send(());

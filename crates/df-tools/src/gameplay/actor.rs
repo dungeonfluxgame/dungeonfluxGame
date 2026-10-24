@@ -2006,7 +2006,12 @@ impl Actor {
                     ));
                 }
             }
-        } else {
+        } else if super::journey::living_scene::has_pending_fight_witness(
+            self.owner.checkpoint().state(),
+            &self.social,
+        )
+        .map_err(unavailable)?
+        {
             self.resume_fight_reactions()?;
         }
         Ok(self.owner.checkpoint().clone())
@@ -2790,25 +2795,27 @@ impl Actor {
             }
             // The judgement that created this candidate was made by the service before the
             // proposal existed; the actor repeats only the deterministic checks.
-            let validated = match super::journey::merchant_bargaining::revalidate_quote(
-                &terms,
-                &hero_id,
-                &proposal.actor_id,
-                quote.direction,
-                &quote.item_id,
-                &source_text,
-            ) {
-                Ok(validated) => validated,
-                Err(reason) => {
-                    record_npc_event_status(
-                        &proposal,
-                        "rejected",
-                        reason.label(),
-                        &current_revision,
-                    );
-                    return Ok(NpcEventOutcome::status("rejected", current_revision));
-                }
-            };
+            let validated =
+                match super::journey::merchant_bargaining::revalidate_quote_with_number_reading(
+                    &terms,
+                    &hero_id,
+                    &proposal.actor_id,
+                    quote.direction,
+                    &quote.item_id,
+                    &source_text,
+                    quote.number_reading,
+                ) {
+                    Ok(validated) => validated,
+                    Err(reason) => {
+                        record_npc_event_status(
+                            &proposal,
+                            "rejected",
+                            reason.label(),
+                            &current_revision,
+                        );
+                        return Ok(NpcEventOutcome::status("rejected", current_revision));
+                    }
+                };
             if &validated != quote {
                 record_npc_event_status(
                     &proposal,
@@ -5269,8 +5276,10 @@ impl Actor {
             return Err(session_lost_status());
         }
         require_readable(self.fenced)?;
-        let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
-        let principal = self.issuer.principal(&credential).map_err(unavailable)?;
+        let (role, principal) = self
+            .issuer
+            .authenticate_with_principal(&credential)
+            .map_err(unavailable)?;
         watch_scope_identity(self.owner.checkpoint().basis(), role, principal, &request)?;
         Ok(role)
     }
@@ -5283,8 +5292,10 @@ impl Actor {
             return Err(session_lost_status());
         }
         require_readable(self.fenced)?;
-        let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
-        let principal = self.issuer.principal(&credential).map_err(unavailable)?;
+        let (role, principal) = self
+            .issuer
+            .authenticate_with_principal(&credential)
+            .map_err(unavailable)?;
         let current = self.owner.checkpoint();
         let member = watch_scope_identity(current.basis(), role, principal, &request)?;
         if role == LocalDemoRole::Player {
@@ -5357,6 +5368,8 @@ impl Actor {
         if let Some(tempo) = self.tempo.as_mut() {
             tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
         }
+        // Every attachment is in: a view the client cannot decode is refused here, audited.
+        wire::validate_view_size(&view).map_err(unavailable)?;
         self.seat_activity(&credential)?;
         Ok((role, view))
     }

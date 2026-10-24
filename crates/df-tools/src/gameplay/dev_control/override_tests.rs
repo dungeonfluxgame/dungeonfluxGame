@@ -166,6 +166,7 @@ impl Fixture {
         let social = crate::gameplay::social::SocialLedger::none();
         let layout = layout::LayoutState::new();
         let service = Service {
+            look_ahead: Default::default(),
             portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             actor: sender,
             display_credential: DISPLAY,

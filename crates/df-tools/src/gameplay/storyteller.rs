@@ -86,9 +86,11 @@ const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
 const MAXIMUM_WITHHELD: usize = 160;
 const MAXIMUM_WITHHELD_CHARACTERS: usize = 240;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
-const MAXIMUM_FACTS_BYTES: usize = 16 * 1024;
-pub(super) const MAXIMUM_PROMPT_BYTES: usize = 32 * 1024;
-const MAXIMUM_CACHE_FILE_BYTES: u64 = 64 * 1024;
+// Generated free-roam people carry persona, place, lore and fact decisions; 16 KiB refused
+// every stranger's reply as `request_invalid detail=facts` (2026-10-24, owner: remove the limits).
+const MAXIMUM_FACTS_BYTES: usize = 96 * 1024;
+pub(super) const MAXIMUM_PROMPT_BYTES: usize = 128 * 1024;
+const MAXIMUM_CACHE_FILE_BYTES: u64 = (MAXIMUM_SLOTS * MAXIMUM_SLOT_CHARACTERS * 4 + 4096) as u64;
 /// Tokens the model may spend thinking before it writes, on top of the visible prose.
 const REASONING_ALLOWANCE_TOKENS: usize = 200;
 
@@ -610,8 +612,8 @@ impl Storyteller {
         request: &Expression<'_>,
     ) -> Result<Option<BTreeMap<String, String>>, StorytellerError> {
         let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
-        check_request(request)?;
         let key = cache_key(&online.model, request);
+        check_request(request).map_err(|error| refuse(online, request, &key, error))?;
         let prompt = build_prompt(request, None);
         let reserved = online.estimate(&prompt, request);
         match online
@@ -629,8 +631,8 @@ impl Storyteller {
         request: &Expression<'_>,
     ) -> Result<BTreeMap<String, String>, StorytellerError> {
         let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
-        check_request(request)?;
         let key = cache_key(&online.model, request);
+        check_request(request).map_err(|error| refuse(online, request, &key, error))?;
         let started = Instant::now();
         record_text_resource(
             "gameplay.storyteller.requested",
@@ -694,6 +696,31 @@ impl Storyteller {
         outcome
     }
 
+    /// Drops the cached answer of `request`. A caller that refuses an answer the storyteller
+    /// accepted calls this, so the next identical request asks the model again.
+    pub(super) async fn forget(&self, request: &Expression<'_>) {
+        if let Some(online) = self.online.as_ref() {
+            let key = cache_key(&online.model, request);
+            let file = online.cache_directory.join(format!("{}.json", hex(&key)));
+            // A missing file is already forgotten; other failures must remain visible.
+            if let Err(error) = tokio::fs::remove_file(file).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                record_text_resource(
+                    "gameplay.storyteller.cache_evict_failed",
+                    online,
+                    request,
+                    &key,
+                    "failed",
+                    "failed",
+                    Some("cache_io"),
+                    None,
+                    None,
+                );
+            }
+        }
+    }
+
     /// One batched expression with per-slot acceptance: cache, then at most two budgeted
     /// attempts, the second asking again only for the slots the first answer got wrong. Only
     /// the accepted slots are cached. Fails when nothing could be accepted.
@@ -702,8 +729,8 @@ impl Storyteller {
         request: &Expression<'_>,
     ) -> Result<PartialExpression, StorytellerError> {
         let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
-        check_request(request)?;
         let key = cache_key(&online.model, request);
+        check_request(request).map_err(|error| refuse(online, request, &key, error))?;
         let started = Instant::now();
         record_text_resource(
             "gameplay.storyteller.requested",
@@ -809,6 +836,7 @@ impl Storyteller {
         };
         let started = Instant::now();
         let mut tokens = 0_u64;
+        let mut fresh = false;
         let mut complaint: Option<String> = None;
         let mut last = StorytellerError::Rejected {
             failure: ValidationFailure::NotTheRequestedShape,
@@ -844,6 +872,7 @@ impl Storyteller {
             {
                 Ok(Attempt::Text(values, spent)) => {
                     tokens = tokens.saturating_add(spent);
+                    fresh = true;
                     let (now_accepted, now_rejected) = sort_slots(&rules, &pending, &values);
                     accepted.extend(now_accepted);
                     rejected = now_rejected;
@@ -898,7 +927,8 @@ impl Storyteller {
         if accepted.is_empty() {
             return Err(last);
         }
-        if let Err(error) = write_cache(file, &accepted).await {
+        // A warm hit has nothing new to store: the file already holds these slots.
+        if fresh && let Err(error) = write_cache(file, &accepted).await {
             span.event(
                 "storyteller.cache_write_failed",
                 &[("storyteller.io_error", format!("{:?}", error.kind()))],
@@ -991,7 +1021,10 @@ impl Storyteller {
                     Err(failure) => {
                         span.event(
                             "storyteller.rejected",
-                            &[("storyteller.attempt", attempt.to_string())],
+                            &[
+                                ("storyteller.attempt", attempt.to_string()),
+                                ("storyteller.rejection", failure.label().to_owned()),
+                            ],
                         );
                         complaint = Some(failure.complaint());
                         last = StorytellerError::Rejected {
@@ -1343,7 +1376,7 @@ pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerE
         return Err(invalid("purpose"));
     }
     if request.slots.is_empty() || request.slots.len() > MAXIMUM_SLOTS {
-        return Err(invalid("slot count"));
+        return Err(invalid("slot_count"));
     }
     for (index, slot) in request.slots.iter().enumerate() {
         let well_formed = !slot.name.is_empty()
@@ -1360,10 +1393,10 @@ pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerE
                 .iter()
                 .any(|other| other.name == slot.name)
         {
-            return Err(invalid("slot name"));
+            return Err(invalid("slot_name"));
         }
         if slot.max_chars == 0 || slot.max_chars > MAXIMUM_SLOT_CHARACTERS {
-            return Err(invalid("slot length"));
+            return Err(invalid("slot_length"));
         }
         if slot.must_mention.len() > MAXIMUM_MUST_MENTION
             || slot
@@ -1371,21 +1404,21 @@ pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerE
                 .iter()
                 .any(|term| term.is_empty() || term.chars().count() > MAXIMUM_TERM_CHARACTERS)
         {
-            return Err(invalid("must mention"));
+            return Err(invalid("must_mention"));
         }
         if slot.forbidden.len() > MAXIMUM_SLOT_FORBIDDEN
             || slot.forbidden.iter().any(|term| {
                 term.trim().is_empty() || term.chars().count() > MAXIMUM_TERM_CHARACTERS
             })
         {
-            return Err(invalid("slot forbidden"));
+            return Err(invalid("slot_forbidden"));
         }
         if slot.withheld.len() > MAXIMUM_WITHHELD
             || slot.withheld.iter().any(|term| {
                 term.trim().is_empty() || term.chars().count() > MAXIMUM_WITHHELD_CHARACTERS
             })
         {
-            return Err(invalid("slot withheld"));
+            return Err(invalid("slot_withheld"));
         }
     }
     if !request.facts.is_object() || canonical(request.facts).len() > MAXIMUM_FACTS_BYTES {
@@ -1495,6 +1528,32 @@ fn record_text_outcome<T>(
         Ok(_) => TEXT.line("ready", key, subject, took, &format!("{key}.json"), ""),
         Err(error) => TEXT.line("failed", key, subject, took, "", storyteller_failure(error)),
     }
+}
+
+/// Records a refused request with the rule that refused it, so the refusal is never silent, and
+/// returns the error for the caller.
+fn refuse(
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    error: StorytellerError,
+) -> StorytellerError {
+    let reason = match &error {
+        StorytellerError::InvalidRequest(reason) => *reason,
+        _ => "refused",
+    };
+    record_text_resource(
+        "gameplay.storyteller.refused",
+        online,
+        request,
+        key,
+        "refused",
+        "refused",
+        Some(reason),
+        None,
+        None,
+    );
+    error
 }
 
 fn storyteller_failure(error: &StorytellerError) -> &'static str {

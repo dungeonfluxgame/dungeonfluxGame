@@ -689,6 +689,7 @@ impl ResourceSpec for SplatWorldSpec {
 pub(in crate::gameplay) struct Hub {
     registry: Arc<Mutex<Registry>>,
     ledger: Arc<SpendLedger>,
+    work_available: Arc<tokio::sync::Notify>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -770,6 +771,7 @@ impl Hub {
         audit("request", &key, &entry, 0, "", "");
         let status = Self::status_of(&entry);
         registry.entries.insert(key, entry);
+        self.work_available.notify_one();
         status
     }
 
@@ -841,6 +843,11 @@ impl Hub {
     }
 
     /// Hands out up to `available` queued generations, oldest key first, marking them in flight.
+    pub(in crate::gameplay) async fn wait_for_work(&self) {
+        // notify_one retains a permit if admission races the worker's empty-queue check.
+        self.work_available.notified().await;
+    }
+
     pub(in crate::gameplay) fn take_jobs(&self, available: usize) -> Vec<Job> {
         let mut registry = locked(&self.registry);
         let limits = registry.limits.clone();
@@ -920,6 +927,7 @@ impl Hub {
                 audit("failed", key, entry, ms, "", failure.label());
                 if failure.is_retryable() && entry.attempts < attempts && entry.maker.is_some() {
                     entry.state = State::Queued;
+                    self.work_available.notify_one();
                 } else {
                     entry.state = State::Failed(failure);
                 }
@@ -1031,6 +1039,7 @@ impl Hub {
         entry.state = State::Queued;
         entry.attempts = 0;
         audit("regenerate", key, entry, 0, "", "");
+        self.work_available.notify_one();
         true
     }
 }
@@ -1058,6 +1067,22 @@ mod tests {
         fn chrome(&self) -> Chrome {
             Neutral::Silhouette
         }
+    }
+
+    #[tokio::test]
+    async fn hs54_queue_wakes_an_idle_worker_without_polling() {
+        let hub = Hub::new();
+        let spec = TestSpec {
+            subject: "wake",
+            text: "wake",
+        };
+        assert!(hub.take_jobs(1).is_empty());
+        let maker: Maker = Arc::new(|| Box::pin(async { Err(ResourceFailure::TimedOut) }));
+        hub.get_or_request(&spec, maker);
+        // Admission before the wait must retain a notification, including the empty-check race.
+        assert!(futures::poll!(std::pin::pin!(hub.wait_for_work())).is_ready());
+        assert_eq!(hub.take_jobs(1).len(), 1);
+        assert!(futures::poll!(std::pin::pin!(hub.wait_for_work())).is_pending());
     }
 
     struct VersionTwo(TestSpec);

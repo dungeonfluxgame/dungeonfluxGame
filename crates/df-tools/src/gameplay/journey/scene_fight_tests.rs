@@ -398,7 +398,10 @@ fn s1_jessa_outcome_projects_fled_dead_and_standing_people_and_body_gear_replays
         let held = model
             .things
             .iter()
-            .filter(|thing| thing.holder_id.as_deref() == Some(&hero))
+            .filter(|thing| {
+                thing.holder_id.as_deref() == Some(&hero)
+                    && thing.owner_id.as_deref() == Some("shop-soldier")
+            })
             .map(|thing| thing.name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(

@@ -312,6 +312,15 @@ impl LocalDemoScopeIssuer {
 
     /// Validate a server-issued credential against its actual current grant row.
     pub fn authenticate(&self, credential: &[u8; 32]) -> Result<LocalDemoRole, RepositoryError> {
+        self.authenticate_with_principal(credential)
+            .map(|(role, _)| role)
+    }
+
+    /// Validate role and principal against one current grant row in one database round trip.
+    pub fn authenticate_with_principal(
+        &self,
+        credential: &[u8; 32],
+    ) -> Result<(LocalDemoRole, [u8; 16]), RepositoryError> {
         self.authority.runtime.block_on(async {
             let row = tokio::time::timeout(Duration::from_secs(2), self.authority.client()?.query_opt(
                 "SELECT principal_id, effective_role FROM df_local_demo.grants WHERE credential = $1::bytea AND session_id = $2::bytea AND tenant_id = $3::bytea AND campaign_id = $4::bytea AND active AND expires_at > clock_timestamp()",
@@ -320,9 +329,10 @@ impl LocalDemoScopeIssuer {
                 .ok_or(RepositoryError::Unauthorized)?;
             let principal: Vec<u8> = row.try_get("principal_id").map_err(|_| RepositoryError::Unauthorized)?;
             let role: Vec<u8> = row.try_get("effective_role").map_err(|_| RepositoryError::Unauthorized)?;
+            let principal: [u8; 16] = principal.try_into().map_err(|_| RepositoryError::Unauthorized)?;
             match (principal.as_slice(), role.as_slice()) {
-                (p, b"player") if p.len() == 16 && p != DISPLAY => Ok(LocalDemoRole::Player),
-                (p, b"display") if p == DISPLAY => Ok(LocalDemoRole::Display),
+                (p, b"player") if p.len() == 16 && p != DISPLAY => Ok((LocalDemoRole::Player, principal)),
+                (p, b"display") if p == DISPLAY => Ok((LocalDemoRole::Display, principal)),
                 _ => Err(RepositoryError::Unauthorized),
             }
         })

@@ -62,17 +62,66 @@ fn pack_cast() -> Vec<pack::SceneCastMember> {
 /// resources must remain admissible after travel and recovery, without a live scene registry.
 fn created_cast(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
     use crate::gameplay::place;
-    let places = place::created(state)?;
+    created_cast_records(&place::created(state)?)
+}
+
+fn created_cast_records(
+    places: &std::collections::BTreeMap<String, crate::gameplay::place::PlaceRecord>,
+) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
+    use crate::gameplay::place;
     if places.len() > place::MAXIMUM_CREATED_PLACES {
         return Err(RepositoryError::Capacity);
     }
+    let mut reused =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let authored_origin = crate::gameplay::adventure::free_roam::world().map(|world| world.gate);
+    for record in places.values() {
+        record.validate().map_err(bad)?;
+        if let Some(name) = &record.local_keeper {
+            let origin = places
+                .get(&record.origin.id)
+                .or_else(|| {
+                    authored_origin
+                        .as_ref()
+                        .filter(|origin| origin.place_id == record.origin.id)
+                })
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            let keeper = origin
+                .people
+                .iter()
+                .find(|person| person.name == *name)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            if !record.people.contains(keeper) {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            let original = origin
+                .expand()
+                .map_err(bad)?
+                .cast
+                .into_iter()
+                .find(|person| person.name == *name)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            if !record.expand().map_err(bad)?.cast.contains(&original) {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            let places = reused.entry(original.id).or_default();
+            places.insert(origin.place_id.clone());
+            places.insert(record.place_id.clone());
+        }
+    }
     let mut known = pack_cast();
     let mut created = Vec::new();
-    for record in places.into_values() {
-        record.validate().map_err(bad)?;
+    for record in places.values() {
         for person in record.expand().map_err(bad)?.cast {
-            if known.iter().any(|member| member.id == person.id) {
-                return Err(RepositoryError::InvalidCandidate);
+            if let Some(existing) = known.iter().find(|member| member.id == person.id) {
+                if !reused
+                    .get(&person.id)
+                    .is_some_and(|places| places.contains(&record.place_id))
+                    || existing != &person
+                {
+                    return Err(RepositoryError::InvalidCandidate);
+                }
+                continue;
             }
             known.push(person.clone());
             created.push(person);
@@ -166,13 +215,25 @@ pub(super) fn combatants_in(
 pub(super) fn created_resources(
     state: &GameState,
 ) -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    created_resources_of(state, None)
+}
+/// The created people's rows, or only the rows owned by `only`. The owner check runs before the
+/// 19 rows of a person are built, so a single-owner lookup builds at most one person's rows.
+pub(super) fn created_resources_of(
+    state: &GameState,
+    only: Option<EntityId>,
+) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let authored = combatants();
     let mut resources = Vec::new();
+    let source = rule()?;
     for (person, creature) in combatants_in(state)? {
         if authored.iter().any(|(id, _)| *id == person) {
             continue;
         }
         let owner = person_entity(&person)?;
+        if only.is_some_and(|who| who != owner) {
+            continue;
+        }
         let spec =
             tactical_rules::CombatantSpec::creature(3, creature.id, tactical_rules::Cell(0, 0), 0)
                 .map_err(bad)?;
@@ -206,7 +267,7 @@ pub(super) fn created_resources(
                 resource: model::label(name)?,
                 minimum,
                 maximum,
-                source: rule()?,
+                source: source.clone(),
             });
         }
     }
@@ -1238,15 +1299,20 @@ pub(in crate::gameplay) fn opening_place_move(
 }
 
 fn opening_decision(state: &GameState) -> Option<&AcceptedDecision> {
-    state.decisions.iter().rev().find(|decision| {
-        decision.facts.iter().any(|id| {
-            state.facts.iter().any(|fact| {
-                fact.id == *id
-                    && matches!(&fact.value,
-            FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == OBJECTIVE)
-            })
+    let objective_facts = state
+        .facts
+        .iter()
+        .filter(|fact| {
+            matches!(&fact.value,
+        FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == OBJECTIVE)
         })
-    })
+        .map(|fact| fact.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    state
+        .decisions
+        .iter()
+        .rev()
+        .find(|decision| decision.facts.iter().any(|id| objective_facts.contains(id)))
 }
 
 fn opening_move(
@@ -2246,6 +2312,56 @@ mod tests {
             recorded.push(draws);
         }
         panic!("the created-place fight did not resolve in a hundred rules actions");
+    }
+
+    #[test]
+    fn hs56_keeper_identity_reuses_resources_independent_of_place_key_order_and_rejects_changed_identity()
+     {
+        use crate::gameplay::place_creation;
+        let request = place_creation::tests::request();
+        let mut origin = place_creation::build(
+            &request,
+            &place_creation::tests::place_slot().to_string(),
+            &place_creation::tests::people_slot().to_string(),
+            &place_creation::tests::things_slot().to_string(),
+        )
+        .unwrap();
+        origin.place_id = "place-zz-origin".into();
+        let mut close = origin.clone();
+        close.place_id = "place-aa-close".into();
+        close.origin.id = origin.place_id.clone();
+        close.local_spot = Some("fish stall".into());
+        close.local_keeper = Some(origin.people[0].name.clone());
+        let keeper = origin.expand().unwrap().cast[0].clone();
+        let mut places = std::collections::BTreeMap::from([
+            (origin.place_id.clone(), origin.clone()),
+            (close.place_id.clone(), close.clone()),
+        ]);
+        assert!(places.keys().next().unwrap() < &origin.place_id);
+        let cast = created_cast_records(&places).unwrap();
+        assert_eq!(
+            cast.iter().filter(|person| person.id == keeper.id).count(),
+            1
+        );
+        assert_eq!(cast.len(), origin.people.len() + close.people.len() - 1);
+        places.get_mut(&close.place_id).unwrap().people[0]
+            .description
+            .push_str(" Changed.");
+        assert_eq!(
+            created_cast_records(&places),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        places.get_mut(&close.place_id).unwrap().people[0] = origin.people[0].clone();
+        places.get_mut(&close.place_id).unwrap().local_keeper = None;
+        let independent = created_cast_records(&places).unwrap();
+        assert_eq!(independent.len(), origin.people.len() + close.people.len());
+        assert_eq!(
+            independent
+                .iter()
+                .filter(|person| person.name == keeper.name)
+                .count(),
+            2
+        );
     }
 
     #[test]

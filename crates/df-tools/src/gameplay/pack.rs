@@ -2839,6 +2839,26 @@ pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
     Ok(())
 }
 
+/// Exact pack and projection-data identity. The retained Arc prevents pointer reuse.
+#[derive(Clone)]
+pub(super) struct CacheIdentity(Option<std::sync::Arc<LoadedPack>>, u64);
+impl PartialEq for CacheIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        if self.1 != other.1 {
+            return false;
+        }
+        match (&self.0, &other.0) {
+            (Some(left), Some(right)) => std::sync::Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+impl Eq for CacheIdentity {}
+pub(super) fn cache_identity() -> CacheIdentity {
+    CacheIdentity(active(), super::journey::living_scene::model_generation())
+}
+
 pub(super) fn active() -> Option<std::sync::Arc<LoadedPack>> {
     #[cfg(test)]
     if let Some(loaded) = TEST_ACTIVE.with(|slot| slot.borrow().clone()) {
@@ -2910,9 +2930,17 @@ struct ArcherPackage {
     #[serde(flatten)]
     _source_fields: BTreeMap<String, serde::de::IgnoredAny>,
 }
-fn archer_package() -> Result<ArcherPackage, df_rules::local_journey::JourneyRuleError> {
-    serde_json::from_str(df_rules::tactical::ARCHER_CREATION_JSON)
-        .map_err(|_| df_rules::local_journey::JourneyRuleError::InvalidRules)
+fn archer_package() -> Result<&'static ArcherPackage, df_rules::local_journey::JourneyRuleError> {
+    static PACKAGE: std::sync::OnceLock<
+        Result<ArcherPackage, df_rules::local_journey::JourneyRuleError>,
+    > = std::sync::OnceLock::new();
+    PACKAGE
+        .get_or_init(|| {
+            serde_json::from_str(df_rules::tactical::ARCHER_CREATION_JSON)
+                .map_err(|_| df_rules::local_journey::JourneyRuleError::InvalidRules)
+        })
+        .as_ref()
+        .map_err(|error| *error)
 }
 /// The archer build's ability data, as far as the creation page shows it.
 #[derive(serde::Deserialize)]
@@ -3042,7 +3070,7 @@ pub(super) fn build_packages()
 }
 pub(super) fn archer_equipment()
 -> Result<Vec<EquipmentRow>, df_rules::local_journey::JourneyRuleError> {
-    Ok(archer_package()?.equipment)
+    Ok(archer_package()?.equipment.clone())
 }
 pub(super) fn validate_character(
     name: &str,
@@ -3314,6 +3342,18 @@ pub(super) fn source_scene_asset(
         None => Ok(scene(key).asset),
     }
 }
+/// The scene title without cloning its authored room model.
+pub(super) fn scene_title(key: SceneKey) -> String {
+    with_content(|pack| {
+        pack.scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .expect("validated pack contains every compiled scene")
+            .title
+            .clone()
+    })
+}
+
 pub(super) fn scene(key: SceneKey) -> Scene {
     with_content(|pack| {
         pack.scenes

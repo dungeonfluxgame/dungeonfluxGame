@@ -228,6 +228,7 @@ impl RunningActor {
             return Err(io::Error::other("qualification actor handoff failed").into());
         }
         let service = Service {
+            look_ahead: Default::default(),
             portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             display_credential: [0x82; 32],
             layout: super::dev_control::layout::LayoutState::new(),

@@ -376,6 +376,7 @@ fn service() -> super::super::Service {
     let (_, updates) = tokio::sync::watch::channel(super::super::model::initial().unwrap());
     let (actor, _inbox) = df_session::inbox::bounded_inbox();
     super::super::Service {
+        look_ahead: Default::default(),
         actor,
         display_credential: [11; 32],
         updates,

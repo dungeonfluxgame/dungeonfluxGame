@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal, native_http::NativeHttp};
 
-const DEADLINE: Duration = Duration::from_millis(800);
+// 800 ms and 32 KiB failed every free-roam judgement (larger generated-place context) as a
+// transport error, which silenced every stranger (2026-10-24, owner: remove the limits).
+const DEADLINE: Duration = Duration::from_secs(4);
 
 /// A closed failure vocabulary that never includes credentials, URLs or payloads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,8 +58,8 @@ impl SystemOneChoiceProvider {
                 connect_timeout: DEADLINE,
                 read_timeout: DEADLINE,
                 total_timeout: DEADLINE,
-                maximum_request_bytes: 32 * 1024,
-                maximum_response_bytes: 16 * 1024,
+                maximum_request_bytes: 256 * 1024,
+                maximum_response_bytes: 64 * 1024,
                 maximum_header_bytes: 8 * 1024,
                 maximum_chunks: 64,
             },

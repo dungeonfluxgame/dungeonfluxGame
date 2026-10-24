@@ -495,6 +495,14 @@ pub(super) async fn create_hero(
         let seats = state.seats.lock().await;
         super::seat_credential(&seats, index)?
     };
+    if seat_sheet_name(&state, index).await?.as_deref() == Some(name) {
+        return Ok((
+            axum::http::StatusCode::OK,
+            Json(
+                json!({"status":"accepted", "recovered":true, "note":"the published checkpoint already contains this hero"}),
+            ),
+        ));
+    }
     let (revision, offers) = seat_offers(&state, index).await?;
     let offer = offers
         .iter()
@@ -530,14 +538,76 @@ pub(super) async fn create_hero(
         }),
         ..Default::default()
     };
-    let (code, Json(answer)) = owner_submit_action(&state, credential, request).await?;
-    if answer.get("status").and_then(Value::as_str) == Some("accepted") {
+    let submitted = owner_submit_action(&state, credential, request).await;
+    // The owner still runs a submit after its reply bound has passed, so a create that timed out
+    // may have committed. The seat's own sheet is the evidence, not the timeout.
+    let accepted = match &submitted {
+        Ok((_, Json(answer))) => answer.get("status").and_then(Value::as_str) == Some("accepted"),
+        Err(_) => match seat_sheet_name(&state, index).await {
+            Ok(hero) => hero.as_deref() == Some(name),
+            Err(_) => {
+                crate::gameplay::actor::record_audit_line(
+                    "gameplay.dev_control",
+                    "DEV_CONTROL create_recovery outcome=metadata_unavailable".into(),
+                );
+                false
+            }
+        },
+    };
+    if accepted {
         let mut seats = state.seats.lock().await;
         seats.seats[index].hero = Some(name.to_owned());
         super::persist_seats(&state, &seats)
             .map_err(|_| failed("dev control seat state unavailable"))?;
     }
-    Ok((code, Json(answer)))
+    match submitted {
+        Err(_) if accepted => Ok((
+            axum::http::StatusCode::OK,
+            Json(
+                json!({"status": "accepted", "recovered": true, "note": "the reply bound passed; the seat's sheet shows the hero, so the create committed"}),
+            ),
+        )),
+        other => other,
+    }
+}
+
+/// The hero name on a seat's own sheet as the owner reports it, or `None` when it cannot be read.
+pub(super) fn reconcile_hero_name(
+    seats: &mut Seats,
+    current: &df_model::checkpoint::Checkpoint,
+    index: usize,
+) -> Option<String> {
+    if seats.session_id.as_deref() != Some(current.basis().session.as_bytes().as_slice())
+        || seats.run_id.as_deref() != Some(current.basis().run.as_bytes().as_slice())
+    {
+        return None;
+    }
+    let seat = seats.seats.get_mut(index)?;
+    let member = df_types::MemberId::from_bytes(seat.member.as_deref()?).ok()?;
+    let hero = current
+        .state()
+        .members
+        .iter()
+        .find(|link| link.member == member)?
+        .character?;
+    let name = crate::gameplay::journey::name(current.state(), hero).ok()?;
+    seat.hero = Some(name.clone());
+    Some(name)
+}
+
+async fn seat_sheet_name(
+    state: &Shared,
+    index: usize,
+) -> Result<Option<String>, (axum::http::StatusCode, Json<Value>)> {
+    let current = state.service.updates.borrow().clone();
+    let mut seats = state.seats.lock().await;
+    let before = seats.seats.get(index).and_then(|seat| seat.hero.clone());
+    let name = reconcile_hero_name(&mut seats, &current, index);
+    if name.is_some() && name != before {
+        super::persist_seats(state, &seats)
+            .map_err(|_| failed("dev control seat state unavailable"))?;
+    }
+    Ok(name)
 }
 
 /// Uses the same authenticated, read-only identity preview as the creation page.
@@ -2143,5 +2213,40 @@ mod phone_seat_tests {
         let token = reclaim_token(0, &seats, &[away(2, 0xb2)]).expect("owner decides");
 
         assert_eq!(token, [0; 32]);
+    }
+}
+
+#[cfg(test)]
+mod hs54_recovery_tests {
+    use super::*;
+    #[test]
+    fn late_creation_reconciles_name_only_for_the_matching_session_run_and_member() {
+        let before = crate::gameplay::journey::initial().unwrap();
+        let after = crate::gameplay::beat_script_tests::prepared_story();
+        let member = after.state().characters[0].owner;
+        let mut seats = Seats {
+            session_id: Some(after.basis().session.as_bytes().to_vec()),
+            run_id: Some(after.basis().run.as_bytes().to_vec()),
+            seats: vec![super::super::Seat {
+                reclaim: None,
+                credential: Some([1; 32]),
+                member: Some(member.as_bytes().to_vec()),
+                hero: None,
+            }],
+        };
+        assert_eq!(reconcile_hero_name(&mut seats, &before, 0), None);
+        assert_eq!(seats.seats[0].hero, None);
+        assert_eq!(
+            reconcile_hero_name(&mut seats, &after, 0).as_deref(),
+            Some("Brynn")
+        );
+        assert_eq!(seats.seats[0].hero.as_deref(), Some("Brynn"));
+        seats.seats[0].hero = None;
+        seats.run_id = Some(vec![9; 16]);
+        assert_eq!(reconcile_hero_name(&mut seats, &after, 0), None);
+        assert_eq!(seats.seats[0].hero, None);
+        seats.run_id = Some(after.basis().run.as_bytes().to_vec());
+        seats.seats[0].member = Some(vec![9; 16]);
+        assert_eq!(reconcile_hero_name(&mut seats, &after, 0), None);
     }
 }

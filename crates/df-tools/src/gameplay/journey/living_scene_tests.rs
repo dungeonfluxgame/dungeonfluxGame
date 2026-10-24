@@ -2532,6 +2532,7 @@ fn coin_narration_names_copper_silver_and_gold_coins() {
 fn examining_or_talking_to_a_person_reads_the_act_and_the_description_never_the_relation() {
     use crate::gameplay::adventure::scene_model::{ScenePerson, StartingAttitude};
     let person = ScenePerson {
+        persona: None,
         id: "corin".into(),
         name: "Corin".into(),
         role: "customer".into(),

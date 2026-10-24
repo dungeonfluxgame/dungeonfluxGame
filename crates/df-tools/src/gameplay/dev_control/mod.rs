@@ -541,14 +541,17 @@ async fn health(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome
     let revision = current_revision(&state).await?;
     Ok((
         StatusCode::OK,
-        Json(json!({"status": "ok", "build": BUILD_ID, "revision": revision})),
+        Json(
+            json!({"status": "snapshot_available", "source": "last_published_checkpoint", "owner_probed": false, "build": BUILD_ID, "revision": revision}),
+        ),
     ))
 }
 
-/// The owner's current revision, read from the display view without side effects.
+/// The last owner-published checkpoint revision; this read does not queue an owner operation.
 async fn current_revision(state: &Shared) -> Result<Value, (StatusCode, Json<Value>)> {
-    let (_, view) = display_view(state).await?;
-    Ok(revision_json(view.revision.as_ref()))
+    Ok(reads::checkpoint_revision_json(
+        &state.service.updates.borrow(),
+    ))
 }
 
 fn revision_json(revision: Option<&rpc::SessionRevision>) -> Value {
@@ -772,6 +775,19 @@ async fn owner_view(
 }
 
 fn owner_view_failure(status: tonic::Status) -> (StatusCode, Json<Value>) {
+    if status.code() == tonic::Code::DeadlineExceeded {
+        // The owner was busy past the reply bound. The read changed nothing: say so, and say retry.
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "retry",
+                "code": "owner_busy",
+                "retry_after_seconds": 2,
+                "error": status.message(),
+                "message": "the game owner did not answer within the reply bound; this read changed nothing, retry it",
+            })),
+        );
+    }
     (
         StatusCode::BAD_GATEWAY,
         Json(json!({"error": status.message()})),
@@ -797,7 +813,17 @@ async fn owner_submit_action(
         .map_err(|_| failed("gameplay actor queue full"))?;
     let response = tokio::time::timeout(timing::active().reply, wait)
         .await
-        .map_err(|_| failed("gameplay submit deadline"))?
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "status": "unknown",
+                    "code": "outcome_unknown",
+                    "error": "gameplay submit deadline",
+                    "message": "the owner did not answer in time and the action may still commit; run dev state before retrying",
+                })),
+            )
+        })?
         .map_err(|_| failed("gameplay actor stopped"))?
         .map_err(|status| {
             (

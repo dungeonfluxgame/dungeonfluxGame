@@ -18,7 +18,7 @@ fn add_resource(
     value: i64,
 ) -> Result<(), RepositoryError> {
     let label = model::label(name)?;
-    if let Some(constraint) = super::scene_fight::created_resources(state)?
+    if let Some(constraint) = super::scene_fight::created_resources_of(state, Some(who))?
         .into_iter()
         .find(|constraint| constraint.owner == who && constraint.resource == label)
     {
@@ -564,24 +564,7 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
                     .iter()
                     .map(|weapon| (weapon.id(), u64::from(actor.weapon_count(*weapon)))),
             ) {
-                if let Some(item) = state
-                    .inventory
-                    .iter_mut()
-                    .find(|item| item.owner == who && item.origin.entry.as_str() == entry)
-                {
-                    item.quantity = quantity;
-                } else if quantity != 0 {
-                    if !development_mode(state) {
-                        return Err(RepositoryError::InvalidCandidate);
-                    }
-                    let mut restored = super::recreated_heroes(state)?
-                        .inventory
-                        .into_iter()
-                        .find(|item| item.owner == who && item.origin.entry.as_str() == entry)
-                        .ok_or(RepositoryError::InvalidCandidate)?;
-                    restored.quantity = quantity;
-                    state.inventory.push(restored);
-                }
+                store_carried_quantity(state, who, entry, quantity)?;
             }
         }
         if actor.side() == Side::Heroes {
@@ -641,6 +624,88 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
     }
     Ok(())
 }
+/// Several source-bound lots may share an origin after an accepted handoff.
+fn carried_quantity(
+    state: &GameState,
+    owner: EntityId,
+    entry: &str,
+) -> Result<u64, RepositoryError> {
+    state
+        .inventory
+        .iter()
+        .filter(|item| item.owner == owner && item.origin.entry.as_str() == entry)
+        .try_fold(0_u64, |total, item| {
+            total
+                .checked_add(item.quantity)
+                .ok_or(RepositoryError::Capacity)
+        })
+}
+
+/// Preserve each lot's identity and consume the last canonical lots first.
+fn store_carried_quantity(
+    state: &mut GameState,
+    owner: EntityId,
+    entry: &str,
+    quantity: u64,
+) -> Result<(), RepositoryError> {
+    let total = carried_quantity(state, owner, entry)?;
+    let mut indices = state
+        .inventory
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.owner == owner && item.origin.entry.as_str() == entry)
+        .map(|(index, item)| (item.item, index))
+        .collect::<Vec<_>>();
+    indices.sort_by_key(|(item, _)| *item);
+    if quantity > total {
+        if !development_mode(state) {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let Some((_, index)) = indices.first() else {
+            return Err(RepositoryError::InvalidCandidate);
+        };
+        state.inventory[*index].quantity += quantity - total;
+        return Ok(());
+    }
+    let mut remaining = quantity;
+    for (_, index) in indices {
+        let item = &mut state.inventory[index];
+        item.quantity = item.quantity.min(remaining);
+        remaining -= item.quantity;
+    }
+    Ok(())
+}
+
+/// An explicit development refill may restore an exhausted lot's retained provenance entity.
+/// Selling or handing away its last unit removes that entity, so it cannot grant the old kit.
+fn development_refill_ammunition(
+    state: &mut GameState,
+    owner: EntityId,
+    quantity: u64,
+) -> Result<(), RepositoryError> {
+    if quantity == 0 || carried_quantity(state, owner, "arrow")? != 0 {
+        return Ok(());
+    }
+    let entity = state
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.location == Some(owner) && entity.definition.entry.as_str() == "arrow"
+        })
+        .min_by_key(|entity| entity.id)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let mut restored = super::recreated_heroes(state)?
+        .inventory
+        .into_iter()
+        .find(|item| item.origin == entity.definition)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    restored.item = entity.id;
+    restored.owner = owner;
+    restored.quantity = quantity;
+    state.inventory.push(restored);
+    Ok(())
+}
+
 /// The hero reaction offer the battle waits on, as `(identity, reactor, provoker)`. An enemy's
 /// reaction is answered by the enemy policy at once, so only a hero's offer has a window.
 /// The identity names one offer: the round, the mover, where its move has reached and how much
@@ -2142,11 +2207,7 @@ fn start_on(
         {
             continue;
         }
-        let arrows = state
-            .inventory
-            .iter()
-            .find(|item| item.owner == *who && item.origin.entry.as_str() == "arrow")
-            .map_or(0, |item| item.quantity);
+        let arrows = carried_quantity(state, *who, "arrow")?;
         result.battle = noted(
             "fight-hero-resources",
             result
@@ -2192,13 +2253,9 @@ fn start_on(
             .weapons
             .iter()
             .map(|weapon| {
-                let item = state
-                    .inventory
-                    .iter()
-                    .find(|item| item.owner == *who && item.origin.entry.as_str() == weapon.id());
                 Ok((
                     *weapon,
-                    u16::try_from(item.map_or(0, |item| item.quantity)).map_err(bad)?,
+                    u16::try_from(carried_quantity(state, *who, weapon.id())?).map_err(bad)?,
                 ))
             })
             .collect::<Result<Vec<_>, RepositoryError>>()?;
@@ -3275,11 +3332,7 @@ pub(super) fn validate_encounter(current: &Checkpoint) -> Result<(), RepositoryE
                     .iter()
                     .map(|weapon| (weapon.id(), u64::from(actor.weapon_count(*weapon)))),
             ) {
-                let canonical = state
-                    .inventory
-                    .iter()
-                    .find(|item| item.owner == who && item.origin.entry.as_str() == entry)
-                    .map_or(0, |item| item.quantity);
+                let canonical = carried_quantity(state, who, entry)?;
                 if canonical != quantity {
                     return Err(RepositoryError::InvalidCandidate);
                 }
@@ -4341,6 +4394,156 @@ pub(super) mod tests {
         }
         panic!("bounded submitted defeat fixture did not finish")
     }
+    #[test]
+    fn hs56_source_lots_aggregate_and_spend_without_regranting_sold_gear() {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../../content/harbor-journey/pack.json"),
+            include_bytes!("../../../../../content/harbor-journey/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = mixed_opening();
+            let mut state = current.state().clone();
+            let owner = state.characters[0].entity;
+            let index = state
+                .inventory
+                .iter()
+                .position(|item| item.owner == owner && item.origin.entry.as_str() == "javelin")
+                .unwrap();
+            let mut received = state.inventory[index].clone();
+            let original_id = received.item;
+            received.item = entity([0xe7; 16]).unwrap();
+            received.quantity = 2;
+            state.inventory[index].quantity = 3;
+            state.inventory.push(received.clone());
+            assert_eq!(carried_quantity(&state, owner, "javelin").unwrap(), 5);
+            store_carried_quantity(&mut state, owner, "javelin", 4).unwrap();
+            assert_eq!(carried_quantity(&state, owner, "javelin").unwrap(), 4);
+            assert!(state.inventory.iter().any(|item| item.item == original_id));
+            assert!(
+                state
+                    .inventory
+                    .iter()
+                    .any(|item| item.item == received.item)
+            );
+            let before = state.inventory.clone();
+            assert!(store_carried_quantity(&mut state, owner, "javelin", 6).is_err());
+            assert_eq!(state.inventory, before);
+            state
+                .inventory
+                .retain(|item| item.owner != owner || item.origin.entry.as_str() != "greatsword");
+            assert!(store_carried_quantity(&mut state, owner, "greatsword", 1).is_err());
+            assert_eq!(carried_quantity(&state, owner, "greatsword").unwrap(), 0);
+            let source_arrow = state
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.location == Some(owner) && entity.definition.entry.as_str() == "arrow"
+                })
+                .unwrap()
+                .id;
+            state
+                .inventory
+                .retain(|item| item.owner != owner || item.origin.entry.as_str() != "arrow");
+            assert!(store_carried_quantity(&mut state, owner, "arrow", 20).is_err());
+            development_refill_ammunition(&mut state, owner, 20).unwrap();
+            assert_eq!(carried_quantity(&state, owner, "arrow").unwrap(), 20);
+            assert!(
+                state
+                    .inventory
+                    .iter()
+                    .any(|item| item.item == source_arrow && item.owner == owner)
+            );
+            state.inventory.retain(|item| item.item != source_arrow);
+            state.entities.retain(|entity| entity.id != source_arrow);
+            let before = state.inventory.clone();
+            assert!(development_refill_ammunition(&mut state, owner, 20).is_err());
+            assert_eq!(state.inventory, before);
+        });
+    }
+
+    #[test]
+    fn hs56_fight_loads_and_stores_split_arrow_and_javelin_lots() {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../../content/harbor-journey/pack.json"),
+            include_bytes!("../../../../../content/harbor-journey/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = dialogue_checkpoint(true, false).unwrap();
+            let mut state = current.state().clone();
+            let owner = state.characters[0].entity;
+            let mut ids = Vec::new();
+            for (entry, split, byte) in [("arrow", 6, 0xe5), ("javelin", 2, 0xe6)] {
+                let index = state
+                    .inventory
+                    .iter()
+                    .position(|item| item.owner == owner && item.origin.entry.as_str() == entry)
+                    .unwrap();
+                let mut received = state.inventory[index].clone();
+                state.inventory[index].quantity -= split;
+                received.item = entity([byte; 16]).unwrap();
+                received.quantity = split;
+                ids.push((entry, state.inventory[index].item, received.item));
+                state.inventory.push(received);
+            }
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let GameInput::Game(command) = input(&current, member, 7, "defend-courier", vec![])
+            else {
+                panic!("game input")
+            };
+            start_on(
+                &current,
+                &command,
+                &mut state,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut |sides| Ok(sides),
+                "harbor-journey".into(),
+                Foes::Tuned,
+            )
+            .unwrap();
+            let battle = read(&state).unwrap();
+            let id = actor_id(&state, owner).unwrap();
+            let actor = battle.actor(id).unwrap();
+            assert_eq!(actor.arrows(), 20);
+            assert_eq!(actor.weapon_count(Weapon::Javelin), 8);
+            let quantities = actor
+                .spec()
+                .weapons
+                .iter()
+                .map(|weapon| {
+                    (
+                        *weapon,
+                        actor.weapon_count(*weapon) - u16::from(*weapon == Weapon::Javelin),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let spent = battle
+                .clone()
+                .with_hero_resources(
+                    id,
+                    actor.health().hit_points,
+                    19,
+                    actor.spec().second_wind_uses,
+                )
+                .unwrap()
+                .with_hero_weapons(id, &quantities)
+                .unwrap();
+            store(&mut state, &spent).unwrap();
+            assert_eq!(carried_quantity(&state, owner, "arrow").unwrap(), 19);
+            assert_eq!(carried_quantity(&state, owner, "javelin").unwrap(), 7);
+            for (_, original, received) in ids {
+                assert!(state.inventory.iter().any(|item| item.item == original));
+                assert!(state.inventory.iter().any(|item| item.item == received));
+            }
+            let after = state.inventory.clone();
+            store(&mut state, &spent).unwrap();
+            assert_eq!(state.inventory, after);
+            assert_eq!(read(&state).unwrap().actor(id).unwrap().arrows(), 19);
+        });
+    }
+
     fn mixed_opening() -> Checkpoint {
         let mut current = initial().unwrap();
         for operation in [1, 2] {
@@ -9264,6 +9467,7 @@ pub(super) fn development_resources(
     state: &GameState,
 ) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let mut result = Vec::new();
+    let rule_source = rule()?;
     for world in &state.entities {
         let Some((source, _)) = development_profile(world) else {
             continue;
@@ -9297,7 +9501,7 @@ pub(super) fn development_resources(
                 resource: model::label(name)?,
                 minimum,
                 maximum,
-                source: rule()?,
+                source: rule_source.clone(),
             });
         }
     }
@@ -9591,11 +9795,7 @@ fn development_start(
             continue;
         }
         let arrows = u16::try_from(
-            state
-                .inventory
-                .iter()
-                .find(|item| item.owner == *who && item.origin.entry.as_str() == "arrow")
-                .map_or(0, |item| item.quantity),
+            carried_quantity(state, *who, "arrow").map_err(|_| "invalid ammunition")?,
         )
         .map_err(|_| "invalid ammunition")?;
         let actor = result
@@ -9674,11 +9874,8 @@ fn development_start(
             .weapons
             .iter()
             .map(|weapon| {
-                let quantity = state
-                    .inventory
-                    .iter()
-                    .find(|item| item.owner == *who && item.origin.entry.as_str() == weapon.id())
-                    .map_or(0, |item| item.quantity);
+                let quantity = carried_quantity(state, *who, weapon.id())
+                    .map_err(|_| "weapon quantity bounds")?;
                 Ok((
                     *weapon,
                     u16::try_from(quantity).map_err(|_| "weapon quantity bounds")?,
@@ -9954,6 +10151,28 @@ fn development_turn(
                     .map_or(0, |level| level.second_wind_maximum());
                 let initiative_modifier = profile.spec().initiative_modifier();
                 battle=battle.development_edit(id,&edit).map_err(|error|format!("{person}: {edit:?} refused: {error:?}; zero HP must remain unconscious; dead/stable cannot coexist, restore or set positive HP to revive; HP 0..={maximum}, second-wind 0..={wind}, action-surge 0..=1 (Fighter 2+), ammo 0..=1000, initiative {}..={}; conditions: prone unconscious dead stable dodging disengaged slowed sapped",1+initiative_modifier,20+initiative_modifier))?;
+                if let Command::Edit { kind, resource, .. } = command
+                    && kind == "resource"
+                    && resource.as_deref() == Some("ammo")
+                    && battle
+                        .actor(id)
+                        .map_err(|_| "combatant unavailable")?
+                        .side()
+                        == Side::Heroes
+                {
+                    let owner = canonical(&state, id).map_err(|_| "hero identity unavailable")?;
+                    development_refill_ammunition(
+                        &mut state,
+                        owner,
+                        u64::from(
+                            battle
+                                .actor(id)
+                                .map_err(|_| "combatant unavailable")?
+                                .arrows(),
+                        ),
+                    )
+                    .map_err(|error| format!("ammunition provenance unavailable: {error:?}"))?;
+                }
                 store(&mut state, &battle)
                     .map_err(|error| format!("edit canonical sync: {error:?}"))?;
             }

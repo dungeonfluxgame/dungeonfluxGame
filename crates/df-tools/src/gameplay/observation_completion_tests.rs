@@ -165,6 +165,7 @@ fn service(
         thread: Some(thread),
     };
     let service = Arc::new(Service {
+        look_ahead: Default::default(),
         portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
         display_credential: [0x82; 32],
         layout: crate::gameplay::dev_control::layout::LayoutState::new(),

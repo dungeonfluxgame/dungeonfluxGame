@@ -246,35 +246,43 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
 // thread CPU-bound and every call past its deadline (2026-10-24, live free roam). Both are pure
 // functions of the game state, so the owner thread remembers the last few results by exact state.
 thread_local! {
-    static PHASES: std::cell::RefCell<std::collections::VecDeque<(GameState, rpc::JourneyPhase)>> =
+    static PHASES: std::cell::RefCell<std::collections::VecDeque<(GameState, pack::CacheIdentity, rpc::JourneyPhase)>> =
         const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
-    static RECREATED: std::cell::RefCell<std::collections::VecDeque<(GameState, GameState)>> =
+    static RECREATED: std::cell::RefCell<std::collections::VecDeque<(GameState, pack::CacheIdentity, GameState)>> =
         const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
 }
 const REMEMBERED_PHASES: usize = 8;
 const REMEMBERED_RECREATIONS: usize = 4;
 
 pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
-    if let Some(phase) = tactical::development_phase(current)? {
-        return Ok(phase);
-    }
+    // Resume admission includes pins, which an exact state comparison alone cannot check.
+    current
+        .validate_resume(current.basis(), &model::pins()?)
+        .map_err(|error| {
+            refusal_detail::cause("beat-script-checkpoint-resume", format!("{error:?}"));
+            RepositoryError::InvalidCandidate
+        })?;
+    let pack = pack::cache_identity();
     let remembered = PHASES.with(|cache| {
         cache
             .borrow()
             .iter()
-            .find(|(state, _)| state == current.state())
-            .map(|(_, phase)| *phase)
+            .find(|(state, source, _)| *source == pack && state == current.state())
+            .map(|(_, _, phase)| *phase)
     });
     if let Some(phase) = remembered {
         return Ok(phase);
     }
-    let phase = derived_phase(current)?;
+    let phase = match tactical::development_phase(current)? {
+        Some(phase) => phase,
+        None => derived_phase(current)?,
+    };
     PHASES.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.len() >= REMEMBERED_PHASES {
             cache.pop_front();
         }
-        cache.push_back((current.state().clone(), phase));
+        cache.push_back((current.state().clone(), pack, phase));
     });
     Ok(phase)
 }
@@ -301,6 +309,10 @@ fn derived_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryEr
     Ok(phase)
 }
 pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    resources_of(None)
+}
+/// The pack's rows for every owner, or only the rows of `only`. Each owner's rows are independent.
+fn resources_of(only: Option<EntityId>) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let hero_hp = pack::with_creation(|rules| {
         Ok::<_, RepositoryError>(
             i64::from(rules.base_hit_points)
@@ -358,7 +370,11 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
     } else {
         owners.push((BANDIT, None));
     }
+    let source = rule()?;
     for (owner, tactical_enemy) in owners {
+        if only.is_some_and(|who| who.as_bytes() != &owner) {
+            continue;
+        }
         let enemy_hp = tactical_enemy
             .as_ref()
             .map_or(i64::from(bandit.hit_points), |spec| {
@@ -413,7 +429,7 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
                 resource: model::label(name)?,
                 minimum,
                 maximum,
-                source: rule()?,
+                source: source.clone(),
             });
         }
     }
@@ -448,10 +464,26 @@ fn fighter_progression(
     rules::FighterProgression::new(level).map_err(bad)
 }
 pub(super) fn resources_for(state: &GameState) -> Result<Vec<ResourceConstraint>, RepositoryError> {
-    let mut inventory = resources()?;
-    inventory.extend(scene_fight::created_resources(state)?);
-    inventory.extend(tactical::development_resources(state)?);
-    for character in &state.characters {
+    resources_for_owners(state, None)
+}
+/// `resources_for` restricted to one owner: the same rows, order and bounds for that owner.
+fn resources_for_owners(
+    state: &GameState,
+    only: Option<EntityId>,
+) -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    let keep = |owner: EntityId| only.is_none_or(|who| who == owner);
+    let mut inventory = resources_of(only)?;
+    inventory.extend(scene_fight::created_resources_of(state, only)?);
+    inventory.extend(
+        tactical::development_resources(state)?
+            .into_iter()
+            .filter(|constraint| keep(constraint.owner)),
+    );
+    for character in state
+        .characters
+        .iter()
+        .filter(|character| keep(character.entity))
+    {
         let progression = fighter_progression(state, character.entity)?;
         if progression.level() == 1 {
             continue;
@@ -497,7 +529,7 @@ fn add_resource(
     value: i64,
 ) -> Result<(), RepositoryError> {
     let label = model::label(name)?;
-    let constraint = resources_for(state)?
+    let constraint = resources_for_owners(state, Some(who))?
         .into_iter()
         .find(|value| value.owner == who && value.resource == label)
         .ok_or(RepositoryError::InvalidCandidate)?;
@@ -3991,6 +4023,8 @@ fn accept_character_at_level(
     } else {
         0
     };
+    let equipment_revision = model::label("source-starting-equipment-1")?;
+    let equipment_source = rule()?;
     for row in equipment {
         let entry = row.item.as_str();
         let quantity = u64::from(row.quantity);
@@ -4006,13 +4040,13 @@ fn accept_character_at_level(
             definition: model::content(entry)?,
             location: Some(who),
             position: None,
-            identity_revision: model::label("source-starting-equipment-1")?,
+            identity_revision: equipment_revision.clone(),
         });
         state.inventory.push(InventoryItem {
             item: entity(id)?,
             owner: who,
             quantity,
-            source: rule()?,
+            source: equipment_source.clone(),
             origin: model::content(entry)?,
             attunement_owner: None,
         });
@@ -4914,12 +4948,13 @@ pub(super) fn validate_script_characters(state: &GameState) -> Result<(), Reposi
 /// character whose record does not belong to its member or its build. The replay of a creation
 /// receipt reads the sheet from this, because a freeplay fight changes a hero's combat resources.
 pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, RepositoryError> {
+    let pack = pack::cache_identity();
     let remembered = RECREATED.with(|cache| {
         cache
             .borrow()
             .iter()
-            .find(|(input, _)| input == state)
-            .map(|(_, recreated)| recreated.clone())
+            .find(|(input, source, _)| *source == pack && input == state)
+            .map(|(_, _, recreated)| recreated.clone())
     });
     if let Some(recreated) = remembered {
         return Ok(recreated);
@@ -4930,7 +4965,7 @@ pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, Repositor
         if cache.len() >= REMEMBERED_RECREATIONS {
             cache.pop_front();
         }
-        cache.push_back((state.clone(), recreated.clone()));
+        cache.push_back((state.clone(), pack, recreated.clone()));
     });
     Ok(recreated)
 }
@@ -5074,6 +5109,36 @@ impl df_rules::RulesCommandHandler for JourneyHandler {
         Ok(staged)
     }
 }
+
+struct PreparedJourneyHandler<'a> {
+    replay: &'a JourneyHandler,
+    current: &'a Checkpoint,
+    command: &'a GameInput,
+    draws: &'a [ActualDraw],
+    prepared: &'a Checkpoint,
+}
+impl df_rules::RulesCommandHandler for PreparedJourneyHandler<'_> {
+    type Rejection = RepositoryError;
+    fn pins(&self) -> &CheckpointPins {
+        &self.replay.pins
+    }
+    fn stage(
+        &self,
+        input: df_rules::RulesCommandInput<'_>,
+        current: &Checkpoint,
+    ) -> Result<Checkpoint, RepositoryError> {
+        // This private handler exists for exactly one discovery result. Reuse it only for
+        // those exact inputs; registry admission and candidate/draw/history checks still run.
+        if current != self.current
+            || input.command != self.command
+            || input.supplied_draws != self.draws
+        {
+            refusal_detail::note("handler-discovery-mismatch");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        Ok(self.prepared.clone())
+    }
+}
 /// Native sampling is separate from the registered pure transition. Every actual
 /// source-qualified draw is supplied explicitly; retries stop at the PG operation lookup.
 pub(super) fn stage(
@@ -5088,9 +5153,11 @@ pub(super) fn stage_with_supplier(
     input: &GameInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
+    let started = std::time::Instant::now();
     let prepared = stage_using(current, input, supplier).inspect_err(|_| {
         refusal_detail::note("stage-using");
     })?;
+    let prepared_us = started.elapsed().as_micros();
     let operation = command(input)?.operation;
     let draws = prepared
         .state()
@@ -5118,15 +5185,23 @@ pub(super) fn stage_with_supplier(
     )
     .map_err(bad)?;
     let base_handler = JourneyHandler { pins: pins.clone() };
+    let prepared_handler = PreparedJourneyHandler {
+        replay: &base_handler,
+        current,
+        command: input,
+        draws: &draws,
+        prepared: &prepared,
+    };
     let handler = courier_reaction::CourierJourneyHandler {
-        command_handler: &base_handler,
+        command_handler: &prepared_handler,
     };
     let registrations = [df_rules::HandlerRegistration::new(
         &selector, &source, &handler,
     )];
     let registry =
         df_rules::DispatchRegistry::from_catalog(catalog, &registrations, 1).map_err(bad)?;
-    df_engine::command_entry::decide_registered_command(
+    let dispatched = std::time::Instant::now();
+    let result = df_engine::command_entry::decide_registered_command(
         df_rules::RulesCommandInput {
             command: input,
             supplied_draws: &draws,
@@ -5171,7 +5246,18 @@ pub(super) fn stage_with_supplier(
         }
         refusal_detail::note("decide-command");
         bad(error)
-    })
+    });
+    super::actor::record_audit_line(
+        "gameplay.stage_timing",
+        format!(
+            "STAGE operation={} prepare_us={prepared_us} dispatch_us={} total_us={} outcome={}",
+            hex(operation.as_bytes()),
+            dispatched.elapsed().as_micros(),
+            started.elapsed().as_micros(),
+            if result.is_ok() { "staged" } else { "refused" }
+        ),
+    );
+    result
 }
 
 #[cfg(test)]
@@ -6334,6 +6420,135 @@ mod tests {
                 refusal_detail::take()
             )
         })
+    }
+
+    #[test]
+    fn hs54_memos_reject_changed_content_under_the_same_basis_and_foreign_pins() {
+        let current = table_story(1);
+        assert!(current.state().encounters.is_empty());
+        assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Opening);
+        let role = df_persistence::local_demo_scope::LocalDemoRole::Display;
+        let member = bootstrap_member().unwrap();
+        let expected = wire::journey_view(&current, role, member).unwrap();
+        let mut changed = current.state().clone();
+        // A structural checkpoint can retain its basis while its journey receipt is invalid.
+        changed.decisions.last_mut().unwrap().source_policy =
+            model::label("hs54-foreign-policy").unwrap();
+        let alias = model::checkpoint(current.basis(), changed).unwrap();
+        assert_eq!(
+            current.basis(),
+            alias.basis(),
+            "Basis alone does not uniquely name content"
+        );
+        assert!(wire::journey_view(&alias, role, member).is_err());
+        assert_eq!(
+            wire::journey_view(&current, role, member).unwrap(),
+            expected
+        );
+
+        let mut pins = current.pins().clone();
+        pins.build = df_types::BuildIdentity::new(
+            Some("hs54"),
+            Some("native"),
+            Some("wasm"),
+            Some("configuration"),
+            Some("content"),
+        )
+        .unwrap();
+        let foreign = Checkpoint::new(
+            CHECKPOINT_SCHEMA,
+            current.basis(),
+            pins,
+            current.state().clone(),
+            ReferenceInventory {
+                rules: &[model::rule().unwrap(), rule().unwrap()],
+                content: &model::contents().unwrap(),
+                resources: &resources_for(current.state()).unwrap(),
+                assets: &[],
+            },
+            model::limits(),
+        )
+        .unwrap();
+        assert_eq!(foreign.state(), current.state());
+        assert!(
+            phase(&foreign).is_err(),
+            "a cached phase never bypasses resume admission"
+        );
+        assert!(wire::journey_view(&foreign, role, member).is_err());
+    }
+
+    #[test]
+    fn hs54_pack_replacement_invalidates_views_and_phase_memos() {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/merchant-shop/pack.json"),
+            include_bytes!("../../../../content/merchant-shop/tuning.json"),
+        )
+        .unwrap();
+        let mut replacement = loaded.clone();
+        replacement.pack.room_code = "HS54NEW".into();
+        pack::with_test_pack(loaded, || {
+            let current = table_story(1);
+            assert!(current.state().encounters.is_empty());
+            assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Opening);
+            let member = bootstrap_member().unwrap();
+            let role = df_persistence::local_demo_scope::LocalDemoRole::Display;
+            let before = wire::journey_view(&current, role, member).unwrap();
+            pack::with_test_pack(replacement, || {
+                let after = wire::journey_view(&current, role, member).unwrap();
+                assert_ne!(
+                    before, after,
+                    "installed pack identity is a memo input even with equal source pins"
+                );
+            });
+            assert_eq!(wire::journey_view(&current, role, member).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn hs54_six_hero_free_roam_100_views_cpu_budget() {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/merchant-shop/pack.json"),
+            include_bytes!("../../../../content/merchant-shop/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = table_story(6);
+            for line in super::super::actor::audit_lines_containing("STAGE ") {
+                eprintln!("{line}");
+            }
+            assert_eq!(current.state().characters.len(), 6);
+            assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Opening);
+            let checkpoint_started = std::time::Instant::now();
+            for _ in 0..100 {
+                std::hint::black_box(
+                    model::checkpoint(current.basis(), current.state().clone()).unwrap(),
+                );
+            }
+            eprintln!(
+                "HS54 checkpoint_rebuilds=100 elapsed_us={}",
+                checkpoint_started.elapsed().as_micros()
+            );
+            let started = std::time::Instant::now();
+            for index in 0..100 {
+                let role = if index % 7 == 0 {
+                    df_persistence::local_demo_scope::LocalDemoRole::Display
+                } else {
+                    df_persistence::local_demo_scope::LocalDemoRole::Player
+                };
+                let member = MemberId::from_bytes(&MEMBERS[index % 6]).unwrap();
+                let view = wire::journey_view(&current, role, member).unwrap();
+                std::hint::black_box(view);
+            }
+            let elapsed = started.elapsed();
+            eprintln!(
+                "HS54 six_heroes views=100 elapsed_us={} budget_us=500000",
+                elapsed.as_micros()
+            );
+            assert!(
+                elapsed < Duration::from_millis(500),
+                "100 pure projections exceeded the CPU-work budget: {elapsed:?}"
+            );
+        });
     }
 
     #[test]

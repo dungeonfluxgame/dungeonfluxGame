@@ -308,6 +308,17 @@ impl DecisionAdapter {
         deadline: Instant,
         context: &OperationContext,
     ) -> Result<CommitOutcome, RepositoryError> {
+        let prepared_document = self
+            .recovery
+            .as_ref()
+            .ok_or(RepositoryError::InvalidCandidate)
+            .and_then(|recovery| {
+                recovery.encode_candidate(checkpoint, scope.admitted_pins(), self.codec_limits)
+            });
+        // CPU work cannot be preempted by timeout_at. Check the same commit bound before I/O.
+        if Instant::now() >= deadline {
+            return Err(RepositoryError::Unavailable);
+        }
         let transaction = match timeout_at(deadline, client.transaction()).await {
             Ok(Ok(transaction)) => transaction,
             Ok(Err(_)) | Err(_) => {
@@ -317,7 +328,14 @@ impl DecisionAdapter {
         };
         let stage = timeout_at(
             deadline,
-            self.stage(&transaction, scope, checkpoint, expected, deadline),
+            self.stage(
+                &transaction,
+                scope,
+                checkpoint,
+                expected,
+                deadline,
+                &prepared_document,
+            ),
         )
         .await;
         match stage {
@@ -412,6 +430,7 @@ impl DecisionAdapter {
         checkpoint: &Checkpoint,
         expected: Basis,
         deadline: Instant,
+        prepared_document: &Result<Vec<u8>, RepositoryError>,
     ) -> Result<Stage, RepositoryError> {
         let codec_limits = self.codec_limits;
         let maximum_receipt_bytes = self.maximum_receipt_bytes;
@@ -464,15 +483,10 @@ impl DecisionAdapter {
         let receipt = DecisionReceipt::new(basis, decision.clone(), maximum_receipt_bytes)?;
         // A caller's Checkpoint constructor is not source admission. Revalidate the
         // actual complete encoded candidate with the root's admitted reference inventory.
-        let recovery = self
-            .recovery
-            .as_ref()
-            .ok_or(RepositoryError::InvalidCandidate)?;
-        let document =
-            recovery.encode_candidate(checkpoint, scope.admitted_pins(), codec_limits)?;
+        let document = prepared_document.as_ref().map_err(|error| *error)?;
         let receipt_document =
             encode_receipt(&receipt, codec_limits).map_err(|_| RepositoryError::InvalidReceipt)?;
-        insert_checkpoint(transaction, scope, checkpoint, &document).await?;
+        insert_checkpoint(transaction, scope, checkpoint, document).await?;
         for fact in checkpoint
             .state()
             .facts

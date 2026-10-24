@@ -55,14 +55,24 @@ pub(in crate::gameplay) fn weapon_source_name(
 }
 
 pub(super) fn weapon(thing: &SceneThing) -> Result<bool, RepositoryError> {
-    let catalog = super::super::merchant_bargaining::equipment_catalog().map_err(|_| invalid())?;
-    let items = catalog["items"].as_array().ok_or_else(invalid)?;
-    Ok(items.iter().any(|item| {
-        item["kind"] == "weapon"
-            && item["id"].as_str().is_some_and(|id| {
-                id == thing.provenance.source_id
-                    || id.replace('-', " ").eq_ignore_ascii_case(&thing.name)
-            })
+    static WEAPONS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    let weapons = match WEAPONS.get() {
+        Some(weapons) => weapons,
+        None => {
+            let catalog =
+                super::super::merchant_bargaining::equipment_catalog().map_err(|_| invalid())?;
+            let items = catalog["items"].as_array().ok_or_else(invalid)?;
+            let built = items
+                .iter()
+                .filter(|item| item["kind"] == "weapon")
+                .filter_map(|item| item["id"].as_str())
+                .map(|id| (id.to_owned(), id.replace('-', " ")))
+                .collect::<Vec<_>>();
+            WEAPONS.get_or_init(|| built)
+        }
+    };
+    Ok(weapons.iter().any(|(id, spaced)| {
+        *id == thing.provenance.source_id || spaced.eq_ignore_ascii_case(&thing.name)
     }))
 }
 

@@ -1257,3 +1257,48 @@ fn a_provider_contract_failure_is_labelled_by_the_part_of_the_contract_that_fail
         "supplier"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs54_caller_rejection_evicts_the_cached_answer() {
+    let endpoint = FakeEndpoint::start(vec![reply("First answer."), reply("Replacement answer.")]);
+    let cache = cache_directory("hs54-forget");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), slots());
+    let request = expression(&facts, &slots);
+    assert_eq!(
+        storyteller.express(&request).await.unwrap()["reply"],
+        "First answer."
+    );
+    assert_eq!(
+        storyteller.express(&request).await.unwrap()["reply"],
+        "First answer."
+    );
+    assert_eq!(endpoint.connections(), 1);
+    storyteller.forget(&request).await;
+    assert_eq!(
+        storyteller.express(&request).await.unwrap()["reply"],
+        "Replacement answer."
+    );
+    assert_eq!(endpoint.connections(), 2);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs54_valid_multibyte_answers_larger_than_64k_round_trip_the_cache() {
+    let values = json!({"one":"\u{9f8d}".repeat(7900),"two":"\u{9f8d}".repeat(7900),"three":"\u{9f8d}".repeat(7900)});
+    assert!(serde_json::to_vec(&values).unwrap().len() > 64 * 1024);
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(values)]);
+    let cache = cache_directory("hs54-large-cache");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    let facts = facts();
+    let slots = [
+        Slot::new("one", 8000),
+        Slot::new("two", 8000),
+        Slot::new("three", 8000),
+    ];
+    let request = expression(&facts, &slots);
+    let first = storyteller.express(&request).await.unwrap();
+    assert_eq!(storyteller.express(&request).await.unwrap(), first);
+    assert_eq!(endpoint.connections(), 1);
+    std::fs::remove_dir_all(cache).unwrap();
+}

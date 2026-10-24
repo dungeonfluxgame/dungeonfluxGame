@@ -316,7 +316,8 @@ pub(super) fn cast_speakers(
 ) -> BTreeMap<String, String> {
     let mut ordered: Vec<&SpeakerCasting> = speakers.iter().collect();
     ordered.sort();
-    ordered.dedup_by(|later, earlier| later.name == earlier.name);
+    let mut names = std::collections::BTreeSet::new();
+    ordered.retain(|speaker| names.insert(speaker.name.as_str()));
 
     let mut uses: BTreeMap<&str, usize> = BTreeMap::new();
     let mut cast = BTreeMap::new();
@@ -438,6 +439,20 @@ mod tests {
 
     fn gender_of(roster: &Roster, voice_id: &str) -> Gender {
         roster.voice(voice_id).unwrap().gender
+    }
+
+    #[test]
+    fn hs54_duplicate_names_do_not_skew_voice_diversity_when_actor_ids_interleave() {
+        let mut first = speaker("first", Gender::He, Some(Age::Adult), "warm");
+        first.actor_ids = vec!["a".into()];
+        let mut second = speaker("second", Gender::He, Some(Age::Adult), "warm");
+        second.actor_ids = vec!["b".into()];
+        let mut duplicate = first.clone();
+        duplicate.actor_ids = vec!["c".into()];
+        let roster = test_roster();
+        let expected = cast_speakers(&roster, "narr", &[first.clone(), second.clone()], "hs54");
+        let actual = cast_speakers(&roster, "narr", &[first, second, duplicate], "hs54");
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -892,7 +907,32 @@ impl super::Voice {
                 .1
                 .push(serde_json::json!({"key":key,"state":state,"ms":null}));
         }
-        serde_json::json!(speakers.into_iter().map(|(speaker,(voice_id,lines))|
-            serde_json::json!({"speaker":speaker,"voice_id":voice_id,"lines":lines})).collect::<Vec<_>>())
+        let mut report = speakers.into_iter().map(|(speaker, (voice_id, lines))|
+            serde_json::json!({"speaker":speaker,"voice_id":voice_id,"lines":lines,
+                "reason":if speaker == "narrator" { "narrator" } else { "authored_cast" }}))
+            .collect::<Vec<_>>();
+        if let super::Mode::On { synthesis, .. } = &self.inner.mode {
+            for (actor_id, cast) in super::locked(&synthesis.casting.generated).iter() {
+                let key = super::speaker_key(&cast.speaker.name);
+                let index = match report.iter().position(|row| row["speaker"] == key) {
+                    Some(index) => index,
+                    None => {
+                        report.push(serde_json::json!({"speaker":key,"lines":[]}));
+                        report.len() - 1
+                    }
+                };
+                let voice = synthesis.casting.forced.as_ref().unwrap_or(&cast.voice);
+                report[index]["actor_id"] = serde_json::json!(actor_id);
+                report[index]["voice_id"] = serde_json::json!(voice.voice_id);
+                report[index]["voice_name"] = serde_json::json!(voice.name);
+                report[index]["gender"] = serde_json::json!(cast.speaker.gender.label());
+                report[index]["age"] = serde_json::json!(cast.speaker.age.map(super::Age::label));
+                report[index]["fallback"] = serde_json::json!(voice.fallback);
+                report[index]["reason"] = serde_json::json!(if synthesis.casting.forced.is_some() {
+                    "forced_override"
+                } else { cast.reason.as_str() });
+            }
+        }
+        serde_json::json!(report)
     }
 }
