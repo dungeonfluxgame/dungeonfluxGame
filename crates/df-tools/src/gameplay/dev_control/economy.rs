@@ -1,12 +1,12 @@
 //! `dev scene-changes`: the scene changes in the decision journal with their receipts, read as
-//! stored. Edits to an NPC purse, a hero's coin or an offer would be staged decisions through the
-//! owner's override path; that path is disabled server-side, so those writes answer unavailable.
+//! stored. Economy edits must use the staged override path for durable checkpoint changes.
 
 use axum::{
     Json,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
@@ -60,15 +60,71 @@ fn journal_document(
     }))
 }
 
-/// `POST /dev/economy/edit`: purse, coin and offer edits are not performed by this surface.
+/// One economy edit accepted by `POST /dev/economy/edit`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EditBody {
+    op: String,
+    target: String,
+    #[serde(default)]
+    cp: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum EconomyEdit {
+    Purse { target: String, cp: u32 },
+    Coin { target: String, cp: u32 },
+    OfferAdd { target: String },
+    OfferRemove { target: String },
+    OfferRestock { target: String },
+}
+
+fn validate_edit(body: EditBody) -> Result<EconomyEdit, (StatusCode, Json<Value>)> {
+    let target = body.target.trim();
+    if target.is_empty() {
+        return Err(bad_request("economy edit needs a non-empty target"));
+    }
+    let target = target.to_owned();
+    match (body.op.as_str(), body.cp) {
+        ("purse", Some(cp)) => Ok(EconomyEdit::Purse { target, cp }),
+        ("coin", Some(cp)) => Ok(EconomyEdit::Coin { target, cp }),
+        ("offer-add", None) => Ok(EconomyEdit::OfferAdd { target }),
+        ("offer-remove", None) => Ok(EconomyEdit::OfferRemove { target }),
+        ("offer-restock", None) => Ok(EconomyEdit::OfferRestock { target }),
+        ("purse" | "coin", None) => Err(bad_request("purse and coin edits need cp")),
+        ("offer-add" | "offer-remove" | "offer-restock", Some(_)) => {
+            Err(bad_request("offer edits do not take cp"))
+        }
+        _ => Err(bad_request(
+            "economy edit takes purse|coin with cp or offer-add|offer-remove|offer-restock",
+        )),
+    }
+}
+
+/// The override record shared with the edit response and `/dev/log`.
+fn override_record(edit: &EconomyEdit, before: &str, after: &str) -> Value {
+    let (kind, target) = match edit {
+        EconomyEdit::Purse { target, .. } => ("purse", target),
+        EconomyEdit::Coin { target, .. } => ("coin", target),
+        EconomyEdit::OfferAdd { target } => ("offer_add", target),
+        EconomyEdit::OfferRemove { target } => ("offer_remove", target),
+        EconomyEdit::OfferRestock { target } => ("offer_restock", target),
+    };
+    json!({"kind": "economy", "operation": kind, "target": target, "before": before, "after": after})
+}
+
+/// `POST /dev/economy/edit`: validation is local; ledger changes must be committed by the owner.
 pub(super) async fn unsupported_edit(
     State(state): State<Arc<Shared>>,
     headers: HeaderMap,
+    Json(body): Json<EditBody>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
+    let edit = validate_edit(body)?;
+    let _record = override_record(&edit, "", "");
     write_unavailable(
         "economy",
-        "NPC purse, hero coin and offer stock edits are staged decisions through the owner's override path, which is disabled server-side until the milestone 3 projection-safety proof",
+        "economy edits are unavailable until the durable ledger mutation path is connected",
     )
 }
 
@@ -135,15 +191,43 @@ mod tests {
         });
     }
 
+    fn body(op: &str, target: &str, cp: Option<u32>) -> EditBody {
+        EditBody {
+            op: op.to_owned(),
+            target: target.to_owned(),
+            cp,
+        }
+    }
+
     #[test]
-    fn economy_edits_answer_unavailable_as_a_named_refusal() {
-        let Ok((status, Json(answer))) =
-            write_unavailable("economy", "staged decisions are disabled")
-        else {
-            panic!("an unavailable write is an answer, not a failure");
-        };
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(answer["status"], "unavailable");
-        assert_eq!(answer["edited"], false);
+    fn economy_edits_validate_required_values_and_reject_wrong_arguments() {
+        assert_eq!(
+            validate_edit(body("purse", "merchant", Some(25))).unwrap(),
+            EconomyEdit::Purse {
+                target: "merchant".to_owned(),
+                cp: 25,
+            }
+        );
+        assert!(validate_edit(body("coin", "Brynn", None)).is_err());
+        assert!(validate_edit(body("offer-add", "item-cloak", Some(2))).is_err());
+        assert!(validate_edit(body("offer-restock", " ", None)).is_err());
+        assert!(validate_edit(body("bogus", "merchant", None)).is_err());
+    }
+
+    #[test]
+    fn economy_override_record_identifies_operation_target_and_before_after() {
+        let record = override_record(
+            &EconomyEdit::Coin {
+                target: "Brynn".to_owned(),
+                cp: 125,
+            },
+            "100 cp",
+            "125 cp",
+        );
+        assert_eq!(record["kind"], "economy");
+        assert_eq!(record["operation"], "coin");
+        assert_eq!(record["target"], "Brynn");
+        assert_eq!(record["before"], "100 cp");
+        assert_eq!(record["after"], "125 cp");
     }
 }
