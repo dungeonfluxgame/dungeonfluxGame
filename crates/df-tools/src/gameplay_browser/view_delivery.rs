@@ -104,8 +104,6 @@ impl ViewScope {
     }
 }
 
-/// Admission of the actual generated gameplay snapshots for one authorized scope.
-/// The connection owner issues generations; reconnect preserves the durable watermark.
 /// The server's table-talk counter of a view: it moves when a line is logged or a reply starts
 /// or ends, while the game revision does not.
 fn presentation_sequence(view: &rpc::ViewMessage) -> Option<u64> {
@@ -116,6 +114,9 @@ fn presentation_sequence(view: &rpc::ViewMessage) -> Option<u64> {
     journey.map(|journey| journey.presentation_sequence)
 }
 
+/// Admission of the actual generated gameplay snapshots for one authorized scope.
+/// The connection owner issues generations; reconnect preserves the durable watermark.
+///
 /// An equal revision never replaces a view, with one exception: table talk (what heroes and
 /// speakers said) changes the room's screens without moving the game revision, so a same-revision
 /// view whose `presentation_sequence` differs is kept beside the store as the current view

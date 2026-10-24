@@ -54,8 +54,12 @@ fn fnv(parts: &[&[u8]]) -> u64 {
     hash
 }
 
+/// Identifies one committed outcome within a fight. The sequence is what makes it one blow: two
+/// separate attacks can match in every number, and an attack already shown must not hide a later
+/// identical one.
 fn fingerprint(outcome: &rpc::CombatOutcome) -> u64 {
     let numbers = [
+        outcome.sequence.to_le_bytes().to_vec(),
         outcome.attack_die.to_le_bytes().to_vec(),
         outcome.attack_modifier.to_le_bytes().to_vec(),
         outcome.attack_total.to_le_bytes().to_vec(),
@@ -2815,6 +2819,30 @@ mod tests {
             .collect();
         assert_eq!(added, ["Weasel 1", "Weasel 2"]);
         assert_eq!(new_outcomes(None, &after).len(), 3);
+    }
+
+    #[test]
+    fn an_identical_repeat_of_an_earlier_blow_is_still_new() {
+        // Two separate blows can match in every number (die, total, damage, remaining health),
+        // so the server's sequence, not the numbers alone, tells the repeat apart.
+        let first = rpc::CombatOutcome {
+            sequence: 1,
+            ..outcome("Goblin", "Brakka", 9, false)
+        };
+        let repeat = rpc::CombatOutcome {
+            sequence: 2,
+            ..outcome("Goblin", "Brakka", 9, false)
+        };
+        let before = snapshot(
+            &journey(rpc::JourneyPhase::Combat, false, vec![first.clone()]),
+            &scene(),
+        );
+        let after = journey(rpc::JourneyPhase::Combat, false, vec![first, repeat]);
+        let added: Vec<u64> = new_outcomes(Some(&before), &after)
+            .into_iter()
+            .map(|outcome| outcome.sequence)
+            .collect();
+        assert_eq!(added, [2]);
     }
 
     #[test]

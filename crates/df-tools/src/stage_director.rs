@@ -246,11 +246,10 @@ pub(crate) const ROLLING_MS: u32 = crate::dice_roll::FIGHT_REST_BUDGET_MS as u32
 const TURN_CUE_MS: u32 = 650;
 /// The result after the die lands: the roll card is held for three seconds and the die fades,
 /// so Rolling and Impact together are one whole d20 beat and the next blow's die can start
-/// only after this one has gone. A display that is behind holds it for two.
+/// only after this one has gone. A display that is behind holds it just as long, because
+/// `dice_roll::fight_beat_ms` reserves the full hit sequence during catch-up too.
 pub(crate) const IMPACT_CUE_MS: u32 =
     (crate::dice_roll::fight_beat_ms(false) - crate::dice_roll::FIGHT_REST_BUDGET_MS) as u32;
-const IMPACT_CUE_CATCH_UP_MS: u32 =
-    (crate::dice_roll::fight_beat_ms(true) - crate::dice_roll::FIGHT_REST_BUDGET_MS) as u32;
 const BATTLEFIELD_WAIT_CAP_MS: u64 = 20_000;
 
 impl<D: Clone> Default for StageDirector<D> {
@@ -776,14 +775,7 @@ impl<D: Clone> StageDirector<D> {
         let (minimum_ms, maximum_ms) = match state {
             StageState::Rolling => (ROLLING_MS, ROLLING_MS),
             StageState::Turn => (TURN_CUE_MS, TURN_CUE_MS),
-            StageState::Impact => {
-                let impact = if cue.short {
-                    IMPACT_CUE_CATCH_UP_MS
-                } else {
-                    IMPACT_CUE_MS
-                };
-                (impact, impact)
-            }
+            StageState::Impact => (IMPACT_CUE_MS, IMPACT_CUE_MS),
             StageState::Defeat => (
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
@@ -1111,13 +1103,14 @@ mod tests {
     }
 
     #[test]
-    fn a_display_behind_its_queue_shortens_the_hold_but_never_the_tumble() {
+    fn a_display_behind_its_queue_keeps_the_whole_tumble_and_result_hold() {
         let mut director = Director::new();
         director.set_battlefield_busy(false);
         let mut commands = director.on_view(0, blow("first"));
         commands.extend(director.on_view(0, blow("second")));
         // The battlefield stalls with the first blow: the second waits far longer than one
-        // blow ahead of it explains, so it plays shortened when it finally starts.
+        // blow ahead of it explains, so it is marked short when it finally starts. The mark
+        // changes no hold: the tumble and the result keep their full length.
         director.set_battlefield_busy(true);
         let mut times = state_times(&mut director, commands, 0, 14_000);
         director.set_battlefield_busy(false);
@@ -1154,11 +1147,9 @@ mod tests {
             .expect("then it ends");
         let held = rest - impact;
         assert!(
-            (u64::from(IMPACT_CUE_CATCH_UP_MS)..u64::from(IMPACT_CUE_CATCH_UP_MS) + 50)
-                .contains(&held),
+            (u64::from(IMPACT_CUE_MS)..u64::from(IMPACT_CUE_MS) + 50).contains(&held),
             "held {held} ms"
         );
-        assert!(IMPACT_CUE_CATCH_UP_MS < IMPACT_CUE_MS);
     }
 
     #[test]
