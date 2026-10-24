@@ -388,7 +388,7 @@ Settings, read by `DF_GAMEPLAY_*` and `FAL_KEY`:
 
 - `FAL_KEY`: the fal credential. `run-gameplay.sh` exports it from the ignored `.env` the way it
   exports the other keys, and never prints it. Without it the feature is off.
-- `DF_GAMEPLAY_HOME_VIDEO=on|off`: default on when a key is present.
+- `DF_GAMEPLAY_HOME_VIDEO=on|off`: default off, even when a key is present; only explicit `on` enables generation.
 - `DF_GAMEPLAY_HOME_VIDEO_MODEL`: the endpoint. Default `fal-ai/kling-video/o1/image-to-video`;
   any other value is refused at startup, since the adapter has no request shape for it.
 - `DF_GAMEPLAY_VIDEO_BUDGET`: clips the run may request, default 4, at most 1000. Each clip is
@@ -599,3 +599,58 @@ cargo run --release -p df-render --example splat_fit -- <scan>/v1 out.json \
 `blocked` data go into the scene file by hand. The real-data decode tests run when
 `DF_SPLAT_SCAN_DIR` (or `artifacts/tmp/splat-dl` beside the crate) holds the scans and skip
 otherwise.
+
+### Launch configuration preflight
+
+`development/run-gameplay.sh --print-config` reports nonsecret launch inputs without
+building, loading `.env` credentials, contacting providers, or starting PostgreSQL.
+It validates supplied database names, campaign option conflicts and database port
+settings. `listen_requested` and `lan_requested` are requests: address discovery
+and native content validation have not run, as the output explicitly states.
+`no_build=1` means existing build outputs are requested; `0` means build enabled.
+
+`DF_GAMEPLAY_DATABASE_PORT` is the canonical local PostgreSQL port (default 55517,
+decimal digits naming 1024–65535). The legacy `DF_GAMEPLAY_DEMO_DATABASE_PORT` works
+when the canonical name is absent. When both are supplied, both must be valid and
+resolve to the same port; different values refuse startup. The launcher uses the
+resolved port for listener checks, PostgreSQL startup, SQL/database creation, and
+the native game server. Use a separate artifact root when running another owned
+PostgreSQL cluster; a different port alone does not make a shared pgdata safe.
+
+Database names must start with `df_gameplay_demo_`, contain only ASCII letters,
+digits, underscores or hyphens, and total at most 63 bytes. The native server's
+existing allowance for the bare prefix is retained. Each launcher invocation owns
+a separate stop directory; the server publishes its exact marker basename in
+`target.receipt`. Shutdown writes that marker only, preserving other runs.
+
+The focused launcher regression harness uses fake tools and does not launch real
+PostgreSQL or contact providers:
+
+```sh
+python development/test-launch-settings.py
+```
+
+On Windows, point `DF_TEST_BASH` at Git Bash (rather than WSL bash); optional
+`DUNGEONFLUX_TEST_ROOT` selects retained fixtures under `artifacts/`.
+
+See [Launch and configuration reference](launch-reference.md) for the executable
+modes, shell flags, environment precedence, config files and direct developer
+screen-entry tool.
+
+For executable icon embedding and the current development desktop shortcut, see [Windows desktop entry](windows-desktop.md).
+
+
+### Generated video and image provider defaults
+
+Generated video is off by default to limit cost. Explicit development opt-ins are
+`DF_GAMEPLAY_HOME_VIDEO=on` (home), `DF_GAMEPLAY_SCENE_VIDEO=on` (scene and kill clips),
+and `DF_GAMEPLAY_CHARACTER_VIDEO=on` (character action clips). Unset, empty or `off`
+stay disabled even with keys; invalid values refuse. Disabled character generation
+also skips clip-only image frames, while canonical still portraits and plates are
+unaffected. Existing cached character clips remain readable.
+
+`DF_GAMEPLAY_IMAGERY_PROVIDER` defaults to OpenAI when unset/empty or `openai`, even
+with a fal key present. Explicit `flux` remains an override requiring `FAL_KEY`.
+Existing imagery admission still requires a usable OpenAI credential; a fal-only
+environment is not newly supported by this routing change. See
+[Character creation research](../planning/character-creation-refinement-research.md).

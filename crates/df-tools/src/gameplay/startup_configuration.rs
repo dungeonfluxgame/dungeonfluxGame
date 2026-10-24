@@ -893,19 +893,44 @@ pub(super) fn database_config(
     Ok(configuration)
 }
 
-/// The launcher's PostgreSQL port. PLAY-L01 harness knob: `DF_GAMEPLAY_DEMO_DATABASE_PORT` names a
-/// private instance's port (evaluation runs must not share the launcher's); an invalid value is
-/// refused without echoing it.
+/// PostgreSQL port, default 55517. `DF_GAMEPLAY_DATABASE_PORT` is canonical;
+/// `DF_GAMEPLAY_DEMO_DATABASE_PORT` remains a compatible alias. Invalid values and
+/// conflicting settings are refused without echoing supplied values.
 fn database_port() -> Result<u16, io::Error> {
-    match std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT") {
-        Err(VarError::NotPresent) => Ok(55517),
-        Ok(value) => value
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port >= 1024)
-            .ok_or_else(|| refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
-        Err(_) => Err(refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
+    resolve_database_port(
+        std::env::var("DF_GAMEPLAY_DATABASE_PORT"),
+        std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT"),
+    )
+}
+
+/// The canonical setting and its legacy alias must agree when both are supplied.
+fn resolve_database_port(
+    canonical: Result<String, VarError>,
+    legacy: Result<String, VarError>,
+) -> Result<u16, io::Error> {
+    let parse = |input, name| -> Result<Option<u16>, io::Error> {
+        optional(input)?
+            .map(|value| {
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(refused(name));
+                }
+                value
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port >= 1024)
+                    .ok_or_else(|| refused(name))
+            })
+            .transpose()
+    };
+    let canonical = parse(canonical, "DF_GAMEPLAY_DATABASE_PORT")?;
+    let legacy = parse(legacy, "DF_GAMEPLAY_DEMO_DATABASE_PORT")?;
+    if canonical
+        .zip(legacy)
+        .is_some_and(|(first, second)| first != second)
+    {
+        return Err(io::Error::other("database port settings conflict"));
     }
+    Ok(canonical.or(legacy).unwrap_or(55517))
 }
 
 /// Resolve once at startup; missing files are diagnosed by the typed pack loader.
@@ -1384,6 +1409,42 @@ pub(super) fn choice_hints_hidden(input: Result<String, VarError>) -> Result<boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn database_port_defaults_aliases_and_conflicts_are_explicit() {
+        let unset = || Err(VarError::NotPresent);
+        let set = |value: &str| Ok(value.to_owned());
+        assert_eq!(resolve_database_port(unset(), unset()).unwrap(), 55517);
+        assert_eq!(resolve_database_port(set("55518"), unset()).unwrap(), 55518);
+        assert_eq!(resolve_database_port(unset(), set("55519")).unwrap(), 55519);
+        assert_eq!(
+            resolve_database_port(set("55518"), set("55518")).unwrap(),
+            55518
+        );
+        assert!(resolve_database_port(set("55518"), set("55519")).is_err());
+        for invalid in [
+            "",
+            "1023",
+            "65536",
+            "-1",
+            " 55517",
+            "+55517",
+            "55517 ",
+            "private-secret",
+        ] {
+            for result in [
+                resolve_database_port(set(invalid), unset()),
+                resolve_database_port(unset(), set(invalid)),
+            ] {
+                let message = result.unwrap_err().to_string();
+                assert!(!message.contains(invalid) || invalid.is_empty());
+            }
+        }
+        assert!(
+            resolve_database_port(Err(VarError::NotUnicode("private-secret".into())), unset())
+                .is_err()
+        );
+    }
 
     #[test]
     fn extra_assets_serve_chrome_sound_and_reviewed_photographs_and_refuse_painted_depictions() {

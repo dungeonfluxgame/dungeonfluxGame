@@ -166,6 +166,7 @@ impl Fixture {
         let social = crate::gameplay::social::SocialLedger::none();
         let layout = layout::LayoutState::new();
         let service = Service {
+            portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             actor: sender,
             display_credential: DISPLAY,
             updates,
@@ -197,6 +198,7 @@ impl Fixture {
                 service,
                 display_credential: DISPLAY,
                 token: Arc::from("override-test-token"),
+                screen_tickets: Arc::new(Mutex::new(super::screen_preview::Tickets::default())),
                 seat_file: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../../artifacts/tmp/lanes/K1/gate-test-seats"),
                 shutdown,

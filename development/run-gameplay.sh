@@ -25,9 +25,9 @@ export CARGO_TARGET_DIR=${DUNGEONFLUX_BUILD_ROOT:-$ARTIFACT_ROOT/build/play}
 export TMPDIR=${DUNGEONFLUX_TMP_ROOT:-$ARTIFACT_ROOT/tmp/play}
 export PATH="$CARGO_HOME/bin:$PATH"
 PG=${DUNGEONFLUX_POSTGRES_BIN:-$ARTIFACT_ROOT/build/postgres-g05/install/bin}
-PLAY="$ARTIFACT_ROOT/tmp/play"
+PLAY=${DUNGEONFLUX_PLAY_ROOT:-$ARTIFACT_ROOT/tmp/play}
 RUN_DIR="$PLAY/run"
-STOP_FILE="$RUN_DIR/stop.request"
+STOP_FILE=
 # Windows under Git Bash reports MINGW64/MSYS/CYGWIN here; the game and
 # PostgreSQL binaries are native Windows programs with a `.exe` suffix.
 case "$(uname -s)" in
@@ -35,14 +35,11 @@ case "$(uname -s)" in
   *) WINDOWS=0 ;;
 esac
 if test "$WINDOWS" -eq 1; then EXE=.exe; else EXE=; fi
-# Storyteller (text model): export only OPENAI_API_KEY from the gitignored .env, never echoed.
-if test -z "${OPENAI_API_KEY:-}" && test -f "$ROOT/.env"; then
-  OPENAI_API_KEY=$(sed -n 's/^OPENAI_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
-  if test -n "$OPENAI_API_KEY"; then export OPENAI_API_KEY; else unset OPENAI_API_KEY; fi
-fi
 export DF_GAMEPLAY_TEXT_CACHE=${DF_GAMEPLAY_TEXT_CACHE:-$PLAY/text-cache}
 DATABASE=
 NO_BUILD=0
+NATIVE_BUILT=0
+PRINT_CONFIG=0
 NEW_GAME=0
 CAMPAIGN=
 CAMPAIGN_SEED=
@@ -53,7 +50,7 @@ ADVENTURE_SEED_REQUESTED=0
 LAN=0
 
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--new-game] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status] [--test-fight <1-4>] [--test-foe <creature id>]'
+  echo 'usage: run-gameplay.sh [--no-build] [--print-config] [--lan] [--new-game] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status] [--test-fight <1-4>] [--test-foe <creature id>]'
 }
 
 while test "$#" -gt 0; do
@@ -71,6 +68,7 @@ while test "$#" -gt 0; do
     --test-foe)
       if test "$#" -lt 2; then usage >&2; exit 2; fi
       export DF_GAMEPLAY_TEST_FOE=$2; shift 2 ;;
+    --print-config) PRINT_CONFIG=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
     --new-game) NEW_GAME=1; shift ;;
     --lan) LAN=1; shift ;;
@@ -92,6 +90,30 @@ while test "$#" -gt 0; do
 done
 
 
+# Both the shell and native server use this canonical port. Legacy callers remain
+# compatible, but two explicitly supplied values must agree.
+. "$ROOT/development/launch-settings.sh"
+resolve_database_port
+case "${DF_GAMEPLAY_LOAD_DOTENV:-on}" in
+  on|off) ;;
+  *) echo 'DF_GAMEPLAY_LOAD_DOTENV invalid: expected on or off' >&2; exit 2 ;;
+esac
+
+validate_database_name() {
+case "$DATABASE" in
+  df_gameplay_demo_*) ;;
+  *) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, underscores, or hyphens' >&2; exit 1 ;;
+esac
+case "$DATABASE" in
+  *[!A-Za-z0-9_-]*) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, underscores, or hyphens' >&2; exit 1 ;;
+esac
+if test "${#DATABASE}" -gt 63; then
+  echo 'invalid database name: must be 1-63 characters and match df_gameplay_demo_<name>' >&2
+  exit 1
+fi
+
+}
+
 if test -z "$CAMPAIGN" && { test "$CAMPAIGN_STATUS" -eq 1 || test -n "$CAMPAIGN_SEED"; }; then
   echo '--status and --campaign-seed require --campaign' >&2; exit 2
 fi
@@ -99,9 +121,24 @@ if test -n "$CAMPAIGN"; then
   if test "$NEW_GAME" -eq 1; then echo '--new-game cannot combine with --campaign' >&2; exit 2; fi
   if test "$HARBOR_REQUESTED" -eq 1 || test "$ADVENTURE_SEED_REQUESTED" -eq 1; then echo '--campaign cannot combine with --harbor or --seed; use --campaign-seed' >&2; exit 2; fi
   if test -n "$DATABASE"; then echo '--campaign chooses its database; omit --database' >&2; exit 2; fi
+fi
+
+if test -n "$DATABASE"; then validate_database_name; fi
+if test "$PRINT_CONFIG" -eq 1; then
+  printf 'adventure=%s\nlisten_requested=%s\nlan_requested=%s\ndatabase_port=%s\nno_build=%s\nartifact_root=%s\nbuild_root=%s\n' \
+    "$DF_GAMEPLAY_ADVENTURE" "${DF_GAMEPLAY_LISTEN:-127.0.0.1:63309}" "$LAN" "$DATABASE_PORT" \
+    "$NO_BUILD" "$ARTIFACT_ROOT" "$CARGO_TARGET_DIR"
+  printf 'network_resolution=not_started\nserver_content_validation=not_started\n'
+  exit 0
+fi
+
+if test -n "$CAMPAIGN"; then
   mkdir -p "$TMPDIR"
   cd "$ROOT"
-  if test "$NO_BUILD" -eq 0; then cargo build --offline --locked -j 3 -p df-tools --bin df-transport-fixture; fi
+  if test "$NO_BUILD" -eq 0; then
+    cargo build --offline --locked -j 3 -p df-tools --bin df-transport-fixture
+    NATIVE_BUILT=1
+  fi
   if test "$CAMPAIGN_STATUS" -eq 1; then
     "$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" --campaign-status "$CAMPAIGN"
     exit 0
@@ -122,17 +159,7 @@ if test -z "$DATABASE"; then
     DATABASE="df_gameplay_demo_play_$(date -u +%Y%m%d%H%M%S)"
   fi
 fi
-case "$DATABASE" in
-  df_gameplay_demo_*) ;;
-  *) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, or underscores' >&2; exit 1 ;;
-esac
-case "$DATABASE" in
-  *[!A-Za-z0-9_-]*) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, or underscores' >&2; exit 1 ;;
-esac
-if test "${#DATABASE}" -gt 63 || test "$DATABASE" = df_gameplay_demo_; then
-  echo 'invalid database name: must be 1-63 characters and match df_gameplay_demo_<name>' >&2
-  exit 1
-fi
+validate_database_name
 
 if test ! -x "$CARGO_HOME/bin/cargo"; then echo "missing cargo: $CARGO_HOME/bin/cargo" >&2; exit 1; fi
 # lsof is absent on Windows, where netstat reports the owning PID instead.
@@ -196,23 +223,31 @@ if test -n "$GAME_HOLDER"; then
   exit 1
 fi
 
-PG_HOLDER=$(port_listener 55517)
+owned_postgres_port() {
+  # pg_ctl status alone may name our cluster on a different port. PostgreSQL
+  # publishes the active server port on line four of its own postmaster.pid.
+  test -f "$PLAY/pgdata/postmaster.pid" || return 1
+  OWNED_PG_PORT=$(sed -n '4p' "$PLAY/pgdata/postmaster.pid" | tr -d '\r')
+  case "$OWNED_PG_PORT" in ''|*[!0-9]*) return 1 ;; esac
+  test "$OWNED_PG_PORT" -eq "$DATABASE_PORT"
+}
+PG_HOLDER=$(port_listener "$DATABASE_PORT")
 PG_ALREADY_RUNNING=0
 if test -n "$PG_HOLDER"; then
   if test "$HAVE_LSOF" -eq 1; then
     case "$PG_HOLDER" in
       *postgres*)
-        if "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1; then PG_ALREADY_RUNNING=1
-        else echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1
+        if "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1 && owned_postgres_port; then PG_ALREADY_RUNNING=1
+        else echo "PostgreSQL port $DATABASE_PORT is held by another process:" >&2; echo "$PG_HOLDER" >&2; exit 1
         fi
         ;;
-      *) echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1 ;;
+      *) echo "PostgreSQL port $DATABASE_PORT is held by another process:" >&2; echo "$PG_HOLDER" >&2; exit 1 ;;
     esac
-  elif "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1; then
+  elif "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1 && owned_postgres_port; then
     # netstat names no process, so our own running cluster is the decider.
     PG_ALREADY_RUNNING=1
   else
-    echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1
+    echo "PostgreSQL port $DATABASE_PORT is held by another process:" >&2; echo "$PG_HOLDER" >&2; exit 1
   fi
 fi
 
@@ -220,26 +255,22 @@ mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
 mkdir -p "$RUN_DIR"
 chmod 700 "$RUN_DIR"
-# The server treats STOP_FILE as a base directory and appends its own
-# <run_identity>.stop marker beneath it. Remove only an empty base directory;
-# never recurse through the run directory. A non-empty directory is left intact
-# and reported so an operator can inspect it.
-if test -d "$STOP_FILE" && test ! -L "$STOP_FILE"; then
-  if ! rmdir "$STOP_FILE"; then
-    echo "stop marker is a non-empty directory: $STOP_FILE" >&2
-    exit 1
-  fi
-elif test -e "$STOP_FILE" || test -L "$STOP_FILE"; then
-  rm -f "$STOP_FILE"
-fi
+# Every launch owns a distinct marker directory. The server writes its exact
+# marker basename to target.receipt there, after deriving its run identity.
+STOP_FILE=$(mktemp -d "$RUN_DIR/stop.XXXXXXXX")
 
+# Storyteller (text model): export only OPENAI_API_KEY from the gitignored .env, never echoed.
+if test "${DF_GAMEPLAY_LOAD_DOTENV:-on}" = on && test -z "${OPENAI_API_KEY:-}" && test -f "$ROOT/.env"; then
+  OPENAI_API_KEY=$(sed -n 's/^OPENAI_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
+  if test -n "$OPENAI_API_KEY"; then export OPENAI_API_KEY; else unset OPENAI_API_KEY; fi
+fi
 # Approach model: take only its credential from the ignored .env, never printing it.
-if test -z "${DF_JEV_API_KEY:-}" && test -f "$ROOT/.env"; then
+if test "${DF_GAMEPLAY_LOAD_DOTENV:-on}" = on && test -z "${DF_JEV_API_KEY:-}" && test -f "$ROOT/.env"; then
   DF_JEV_API_KEY=$(sed -n 's/^DF_JEV_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
   if test -n "$DF_JEV_API_KEY"; then export DF_JEV_API_KEY; else unset DF_JEV_API_KEY; fi
 fi
 # Home video (PLAY-V10): take only the fal key from the ignored .env, never printing it.
-if test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
+if test "${DF_GAMEPLAY_LOAD_DOTENV:-on}" = on && test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
   FAL_KEY=$(sed -n 's/^FAL_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
   if test -z "$FAL_KEY"; then
     FAL_KEY=$(sed -n 's/^DF_FAL_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
@@ -247,7 +278,7 @@ if test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
   if test -n "$FAL_KEY"; then export FAL_KEY; else unset FAL_KEY; fi
 fi
 # Spoken narration: take only the ElevenLabs key from the ignored .env, never printing it.
-if test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
+if test "${DF_GAMEPLAY_LOAD_DOTENV:-on}" = on && test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
   ELEVENLABS_API_KEY=$(sed -n 's/^ELEVENLABS_API_KEY=//p' "$ROOT/.env" | head -n 1)
   if test -n "$ELEVENLABS_API_KEY"; then export ELEVENLABS_API_KEY; else unset ELEVENLABS_API_KEY; fi
 fi
@@ -263,7 +294,9 @@ if test "${DF_GAMEPLAY_BATTLE_SCENE+x}" = x; then export DF_GAMEPLAY_BATTLE_SCEN
 if test "${DF_GAMEPLAY_BATTLE_FPS+x}" = x; then export DF_GAMEPLAY_BATTLE_FPS; echo "The battlefield presents at $DF_GAMEPLAY_BATTLE_FPS fps"; fi
 cd "$ROOT"
 if test "$NO_BUILD" -eq 0; then
-  cargo build --locked --offline -j 3 -p df-tools --bin df-transport-fixture
+  if test "$NATIVE_BUILT" -eq 0; then
+    cargo build --locked --offline -j 3 -p df-tools --bin df-transport-fixture
+  fi
   cargo build --locked --offline -j 3 -p df-tools --lib --target wasm32-unknown-unknown
   STAGING=$(mktemp -d "$TMPDIR/wasm-bindgen.XXXXXXXX")
   wasm-bindgen --target web --out-name df_tools --out-dir "$STAGING" "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/df_tools.wasm"
@@ -288,7 +321,20 @@ cleanup() {
   if test "$CLEANED" -eq 1; then return; fi
   CLEANED=1
   if test -n "$SERVER_PID" && kill -0 "$SERVER_PID" 2>/dev/null; then
-    : > "$STOP_FILE"
+    if test -f "$STOP_FILE/target.receipt"; then
+      STOP_TARGET=$(cat "$STOP_FILE/target.receipt")
+      case "$STOP_TARGET" in
+        *[!a-z0-9.]*|"") echo 'invalid stop receipt; waiting for owned server exit' >&2 ;;
+        *)
+          if printf '%s\n' "$STOP_TARGET" | grep -Eq '^[a-f0-9]{16}\.stop$'; then
+            : > "$STOP_FILE/$STOP_TARGET"
+          else
+            echo 'invalid stop receipt; waiting for owned server exit' >&2
+          fi ;;
+      esac
+    else
+      echo 'server has not published its stop receipt; waiting for owned server exit' >&2
+    fi
     STOP_WAIT=0
     while kill -0 "$SERVER_PID" 2>/dev/null && test "$STOP_WAIT" -lt 20; do
       sleep 1
@@ -323,15 +369,15 @@ if test "$PG_ALREADY_RUNNING" -eq 0; then
     mkdir -p "$PLAY/sock"
     PG_SOCKET_OPTS=" -k $PLAY/sock"
   fi
-  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p 55517 -h 127.0.0.1$PG_SOCKET_OPTS -c max_connections=120" -w start
+  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p $DATABASE_PORT -h 127.0.0.1$PG_SOCKET_OPTS -c max_connections=120" -w start
   PG_STARTED=1
 fi
 
-DATABASE_EXISTS=$("$PG/psql" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_20261004 -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='$DATABASE'")
+DATABASE_EXISTS=$("$PG/psql" -h 127.0.0.1 -p "$DATABASE_PORT" -U df_gameplay_demo_admin_20261004 -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='$DATABASE'")
 if test -n "$DATABASE_EXISTS"; then
   if test "$NEW_GAME" -eq 1; then echo "new game database already exists: $DATABASE" >&2; exit 1; fi
 else
-  "$PG/createdb" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_20261004 -T template0 "$DATABASE"
+  "$PG/createdb" -h 127.0.0.1 -p "$DATABASE_PORT" -U df_gameplay_demo_admin_20261004 -T template0 "$DATABASE"
 fi
 
 echo "Playing with database: $DATABASE"

@@ -56,6 +56,7 @@ mod parse;
 mod place;
 mod presentation;
 mod reads;
+mod screen_preview;
 mod social_view;
 pub(super) mod timeline;
 
@@ -79,6 +80,7 @@ struct Shared {
     service: super::Service,
     display_credential: [u8; 32],
     token: Arc<str>,
+    screen_tickets: Arc<Mutex<screen_preview::Tickets>>,
     seat_file: std::path::PathBuf,
     shutdown: watch::Sender<bool>,
     seats: Arc<Mutex<Seats>>,
@@ -187,6 +189,7 @@ pub(super) fn setup(
         service,
         display_credential,
         token: Arc::from(token),
+        screen_tickets: Arc::new(Mutex::new(screen_preview::Tickets::default())),
         seats: Arc::new(Mutex::new(load_seats(&seat_file)?)),
         seat_file,
         shutdown: shutdown_send,
@@ -200,7 +203,7 @@ pub(super) fn setup(
         lore: bundle.lore,
     };
     let state = Arc::new(shared);
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/dev/health", get(health))
         .route("/dev/join", post(actions::join_seat))
         .route("/dev/reclaim", post(actions::reclaim_seat))
@@ -287,8 +290,14 @@ pub(super) fn setup(
         .route("/dev/forward", post(jumps::step_forward))
         .route("/dev/override", post(jumps::apply_override))
         .route("/dev/shutdown", post(shutdown))
-        .route("/dev/describe", get(reads::describe))
-        .with_state(state);
+        .route("/dev/describe", get(reads::describe));
+    // Seat bootstrap is stricter than the optional public development API.
+    if listen.ip().is_loopback() {
+        router = router
+            .route("/dev/screens/ticket", post(screen_preview::issue))
+            .route("/gameplay/dev/screens/{ticket}", get(screen_preview::consume));
+    }
+    let router = router.with_state(state);
     Ok(Control {
         router: Some(router),
         shutdown: shutdown_receive,
