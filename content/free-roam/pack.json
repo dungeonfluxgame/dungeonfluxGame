@@ -1,0 +1,357 @@
+{
+  "schema": "df-gameplay-pack/1",
+  "id": "free-roam",
+  "locale": "en",
+  "room_code": "ROAM",
+  "creation": {
+    "description": "Create your own level 1 Fighter with the Soldier background and an SRD 5.2.1 species, then enter the city.",
+    "groups": [
+      {
+        "id": "species",
+        "label": "Ancestry",
+        "options": [
+          {
+            "id": "dwarf",
+            "label": "Dwarf",
+            "description": "Dwarves are hardy, resilient, and can see in the dark."
+          },
+          {
+            "id": "dragonborn",
+            "label": "Dragonborn",
+            "description": "SRD 5.2.1 Dragonborn species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "elf",
+            "label": "Elf",
+            "description": "SRD 5.2.1 Elf species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "gnome",
+            "label": "Gnome",
+            "description": "SRD 5.2.1 Gnome species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "goliath",
+            "label": "Goliath",
+            "description": "SRD 5.2.1 Goliath species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "halfling",
+            "label": "Halfling",
+            "description": "SRD 5.2.1 Halfling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "human",
+            "label": "Human",
+            "description": "SRD 5.2.1 Human species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "orc",
+            "label": "Orc",
+            "description": "SRD 5.2.1 Orc species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          },
+          {
+            "id": "tiefling",
+            "label": "Tiefling",
+            "description": "SRD 5.2.1 Tiefling species; Fighter / Soldier. Unsupported traits are listed on the character sheet."
+          }
+        ]
+      },
+      {
+        "id": "class",
+        "label": "Class",
+        "options": [
+          {
+            "id": "fighter-1",
+            "label": "Fighter · level 1",
+            "description": "Choose a Fighting Style, call on Second Wind, and master three weapons."
+          }
+        ]
+      },
+      {
+        "id": "background",
+        "label": "Background",
+        "options": [
+          {
+            "id": "soldier",
+            "label": "Soldier",
+            "description": "Athletics, Intimidation, a gaming set, and the Savage Attacker feat."
+          }
+        ]
+      },
+      {
+        "id": "array",
+        "label": "Ability scores",
+        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} · Soldier +{bonus_str}STR/+{bonus_con}CON",
+        "options": [
+          {
+            "id": "stalwart",
+            "label": "Stalwart"
+          },
+          {
+            "id": "vanguard",
+            "label": "Vanguard"
+          }
+        ]
+      },
+      {
+        "id": "equipment",
+        "label": "Starting equipment",
+        "options": [
+          {
+            "id": "fighter-a-soldier-a",
+            "label": "Chain mail, greatsword, flail, 8 javelins",
+            "description": "Also includes a dungeoneer's pack, spear, shortbow, 20 arrows, a gaming set, healer's kit, quiver, traveler's clothes, and 18 gp to spend."
+          }
+        ]
+      },
+      {
+        "id": "style-masteries",
+        "label": "Fighting style and weapon masteries",
+        "options": [
+          {
+            "id": "defense-greatsword-flail-javelin",
+            "label": "Defense",
+            "description": "Defense raises your AC by 1 while you wear armor. Your greatsword, flail, and javelin use Graze, Sap, and Slow."
+          }
+        ]
+      },
+      {
+        "id": "allied-ties",
+        "label": "When turns are tied",
+        "options": [
+          {
+            "id": "join-order",
+            "label": "Party goes first",
+            "description": "On a tie, heroes act before enemies. Tied heroes go in the order they joined."
+          }
+        ]
+      }
+    ],
+    "pick_lists": {
+      "alignment": [
+        "lawful-good",
+        "neutral-good",
+        "chaotic-good",
+        "lawful-neutral",
+        "neutral",
+        "chaotic-neutral"
+      ],
+      "language": [
+        "common-sign",
+        "draconic",
+        "dwarvish",
+        "elvish",
+        "giant",
+        "gnomish",
+        "goblin",
+        "halfling",
+        "orc"
+      ],
+      "skill": [
+        "acrobatics",
+        "animal-handling",
+        "history",
+        "insight",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "gaming-set": [
+        "dice",
+        "dragonchess",
+        "playing-cards",
+        "three-dragon-ante"
+      ]
+    }
+  },
+  "equipment": [
+    {
+      "item": "chain-mail",
+      "quantity": 1
+    },
+    {
+      "item": "greatsword",
+      "quantity": 1
+    },
+    {
+      "item": "flail",
+      "quantity": 1
+    },
+    {
+      "item": "javelin",
+      "quantity": 8
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "spear",
+      "quantity": 1
+    },
+    {
+      "item": "shortbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "gaming-set",
+      "quantity": 1
+    },
+    {
+      "item": "healers-kit",
+      "quantity": 1
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "travelers-clothes",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 18
+    }
+  ],
+  "offer_labels": {
+    "create-character": "Create a character",
+    "begin-story": "Enter the city"
+  },
+  "scenes": [
+    {
+      "key": "room",
+      "title": "Free roam",
+      "narration": "Create your hero, then enter the city.",
+      "speaker": "",
+      "dialogue": "",
+      "asset": "live-room-photo",
+      "speaker_portrait": "",
+      "setting": {
+        "place_id": "place-city-main-gate",
+        "name": "City main gate",
+        "short": "the public space inside the main gate",
+        "kind": "market-street",
+        "exterior": true,
+        "art_key": "loc-lamplit-market-arrival"
+      },
+      "cast": [
+        {
+          "id": "gate-guard",
+          "name": "Gate guard",
+          "role": "bystander",
+          "sprite": "live-canonical-photo",
+          "portrait": "live-canonical-photo",
+          "voice": "a steady adult voice",
+          "gender": "they",
+          "age": "adult",
+          "stat_block": "guard"
+        }
+      ]
+    },
+    {
+      "key": "opening",
+      "title": "Free roam",
+      "narration": "The party has just walked through the main gate.",
+      "speaker": "",
+      "dialogue": "",
+      "asset": "live-room-photo",
+      "speaker_portrait": "",
+      "setting": {
+        "place_id": "place-city-main-gate",
+        "name": "City main gate",
+        "short": "the public space inside the main gate",
+        "kind": "market-street",
+        "exterior": true,
+        "art_key": "loc-lamplit-market-arrival"
+      },
+      "cast": [
+        {
+          "id": "gate-guard",
+          "name": "Gate guard",
+          "role": "bystander",
+          "sprite": "live-canonical-photo",
+          "portrait": "live-canonical-photo",
+          "voice": "a steady adult voice",
+          "gender": "they",
+          "age": "adult",
+          "stat_block": "guard"
+        }
+      ]
+    }
+  ],
+  "music": [],
+  "speakers": [],
+  "beat_script": {
+    "mode": "freeplay",
+    "entry": "gather",
+    "terminal": [],
+    "beats": [
+      {
+        "id": "gather",
+        "kind": "gather",
+        "scene": "room",
+        "state": {
+          "durable": "room"
+        },
+        "offers": [
+          {
+            "id": "create-character",
+            "label_slot": "create-character",
+            "effect": "create-character"
+          },
+          {
+            "id": "begin-story",
+            "label_slot": "begin-story",
+            "effect": "begin-story"
+          }
+        ],
+        "transitions": [
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "create-character"
+            },
+            "target": "gather"
+          },
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "begin-story"
+            },
+            "target": "freeplay"
+          }
+        ]
+      },
+      {
+        "id": "freeplay",
+        "kind": "converse",
+        "scene": "opening",
+        "state": {
+          "durable": "opening"
+        },
+        "offers": [
+          {
+            "id": "look-around",
+            "label_slot": "look-around",
+            "effect": "observe"
+          }
+        ],
+        "transitions": [
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "look-around"
+            },
+            "target": "freeplay"
+          }
+        ]
+      }
+    ]
+  }
+}

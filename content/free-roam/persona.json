@@ -1,0 +1,123 @@
+{
+  "npc_id": "bystander:local",
+  "name": "Local",
+  "role": "bystander",
+  "role_label": "a local adult",
+  "tables_revision": "free-roam-persona-1",
+  "given": {
+    "mannerism": null,
+    "delivery": "plain and conversational",
+    "voice": "an even adult voice",
+    "tags": [],
+    "note": null
+  },
+  "archetype_profile": null,
+  "origin": {
+    "id": "unshared-origin",
+    "text": "Not yet shared with the party."
+  },
+  "past_trade": {
+    "id": "unshared-past-trade",
+    "text": "Not yet shared with the party."
+  },
+  "formative_event": {
+    "id": "unshared-formative-event",
+    "text": "Not yet shared with the party."
+  },
+  "ideal": {
+    "id": "unshared-ideal",
+    "text": "Not yet shared with the party."
+  },
+  "bond": {
+    "id": "unshared-bond",
+    "text": "Not yet shared with the party."
+  },
+  "flaw": {
+    "id": "unshared-flaw",
+    "text": "Not yet shared with the party."
+  },
+  "want": {
+    "id": "unshared-want",
+    "text": "Not yet shared with the party."
+  },
+  "fear": {
+    "id": "unshared-fear",
+    "text": "Not yet shared with the party."
+  },
+  "talent": {
+    "id": "unshared-talent",
+    "text": "Not yet shared with the party."
+  },
+  "story_tie": {
+    "id": "local-place",
+    "binds": "location",
+    "bound_fact": "City main gate",
+    "bound_cast": null,
+    "public": true,
+    "text": "A local adult going about their own business.",
+    "speak": "I am getting on with my day."
+  },
+  "motive": null,
+  "stand_down": null,
+  "knowledge": {
+    "says_freely": [],
+    "says_when_trusted": [],
+    "never_says": []
+  },
+  "temperament": {
+    "flattery": {
+      "id": "local-flattery",
+      "text": "Respond according to the established persona and circumstances.",
+      "answer": "I would rather get on with my work.",
+      "tags": [],
+      "effect": "steady"
+    },
+    "flirting": {
+      "id": "local-flirting",
+      "text": "Respond according to the established persona and circumstances.",
+      "answer": "I would rather get on with my work.",
+      "tags": [],
+      "effect": "steady"
+    },
+    "threats": {
+      "id": "local-threats",
+      "text": "Respond according to the established persona and circumstances.",
+      "answer": "I would rather get on with my work.",
+      "tags": [],
+      "effect": "steady"
+    },
+    "lies": {
+      "id": "local-lies",
+      "text": "Respond according to the established persona and circumstances.",
+      "answer": "I would rather get on with my work.",
+      "tags": [],
+      "effect": "steady"
+    },
+    "bribes": {
+      "id": "local-bribes",
+      "text": "Respond according to the established persona and circumstances.",
+      "answer": "I would rather get on with my work.",
+      "tags": [],
+      "effect": "steady"
+    }
+  },
+  "starting_attitude": "indifferent",
+  "speech_style": {
+    "id": "conversational",
+    "length": "short",
+    "vocabulary": "ordinary everyday speech",
+    "tic": "",
+    "opener": "",
+    "closer": "",
+    "tags": []
+  },
+  "prepared_answers": {},
+  "subject_answers": {},
+  "question_answers": {},
+  "curt_answers": [
+    "I would rather get on with my day."
+  ],
+  "rolls": [],
+  "emotional_profile": null,
+  "withheld_subjects": []
+}

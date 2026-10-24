@@ -1,0 +1,53 @@
+{
+  "schema": "df-gameplay-tuning/1",
+  "pack": "free-roam",
+  "hero": {
+    "armor_class": 17,
+    "proficiency_bonus": 2,
+    "base_hit_points": 11,
+    "ability_arrays": [
+      {
+        "id": "stalwart",
+        "scores": [
+          15,
+          13,
+          14,
+          10,
+          12,
+          8
+        ]
+      },
+      {
+        "id": "vanguard",
+        "scores": [
+          15,
+          14,
+          13,
+          8,
+          10,
+          12
+        ]
+      }
+    ],
+    "background_bonus": {
+      "strength": 2,
+      "constitution": 1
+    },
+    "second_wind": {
+      "uses_max": 2,
+      "die_sides": 10,
+      "flat_bonus": 1,
+      "recharge_per_short_rest": 1
+    },
+    "weapon": {
+      "item": "greatsword",
+      "damage_dice": 2,
+      "damage_sides": 6
+    }
+  },
+  "tactical": {
+    "scene_assault": {
+      "battle_scene": "salt-quay"
+    }
+  }
+}

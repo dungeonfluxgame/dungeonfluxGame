@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "character",
+    "mood",
+    "time_of_day",
+    "weather"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "character": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "mood": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "time_of_day": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "weather": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 72
+    }
+  }
+}
