@@ -513,8 +513,8 @@ fn readiness(snapshot: &Snapshot) -> String {
         ),
         (true, false) => (
             false,
-            "Written story only: add an OpenAI key for the AI storyteller and pictures".to_owned(),
-            "/settings#keys",
+            "Written story only: the AI storyteller and pictures aren't set up yet".to_owned(),
+            "/settings#story",
         ),
         (false, _) => (
             false,
@@ -534,8 +534,8 @@ fn readiness(snapshot: &Snapshot) -> String {
             ),
             (true, false) => (
                 false,
-                "No voices or music: add an ElevenLabs key".to_owned(),
-                "/settings#keys",
+                "No voices or music: they aren't set up yet".to_owned(),
+                "/settings#story",
             ),
             (false, _) => (
                 false,
@@ -1236,7 +1236,15 @@ mod tests {
                 assert!(!body.contains(script), "{target} contains {script}");
             }
         }
-        assert!(text(&handle(&app, "GET", "/", b"")).contains("No game is running"));
+        let play = text(&handle(&app, "GET", "/", b""));
+        assert!(play.contains("No game is running"));
+        // The Play page never talks about keys; Settings does.
+        for word in [" key", "api", "openai", "elevenlabs"] {
+            assert!(
+                !play.to_lowercase().contains(word),
+                "Play page mentions {word}"
+            );
+        }
         let dismissed = handle(&app, "POST", "/dismiss", b"");
         assert_eq!(dismissed.status, 303);
         assert_eq!(dismissed.location.as_deref(), Some("/"));

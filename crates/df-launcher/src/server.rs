@@ -166,20 +166,20 @@ pub fn missing_keys(settings: &Settings, keys: &Keys) -> Option<String> {
     let has = |credential| keys.value(credential).is_some();
     if settings.creator_portraits && !(has(Credential::Openai) && has(Credential::Jev)) {
         return Some(
-            "Character portraits need an OpenAI key and a Jev key. Add them in Settings, under Keys, or turn character portraits off."
+            "Character portraits aren't set up yet. Settings, under Pictures, shows what they need; or turn them off there."
                 .to_owned(),
         );
     }
     if settings.creator_portraits && settings.creator_alternate_route && !has(Credential::Bfl) {
         return Some(
-            "The alternate portrait route needs a Black Forest Labs key. Add it in Settings, under Keys, or turn the route off."
+            "The alternate portrait route isn't set up yet. Settings, under Pictures, shows what it needs; or turn it off there."
                 .to_owned(),
         );
     }
     if settings.picture_provider == crate::settings::PictureProvider::Flux && !has(Credential::Fal)
     {
         return Some(
-            "FLUX pictures need a fal key. Add it in Settings, under Keys, or choose OpenAI pictures."
+            "FLUX pictures aren't set up yet. Settings, under Pictures, shows what they need; or choose OpenAI pictures there."
                 .to_owned(),
         );
     }
@@ -479,7 +479,11 @@ mod tests {
             Some("bfl")
         );
         settings.picture_provider = crate::settings::PictureProvider::Flux;
-        assert!(missing_keys(&settings, &keys).unwrap().contains("fal key"));
+        assert!(
+            missing_keys(&settings, &keys)
+                .unwrap()
+                .contains("FLUX pictures")
+        );
         assert!(inherited_setting("DF_GAMEPLAY_HOME_VIDEO"));
         assert!(!inherited_setting("PATH"));
         std::fs::remove_dir_all(data).unwrap();
