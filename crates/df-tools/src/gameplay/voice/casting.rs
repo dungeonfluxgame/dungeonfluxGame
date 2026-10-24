@@ -803,3 +803,96 @@ mod tests {
         }
     }
 }
+
+impl super::Voice {
+    /// The shared token account attached to enabled synthesis, when that kit is available.
+    pub(in crate::gameplay) fn development_text_spend(&self) -> Option<serde_json::Value> {
+        let super::Mode::On { synthesis, .. } = &self.inner.mode else {
+            return None;
+        };
+        let spend = synthesis
+            .kit
+            .get()
+            .hub()
+            .ledger()
+            .snapshot(crate::gameplay::resources::Unit::TextToken);
+        Some(
+            serde_json::json!({"unit":"text_token","committed":spend.committed,"reserved":spend.reserved,
+            "scope":"shared resource ledger attached to enabled voice synthesis; process lifetime"}),
+        )
+    }
+
+    /// Reads actual casting and existing cache metadata without requesting synthesis.
+    pub(in crate::gameplay) fn development_report(&self) -> serde_json::Value {
+        let registered = {
+            let lines = super::locked(&self.inner.lines);
+            lines
+                .order
+                .iter()
+                .filter_map(|key| {
+                    lines
+                        .by_key
+                        .get(key)
+                        .cloned()
+                        .map(|line| (key.clone(), line))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut speakers = BTreeMap::<String, (Option<String>, Vec<serde_json::Value>)>::new();
+        if let super::Mode::On { synthesis, .. } = &self.inner.mode {
+            speakers.insert(
+                "narrator".into(),
+                (
+                    Some(synthesis.casting.narrator.voice_id.clone()),
+                    Vec::new(),
+                ),
+            );
+            for (speaker, voice) in &synthesis.casting.by_speaker {
+                let voice = synthesis.casting.forced.as_ref().unwrap_or(voice);
+                speakers.insert(speaker.clone(), (Some(voice.voice_id.clone()), Vec::new()));
+            }
+        }
+        for (key, line) in registered {
+            let speaker = super::speaker_key(line.speaker().unwrap_or("Narrator"));
+            let (voice_id, state) = match &self.inner.mode {
+                super::Mode::Off(_) => (None, "off"),
+                super::Mode::On { synthesis, .. } => {
+                    let voice_id = synthesis.casting.voice_for(&line).voice_id.clone();
+                    let mut status = "cached";
+                    for text in super::voice_segments(&line.text) {
+                        let segment = super::VoiceLine {
+                            role: line.role.clone(),
+                            text,
+                        };
+                        let path = synthesis
+                            .cache_dir
+                            .join(super::VoiceLineSpec::new(&voice_id, &segment).file_name());
+                        match std::fs::metadata(path) {
+                            Ok(metadata) if metadata.is_file() => {}
+                            Ok(_) => {
+                                status = "cache_unavailable";
+                                break;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                status = "registered"
+                            }
+                            Err(_) => {
+                                status = "cache_unavailable";
+                                break;
+                            }
+                        }
+                    }
+                    (Some(voice_id), status)
+                }
+            };
+            let entry = speakers
+                .entry(speaker)
+                .or_insert_with(|| (voice_id, Vec::new()));
+            entry
+                .1
+                .push(serde_json::json!({"key":key,"state":state,"ms":null}));
+        }
+        serde_json::json!(speakers.into_iter().map(|(speaker,(voice_id,lines))|
+            serde_json::json!({"speaker":speaker,"voice_id":voice_id,"lines":lines})).collect::<Vec<_>>())
+    }
+}

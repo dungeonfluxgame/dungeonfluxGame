@@ -201,7 +201,11 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
         lines.push(check.voice);
     }
     lines.extend(scene_outcomes(display));
-    lines.extend(conversation_reply(display));
+    for line in conversation_replies(display) {
+        if !lines.iter().any(|known| known.key() == line.key()) {
+            lines.push(line);
+        }
+    }
     lines.extend(fight_lines(display));
     lines
 }
@@ -329,42 +333,63 @@ fn fight_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
         .collect()
 }
 
-/// The speaker's reply to a hero's typed words, while it is still the last thing said at the
-/// table. Any accepted action (and so any change of beat) logs a later line, which ends it, so
-/// an old reply is never spoken again in a later beat. It is voiced as that speaker, the same
-/// cast voice as the speaker's scripted line.
-fn conversation_reply(display: &rpc::DisplayGameplayView) -> Option<VoiceLine> {
-    let last = display.journey.as_ref()?.table_log.last()?;
-    let spoken_by_npc = rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
-        && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech);
-    let (speaker, text) = (last.speaker.trim(), last.text.trim());
-    if !spoken_by_npc || speaker.is_empty() || text.is_empty() {
-        return None;
-    }
-    let speaker = if last.actor_id.is_empty() {
-        match scene_speaker(display.scene.as_ref(), speaker) {
-            SceneSpeaker::Matched(actor) => actor.name.as_str(),
-            SceneSpeaker::Missing => speaker,
-            SceneSpeaker::Ambiguous => return None,
-        }
-    } else {
-        display
-            .scene
-            .as_ref()?
-            .cast
-            .iter()
-            .find(|actor| actor.id == last.actor_id && speaker_names_match(&actor.name, speaker))?
-            .name
-            .as_str()
+/// Every permitted public NPC speech row in the table log, in log order. The display view
+/// is already audience-filtered, so an explicit actor id and public speaker on a row are
+/// authority enough: no figure or plate cast entry is required. A cast entry for that id
+/// supplies its canonical name when the public name matches it; a contradictory name for
+/// a known id is refused. An empty id keeps the unambiguous legacy name path. Duplicate
+/// role/text keys are kept once.
+fn conversation_replies(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
+    let Some(journey) = display.journey.as_ref() else {
+        return Vec::new();
     };
-    Some(VoiceLine {
-        role: if last.actor_id.is_empty() {
-            format!("{NPC_ROLE_PREFIX}{speaker}")
+    let mut lines = Vec::new();
+    for row in &journey.table_log {
+        let spoken_by_npc = rpc::TableRole::try_from(row.role) == Ok(rpc::TableRole::Npc)
+            && rpc::TableKind::try_from(row.kind) == Ok(rpc::TableKind::Speech);
+        let (speaker, text) = (row.speaker.trim(), row.text.trim());
+        if !spoken_by_npc || speaker.is_empty() || text.is_empty() {
+            continue;
+        }
+        let line = if row.actor_id.is_empty() {
+            let speaker = match scene_speaker(display.scene.as_ref(), speaker) {
+                SceneSpeaker::Matched(actor) => actor.name.as_str(),
+                SceneSpeaker::Missing => speaker,
+                SceneSpeaker::Ambiguous => continue,
+            };
+            VoiceLine {
+                role: format!("{NPC_ROLE_PREFIX}{speaker}"),
+                text: text.to_owned(),
+            }
         } else {
-            format!("npc-id:{}|{speaker}", last.actor_id)
-        },
-        text: text.to_owned(),
-    })
+            let known = display
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.cast.iter().find(|actor| actor.id == row.actor_id));
+            let speaker = match known {
+                Some(actor) if speaker_names_match(&actor.name, speaker) => actor.name.as_str(),
+                Some(_) => continue,
+                None => speaker,
+            };
+            VoiceLine {
+                role: format!("npc-id:{}|{speaker}", row.actor_id),
+                text: text.to_owned(),
+            }
+        };
+        if !lines
+            .iter()
+            .any(|known: &VoiceLine| known.key() == line.key())
+        {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+/// The newest conversation reply, for callers that only need the latest line.
+#[cfg(test)]
+fn conversation_reply(display: &rpc::DisplayGameplayView) -> Option<VoiceLine> {
+    conversation_replies(display).into_iter().last()
 }
 
 #[cfg(test)]
@@ -471,12 +496,27 @@ mod tests {
     }
 
     #[test]
-    fn canonical_reply_rejects_wrong_actor_id_or_name_even_with_case_matching() {
-        for (actor_id, speaker) in [
-            ("departed", "courier"),
-            ("COURIER", "Courier"),
-            ("courier", "Bandit"),
-        ] {
+    fn canonical_reply_rejects_a_contradictory_name_for_a_known_actor_id() {
+        let mut shown = courier_display("Courier");
+        shown
+            .journey
+            .as_mut()
+            .unwrap()
+            .table_log
+            .push(rpc::TableLine {
+                actor_id: "courier".into(),
+                speaker: "Bandit".into(),
+                text: "Give me the packet.".into(),
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                ..Default::default()
+            });
+        assert!(conversation_reply(&shown).is_none());
+    }
+
+    #[test]
+    fn canonical_reply_accepts_an_explicit_actor_id_absent_from_the_cast() {
+        for (actor_id, speaker) in [("departed", "courier"), ("COURIER", "Courier")] {
             let mut shown = courier_display("Courier");
             shown
                 .journey
@@ -491,8 +531,54 @@ mod tests {
                     kind: rpc::TableKind::Speech as i32,
                     ..Default::default()
                 });
-            assert!(conversation_reply(&shown).is_none(), "{actor_id}/{speaker}");
+            let reply = conversation_reply(&shown).unwrap();
+            assert_eq!(reply.actor_id(), Some(actor_id), "{actor_id}/{speaker}");
+            assert_eq!(reply.speaker(), Some(speaker), "{actor_id}/{speaker}");
         }
+    }
+
+    #[test]
+    fn public_npc_speech_without_a_cast_figure_registers_every_reply_once() {
+        let mut shown = display("", "", "");
+        shown.scene = Some(rpc::GameplayScene {
+            title: "Salt Quay".into(),
+            cast: vec![rpc::SceneActor {
+                id: "courier".into(),
+                name: "Courier".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let row = |sequence: u64, text: &str| rpc::TableLine {
+            sequence,
+            actor_id: "bandit".into(),
+            speaker: "Dain Rusk".into(),
+            text: text.into(),
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            ..Default::default()
+        };
+        shown.journey.as_mut().unwrap().table_log = vec![
+            row(1, "The packet stays with me."),
+            row(2, "Ask the harbourmaster."),
+            row(3, "The packet stays with me."),
+        ];
+        let expected = vec![
+            VoiceLine {
+                role: "npc-id:bandit|Dain Rusk".into(),
+                text: "The packet stays with me.".into(),
+            },
+            VoiceLine {
+                role: "npc-id:bandit|Dain Rusk".into(),
+                text: "Ask the harbourmaster.".into(),
+            },
+        ];
+        assert_eq!(conversation_replies(&shown), expected);
+        assert_eq!(display_lines(&shown), expected);
+        assert_eq!(
+            conversation_reply(&shown).unwrap().text,
+            "Ask the harbourmaster."
+        );
     }
 
     #[test]
@@ -570,10 +656,9 @@ mod tests {
             .last_mut()
             .unwrap()
             .actor_id = "courier".into();
-        assert!(
-            conversation_reply(&display).is_none(),
-            "stale actor identity cannot borrow another voice"
-        );
+        let reassigned = conversation_reply(&display).unwrap();
+        assert_eq!(reassigned.actor_id(), Some("courier"));
+        assert_eq!(reassigned.speaker(), Some("Bandit"));
     }
 
     #[test]

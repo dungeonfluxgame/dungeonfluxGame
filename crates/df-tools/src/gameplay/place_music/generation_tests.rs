@@ -17,6 +17,7 @@ use std::{
 use df_providers::{ElevenMusicConfig, NativeElevenMusicProvider};
 use serde_json::json;
 
+use super::PackMusic;
 use super::generator::{MusicGenerator, MusicSetSpec, PROVIDER_CALLS};
 use super::hub::{MusicHub as _, MusicStatus};
 use super::master::{
@@ -25,7 +26,6 @@ use super::master::{
 use super::resource::HubMusic;
 use super::spec::{Closed, Energy, Layer, Mood, Palette, Space, TimeOfDay};
 use super::test_support::shop_block;
-use super::PackMusic;
 
 // ---- spec and prompts ----
 
@@ -441,6 +441,111 @@ async fn until_status(music: &HubMusic, set: &MusicSetSpec, wanted: &str) -> Mus
 
 fn provider_calls(fake: &FakeEleven) -> usize {
     fake.requests.lock().unwrap().len()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ambient_layers_are_separate_hub_resources_cached_and_reused_across_pacing() {
+    use super::ambience::{AmbientSpec, AmbientStatus};
+    use crate::music_score::AmbientKind;
+    let fake = FakeEleven::start(Duration::ZERO, None);
+    let hub = Hub::new();
+    let directory = store_directory("hs36-ambient");
+    let music = HubMusic::for_tests(hub.clone(), directory.clone(), fake.generator());
+    music.start_worker(&tokio::runtime::Handle::current(), || {});
+    let spec = AmbientSpec {
+        place: "quay".into(),
+        kind: AmbientKind::Water,
+        facts: "public harbour water".into(),
+        activity_permille: 550,
+    };
+    for _ in 0..5 {
+        music.ambient_request(&spec);
+    }
+    let mut ready = None;
+    for _ in 0..600 {
+        if let AmbientStatus::Ready(path) = music.ambient_status(&spec) {
+            ready = Some(path);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        ready,
+        Some(format!("/gameplay/music/{}/ambient", spec.key()))
+    );
+    assert_eq!(provider_calls(&fake), 1);
+    let bytes = std::fs::read(directory.join(spec.key()).join("ambient.mp3")).unwrap();
+    assert_eq!(frames_of(&bytes).len(), 24 * 44_100);
+    assert_eq!(hub.list(Some(ResourceKind::AmbientLayer)).len(), 1);
+    let spend = hub
+        .ledger()
+        .snapshot(crate::gameplay::resources::Unit::MusicCall);
+    assert_eq!(spend.committed, 1);
+    assert_eq!(spend.reserved, 0);
+    for _ in crate::music_score::PacingBand::ALL {
+        music.ambient_request(&spec);
+    }
+    assert_eq!(
+        provider_calls(&fake),
+        1,
+        "tempo bands must reuse the environmental loop"
+    );
+    drop(music);
+    let next_hub = Hub::new();
+    let next = HubMusic::for_tests(next_hub, directory, fake.generator());
+    next.start_worker(&tokio::runtime::Handle::current(), || {});
+    next.ambient_request(&spec);
+    for _ in 0..200 {
+        if matches!(next.ambient_status(&spec), AmbientStatus::Ready(_)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(matches!(
+        next.ambient_status(&spec),
+        AmbientStatus::Ready(_)
+    ));
+    assert_eq!(
+        provider_calls(&fake),
+        1,
+        "a new hub process must read the disk cache"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pacing_variant_passes_the_original_theme_reference_to_every_fake_provider_layer() {
+    use crate::music_score::PacingBand;
+    let fake = FakeEleven::start(Duration::ZERO, None);
+    let base = shop_set();
+    let variant = MusicSetSpec::in_band(base.spec().clone(), PacingBand::Driving);
+    let generated = fake
+        .generator()
+        .generate(&variant, Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(generated.manifest["band"], "driving");
+    assert_eq!(generated.manifest["bpm"], 105);
+    assert_eq!(generated.manifest["bars"], 20);
+    assert_eq!(generated.manifest["energy_permille"], 650);
+    assert_eq!(
+        generated.manifest["motif_reference"],
+        base.motif_reference()
+    );
+    for (path, body) in fake.requests.lock().unwrap().iter() {
+        if path == "/v1/music" {
+            let prompt = body["prompt"].as_str().unwrap();
+            assert!(prompt.contains("Exactly 105 BPM in G major"));
+            assert!(prompt.contains("20 bars"));
+            assert!(prompt.contains(&base.motif_reference()));
+            assert!(!prompt.contains("Exactly 84 BPM"));
+        }
+    }
+    for layer in &generated.layers {
+        assert_eq!(
+            frames_of(layer).len(),
+            crate::music_score::LOOP_SAMPLES as usize
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -9,7 +9,7 @@
 //! the browser then simply stays silent.
 //!
 //! The public key never includes a voice: the browser does not know voices. Each named
-//! speaker is cast to a roster voice at startup. The audio itself is a `VoiceLine` resource of
+//! speaker is cast to a roster voice when their saved identity is admitted. The audio itself is a `VoiceLine` resource of
 //! the generation hub: its key (and its file name in the cache) is the hash of the voice id, the
 //! role, the clip text, the model, the output format, the language, the clip split and the
 //! contract version ([`VoiceLineSpec`]), so a speaker recast to another voice, or a provider
@@ -65,7 +65,8 @@ use crate::voice_line::{MAXIMUM_VOICE_CLIP_CHARACTERS, VoiceLine, voice_segments
 /// Most recent registered lines kept; older ones can no longer be requested.
 const MAXIMUM_LINES: usize = 256;
 const MAXIMUM_LINE_CHARACTERS: usize = MAXIMUM_VOICE_CLIP_CHARACTERS;
-const MAXIMUM_ROLE_BYTES: usize = 96;
+// Generated actor IDs contain two 32-byte slugs and a separator; names allow 32 Unicode scalars.
+const MAXIMUM_ROLE_BYTES: usize = "npc-id:".len() + 65 + 1 + 32 * 4;
 const MAXIMUM_AUDIO_BYTES: usize = 4 * 1024 * 1024;
 const SYNTHESIS_DEADLINE: Duration = Duration::from_secs(30);
 const CACHE_CONTROL: &str = "private, max-age=86400";
@@ -255,6 +256,15 @@ struct Casting {
     by_speaker: HashMap<String, ChosenVoice>,
     by_actor: HashMap<String, ChosenVoice>,
     fallback: ChosenVoice,
+    roster: Roster,
+    run_identifier: String,
+    generated: Mutex<HashMap<String, GeneratedCasting>>,
+}
+
+struct GeneratedCasting {
+    speaker: SpeakerCasting,
+    voice: ChosenVoice,
+    reason: String,
 }
 
 fn speaker_key(name: &str) -> String {
@@ -262,18 +272,122 @@ fn speaker_key(name: &str) -> String {
 }
 
 impl Casting {
-    fn voice_for(&self, line: &VoiceLine) -> &ChosenVoice {
+    fn voice_for(&self, line: &VoiceLine) -> ChosenVoice {
         if !line.is_npc() {
-            return &self.narrator;
+            return self.narrator.clone();
         }
-        let speaker = line.speaker().unwrap_or_default();
-        self.forced
-            .as_ref()
-            .or_else(|| match line.actor_id() {
-                Some(id) => self.by_actor.get(id),
-                None => self.by_speaker.get(&speaker_key(speaker)),
-            })
-            .unwrap_or(&self.fallback)
+        if let Some(forced) = &self.forced {
+            return forced.clone();
+        }
+        let generated = locked(&self.generated);
+        let selected = match line.actor_id() {
+            Some(id) => self
+                .by_actor
+                .get(id)
+                .or_else(|| generated.get(id).map(|cast| &cast.voice)),
+            None => {
+                let key = speaker_key(line.speaker().unwrap_or_default());
+                self.by_speaker.get(&key).or_else(|| {
+                    generated
+                        .values()
+                        .find(|cast| speaker_key(&cast.speaker.name) == key)
+                        .map(|cast| &cast.voice)
+                })
+            }
+        };
+        selected.unwrap_or(&self.fallback).clone()
+    }
+
+    fn register_place(
+        &self,
+        place: &super::place::PlaceRecord,
+    ) -> Result<(), super::place::PlaceRefusal> {
+        let mut cast = place.expand()?.cast;
+        cast.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut generated = locked(&self.generated);
+        let mut uses = HashMap::<String, usize>::new();
+        for person in &cast {
+            if let Some(voice) = self
+                .by_actor
+                .get(&person.id)
+                .or_else(|| generated.get(&person.id).map(|cast| &cast.voice))
+            {
+                *uses.entry(voice.voice_id.clone()).or_default() += 1;
+            }
+        }
+        for person in cast {
+            if self.by_actor.contains_key(&person.id) || generated.contains_key(&person.id) {
+                continue;
+            }
+            let gender = match person.gender {
+                Some(super::pack::Gender::He) => Gender::He,
+                Some(super::pack::Gender::She) => Gender::She,
+                Some(super::pack::Gender::They) => Gender::They,
+                Some(super::pack::Gender::It) => Gender::It,
+                None => continue,
+            };
+            let age = match person.age {
+                Some(super::pack::Age::Young) => Age::Young,
+                Some(super::pack::Age::Elder) => Age::Elder,
+                _ => Age::Adult,
+            };
+            let selected = self
+                .roster
+                .voices
+                .iter()
+                .filter(|voice| voice.gender == gender && voice.voice_id != self.narrator.voice_id)
+                .min_by_key(|voice| {
+                    use sha2::{Digest, Sha256};
+                    let tie = Sha256::digest(format!(
+                        "{}\0{}\0{}",
+                        self.run_identifier, person.id, voice.voice_id
+                    ));
+                    (
+                        (age as i8 - voice.age as i8).unsigned_abs(),
+                        uses.get(&voice.voice_id).copied().unwrap_or(0),
+                        tie.to_vec(),
+                    )
+                });
+            let voice = selected.map_or_else(
+                || self.fallback.clone(),
+                |voice| ChosenVoice::from_roster(voice, false),
+            );
+            let reason = match selected {
+                Some(selected) if selected.age == age => {
+                    "presentation_and_age; scene_voice_diversity"
+                }
+                Some(_) => "presentation_and_nearest_available_age; scene_voice_diversity",
+                None => "fallback: no_matching_presentation_in_roster",
+            }
+            .to_owned();
+            super::actor::record_audit_line(
+                "gameplay.voice.cast",
+                format!(
+                    "VOICE cast {} {}/{} -> {}{} reason={reason}",
+                    person.name,
+                    gender.label(),
+                    age.label(),
+                    voice.name,
+                    if voice.fallback { " fallback" } else { "" }
+                ),
+            );
+            *uses.entry(voice.voice_id.clone()).or_default() += 1;
+            generated.insert(
+                person.id.clone(),
+                GeneratedCasting {
+                    speaker: SpeakerCasting {
+                        actor_ids: vec![person.id],
+                        name: person.name,
+                        gender,
+                        age: Some(age),
+                        tone: String::new(),
+                    },
+                    voice,
+                    reason,
+                },
+            );
+        }
+        Ok(())
     }
 }
 
@@ -495,6 +609,9 @@ impl Voice {
             by_speaker,
             by_actor,
             fallback: ChosenVoice::from_roster(&roster.fallback, true),
+            roster: roster.clone(),
+            run_identifier: run_identifier.to_owned(),
+            generated: Mutex::new(HashMap::new()),
         };
         let synthesis = Synthesis {
             provider,
@@ -529,8 +646,50 @@ impl Voice {
     pub(super) fn startup_line(&self) -> String {
         match &self.inner.mode {
             Mode::Off(reason) => format!("VOICE off ({})", reason.reason()),
-            Mode::On { summary, .. } => summary.clone(),
+            Mode::On { summary, synthesis } => {
+                let generated = locked(&synthesis.casting.generated);
+                let mut cast: Vec<_> = generated.values().collect();
+                cast.sort_by_key(|cast| &cast.speaker.name);
+                let mut summary = summary.clone();
+                for cast in cast {
+                    summary.push_str(&format!(
+                        "\nVOICE cast {} {}/{} -> {} reason={}",
+                        cast.speaker.name,
+                        cast.speaker.gender.label(),
+                        cast.speaker.age.map_or("unknown", Age::label),
+                        cast.voice.name,
+                        cast.reason
+                    ));
+                }
+                summary
+            }
         }
+    }
+
+    /// Replays committed person admission in journal order. The free-roam gate predates that
+    /// journal; local spots may reuse its keepers, so it is always admitted first.
+    pub(super) fn register_people(
+        &self,
+        state: &df_model::checkpoint::GameState,
+    ) -> Result<(), df_session::submission::RepositoryError> {
+        let Mode::On { synthesis, .. } = &self.inner.mode else {
+            return Ok(());
+        };
+        if let Some(world) = super::adventure::free_roam::world() {
+            synthesis
+                .casting
+                .register_place(&world.gate)
+                .map_err(|_| df_session::submission::RepositoryError::InvalidCandidate)?;
+        }
+        for (_, entry) in super::place::entries(state)? {
+            if let Some(place) = entry.change.created {
+                synthesis
+                    .casting
+                    .register_place(&place)
+                    .map_err(|_| df_session::submission::RepositoryError::InvalidCandidate)?;
+            }
+        }
+        Ok(())
     }
 
     /// Registers the speakable text of a view the server is sending. Only the display
@@ -711,7 +870,7 @@ impl Synthesis {
 
     /// The audio of one clip, and where it came from (`hit`, `in_flight` or `miss`).
     async fn audio(self: &Arc<Self>, line: VoiceLine) -> (Outcome, &'static str) {
-        let voice = self.casting.voice_for(&line).clone();
+        let voice = self.casting.voice_for(&line);
         let kit = self.kit.get();
         // A ready entry whose file vanished between the hub's check and the read is asked for
         // again once.
@@ -1259,24 +1418,28 @@ mod tests {
         voice_cast(fake, configuration(cache), &[], "0x1")
     }
 
-    fn voice_cast(
-        fake: &FakeEleven,
-        configuration: VoiceConfiguration,
-        speakers: &[SpeakerCasting],
-        run_identifier: &str,
-    ) -> Voice {
+    fn fixture_provider(fake: &FakeEleven) -> NativeSpeechProvider {
         let limits = ProviderLimits::new(Duration::from_secs(5), 16_384, 65_536)
             .connect_timeout(Duration::from_secs(1))
             .header_bytes(4096)
             .build();
-        let provider = registered_speech_provider(
+        registered_speech_provider(
             CandidateRouteId::ElevenFlashV25Tts,
             "test-credential",
             limits,
         )
         .unwrap()
         .for_loopback_fixture(fake.address)
-        .unwrap();
+        .unwrap()
+    }
+
+    fn voice_cast(
+        fake: &FakeEleven,
+        configuration: VoiceConfiguration,
+        speakers: &[SpeakerCasting],
+        run_identifier: &str,
+    ) -> Voice {
+        let provider = fixture_provider(fake);
         Voice::new(
             configuration,
             provider,
@@ -1522,6 +1685,9 @@ mod tests {
             by_speaker: HashMap::from([("courier".into(), voice("courier-voice"))]),
             by_actor: HashMap::from([("bandit".into(), voice("bandit-voice"))]),
             fallback: voice("neutral"),
+            roster: test_roster(),
+            run_identifier: "test".into(),
+            generated: Mutex::new(HashMap::new()),
         };
         let line = VoiceLine {
             role: "npc-id:bandit|Courier".into(),
@@ -1634,6 +1800,298 @@ mod tests {
 
         assert_eq!(roster_voice_gender(&wren), Some(Gender::She));
         assert_eq!(roster_voice_gender(&garrick), Some(Gender::He));
+    }
+
+    fn generated_place() -> super::super::place::PlaceRecord {
+        use super::super::place_creation::{build, tests};
+        let mut place = tests::place_slot();
+        // This fixture tests person admission independently of market generation and its byte budget.
+        for field in ["wares", "services", "stalls", "mentioned_stalls"] {
+            place[field] = serde_json::json!([]);
+        }
+        place["market"] = serde_json::json!(false);
+        build(
+            &tests::request(),
+            &place.to_string(),
+            &tests::people_slot().to_string(),
+            &tests::things_slot().to_string(),
+        )
+        .unwrap()
+    }
+
+    fn generated_line(place: &super::super::place::PlaceRecord, index: usize) -> VoiceLine {
+        let actor = place.expand().unwrap().cast.remove(index);
+        VoiceLine {
+            role: format!("npc-id:{}|{}", actor.id, actor.name),
+            text: "Good day.".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_man_and_woman_use_matching_distinct_voices_without_fallback() {
+        let cache = scratch("generated-presentation");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache);
+        let place = generated_place();
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice on");
+        };
+        synthesis.casting.register_place(&place).unwrap();
+        let man = voice_id_requested(&voice, &fake, &generated_line(&place, 0)).await;
+        let woman = voice_id_requested(&voice, &fake, &generated_line(&place, 1)).await;
+        assert_eq!(roster_voice_gender(&man), Some(Gender::He));
+        assert_eq!(roster_voice_gender(&woman), Some(Gender::She));
+        assert_ne!(man, woman);
+        for index in 0..place.people.len() {
+            let selected = synthesis.casting.voice_for(&generated_line(&place, index));
+            assert!(!selected.fallback);
+            assert_eq!(
+                synthesis
+                    .casting
+                    .roster
+                    .voice(&selected.voice_id)
+                    .unwrap()
+                    .age,
+                Age::Adult
+            );
+        }
+    }
+
+    #[test]
+    fn four_generated_vendors_are_distinct_and_keep_their_voices_after_restart() {
+        let cache = scratch("generated-restart");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let mut roster = test_roster();
+        for voice in &mut roster.voices {
+            voice.age = Age::Adult;
+        }
+        let start = || {
+            Voice::new(
+                configuration(&cache),
+                fixture_provider(&fake),
+                &roster,
+                &[],
+                "same-run",
+            )
+            .unwrap()
+        };
+        let first = start();
+        let mut market = generated_place();
+        market.people[0].gender = super::super::pack::Gender::She;
+        for person in &mut market.people {
+            person.role = "vendor".into();
+        }
+        let mut fourth = market.people[1].clone();
+        fourth.name = "Fourth Vendor".into();
+        market.people.push(fourth);
+        let Mode::On { synthesis, .. } = &first.inner.mode else {
+            panic!("voice on");
+        };
+        synthesis.casting.register_place(&market).unwrap();
+        let chosen = |casting: &Casting| {
+            (0..market.people.len())
+                .map(|index| casting.voice_for(&generated_line(&market, index)).voice_id)
+                .collect::<Vec<_>>()
+        };
+        let before = chosen(&synthesis.casting);
+        assert_eq!(
+            before
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            4
+        );
+        let mut later = market.clone();
+        later.place_id = "place-another".into();
+        for person in &mut later.people {
+            person.name = format!("Earlier {}", person.name);
+        }
+        synthesis.casting.register_place(&later).unwrap();
+        assert_eq!(chosen(&synthesis.casting), before);
+        let stored: super::super::place::PlaceRecord =
+            serde_json::from_str(&serde_json::to_string(&market).unwrap()).unwrap();
+        let restarted = start();
+        let Mode::On {
+            synthesis: restored,
+            ..
+        } = &restarted.inner.mode
+        else {
+            panic!("voice on");
+        };
+        restored.casting.register_place(&stored).unwrap();
+        restored.casting.register_place(&later).unwrap();
+        assert_eq!(chosen(&restored.casting), before);
+        let mut spot = market.clone();
+        spot.place_id = "place-stall".into();
+        spot.origin.id = market.place_id.clone();
+        spot.local_spot = Some("the vendor stall".into());
+        spot.local_keeper = Some(market.people[0].name.clone());
+        spot.people.truncate(1);
+        restored.casting.register_place(&spot).unwrap();
+        assert_eq!(
+            restored
+                .casting
+                .voice_for(&generated_line(&spot, 0))
+                .voice_id,
+            before[0]
+        );
+        assert!(
+            locked(&restored.casting.generated)
+                .values()
+                .all(|cast| !cast.voice.fallback)
+        );
+    }
+
+    #[tokio::test]
+    async fn longest_generated_actor_identity_registers_and_speaks_with_its_cast_voice() {
+        let cache = scratch("generated-long-identity");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache);
+        let mut place = generated_place();
+        place.place_id = format!("place-{}", "p".repeat(32));
+        place.people[0].name = "Long Generated Merchant Identity".into();
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice on");
+        };
+        synthesis.casting.register_place(&place).unwrap();
+        let actor = place.expand().unwrap().cast.remove(0);
+        let display = rpc::DisplayGameplayView {
+            journey: Some(rpc::JourneyView {
+                speaker: actor.name.clone(),
+                dialogue: "Welcome to my stall.".into(),
+                ..Default::default()
+            }),
+            scene: Some(rpc::GameplayScene {
+                cast: vec![rpc::SceneActor {
+                    id: actor.id,
+                    name: actor.name,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let line = crate::voice_line::display_lines(&display).pop().unwrap();
+        assert!(line.role.len() > 96);
+        voice.register_view(&rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(display)),
+            ..Default::default()
+        });
+        assert_eq!(
+            voice.audio(&line.key()).await,
+            Lookup::Audio(Bytes::from_static(AUDIO))
+        );
+        assert!(!synthesis.casting.voice_for(&line).fallback);
+    }
+
+    #[test]
+    fn committed_people_admission_replays_journal_and_does_not_recast() {
+        use super::super::{
+            adventure::{RulesMode, record, shop},
+            beat_script_variety_tests as native, pack, place,
+            startup_configuration::ContentRating,
+        };
+        let adventure = shop::generate(42, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) = record::reload(&adventure.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let cache = scratch("generated-journal");
+            let fake = FakeEleven::start(Duration::ZERO, true);
+            let voice = voice_with(&fake, &cache);
+            let first = generated_place();
+            let mut second = first.clone();
+            second.place_id = "place-next-market".into();
+            second.name = "Next Market".into();
+            for person in &mut second.people {
+                person.name = format!("New {}", person.name);
+            }
+            second.speaker = format!("New {}", second.speaker);
+            second.origin.id = first.place_id.clone();
+            second.origin.name = first.name.clone();
+            first.validate().unwrap();
+            second.validate().unwrap();
+            let mut checkpoint =
+                native::act(&native::prepared(), native::first(), 5, "begin-story");
+            for (number, destination) in [(81, &first), (82, &second)] {
+                let scene = super::super::beat_script_runtime::scene(checkpoint.state()).unwrap();
+                let from = place::home_id(&scene).unwrap();
+                checkpoint = match place::plan(
+                    &checkpoint,
+                    "Brynn",
+                    OperationId::from_bytes(&[number; 16]).unwrap(),
+                    &from,
+                    place::JOURNEY_EXIT,
+                    &destination.place_id,
+                    Some(destination),
+                ) {
+                    Ok(planned) => planned.candidate,
+                    Err(place::PlaceFailure::Refused(reason)) => panic!(
+                        "fixture place admission refused: {reason:?}; step={:?}",
+                        super::super::refusal_detail::take()
+                    ),
+                    Err(place::PlaceFailure::State(error)) => panic!(
+                        "fixture place state failed: {error:?}; step={:?}",
+                        super::super::refusal_detail::take()
+                    ),
+                };
+                voice.register_people(checkpoint.state()).unwrap();
+            }
+            let Mode::On { synthesis, .. } = &voice.inner.mode else {
+                panic!("voice on");
+            };
+            let selected = synthesis.casting.voice_for(&generated_line(&first, 0));
+            let count = locked(&synthesis.casting.generated).len();
+            voice.register_people(checkpoint.state()).unwrap();
+            assert_eq!(locked(&synthesis.casting.generated).len(), count);
+            let restored = voice_with(&fake, &cache);
+            restored.register_people(checkpoint.state()).unwrap();
+            let Mode::On {
+                synthesis: replay, ..
+            } = &restored.inner.mode
+            else {
+                panic!("voice on");
+            };
+            assert_eq!(
+                replay.casting.voice_for(&generated_line(&first, 0)),
+                selected
+            );
+            assert_eq!(locked(&replay.casting.generated).len(), count);
+            assert_eq!(count, first.people.len() + second.people.len());
+        });
+    }
+
+    #[test]
+    fn generated_age_match_wins_over_unused_wrong_age_and_missing_match_is_explicit_fallback() {
+        let cache = scratch("generated-age");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let mut roster = test_roster();
+        roster.voices.retain(|voice| voice.gender != Gender::He);
+        let voice = Voice::new(
+            configuration(&cache),
+            fixture_provider(&fake),
+            &roster,
+            &[],
+            "age-run",
+        )
+        .unwrap();
+        let mut place = generated_place();
+        place.people[1].age = Some(super::super::pack::Age::Young);
+        place.people[2].age = Some(super::super::pack::Age::Young);
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice on");
+        };
+        synthesis.casting.register_place(&place).unwrap();
+        for index in [1, 2] {
+            let selected = synthesis.casting.voice_for(&generated_line(&place, index));
+            assert!(!selected.fallback);
+            assert_eq!(roster.voice(&selected.voice_id).unwrap().age, Age::Young);
+        }
+        let generated = locked(&synthesis.casting.generated);
+        let missing = generated
+            .values()
+            .find(|cast| cast.speaker.gender == Gender::He)
+            .unwrap();
+        assert!(missing.voice.fallback);
+        assert!(missing.reason.starts_with("fallback:"));
     }
 
     #[tokio::test]
@@ -2004,6 +2462,53 @@ mod tests {
                 .by_key
                 .contains_key(&narrator("Public narration.").key())
         );
+    }
+
+    #[test]
+    fn register_view_registers_every_public_npc_reply_without_a_cast_figure() {
+        let voice = Voice::disabled(VoiceOff::Disabled);
+        let row = |sequence: u64, text: &str| rpc::TableLine {
+            sequence,
+            actor_id: "bandit".into(),
+            speaker: "Dain Rusk".into(),
+            text: text.into(),
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            ..Default::default()
+        };
+        let display = rpc::DisplayGameplayView {
+            scene: Some(rpc::GameplayScene {
+                title: "Salt Quay".into(),
+                cast: vec![rpc::SceneActor {
+                    id: "courier".into(),
+                    name: "Courier".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            journey: Some(rpc::JourneyView {
+                table_log: vec![
+                    row(1, "The packet stays with me."),
+                    row(2, "Ask the harbourmaster."),
+                    row(3, "The packet stays with me."),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let expected = crate::voice_line::display_lines(&display);
+        assert_eq!(expected.len(), 2);
+        voice.register_view(&rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(display)),
+            ..Default::default()
+        });
+        let lines = locked(&voice.inner.lines);
+        assert_eq!(lines.by_key.len(), expected.len());
+        for line in &expected {
+            assert_eq!(line.actor_id(), Some("bandit"));
+            assert_eq!(line.speaker(), Some("Dain Rusk"));
+            assert!(lines.by_key.contains_key(&line.key()));
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! No presentation field is changed: an unavailable clip leaves the existing cutout intact.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     io::Cursor,
     path::{Path, PathBuf},
@@ -680,11 +680,19 @@ fn measure_motion(
     }
 }
 
+#[derive(Clone)]
 struct Wanted {
     fighter: Fighter,
     kinds: Vec<ClipKind>,
     force: bool,
-    since: Instant,
+}
+
+/// A resolved or missing canonical source, pinned to the complete fighter and revision.
+#[derive(Clone)]
+struct CachedSource {
+    fighter: Fighter,
+    revision: String,
+    depiction: Option<Arc<Depiction>>,
 }
 
 pub(super) struct CharacterClips {
@@ -692,6 +700,8 @@ pub(super) struct CharacterClips {
     source: Source,
     wanted: Mutex<BTreeMap<String, Wanted>>,
     fighters: Mutex<BTreeMap<String, Fighter>>,
+    source_cache: Mutex<BTreeMap<String, CachedSource>>,
+    logged_misses: Mutex<BTreeSet<String>>,
 }
 
 impl CharacterClips {
@@ -730,11 +740,31 @@ impl CharacterClips {
             source,
             wanted: Mutex::new(BTreeMap::new()),
             fighters: Mutex::new(BTreeMap::new()),
+            source_cache: Mutex::new(BTreeMap::new()),
+            logged_misses: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// Drops cached misses so the next resolver tick retries once. Resolved sources keep
+    /// their pinned revision; a changed fighter or explicit force is handled in `request`.
+    pub(super) fn note_source_changed(&self) {
+        locked(&self.source_cache).retain(|_, cached| cached.depiction.is_some());
     }
 
     pub(super) fn request(&self, fighter: Fighter, kind: Option<ClipKind>, force: bool) {
         locked(&self.fighters).insert(fighter.identity.clone(), fighter.clone());
+        if force {
+            locked(&self.source_cache).remove(&fighter.identity);
+            locked(&self.logged_misses)
+                .retain(|key| !key.starts_with(&format!("{}|", fighter.identity)));
+        } else {
+            let stale = locked(&self.source_cache)
+                .get(&fighter.identity)
+                .is_some_and(|cached| cached.fighter != fighter);
+            if stale {
+                locked(&self.source_cache).remove(&fighter.identity);
+            }
+        }
         let mut wanted = locked(&self.wanted);
         let kinds = kind.map_or_else(|| ClipKind::ALL.to_vec(), |kind| vec![kind]);
         match wanted.get_mut(&fighter.identity) {
@@ -753,28 +783,112 @@ impl CharacterClips {
                         fighter,
                         kinds,
                         force,
-                        since: Instant::now(),
                     },
                 );
             }
         }
     }
 
+    fn admit(
+        self: &Arc<Self>,
+        fighter: &Fighter,
+        kinds: &[ClipKind],
+        force: bool,
+        source: Arc<Depiction>,
+        revision: &str,
+    ) {
+        for &kind in kinds {
+            let spec = CharacterClipSpec::new(fighter.clone(), revision.to_owned(), kind);
+            let key = ResourceKey::of(&spec);
+            if force {
+                match self.generation.hub.status(&key) {
+                    super::resources::ResourceStatus::Ready(_)
+                    | super::resources::ResourceStatus::Failed(..) => {
+                        self.generation
+                            .hub
+                            .invalidate(super::resources::Invalidate::Key(&key));
+                    }
+                    _ => {}
+                }
+                // A deliberately forced retry can also retry a previously refused frame.
+                for fallen in [false, true] {
+                    let frame_key = ResourceKey::of(&FrameSpec {
+                        clip: spec.clone(),
+                        fallen,
+                    });
+                    if matches!(
+                        self.generation.hub.status(&frame_key),
+                        super::resources::ResourceStatus::Failed(..)
+                    ) {
+                        self.generation
+                            .hub
+                            .invalidate(super::resources::Invalidate::Key(&frame_key));
+                    }
+                }
+            }
+            // The registry keeps the maker; a weak owner avoids retaining the hub and
+            // provider credentials in a registry -> maker -> hub reference cycle.
+            let service = Arc::downgrade(self);
+            let work_spec = spec.clone();
+            let source = Arc::clone(&source);
+            let maker: Maker = Arc::new(move || {
+                let service = service.clone();
+                let spec = work_spec.clone();
+                let source = Arc::clone(&source);
+                Box::pin(async move {
+                    let service = service.upgrade().ok_or(ResourceFailure::Interrupted)?;
+                    service.generation.generate(spec, source, force).await
+                })
+            });
+            self.generation.hub.get_or_request(&spec, maker);
+        }
+    }
+
     /// Wait for a canonical source without making a failed clip key for an absent depiction.
-    /// The serve-owned resolver polls this bounded inventory; the existing hub worker runs jobs.
+    /// Resolved and missing sources are cached per complete fighter; only a changed
+    /// fighter, explicit force, or `note_source_changed` re-admits a Source call.
     async fn resolve_sources(self: &Arc<Self>) {
-        let fighters = locked(&self.wanted)
-            .values()
-            .map(|wanted| wanted.fighter.clone())
-            .collect::<Vec<_>>();
-        for fighter in fighters {
+        let pending = locked(&self.wanted).values().cloned().collect::<Vec<_>>();
+        for wanted in pending {
+            let fighter = wanted.fighter.clone();
+            if !wanted.force
+                && let Some(cached) = locked(&self.source_cache)
+                    .get(&fighter.identity)
+                    .filter(|cached| cached.fighter == fighter)
+                    .cloned()
+            {
+                match cached.depiction {
+                    Some(source) => {
+                        let removed = {
+                            let mut current = locked(&self.wanted);
+                            if current
+                                .get(&fighter.identity)
+                                .is_some_and(|known| known.fighter != fighter)
+                            {
+                                continue;
+                            }
+                            current.remove(&fighter.identity)
+                        };
+                        if removed.is_some() {
+                            self.admit(&fighter, &wanted.kinds, false, source, &cached.revision);
+                        }
+                    }
+                    None => continue,
+                }
+                continue;
+            }
             let source = (self.source)(&fighter).await;
             let Some(source) = source else {
-                let expired = locked(&self.wanted)
-                    .get(&fighter.identity)
-                    .is_some_and(|wanted| wanted.since.elapsed() >= DEADLINE);
-                if expired {
-                    locked(&self.wanted).remove(&fighter.identity);
+                locked(&self.source_cache).insert(
+                    fighter.identity.clone(),
+                    CachedSource {
+                        fighter: fighter.clone(),
+                        revision: String::new(),
+                        depiction: None,
+                    },
+                );
+                let miss_key = format!("{}|{fighter:?}", fighter.identity);
+                if locked(&self.logged_misses).insert(miss_key) {
                     super::actor::record_audit_line(
                         "gameplay.character_clips",
                         format!(
@@ -785,69 +899,28 @@ impl CharacterClips {
                 }
                 continue;
             };
-            let wanted = {
-                let mut wanted = locked(&self.wanted);
-                if wanted
+            let revision = format!("{}:{}", source.revision, digest(&source.bytes));
+            let source = Arc::new(source);
+            locked(&self.source_cache).insert(
+                fighter.identity.clone(),
+                CachedSource {
+                    fighter: fighter.clone(),
+                    revision: revision.clone(),
+                    depiction: Some(Arc::clone(&source)),
+                },
+            );
+            let removed = {
+                let mut current = locked(&self.wanted);
+                if current
                     .get(&fighter.identity)
-                    .is_some_and(|wanted| wanted.fighter != fighter)
+                    .is_some_and(|known| known.fighter != fighter)
                 {
                     continue;
                 }
-                wanted.remove(&fighter.identity)
+                current.remove(&fighter.identity)
             };
-            let Some(wanted) = wanted else {
-                continue;
-            };
-            let revision = format!("{}:{}", source.revision, digest(&source.bytes));
-            let source = Arc::new(source);
-            for kind in wanted.kinds {
-                let spec = CharacterClipSpec::new(fighter.clone(), revision.clone(), kind);
-                let key = ResourceKey::of(&spec);
-                if wanted.force {
-                    match self.generation.hub.status(&key) {
-                        super::resources::ResourceStatus::Ready(_)
-                        | super::resources::ResourceStatus::Failed(..) => {
-                            self.generation
-                                .hub
-                                .invalidate(super::resources::Invalidate::Key(&key));
-                        }
-                        _ => {}
-                    }
-                    // A deliberately forced retry can also retry a previously refused frame.
-                    for fallen in [false, true] {
-                        let frame_key = ResourceKey::of(&FrameSpec {
-                            clip: spec.clone(),
-                            fallen,
-                        });
-                        if matches!(
-                            self.generation.hub.status(&frame_key),
-                            super::resources::ResourceStatus::Failed(..)
-                        ) {
-                            self.generation
-                                .hub
-                                .invalidate(super::resources::Invalidate::Key(&frame_key));
-                        }
-                    }
-                }
-                // The registry keeps the maker; a weak owner avoids retaining the hub and
-                // provider credentials in a registry -> maker -> hub reference cycle.
-                let service = Arc::downgrade(self);
-                let work_spec = spec.clone();
-                let source = Arc::clone(&source);
-                let explicit_retry = wanted.force;
-                let maker: Maker = Arc::new(move || {
-                    let service = service.clone();
-                    let spec = work_spec.clone();
-                    let source = Arc::clone(&source);
-                    Box::pin(async move {
-                        let service = service.upgrade().ok_or(ResourceFailure::Interrupted)?;
-                        service
-                            .generation
-                            .generate(spec, source, explicit_retry)
-                            .await
-                    })
-                });
-                self.generation.hub.get_or_request(&spec, maker);
+            if removed.is_some() {
+                self.admit(&fighter, &wanted.kinds, wanted.force, source, &revision);
             }
         }
     }
@@ -920,6 +993,7 @@ pub(super) fn start(
     source: Source,
     directory: PathBuf,
     live: bool,
+    mut source_wake: Option<tokio::sync::watch::Receiver<u64>>,
 ) -> Result<Worker, std::io::Error> {
     let (frames, videos) = native_providers(live)?;
     let service = Arc::new(CharacterClips::new(hub, frames, videos, source, directory));
@@ -928,7 +1002,22 @@ pub(super) fn start(
     let task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                changed = async {
+                    match source_wake.as_mut() {
+                        Some(wake) => wake.changed().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if changed.is_ok() {
+                        service.note_source_changed();
+                    } else {
+                        source_wake = None;
+                        continue;
+                    }
+                }
+            }
             service.resolve_sources().await;
         }
     });

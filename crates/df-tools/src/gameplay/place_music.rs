@@ -6,10 +6,10 @@
 //!   among closed labels. No word list, name match or asset-name guess decides anything. With no
 //!   block and no Jev answer the place has no spec: the shared score plays with no ambience bed
 //!   and the plan says why.
-//! * The set (four sample-aligned 84 BPM layers and an ambience bed) is a resource of the
+//! * The set (four sample-aligned pacing-band layers and an ambience bed) is a resource of the
 //!   generation hub (`hub`): the hub owns the cache, the single in-flight request per key, the
-//!   spend limit, retries and the RESOURCE audit lines. `generator` is the adapter it invokes.
-//!   Nothing is generated ahead of time; the first view of a place requests its set.
+//!   spend ledger, retries and the RESOURCE audit lines. `generator` is the adapter it invokes.
+//!   The first view requests the set; a ready set requests its neighbouring pacing bands.
 //! * Until the set is ready, or when it failed, the plan is FALLBACK: the shared score plus the
 //!   existing bed that the spec (or Jev) named as fitting, if any. The display crossfades to the
 //!   place's own layers when the plan turns READY. The tempo engine still decides the mix.
@@ -19,9 +19,11 @@
 //! gameplay service finishes a view, so the plan is a presentation layer on top of the
 //! authoritative view and changes nothing else in it.
 
+mod ambience;
 mod generator;
 mod hub;
 mod master;
+mod pacing;
 mod resource;
 mod spec;
 
@@ -41,7 +43,7 @@ use df_protocol::common as rpc;
 use serde_json::Value;
 
 use crate::music_score::{
-    BPM, GENERATED_MUSIC_ROUTE, LOOP_SAMPLES, SAMPLE_RATE, SHARED_MUSIC_ROUTE,
+    BPM, GENERATED_MUSIC_ROUTE, LOOP_SAMPLES, PacingBand, SAMPLE_RATE, SHARED_MUSIC_ROUTE,
 };
 
 use super::{approach_model::ApproachModel, pack};
@@ -66,8 +68,17 @@ struct Decided {
 
 #[derive(Default)]
 struct State {
+    entry_memory: crate::music_score::EntryMemory,
+    soundscapes: HashMap<String, Option<ambience::Soundscape>>,
+    soundscape_status: HashMap<String, String>,
+    audio_place: String,
+    audio_intensity: u16,
     places: HashMap<String, Place>,
     overrides: HashMap<String, MusicSpec>,
+    band: PacingBand,
+    playing: HashMap<String, MusicSetSpec>,
+    variant_status: HashMap<String, (String, &'static str)>,
+    pacing_review: Option<pacing::Review>,
 }
 
 struct Inner {
@@ -109,7 +120,43 @@ pub(in crate::gameplay) fn apply(message: &mut rpc::ViewMessage) {
     }
 }
 
+/// Projects only decided specs and existing cache status; never starts Jev or generation.
+pub(in crate::gameplay) fn apply_read(message: &mut rpc::ViewMessage) {
+    if let Some(music) = installed() {
+        music.apply_read(message);
+    }
+}
+
 impl PlaceMusic {
+    /// Projects the existing spec/cache only. No resolution or generation side effects.
+    fn apply_read(&self, message: &mut rpc::ViewMessage) {
+        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+            return;
+        };
+        let Some(scene) = &display.scene else {
+            return;
+        };
+        let Ok(decided) = self.decided(&scene.location_id) else {
+            return;
+        };
+        let set = self.playing_set(&scene.location_id, &decided.spec);
+        let status = self
+            .inner
+            .hub
+            .as_ref()
+            .map_or(MusicStatus::Fallback("no generation hub".into()), |hub| {
+                hub.status(&set)
+            });
+        display.place_music = Some(match status {
+            MusicStatus::Ready(ready) => ready_plan(&decided.spec, &set, ready),
+            MusicStatus::Pending => fallback_plan(Some(&decided.spec), "pending".into()),
+            MusicStatus::Failed(reason) | MusicStatus::Fallback(reason) => {
+                fallback_plan(Some(&decided.spec), reason)
+            }
+        });
+        self.project_audio(display);
+    }
+
     /// `hub` is the generation hub; `None` leaves every place on its fallback with that reason.
     pub(in crate::gameplay) fn new(
         jev: ApproachModel,
@@ -148,12 +195,45 @@ impl PlaceMusic {
         if scene.location_id.is_empty() {
             return;
         }
-        display.place_music = self.plan(&place_facts(scene));
+        let facts = place_facts(scene);
+        display.place_music = self.plan(&facts);
+        self.project_audio(display);
+    }
+
+    /// Primes a proposed place through the normal Jev and resource-hub path without
+    /// publishing a view or changing the active mix. The returned plan reports current
+    /// readiness only; pending work completes even if no display visits the place yet.
+    /// A scene without a setting has no place to prepare. Public projection errors are
+    /// returned before any work is queued.
+    pub(in crate::gameplay) fn prepare_scene(
+        &self,
+        scene: &pack::Scene,
+    ) -> Result<Option<rpc::PlaceMusicPlan>, super::adventure::scene_model::SceneModelError> {
+        let Some(setting) = &scene.setting else {
+            return Ok(None);
+        };
+        let contents = setting
+            .model
+            .as_ref()
+            .map(|model| model.for_scene(scene.key).public_contents())
+            .transpose()?
+            .unwrap_or_default();
+        let projection = rpc::GameplayScene {
+            location_id: setting.place_id.clone(),
+            title: scene.title.clone(),
+            scene_contents_json: contents,
+            ..Default::default()
+        };
+        Ok(self.plan(&facts_with_setting(&projection, Some(setting))))
     }
 
     fn plan(&self, facts: &PlaceFacts) -> Option<rpc::PlaceMusicPlan> {
         match self.resolve(facts)? {
-            Resolved::Decided(decided) => Some(self.plan_for(&decided.spec)),
+            Resolved::Decided(decided) => {
+                let plan = self.plan_for(&facts.place_id, &decided.spec);
+                self.request_soundscape(facts.clone());
+                Some(plan)
+            }
             Resolved::Waiting(note) => Some(fallback_plan(None, note)),
         }
     }
@@ -266,25 +346,116 @@ impl PlaceMusic {
                 }
             };
             super::actor::record_audit_line("gameplay.music.spec", line);
+            // A prepared destination may have no view watcher. Continue its hub requests
+            // after Jev resolves, rather than waiting for the party to arrive.
+            let music = Self {
+                inner: Arc::clone(&inner),
+            };
+            if music.decided(&facts.place_id).is_ok() {
+                let _plan = music.plan(&facts);
+            }
             (inner.changed)();
         });
     }
 
     /// What the hub says about the spec's set, as a plan. Asking is idempotent: the hub starts
     /// generation on the first request only.
-    fn plan_for(&self, spec: &MusicSpec) -> rpc::PlaceMusicPlan {
+    fn plan_for(&self, place: &str, spec: &MusicSpec) -> rpc::PlaceMusicPlan {
         let Some(hub) = &self.inner.hub else {
             return fallback_plan(Some(spec), "generation hub not connected".into());
         };
-        let set = MusicSetSpec::new(spec.clone());
-        match hub.get_or_request(&set) {
-            MusicStatus::Ready(ready) => ready_plan(spec, &set, ready),
+        let desired = MusicSetSpec::in_band(spec.clone(), self.band());
+        let requested = self.request_variant(place, &desired, hub.as_ref());
+        let (set, status) = if matches!(requested, MusicStatus::Ready(_)) {
+            (desired, requested)
+        } else {
+            let playing = self.playing_set(place, spec);
+            if playing == desired {
+                (desired, requested)
+            } else {
+                let status = self.request_variant(place, &playing, hub.as_ref());
+                (playing, status)
+            }
+        };
+        match status {
+            MusicStatus::Ready(ready) => {
+                locked(&self.inner.state)
+                    .playing
+                    .insert(place.to_owned(), set.clone());
+                for band in set.band().neighbours() {
+                    self.request_variant(
+                        place,
+                        &MusicSetSpec::in_band(spec.clone(), *band),
+                        hub.as_ref(),
+                    );
+                }
+                ready_plan(spec, &set, ready)
+            }
             MusicStatus::Pending => fallback_plan(Some(spec), "generating".into()),
             MusicStatus::Failed(reason) => fallback_plan(Some(spec), format!("failed: {reason}")),
             MusicStatus::Fallback(reason) => {
                 fallback_plan(Some(spec), format!("fallback: {reason}"))
             }
         }
+    }
+
+    pub(in crate::gameplay) fn band(&self) -> PacingBand {
+        locked(&self.inner.state).band
+    }
+
+    pub(in crate::gameplay) fn set_band(&self, band: PacingBand) {
+        locked(&self.inner.state).band = band;
+        (self.inner.changed)();
+    }
+
+    fn playing_set(&self, place: &str, spec: &MusicSpec) -> MusicSetSpec {
+        let state = locked(&self.inner.state);
+        state
+            .playing
+            .get(place)
+            .filter(|set| set.spec() == spec)
+            .cloned()
+            .unwrap_or_else(|| MusicSetSpec::in_band(spec.clone(), state.band))
+    }
+
+    fn request_variant(&self, place: &str, set: &MusicSetSpec, hub: &dyn MusicHub) -> MusicStatus {
+        let status = hub.get_or_request(set);
+        let record = (set.key(), status.label());
+        let changed = locked(&self.inner.state)
+            .variant_status
+            .insert(format!("{place}:{}", set.band().label()), record.clone())
+            != Some(record);
+        if changed {
+            super::actor::record_audit_line(
+                "gameplay.music.variant",
+                format!(
+                    "MUSIC variant place={place} band={} status={} key={}",
+                    set.band().label(),
+                    status.label(),
+                    set.key(),
+                ),
+            );
+        }
+        status
+    }
+
+    /// Read-only status of all pacing variants; this never starts generation.
+    pub(in crate::gameplay) fn variants(&self, place: &str) -> Result<Value, NoSpec> {
+        let decided = self.decided(place)?;
+        let playing = locked(&self.inner.state).playing.get(place).cloned();
+        Ok(Value::Array(
+            PacingBand::ALL
+                .into_iter()
+                .map(|band| {
+                    let set = MusicSetSpec::in_band(decided.spec.clone(), band);
+                    let status = self.inner.hub.as_ref().map(|hub| hub.status(&set));
+                    serde_json::json!({"band": band.label(), "bpm": band.bpm(),
+                "energy_permille": band.energy(), "bars": band.bars(), "loop_samples": LOOP_SAMPLES,
+                "set_key": set.key(), "playing": playing.as_ref() == Some(&set),
+                "status": status.as_ref().map_or("unavailable", MusicStatus::label)})
+                })
+                .collect(),
+        ))
     }
 }
 
@@ -353,6 +524,7 @@ fn ready_plan(spec: &MusicSpec, set: &MusicSetSpec, ready: ReadyMusicSet) -> rpc
     );
     rpc::PlaceMusicPlan {
         state: rpc::PlaceMusicState::Ready as i32,
+        bpm: set.band().bpm(),
         spec_key: set.key(),
         layer_paths: ready.layer_paths.to_vec(),
         ambience_path: ready
@@ -377,7 +549,17 @@ fn place_facts(scene: &rpc::GameplayScene) -> PlaceFacts {
         })
         // A place the run created is not in the pack; the session owner published its setting.
         .or_else(|| super::place::registered_setting(&scene.location_id));
-    let contents: Option<Value> = serde_json::from_str(&scene.scene_contents_json).ok();
+    facts_with_setting(scene, setting.as_ref())
+}
+
+fn facts_with_setting(
+    scene: &rpc::GameplayScene,
+    setting: Option<&super::adventure::setting::SceneSetting>,
+) -> PlaceFacts {
+    let mut contents: Option<Value> = serde_json::from_str(&scene.scene_contents_json).ok();
+    if let Some(object) = contents.as_mut().and_then(Value::as_object_mut) {
+        object.remove("tempo_audio");
+    }
     let field = |name: &str| {
         contents
             .as_ref()
@@ -391,10 +573,14 @@ fn place_facts(scene: &rpc::GameplayScene) -> PlaceFacts {
         name: setting
             .as_ref()
             .map_or_else(|| scene.place.clone(), |setting| setting.name.clone()),
-        description: setting
-            .as_ref()
-            .map(|setting| setting.short.clone())
-            .unwrap_or_default(),
+        description: format!(
+            "{} Public scene: {}",
+            setting
+                .as_ref()
+                .map(|setting| setting.short.clone())
+                .unwrap_or_default(),
+            contents.as_ref().unwrap_or(&Value::Null)
+        ),
         kind: setting
             .as_ref()
             .and_then(|setting| serde_json::to_value(setting.kind).ok())
@@ -475,7 +661,7 @@ impl PlaceMusic {
             place_id: place_id.to_owned(),
             source: decided.source.label(),
             label: decided.spec.label(),
-            set_key: MusicSetSpec::new(decided.spec.clone()).key(),
+            set_key: self.playing_set(place_id, &decided.spec).key(),
             fallback_bed: decided
                 .spec
                 .fallback_bed()
@@ -491,7 +677,7 @@ impl PlaceMusic {
         place_id: &str,
     ) -> Result<Vec<TrackReport>, NoSpec> {
         let decided = self.decided(place_id)?;
-        let set = MusicSetSpec::new(decided.spec);
+        let set = self.playing_set(place_id, &decided.spec);
         let status = self
             .inner
             .hub
@@ -548,7 +734,8 @@ impl PlaceMusic {
                 {
                     Ok((report, decided)) => {
                         let status = self.inner.hub.as_ref().map_or("fallback", |hub| {
-                            hub.status(&MusicSetSpec::new(decided.spec.clone())).label()
+                            hub.status(&self.playing_set(&place_id, &decided.spec))
+                                .label()
                         });
                         PlaceSummary {
                             place_id,
@@ -572,7 +759,7 @@ impl PlaceMusic {
 
     /// Forgets the place's set in the hub so the next view regenerates it.
     pub(in crate::gameplay) fn clear(&self, place_id: &str) -> Result<(), NoSpec> {
-        let set = MusicSetSpec::new(self.decided(place_id)?.spec);
+        let set = MusicSetSpec::in_band(self.decided(place_id)?.spec, self.band());
         if let Some(hub) = &self.inner.hub {
             hub.invalidate(&set);
         }
@@ -581,21 +768,22 @@ impl PlaceMusic {
 
     /// Requests the place's set now; idempotent, bounded by the hub's own limits.
     pub(in crate::gameplay) fn request_now(&self, place_id: &str) -> Result<MusicStatus, NoSpec> {
-        let set = MusicSetSpec::new(self.decided(place_id)?.spec);
+        let set = MusicSetSpec::in_band(self.decided(place_id)?.spec, self.band());
         Ok(self
             .inner
             .hub
             .as_ref()
             .map_or(MusicStatus::Fallback("no generation hub".into()), |hub| {
-                hub.get_or_request(&set)
+                self.request_variant(place_id, &set, hub.as_ref())
             }))
     }
 
     /// Invalidates and requests the place's set in one step.
     pub(in crate::gameplay) fn regenerate(&self, place_id: &str) -> Result<(), NoSpec> {
-        let set = MusicSetSpec::new(self.decided(place_id)?.spec);
+        let set = MusicSetSpec::in_band(self.decided(place_id)?.spec, self.band());
         if let Some(hub) = &self.inner.hub {
             hub.regenerate(&set);
+            self.request_variant(place_id, &set, hub.as_ref());
         }
         Ok(())
     }
@@ -650,3 +838,9 @@ mod test_support {
 #[cfg(test)]
 #[path = "place_music/generation_tests.rs"]
 mod generation_tests;
+
+#[cfg(test)]
+mod variant_tests;
+
+#[cfg(test)]
+mod preparation_tests;

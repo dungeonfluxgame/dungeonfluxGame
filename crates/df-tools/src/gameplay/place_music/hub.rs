@@ -42,6 +42,15 @@ pub(in crate::gameplay) struct ReadyMusicSet {
 
 /// `get_or_request`, `status`, `invalidate` and `regenerate`, as the hub offers them.
 pub(in crate::gameplay) trait MusicHub: Send + Sync {
+    fn ambient_request(
+        &self,
+        spec: &super::ambience::AmbientSpec,
+    ) -> super::ambience::AmbientStatus {
+        self.ambient_status(spec)
+    }
+    fn ambient_status(&self, _: &super::ambience::AmbientSpec) -> super::ambience::AmbientStatus {
+        super::ambience::AmbientStatus::Fallback("ambient generation unavailable".into())
+    }
     /// Idempotent: the first call for a key starts generation, later calls only report.
     fn get_or_request(&self, set: &MusicSetSpec) -> MusicStatus;
     /// The state of a set without requesting it.

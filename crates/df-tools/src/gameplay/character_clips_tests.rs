@@ -397,6 +397,81 @@ async fn character_clips_absent_source_waits_without_spend_or_invented_spec() {
 }
 
 #[tokio::test]
+async fn character_clips_missing_source_is_called_once_until_revision_wake_or_force() {
+    let (mut service, _, _) = setup(false, false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let available = Arc::new(Mutex::new(None::<(Vec<u8>, String)>));
+    let (counted_calls, counted_available) = (Arc::clone(&calls), Arc::clone(&available));
+    Arc::get_mut(&mut service).unwrap().source = Arc::new(move |_| {
+        let calls = Arc::clone(&counted_calls);
+        let available = Arc::clone(&counted_available);
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            locked(&available)
+                .clone()
+                .map(|(bytes, revision)| Depiction {
+                    bytes,
+                    format: ImageFormat::Png,
+                    revision,
+                })
+        })
+    });
+    for _ in 0..5 {
+        service.request(fighter(), None, false);
+        service.resolve_sources().await;
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "many ticks, one miss call");
+    assert!(
+        service.list(&fighter())["waiting_for_depiction"]
+            .as_bool()
+            .unwrap()
+    );
+    let mut changed = fighter();
+    changed.identity_revision = "identity-v2".to_owned();
+    for _ in 0..3 {
+        service.request(changed.clone(), None, false);
+        service.resolve_sources().await;
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "changed revision, one new call"
+    );
+    *locked(&available) = Some((vec![1, 2, 3], "canonical-v2".to_owned()));
+    service.note_source_changed();
+    service.request(changed.clone(), None, false);
+    service.resolve_sources().await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "wake re-admits the miss once"
+    );
+    assert_eq!(
+        service
+            .generation
+            .hub
+            .list(Some(ResourceKind::CharacterClip))
+            .len(),
+        3
+    );
+    for _ in 0..3 {
+        service.request(changed.clone(), None, false);
+        service.resolve_sources().await;
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "resolved source is cached");
+    service.request(changed.clone(), Some(ClipKind::Idle), true);
+    service.resolve_sources().await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        4,
+        "force retries exactly once"
+    );
+    service.request(changed.clone(), Some(ClipKind::Idle), false);
+    service.resolve_sources().await;
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
 async fn character_clips_explicit_request_regenerates_only_selected_clip_and_retains_cost() {
     let (service, frames, videos) = setup(false, false);
     service.request(fighter(), Some(ClipKind::Attack), false);

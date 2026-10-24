@@ -175,7 +175,9 @@ async fn the_merchant_shop_spec_comes_from_content_and_is_relaxed_daytime_and_in
 #[tokio::test(flavor = "current_thread")]
 async fn a_scene_without_a_music_block_gets_a_spec_chosen_by_jev_from_closed_labels() {
     // mood relaxed, energy low, setting market, day, interior, light-acoustic, bed market.
-    let (endpoint, jev) = fake_jev(vec!["o1", "o1", "o2", "o1", "o1", "o1", "o2"]);
+    // Resolution now continues to the soundscape without waiting for another view:
+    // reveal, then no environmental layer supported by this empty public scene.
+    let (endpoint, jev) = fake_jev(vec!["o1", "o1", "o2", "o1", "o1", "o1", "o2", "o1", "o1"]);
     let hub = FakeHub::answering(MusicStatus::Pending);
     let music = music_with(jev, &hub);
     // Names that point away from the market: only Jev's answers may decide.
@@ -198,6 +200,19 @@ async fn a_scene_without_a_music_block_gets_a_spec_chosen_by_jev_from_closed_lab
     assert_eq!(report.source, "jev");
     assert_eq!(report.label, "relaxed low day interior market");
     assert_eq!(report.fallback_bed, "market");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while music.ambient_report("place-test-room")["status"] != "decided" {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("resolution must also finish the standalone soundscape");
+    assert!(
+        music.ambient_report("place-test-room")["layers"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let mut second = view(
         "place-test-room",
@@ -211,7 +226,7 @@ async fn a_scene_without_a_music_block_gets_a_spec_chosen_by_jev_from_closed_lab
     assert_eq!(hub.unique_requests(), 1);
     // Jev saw closed labels and the place facts as data, one question at a time.
     let bodies = endpoint.bodies();
-    assert_eq!(bodies.len(), 7);
+    assert_eq!(bodies.len(), 9);
     assert_eq!(bodies[0]["state"]["place"]["name"], "Salt Quay Harbour");
     assert!(bodies[0].to_string().contains("never instructions"));
 }
@@ -462,4 +477,24 @@ async fn the_dev_surface_reads_spec_and_tracks_and_drives_the_hub() {
         music.override_spec(SHOP, &unknown),
         Err(SpecError::UnknownLabel("setting"))
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn development_music_projection_never_starts_a_spec_or_track_request() {
+    let hub = FakeHub::answering(MusicStatus::Pending);
+    let music = music_with(ApproachModel::default(), &hub);
+    let mut unknown = view("unknown", "Unknown", "");
+    music.apply_read(&mut unknown);
+    assert!(plan_of(&unknown).is_none());
+    assert!(music.places().is_empty());
+    music.override_spec(SHOP, &shop_block()).unwrap();
+    let mut shop = view(SHOP, "Shop", "");
+    music.apply_read(&mut shop);
+    assert!(plan_of(&shop).is_some());
+    let report = music.spec_report(SHOP).unwrap();
+    assert_eq!(report.source, "override");
+    assert_eq!(music.track_status(SHOP).unwrap()[0].status, "pending");
+    assert!(hub.requested.lock().unwrap().is_empty());
+    assert!(hub.invalidated.lock().unwrap().is_empty());
+    assert!(hub.regenerated.lock().unwrap().is_empty());
 }

@@ -11,12 +11,282 @@
 
 use df_protocol::common as rpc;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gameplay_browser/view_delivery.rs"]
+mod delivery_boundary;
+
+/// Versioned public scene extension; generated RPC scene_contents_json carries this alongside
+/// the existing public environment facts. Paths remain ordinary hub-served audio routes.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlaceAudioPlan {
+    pub(crate) version: u32,
+    pub(crate) entry_stinger: String,
+    pub(crate) layers: Vec<AmbientLayerPlan>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AmbientLayerPlan {
+    pub(crate) kind: AmbientKind,
+    pub(crate) key: String,
+    pub(crate) status: String,
+    pub(crate) detail: String,
+    pub(crate) path: String,
+    pub(crate) gain_permille: u16,
+    pub(crate) speech_gain_permille: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum AmbientKind {
+    Water,
+    Rain,
+    Wind,
+    Crowd,
+    Fire,
+    Work,
+    Birds,
+    Animals,
+    Insects,
+    Room,
+}
+
+impl AmbientKind {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Water,
+        Self::Rain,
+        Self::Wind,
+        Self::Crowd,
+        Self::Fire,
+        Self::Work,
+        Self::Birds,
+        Self::Animals,
+        Self::Insects,
+        Self::Room,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Water => "water",
+            Self::Rain => "rain",
+            Self::Wind => "wind",
+            Self::Crowd => "crowd",
+            Self::Fire => "fire",
+            Self::Work => "work",
+            Self::Birds => "birds",
+            Self::Animals => "animals",
+            Self::Insects => "insects",
+            Self::Room => "room",
+        }
+    }
+
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::Water => "water moving against the public environment's surfaces",
+            Self::Rain => "rain falling on the public environment's surfaces",
+            Self::Wind => "wind moving through the public environment",
+            Self::Crowd => "indistinct crowd murmur without intelligible words",
+            Self::Fire => "steady fire crackle",
+            Self::Work => "distant repeated work sounds",
+            Self::Birds => "birds present in the public environment",
+            Self::Animals => "animals present in the public environment",
+            Self::Insects => "insects present in the public environment",
+            Self::Room => "quiet enclosed room tone",
+        }
+    }
+}
+
+/// Server mix policy: a busy public tempo raises each judged layer without restarting it.
+/// Speech targets are carried explicitly so the player only follows actual line timing.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+pub(crate) fn ambient_gain(activity: u16, intensity: u16, speech: bool) -> u16 {
+    let gain = 180
+        + u32::from(activity.min(1000)) * 220 / 1000
+        + u32::from(intensity.min(1000)) * 180 / 1000;
+    (if speech { gain * 35 / 100 } else { gain }) as u16
+}
+
+/// Playback work at the browser boundary. A target-only update never starts a source.
+#[derive(Debug, PartialEq)]
+pub(crate) enum AmbientChange {
+    Start(String, f32),
+    Gain(String, f32),
+    Stop(String),
+}
+
+pub(crate) fn ambient_changes(
+    playing: &[(&str, f32)],
+    desired: &[(&str, f32)],
+) -> Vec<AmbientChange> {
+    let mut changes = Vec::new();
+    for (path, _) in playing {
+        if !desired.iter().any(|(target, _)| target == path) {
+            changes.push(AmbientChange::Stop((*path).to_owned()));
+        }
+    }
+    for (path, gain) in desired {
+        match playing.iter().find(|(current, _)| current == path) {
+            None => changes.push(AmbientChange::Start((*path).to_owned(), *gain)),
+            Some((_, old)) if old != gain => {
+                changes.push(AmbientChange::Gain((*path).to_owned(), *gain))
+            }
+            Some(_) => {}
+        }
+    }
+    changes
+}
+
+pub(crate) fn place_audio_of(scene: &rpc::GameplayScene) -> Option<PlaceAudioPlan> {
+    let contents: serde_json::Value = serde_json::from_str(&scene.scene_contents_json).ok()?;
+    let plan: PlaceAudioPlan = serde_json::from_value(contents.get("tempo_audio")?.clone()).ok()?;
+    if plan.version != 1
+        || plan.layers.len() > 3
+        || ![
+            "sting-reveal",
+            "sting-combat",
+            "sting-victory",
+            "sting-defeat",
+        ]
+        .contains(&plan.entry_stinger.as_str())
+        || plan.layers.iter().enumerate().any(|(index, layer)| {
+            layer.gain_permille > 1000
+                || layer.speech_gain_permille > layer.gain_permille
+                || !["ready", "pending", "failed", "fallback"].contains(&layer.status.as_str())
+                || (layer.status == "ready") == layer.path.is_empty()
+                || plan.layers[..index]
+                    .iter()
+                    .any(|other| other.kind == layer.kind)
+                || (!layer.path.is_empty()
+                    && (layer.key.len() != 32
+                        || !layer.key.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        || layer.path != format!("/gameplay/music/{}/ambient", layer.key)))
+        })
+    {
+        return None;
+    }
+    Some(plan)
+}
+
+/// Empty public contents is the existing absence contract, so audio may add the first member.
+pub(crate) fn scene_object_for_audio(
+    contents: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if contents.is_empty() {
+        return Some(serde_json::Map::new());
+    }
+    match serde_json::from_str(contents).ok()? {
+        serde_json::Value::Object(object) => Some(object),
+        _ => None,
+    }
+}
+
+/// A short opening uses a shared stinger's first bar at its recorded 84 BPM. The
+/// score enters at the next bar within that clip, with a half-beat complementary crossfade.
+/// Returns (handoff start, crossfade end), seconds relative to stinger start.
+pub(crate) const ENTRY_CROSSFADE_SECONDS: f64 = BEAT_SECONDS / 2.0;
+
+pub(crate) fn entry_handoff(duration: f64) -> Option<(f64, f64)> {
+    let bar = 4.0 * BEAT_SECONDS;
+    if !duration.is_finite() || duration < bar + ENTRY_CROSSFADE_SECONDS {
+        return None;
+    }
+    Some((bar, bar + ENTRY_CROSSFADE_SECONDS))
+}
+
+/// An entry is an observed lobby-to-story edge. Reconnect and first snapshots never replay it.
+#[derive(Default)]
+pub(crate) struct EntryMemory {
+    seen: Option<bool>,
+}
+
+impl EntryMemory {
+    pub(crate) fn observe(&mut self, lobby: bool) -> bool {
+        let entry = self.seen == Some(true) && !lobby;
+        self.seen = Some(lobby);
+        entry
+    }
+}
+
 /// Tempo, key and loop length shared by every `score-*` layer and every stinger in
 /// `assets/music`. Layers are cut from the same bar grid, so they stack sample-aligned.
 pub(crate) const BPM: f64 = 84.0;
 pub(crate) const BEAT_SECONDS: f64 = 60.0 / BPM;
 /// 16 bars of 4/4: exactly 2 016 000 samples at 44.1 kHz (45.714 s).
 pub(crate) const LOOP_SECONDS: f64 = 64.0 * BEAT_SECONDS;
+
+/// REF-066: every pacing band has the same 2,016,000-frame loop. Different bar counts
+/// let the player change tempo at the existing loop boundary without stretching audio.
+/// Energy is a generation instruction (permille), independent of HS18's live layer gains.
+///
+/// | Band | BPM | Energy | 4/4 bars | Loop seconds |
+/// | --- | ---: | ---: | ---: | ---: |
+/// | calm | 63 | 200 | 12 | 45.7142857 |
+/// | steady | 84 | 400 | 16 | 45.7142857 |
+/// | driving | 105 | 650 | 20 | 45.7142857 |
+/// | urgent | 126 | 850 | 24 | 45.7142857 |
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PacingBand {
+    Calm,
+    #[default]
+    Steady,
+    Driving,
+    Urgent,
+}
+
+impl PacingBand {
+    pub(crate) const ALL: [Self; 4] = [Self::Calm, Self::Steady, Self::Driving, Self::Urgent];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Calm => "calm",
+            Self::Steady => "steady",
+            Self::Driving => "driving",
+            Self::Urgent => "urgent",
+        }
+    }
+
+    pub(crate) fn bpm(self) -> u32 {
+        match self {
+            Self::Calm => 63,
+            Self::Steady => 84,
+            Self::Driving => 105,
+            Self::Urgent => 126,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn bars(self) -> u32 {
+        match self {
+            Self::Calm => 12,
+            Self::Steady => 16,
+            Self::Driving => 20,
+            Self::Urgent => 24,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn energy(self) -> u16 {
+        match self {
+            Self::Calm => 200,
+            Self::Steady => 400,
+            Self::Driving => 650,
+            Self::Urgent => 850,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn neighbours(self) -> &'static [Self] {
+        match self {
+            Self::Calm => &[Self::Steady],
+            Self::Steady => &[Self::Calm, Self::Driving],
+            Self::Driving => &[Self::Steady, Self::Urgent],
+            Self::Urgent => &[Self::Driving],
+        }
+    }
+}
 
 /// How long a Release keeps the resolving motif before the mix settles to the calm bed when
 /// the tempo is derived from the view, or a cue arrives without a `hold_millis`. A server
@@ -677,14 +947,20 @@ pub(crate) fn next_take(last: Option<usize>, takes: usize) -> usize {
 /// The next beat of the layer grid that is still far enough ahead to schedule. The layers
 /// started together at `started_at`, so a one-shot placed on a beat lands in time with them.
 /// Before the layers run there is no grid and the one-shot plays at once.
+#[cfg(test)]
 pub(crate) fn next_beat(now: f64, started_at: Option<f64>) -> f64 {
+    next_pacing_beat(now, started_at, PacingBand::Steady)
+}
+
+pub(crate) fn next_pacing_beat(now: f64, started_at: Option<f64>, band: PacingBand) -> f64 {
     const MINIMUM_LEAD_SECONDS: f64 = 0.02;
     let Some(start) = started_at.filter(|start| *start <= now) else {
         return now;
     };
-    let beat = start + ((now - start) / BEAT_SECONDS).ceil() * BEAT_SECONDS;
+    let beat_seconds = 60.0 / f64::from(band.bpm());
+    let beat = start + ((now - start) / beat_seconds).ceil() * beat_seconds;
     if beat - now < MINIMUM_LEAD_SECONDS {
-        beat + BEAT_SECONDS
+        beat + beat_seconds
     } else {
         beat
     }
@@ -861,6 +1137,7 @@ pub(crate) enum PlaceMusic {
     /// The place's generated layers (bed, motif, tension, combat) and ambience.
     Ready {
         key: String,
+        band: PacingBand,
         layers: [String; 4],
         ambience: Option<String>,
     },
@@ -891,12 +1168,13 @@ pub(crate) fn place_music_of(plan: Option<&rpc::PlaceMusicPlan>) -> PlaceMusic {
     if state != Some(rpc::PlaceMusicState::Ready) {
         return PlaceMusic::Fallback { ambience };
     }
-    let same_timebase = plan.bpm == BPM as u32
-        && plan.sample_rate == SAMPLE_RATE
-        && plan.loop_samples == LOOP_SAMPLES;
+    let band = PacingBand::ALL
+        .into_iter()
+        .find(|band| band.bpm() == plan.bpm);
+    let same_timebase = plan.sample_rate == SAMPLE_RATE && plan.loop_samples == LOOP_SAMPLES;
     let layers: Result<[String; 4], _> = plan.layer_paths.clone().try_into();
-    match layers {
-        Ok(layers)
+    match (layers, band) {
+        (Ok(layers), Some(band))
             if same_timebase
                 && layers
                     .iter()
@@ -905,12 +1183,59 @@ pub(crate) fn place_music_of(plan: Option<&rpc::PlaceMusicPlan>) -> PlaceMusic {
         {
             PlaceMusic::Ready {
                 key: plan.spec_key.clone(),
+                band,
                 layers,
                 ambience,
             }
         }
         _ => PlaceMusic::Fallback { ambience },
     }
+}
+
+/// Copies only a validated server music plan for the same public place. Revision and
+/// connection freshness are checked by the delivery owner before calling this boundary.
+pub(crate) fn merge_place_music(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    let (
+        Some(rpc::view_message::Audience::Display(shown)),
+        Some(rpc::view_message::Audience::Display(new)),
+    ) = (shown.audience.as_mut(), new.audience.as_ref())
+    else {
+        return false;
+    };
+    let (Some(old_scene), Some(new_scene)) = (&shown.scene, &new.scene) else {
+        return false;
+    };
+    if old_scene.location_id != new_scene.location_id
+        || old_scene.title != new_scene.title
+        || old_scene.source_scene_key != new_scene.source_scene_key
+    {
+        return false;
+    }
+    if new.place_music.as_ref().is_some_and(|plan| {
+        plan.state == rpc::PlaceMusicState::Ready as i32
+            && !matches!(place_music_of(Some(plan)), PlaceMusic::Ready { .. })
+    }) {
+        return false;
+    }
+    let audio = place_audio_of(new_scene);
+    let mut audio_contents = scene_object_for_audio(&old_scene.scene_contents_json);
+    let audio_changed = audio_contents.is_some()
+        && audio
+            .as_ref()
+            .is_some_and(|plan| Some(plan.clone()) != place_audio_of(old_scene));
+    let music_changed = shown.place_music != new.place_music;
+    if !audio_changed && !music_changed {
+        return false;
+    }
+    if audio_changed
+        && let Some(scene) = shown.scene.as_mut()
+        && let Some(mut contents) = audio_contents.take()
+    {
+        contents.insert("tempo_audio".into(), serde_json::json!(audio));
+        scene.scene_contents_json = serde_json::Value::Object(contents).to_string();
+    }
+    shown.place_music.clone_from(&new.place_music);
+    true
 }
 
 /// The served path of a shared-score or bed track name.
@@ -979,6 +1304,210 @@ pub(crate) fn stinger_between(previous: &Facts, next: &Facts) -> Option<Stinger>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn live_music_equal_revision_ambient_completion_reaches_the_actual_delivery_store() {
+        use super::delivery_boundary::{GameplayViews, ViewRole, ViewScope};
+        let scope = ViewScope::from_wire(
+            Some(&rpc::SessionId {
+                value: Some(vec![1; 16]),
+            }),
+            Some(&rpc::RunId {
+                value: Some(vec![2; 16]),
+            }),
+            Some(&rpc::ClientBindingId {
+                value: Some(vec![3; 16]),
+            }),
+            ViewRole::Display,
+        )
+        .unwrap();
+        let connection = df_client::connection::RpcConnection::new(());
+        let generation = connection.generation();
+        let mut views = GameplayViews::new(scope, generation.clone());
+        let key = "a".repeat(32);
+        let mut plan = PlaceAudioPlan {
+            version: 1,
+            entry_stinger: "sting-victory".into(),
+            layers: vec![AmbientLayerPlan {
+                kind: AmbientKind::Water,
+                key: key.clone(),
+                status: "pending".into(),
+                detail: String::new(),
+                path: String::new(),
+                gain_permille: 350,
+                speech_gain_permille: 120,
+            }],
+        };
+        let mut incoming = rpc::ViewMessage {
+            revision: Some(rpc::SessionRevision {
+                epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+                sequence: Some(8),
+            }),
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(rpc::JourneyView {
+                        presentation_sequence: 42,
+                        ..Default::default()
+                    }),
+                    scene: Some(rpc::GameplayScene {
+                        location_id: "quay".into(),
+                        scene_contents_json: serde_json::json!({"tempo_audio":plan}).to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        views.accept(&generation, scope, incoming.clone()).unwrap();
+        plan.layers[0].status = "ready".into();
+        plan.layers[0].path = format!("/gameplay/music/{key}/ambient");
+        if let Some(rpc::view_message::Audience::Display(display)) = &mut incoming.audience {
+            display.scene.as_mut().unwrap().scene_contents_json =
+                serde_json::json!({"tempo_audio":plan}).to_string();
+        }
+        let (acceptance, changed) = views
+            .accept_with_art(&generation, scope, incoming.clone(), merge_place_music)
+            .unwrap();
+        assert!(changed);
+        assert!(matches!(
+            acceptance,
+            df_client::connection_views::ConnectionViewAcceptance::View(
+                df_client::revisions::ViewAcceptance::Duplicate { .. }
+            )
+        ));
+        assert_eq!(views.current(), Some(&incoming));
+        assert!(
+            !views
+                .accept_with_art(&generation, scope, incoming, merge_place_music)
+                .unwrap()
+                .1
+        );
+    }
+
+    #[test]
+    fn entry_stinger_hands_off_on_a_bar_with_a_short_overlap_and_never_replays_a_line() {
+        let mut entry = EntryMemory::default();
+        assert!(!entry.observe(true));
+        assert!(!entry.observe(true));
+        assert!(entry.observe(false));
+        for _ in 0..10 {
+            assert!(!entry.observe(false));
+        }
+        assert!(
+            !EntryMemory::default().observe(false),
+            "reconnect is a snapshot"
+        );
+        let (handoff, end) = entry_handoff(4.0).unwrap();
+        assert!((handoff - 4.0 * BEAT_SECONDS).abs() < 0.0001);
+        assert!((end - handoff - ENTRY_CROSSFADE_SECONDS).abs() < 0.0001);
+        assert!(end < 4.0, "stinger still has audio throughout the handoff");
+        assert_eq!(entry_handoff(1.0), None);
+        assert_eq!(entry_handoff(f64::NAN), None);
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/music/source-manifest.json"))
+                .unwrap();
+        for kind in Stinger::ALL {
+            let file = format!("{}.mp3", stinger_track(kind, 0));
+            let duration = manifest["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["file"] == file)
+                .unwrap()["duration_ms"]
+                .as_f64()
+                .unwrap()
+                / 1000.0;
+            assert!(
+                entry_handoff(duration).unwrap().1 < duration,
+                "{file} must cover the handoff"
+            );
+        }
+    }
+
+    #[test]
+    fn live_music_ambient_lines_and_busy_scenes_change_gains_without_restarting_layers() {
+        let quiet = f32::from(ambient_gain(250, 150, false)) / 1000.0;
+        let busy = f32::from(ambient_gain(900, 700, false)) / 1000.0;
+        let speaking = f32::from(ambient_gain(900, 700, true)) / 1000.0;
+        assert!(busy > quiet && speaking < quiet);
+        let playing = [("water", busy), ("gulls", quiet)];
+        assert!(ambient_changes(&playing, &playing).is_empty());
+        assert_eq!(
+            ambient_changes(&playing, &[("water", speaking), ("gulls", quiet)]),
+            vec![AmbientChange::Gain("water".into(), speaking)]
+        );
+        assert_eq!(
+            ambient_changes(&playing, &[("water", busy), ("rain", quiet)]),
+            vec![
+                AmbientChange::Stop("gulls".into()),
+                AmbientChange::Start("rain".into(), quiet)
+            ]
+        );
+    }
+
+    #[test]
+    fn layered_audio_validates_routes_and_merges_without_replacing_public_scene_facts() {
+        let key = "a".repeat(32);
+        let plan = PlaceAudioPlan {
+            version: 1,
+            entry_stinger: "sting-victory".into(),
+            layers: vec![AmbientLayerPlan {
+                kind: AmbientKind::Water,
+                key: key.clone(),
+                status: "ready".into(),
+                detail: String::new(),
+                path: format!("/gameplay/music/{key}/ambient"),
+                gain_permille: 350,
+                speech_gain_permille: 120,
+            }],
+        };
+        let scene = rpc::GameplayScene {
+            location_id: "quay".into(),
+            scene_contents_json: serde_json::json!({"weather":"rain","tempo_audio":plan})
+                .to_string(),
+            ..Default::default()
+        };
+        assert_eq!(place_audio_of(&scene), Some(plan.clone()));
+        let mut shown = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    scene: Some(rpc::GameplayScene {
+                        scene_contents_json: "{\"weather\":\"rain\"}".into(),
+                        ..scene.clone()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let new = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    scene: Some(scene.clone()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(merge_place_music(&mut shown, &new));
+        assert!(!merge_place_music(&mut shown, &new));
+        let Some(rpc::view_message::Audience::Display(display)) = shown.audience else {
+            panic!("display");
+        };
+        let contents: serde_json::Value =
+            serde_json::from_str(&display.scene.unwrap().scene_contents_json).unwrap();
+        assert_eq!(contents["weather"], "rain");
+        let mut bad = plan;
+        bad.layers[0].path = "https://untrusted.invalid/loop".into();
+        assert!(
+            place_audio_of(&rpc::GameplayScene {
+                scene_contents_json: serde_json::json!({"tempo_audio":bad}).to_string(),
+                ..scene
+            })
+            .is_none()
+        );
+    }
 
     fn hero(hit_points: u32, maximum: u32) -> rpc::PartyMemberView {
         rpc::PartyMemberView {
@@ -1258,6 +1787,87 @@ mod tests {
                 PlaceMusic::Fallback { .. }
             ));
         }
+    }
+
+    #[test]
+    fn live_music_pacing_variants_share_the_loop_grid_and_keep_the_battle_suite() {
+        for band in PacingBand::ALL {
+            #[cfg(not(target_arch = "wasm32"))]
+            let bars = band.bars();
+            #[cfg(target_arch = "wasm32")]
+            let bars = match band {
+                PacingBand::Calm => 12,
+                PacingBand::Steady => 16,
+                PacingBand::Driving => 20,
+                PacingBand::Urgent => 24,
+            };
+            let seconds = f64::from(bars) * 4.0 * 60.0 / f64::from(band.bpm());
+            assert!((seconds - LOOP_SECONDS).abs() < 1e-9);
+            assert_eq!(
+                (seconds * f64::from(SAMPLE_RATE)).round() as u32,
+                LOOP_SAMPLES
+            );
+            let beat = next_pacing_beat(7.1, Some(0.0), band);
+            assert!(beat > 7.1);
+            let beat_index = beat * f64::from(band.bpm()) / 60.0;
+            assert!((beat_index - beat_index.round()).abs() < 1e-8);
+            let mut variant = plan(rpc::PlaceMusicState::Ready, "market");
+            variant.bpm = band.bpm();
+            let parsed = place_music_of(Some(&variant));
+            assert!(matches!(parsed, PlaceMusic::Ready { .. }));
+            assert_eq!(
+                wanted_layer_paths(Suite::Main, false, &parsed),
+                variant.layer_paths.as_slice()
+            );
+            assert_eq!(
+                wanted_layer_paths(Suite::Battle, false, &parsed)[0],
+                "/assets/music/b-score-bed"
+            );
+            for now in [0.0, 7.0, LOOP_SECONDS - 0.05, LOOP_SECONDS + 3.0] {
+                let boundary = swap_boundary(now, 0.0, 4.0, 0.15);
+                assert!(boundary >= now + 4.15);
+                assert!((boundary / seconds - (boundary / seconds).round()).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn live_music_same_revision_merge_validates_variants_and_place_identity() {
+        let view = |band: PacingBand| {
+            let mut music = plan(rpc::PlaceMusicState::Ready, "market");
+            music.bpm = band.bpm();
+            music.spec_key = band.label().into();
+            rpc::ViewMessage {
+                audience: Some(rpc::view_message::Audience::Display(
+                    rpc::DisplayGameplayView {
+                        scene: Some(rpc::GameplayScene {
+                            location_id: "shop".into(),
+                            title: "Shop".into(),
+                            ..Default::default()
+                        }),
+                        place_music: Some(music),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }
+        };
+        let mut shown = view(PacingBand::Steady);
+        let ready = view(PacingBand::Driving);
+        assert!(merge_place_music(&mut shown, &ready));
+        assert_eq!(shown, ready);
+        assert!(!merge_place_music(&mut shown, &ready));
+        let mut wrong_place = view(PacingBand::Urgent);
+        if let Some(rpc::view_message::Audience::Display(display)) = &mut wrong_place.audience {
+            display.scene.as_mut().unwrap().location_id = "elsewhere".into();
+        }
+        assert!(!merge_place_music(&mut shown, &wrong_place));
+        let mut invalid = view(PacingBand::Urgent);
+        if let Some(rpc::view_message::Audience::Display(display)) = &mut invalid.audience {
+            display.place_music.as_mut().unwrap().loop_samples = 1;
+        }
+        assert!(!merge_place_music(&mut shown, &invalid));
+        assert_eq!(shown, ready);
     }
 
     #[test]

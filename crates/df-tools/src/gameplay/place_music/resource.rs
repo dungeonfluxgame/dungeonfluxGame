@@ -62,6 +62,32 @@ const AMBIENCE: &str = "ambience";
 const MANIFEST: &str = "manifest.json";
 const DEFAULT_CACHE: &str = "artifacts/tmp/play/music-cache";
 
+pub(super) struct AmbientResource(pub(super) super::ambience::AmbientSpec);
+
+impl AmbientResource {
+    pub(super) fn key(&self) -> ResourceKey {
+        ResourceKey::of(self)
+    }
+}
+
+impl ResourceSpec for AmbientResource {
+    const KIND: ResourceKind = ResourceKind::AmbientLayer;
+    const CONTRACT_VERSION: u32 = 1;
+    fn canonical(&self) -> String {
+        json!(self.0).to_string()
+    }
+    fn subject(&self) -> String {
+        format!(
+            "ambient:{}:{}",
+            slug(&self.0.place, 48),
+            self.0.kind.label()
+        )
+    }
+    fn chrome(&self) -> Chrome {
+        Neutral::Nothing
+    }
+}
+
 /// One provider call may take this long, including its body.
 pub(in crate::gameplay) const CALL_DEADLINE: Duration = Duration::from_secs(120);
 /// The whole set (five calls, two at a time, then mastering) must finish within this; the
@@ -94,7 +120,7 @@ impl ResourceSpec for MusicSetResource {
     const CONTRACT_VERSION: u32 = GENERATOR_VERSION;
 
     fn canonical(&self) -> String {
-        json!({"spec": self.set.spec().canonical()}).to_string()
+        json!({"spec": self.set.spec().canonical(), "band": self.set.band().label()}).to_string()
     }
 
     fn subject(&self) -> String {
@@ -290,6 +316,27 @@ impl HubMusic {
     /// freshness check that a ready set is still on disk.
     fn tune(hub: &Hub, store: &Arc<MusicStore>) {
         hub.set_limits(
+            ResourceKind::AmbientLayer,
+            Limits {
+                timeout: Duration::from_secs(180),
+                attempts: 1,
+            },
+        );
+        let ambient_store = Arc::clone(store);
+        hub.set_validator(
+            ResourceKind::AmbientLayer,
+            Arc::new(move |generated: &Generated| {
+                ambient_store
+                    .set_directory(&generated.handle)
+                    .join(MANIFEST)
+                    .is_file()
+                    && ambient_store
+                        .set_directory(&generated.handle)
+                        .join("ambient.mp3")
+                        .is_file()
+            }),
+        );
+        hub.set_limits(
             ResourceKind::MusicSet,
             Limits {
                 timeout: HUB_TIMEOUT,
@@ -423,6 +470,94 @@ impl HubMusic {
 }
 
 impl MusicHub for HubMusic {
+    fn ambient_request(
+        &self,
+        spec: &super::ambience::AmbientSpec,
+    ) -> super::ambience::AmbientStatus {
+        use super::ambience::AmbientStatus;
+        let Some(generator) = &self.generator else {
+            return AmbientStatus::Fallback(self.off_reason.clone());
+        };
+        let resource = AmbientResource(spec.clone());
+        let (generator, store, ledger, layer_spec) = (
+            Arc::clone(generator),
+            Arc::clone(&self.store),
+            Arc::clone(self.hub.ledger()),
+            spec.clone(),
+        );
+        let maker: Maker = Arc::new(move || {
+            let (generator, store, ledger, spec) = (
+                generator.clone(),
+                store.clone(),
+                ledger.clone(),
+                layer_spec.clone(),
+            );
+            Box::pin(async move {
+                let key = spec.key();
+                let directory = store.set_directory(&key);
+                if directory.join(MANIFEST).is_file() && directory.join("ambient.mp3").is_file() {
+                    return Ok(Generated {
+                        handle: key,
+                        note: "ambient".into(),
+                    });
+                }
+                let reservation = ledger.reserve(Unit::MusicCall, 1);
+                let bytes = match generator.ambient_layer(&spec, CALL_DEADLINE).await {
+                    Ok(bytes) => {
+                        reservation.commit(1);
+                        bytes
+                    }
+                    Err(reason) => {
+                        if reason == FailureReason::InvalidRequest {
+                            reservation.refund();
+                        } else {
+                            reservation.commit(1);
+                        }
+                        return Err(if reason.is_permanent() {
+                            ResourceFailure::Permanent(reason.label())
+                        } else {
+                            ResourceFailure::Transient(reason.label())
+                        });
+                    }
+                };
+                tokio::task::spawn_blocking(move || {
+                    std::fs::create_dir_all(&directory)?;
+                    write_atomic(&directory, "ambient.mp3", &bytes)?;
+                    write_atomic(
+                        &directory,
+                        MANIFEST,
+                        json!({"version":1,"spec":spec}).to_string().as_bytes(),
+                    )
+                })
+                .await
+                .map_err(|_| ResourceFailure::Interrupted)?
+                .map_err(|_| ResourceFailure::Transient("store_failed"))?;
+                Ok(Generated {
+                    handle: key,
+                    note: "ambient".into(),
+                })
+            })
+        });
+        self.hub.get_or_request(&resource, maker);
+        self.ambient_status(spec)
+    }
+
+    fn ambient_status(
+        &self,
+        spec: &super::ambience::AmbientSpec,
+    ) -> super::ambience::AmbientStatus {
+        use super::ambience::AmbientStatus;
+        if self.generator.is_none() {
+            return AmbientStatus::Fallback(self.off_reason.clone());
+        }
+        let key = AmbientResource(spec.clone()).key();
+        match self.hub.status(&key) {
+            ResourceStatus::Ready(_) => AmbientStatus::Ready(format!("{ROUTE}/{key}/ambient")),
+            ResourceStatus::Pending(_) => AmbientStatus::Pending,
+            ResourceStatus::Failed(reason, _) => AmbientStatus::Failed(reason.label().into()),
+            ResourceStatus::Fallback(_) => AmbientStatus::Fallback("not requested".into()),
+        }
+    }
     fn get_or_request(&self, set: &MusicSetSpec) -> MusicStatus {
         let Some(generator) = &self.generator else {
             return MusicStatus::Fallback(self.off_reason.clone());
@@ -468,12 +603,18 @@ async fn serve(
     RoutePath((key, name)): RoutePath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let known_name = name == AMBIENCE || Layer::ALL.iter().any(|layer| layer.name() == name);
+    let known_name = name == AMBIENCE
+        || name == "ambient"
+        || Layer::ALL.iter().any(|layer| layer.name() == name);
     let ready = is_key(&key)
         && known_name
         && music
             .hub
-            .list(Some(ResourceKind::MusicSet))
+            .list(Some(if name == "ambient" {
+                ResourceKind::AmbientLayer
+            } else {
+                ResourceKind::MusicSet
+            }))
             .iter()
             .any(|row| row.state == "ready" && row.key.as_str() == key);
     if !ready {

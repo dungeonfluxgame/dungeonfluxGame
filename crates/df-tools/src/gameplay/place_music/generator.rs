@@ -2,7 +2,7 @@
 //! invokes to make one set.
 //!
 //! A set is four music layers (bed, motif, tension, combat) from `POST /v1/music`, all at the
-//! shared score's 84 BPM, one key and 16 bars, plus one ambience bed from
+//! selected pacing band's BPM, one key and a common loop duration, plus one ambience bed from
 //! `POST /v1/sound-generation`. Each is cut to the exact loop, made seamless with a tail
 //! crossfade and set to the shipped loudness (see `master`). The generator makes the calls and
 //! returns the mastered files; it keeps no cache, no in-flight registry, no retry and no spend
@@ -16,7 +16,7 @@ use df_providers::{
 use serde_json::json;
 use tokio::sync::Semaphore;
 
-use crate::music_score::{LAYER_LUFS, LOOP_SAMPLES, SAMPLE_RATE};
+use crate::music_score::{LAYER_LUFS, LOOP_SAMPLES, PacingBand, SAMPLE_RATE};
 
 use super::master::{Codec, Frame, MasterFailure, loop_cut, normalise};
 use super::spec::{
@@ -24,7 +24,7 @@ use super::spec::{
 };
 
 /// Bumped when the prompts or the mastering change, so a stored set is not reused for new ones.
-pub(in crate::gameplay) const GENERATOR_VERSION: u32 = 1;
+pub(in crate::gameplay) const GENERATOR_VERSION: u32 = 2;
 /// Provider calls one set costs: four `/v1/music` and one `/v1/sound-generation`.
 pub(in crate::gameplay) const PROVIDER_CALLS: u32 = 5;
 /// The shipped ambience beds are mastered to -30 LUFS.
@@ -38,6 +38,7 @@ const SET_CONCURRENCY: usize = 2;
 pub(in crate::gameplay) struct MusicSetSpec {
     spec: MusicSpec,
     version: u32,
+    band: PacingBand,
 }
 
 impl MusicSetSpec {
@@ -45,7 +46,38 @@ impl MusicSetSpec {
         Self {
             spec,
             version: GENERATOR_VERSION,
+            band: PacingBand::Steady,
         }
+    }
+
+    pub(in crate::gameplay) fn in_band(spec: MusicSpec, band: PacingBand) -> Self {
+        Self {
+            band,
+            ..Self::new(spec)
+        }
+    }
+
+    pub(in crate::gameplay) fn band(&self) -> PacingBand {
+        self.band
+    }
+
+    /// A symbolic motif reference shared by the original set and every pacing variant.
+    /// The provider's compose API accepts text, so the seed and exact scale-degree phrase
+    /// travel in every layer prompt, rather than pretending it supports audio conditioning.
+    pub(in crate::gameplay) fn motif_reference(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(self.spec.canonical().as_bytes());
+        let degrees = digest[..4]
+            .iter()
+            .map(|byte| (1 + byte % 5).to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "theme seed {}; recurring scale degrees 1 {degrees} 5 1 in {}; retain this \
+             phrase, contour and instrumentation in every pacing variant",
+            Self::new(self.spec.clone()).key(),
+            self.spec.key_name(),
+        )
     }
 
     pub(in crate::gameplay) fn spec(&self) -> &MusicSpec {
@@ -68,7 +100,7 @@ impl MusicSetSpec {
 
 /// The mastered files of one set, as MP3 bytes, and the provenance the hub records.
 pub(in crate::gameplay) struct GeneratedMusicSet {
-    /// Bed, motif, tension, combat: each exactly 16 bars at 84 BPM.
+    /// Bed, motif, tension, combat: each exactly 2,016,000 frames in the selected pacing band.
     pub(in crate::gameplay) layers: [Vec<u8>; 4],
     /// Absent when only the ambience call failed; the place keeps its fallback bed.
     pub(in crate::gameplay) ambience: Option<Vec<u8>>,
@@ -169,6 +201,39 @@ pub(in crate::gameplay) struct MusicGenerator {
 }
 
 impl MusicGenerator {
+    /// A standalone sound-generation resource uses the identical seamless mastering path.
+    pub(super) async fn ambient_layer(
+        &self,
+        spec: &super::ambience::AmbientSpec,
+        deadline: Duration,
+    ) -> Result<Vec<u8>, FailureReason> {
+        let started = Instant::now();
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| FailureReason::Interrupted)?;
+        let audio = self
+            .provider
+            .ambience(
+                &spec.prompt(),
+                AMBIENCE_SECONDS,
+                Self::remaining(started, deadline),
+            )
+            .await
+            .map_err(provider_reason)?;
+        self.master(
+            audio.bytes,
+            (AMBIENCE_LOOP_SECONDS * SAMPLE_RATE) as usize,
+            AMBIENCE_CROSSFADE_MILLIS,
+            AMBIENCE_LUFS,
+            started,
+            deadline,
+        )
+        .await
+        .map(|(bytes, _)| bytes)
+        .map_err(FailureReason::Master)
+    }
     pub(in crate::gameplay) fn new(provider: NativeElevenMusicProvider, codec: Codec) -> Self {
         Self {
             provider,
@@ -214,7 +279,7 @@ impl MusicGenerator {
         deadline: Duration,
     ) -> Result<GeneratedMusicSet, GeneratorFailure> {
         let spec = set.spec();
-        let layers = Layer::ALL.map(|layer| self.layer(spec, layer, started, deadline));
+        let layers = Layer::ALL.map(|layer| self.layer(set, layer, started, deadline));
         let ambience = self.ambience(spec, started, deadline);
         let (layers, ambience) = tokio::join!(futures::future::join_all(layers), ambience);
         let mut files = Vec::with_capacity(4);
@@ -241,7 +306,11 @@ impl MusicGenerator {
             "spec": spec,
             "label": spec.label(),
             "provider_calls": PROVIDER_CALLS,
-            "bpm": crate::music_score::BPM,
+            "bpm": set.band().bpm(),
+            "band": set.band().label(),
+            "energy_permille": set.band().energy(),
+            "bars": set.band().bars(),
+            "motif_reference": set.motif_reference(),
             "key_name": spec.key_name(),
             "loop_samples": LOOP_SAMPLES,
             "sample_rate": SAMPLE_RATE,
@@ -262,12 +331,18 @@ impl MusicGenerator {
 
     async fn layer(
         &self,
-        spec: &MusicSpec,
+        set: &MusicSetSpec,
         layer: Layer,
         started: Instant,
         deadline: Duration,
     ) -> Result<Mastered, FailureReason> {
-        let prompt = spec.layer_prompt(layer);
+        let prompt = format!(
+            "{} Theme reference: {}. Pacing energy {}/1000; change rhythmic density, \
+             retain the harmony, melody and acoustic palette.",
+            set.spec().layer_prompt_at(layer, set.band()),
+            set.motif_reference(),
+            set.band().energy(),
+        );
         let _permit = self
             .permits
             .acquire()

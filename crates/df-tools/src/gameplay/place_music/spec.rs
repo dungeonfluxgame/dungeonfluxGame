@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::music_score::{BPM, Bed};
+use crate::music_score::{BPM, Bed, PacingBand};
 
 use super::super::approach_model::{ApproachModel, JevUnavailable};
 
@@ -578,7 +578,7 @@ impl MusicSpec {
         .join("\n")
     }
 
-    fn header(&self) -> String {
+    fn header(&self, band: PacingBand) -> String {
         let harmony = self.mood.harmony();
         let voices = self.palette.voices();
         let ensemble = self.instruments.as_deref().map_or_else(
@@ -586,8 +586,8 @@ impl MusicSpec {
             |instruments| format!("Acoustic ensemble of {instruments}"),
         );
         format!(
-            "Instrumental fantasy RPG score for {} {} scene {} in {}. Exactly {BPM:.0} BPM in {}, \
-             rock-steady constant tempo, 4/4, 16 bars. Starts immediately on beat one with no \
+            "Instrumental fantasy RPG score for {} {} scene {} in {}. Exactly {} BPM in {}, \
+             rock-steady constant tempo, 4/4, {} bars. Starts immediately on beat one with no \
              intro, holds the same energy and texture all the way through with no ending, no \
              outro, no fade out, no final chord, written to loop seamlessly. {ensemble}, no \
              vocals, no electronic drums, no synth leads. ",
@@ -598,13 +598,20 @@ impl MusicSpec {
                 Space::Exterior => "outdoors",
             },
             self.setting.place_phrase(),
+            band.bpm(),
             harmony.key,
+            band.bars(),
         )
     }
 
     /// The `/v1/music` prompt of one layer. All four share the header: same tempo, key, chord
     /// movement, loop length and palette, so they stack sample-aligned.
+    #[cfg(test)]
     pub(super) fn layer_prompt(&self, layer: Layer) -> String {
+        self.layer_prompt_at(layer, PacingBand::Steady)
+    }
+
+    pub(super) fn layer_prompt_at(&self, layer: Layer, band: PacingBand) -> String {
         let harmony = self.mood.harmony();
         let voices = self.palette.voices();
         let time = match self.time_of_day {
@@ -639,7 +646,7 @@ impl MusicSpec {
                 voices.battle, harmony.key,
             ),
         };
-        format!("{}{body}", self.header())
+        format!("{}{body}", self.header(band))
     }
 
     /// The `/v1/sound-generation` prompt of the ambience bed.
