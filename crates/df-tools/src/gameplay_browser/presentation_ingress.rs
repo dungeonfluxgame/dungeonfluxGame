@@ -420,9 +420,10 @@ impl Ledger {
             emit(
                 "gameplay.presentation",
                 format!(
-                    "{} {}",
+                    "{} {}{}",
                     event.log_line(audience, receive_ms, &producer, sequence),
                     correlation.log_suffix(),
+                    crate::client_diagnostics::log_suffix(event),
                 ),
                 Some(event.clone()),
                 &producer,
@@ -567,6 +568,37 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::sync::OnceLock;
+
+    #[test]
+    fn phone_portrait_and_reconnect_diagnostics_are_ingested_with_semantic_labels() {
+        use crate::client_diagnostics::Diagnostic;
+        for diagnostic in [
+            Diagnostic::PortraitRequestStart,
+            Diagnostic::PortraitPollPending,
+            Diagnostic::PortraitPollReady,
+            Diagnostic::PortraitPollFailed,
+            Diagnostic::PortraitPollUnknown,
+            Diagnostic::PortraitDisplayed,
+            Diagnostic::PortraitStoppedExhausted,
+            Diagnostic::ReconnectScheduled,
+            Diagnostic::ReconnectAttempt,
+            Diagnostic::ReconnectReady,
+            Diagnostic::ReconnectFailed,
+        ] {
+            let bytes = presentation::encode(&[diagnostic.event(1234, 12, 2_000, 30_000)]).unwrap();
+            let mut upload = upload(&bytes);
+            upload.role = LocalDemoRole::Player;
+            let lines = RefCell::new(Vec::new());
+            let result =
+                Ledger::default().record(upload, |_, line, _, _| lines.borrow_mut().push(line));
+            assert_eq!(result.unwrap(), (1, false));
+            let lines = lines.into_inner();
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].starts_with("PHONE usable"));
+            assert!(lines[0].contains(diagnostic.label()));
+            assert!(lines[0].contains("operation_hash=1234 attempt=12 delay_ms=2000"));
+        }
+    }
 
     static TEST_CORRELATION: OnceLock<ScopeCorrelation> = OnceLock::new();
 

@@ -19,6 +19,7 @@ pub(super) const SOURCE: &[u8] = b"SRD5.2.1 page6 D20 Tests Ability Checks; http
 const CONTENT: &[u8] = b"DungeonFlux authored local journey profile6: Share the Lantern room. Two independently joined members create source-selected Dwarf Fighter/Soldier heroes; their selections and starting equipment persist. Begin at Lantern Wharf only after both builds. The physically present unnamed courier is canonical lantern-wharf-courier, with cautious-courier personality, deliver-dispatch motivation, and directional unfamiliar relationships to each hero. Asking reveals a member-private delivery clue; it grants no courier knowledge or witness. Accepted escort creates a shared courier-escort-contact fact with the acting hero as subject and an actual same-scene courier witness/known fact. The terminal escort-courier event remains shared with empty subjects for current phase admission. On a subsequent Defend command, source-bound courier-escort-reaction-policy may change only that witnessed hero's relationship to escort-supported through df-interaction::react on the prior committed contact. The change is categorical story policy, without a D&D bonus, action success, resource grant, or packet delivery. Defending begins the normal adjacent nonlethal Bandit encounter with actual initiative, player-selected attacks/SecondWind/endturn, source-qualified damage, unconscious one-HP knockout and no wall-time rest completion. Source knockout starts persist due schedules. After combat a joined member may propose an uninterrupted campaign Short Rest: one hour, no Hit Point Dice or HP healing, Fighter one-use SecondWind recharge capped2. Knockout waking retains Prone and dropped held gear and preserves the battle outcome. Versioned local-journey-rpc-3-threads-1-rest-1-inn-1-npc-1 maps begin-story/private-courier-note/escort-courier events to continued sealed-packet-delivery-thread; defend-courier/greatsword-attack/second-wind/end-turn events continue dockside-threat-thread, resolving only on the current operation accepted bandit unconscious transition. A conscious joined hero may select Harbor Inn from the current source-bound victory offer, before or after Short Rest. The admitted harbor-inn ContentEvent continues the unresolved packet thread and retains party, knowledge, resource, encounter and schedule records at unchanged logical time; this is scene continuation, not timed physical travel or delivery. Current phase admission requires exact accepted source receipts, prerequisite beats and historical native encounter outcome. Native Bandit tactics enumerate at most two source-legal authored adjacent targets in joined party order, select the first legal target without utility weights and preserve attack/draw authority. Delivery remains unresolved after combat; unmapped events consume no narrative source. Preconfigured Investigation/next-scene draft remains an earlier source lineage, not the active browser room.";
 
 fn invalid<T>(_: T) -> RepositoryError {
+    super::refusal_detail::note("model-value");
     RepositoryError::InvalidCandidate
 }
 pub(super) fn label(value: &str) -> Result<RevisionLabel, RepositoryError> {
@@ -415,7 +416,7 @@ pub(super) fn checkpoint(basis: Basis, state: GameState) -> Result<Checkpoint, R
         limits(),
     )
     .map_err(|error| {
-        super::refusal_detail::note("checkpoint-validation");
+        super::refusal_detail::cause("checkpoint-validation", format!("{error:?}"));
         super::actor::record_audit_line(
             "gameplay.checkpoint_invalid",
             format!("CHECKPOINT invalid error={error:?}"),
@@ -432,6 +433,10 @@ pub(super) fn creator_portrait_assets(
 ) -> Result<Vec<AssetReference>, RepositoryError> {
     let maximum = limits().maximum_records;
     if state.characters.len() > maximum || state.continuity.canonical_packs.len() > maximum {
+        super::refusal_detail::cause(
+            "creator-portrait-assets",
+            format!("Capacity budget=records limit={maximum}"),
+        );
         return Err(RepositoryError::Capacity);
     }
     let mut records = state.characters.len();
@@ -440,6 +445,10 @@ pub(super) fn creator_portrait_assets(
             .checked_add(character.choices.len())
             .ok_or(RepositoryError::Capacity)?;
         if records > maximum {
+            super::refusal_detail::cause(
+                "creator-portrait-assets",
+                format!("Capacity budget=records limit={maximum}"),
+            );
             return Err(RepositoryError::Capacity);
         }
     }
@@ -448,6 +457,10 @@ pub(super) fn creator_portrait_assets(
             .checked_add(pack.identities.len())
             .ok_or(RepositoryError::Capacity)?;
         if records > maximum {
+            super::refusal_detail::cause(
+                "creator-portrait-assets",
+                format!("Capacity budget=records limit={maximum}"),
+            );
             return Err(RepositoryError::Capacity);
         }
         for identity in &pack.identities {
@@ -455,6 +468,10 @@ pub(super) fn creator_portrait_assets(
                 .checked_add(identity.appearances.len())
                 .ok_or(RepositoryError::Capacity)?;
             if records > maximum {
+                super::refusal_detail::cause(
+                    "creator-portrait-assets",
+                    format!("Capacity budget=records limit={maximum}"),
+                );
                 return Err(RepositoryError::Capacity);
             }
         }
@@ -464,13 +481,17 @@ pub(super) fn creator_portrait_assets(
         .try_reserve_exact(state.characters.len())
         .map_err(|_| RepositoryError::Capacity)?;
     for character in &state.characters {
-        let field = |name: &str| -> Result<Option<&str>, RepositoryError> {
+        let field = |name: &'static str| -> Result<Option<&str>, RepositoryError> {
             let mut choices = character
                 .choices
                 .iter()
                 .filter(|choice| choice.offer.as_str() == name);
             let selected = choices.next().map(|choice| choice.selected.as_str());
             if choices.next().is_some() {
+                super::refusal_detail::cause(
+                    "creator-portrait-assets",
+                    format!("DuplicateField field={name}"),
+                );
                 return Err(RepositoryError::InvalidCandidate);
             }
             Ok(selected)
@@ -485,6 +506,15 @@ pub(super) fn creator_portrait_assets(
             continue;
         }
         let [Some(key), Some(digest), Some(bytes), Some(revision)] = metadata else {
+            let fields = ["key", "digest", "bytes", "revision"];
+            let field = metadata
+                .iter()
+                .position(Option::is_none)
+                .map_or("metadata", |index| fields[index]);
+            super::refusal_detail::cause(
+                "creator-portrait-assets",
+                format!("MissingField field={field}"),
+            );
             return Err(RepositoryError::InvalidCandidate);
         };
         let lowercase_hex = |text: &str| {
@@ -493,22 +523,33 @@ pub(super) fn creator_portrait_assets(
                     .bytes()
                     .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
         };
-        let bytes = bytes.parse::<u64>().map_err(invalid)?;
-        if !lowercase_hex(key)
-            || !lowercase_hex(digest)
-            || bytes == 0
-            || bytes > 6 * 1024 * 1024
-            || revision.parse::<u64>().map_err(invalid)? == 0
-        {
-            return Err(RepositoryError::InvalidCandidate);
+        let reject = |field: &'static str| {
+            super::refusal_detail::cause(
+                "creator-portrait-assets",
+                format!("InvalidField field={field}"),
+            );
+            RepositoryError::InvalidCandidate
+        };
+        let bytes = bytes.parse::<u64>().map_err(|_| reject("bytes"))?;
+        if !lowercase_hex(key) {
+            return Err(reject("key"));
+        }
+        if !lowercase_hex(digest) {
+            return Err(reject("digest"));
+        }
+        if bytes == 0 || bytes > 6 * 1024 * 1024 {
+            return Err(reject("bytes"));
+        }
+        if revision.parse::<u64>().map_err(|_| reject("revision"))? == 0 {
+            return Err(reject("revision"));
         }
         let asset = super::hero_identity::approved_portrait_asset(state, character.entity)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| reject("approved-appearance"))?;
         if assets
             .iter()
             .any(|registered| registered.key == asset.key && registered != asset)
         {
-            return Err(RepositoryError::InvalidCandidate);
+            return Err(reject("conflicting-asset"));
         }
         if !assets.contains(asset) {
             assets.push(asset.clone());
@@ -520,6 +561,23 @@ pub(super) fn creator_portrait_assets(
                 if super::hero_identity::approved_portrait_asset(state, identity.entity)
                     != Some(asset)
                 {
+                    let field =
+                        super::hero_identity::approved_portrait_asset(state, identity.entity)
+                            .map_or("appearance-owner", |approved| {
+                                if approved.kind != asset.kind {
+                                    "appearance-kind"
+                                } else if approved.digest != asset.digest {
+                                    "appearance-digest"
+                                } else if approved.byte_length != asset.byte_length {
+                                    "appearance-bytes"
+                                } else {
+                                    "appearance-key"
+                                }
+                            });
+                    super::refusal_detail::cause(
+                        "creator-portrait-assets",
+                        format!("Mismatch field={field}"),
+                    );
                     return Err(RepositoryError::InvalidCandidate);
                 }
             }
@@ -1057,9 +1115,10 @@ pub(super) fn staged_transition(
     operation: df_types::OperationId,
 ) -> df_model::transition::TransitionResult<RepositoryError> {
     use df_model::transition::TransitionResult;
-    TransitionResult::classify(current, candidate, operation).unwrap_or(TransitionResult::Rejected(
-        RepositoryError::InvalidCandidate,
-    ))
+    TransitionResult::classify(current, candidate, operation).unwrap_or_else(|error| {
+        super::refusal_detail::cause("staged-transition", format!("{error:?}"));
+        TransitionResult::Rejected(RepositoryError::InvalidCandidate)
+    })
 }
 
 #[cfg(test)]
@@ -1102,6 +1161,30 @@ mod tests {
             1024 * 1024,
         )
         .map_err(invalid)
+    }
+
+    #[test]
+    fn invalid_checkpoint_diagnostic_reaches_the_final_refusal_line() {
+        let current = initial().unwrap();
+        let mut state = current.state().clone();
+        state.logical_time.ticks_per_second = 0;
+        let _ = super::super::refusal_detail::take();
+        let _ = df_session::submission::take_refusal_diagnostic();
+        assert!(checkpoint(current.basis(), state).is_err());
+        let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+        assert_eq!(detail.step, "checkpoint-validation");
+        assert_eq!(detail.cause, "InvalidTime");
+        df_session::submission::note_refusal_diagnostic(detail.step, detail.cause);
+        super::super::actor::record_refusal(
+            df_protocol::common::GameplayActionKind::CreateCharacter as i32,
+            "InvalidCandidate",
+            "refused",
+        );
+        assert!(
+            super::super::actor::audit_lines_containing("REFUSAL action=CreateCharacter")
+                .iter()
+                .any(|line| line.contains("step=checkpoint-validation cause=InvalidTime"))
+        );
     }
 
     #[test]
@@ -1554,7 +1637,15 @@ mod creator_portrait_recovery_tests {
                 .unwrap()
                 .clone();
             state.characters[0].choices.push(duplicate);
+            let _ = df_session::submission::take_refusal_diagnostic();
             assert!(creator_portrait_assets(&state).is_err());
+            let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+            assert_eq!(detail.step, "creator-portrait-assets");
+            assert!(
+                detail
+                    .cause
+                    .starts_with("DuplicateField field=identity-portrait:")
+            );
             let mut state = accepted.state().clone();
             state.continuity.canonical_packs[0].identities[0]
                 .appearances
@@ -1566,6 +1657,9 @@ mod creator_portrait_recovery_tests {
                 .digest
                 .0[0] ^= 1;
             assert!(creator_portrait_assets(&state).is_err());
+            let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+            assert_eq!(detail.step, "creator-portrait-assets");
+            assert_eq!(detail.cause, "Mismatch field=appearance-digest");
         });
     }
 }

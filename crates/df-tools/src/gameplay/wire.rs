@@ -156,17 +156,45 @@ pub(super) fn journey_input(
     member: df_types::MemberId,
     current: &Checkpoint,
 ) -> Result<GameInput, tonic::Status> {
-    let invalid = || tonic::Status::invalid_argument("required bounded action fields invalid");
-    let session = df_api::session_id(request.session_id.as_ref()).map_err(|_| invalid())?;
-    let run = df_api::run_id(request.run_id.as_ref()).map_err(|_| invalid())?;
-    let observed =
-        df_api::session_revision(request.observed_revision.as_ref()).map_err(|_| invalid())?;
-    let operation = df_api::operation_id(request.operation_id.as_ref()).map_err(|_| invalid())?;
-    let kind = rpc::GameplayActionKind::try_from(request.action_kind)
-        .map_err(|_| tonic::Status::invalid_argument("unknown action kind"))?;
-    let entry =
-        action_entry(kind).ok_or_else(|| tonic::Status::invalid_argument("unsupported action"))?;
+    let invalid = || {
+        super::refusal_detail::cause("wire-action-validation", "InvalidBoundedField".to_owned());
+        tonic::Status::invalid_argument("required bounded action fields invalid")
+    };
+    let session = df_api::session_id(request.session_id.as_ref()).map_err(|_| {
+        super::refusal_detail::cause(
+            "wire-scope-validation",
+            "InvalidField field=session".to_owned(),
+        );
+        invalid()
+    })?;
+    let run = df_api::run_id(request.run_id.as_ref()).map_err(|_| {
+        super::refusal_detail::cause("wire-scope-validation", "InvalidField field=run".to_owned());
+        invalid()
+    })?;
+    let observed = df_api::session_revision(request.observed_revision.as_ref()).map_err(|_| {
+        super::refusal_detail::cause(
+            "wire-scope-validation",
+            "InvalidField field=observed_revision".to_owned(),
+        );
+        invalid()
+    })?;
+    let operation = df_api::operation_id(request.operation_id.as_ref()).map_err(|_| {
+        super::refusal_detail::cause(
+            "wire-scope-validation",
+            "InvalidField field=operation".to_owned(),
+        );
+        invalid()
+    })?;
+    let kind = rpc::GameplayActionKind::try_from(request.action_kind).map_err(|_| {
+        super::refusal_detail::cause("wire-action-kind", "UnknownActionKind".to_owned());
+        tonic::Status::invalid_argument("unknown action kind")
+    })?;
+    let entry = action_entry(kind).ok_or_else(|| {
+        super::refusal_detail::cause("wire-action-kind", "UnsupportedActionKind".to_owned());
+        tonic::Status::invalid_argument("unsupported action")
+    })?;
     if request.offer_id.len() > 96 {
+        super::refusal_detail::cause("wire-creation-validation", "offer exceeds bound".to_owned());
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
     let interaction_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
@@ -217,6 +245,10 @@ pub(super) fn journey_input(
     }
     if let Some(character) = &request.character {
         if character.name.len() > 48 || character.choices.len() > 16 {
+            super::refusal_detail::cause(
+                "wire-creation-validation",
+                "character choices exceed bound".to_owned(),
+            );
             return Err(tonic::Status::invalid_argument(
                 "character choices exceed bound",
             ));
@@ -231,18 +263,25 @@ pub(super) fn journey_input(
                 &offer.supported_designs,
             )
         {
+            super::refusal_detail::cause(
+                "wire-creation-validation",
+                "Gameplay rules for this combination are not ready. Your character design is kept."
+                    .to_owned(),
+            );
             return Err(tonic::Status::failed_precondition(
                 "Gameplay rules for this combination are not ready. Your character design is kept.",
             ));
         }
-        super::creator_catalog::checked_scenery(&character.portrait_scenery)
-            .map_err(|_| tonic::Status::invalid_argument("Review your public portrait scenery"))?;
+        super::creator_catalog::checked_scenery(&character.portrait_scenery).map_err(|error| {
+            super::refusal_detail::cause("wire-creation-scenery", format!("{error:?}"));
+            tonic::Status::invalid_argument("Review your public portrait scenery")
+        })?;
         let identity = match character.identity.clone() {
             Some(identity) => super::hero_identity::Identity::from_rpc(identity),
             None => super::hero_identity::Identity::from_menus(&[]),
         };
         let identity = identity.map_err(|_| {
-            super::refusal_detail::note("hero-identity-invalid");
+            super::refusal_detail::cause("hero-identity-invalid", "InvalidIdentity".to_owned());
             tonic::Status::invalid_argument("Your hero's appearance or story was not accepted.")
         })?;
         // Only closed appearance ids cross the durable creation boundary. Private story
@@ -276,6 +315,10 @@ pub(super) fn journey_input(
                 return Err(invalid());
             }
             if selection.group_id.len() > 64 || selection.option_id.len() > 64 {
+                super::refusal_detail::cause(
+                    "wire-creation-validation",
+                    "character option exceeds bound".to_owned(),
+                );
                 return Err(tonic::Status::invalid_argument(
                     "character option exceeds bound",
                 ));

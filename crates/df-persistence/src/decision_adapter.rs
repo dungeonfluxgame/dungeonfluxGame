@@ -512,11 +512,20 @@ impl RecoverySource {
         pins: &df_model::checkpoint::CheckpointPins,
         codec_limits: crate::checkpoint_codec::CodecLimits,
     ) -> Result<Vec<u8>, RepositoryError> {
-        let document = encode_checkpoint(checkpoint, codec_limits)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        let document = encode_checkpoint(checkpoint, codec_limits).map_err(|error| {
+            df_session::submission::note_refusal_diagnostic(
+                "candidate-encode",
+                format!("{error:?}"),
+            );
+            RepositoryError::InvalidCandidate
+        })?;
         let validated =
             self.decode_checkpoint(&document, checkpoint.basis(), pins, codec_limits)?;
         if &validated != checkpoint {
+            df_session::submission::note_refusal_diagnostic(
+                "candidate-equality",
+                "RoundTripMismatch".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         }
         Ok(document)
@@ -540,10 +549,16 @@ impl RecoverySource {
             codec_limits,
             Some(self),
         )
-        .map_err(|error| match error {
-            crate::checkpoint_codec::CodecError::ResourceResolution(error)
-            | crate::checkpoint_codec::CodecError::AssetResolution(error) => error,
-            _ => RepositoryError::InvalidCandidate,
+        .map_err(|error| {
+            df_session::submission::note_refusal_diagnostic(
+                "candidate-decode",
+                format!("{error:?}"),
+            );
+            match error {
+                crate::checkpoint_codec::CodecError::ResourceResolution(error)
+                | crate::checkpoint_codec::CodecError::AssetResolution(error) => error,
+                _ => RepositoryError::InvalidCandidate,
+            }
         })
     }
 
@@ -1028,6 +1043,50 @@ mod projection_tests {
     }
     fn supplied_decision(state: GameState) -> Checkpoint {
         checkpoint(state).unwrap()
+    }
+
+    #[test]
+    fn candidate_codec_and_decode_refusals_preserve_the_typed_deepest_cause() {
+        let mut proposed = state();
+        proposed.decisions.push(decision());
+        let candidate = checkpoint(proposed).unwrap();
+        let source = RecoverySource {
+            rules: vec![rule()],
+            content: vec![content()],
+            resources: resource_constraints(),
+            resource_resolver: None,
+            assets: vec![],
+            asset_resolver: None,
+            limits: limits(),
+        };
+        let codec = crate::checkpoint_codec::CodecLimits {
+            maximum_document_bytes: 1024 * 1024,
+            maximum_allocated_bytes: 1024 * 1024,
+            maximum_collection_items: 1024,
+            maximum_text_bytes: 256,
+        };
+        let _ = df_session::submission::take_refusal_diagnostic();
+        assert_eq!(
+            source.encode_candidate(
+                &candidate,
+                &pins(),
+                crate::checkpoint_codec::CodecLimits {
+                    maximum_text_bytes: 1,
+                    ..codec
+                }
+            ),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+        assert_eq!(detail.step, "checkpoint-codec-budget");
+        assert!(detail.cause.contains("budget=text_bytes"));
+        assert!(matches!(
+            source.decode_checkpoint(b"bad", basis(), &pins(), codec),
+            Err(RepositoryError::InvalidCandidate)
+        ));
+        let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+        assert_eq!(detail.step, "candidate-decode");
+        assert!(detail.cause.contains("Truncated"));
     }
 
     #[test]

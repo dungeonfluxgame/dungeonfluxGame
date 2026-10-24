@@ -183,6 +183,7 @@ struct Controls {
     portrait_button: HtmlButtonElement,
     portrait_version: Rc<Cell<Option<u64>>>,
     portrait_pending: Rc<Cell<bool>>,
+    portrait_operation: Rc<Cell<u64>>,
     look_signature: Rc<RefCell<String>>,
     look_version: Rc<Cell<u64>>,
     custom_summary: Element,
@@ -1232,6 +1233,7 @@ impl HeroCreator {
             portrait_button,
             portrait_version: Rc::new(Cell::new(None)),
             portrait_pending: Rc::new(Cell::new(false)),
+            portrait_operation: Rc::new(Cell::new(0)),
             look_signature: Rc::new(RefCell::new(String::new())),
             look_version: Rc::new(Cell::new(0)),
             custom_summary,
@@ -1605,13 +1607,54 @@ impl HeroCreator {
         true
     }
 
+    pub(super) fn observe_portrait_operation(&self, operation_hash: u64) {
+        self.controls.portrait_operation.set(operation_hash);
+    }
+
+    pub(super) fn observe_portrait_visibility(&self, hidden: bool) {
+        if self.controls.portrait_pending.get() {
+            super::presentation_timing::diagnostic(
+                &self.root,
+                if hidden {
+                    crate::client_diagnostics::Diagnostic::PortraitPageHidden
+                } else {
+                    crate::client_diagnostics::Diagnostic::PortraitPageVisible
+                },
+                self.controls.portrait_operation.get(),
+                0,
+                0,
+            );
+        }
+    }
+
     pub(super) fn apply_portrait(&self, version: u64, state: &str, uri: &str, message: &str) {
         let controls = &self.controls;
         if controls.look_version.get() != version {
+            super::presentation_timing::diagnostic(
+                &self.root,
+                crate::client_diagnostics::Diagnostic::PortraitIgnoredRevision,
+                controls.portrait_operation.get(),
+                0,
+                0,
+            );
             return;
         }
         if state == "ready" && uri.starts_with("/gameplay/creator-portrait/") && uri.len() <= 128 {
+            super::presentation_timing::diagnostic(
+                &self.root,
+                crate::client_diagnostics::Diagnostic::PortraitApplied,
+                controls.portrait_operation.get(),
+                0,
+                0,
+            );
             if self.load_portrait(version, uri).is_err() {
+                super::presentation_timing::diagnostic(
+                    &self.root,
+                    crate::client_diagnostics::Diagnostic::PortraitImageFailed,
+                    controls.portrait_operation.get(),
+                    0,
+                    0,
+                );
                 controls.set_portrait_pending(false);
                 controls.portrait_status.set_text_content(Some("The portrait image could not load. Your previous portrait is kept. Choose Regenerate to try again."));
             }
@@ -1657,6 +1700,8 @@ impl HeroCreator {
             .portrait_status
             .set_text_content(Some("Your portrait is ready. Loading image…"));
         for event in ["load", "error"] {
+            let root = self.root.clone();
+            let operation_hash = self.controls.portrait_operation.get();
             let controls = self.controls.clone();
             let current = image.clone();
             let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
@@ -1666,6 +1711,13 @@ impl HeroCreator {
                     .as_ref()
                     .is_some_and(|incoming| incoming.is_same_node(Some(&current)));
                 if !matches || controls.look_version.get() != version {
+                    super::presentation_timing::diagnostic(
+                        &root,
+                        crate::client_diagnostics::Diagnostic::PortraitIgnoredRevision,
+                        operation_hash,
+                        0,
+                        0,
+                    );
                     return;
                 }
                 controls.incoming_preview.borrow_mut().take();
@@ -1676,6 +1728,14 @@ impl HeroCreator {
                     controls.autosave();
                     let _ = current.set_attribute("data-loaded", "true");
                     controls.set_portrait_pending(false);
+                    super::presentation_timing::diagnostic(
+                        &root,
+                        crate::client_diagnostics::Diagnostic::PortraitImageLoaded,
+                        operation_hash,
+                        0,
+                        0,
+                    );
+                    super::presentation_timing::portrait_display(&root, &current, operation_hash);
                     controls
                         .portrait_button
                         .set_text_content(Some("Regenerate portrait"));
@@ -1687,6 +1747,13 @@ impl HeroCreator {
                         },
                     ));
                 } else {
+                    super::presentation_timing::diagnostic(
+                        &root,
+                        crate::client_diagnostics::Diagnostic::PortraitImageFailed,
+                        operation_hash,
+                        0,
+                        0,
+                    );
                     current.remove();
                     controls.set_portrait_pending(false);
                     controls.portrait_status.set_text_content(Some("The portrait image could not load. Your previous portrait is kept. Choose Regenerate to try again."));

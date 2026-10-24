@@ -14,9 +14,12 @@ pub(super) const CHOICE_ACTION: &str = "script-choice";
 /// The submitted action entry of a resolution choice.
 pub(super) const RESOLVE_ACTION: &str = "resolve-errand";
 const OFFER_PREFIX: &str = "beat-script-offer-";
-fn invalid<T>() -> Result<T, RepositoryError> {
-    refusal_detail::note("beat-script-state");
-    Err(RepositoryError::InvalidCandidate)
+fn refusal(cause: &'static str) -> RepositoryError {
+    refusal_detail::cause("beat-script-state", cause.to_owned());
+    RepositoryError::InvalidCandidate
+}
+fn invalid<T>(cause: &'static str) -> Result<T, RepositoryError> {
+    Err(refusal(cause))
 }
 pub(super) fn marker(offer: &str) -> Result<ContentReference, RepositoryError> {
     model::content(&format!("{OFFER_PREFIX}{offer}"))
@@ -47,19 +50,19 @@ pub(super) fn choice<'a>(
             || fact.audience != AudienceScope::Shared
             || decision.source_policy.as_str() != journey::THREAD_POLICY
         {
-            return invalid();
+            return invalid("ChoiceFactBinding");
         }
         let [actor] = subjects.as_slice() else {
-            return invalid();
+            return invalid("ChoiceSubjectCount");
         };
         if *definition != model::content(definition.entry.as_str())? {
-            return invalid();
+            return invalid("ChoiceDefinition");
         }
         let index = state
             .facts
             .iter()
             .position(|f| f.id == fact.id)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ChoiceFactMissing"))?;
         let preceding = index.checked_sub(1).and_then(|i| state.facts.get(i));
         if fact.cause != preceding.map(|f| f.id)
             || (fact.ordinal > 0
@@ -70,7 +73,7 @@ pub(super) fn choice<'a>(
                         || decision.facts.get(f.ordinal as usize) != Some(&f.id)
                 }))
         {
-            return invalid();
+            return invalid("ChoiceCausalHistory");
         }
         let bootstrap = journey::bootstrap_member()?;
         let member = state
@@ -78,7 +81,7 @@ pub(super) fn choice<'a>(
             .iter()
             .find(|link| link.character == Some(*actor) && link.member != bootstrap)
             .map(|link| link.member)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ChoiceMemberMissing"))?;
         chosen = Some((fact, offer, member));
     }
     Ok(chosen)
@@ -88,7 +91,7 @@ pub(super) fn last_choice(state: &GameState) -> Result<Option<String>, Repositor
     let mut revision = None;
     for decision in &state.decisions {
         if revision.is_some_and(|previous| decision.revision <= previous) {
-            return invalid();
+            return invalid("DecisionRevisionOrder");
         }
         revision = Some(decision.revision);
         if let Some((_, offer, _)) = choice(state, decision)? {
@@ -105,7 +108,7 @@ pub(super) fn last_choice(state: &GameState) -> Result<Option<String>, Repositor
         .into_iter()
         .sum::<usize>();
     if actual != admitted {
-        return invalid();
+        return invalid("UnassociatedChoiceFact");
     }
     Ok(latest)
 }
@@ -164,7 +167,7 @@ pub(super) fn skill_check_modifiers(
         "athletics" => "strength",
         "intimidation" | "persuasion" | "deception" | "performance" => "charisma",
         _ => {
-            refusal_detail::note("search-skill");
+            refusal_detail::cause("search-skill", "UnsupportedSkill".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
     };
@@ -173,11 +176,11 @@ pub(super) fn skill_check_modifiers(
         .iter()
         .find(|character| character.entity == actor)
         .ok_or_else(|| {
-            refusal_detail::note("search-character");
+            refusal_detail::cause("search-character", "CharacterMissing".to_owned());
             RepositoryError::InvalidCandidate
         })?;
-    let score = u8::try_from(journey::value(state, actor, ability_name)?).map_err(|_| {
-        refusal_detail::note("search-ability-score");
+    let score = u8::try_from(journey::value(state, actor, ability_name)?).map_err(|error| {
+        refusal_detail::cause("search-ability-score", format!("{error:?}"));
         RepositoryError::InvalidCandidate
     })?;
     let background_proficiency = character.build.entry.as_str() == "dwarf-fighter-soldier"
@@ -191,8 +194,8 @@ pub(super) fn skill_check_modifiers(
         0
     };
     let ability_modifier = df_rules::local_journey::ability_modifier(score);
-    let ability_modifier = i8::try_from(ability_modifier).map_err(|_| {
-        refusal_detail::note("search-ability-modifier");
+    let ability_modifier = i8::try_from(ability_modifier).map_err(|error| {
+        refusal_detail::cause("search-ability-modifier", format!("{error:?}"));
         RepositoryError::InvalidCandidate
     })?;
     Ok((ability_modifier, proficiency))
@@ -221,8 +224,8 @@ pub(super) fn resolve_skill_check(
         proficiency_bonus,
         difficulty_class,
     })
-    .map_err(|_| {
-        refusal_detail::note("search-check");
+    .map_err(|error| {
+        refusal_detail::cause("search-check", format!("{error:?}"));
         RepositoryError::InvalidCandidate
     })
 }
@@ -237,7 +240,7 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
                     .scenes
                     .get(variant)
                     .cloned()
-                    .ok_or(RepositoryError::InvalidCandidate)?;
+                    .ok_or_else(|| refusal("AuthoredSceneVariantMissing"))?;
                 authored.source_variant_id = Some(variant.clone());
                 // Who stands on stage is the adventure's own cast, never the static base's.
                 authored.cast = pack::scene(beat.scene).cast;
@@ -324,7 +327,7 @@ fn shown_variant(
     }
     let stem = variant
         .strip_suffix(journey::tactical::FightOutcome::Won.slug())
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refusal("EndingVariantOutcomeSuffixMissing"))?;
     Ok(Some(format!("{stem}{}", fight_outcome(state)?.slug())))
 }
 pub(super) fn native_inn(state: &GameState) -> Result<bool, RepositoryError> {
@@ -343,7 +346,7 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
                 .scenes
                 .get(id)
                 .cloned()
-                .ok_or(RepositoryError::InvalidCandidate)?;
+                .ok_or_else(|| refusal("ResolvedSceneVariantMissing"))?;
             scene.source_variant_id = Some(id.clone());
             Ok(scene)
         }
@@ -401,7 +404,7 @@ pub(super) fn pure_target(
             .iter()
             .find(|t| t.trigger == trigger)
             .and_then(|t| script.find(&t.target))
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("OfferTransitionTargetMissing"))?;
         Ok(Some(next.clone()))
     })
 }
@@ -439,18 +442,18 @@ fn terminal<'a>(
         .facts
         .last()
         .and_then(|id| state.facts.iter().find(|f| f.id == *id))
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refusal("TerminalFactMissing"))?;
     if fact.operation != decision.operation
         || fact.revision != decision.revision
         || decision.facts.get(fact.ordinal as usize) != Some(&fact.id)
     {
-        return invalid();
+        return invalid("TerminalFactBinding");
     }
     let index = state
         .facts
         .iter()
         .position(|f| f.id == fact.id)
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refusal("TerminalFactIndexMissing"))?;
     let previous = index.checked_sub(1).and_then(|i| state.facts.get(i));
     if fact.cause != previous.map(|f| f.id)
         || (fact.ordinal > 0
@@ -461,7 +464,7 @@ fn terminal<'a>(
                     || decision.facts.get(f.ordinal as usize) != Some(&f.id)
             }))
     {
-        return invalid();
+        return invalid("TerminalCausalHistory");
     }
     Ok(fact)
 }
@@ -474,7 +477,10 @@ pub(super) fn validate(
 ) -> Result<rpc::JourneyPhase, RepositoryError> {
     current
         .validate_resume(current.basis(), &model::pins()?)
-        .map_err(|_| RepositoryError::InvalidCandidate)?;
+        .map_err(|error| {
+            refusal_detail::cause("beat-script-checkpoint-resume", format!("{error:?}"));
+            RepositoryError::InvalidCandidate
+        })?;
     let state = current.state();
     // A freeplay state may hold one encounter: the open fight of a hero's scene assault.
     if !state.encounters.is_empty()
@@ -482,18 +488,18 @@ pub(super) fn validate(
             && journey::scene_fight::encounters_admissible(current)?)
     {
         refusal_detail::note("scene-fight-encounter");
-        return invalid();
+        return invalid("EncounterNotAdmitted");
     }
     if script.uses_encounter()
         || state.narrative.definition != model::content("room")?
         || !state.schedules.is_empty()
         || state.narrative.remaining_budget != pack::narrative_budget()
     {
-        return invalid();
+        return invalid("NarrativeInitialState");
     }
     let mut beat = script
         .find(&script.entry)
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refusal("ScriptEntryMissing"))?;
     let mut completed = Vec::new();
     let mut accepted = Vec::new();
     let mut started = false;
@@ -527,7 +533,7 @@ pub(super) fn validate(
                         ..Default::default()
                     })
             {
-                return invalid();
+                return invalid("RestartReceiptMismatch");
             }
             restart_seen = true;
             continue;
@@ -553,7 +559,7 @@ pub(super) fn validate(
                 || receipt.character.is_some()
             {
                 refusal_detail::note("scene-fight-replay");
-                return invalid();
+                return invalid("FightReplayMismatch");
             }
             fought = true;
             fight_draws += decision.draws.len();
@@ -576,7 +582,7 @@ pub(super) fn validate(
             let character = state
                 .characters
                 .get(creations)
-                .ok_or(RepositoryError::InvalidCandidate)?;
+                .ok_or_else(|| refusal("CreationCharacterMissing"))?;
             creations += 1;
             if started
                 || receipt.phase != rpc::JourneyPhase::Room as i32
@@ -591,7 +597,7 @@ pub(super) fn validate(
                 || !matches!(&terminal.value,FactValue::ContentEvent{definition,subjects} if definition.entry.as_str()=="create-character" && subjects.is_empty())
                 || terminal.audience != AudienceScope::Shared
             {
-                return invalid();
+                return invalid("CreationReceiptMismatch");
             }
             continue;
         };
@@ -599,19 +605,19 @@ pub(super) fn validate(
             .offers
             .iter()
             .find(|o| o.id == id)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ReplayOfferMissing"))?;
         let trigger = BeatTrigger::Offer { offer: id.into() };
         let next = beat
             .transitions
             .iter()
             .find(|t| t.trigger == trigger)
             .and_then(|t| script.find(&t.target))
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ReplayTransitionTargetMissing"))?;
         if receipt.phase != phase_of(next) as i32
             || !receipt.combat.is_empty()
             || receipt.character.is_some()
         {
-            return invalid();
+            return invalid("OfferReceiptPhaseMismatch");
         }
         if selected.effect == BeatEffect::Observe {
             let source_scene = beat
@@ -636,7 +642,7 @@ pub(super) fn validate(
                 observation_draws += 1;
             }
         } else if receipt.check.is_some() {
-            return invalid();
+            return invalid("UnexpectedOfferCheck");
         }
         let native = match selected.effect {
             BeatEffect::BeginStory => {
@@ -649,7 +655,7 @@ pub(super) fn validate(
             | BeatEffect::Observe
             | BeatEffect::Resolve
             | BeatEffect::ChooseHarborScene => None,
-            _ => return invalid(),
+            _ => return invalid("UnsupportedOfferEffect"),
         };
         let expected = native.unwrap_or(STEP);
         let private = selected.effect == BeatEffect::AskCourier;
@@ -672,13 +678,13 @@ pub(super) fn validate(
             && matches!(&terminal.audience, AudienceScope::Members(_))
             && terminal.audience != scope
         {
-            return invalid();
+            return invalid("PrivateAudienceMismatch");
         }
         if (!actual_event || terminal.audience != scope) && !retained_private {
-            return invalid();
+            return invalid("TerminalEventOrAudienceMismatch");
         }
         if choice_fact.ordinal >= terminal.ordinal {
-            return invalid();
+            return invalid("ChoiceAfterTerminalFact");
         }
         if native.is_some() {
             accepted.push(terminal.id);
@@ -687,10 +693,10 @@ pub(super) fn validate(
         if selected.effect == BeatEffect::ChooseHarborScene {
             let expected = destination_scene(next)?;
             if receipt.scene != Some(expected) {
-                return invalid();
+                return invalid("DestinationReceiptMismatch");
             }
         } else if receipt.scene.is_some() {
-            return invalid();
+            return invalid("UnexpectedSceneReceipt");
         }
         if beat.state.durable != next.state.durable {
             let previous = model::content(&beat.state.durable)?;
@@ -712,7 +718,7 @@ pub(super) fn validate(
                 && state.logical_time.ticks % 6 == 0))
     {
         refusal_detail::note("scene-fight-accounting");
-        return invalid();
+        return invalid("FightAccountingMismatch");
     }
     if creations != state.characters.len()
         || script.current(state)?.id != beat.id
@@ -725,10 +731,10 @@ pub(super) fn validate(
                 Vec::new()
             }
     {
-        return invalid();
+        return invalid("NarrativeHistoryMismatch");
     }
     if started && (journey::participants(current).len() != 2 || state.characters.len() != 2) {
-        return invalid();
+        return invalid("PartyCreationCountMismatch");
     }
     if script.mode != beat_script::ScriptMode::Freeplay {
         journey::validate_script_native_prefix(current, native_durable)?;
@@ -739,7 +745,7 @@ pub(super) fn validate(
         .iter()
         .any(|entity| entity.definition.entry.as_str() == "bandit")
     {
-        return invalid();
+        return invalid("UnexpectedBanditEntity");
     }
     Ok(journey::scene_fight::phase_after(state, phase_of(beat)))
 }
@@ -813,14 +819,14 @@ fn validate_observation_check(
         setting.model = Some(snapshot.model);
     }
     let scene = &source_scene;
-    let invalid = || {
-        refusal_detail::note("search-replay-check");
+    let invalid = |cause: &'static str| {
+        refusal_detail::cause("search-replay-check", cause.to_owned());
         RepositoryError::InvalidCandidate
     };
-    let check = check.ok_or_else(invalid)?;
+    let check = check.ok_or_else(|| invalid("SearchCheckMissing"))?;
     let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
     if parts.len() != 4 || parts[0] != "srd521-p6" || parts[1] != scene_scope {
-        return Err(invalid());
+        return Err(invalid("SearchSourceRevisionMismatch"));
     }
     let skill = parts[2];
     let detail = parts[3];
@@ -838,18 +844,18 @@ fn validate_observation_check(
             | "stealth"
             | "sleight-of-hand"
     ) {
-        return Err(invalid());
+        return Err(invalid("SearchSkillUnsupported"));
     }
     let selected_id = detail.strip_prefix("finding-");
     let selected =
         selected_id.and_then(|id| scene.findings.iter().find(|finding| finding.id == id));
     if selected_id.is_some() && selected.is_none() {
-        return Err(invalid());
+        return Err(invalid("SearchFindingUnknown"));
     }
     if let Some(finding) = selected
         && finding_skill_name(finding.skill) != skill
     {
-        return Err(invalid());
+        return Err(invalid("SearchFindingSkillMismatch"));
     }
     if detail.starts_with("watch-")
         && (skill != "insight"
@@ -858,7 +864,7 @@ fn validate_observation_check(
                 .iter()
                 .any(|person| format!("watch-{}", person.id) == detail))
     {
-        return Err(invalid());
+        return Err(invalid("SearchWatchTargetMismatch"));
     }
     let matching = selected.or_else(|| {
         if detail.starts_with("watch-") {
@@ -870,7 +876,7 @@ fn validate_observation_check(
             .find(|finding| finding_skill_name(finding.skill) == skill)
     });
     if decision.draws.len() != 1 {
-        return Err(invalid());
+        return Err(invalid("SearchDrawCount"));
     }
     let ordinal = decision.draws[0];
     let die = state
@@ -878,23 +884,24 @@ fn validate_observation_check(
         .iter()
         .find(|draw| draw.operation == decision.operation && draw.ordinal == ordinal)
         .filter(|draw| draw.sides == 20 && draw.value == check.die)
-        .ok_or_else(invalid)?;
+        .ok_or_else(|| invalid("SearchDrawMissing"))?;
     let _ = die;
     let actor = state
         .members
         .iter()
         .find(|link| link.member == member)
         .and_then(|link| link.character)
-        .ok_or_else(invalid)?;
-    let (ability_modifier, proficiency_bonus) =
-        skill_check_modifiers(state, actor, skill).map_err(|_| invalid())?;
-    let total = i32::try_from(check.die).map_err(|_| invalid())?
+        .ok_or_else(|| invalid("SearchActorMissing"))?;
+    let (ability_modifier, proficiency_bonus) = skill_check_modifiers(state, actor, skill)
+        .map_err(|_| invalid("SearchAbilityModifiers"))?;
+    let total = i32::try_from(check.die).map_err(|_| invalid("SearchDieRange"))?
         + i32::from(ability_modifier)
         + i32::from(proficiency_bonus);
     // SRD 5.2.1 p. 183: "you must succeed on a DC 15 Dexterity (Stealth) check" to Hide.
     let difficulty_class = if detail.starts_with("target-") || detail.starts_with("repeat-target-")
     {
-        let target = super::investigation::check_target(scene, check).ok_or_else(invalid)?;
+        let target = super::investigation::check_target(scene, check)
+            .ok_or_else(|| invalid("SearchTargetMismatch"))?;
         super::investigation::difficulty_class(state, scene, &target, skill)?
     } else if skill == "stealth" {
         15
@@ -908,7 +915,7 @@ fn validate_observation_check(
         || check.difficulty_class != u32::from(difficulty_class)
         || check.succeeded != (total >= i32::from(difficulty_class))
     {
-        return Err(invalid());
+        return Err(invalid("SearchReceiptMismatch"));
     }
     Ok(())
 }
@@ -973,13 +980,13 @@ pub(super) fn select(
                 if action != rpc::GameplayActionKind::EndTurn
                     || !journey::tactical::dying(current.state())?
                 {
-                    return invalid();
+                    return invalid("FightActionOutsideDyingTurn");
                 }
                 script
                     .beats
                     .iter()
                     .find(|beat| beat.kind == BeatKind::Fight)
-                    .ok_or(RepositoryError::InvalidCandidate)?
+                    .ok_or_else(|| refusal("DyingFightBeatMissing"))?
             };
             let source_kind = if matches!(
                 action,
@@ -994,7 +1001,7 @@ pub(super) fn select(
                 .iter()
                 .find(|offer| offer.effect.action() == source_kind)
                 .cloned()
-                .ok_or(RepositoryError::InvalidCandidate);
+                .ok_or_else(|| refusal("FightSourceOfferMissing"));
         }
         let mut submitted = choices
             .iter()
@@ -1004,13 +1011,13 @@ pub(super) fn select(
             || (!script.is_canonical() && id.is_none())
             || (script.is_canonical() && id.is_some())
         {
-            return invalid();
+            return invalid("SubmittedChoiceCountOrMode");
         }
         beat.offers
             .iter()
             .find(|offer| offer.effect.action() == action && id.is_none_or(|id| offer.id == id))
             .cloned()
-            .ok_or(RepositoryError::InvalidCandidate)
+            .ok_or_else(|| refusal("SubmittedOfferMissing"))
     })
 }
 pub(super) fn matches_id(
@@ -1222,7 +1229,7 @@ pub(super) fn action_label(
             rpc::GameplayActionKind::Stand => "Stand up",
             rpc::GameplayActionKind::PickUpWeapon => "Pick up weapon",
             rpc::GameplayActionKind::HelpAttack => "Help an ally attack",
-            _ => return Err(RepositoryError::InvalidCandidate),
+            _ => return Err(refusal("UnsupportedFightActionLabel")),
         }
         .to_owned());
     }
@@ -1239,7 +1246,7 @@ pub(super) fn action_label(
                                 offer.id == offer_id && offer.effect == BeatEffect::Resolve
                             })
                     })
-                    .ok_or(RepositoryError::InvalidCandidate)?;
+                    .ok_or_else(|| refusal("ResolutionLabelOfferMissing"))?;
                 return script.label(offer);
             }
             if kind == rpc::GameplayActionKind::ExamineHarborSeal {
@@ -1247,13 +1254,13 @@ pub(super) fn action_label(
             }
             return Ok(pack::offer_label(kind));
         }
-        let submitted = submitted_id(id).ok_or(RepositoryError::InvalidCandidate)?;
+        let submitted = submitted_id(id).ok_or_else(|| refusal("SubmittedOfferIdMalformed"))?;
         let offer = script
             .beats
             .iter()
             .flat_map(|beat| &beat.offers)
             .find(|o| o.id == submitted && o.effect.action() == kind)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("SubmittedLabelOfferMissing"))?;
         script.label(offer)
     })
 }
@@ -1281,10 +1288,10 @@ pub(super) fn end_for_total_party_death(state: &mut GameState) -> Result<(), Rep
                 .iter()
                 .filter(|offer| offer.effect == BeatEffect::Resolve);
             let Some(resolve) = resolutions.next() else {
-                return invalid();
+                return invalid("ResolutionOfferMissing");
             };
             if resolutions.next().is_some() {
-                return invalid();
+                return invalid("ResolutionOfferAmbiguous");
             }
             let Some(transition) = beat.transitions.iter().find(|transition| {
                 transition.trigger
@@ -1292,16 +1299,16 @@ pub(super) fn end_for_total_party_death(state: &mut GameState) -> Result<(), Rep
                         offer: resolve.id.clone(),
                     })
             }) else {
-                return invalid();
+                return invalid("ResolutionTransitionMissing");
             };
             let Some(next) = script.find(&transition.target) else {
-                return invalid();
+                return invalid("ResolutionTargetMissing");
             };
             let durable = next.state.durable.clone();
             advance_state(state, &durable)?;
             beat = script.current(state)?;
         }
-        invalid()
+        invalid("ResolutionChainExhausted")
     })
 }
 
@@ -1317,7 +1324,7 @@ pub(super) fn first_action(
                     .flat_map(|beat| &beat.offers)
                     .find(|o| o.id == id)
                     .map(|o| o.effect)
-                    .ok_or(RepositoryError::InvalidCandidate)?;
+                    .ok_or_else(|| refusal("LastEffectOfferMissing"))?;
                 if effect != BeatEffect::BeginStory {
                     return Ok(Some((effect, member)));
                 }
@@ -1338,7 +1345,7 @@ pub(super) fn private_action(
                     .iter()
                     .flat_map(|beat| &beat.offers)
                     .find(|offer| offer.id == id)
-                    .ok_or(RepositoryError::InvalidCandidate)?;
+                    .ok_or_else(|| refusal("LastCourierOfferMissing"))?;
                 if offer.effect == BeatEffect::AskCourier {
                     return Ok(Some((offer.effect, member)));
                 }
@@ -1359,7 +1366,7 @@ pub(super) fn validate_encounter_choices(
     }
     let mut beat = script
         .find(&script.entry)
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refusal("ReplayScriptEntryMissing"))?;
     for decision in &current.state().decisions {
         let Some((_, id, member)) = choice(current.state(), decision)? else {
             continue;
@@ -1368,7 +1375,7 @@ pub(super) fn validate_encounter_choices(
             .offers
             .iter()
             .find(|offer| offer.id == id)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ReplayBeatOfferMissing"))?;
         if offer.effect == BeatEffect::ShortRest
             && !decision.facts.iter().any(|fact_id| {
                 current.state().facts.iter().any(|fact| {
@@ -1399,7 +1406,7 @@ pub(super) fn validate_encounter_choices(
                 receipt.check.as_ref(),
             )?;
         } else if receipt.check.is_some() {
-            refusal_detail::note("search-unexpected-check");
+            refusal_detail::cause("search-unexpected-check", "UnexpectedCheck".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
         let trigger = if offer.effect == BeatEffect::ShortRest {
@@ -1432,13 +1439,13 @@ pub(super) fn validate_encounter_choices(
             .iter()
             .find(|transition| transition.trigger == trigger)
             .and_then(|transition| script.find(&transition.target))
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("ReplayBeatTransitionMissing"))?;
         if journey::accepted(decision)?.phase != phase_of(beat) as i32 {
-            return invalid();
+            return invalid("ReplayTransitionPhaseMismatch");
         }
     }
     if beat.id != script.current(current.state())?.id {
-        return invalid();
+        return invalid("ReplayActiveBeatMismatch");
     }
     Ok(())
 }
@@ -1461,14 +1468,39 @@ pub(super) fn fight_scene(
             })
             .and_then(|transition| script.find(&transition.target))
             .filter(|beat| beat.kind == BeatKind::Fight)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("SelectedFightTransitionMissing"))?;
         match &fight.scene_variant {
             Some(id) => script
                 .scenes
                 .get(id)
                 .cloned()
-                .ok_or(RepositoryError::InvalidCandidate),
+                .ok_or_else(|| refusal("FightSceneVariantMissing")),
             None => Ok(pack::scene(fight.scene)),
         }
     })
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn unordered_beat_decision_history_records_the_exact_invariant() {
+        let current = model::initial().unwrap();
+        let mut state = current.state().clone();
+        let decision = AcceptedDecision {
+            operation: df_types::OperationId::from_bytes(&[9; 16]).unwrap(),
+            revision: current.basis().revision,
+            facts: vec![],
+            draws: vec![],
+            effects: vec![],
+            source_policy: model::label("synthetic-policy").unwrap(),
+            semantic_output: None,
+        };
+        state.decisions = vec![decision.clone(), decision];
+        let _ = df_session::submission::take_refusal_diagnostic();
+        assert!(last_choice(&state).is_err());
+        let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+        assert_eq!(detail.step, "beat-script-state");
+        assert_eq!(detail.cause, "DecisionRevisionOrder");
+    }
 }

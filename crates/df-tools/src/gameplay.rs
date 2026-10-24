@@ -233,40 +233,107 @@ impl Service {
         Ok((role, message))
     }
 }
+fn validate_submit_shape(request: &rpc::SubmitActionRequest) -> Result<(), Status> {
+    let fail = |field: &'static str, actual: usize, limit: usize| {
+        actor::record_ingress_refusal(
+            request.action_kind,
+            "submit-shape",
+            &format!("Capacity field={field} actual={actual} limit={limit}"),
+            tonic::Code::InvalidArgument,
+        );
+        Status::invalid_argument("bounded action fields required")
+    };
+    if request.offer_id.len() > 96 {
+        return Err(fail("offer_id_bytes", request.offer_id.len(), 96));
+    }
+    if let Some(character) = request.character.as_ref() {
+        if character.name.len() > 48 {
+            return Err(fail("character_name_bytes", character.name.len(), 48));
+        }
+        if character.choices.len() > 16 {
+            return Err(fail("character_choices", character.choices.len(), 16));
+        }
+        for choice in &character.choices {
+            if choice.group_id.len() > 64 {
+                return Err(fail("choice_group_bytes", choice.group_id.len(), 64));
+            }
+            if choice.option_id.len() > 64 {
+                return Err(fail("choice_option_bytes", choice.option_id.len(), 64));
+            }
+        }
+        if let Some(appearance) = character
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.appearance.as_ref())
+        {
+            hero_identity::validate_public_description(&appearance.public_description).map_err(
+                |error| {
+                    actor::record_ingress_refusal(
+                        request.action_kind,
+                        "submit-public-description",
+                        &format!(
+                            "{error:?} bytes={} chars={}",
+                            appearance.public_description.len(),
+                            appearance.public_description.chars().count()
+                        ),
+                        tonic::Code::InvalidArgument,
+                    );
+                    Status::invalid_argument(
+                        "Public appearance must fit 2000 characters and 4096 bytes",
+                    )
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod submit_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn oversize_creator_ingress_is_logged_before_actor_admission_without_player_text() {
+        let request = rpc::SubmitActionRequest {
+            action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+            character: Some(rpc::CharacterSelection {
+                name: "secret-player-name".repeat(4),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_submit_shape(&request).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let lines = actor::audit_lines_containing(
+            "step=submit-shape cause=Capacity field=character_name_bytes actual=72 limit=48",
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("secret-player-name"))
+        );
+    }
+}
+
 #[tonic::async_trait]
 impl rpc::action_service_server::ActionService for Service {
     async fn submit(
         &self,
         request: Request<rpc::SubmitActionRequest>,
     ) -> Result<Response<rpc::SubmitActionResponse>, Status> {
-        let credential = credential(&request)?;
+        let action_kind = request.get_ref().action_kind;
+        let credential = credential(&request).inspect_err(|status| {
+            actor::record_ingress_refusal(
+                action_kind,
+                "submit-credential",
+                "CredentialInvalid",
+                status.code(),
+            );
+        })?;
         let request = request.into_inner();
-        if request.offer_id.len() > 96
-            || request.character.as_ref().is_some_and(|character| {
-                character.name.len() > 48
-                    || character.choices.len() > 16
-                    || character
-                        .choices
-                        .iter()
-                        .any(|choice| choice.group_id.len() > 64 || choice.option_id.len() > 64)
-            })
-        {
-            return Err(Status::invalid_argument("bounded action fields required"));
-        }
-        if let Some(identity) = request
-            .character
-            .as_ref()
-            .and_then(|character| character.identity.as_ref())
-        {
-            if let Some(appearance) = &identity.appearance {
-                hero_identity::validate_public_description(&appearance.public_description)
-                    .map_err(|_| {
-                        Status::invalid_argument(
-                            "Public appearance must fit 2000 characters and 4096 bytes",
-                        )
-                    })?;
-            }
-        }
+        validate_submit_shape(&request)?;
         // A scene assault starts a fight through the one entry point every route shares.
         if request.action_kind == rpc::GameplayActionKind::SceneAssault as i32 {
             return self
@@ -302,11 +369,35 @@ impl rpc::action_service_server::ActionService for Service {
                 request,
                 reply,
             })
-            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+            .map_err(|_| {
+                actor::record_ingress_refusal(
+                    action_kind,
+                    "submit-actor-admission",
+                    "QueueFull",
+                    tonic::Code::ResourceExhausted,
+                );
+                Status::resource_exhausted("gameplay actor queue full")
+            })?;
         let outcome = tokio::time::timeout(timing::active().reply, wait)
             .await
-            .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
-            .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+            .map_err(|_| {
+                actor::record_ingress_refusal(
+                    action_kind,
+                    "submit-actor-reply",
+                    "ReplyDeadlineOutcomeUnknown",
+                    tonic::Code::DeadlineExceeded,
+                );
+                Status::deadline_exceeded("retain your gameplay operation for lookup")
+            })?
+            .map_err(|_| {
+                actor::record_ingress_refusal(
+                    action_kind,
+                    "submit-actor-reply",
+                    "ActorStoppedOutcomeUnknown",
+                    tonic::Code::Unavailable,
+                );
+                Status::unavailable("gameplay actor stopped")
+            })??;
         Ok(Response::new(outcome))
     }
 

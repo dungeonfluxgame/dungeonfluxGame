@@ -346,3 +346,18 @@ fn checkpoint_story_selector_enforces_current_recipient_owner_and_bounded_admiss
         assert_eq!(current, unchanged);
     }
 }
+
+#[test]
+fn stale_narrative_request_records_observed_basis_mismatch_without_state_change() {
+    let current = prepared_story();
+    let mut request = input(&current, first(), 40, "begin-story", vec![]);
+    let GameInput::Game(command) = &mut request else {
+        panic!("game command");
+    };
+    command.observed_revision = current.basis().revision.next_sequence().unwrap();
+    let _ = df_session::submission::take_refusal_diagnostic();
+    assert!(select(&current, &request).is_err());
+    let detail = df_session::submission::take_refusal_diagnostic().unwrap();
+    assert_eq!(detail.step, "narrative-transition");
+    assert_eq!(detail.cause, "ObservedBasisMismatch");
+}

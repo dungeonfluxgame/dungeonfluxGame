@@ -26,6 +26,7 @@ mod qualification;
 #[cfg(target_arch = "wasm32")]
 mod qualification_verdict;
 
+mod client_diagnostics;
 mod layout_contract;
 mod music_score;
 #[cfg(any(target_arch = "wasm32", test))]

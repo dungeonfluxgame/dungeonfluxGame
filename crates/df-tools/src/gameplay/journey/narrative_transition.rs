@@ -17,8 +17,12 @@ use super::{
 #[path = "narrative_transition_tests.rs"]
 mod tests;
 
-fn invalid<T>() -> Result<T, RepositoryError> {
-    Err(RepositoryError::InvalidCandidate)
+fn refusal(cause: &'static str) -> RepositoryError {
+    crate::gameplay::refusal_detail::cause("narrative-transition", cause.to_owned());
+    RepositoryError::InvalidCandidate
+}
+fn invalid<T>(cause: &'static str) -> Result<T, RepositoryError> {
+    Err(refusal(cause))
 }
 
 fn native_sources<'a>(
@@ -42,7 +46,7 @@ fn native_sources<'a>(
                     && decision.facts.last() == Some(&source.id)
                     && decision.facts.get(source.ordinal as usize) == Some(&source.id)
             })
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| refusal("SourceDecisionMissing"))?;
         let receipt = accepted(decision)?;
         let prior = index
             .checked_sub(1)
@@ -59,7 +63,7 @@ fn native_sources<'a>(
                         && decision.facts.get(source.ordinal as usize - 1) == Some(&fact.id)
                 }))
         {
-            return invalid();
+            return invalid("SourceReceiptOrCausalHistoryMismatch");
         }
         sources.push((source, receipt));
     }
@@ -74,7 +78,7 @@ pub(super) fn select(
 ) -> Result<Checkpoint, RepositoryError> {
     let command = command(input)?;
     if command.basis != current.basis() || command.observed_revision != current.basis().revision {
-        return invalid();
+        return invalid("ObservedBasisMismatch");
     }
     let GameCommand::ProposeAction {
         actor,
@@ -83,13 +87,13 @@ pub(super) fn select(
         choices,
     } = &command.command
     else {
-        return invalid();
+        return invalid("ExpectedProposeAction");
     };
     if *actor != player_entity(command.member, current)?
         || !targets.is_empty()
         || !choices.is_empty()
     {
-        return invalid();
+        return invalid("ActorTargetsOrChoicesMismatch");
     }
     select_for(current, command.member, action)
 }
@@ -101,11 +105,25 @@ pub(super) fn story_permitted(
     member: MemberId,
 ) -> Result<bool, RepositoryError> {
     super::phase(current)?;
-    match select_for(current, member, &model::content("begin-story")?) {
+    // Offer probing is not a refused command: preserve only the caller's diagnostic.
+    let diagnostic = df_session::submission::take_refusal_diagnostic();
+    let step = crate::gameplay::refusal_detail::take();
+    let result = match select_for(current, member, &model::content("begin-story")?) {
         Ok(_) => Ok(true),
         Err(RepositoryError::InvalidCandidate | RepositoryError::InvalidReceipt) => Ok(false),
         Err(error) => Err(error),
+    };
+    if matches!(result, Ok(false)) {
+        let _ = df_session::submission::take_refusal_diagnostic();
+        let _ = crate::gameplay::refusal_detail::take();
     }
+    if let Some(detail) = diagnostic {
+        df_session::submission::note_refusal_diagnostic(detail.step, detail.cause);
+    }
+    if let Some(step) = step {
+        crate::gameplay::refusal_detail::note(step);
+    }
+    result
 }
 
 /// The active source profile authorizes earned routes only. Its configured balance is
@@ -133,7 +151,7 @@ fn select_for(
         .iter()
         .any(|link| link.member == member)
     {
-        return invalid();
+        return invalid("MemberNotParticipant");
     }
     let room = model::content("room")?;
     let opening = model::content("opening")?;
@@ -149,23 +167,25 @@ fn select_for(
     let alternatives = if phase == rpc::JourneyPhase::Room && *action == begin {
         let party = participants(current);
         if party.len() != 2 || current.state().characters.len() != 2 {
-            return invalid();
+            return invalid("PartyCreationCountMismatch");
         }
         let sources = native_sources(current, &create, rpc::JourneyPhase::Room)?;
         if sources.len() != 2 {
-            return invalid();
+            return invalid("CreationSourceCountMismatch");
         }
         let mut remaining = sources
             .iter()
             .map(|(_, receipt)| receipt.character.as_ref())
             .collect::<Vec<_>>();
         for link in party {
-            let who = link.character.ok_or(RepositoryError::InvalidCandidate)?;
+            let who = link
+                .character
+                .ok_or_else(|| refusal("MemberCharacterMissing"))?;
             let sheet = super::receipt_character_sheet(current.state(), who)?;
             let index = remaining
                 .iter()
                 .position(|candidate| *candidate == Some(&sheet))
-                .ok_or(RepositoryError::InvalidCandidate)?;
+                .ok_or_else(|| refusal("CreationSheetReceiptMismatch"))?;
             remaining.remove(index);
         }
         for (source, _) in sources {
@@ -193,7 +213,7 @@ fn select_for(
     } else if phase == rpc::JourneyPhase::Opening && (*action == ask || *action == escort_action) {
         let sources = native_sources(current, &begin, rpc::JourneyPhase::Opening)?;
         let [(source, _)] = sources.as_slice() else {
-            return invalid();
+            return invalid("OpeningSourceCountMismatch");
         };
         causes.push(BeatCause {
             fact: source.id,
@@ -220,7 +240,7 @@ fn select_for(
             },
         ]
     } else {
-        return invalid();
+        return invalid("ActionUnavailableInPhase");
     };
     let policy = model::label(THREAD_POLICY)?;
     if crate::gameplay::beat_script::with_script(|script| {
@@ -252,7 +272,10 @@ fn select_for(
                 work: 1024 * 1024,
             },
         )
-        .map_err(|_| RepositoryError::InvalidCandidate);
+        .map_err(|error| {
+            crate::gameplay::refusal_detail::cause("narrative-transition", format!("{error:?}"));
+            RepositoryError::InvalidCandidate
+        });
     }
     let budget = native_budget()?;
     let proposal = stage_checkpoint_convergence(
@@ -292,6 +315,9 @@ fn select_for(
             maximum_evidence_bytes: 8192,
         },
     )
-    .map_err(|_| RepositoryError::InvalidCandidate)?;
+    .map_err(|error| {
+        crate::gameplay::refusal_detail::cause("narrative-transition", format!("{error:?}"));
+        RepositoryError::InvalidCandidate
+    })?;
     Ok(proposal.checkpoint)
 }

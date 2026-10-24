@@ -33,19 +33,23 @@ pub(super) fn config() -> Result<tokio_postgres::Config, Status> {
 fn unavailable() -> Status {
     Status::unavailable("Your hero is safe in this game. Not yet saved to your heroes.")
 }
+tokio::task_local! {
+    // Request-local diagnostic classification survives async thread migration.
+    static LIBRARY_FAILURE: std::cell::RefCell<Option<&'static str>>;
+}
+
 fn failure(error: df_persistence::hero_library::LibraryError) -> Status {
-    super::actor::record_audit_line(
-        "hero_library.failure",
-        format!(
-            "HERO_LIBRARY failure class={}",
-            match error {
-                df_persistence::hero_library::LibraryError::Deadline => "deadline",
-                df_persistence::hero_library::LibraryError::NotFound => "not_found",
-                df_persistence::hero_library::LibraryError::InvalidRecord => "invalid_record",
-                df_persistence::hero_library::LibraryError::Database(_) => "database",
-            }
-        ),
-    );
+    let class = match error {
+        df_persistence::hero_library::LibraryError::Deadline => "deadline",
+        df_persistence::hero_library::LibraryError::NotFound => "not_found",
+        df_persistence::hero_library::LibraryError::InvalidRecord => "invalid_record",
+        df_persistence::hero_library::LibraryError::Database(_) => "database",
+    };
+    let _captured = LIBRARY_FAILURE.try_with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(class);
+        }
+    });
     unavailable()
 }
 pub(super) async fn open() -> Result<HeroLibrary, Status> {
@@ -356,9 +360,8 @@ fn portrait_matches(hero: &rpc::LibraryHeroIdentity, previous: &rpc::LibraryHero
         && hero.portrait_scenery == previous.portrait_scenery
         && hero.design == previous.design
 }
-#[tonic::async_trait]
-impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
-    async fn list_my_heroes(
+impl super::Service {
+    async fn list_my_heroes_inner(
         &self,
         request: Request<rpc::ListMyHeroesRequest>,
     ) -> Result<Response<rpc::ListMyHeroesResponse>, Status> {
@@ -376,11 +379,11 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
                 .map_err(failure)
         })
         .await
-        .map_err(|_| unavailable())??;
+        .map_err(|_| failure(df_persistence::hero_library::LibraryError::Deadline))??;
         let response = summaries_page(&rows);
         Ok(Response::new(response))
     }
-    async fn load_hero(
+    async fn load_hero_inner(
         &self,
         request: Request<rpc::LoadHeroRequest>,
     ) -> Result<Response<rpc::LoadHeroResponse>, Status> {
@@ -408,10 +411,13 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
                 .await?
                 .load(&key, body.hero_id)
                 .await
-                .map_err(|_| Status::not_found("Hero unavailable"))
+                .map_err(|error| {
+                    let _classified = failure(error);
+                    Status::not_found("Hero unavailable")
+                })
         })
         .await
-        .map_err(|_| unavailable())??;
+        .map_err(|_| failure(df_persistence::hero_library::LibraryError::Deadline))??;
         let hero = rpc::LibraryHeroIdentity::decode(row.record.encoded.as_slice())
             .map_err(|_| unavailable())?;
         if !row.record.portrait.is_empty() {
@@ -460,7 +466,7 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
             summary: Some(summary(&row)),
         }))
     }
-    async fn save_my_seat_hero(
+    async fn save_my_seat_hero_inner(
         &self,
         request: Request<rpc::SaveMySeatHeroRequest>,
     ) -> Result<Response<rpc::SaveMySeatHeroResponse>, Status> {
@@ -551,26 +557,101 @@ impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
             Ok::<_, Status>(reference)
         })
         .await
-        .map_err(|_| unavailable())??;
-        super::actor::record_audit_line(
-            "hero_library.saved",
-            format!(
-                "HERO_LIBRARY saved hero={} revision={}",
-                reference.hero_id, reference.revision
-            ),
-        );
+        .map_err(|_| failure(df_persistence::hero_library::LibraryError::Deadline))??;
         Ok(Response::new(rpc::SaveMySeatHeroResponse {
             hero_id: reference.hero_id,
             revision: reference.revision as u64,
         }))
     }
 }
+async fn observe_library<T>(
+    operation: &'static str,
+    seat_hash: String,
+    work: impl std::future::Future<Output = Result<T, Status>>,
+) -> Result<T, Status> {
+    LIBRARY_FAILURE.scope(std::cell::RefCell::new(None), async {
+        let result = work.await;
+        let cause = LIBRARY_FAILURE.with(|slot| *slot.borrow());
+        let (outcome, reason) = match &result {
+            Ok(_) => ("ready", "success".to_owned()),
+            Err(status) => ("failed", cause.map_or_else(|| format!("{:?}", status.code()), str::to_owned)),
+        };
+        super::actor::record_audit_line("hero_library.outcome", format!("HERO_LIBRARY operation={operation} seat_hash={seat_hash} outcome={outcome} reason={reason}"));
+        result
+    }).await
+}
+
+#[tonic::async_trait]
+impl rpc::hero_library_service_server::HeroLibraryService for super::Service {
+    async fn list_my_heroes(
+        &self,
+        request: Request<rpc::ListMyHeroesRequest>,
+    ) -> Result<Response<rpc::ListMyHeroesResponse>, Status> {
+        let seat_hash = super::credential(&request)
+            .ok()
+            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .unwrap_or_else(|| "unscoped".to_owned());
+        observe_library("list", seat_hash, self.list_my_heroes_inner(request)).await
+    }
+    async fn load_hero(
+        &self,
+        request: Request<rpc::LoadHeroRequest>,
+    ) -> Result<Response<rpc::LoadHeroResponse>, Status> {
+        let seat_hash = super::credential(&request)
+            .ok()
+            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .unwrap_or_else(|| "unscoped".to_owned());
+        observe_library("load", seat_hash, self.load_hero_inner(request)).await
+    }
+    async fn save_my_seat_hero(
+        &self,
+        request: Request<rpc::SaveMySeatHeroRequest>,
+    ) -> Result<Response<rpc::SaveMySeatHeroResponse>, Status> {
+        let seat_hash = super::credential(&request)
+            .ok()
+            .map(|binding| format!("{:x}", Sha256::digest(binding)))
+            .unwrap_or_else(|| "unscoped".to_owned());
+        observe_library("save", seat_hash, self.save_my_seat_hero_inner(request)).await
+    }
+}
+
 #[cfg(test)]
 #[path = "../gameplay_browser/hero_draft_storage.rs"]
 mod draft_storage_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn library_outcome_keeps_one_typed_reason_per_scoped_seat() {
+        for (error, reason) in [
+            (
+                df_persistence::hero_library::LibraryError::Deadline,
+                "deadline",
+            ),
+            (
+                df_persistence::hero_library::LibraryError::NotFound,
+                "not_found",
+            ),
+            (
+                df_persistence::hero_library::LibraryError::InvalidRecord,
+                "invalid_record",
+            ),
+        ] {
+            let result: Result<(), Status> =
+                observe_library("test", format!("synthetic-seat-{reason}"), async {
+                    tokio::task::yield_now().await;
+                    Err(failure(error))
+                })
+                .await;
+            assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
+            let lines = super::super::actor::audit_lines_containing(&format!(
+                "HERO_LIBRARY operation=test seat_hash=synthetic-seat-{reason}"
+            ));
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].ends_with(&format!("outcome=failed reason={reason}")));
+        }
+    }
+
     #[test]
     fn loaded_origin_wire_reference_and_portrait_survive_without_process_state() {
         let request = rpc::SaveMySeatHeroRequest {

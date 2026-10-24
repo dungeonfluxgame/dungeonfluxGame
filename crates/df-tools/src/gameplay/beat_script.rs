@@ -175,6 +175,7 @@ impl fmt::Display for ScriptError {
 }
 impl std::error::Error for ScriptError {}
 fn refuse(beat: &str, reason: ScriptErrorReason) -> ScriptError {
+    refusal_detail::cause("beat-script-validation", format!("{reason:?}"));
     ScriptError {
         beat: beat.into(),
         reason,
@@ -1122,7 +1123,10 @@ pub(super) fn validate_resume(current: &Checkpoint) -> Result<(), ScriptResumeEr
     let pins = model::pins().map_err(|_| ScriptResumeError::InvalidState)?;
     current
         .validate_resume(current.basis(), &pins)
-        .map_err(|_| ScriptResumeError::RevisionMismatch)?;
+        .map_err(|error| {
+            refusal_detail::cause("beat-script-resume", format!("{error:?}"));
+            ScriptResumeError::RevisionMismatch
+        })?;
     journey::phase(current)
         .map(|_| ())
         .map_err(|_| ScriptResumeError::InvalidState)

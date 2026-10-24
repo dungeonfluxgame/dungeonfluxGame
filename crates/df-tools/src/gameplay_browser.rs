@@ -113,6 +113,8 @@ struct VisibilityWatch {
 struct Reconnect {
     /// Retries made since the connection last delivered a view.
     attempt: u32,
+    /// Diagnostic copy of this retry's scheduled delay, carried into its outcome record.
+    delay_ms: u32,
     /// Identifies the retry that may still run; any newer connect attempt cancels older ones.
     token: u64,
 }
@@ -899,6 +901,9 @@ fn attach_visibility(document: &Document, client: &Rc<RefCell<Client>>) -> Resul
             return;
         };
         let document_hidden = client.borrow().document.hidden();
+        if let Some(creator) = client.borrow().creation.as_ref() {
+            creator.observe_portrait_visibility(document_hidden);
+        }
         if document_hidden {
             hidden_since.set(Some(js_sys::Date::now()));
         } else if hidden_since.take().is_some() {
@@ -976,10 +981,24 @@ fn connect(client: Rc<RefCell<Client>>) {
     let owned = client.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let run = async {
+            presentation_timing::diagnostic(
+                &owned.borrow().root,
+                crate::client_diagnostics::Diagnostic::ReconnectAttempt,
+                0,
+                owned.borrow().reconnect.attempt,
+                owned.borrow().reconnect.delay_ms,
+            );
             let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
-            let (connection, channel) = BrowserConnection::connect(&url)
-                .await
-                .map_err(|_| "Game connection unavailable")?;
+            let (connection, channel) = BrowserConnection::connect(&url).await.map_err(|_| {
+                presentation_timing::diagnostic(
+                    &owned.borrow().root,
+                    crate::client_diagnostics::Diagnostic::ReconnectFailed,
+                    0,
+                    owned.borrow().reconnect.attempt,
+                    owned.borrow().reconnect.delay_ms,
+                );
+                "Game connection unavailable"
+            })?;
             if owned.borrow().generation != generation {
                 connection.close();
                 return Ok::<(), String>(());
@@ -1015,6 +1034,13 @@ fn connect(client: Rc<RefCell<Client>>) {
                 state.connection = Some(connection);
             }
             presentation_timing::connect(&owned, timing_channel);
+            presentation_timing::diagnostic(
+                &owned.borrow().root,
+                crate::client_diagnostics::Diagnostic::ReconnectReady,
+                0,
+                owned.borrow().reconnect.attempt,
+                owned.borrow().reconnect.delay_ms,
+            );
             // Reconnect refreshes local input/busy state from the retained snapshot.
             // A duplicate server frame never replaces that snapshot.
             redraw_current(&owned).map_err(|_| "Saved view could not be displayed")?;
@@ -1202,6 +1228,7 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
+        state.reconnect.delay_ms = wait.as_millis().min(u128::from(u32::MAX)) as u32;
         let preparing = state.preparing_adventure
             || state
                 .views
@@ -1235,6 +1262,13 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
         );
         (state.reconnect.token, wait, state.role == "display")
     };
+    presentation_timing::diagnostic(
+        &client.borrow().root,
+        crate::client_diagnostics::Diagnostic::ReconnectScheduled,
+        0,
+        client.borrow().reconnect.attempt,
+        wait.as_millis().min(u128::from(u32::MAX)) as u32,
+    );
     let weak = Rc::downgrade(client);
     wasm_bindgen_futures::spawn_local(async move {
         gloo_timers::future::TimeoutFuture::new(
@@ -1249,6 +1283,13 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
             state.reconnect.token == token && state.connection.is_none()
         };
         if !due {
+            presentation_timing::diagnostic(
+                &client.borrow().root,
+                crate::client_diagnostics::Diagnostic::ReconnectCancelled,
+                0,
+                client.borrow().reconnect.attempt,
+                0,
+            );
             return;
         }
         if display && refused {
@@ -1695,18 +1736,82 @@ fn portrait_creation(
             if let Some(creator) = client.borrow().creation.as_ref() {
                 creator.apply_portrait(draft_version, "failed", "", &error);
             }
+            presentation_timing::diagnostic(
+                &client.borrow().root,
+                crate::client_diagnostics::Diagnostic::PortraitStoppedInvalidRequest,
+                0,
+                0,
+                0,
+            );
             return;
         }
     };
+    let operation_hash = crate::client_diagnostics::operation_hash(
+        body.operation_id
+            .as_ref()
+            .and_then(|id| id.value.as_deref())
+            .unwrap_or_default(),
+    );
+    let root = client.borrow().root.clone();
+    if let Some(creator) = client.borrow().creation.as_ref() {
+        creator.observe_portrait_operation(operation_hash);
+    }
+    presentation_timing::diagnostic(
+        &root,
+        crate::client_diagnostics::Diagnostic::PortraitRequestStart,
+        operation_hash,
+        0,
+        0,
+    );
     let weak = Rc::downgrade(client);
     wasm_bindgen_futures::spawn_local(async move {
+        use crate::client_diagnostics::Diagnostic;
         let mut first = true;
-        for _ in 0..240 {
+        let mut timer_started: Option<f64> = None;
+        for attempt in 0..240 {
+            if let Some(started) = timer_started.take() {
+                let elapsed = (js_sys::Date::now() - started).max(0.0) as u32;
+                if elapsed > 1_500 {
+                    presentation_timing::diagnostic(
+                        &root,
+                        Diagnostic::PortraitTimerThrottled,
+                        operation_hash,
+                        attempt,
+                        elapsed,
+                    );
+                }
+            }
             let Some(client) = weak.upgrade() else {
                 return;
             };
-            if client.borrow().generation != generation || client.borrow().creation.is_none() {
+            if client.borrow().generation != generation {
+                presentation_timing::diagnostic(
+                    &root,
+                    Diagnostic::PortraitStoppedScopeChanged,
+                    operation_hash,
+                    attempt,
+                    0,
+                );
                 return;
+            }
+            if client.borrow().creation.is_none() {
+                presentation_timing::diagnostic(
+                    &root,
+                    Diagnostic::PortraitStoppedCreatorClosed,
+                    operation_hash,
+                    attempt,
+                    0,
+                );
+                return;
+            }
+            if client.borrow().document.hidden() {
+                presentation_timing::diagnostic(
+                    &root,
+                    Diagnostic::PortraitPageHidden,
+                    operation_hash,
+                    attempt,
+                    0,
+                );
             }
             let result = match request(body.clone(), &credential) {
                 Ok(mut request) => {
@@ -1717,12 +1822,28 @@ fn portrait_creation(
                         action.get_hero_portrait(request).await
                     }
                 }
-                Err(_) => return,
+                Err(_) => {
+                    presentation_timing::diagnostic(
+                        &root,
+                        Diagnostic::PortraitStoppedInvalidRequest,
+                        operation_hash,
+                        attempt,
+                        0,
+                    );
+                    return;
+                }
             };
             first = false;
             let pending = match result {
                 Ok(response) => {
                     let response = response.into_inner();
+                    let diagnostic = match response.state.as_str() {
+                        "pending" => Diagnostic::PortraitPollPending,
+                        "ready" => Diagnostic::PortraitPollReady,
+                        "failed" => Diagnostic::PortraitPollFailed,
+                        _ => Diagnostic::PortraitPollUnknown,
+                    };
+                    presentation_timing::diagnostic(&root, diagnostic, operation_hash, attempt, 0);
                     if let Some(creator) = client.borrow().creation.as_ref() {
                         creator.apply_portrait(
                             response.draft_revision,
@@ -1734,6 +1855,13 @@ fn portrait_creation(
                     response.state == "pending"
                 }
                 Err(error) => {
+                    presentation_timing::diagnostic(
+                        &root,
+                        Diagnostic::PortraitStoppedRpcFailed,
+                        operation_hash,
+                        attempt,
+                        0,
+                    );
                     if let Some(creator) = client.borrow().creation.as_ref() {
                         creator.apply_portrait(draft_version, "unknown", "", error.message());
                     }
@@ -1741,11 +1869,26 @@ fn portrait_creation(
                 }
             };
             if !pending {
+                presentation_timing::diagnostic(
+                    &root,
+                    Diagnostic::PortraitStoppedTerminal,
+                    operation_hash,
+                    attempt,
+                    0,
+                );
                 return;
             }
+            timer_started = Some(js_sys::Date::now());
             drop(client);
             gloo_timers::future::TimeoutFuture::new(1000).await;
         }
+        presentation_timing::diagnostic(
+            &root,
+            Diagnostic::PortraitStoppedExhausted,
+            operation_hash,
+            240,
+            0,
+        );
         if let Some(client) = weak.upgrade() {
             if let Some(creator) = client.borrow().creation.as_ref() {
                 creator.apply_portrait(

@@ -29,6 +29,33 @@ pub enum RepositoryError {
     Unavailable,
 }
 
+/// Safe diagnostic facts from synchronous candidate admission on the session owner's thread.
+/// Callers supply static stage names and typed error variants/counts only, never source text.
+/// The owner clears this slot before every reduction; the innermost failure wins.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefusalDiagnostic {
+    pub step: &'static str,
+    pub cause: String,
+}
+thread_local! {
+    static REFUSAL_DIAGNOSTIC: std::cell::RefCell<Option<RefusalDiagnostic>> = const { std::cell::RefCell::new(None) };
+}
+pub fn note_refusal_diagnostic(step: &'static str, cause: String) {
+    REFUSAL_DIAGNOSTIC.with_borrow_mut(|slot| {
+        if slot.is_none() {
+            *slot = Some(RefusalDiagnostic { step, cause });
+        }
+    });
+}
+pub fn take_refusal_diagnostic() -> Option<RefusalDiagnostic> {
+    REFUSAL_DIAGNOSTIC.with_borrow_mut(Option::take)
+}
+
+fn refused(step: &'static str, error: RepositoryError) -> SubmissionOutcome {
+    note_refusal_diagnostic(step, format!("{error:?}"));
+    SubmissionOutcome::Refused(error)
+}
+
 /// Errors that refuse an operation outright, decided from the request and the
 /// current state alone: no write was attempted and no commit can be in doubt.
 fn definitive_refusal(error: RepositoryError) -> bool {
@@ -219,9 +246,13 @@ pub trait SessionEngine<S: OperationScope> {
     ) -> TransitionResult<RepositoryError> {
         match self.decide(current, operation, input) {
             Ok(candidate) => TransitionResult::classify(current, candidate, operation.operation())
-                .unwrap_or(TransitionResult::Rejected(
-                    RepositoryError::InvalidCandidate,
-                )),
+                .unwrap_or_else(|error| {
+                    note_refusal_diagnostic(
+                        "session-transition-classification",
+                        format!("{error:?}"),
+                    );
+                    TransitionResult::Rejected(RepositoryError::InvalidCandidate)
+                }),
             Err(error) => TransitionResult::Rejected(error),
         }
     }
@@ -554,18 +585,18 @@ where
     ) -> SubmissionOutcome {
         let key = match self.capture_uncertainty_key(operation) {
             Ok(key) => key,
-            Err(error) => return SubmissionOutcome::Refused(error),
+            Err(error) => return refused("session-uncertainty-key", error),
         };
         if matches!(&self.cache, CacheState::Uncertain(unresolved) if unresolved == &key)
             && let Err(error) = self.repository.recover_connection(context)
         {
-            return SubmissionOutcome::Refused(error);
+            return refused("repository-recover-connection", error);
         }
         match self.repository.lookup_operation(operation, context) {
             Ok(OperationLookup::Committed(receipt)) => {
                 if let Err(error) = self.check_receipt(&receipt, operation) {
                     self.fence_uncertain(key);
-                    return SubmissionOutcome::Refused(error);
+                    return refused("session-receipt-validation", error);
                 }
                 if matches!(&self.cache, CacheState::Current)
                     && receipt.basis().revision > self.checkpoint.basis().revision
@@ -594,7 +625,7 @@ where
             Ok(OperationLookup::NotRecorded) => {}
             Err(error) => {
                 self.fence_unless_definitive_refusal(key, error);
-                return SubmissionOutcome::Refused(error);
+                return refused("repository-lookup", error);
             }
         }
         if operation.is_lookup_only() {
@@ -605,21 +636,28 @@ where
             return SubmissionOutcome::LookupRequired;
         }
         if operation.session() != self.checkpoint.basis().session {
-            return SubmissionOutcome::Refused(RepositoryError::InputBinding);
+            return refused("session-input-binding", RepositoryError::InputBinding);
         }
         if self.checkpoint.basis().revision.next_sequence().is_err() {
-            return SubmissionOutcome::Refused(RepositoryError::SequenceExhausted);
+            return refused("session-revision", RepositoryError::SequenceExhausted);
         }
-        let valid = match mode {
+        let validation = match mode {
             CommitMode::Extend => {
-                validate_candidate(&self.checkpoint, candidate, operation.operation()).is_ok()
+                validate_candidate(&self.checkpoint, candidate, operation.operation())
             }
             CommitMode::Rewind => {
-                validate_rewind(&self.checkpoint, candidate, operation.operation()).is_ok()
+                validate_rewind(&self.checkpoint, candidate, operation.operation())
             }
         };
-        if !valid {
-            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+        if let Err(error) = validation {
+            note_refusal_diagnostic(
+                "session-candidate-validation",
+                format!("{error:?} mode={mode:?}"),
+            );
+            return refused(
+                "session-candidate-validation",
+                RepositoryError::InvalidCandidate,
+            );
         }
         let Some(decision) = candidate
             .state()
@@ -627,10 +665,21 @@ where
             .iter()
             .find(|d| d.operation == operation.operation())
         else {
-            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+            return refused(
+                "session-candidate-decision",
+                RepositoryError::InvalidCandidate,
+            );
         };
         if receipt_retained_bytes(decision).is_none_or(|bytes| bytes > self.maximum_receipt_bytes) {
-            return SubmissionOutcome::Refused(RepositoryError::Capacity);
+            note_refusal_diagnostic(
+                "session-receipt-budget",
+                format!(
+                    "Capacity actual={:?} limit={}",
+                    receipt_retained_bytes(decision),
+                    self.maximum_receipt_bytes
+                ),
+            );
+            return refused("session-receipt-budget", RepositoryError::Capacity);
         }
         match self.repository.commit_decision(
             operation,
@@ -677,7 +726,7 @@ where
             Ok(CommitOutcome::PreviouslyCommitted(receipt)) => {
                 if let Err(error) = self.check_receipt(&receipt, operation) {
                     self.fence_uncertain(key);
-                    return SubmissionOutcome::Refused(error);
+                    return refused("session-receipt-validation", error);
                 }
                 self.cache = CacheState::ReloadRequired;
                 let _reload_outcome = self.reload(operation, context, Some(&receipt));
@@ -697,7 +746,7 @@ where
                 ) {
                     self.cache = CacheState::ReloadRequired;
                 }
-                SubmissionOutcome::Refused(error)
+                refused("repository-commit", error)
             }
         }
     }
@@ -722,13 +771,13 @@ where
         context: &OperationContext,
     ) -> SubmissionOutcome {
         if let Err(error) = operation.validate_input(input) {
-            return SubmissionOutcome::Refused(error);
+            return refused("session-input-validation", error);
         }
         // Capture before any repository call. A capacity failure is a known local
         // refusal and cannot erase an earlier unknown or run an untracked operation.
         let key = match self.capture_uncertainty_key(operation) {
             Ok(key) => key,
-            Err(error) => return SubmissionOutcome::Refused(error),
+            Err(error) => return refused("session-uncertainty-key", error),
         };
         // Only the exact unresolved key may recover its displaced connection.
         // Other keys still require independently authorized retained lookup; a
@@ -736,13 +785,13 @@ where
         if matches!(&self.cache, CacheState::Uncertain(unresolved) if unresolved == &key)
             && let Err(error) = self.repository.recover_connection(context)
         {
-            return SubmissionOutcome::Refused(error);
+            return refused("repository-recover-connection", error);
         }
         match self.repository.lookup_operation(operation, context) {
             Ok(OperationLookup::Committed(receipt)) => {
                 if let Err(error) = self.check_receipt(&receipt, operation) {
                     self.fence_uncertain(key);
-                    return SubmissionOutcome::Refused(error);
+                    return refused("session-receipt-validation", error);
                 }
                 if matches!(&self.cache, CacheState::Current)
                     && receipt.basis().revision > self.checkpoint.basis().revision
@@ -778,7 +827,7 @@ where
                 // permit another key to execute around an unknown result. A
                 // definitive refusal is known not to have committed.
                 self.fence_unless_definitive_refusal(key, error);
-                return SubmissionOutcome::Refused(error);
+                return refused("repository-lookup", error);
             }
         }
         if operation.is_lookup_only() {
@@ -789,29 +838,32 @@ where
             return SubmissionOutcome::LookupRequired;
         }
         if operation.session() != self.checkpoint.basis().session {
-            return SubmissionOutcome::Refused(RepositoryError::InputBinding);
+            return refused("session-input-binding", RepositoryError::InputBinding);
         }
         if self.checkpoint.basis().revision.next_sequence().is_err() {
-            return SubmissionOutcome::Refused(RepositoryError::SequenceExhausted);
+            return refused("session-revision", RepositoryError::SequenceExhausted);
         }
         let transition = self
             .engine
             .decide_transition(&self.checkpoint, operation, input);
-        if transition
-            .validate(&self.checkpoint, operation.operation())
-            .is_err()
-        {
-            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+        if let Err(error) = transition.validate(&self.checkpoint, operation.operation()) {
+            note_refusal_diagnostic("session-transition-validation", format!("{error:?}"));
+            return refused(
+                "session-transition-validation",
+                RepositoryError::InvalidCandidate,
+            );
         }
         let candidate = match transition {
             TransitionResult::Accepted(candidate) | TransitionResult::Pending { candidate, .. } => {
                 candidate
             }
-            TransitionResult::Rejected(error) => return SubmissionOutcome::Refused(error),
+            TransitionResult::Rejected(error) => {
+                return refused("session-engine-transition", error);
+            }
         };
         if let Err(error) = validate_candidate(&self.checkpoint, &candidate, operation.operation())
         {
-            return SubmissionOutcome::Refused(error);
+            return refused("session-candidate", error);
         }
         let Some(decision) = candidate
             .state()
@@ -819,10 +871,21 @@ where
             .iter()
             .find(|d| d.operation == operation.operation())
         else {
-            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+            return refused(
+                "session-candidate-decision",
+                RepositoryError::InvalidCandidate,
+            );
         };
         if receipt_retained_bytes(decision).is_none_or(|bytes| bytes > self.maximum_receipt_bytes) {
-            return SubmissionOutcome::Refused(RepositoryError::Capacity);
+            note_refusal_diagnostic(
+                "session-receipt-budget",
+                format!(
+                    "Capacity actual={:?} limit={}",
+                    receipt_retained_bytes(decision),
+                    self.maximum_receipt_bytes
+                ),
+            );
+            return refused("session-receipt-budget", RepositoryError::Capacity);
         }
         match self.repository.commit_decision(
             operation,
@@ -869,7 +932,7 @@ where
             Ok(CommitOutcome::PreviouslyCommitted(receipt)) => {
                 if let Err(error) = self.check_receipt(&receipt, operation) {
                     self.fence_uncertain(key);
-                    return SubmissionOutcome::Refused(error);
+                    return refused("session-receipt-validation", error);
                 }
                 self.cache = CacheState::ReloadRequired;
                 let _reload_outcome = self.reload(operation, context, Some(&receipt));
@@ -889,7 +952,7 @@ where
                 ) {
                     self.cache = CacheState::ReloadRequired;
                 }
-                SubmissionOutcome::Refused(error)
+                refused("repository-commit", error)
             }
         }
     }
@@ -936,6 +999,10 @@ fn validate_candidate(
         || actual.revision != next
         || current.pins() != candidate.pins()
     {
+        note_refusal_diagnostic(
+            "session-candidate-validation",
+            "BasisOrPinsMismatch".to_owned(),
+        );
         return Err(RepositoryError::InvalidCandidate);
     }
     let history = current.state();
@@ -944,12 +1011,21 @@ fn validate_candidate(
         || !proposed.facts.starts_with(&history.facts)
         || !proposed.draws.starts_with(&history.draws)
     {
+        note_refusal_diagnostic("session-candidate-validation", "HistoryMismatch".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     let Some([decision]) = proposed.decisions.get(history.decisions.len()..) else {
+        note_refusal_diagnostic(
+            "session-candidate-validation",
+            "DecisionCountMismatch".to_owned(),
+        );
         return Err(RepositoryError::InvalidCandidate);
     };
     if decision.operation != operation || decision.revision != next {
+        note_refusal_diagnostic(
+            "session-candidate-validation",
+            "DecisionBindingMismatch".to_owned(),
+        );
         return Err(RepositoryError::InvalidCandidate);
     }
     validate_retained_intents(current, candidate)?;
@@ -982,20 +1058,25 @@ fn validate_rewind(
         || actual.revision != next
         || current.pins() != candidate.pins()
     {
+        note_refusal_diagnostic("session-rewind", "BasisOrPinsMismatch".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     let history = current.state();
     let proposed = candidate.state();
     let Some(dev) = proposed.decisions.last() else {
+        note_refusal_diagnostic("session-rewind", "DecisionMissing".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     if dev.operation != operation || dev.revision != next {
+        note_refusal_diagnostic("session-rewind", "DecisionBindingMismatch".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     if dev.source_policy.as_str() != DEV_REWIND_POLICY || !dev_marked(&dev.semantic_output) {
+        note_refusal_diagnostic("session-rewind", "SourcePolicyMismatch".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     if !dev.facts.is_empty() || !dev.draws.is_empty() || !dev.effects.is_empty() {
+        note_refusal_diagnostic("session-rewind", "UnexpectedNewDecisionEffects".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     if proposed
@@ -1007,15 +1088,19 @@ fn validate_rewind(
             .iter()
             .any(|draw| draw.operation == operation)
     {
+        note_refusal_diagnostic("session-rewind", "UnexpectedNewFactsOrDraws".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     let base_decisions = &proposed.decisions[..proposed.decisions.len() - 1];
     let core_decisions = strip_trailing_dev(&history.decisions);
-    let direction =
-        chain_direction(core_decisions, base_decisions).ok_or(RepositoryError::InvalidCandidate)?;
+    let direction = chain_direction(core_decisions, base_decisions).ok_or_else(|| {
+        note_refusal_diagnostic("session-rewind", "ForeignChainHistory".to_owned());
+        RepositoryError::InvalidCandidate
+    })?;
     if chain_direction(&history.facts, &proposed.facts) != Some(direction)
         || chain_direction(&history.draws, &proposed.draws) != Some(direction)
     {
+        note_refusal_diagnostic("session-rewind", "MixedChainDirection".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     validate_retained_intents(current, candidate)?;
@@ -1065,6 +1150,7 @@ fn validate_retained_intents(
         return Ok(());
     }
     if prior.len() > staged.len() {
+        note_refusal_diagnostic("session-retained-intents", "IntentCountReduced".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     // Checkpoint admission bounds this borrowed index. Retained intent identity
@@ -1072,6 +1158,10 @@ fn validate_retained_intents(
     let by_id: BTreeMap<_, _> = staged.iter().map(|intent| (intent.id, intent)).collect();
     for intent in prior {
         let Some(retained) = by_id.get(&intent.id) else {
+            note_refusal_diagnostic(
+                "session-retained-intents",
+                "RetainedIntentMissing".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         };
         if retained.basis != intent.basis
@@ -1083,6 +1173,10 @@ fn validate_retained_intents(
             || retained.generation != intent.generation
             || retained.definition != intent.definition
         {
+            note_refusal_diagnostic(
+                "session-retained-intents",
+                "RetainedIntentBindingMismatch".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         }
     }

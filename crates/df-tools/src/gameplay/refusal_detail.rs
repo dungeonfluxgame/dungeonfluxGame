@@ -19,6 +19,20 @@ use std::cell::Cell;
 
 thread_local! {
     static REFUSAL_STEP: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static REFUSAL_RECORDED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Each submitted action gets one terminal refusal record, including pre-repository failures.
+pub(super) fn begin_action() {
+    REFUSAL_RECORDED.with(|slot| slot.set(false));
+    let _step = take();
+    let _cause = df_session::submission::take_refusal_diagnostic();
+}
+pub(super) fn recorded() -> bool {
+    REFUSAL_RECORDED.with(Cell::get)
+}
+pub(super) fn mark_recorded() {
+    REFUSAL_RECORDED.with(|slot| slot.set(true));
 }
 
 /// Records `step` as the refusing step for the command being processed on this thread,
@@ -29,6 +43,13 @@ pub(super) fn note(step: &'static str) {
             slot.set(Some(step));
         }
     });
+}
+
+/// Attach a typed safe cause to the existing step, without replacing a deeper diagnostic.
+pub(super) fn cause(step: &'static str, cause: String) {
+    note(step);
+    let step = REFUSAL_STEP.with(Cell::get).unwrap_or(step);
+    df_session::submission::note_refusal_diagnostic(step, cause);
 }
 
 /// Returns the noted step for the current command and clears the slot, so the detail is

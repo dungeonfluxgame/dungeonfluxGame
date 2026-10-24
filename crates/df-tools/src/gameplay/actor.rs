@@ -946,6 +946,7 @@ fn command_refusal_code(error: RepositoryError) -> Option<rpc::RejectionCode> {
 }
 
 pub(super) fn unavailable(error: RepositoryError) -> tonic::Status {
+    refusal_detail::cause("authority", format!("{error:?}"));
     match error {
         RepositoryError::Unauthorized => {
             tonic::Status::permission_denied("local gameplay binding denied")
@@ -964,8 +965,16 @@ fn authority_unavailable() -> tonic::Status {
 /// One `UNAVAILABLE` line on stdout and the same fact on the shared observability path, for every
 /// place the phone is told to retain its operation or reconnect. `site` names the server path.
 pub(super) fn record_unavailable(site: &'static str, reason: &str) {
-    let step = refusal_detail::step_or_unknown();
-    println!("UNAVAILABLE site={site} reason={reason} step={step}");
+    let noted = refusal_detail::step_or_unknown();
+    let diagnostic = df_session::submission::take_refusal_diagnostic();
+    let step = diagnostic.as_ref().map_or_else(
+        || if noted == "unknown" { site } else { noted },
+        |detail| detail.step,
+    );
+    let cause = diagnostic
+        .as_ref()
+        .map_or(reason, |detail| detail.cause.as_str());
+    println!("UNAVAILABLE site={site} reason={reason} step={step} cause={cause}");
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -977,19 +986,75 @@ pub(super) fn record_unavailable(site: &'static str, reason: &str) {
             ("unavailable.site", site.to_owned()),
             ("unavailable.reason", reason.to_owned()),
             ("unavailable.step", step.to_owned()),
+            ("unavailable.cause", cause.to_owned()),
         ],
     );
     span.finish_unmeasured("unavailable");
+    // An enclosing submit still needs the same typed cause on its terminal REFUSAL.
+    if let Some(detail) = diagnostic {
+        df_session::submission::note_refusal_diagnostic(detail.step, detail.cause);
+    }
+    refusal_detail::note(step);
 }
 
 /// One diagnostic per refused or failed gameplay submit: one `REFUSAL` line on stdout and the same
 /// fact on the shared observability path. It names the action kind, the internal reason and the
 /// status the phone receives; it never carries the submitted payload.
-fn record_refusal(action_kind: i32, reason: &str, status: &str) {
+pub(super) fn record_refusal(action_kind: i32, reason: &str, status: &str) {
+    refusal_detail::mark_recorded();
     let kind = rpc::GameplayActionKind::try_from(action_kind)
         .map_or_else(|_| action_kind.to_string(), |kind| format!("{kind:?}"));
-    let step = refusal_detail::step_or_unknown();
-    println!("REFUSAL action={kind} reason={reason} status={status} step={step}");
+    let noted = refusal_detail::step_or_unknown();
+    let diagnostic = df_session::submission::take_refusal_diagnostic();
+    let step = diagnostic.as_ref().map_or_else(
+        || {
+            if noted == "unknown" {
+                "action-admission"
+            } else {
+                noted
+            }
+        },
+        |detail| detail.step,
+    );
+    let cause = diagnostic
+        .as_ref()
+        .map_or(reason, |detail| detail.cause.as_str());
+    emit_refusal(&kind, reason, status, step, cause);
+}
+
+/// Async ingress passes explicit safe facts; it never reads thread-local actor diagnostics.
+pub(super) fn record_ingress_refusal(
+    action_kind: i32,
+    step: &'static str,
+    cause: &str,
+    code: tonic::Code,
+) {
+    let kind = rpc::GameplayActionKind::try_from(action_kind)
+        .map_or_else(|_| action_kind.to_string(), |kind| format!("{kind:?}"));
+    emit_refusal(
+        &kind,
+        &format!("{code:?}"),
+        if matches!(
+            code,
+            tonic::Code::DeadlineExceeded | tonic::Code::Unavailable
+        ) {
+            "lookup-required"
+        } else {
+            "rpc-refused"
+        },
+        step,
+        cause,
+    );
+}
+
+fn emit_refusal(kind: &str, reason: &str, status: &str, step: &str, cause: &str) {
+    let line =
+        format!("REFUSAL action={kind} reason={reason} status={status} step={step} cause={cause}");
+    #[cfg(test)]
+    if let Ok(mut lines) = AUDIT_TAP.lock() {
+        lines.push(line.clone());
+    }
+    println!("{line}");
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -998,12 +1063,57 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     span.event(
         "gameplay.action_refused",
         &[
-            ("action.kind", kind),
+            ("action.kind", kind.to_owned()),
             ("refusal.reason", reason.to_owned()),
             ("refusal.step", step.to_owned()),
+            ("refusal.cause", cause.to_owned()),
         ],
     );
     span.finish_unmeasured(status);
+}
+
+fn record_action_result(
+    action_kind: i32,
+    result: &Result<rpc::SubmitActionResponse, tonic::Status>,
+) {
+    if refusal_detail::recorded() {
+        return;
+    }
+    match result {
+        Err(status) => record_refusal(
+            action_kind,
+            &format!("{:?}", status.code()),
+            if matches!(
+                status.code(),
+                tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+            ) {
+                "lookup-required"
+            } else {
+                "rpc-refused"
+            },
+        ),
+        Ok(response) => match response.outcome.as_ref() {
+            Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {
+                if let Some(rpc::decision_receipt::Outcome::Rejected(rejection)) =
+                    receipt.outcome.as_ref()
+                {
+                    let code = rpc::RejectionCode::try_from(rejection.code).map_or_else(
+                        |_| "UnknownRejection".to_owned(),
+                        |code| format!("{code:?}"),
+                    );
+                    record_refusal(action_kind, &code, "refused");
+                }
+            }
+            Some(rpc::submit_action_response::Outcome::OperationObservation(observation)) => {
+                let code = rpc::RejectionCode::try_from(observation.code).map_or_else(
+                    |_| "UnknownObservation".to_owned(),
+                    |code| format!("{code:?}"),
+                );
+                record_refusal(action_kind, &code, "observation");
+            }
+            _ => {}
+        },
+    }
 }
 
 /// Every audit line written during a test run, so a test can check that a subsystem wrote its line.
@@ -1688,7 +1798,7 @@ impl Actor {
             );
             return;
         }
-        let _cleared = refusal_detail::take();
+        refusal_detail::begin_action();
         self.session.reaction.expiring = Some(pending.clone());
         let result = self.submit(credential, request);
         self.session.reaction.expiring = None;
@@ -3078,10 +3188,24 @@ impl Actor {
         request: rpc::SubmitActionRequest,
         portrait: Option<super::creator_portraits::Attachment>,
     ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
+        refusal_detail::begin_action();
+        let action_kind = request.action_kind;
+        let result = self.submit_appearance_inner(credential, request, portrait);
+        record_action_result(action_kind, &result);
+        result
+    }
+    fn submit_appearance_inner(
+        &mut self,
+        credential: [u8; 32],
+        request: rpc::SubmitActionRequest,
+        portrait: Option<super::creator_portraits::Attachment>,
+    ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
         if self.session_lost() {
+            refusal_detail::cause("action-session", "SessionLost".to_owned());
             return Err(session_lost_status());
         }
         if self.issuer.authenticate(&credential).map_err(unavailable)? != LocalDemoRole::Player {
+            refusal_detail::cause("action-role", "DisplayCannotSubmit".to_owned());
             return Err(tonic::Status::permission_denied(
                 "display bindings cannot submit player actions",
             ));
@@ -3093,6 +3217,7 @@ impl Actor {
         }
         let principal = self.issuer.principal(&credential).map_err(unavailable)?;
         if principal == df_persistence::local_demo_scope::PLAYER {
+            refusal_detail::cause("action-principal", "BootstrapCannotSubmit".to_owned());
             return Err(tonic::Status::permission_denied(
                 "bootstrap scope is not a player client",
             ));
@@ -3113,10 +3238,10 @@ impl Actor {
                 record_audit_line(
                     "gameplay.request_invalid",
                     format!(
-                        "REQUEST invalid action_kind={} choices={} reason={:?}",
+                        "REQUEST invalid action_kind={} choices={} rpc_code={:?}",
                         request.action_kind,
                         request.action_choices.len(),
-                        status.message()
+                        status.code()
                     ),
                 );
             })?;
@@ -3199,6 +3324,7 @@ impl Actor {
         let operation = command.operation;
         let current = self.owner.checkpoint().basis();
         if command.basis.session != current.session {
+            refusal_detail::cause("action-session", "SessionMismatch".to_owned());
             return Err(tonic::Status::permission_denied(
                 "local gameplay scope denied",
             ));
@@ -3285,6 +3411,16 @@ impl Actor {
                         || (super::journey::tactical::present(checkpoint.state())
                             && command.observed_revision != current.revision)
                     {
+                        let cause = if command.basis.run != current.run {
+                            "RunMismatch"
+                        } else if command.basis.revision.epoch() != current.revision.epoch() {
+                            "EpochMismatch"
+                        } else if command.observed_revision > current.revision {
+                            "ObservedFutureRevision"
+                        } else {
+                            "TacticalRevisionMismatch"
+                        };
+                        refusal_detail::cause("action-revision", cause.to_owned());
                         Some(rpc::RejectionCode::StaleOffer)
                     } else if wire::unrelated_payload(&request, kind)
                         || (kind == rpc::GameplayActionKind::CreateCharacter
@@ -3305,6 +3441,14 @@ impl Actor {
                                     .is_err()
                             }))
                     {
+                        let cause = if wire::unrelated_payload(&request, kind) {
+                            "UnrelatedPayload"
+                        } else if request.character.is_none() {
+                            "MissingCharacter"
+                        } else {
+                            "InvalidCharacter"
+                        };
+                        refusal_detail::cause("action-creation-validation", cause.to_owned());
                         Some(rpc::RejectionCode::InvalidSelection)
                     } else {
                         // An offer check that definitively refuses this command
@@ -3322,16 +3466,13 @@ impl Actor {
                             Err(error) => {
                                 let code = command_refusal_code(error)
                                     .ok_or_else(|| unavailable(error))?;
-                                record_refusal(
-                                    request.action_kind,
-                                    &format!("{error:?}"),
-                                    "refused",
-                                );
+                                refusal_detail::cause("action-repository", format!("{error:?}"));
                                 Some(code)
                             }
                         }
                     };
                     if let Some(code) = rejection {
+                        refusal_detail::cause("action-offer-validation", format!("{code:?}"));
                         record_session_machine_refusal(self.owner.checkpoint(), &request);
                         let receipt = wire::rejected(current, operation, code);
                         let bytes = receipt.encode_to_vec();
@@ -3387,7 +3528,7 @@ impl Actor {
                         .send_replace(self.owner.checkpoint().clone());
                 }
                 let accepted = super::journey::accepted(committed.decision()).map_err(|error| {
-                    record_refusal(request.action_kind, &format!("{error:?}"), "unavailable");
+                    refusal_detail::cause("action-repository", format!("{error:?}"));
                     authority_unavailable()
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
@@ -3435,16 +3576,12 @@ impl Actor {
                 Ok(wire::observation(rpc::RejectionCode::OperationConflict))
             }
             SubmissionOutcome::ExpiredOrIndeterminate => {
-                record_refusal(
-                    request.action_kind,
-                    "ExpiredOrIndeterminate",
-                    "lookup-required",
-                );
+                refusal_detail::cause("action-lookup", "ExpiredOrIndeterminate".to_owned());
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
             SubmissionOutcome::LookupRequired => {
-                record_refusal(request.action_kind, "LookupRequired", "lookup-required");
+                refusal_detail::cause("action-lookup", "LookupRequired".to_owned());
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
@@ -3455,7 +3592,7 @@ impl Actor {
                 if self.owner.is_current() && command_refusal_code(error).is_some() =>
             {
                 record_session_machine_refusal(self.owner.checkpoint(), &request);
-                record_refusal(request.action_kind, &format!("{error:?}"), "refused");
+                refusal_detail::cause("action-repository", format!("{error:?}"));
                 Ok(wire::committed(wire::rejected(
                     current,
                     operation,
@@ -3471,7 +3608,7 @@ impl Actor {
                     return Err(unavailable(error));
                 }
                 record_session_machine_refusal(self.owner.checkpoint(), &request);
-                record_refusal(request.action_kind, &format!("{error:?}"), "unavailable");
+                refusal_detail::cause("action-repository", format!("{error:?}"));
                 Err(authority_unavailable())
             }
         }
@@ -4392,7 +4529,7 @@ impl Reducer<Call> for Actor {
     fn reduce(&mut self, _: AdmissionSequence, call: Call) {
         // One command's refusal detail must never be printed for another: every call
         // this owner reduces starts from a cleared slot (see `refusal_detail`).
-        let _cleared = refusal_detail::take();
+        refusal_detail::begin_action();
         // The unauthenticated player shell may learn only the public scene picture name.
         // Reading it is cheap presentation work and must not consume the game call budget.
         let call = match call {
@@ -4488,10 +4625,14 @@ impl Reducer<Call> for Actor {
                         "finite room budget exhausted",
                     )));
                 }
-                Call::Submit { reply, .. } | Call::SubmitAppearance { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                Call::Submit { request, reply, .. }
+                | Call::SubmitAppearance { request, reply, .. } => {
+                    refusal_detail::cause("action-budget", "FiniteCallBudgetExhausted".to_owned());
+                    let result = Err(tonic::Status::resource_exhausted(
                         "finite demonstration call budget exhausted",
-                    )));
+                    ));
+                    record_action_result(request.action_kind, &result);
+                    let _ = reply.send(result);
                 }
                 Call::FightAftermath { reply, .. } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
@@ -4637,6 +4778,7 @@ impl Reducer<Call> for Actor {
                 let result = after_grant_reconnect(reconnected, || {
                     self.submit_appearance(credential, request, portrait)
                 });
+                record_action_result(asked.action_kind, &result);
                 self.begin_test_fight(credential, &asked, &result);
                 reply.send(result).is_ok()
             }
@@ -4648,6 +4790,7 @@ impl Reducer<Call> for Actor {
                 let asked = request.clone();
                 let result =
                     after_grant_reconnect(reconnected, || self.submit(credential, request));
+                record_action_result(asked.action_kind, &result);
                 self.begin_test_fight(credential, &asked, &result);
                 reply.send(result).is_ok()
             }
@@ -4858,6 +5001,68 @@ fn heartbeat_wake(
 #[cfg(test)]
 mod qualification_tests {
     use super::*;
+
+    #[test]
+    fn failed_grant_before_submit_keeps_its_typed_cause_on_the_terminal_refusal() {
+        refusal_detail::begin_action();
+        let result: Result<rpc::SubmitActionResponse, _> =
+            after_grant_reconnect(Err(RepositoryError::Unavailable), || {
+                panic!("failed grant cannot dispatch")
+            });
+        record_action_result(rpc::GameplayActionKind::CreateCharacter as i32, &result);
+        let lines = audit_lines_containing(
+            "REFUSAL action=CreateCharacter reason=Unavailable status=lookup-required step=authority cause=Unavailable",
+        );
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn malformed_creation_and_retained_selection_refusals_are_recorded_once() {
+        let current = model::initial().unwrap();
+        let basis = current.basis();
+        let operation = df_types::OperationId::from_bytes(&[7; 16]).unwrap();
+        let request = rpc::SubmitActionRequest {
+            session_id: Some(rpc::SessionId {
+                value: Some(basis.session.as_bytes().to_vec()),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(basis.run.as_bytes().to_vec()),
+            }),
+            operation_id: Some(rpc::OperationId {
+                value: Some(operation.as_bytes().to_vec()),
+            }),
+            observed_revision: Some(wire::revision(basis.revision)),
+            action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+            character: Some(rpc::CharacterSelection {
+                name: "x".repeat(49),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        refusal_detail::begin_action();
+        let failure = wire::journey_input(&request, model::member().unwrap(), &current)
+            .err()
+            .expect("invalid character bounds");
+        let result = Err(failure);
+        record_action_result(request.action_kind, &result);
+        record_action_result(request.action_kind, &result);
+        let lines = audit_lines_containing(
+            "step=wire-creation-validation cause=character choices exceed bound",
+        );
+        assert_eq!(lines.len(), 1);
+        refusal_detail::begin_action();
+        refusal_detail::cause("action-creation-validation", "MissingCharacter".to_owned());
+        let result = Ok(wire::committed(wire::rejected(
+            basis,
+            operation,
+            rpc::RejectionCode::InvalidSelection,
+        )));
+        record_action_result(request.action_kind, &result);
+        record_action_result(request.action_kind, &result);
+        let lines =
+            audit_lines_containing("step=action-creation-validation cause=MissingCharacter");
+        assert_eq!(lines.len(), 1);
+    }
 
     #[test]
     fn fight_end_audit_uses_the_committed_encounter_outcome() {

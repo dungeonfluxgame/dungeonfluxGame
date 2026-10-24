@@ -211,6 +211,83 @@ pub(super) fn sound(root: &web_sys::Element, source: &'static str, reason: &'sta
     });
 }
 
+/// Page diagnostics reuse the existing bounded lifecycle upload and authenticated PHONE ingress.
+pub(super) fn diagnostic(
+    root: &web_sys::Element,
+    diagnostic: crate::client_diagnostics::Diagnostic,
+    operation_hash: u64,
+    attempt: u32,
+    delay_ms: u32,
+) {
+    let Some(now) = now_ms() else {
+        return;
+    };
+    let event = diagnostic.event(operation_hash, attempt, delay_ms, now);
+    CAPTURES.with_borrow_mut(|captures| {
+        for capture in captures
+            .iter_mut()
+            .filter(|capture| capture.root == *root || capture.root.contains(Some(root)))
+        {
+            retain(capture, event.clone());
+        }
+    });
+}
+
+/// Observe an image after its load/DOM application, at a visible browser paint opportunity.
+/// Frame handles and closures use the existing page capture owner and its disposal cleanup.
+pub(super) fn portrait_display(
+    root: &web_sys::Element,
+    image: &web_sys::Element,
+    operation_hash: u64,
+) {
+    use crate::client_diagnostics::Diagnostic;
+    if root
+        .owner_document()
+        .is_some_and(|document| document.hidden())
+    {
+        diagnostic(root, Diagnostic::PortraitPageHidden, operation_hash, 0, 0);
+    }
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    CAPTURES.with_borrow_mut(|captures| {
+        let Some(capture) = captures
+            .iter_mut()
+            .find(|capture| capture.root == *root || capture.root.contains(Some(root)))
+        else {
+            return;
+        };
+        if capture.frames.len() >= df_observe::presentation::MAX_BUFFER_EVENTS {
+            capture.buffer.report_loss(1);
+            return;
+        }
+        let root = root.clone();
+        let image = image.clone();
+        let callback = Closure::wrap(Box::new(move |_: f64| {
+            let visible = root
+                .owner_document()
+                .is_some_and(|document| !document.hidden());
+            let bounds = image.get_bounding_client_rect();
+            let outcome = if !image.is_connected() || !root.contains(Some(&image)) {
+                Diagnostic::PortraitIgnoredRevision
+            } else if visible
+                && !image.has_attribute("hidden")
+                && bounds.width() > 0.0
+                && bounds.height() > 0.0
+            {
+                Diagnostic::PortraitDisplayed
+            } else {
+                Diagnostic::PortraitPageHidden
+            };
+            diagnostic(&root, outcome, operation_hash, 0, 0);
+        }) as Box<dyn FnMut(f64)>);
+        match window.request_animation_frame(callback.as_ref().unchecked_ref()) {
+            Ok(id) => capture.frames.push((id, callback)),
+            Err(_) => capture.buffer.report_loss(1),
+        }
+    });
+}
+
 /// Called after the adapter successfully applies the conductor's line command. Never pass text.
 pub(super) fn line(
     id: u64,

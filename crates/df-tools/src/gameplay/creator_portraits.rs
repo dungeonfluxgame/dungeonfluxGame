@@ -208,8 +208,15 @@ impl Portraits {
         let Some(identity) = character.identity.clone() else {
             return Ok(None);
         };
-        let identity = super::hero_identity::Identity::from_rpc(identity)
-            .map_err(|_| Status::invalid_argument("Review your public appearance"))?;
+        let identity = super::hero_identity::Identity::from_rpc(identity).map_err(|error| {
+            super::actor::record_ingress_refusal(
+                rpc::GameplayActionKind::CreateCharacter as i32,
+                "creator-portrait-attachment-identity",
+                &format!("{error:?}"),
+                tonic::Code::InvalidArgument,
+            );
+            Status::invalid_argument("Review your public appearance")
+        })?;
         let species = character
             .choices
             .iter()
@@ -230,18 +237,39 @@ impl Portraits {
             selected("class"),
             selected("background"),
         )
-        .map_err(|_| Status::invalid_argument("Review your character design"))?;
+        .map_err(|error| {
+            super::actor::record_ingress_refusal(
+                rpc::GameplayActionKind::CreateCharacter as i32,
+                "creator-portrait-attachment-design",
+                &format!("{error:?}"),
+                tonic::Code::InvalidArgument,
+            );
+            Status::invalid_argument("Review your character design")
+        })?;
         let (public, _) = super::creator_catalog::with_scenery(
             public,
             String::new(),
             &character.portrait_scenery,
         )
-        .map_err(|_| Status::invalid_argument("Review your public portrait scenery"))?;
+        .map_err(|error| {
+            super::actor::record_ingress_refusal(
+                rpc::GameplayActionKind::CreateCharacter as i32,
+                "creator-portrait-attachment-scenery",
+                &format!("{error:?}"),
+                tonic::Code::InvalidArgument,
+            );
+            Status::invalid_argument("Review your public portrait scenery")
+        })?;
         let candidate = {
-            let requests = self
-                .requests
-                .lock()
-                .map_err(|_| Status::unavailable("Portrait status unavailable"))?;
+            let requests = self.requests.lock().map_err(|_| {
+                super::actor::record_ingress_refusal(
+                    rpc::GameplayActionKind::CreateCharacter as i32,
+                    "creator-portrait-attachment-state",
+                    "RequestMapPoisoned",
+                    tonic::Code::Unavailable,
+                );
+                Status::unavailable("Portrait status unavailable")
+            })?;
             requests
                 .values()
                 .filter(|entry| entry.binding == binding && entry.appearance == public)
@@ -397,7 +425,122 @@ fn prepare_portrait(body: &rpc::HeroPortraitRequest) -> Result<PreparedPortrait,
     })
 }
 
+fn portrait_message_key(message: &str) -> &'static str {
+    match message {
+        PREPARING_PORTRAIT | "preparing" => "preparing",
+        CREATING_PORTRAIT | "creating" => "creating",
+        READY_PORTRAIT | "ready" => "ready",
+        "classified" => "classified",
+        "image-bytes" => "image-bytes",
+        _ => {
+            for label in [
+                "classifier_unavailable",
+                "alternate_unavailable",
+                "rating_disallows_appearance",
+                "classification_uncertain",
+                "content_requires_revision",
+                "bfl_submit_failed",
+                "bfl_poll_failed",
+                "bfl_delivery_failed",
+                "bfl_download_failed",
+                "refused",
+                "deadline",
+                "interrupted",
+            ] {
+                if message == label || message == failure_message(label) {
+                    return label;
+                }
+            }
+            "unknown-result"
+        }
+    }
+}
+
+fn portrait_event(
+    operation_hash: &str,
+    event: &'static str,
+    outcome: &str,
+    revision: u64,
+    bytes: usize,
+    message: &str,
+) {
+    let message_key = portrait_message_key(message);
+    let message_hash = format!("{:x}", Sha256::digest(message.as_bytes()));
+    super::actor::record_audit_line(
+        "gameplay.creator_portrait",
+        format!(
+            "CREATOR_PORTRAIT event={event} operation_hash={operation_hash} outcome={outcome} draft_revision={revision} bytes={bytes} message_key={message_key} message_hash={message_hash}"
+        ),
+    );
+}
+
 pub(super) async fn handle(
+    service: &super::Service,
+    request: Request<rpc::HeroPortraitRequest>,
+    dispatch: bool,
+) -> Result<rpc::HeroPortraitResponse, Status> {
+    let operation_hash = super::credential(&request)
+        .ok()
+        .and_then(|binding| {
+            let operation = request.get_ref().operation_id.as_ref()?.value.as_ref()?;
+            Some(format!(
+                "{:x}",
+                Sha256::digest([binding.as_slice(), operation.as_slice()].concat())
+            ))
+        })
+        .unwrap_or_else(|| "unbound".to_owned());
+    let revision = request.get_ref().draft_revision;
+    if dispatch {
+        let client_operation_hash = crate::client_diagnostics::operation_hash(
+            request
+                .get_ref()
+                .operation_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .unwrap_or_default(),
+        );
+        super::actor::record_audit_line(
+            "gameplay.creator_portrait_binding",
+            format!(
+                "CREATOR_PORTRAIT event=operation-binding operation_hash={operation_hash} client_operation_hash={client_operation_hash} draft_revision={revision}"
+            ),
+        );
+    }
+    let result = handle_inner(service, request, dispatch).await;
+    match &result {
+        Ok(response) => portrait_event(
+            &operation_hash,
+            if dispatch {
+                "request-answer"
+            } else {
+                "poll-answer"
+            },
+            &response.state,
+            revision,
+            0,
+            &response.message,
+        ),
+        Err(status) => portrait_event(
+            &operation_hash,
+            if dispatch {
+                "request-answer"
+            } else {
+                "poll-answer"
+            },
+            if status.code() == tonic::Code::NotFound {
+                "unknown"
+            } else {
+                "failed"
+            },
+            revision,
+            0,
+            &format!("rpc-{:?}", status.code()),
+        ),
+    }
+    result
+}
+
+async fn handle_inner(
     service: &super::Service,
     request: Request<rpc::HeroPortraitRequest>,
     dispatch: bool,
@@ -464,6 +607,14 @@ pub(super) async fn handle(
         }
         policy::Admission::Replay => {}
         policy::Admission::New => {
+            portrait_event(
+                &operation_key,
+                "request-admitted",
+                "new",
+                body.draft_revision,
+                0,
+                "preparing",
+            );
             let portrait_binding = format!("{}|{operation_key}", creator_classification::VERSION);
             let general_prompt = imagery::creator_portrait(
                 config::ContentRating::Restrained,
@@ -544,31 +695,44 @@ pub(super) async fn handle(
                     );
                     let progress = job_progress.clone();
                     Box::pin(async move {
+                        portrait_event(&operation, "classification-start", "pending", 0, 0, "preparing");
                         let assessment = classifier
                             .classify(&source, &operation)
                             .await
-                            .map_err(|_| ResourceFailure::Permanent("classifier_unavailable"))?;
+                            .map_err(|_| {
+                                portrait_event(&operation, "classification-finish", "failed", 0, 0, "classifier_unavailable");
+                                ResourceFailure::Permanent("classifier_unavailable")
+                            })?;
+                        portrait_event(&operation, "classification-finish", assessment.category(), 0, 0, "classified");
                         let route = assessment
                             .route_for_rating(
                                 config::content_rating() == config::ContentRating::Mature,
                             )
                             .map_err(|_| {
+                                portrait_event(&operation, "route", "failed", 0, 0, "rating_disallows_appearance");
                                 ResourceFailure::Permanent("rating_disallows_appearance")
                             })?;
                         let (chosen, provider, request) = match route {
                             Route::OpenAi => (primary, "OpenAI", general_request),
                             Route::Bfl => (
                                 alternate
-                                    .ok_or(ResourceFailure::Permanent("alternate_unavailable"))?,
+                                    .ok_or_else(|| {
+                                        portrait_event(&operation, "route", "failed", 0, 0, "alternate_unavailable");
+                                        ResourceFailure::Permanent("alternate_unavailable")
+                                    })?,
                                 "BFL FLUX 3",
                                 if assessment.requires_mature_prompt() { request } else { general_request },
                             ),
                             Route::Revise => {
+                                portrait_event(&operation, "route", "refused", 0, 0, "content_requires_revision");
                                 return Err(ResourceFailure::Permanent(
                                     "content_requires_revision",
                                 ));
                             }
-                            Route::Uncertain => return Err(ResourceFailure::Permanent("classification_uncertain")),
+                            Route::Uncertain => {
+                                portrait_event(&operation, "route", "unknown", 0, 0, "classification_uncertain");
+                                return Err(ResourceFailure::Permanent("classification_uncertain"));
+                            },
                         };
                         let appearance_hash = format!("{:x}",Sha256::digest(source.as_bytes()));
                         let model = chosen.model_label();
@@ -581,10 +745,14 @@ pub(super) async fn handle(
                         if let Ok(mut message) = progress.lock() {
                             *message = CREATING_PORTRAIT.to_owned();
                         }
-                        let key = chosen
-                            .render_creator(request)
-                            .await
-                            .map_err(|failure| ResourceFailure::Permanent(failure.label()))?;
+                        portrait_event(&operation, "provider-start", "pending", 0, 0, "creating");
+                        let started = std::time::Instant::now();
+                        let result = chosen.render_creator(request).await;
+                        super::actor::record_audit_line("gameplay.creator_portrait_provider", format!(
+                            "CREATOR_PORTRAIT event=provider-finish operation_hash={operation} outcome={} elapsed_ms={}",
+                            result.as_ref().map_or_else(|failure| failure.label(), |_| "ready"), started.elapsed().as_millis()
+                        ));
+                        let key = result.map_err(|failure| ResourceFailure::Permanent(failure.label()))?;
                         let mut generated = Generated::new(key.as_str());
                         generated.note =
                             READY_PORTRAIT.to_owned();
@@ -696,6 +864,24 @@ async fn serve(
     {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let operation_hash = service
+        .portraits
+        .requests
+        .lock()
+        .ok()
+        .and_then(|requests| {
+            requests.iter().find_map(|(operation, entry)| {
+                service.portraits.imagery.as_ref().and_then(|imagery| {
+                    match imagery.hub().status(&entry.resource) {
+                        ResourceStatus::Ready(generated) if generated.handle == key => {
+                            Some(operation.clone())
+                        }
+                        _ => None,
+                    }
+                })
+            })
+        })
+        .unwrap_or_else(|| "committed-asset".to_owned());
     let accepted = service
         .updates
         .borrow()
@@ -709,6 +895,14 @@ async fn serve(
         .cloned();
     let Some(asset) = accepted else {
         if let imagery::Lookup::Image { bytes, format: _ } = service.portraits.image(&key).await {
+            portrait_event(
+                &operation_hash,
+                "image-served",
+                "ready",
+                0,
+                bytes.len(),
+                "image-bytes",
+            );
             return (
                 [
                     (header::CONTENT_TYPE, "image/jpeg"),
@@ -740,6 +934,14 @@ async fn serve(
             if bytes.len() as u64 == asset.byte_length
                 && <[u8; 32]>::from(Sha256::digest(&bytes)) == asset.digest.0 =>
         {
+            portrait_event(
+                &operation_hash,
+                "image-served",
+                "ready",
+                0,
+                bytes.len(),
+                "image-bytes",
+            );
             (
                 [
                     (header::CONTENT_TYPE, "image/jpeg"),
@@ -756,6 +958,41 @@ async fn serve(
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
+
+    #[test]
+    fn portrait_poll_state_records_keep_operation_state_and_message_key_without_text() {
+        for (state, message, expected_key) in [
+            ("pending", PREPARING_PORTRAIT, "preparing"),
+            ("pending", CREATING_PORTRAIT, "creating"),
+            ("ready", READY_PORTRAIT, "ready"),
+            (
+                "failed",
+                failure_message("classifier_unavailable"),
+                "classifier_unavailable",
+            ),
+            (
+                "unknown",
+                "The portrait result is unknown. No automatic retry was sent.",
+                "unknown-result",
+            ),
+        ] {
+            portrait_event(
+                "synthetic-operation-hash",
+                "poll-answer",
+                state,
+                7,
+                0,
+                message,
+            );
+            let lines = super::super::actor::audit_lines_containing(
+                "CREATOR_PORTRAIT event=poll-answer operation_hash=synthetic-operation-hash",
+            );
+            assert!(lines.iter().any(|line| line.contains(&format!(
+                "outcome={state} draft_revision=7 bytes=0 message_key={expected_key}"
+            ))));
+            assert!(lines.iter().all(|line| !line.contains(message)));
+        }
+    }
 
     #[tokio::test]
     async fn approved_reference_checks_digest_length_key_and_kind_before_use() {

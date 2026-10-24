@@ -44,6 +44,14 @@ pub(crate) enum CodecError {
     AssetResolution(df_session::submission::RepositoryError),
 }
 
+fn budget_failure(budget: &'static str, actual: usize, limit: usize) -> CodecError {
+    df_session::submission::note_refusal_diagnostic(
+        "checkpoint-codec-budget",
+        format!("Capacity budget={budget} actual={actual} limit={limit}"),
+    );
+    CodecError::Capacity
+}
+
 /// Every allocation and collection is bounded before reading storage-controlled lengths.
 #[derive(Clone, Copy)]
 pub struct CodecLimits {
@@ -54,12 +62,15 @@ pub struct CodecLimits {
 }
 impl CodecLimits {
     pub(crate) fn validate(self) -> Result<Self, CodecError> {
-        if self.maximum_document_bytes == 0
-            || self.maximum_allocated_bytes == 0
-            || self.maximum_collection_items == 0
-            || self.maximum_text_bytes == 0
-        {
-            return Err(CodecError::Capacity);
+        for (budget, limit) in [
+            ("document_bytes", self.maximum_document_bytes),
+            ("allocation_bytes", self.maximum_allocated_bytes),
+            ("collection_items", self.maximum_collection_items),
+            ("text_bytes", self.maximum_text_bytes),
+        ] {
+            if limit == 0 {
+                return Err(budget_failure(budget, 1, limit));
+            }
         }
         Ok(self)
     }
@@ -68,15 +79,25 @@ struct Encoder {
     bytes: Vec<u8>,
     maximum: usize,
     allocation_remaining: usize,
+    allocation_limit: usize,
     items_remaining: usize,
+    items_limit: usize,
     maximum_text_bytes: usize,
 }
 impl Encoder {
     fn allocate(&mut self, count: usize) -> Result<(), CodecError> {
-        self.allocation_remaining = self
-            .allocation_remaining
-            .checked_sub(count)
-            .ok_or(CodecError::Capacity)?;
+        self.allocation_remaining =
+            self.allocation_remaining
+                .checked_sub(count)
+                .ok_or_else(|| {
+                    budget_failure(
+                        "allocation_bytes",
+                        self.allocation_limit
+                            .saturating_sub(self.allocation_remaining)
+                            .saturating_add(count),
+                        self.allocation_limit,
+                    )
+                })?;
         Ok(())
     }
     fn put(&mut self, bytes: &[u8]) -> Result<(), CodecError> {
@@ -86,7 +107,7 @@ impl Encoder {
             .checked_add(bytes.len())
             .ok_or(CodecError::Capacity)?;
         if next > self.maximum {
-            return Err(CodecError::Capacity);
+            return Err(budget_failure("document_bytes", next, self.maximum));
         }
         if next > self.bytes.capacity() {
             let target = self
@@ -116,7 +137,9 @@ struct Decoder<'a> {
     bytes: &'a [u8],
     offset: usize,
     allocation_remaining: usize,
+    allocation_limit: usize,
     items_remaining: usize,
+    items_limit: usize,
     maximum_text_bytes: usize,
 }
 impl<'a> Decoder<'a> {
@@ -130,10 +153,18 @@ impl<'a> Decoder<'a> {
         Ok(bytes)
     }
     fn allocate(&mut self, count: usize) -> Result<(), CodecError> {
-        self.allocation_remaining = self
-            .allocation_remaining
-            .checked_sub(count)
-            .ok_or(CodecError::Capacity)?;
+        self.allocation_remaining =
+            self.allocation_remaining
+                .checked_sub(count)
+                .ok_or_else(|| {
+                    budget_failure(
+                        "allocation_bytes",
+                        self.allocation_limit
+                            .saturating_sub(self.allocation_remaining)
+                            .saturating_add(count),
+                        self.allocation_limit,
+                    )
+                })?;
         Ok(())
     }
 }
@@ -178,10 +209,20 @@ impl<const N: usize> Wire for [u8; N] {
 }
 impl<T: Wire> Wire for Vec<T> {
     fn write(&self, output: &mut Encoder) -> Result<(), CodecError> {
-        output.items_remaining = output
-            .items_remaining
-            .checked_sub(self.len())
-            .ok_or(CodecError::Capacity)?;
+        output.items_remaining =
+            output
+                .items_remaining
+                .checked_sub(self.len())
+                .ok_or_else(|| {
+                    budget_failure(
+                        "collection_items",
+                        output
+                            .items_limit
+                            .saturating_sub(output.items_remaining)
+                            .saturating_add(self.len()),
+                        output.items_limit,
+                    )
+                })?;
         output.allocate(
             self.len()
                 .checked_mul(size_of::<T>())
@@ -197,10 +238,16 @@ impl<T: Wire> Wire for Vec<T> {
     }
     fn read(input: &mut Decoder<'_>) -> Result<Self, CodecError> {
         let count = usize::try_from(u32::read(input)?).map_err(|_| CodecError::Capacity)?;
-        input.items_remaining = input
-            .items_remaining
-            .checked_sub(count)
-            .ok_or(CodecError::Capacity)?;
+        input.items_remaining = input.items_remaining.checked_sub(count).ok_or_else(|| {
+            budget_failure(
+                "collection_items",
+                input
+                    .items_limit
+                    .saturating_sub(input.items_remaining)
+                    .saturating_add(count),
+                input.items_limit,
+            )
+        })?;
         let bytes = count
             .checked_mul(size_of::<T>())
             .ok_or(CodecError::Capacity)?;
@@ -254,7 +301,11 @@ impl<A: Wire, B: Wire> Wire for (A, B) {
 impl Wire for String {
     fn write(&self, output: &mut Encoder) -> Result<(), CodecError> {
         if self.len() > output.maximum_text_bytes {
-            return Err(CodecError::Capacity);
+            return Err(budget_failure(
+                "text_bytes",
+                self.len(),
+                output.maximum_text_bytes,
+            ));
         }
         output.allocate(self.len())?;
         u32::try_from(self.len())
@@ -265,7 +316,11 @@ impl Wire for String {
     fn read(input: &mut Decoder<'_>) -> Result<Self, CodecError> {
         let count = usize::try_from(u32::read(input)?).map_err(|_| CodecError::Capacity)?;
         if count > input.maximum_text_bytes {
-            return Err(CodecError::Capacity);
+            return Err(budget_failure(
+                "text_bytes",
+                count,
+                input.maximum_text_bytes,
+            ));
         }
         input.allocate(count)?;
         let value =
@@ -448,7 +503,9 @@ pub(crate) fn encode_checkpoint(
         bytes: Vec::new(),
         maximum: limits.maximum_document_bytes,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     output.put(MAGIC)?;
@@ -510,13 +567,19 @@ pub(crate) fn decode_checkpoint_with_recovery(
 ) -> Result<Checkpoint, CodecError> {
     let limits = codec_limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
-        return Err(CodecError::Capacity);
+        return Err(budget_failure(
+            "document_bytes",
+            bytes.len(),
+            limits.maximum_document_bytes,
+        ));
     }
     let mut input = Decoder {
         bytes,
         offset: 0,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     if input.take(MAGIC.len())? != MAGIC {
@@ -607,13 +670,19 @@ pub(crate) fn decode_checkpoint_pins(
 ) -> Result<CheckpointPins, CodecError> {
     let limits = codec_limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
-        return Err(CodecError::Capacity);
+        return Err(budget_failure(
+            "document_bytes",
+            bytes.len(),
+            limits.maximum_document_bytes,
+        ));
     }
     let mut input = Decoder {
         bytes,
         offset: 0,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     if input.take(MAGIC.len())? != MAGIC
@@ -2052,7 +2121,9 @@ fn encode_record<T: Wire>(
         bytes: Vec::new(),
         maximum: limits.maximum_document_bytes,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     output.put(magic)?;
@@ -2067,13 +2138,19 @@ fn decode_record<T: Wire>(
 ) -> Result<T, CodecError> {
     let limits = limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
-        return Err(CodecError::Capacity);
+        return Err(budget_failure(
+            "document_bytes",
+            bytes.len(),
+            limits.maximum_document_bytes,
+        ));
     }
     let mut input = Decoder {
         bytes,
         offset: 0,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     if input.take(magic.len())? != magic || u16::read(&mut input)? != CODEC_VERSION {
@@ -2103,7 +2180,9 @@ pub(crate) fn encode_receipt(
         bytes: Vec::new(),
         maximum: limits.maximum_document_bytes,
         allocation_remaining: limits.maximum_allocated_bytes,
+        allocation_limit: limits.maximum_allocated_bytes,
         items_remaining: limits.maximum_collection_items,
+        items_limit: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     output.put(b"DFRC")?;
@@ -2630,7 +2709,9 @@ mod tests {
             bytes: Vec::new(),
             maximum: bounds.maximum_document_bytes,
             allocation_remaining: bounds.maximum_allocated_bytes,
+            allocation_limit: bounds.maximum_allocated_bytes,
             items_remaining: bounds.maximum_collection_items,
+            items_limit: bounds.maximum_collection_items,
             maximum_text_bytes: bounds.maximum_text_bytes,
         };
         value.write(&mut output).unwrap();
@@ -2638,7 +2719,9 @@ mod tests {
             bytes: &output.bytes,
             offset: 0,
             allocation_remaining: bounds.maximum_allocated_bytes,
+            allocation_limit: bounds.maximum_allocated_bytes,
             items_remaining: bounds.maximum_collection_items,
+            items_limit: bounds.maximum_collection_items,
             maximum_text_bytes: bounds.maximum_text_bytes,
         };
         assert_eq!(T::read(&mut input).unwrap(), *value);
@@ -2658,7 +2741,9 @@ mod tests {
             bytes: Vec::new(),
             maximum: 8,
             allocation_remaining: bounds.maximum_allocated_bytes,
+            allocation_limit: bounds.maximum_allocated_bytes,
             items_remaining: bounds.maximum_collection_items,
+            items_limit: bounds.maximum_collection_items,
             maximum_text_bytes: bounds.maximum_text_bytes,
         };
         RecoveryEpoch::new(u64::MAX)
@@ -2671,7 +2756,9 @@ mod tests {
                 bytes,
                 offset: 0,
                 allocation_remaining: bounds.maximum_allocated_bytes,
+                allocation_limit: bounds.maximum_allocated_bytes,
                 items_remaining: bounds.maximum_collection_items,
+                items_limit: bounds.maximum_collection_items,
                 maximum_text_bytes: bounds.maximum_text_bytes,
             };
             assert_eq!(
@@ -2807,7 +2894,9 @@ mod tests {
                 bytes: &bytes,
                 offset: 0,
                 allocation_remaining: bounds.maximum_allocated_bytes,
+                allocation_limit: bounds.maximum_allocated_bytes,
                 items_remaining: bounds.maximum_collection_items,
+                items_limit: bounds.maximum_collection_items,
                 maximum_text_bytes: bounds.maximum_text_bytes,
             };
             assert_eq!(
@@ -2831,7 +2920,9 @@ mod tests {
                 bytes: Vec::new(),
                 maximum: bounds.maximum_document_bytes,
                 allocation_remaining: bounds.maximum_allocated_bytes,
+                allocation_limit: bounds.maximum_allocated_bytes,
                 items_remaining: bounds.maximum_collection_items,
+                items_limit: bounds.maximum_collection_items,
                 maximum_text_bytes: bounds.maximum_text_bytes,
             };
             assert_eq!(appearance.write(&mut output), Err(CodecError::Capacity));
@@ -3297,7 +3388,9 @@ mod tests {
             bytes: &data,
             offset: 0,
             allocation_remaining: 64,
+            allocation_limit: 64,
             items_remaining: 8,
+            items_limit: 8,
             maximum_text_bytes: 32,
         };
         assert_eq!(Vec::<String>::read(&mut input), Err(CodecError::Capacity));
@@ -3344,7 +3437,9 @@ mod tests {
             bytes: &[0, 99],
             offset: 0,
             allocation_remaining: 64,
+            allocation_limit: 64,
             items_remaining: 8,
+            items_limit: 8,
             maximum_text_bytes: 32,
         };
         assert_eq!(
@@ -3355,7 +3450,9 @@ mod tests {
             bytes: &[2],
             offset: 0,
             allocation_remaining: 64,
+            allocation_limit: 64,
             items_remaining: 8,
+            items_limit: 8,
             maximum_text_bytes: 32,
         };
         assert_eq!(bool::read(&mut input), Err(CodecError::InvalidValue));
@@ -3368,7 +3465,9 @@ mod tests {
             bytes: &[0, 0, 0, 1, 255],
             offset: 0,
             allocation_remaining: 64,
+            allocation_limit: 64,
             items_remaining: 8,
+            items_limit: 8,
             maximum_text_bytes: 32,
         };
         assert_eq!(String::read(&mut input), Err(CodecError::InvalidValue));
@@ -3866,5 +3965,83 @@ mod tests {
             );
             assert_eq!(current.state(), &accepted_structural_state());
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    use df_session::submission::take_refusal_diagnostic;
+
+    fn encoder() -> Encoder {
+        Encoder {
+            bytes: Vec::new(),
+            maximum: 4096,
+            allocation_remaining: 8192,
+            allocation_limit: 8192,
+            items_remaining: 1024,
+            items_limit: 1024,
+            maximum_text_bytes: 16,
+        }
+    }
+    fn assert_budget(budget: &str, actual: usize, limit: usize) {
+        let detail = take_refusal_diagnostic().unwrap();
+        assert_eq!(detail.step, "checkpoint-codec-budget");
+        assert_eq!(
+            detail.cause,
+            format!("Capacity budget={budget} actual={actual} limit={limit}")
+        );
+    }
+    #[test]
+    fn codec_item_budget_refusal_records_actual_cumulative_items_and_limit() {
+        let _ = take_refusal_diagnostic();
+        let mut output = encoder();
+        assert_eq!(
+            vec![0u8; 1025].write(&mut output),
+            Err(CodecError::Capacity)
+        );
+        assert_budget("collection_items", 1025, 1024);
+        let bytes = 1025u32.to_be_bytes();
+        let mut input = Decoder {
+            bytes: &bytes,
+            offset: 0,
+            allocation_remaining: 8192,
+            allocation_limit: 8192,
+            items_remaining: 1024,
+            items_limit: 1024,
+            maximum_text_bytes: 16,
+        };
+        assert_eq!(Vec::<u8>::read(&mut input), Err(CodecError::Capacity));
+        assert_budget("collection_items", 1025, 1024);
+    }
+    #[test]
+    fn codec_text_bytes_refusal_records_length_without_the_text() {
+        let _ = take_refusal_diagnostic();
+        assert_eq!(
+            "x".repeat(17).write(&mut encoder()),
+            Err(CodecError::Capacity)
+        );
+        assert_budget("text_bytes", 17, 16);
+        let bytes = 17u32.to_be_bytes();
+        let mut input = Decoder {
+            bytes: &bytes,
+            offset: 0,
+            allocation_remaining: 8192,
+            allocation_limit: 8192,
+            items_remaining: 1024,
+            items_limit: 1024,
+            maximum_text_bytes: 16,
+        };
+        assert_eq!(String::read(&mut input), Err(CodecError::Capacity));
+        assert_budget("text_bytes", 17, 16);
+    }
+    #[test]
+    fn codec_document_and_allocation_refusals_name_distinct_budgets() {
+        let _ = take_refusal_diagnostic();
+        let mut output = encoder();
+        assert_eq!(output.put(&[0; 4097]), Err(CodecError::Capacity));
+        assert_budget("document_bytes", 4097, 4096);
+        assert_eq!(output.allocate(8193), Err(CodecError::Capacity));
+        assert_budget("allocation_bytes", 8193, 8192);
     }
 }

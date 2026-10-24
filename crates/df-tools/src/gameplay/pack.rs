@@ -1235,6 +1235,14 @@ fn parse_error(file: SourceFile, path: String, error: &serde_json::Error) -> Pac
             ParseErrorKind::Syntax
         }
     };
+    super::refusal_detail::cause(
+        "pack-parse",
+        format!(
+            "{kind:?} file={file:?} line={} column={}",
+            error.line(),
+            error.column()
+        ),
+    );
     PackError::Parse {
         file,
         path,
@@ -1274,6 +1282,10 @@ fn range(file: SourceFile, path: &str, actual: i64, min: i64, max: i64) -> Resul
     if (min..=max).contains(&actual) {
         return Ok(());
     }
+    super::refusal_detail::cause(
+        "pack-bounds",
+        format!("OutOfRange file={file:?} actual={actual} min={min} max={max}"),
+    );
     Err(PackError::Bounds {
         file,
         path: path.to_owned(),
@@ -1292,6 +1304,10 @@ fn one_of(
     if allowed.contains(&actual) {
         return Ok(());
     }
+    super::refusal_detail::cause(
+        "pack-value",
+        format!("NotAllowed file={file:?} actual={actual}"),
+    );
     Err(PackError::NotAllowed {
         file,
         path: path.to_owned(),
@@ -1322,6 +1338,10 @@ fn text(
 }
 
 fn malformed(file: SourceFile, path: &str, expected: &'static str) -> PackError {
+    super::refusal_detail::cause(
+        "pack-validation",
+        format!("Malformed file={file:?} expected={expected}"),
+    );
     PackError::Malformed {
         file,
         path: path.to_owned(),
@@ -1330,6 +1350,7 @@ fn malformed(file: SourceFile, path: &str, expected: &'static str) -> PackError 
 }
 
 fn cross_reference(file: SourceFile, path: &str, reason: CrossRefReason) -> PackError {
+    super::refusal_detail::cause("pack-cross-reference", format!("{reason:?} file={file:?}"));
     PackError::CrossRef {
         file,
         path: path.to_owned(),
@@ -3018,6 +3039,15 @@ pub(super) fn archer_equipment()
     Ok(archer_package()?.equipment)
 }
 pub(super) fn validate_character(
+    name: &str,
+    choices: &[(&str, &str)],
+) -> Result<df_rules::local_journey::LegalCharacter, df_rules::local_journey::JourneyRuleError> {
+    validate_character_inner(name, choices).inspect_err(|error| {
+        super::refusal_detail::cause("character-validation", format!("{error:?}"));
+    })
+}
+
+fn validate_character_inner(
     name: &str,
     choices: &[(&str, &str)],
 ) -> Result<df_rules::local_journey::LegalCharacter, df_rules::local_journey::JourneyRuleError> {
