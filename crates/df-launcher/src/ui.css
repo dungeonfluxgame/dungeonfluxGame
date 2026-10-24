@@ -80,13 +80,29 @@ img { display: block; max-width: 100%; }
 .lantern img { width: 30px; height: 30px; opacity: .55; filter: grayscale(.6); }
 .lantern[data-state="starting"]::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--flame); border-right-color: rgba(242, 178, 92, .35); animation: lantern-turn 1.6s linear infinite; }
 .lantern[data-state="starting"] img { opacity: .9; filter: none; }
-.lantern[data-state="lit"] { background: radial-gradient(circle at 50% 50%, rgba(242, 178, 92, .55), rgba(242, 178, 92, .12) 55%, #0c171e 75%); border-color: rgba(242, 178, 92, .7); box-shadow: 0 0 34px rgba(242, 178, 92, .45), 0 0 90px rgba(242, 178, 92, .18), inset 0 0 14px rgba(255, 220, 160, .3); animation: lantern-glow 3.2s ease-in-out infinite alternate; }
-.lantern[data-state="lit"] img { opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 210, 140, .9)); }
+.lantern[data-state="lit"] { background: radial-gradient(circle at 50% 50%, rgba(242, 178, 92, .55), rgba(242, 178, 92, .12) 55%, #0c171e 75%); border-color: rgba(242, 178, 92, .7); box-shadow: 0 0 34px rgba(242, 178, 92, .45), 0 0 90px rgba(242, 178, 92, .18), inset 0 0 14px rgba(255, 220, 160, .3); animation: lantern-glow 3.2s ease-in-out infinite alternate, lantern-waver 4.3s linear infinite; }
+.lantern[data-state="lit"] img { opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 210, 140, .9)); animation: flame-flicker 2.9s linear infinite; }
 .lantern[data-state="dimming"] { box-shadow: 0 0 22px rgba(242, 178, 92, .2); }
 .lantern[data-state="dimming"] img { opacity: .75; filter: none; }
 .lantern[data-state="failed"] { border-color: var(--ember); box-shadow: 0 0 26px rgba(224, 144, 92, .35); }
 .lantern[data-state="failed"] img { opacity: .8; filter: sepia(1) saturate(3) hue-rotate(-20deg); }
 @keyframes lantern-turn { to { transform: rotate(360deg); } }
+/* A candle, not a pulse: the flame dips and flares at uneven moments, and the lantern's whole light
+   wavers on a different cycle so the two never repeat in step. */
+@keyframes flame-flicker {
+  0%, 100% { opacity: 1; transform: scale(1); filter: drop-shadow(0 0 6px rgba(255, 210, 140, .9)) brightness(1); }
+  7% { opacity: .82; transform: scale(.97); filter: drop-shadow(0 0 3px rgba(255, 196, 120, .6)) brightness(.86); }
+  9% { opacity: 1; transform: scale(1.03); filter: drop-shadow(0 0 9px rgba(255, 218, 156, 1)) brightness(1.1); }
+  24% { opacity: .94; filter: drop-shadow(0 0 5px rgba(255, 206, 136, .8)) brightness(.96); }
+  26% { opacity: 1; filter: drop-shadow(0 0 7px rgba(255, 212, 146, .95)) brightness(1.04); }
+  47% { opacity: .78; transform: scale(.98); filter: drop-shadow(0 0 3px rgba(255, 190, 110, .55)) brightness(.84); }
+  50% { opacity: 1; transform: scale(1.02); filter: drop-shadow(0 0 8px rgba(255, 216, 150, 1)) brightness(1.08); }
+  68% { opacity: .9; filter: drop-shadow(0 0 5px rgba(255, 204, 132, .8)) brightness(.95); }
+  71% { opacity: 1; filter: drop-shadow(0 0 7px rgba(255, 214, 148, .95)) brightness(1.05); }
+  86% { opacity: .86; filter: drop-shadow(0 0 4px rgba(255, 198, 124, .7)) brightness(.9); }
+  88% { opacity: 1; transform: scale(1); filter: drop-shadow(0 0 6px rgba(255, 210, 140, .9)) brightness(1); }
+}
+@keyframes lantern-waver { 0%, 100% { filter: brightness(1); } 13% { filter: brightness(.9); } 15% { filter: brightness(1.06); } 38% { filter: brightness(.96); } 41% { filter: brightness(1.03); } 63% { filter: brightness(.88); } 66% { filter: brightness(1.05); } 82% { filter: brightness(.97); } }
 @keyframes lantern-glow { from { box-shadow: 0 0 26px rgba(242, 178, 92, .38), 0 0 70px rgba(242, 178, 92, .12), inset 0 0 12px rgba(255, 220, 160, .25); } to { box-shadow: 0 0 40px rgba(242, 178, 92, .55), 0 0 110px rgba(242, 178, 92, .22), inset 0 0 16px rgba(255, 220, 160, .35); } }
 
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 24px; }
@@ -254,6 +270,82 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 .plain-page main { padding: 48px 40px; }
 .plain-page main p { margin-top: 12px; }
 
+/* A game in play: the page keeps one subject, centred under the lit lantern. The hall darkens
+   around the centre instead of the left, drifts very slowly, and three quiet layers give it air:
+   a pool of lantern light that breathes, warm motes rising through it and harbor fog along the
+   floor. The Gentle and Follow Windows motion settings still all of it (end of this file). */
+.home.solo { grid-template-columns: minmax(0, 760px); justify-content: center; max-width: none; }
+.running-page::before {
+  background:
+    radial-gradient(ellipse 72% 66% at 50% 40%, rgba(9, 19, 29, .2) 0%, rgba(9, 19, 29, .5) 55%, rgba(9, 19, 29, .86) 100%),
+    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 60%, rgba(9, 19, 29, .9) 100%),
+    url("/art/harbor-hall.png") 62% 30% / cover no-repeat;
+  transform-origin: 56% 38%;
+  animation: hall-drift 54s ease-in-out infinite alternate;
+}
+.ambience { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.ambience span { position: absolute; display: block; }
+.light-pool {
+  left: 50%; top: 40px; width: min(1100px, 130vw); height: 760px; translate: -50% 0;
+  background: radial-gradient(closest-side, rgba(242, 178, 92, .22), rgba(242, 178, 92, .08) 42%, rgba(242, 178, 92, 0) 78%);
+  animation: pool-breathe 9s ease-in-out infinite alternate, pool-flicker 4.7s steps(1, end) infinite;
+}
+.motes {
+  inset: -10% 0 0;
+  background-image:
+    radial-gradient(circle at 8% 22%, rgba(255, 214, 150, .85) 0 1.4px, transparent 2.4px),
+    radial-gradient(circle at 31% 64%, rgba(255, 196, 120, .7) 0 1.1px, transparent 2px),
+    radial-gradient(circle at 54% 12%, rgba(255, 222, 170, .8) 0 1.6px, transparent 2.6px),
+    radial-gradient(circle at 73% 48%, rgba(255, 200, 130, .65) 0 1px, transparent 2px),
+    radial-gradient(circle at 92% 81%, rgba(255, 214, 150, .75) 0 1.3px, transparent 2.3px);
+  background-size: 380px 460px;
+  -webkit-mask-image: radial-gradient(ellipse 46% 52% at 50% 40%, #000 25%, transparent 78%);
+  mask-image: radial-gradient(ellipse 46% 52% at 50% 40%, #000 25%, transparent 78%);
+  opacity: .7;
+  animation: motes-rise 34s linear infinite, motes-sway 11s ease-in-out infinite alternate;
+}
+.motes.far { background-size: 240px 300px; opacity: .3; filter: blur(.6px); animation-duration: 58s, 17s; }
+.fog {
+  left: -40%; right: -40%; bottom: -8vh; height: 38vh;
+  background:
+    radial-gradient(ellipse 30% 55% at 28% 62%, rgba(168, 186, 190, .13), transparent 70%),
+    radial-gradient(ellipse 34% 50% at 66% 70%, rgba(168, 186, 190, .10), transparent 70%),
+    radial-gradient(ellipse 26% 45% at 88% 58%, rgba(168, 186, 190, .08), transparent 70%);
+  filter: blur(14px);
+  animation: fog-drift 80s ease-in-out infinite alternate;
+}
+@keyframes hall-drift { from { transform: scale(1); } to { transform: scale(1.06) translate(-1%, -.6%); } }
+@keyframes pool-breathe { from { opacity: .82; scale: .97; } to { opacity: 1; scale: 1.03; } }
+@keyframes pool-flicker { 0%, 100% { filter: brightness(1); } 23% { filter: brightness(.94); } 24% { filter: brightness(1.02); } 61% { filter: brightness(.97); } 62% { filter: brightness(1); } }
+@keyframes motes-rise { from { background-position: 0 0; } to { background-position: 0 -460px; } }
+@keyframes motes-sway { from { translate: -10px 0; } to { translate: 12px 0; } }
+@keyframes fog-drift { from { translate: -6% 0; } to { translate: 6% 0; } }
+
+.vigil-stage { display: flex; flex-direction: column; align-items: center; padding-top: clamp(8px, 4vh, 44px); text-align: center; }
+.vigil .lantern { width: 104px; height: 104px; margin: 0 0 22px; }
+.vigil .lantern img { width: 46px; height: 46px; }
+.vigil-state { color: var(--brass-bright); font: italic 18px/1.3 var(--serif); text-shadow: 0 1px 14px rgba(0, 0, 0, .8); }
+.vigil h1 { margin-top: 6px; font-size: clamp(40px, 5.6vw, 68px); line-height: 1.04; letter-spacing: -1px; overflow-wrap: anywhere; text-shadow: 0 2px 34px rgba(0, 0, 0, .8); }
+.vigil-lede { margin-top: 12px; color: #d7d9d2; font-size: 17px; text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
+.room-tablet {
+  display: inline-flex; align-items: baseline; gap: 18px; margin-top: 30px; padding: 14px 22px 14px 26px;
+  border: 1px solid rgba(198, 163, 107, .55); border-radius: 10px;
+  background: linear-gradient(180deg, rgba(23, 49, 59, .78), rgba(9, 19, 29, .86));
+  box-shadow: inset 0 1px 0 rgba(230, 201, 146, .22), 0 18px 50px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(6px);
+}
+.room-label { color: var(--muted); font-size: 13px; }
+.room-code { color: var(--brass-bright); font: 34px/1 var(--serif); letter-spacing: .26em; margin-right: -.26em; text-shadow: 0 0 22px rgba(242, 178, 92, .35); }
+.vigil-facts { display: flex; justify-content: center; margin: 28px 0 0; }
+.vigil-facts > div { padding: 2px 24px; }
+.vigil-facts > div + div { border-left: 1px solid var(--line); }
+.vigil-facts dt { color: var(--muted); font-size: 12px; }
+.vigil-facts dd { margin: 3px 0 0; color: var(--ivory); font-size: 15px; }
+.vigil .actions { justify-content: center; margin-top: 30px; }
+.vigil .hint { margin-inline: auto; }
+.vigil-facts, .vigil .hint { text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 16px rgba(0, 0, 0, .8); }
+.vigil .stop-row { display: flex; flex-direction: column; align-items: center; width: min(520px, 100%); margin-top: 34px; }
+
 @media (max-width: 900px) {
   .masthead { padding: 14px 22px 10px; }
   .brand img { width: 160px; }
@@ -265,6 +357,7 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   .index { position: sticky; top: 8px; z-index: 3; flex-direction: row; gap: 2px; padding: 6px; overflow-x: auto; }
   .index a { flex-shrink: 0; padding: 6px 10px; }
   .settings-body h1 { margin-top: 22px; }
+  .home.solo { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {
   .state { grid-template-columns: 52px minmax(0, 1fr); gap: 14px; }
@@ -278,6 +371,12 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   .saves li { flex-wrap: wrap; }
   .settings-body section { padding: 20px 16px; }
   .masthead nav a { padding: 6px 12px; }
+  .vigil .lantern { width: 76px; height: 76px; }
+  .vigil .lantern img { width: 34px; height: 34px; }
+  .room-tablet { flex-direction: column; align-items: center; gap: 6px; padding: 12px 22px; }
+  .room-code { font-size: 30px; }
+  .vigil-facts { flex-direction: column; gap: 10px; }
+  .vigil-facts > div + div { border-left: 0; padding-top: 10px; border-top: 1px solid var(--line); }
 }
 /* Moving between Play and Settings: the brass pill slides to its new tab while the arriving
    page is revealed by a widening circle of lantern light from that tab; the leaving page dims
@@ -319,16 +418,18 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   :root.motion-gentle::view-transition-old(settings-page):only-child, :root.motion-gentle::view-transition-old(play-page):only-child { animation: gentle-out .18s ease both; }
   :root.motion-gentle { scroll-behavior: auto; }
   :root.motion-gentle .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
-  :root.motion-gentle .lantern[data-state="lit"] { animation: none; }
+  :root.motion-gentle .lantern[data-state="lit"], :root.motion-gentle .lantern[data-state="lit"] img { animation: none; }
   :root.motion-gentle .adventure, :root.motion-gentle .adventure-art img, :root.motion-gentle button { transition: none; }
   :root.motion-gentle .adventure:has(input:checked) .adventure-art img { transform: none; }
+  :root.motion-gentle .running-page::before, :root.motion-gentle .ambience span { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   :root.motion-follow-windows::view-transition-group(*) { animation-duration: .18s; animation-timing-function: ease; }
   :root.motion-follow-windows::view-transition-new(settings-page):only-child, :root.motion-follow-windows::view-transition-new(play-page):only-child { animation: gentle-in .22s ease both; }
   :root.motion-follow-windows::view-transition-old(settings-page):only-child, :root.motion-follow-windows::view-transition-old(play-page):only-child { animation: gentle-out .18s ease both; }
   :root.motion-follow-windows { scroll-behavior: auto; }
   :root.motion-follow-windows .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
-  :root.motion-follow-windows .lantern[data-state="lit"] { animation: none; }
+  :root.motion-follow-windows .lantern[data-state="lit"], :root.motion-follow-windows .lantern[data-state="lit"] img { animation: none; }
   :root.motion-follow-windows .adventure, :root.motion-follow-windows .adventure-art img, :root.motion-follow-windows button { transition: none; }
   :root.motion-follow-windows .adventure:has(input:checked) .adventure-art img { transform: none; }
+  :root.motion-follow-windows .running-page::before, :root.motion-follow-windows .ambience span { animation: none; }
 }

@@ -434,17 +434,61 @@ fn home(snapshot: &Snapshot) -> String {
         ),
         Phase::Failed(failure) => failed(failure),
     };
-    let saves = saved_games(snapshot);
     let busy = matches!(snapshot.phase, Phase::Starting { .. } | Phase::Stopping(_));
+    // While a game is in play the page is about that game alone: no saved-games list.
+    let main = match &snapshot.phase {
+        Phase::Idle { .. } | Phase::Failed(_) => format!(
+            "<main class=\"home\"><div class=\"play\">{state}</div>{}</main>",
+            saved_games(snapshot)
+        ),
+        Phase::Running(_) => format!("{AMBIENCE}<main class=\"home solo vigil\">{state}</main>"),
+        Phase::Starting { .. } | Phase::Stopping(_) | Phase::Connected { .. } => {
+            format!("<main class=\"home solo\"><div class=\"play\">{state}</div></main>")
+        }
+    };
+    let page = if matches!(snapshot.phase, Phase::Running(_)) {
+        "home-page running-page"
+    } else {
+        "home-page"
+    };
     shell(
         "DungeonFlux",
-        "home-page",
+        page,
         busy,
         snapshot.settings.animations,
-        &format!(
-            "{}<main class=\"home\"><div class=\"play\">{state}</div>{saves}</main>",
-            masthead(View::Home)
-        ),
+        &format!("{}{main}", masthead(View::Home)),
+    )
+}
+
+/// The running page's ambience, drawn by CSS alone: a pool of lantern light, two layers of
+/// rising motes and a band of harbor fog. The Gentle and Follow Windows motion settings still it.
+const AMBIENCE: &str = "<div class=\"ambience\" aria-hidden=\"true\"><span class=\"light-pool\"></span><span class=\"motes\"></span><span class=\"motes far\"></span><span class=\"fog\"></span></div>";
+
+/// The room code in the player link (`...?room=ABCDEF`), when it is a plain code.
+fn room_code(player_url: &str) -> Option<&str> {
+    let (_, query) = player_url.split_once('?')?;
+    let code = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("room="))?;
+    (!code.is_empty() && code.len() <= 12 && code.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then_some(code)
+}
+
+/// "3:46 AM" today, else "yesterday at 3:46 AM" or "3 October at 3:46 AM".
+fn since(seconds: i64) -> String {
+    let moment = when(seconds);
+    moment
+        .strip_prefix("today at ")
+        .or_else(|| moment.strip_prefix("on "))
+        .map_or_else(|| moment.clone(), str::to_owned)
+}
+
+/// The day a game was first played, for the running page's facts.
+fn first_played(seconds: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local.timestamp_opt(seconds, 0).single().map_or_else(
+        || "Unknown".to_owned(),
+        |moment| moment.format("%-d %B %Y").to_string(),
     )
 }
 
@@ -672,18 +716,36 @@ fn display_controls(snapshot: &Snapshot) -> String {
     actions.concat()
 }
 
+/// The running game, centred: its lantern, name and room code, a few facts, then the actions.
 fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     let display_state = if snapshot.display_open {
-        "The table display is open."
+        "Open"
     } else {
-        "The table display is closed. Players stay connected."
+        "Closed, players stay connected"
     };
+    let joining = if snapshot.settings.phones_on_network {
+        "From phones on this Wi-Fi"
+    } else {
+        "On this PC only"
+    };
+    let room = room_code(&run.player_url)
+        .map(|code| {
+            format!(
+                "<div class=\"room-tablet\"><span class=\"room-label\">Room code</span><span class=\"room-code\">{}</span></div>",
+                escape(code)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "<section class=\"state\">{}<div><h1>{} is running</h1><p class=\"lede\">{}. {display_state}</p><div class=\"actions\">{}</div><p class=\"hint\">{}</p>\
-<div class=\"stop-row\">{}<p class=\"hint\">Closing this window keeps the game running. Stop saves the game and ends it.</p></div></div></section>",
+        "<section class=\"vigil-stage\" aria-labelledby=\"running-name\">{}<p class=\"vigil-state\">Now playing</p><h1 id=\"running-name\">{}</h1><p class=\"vigil-lede\">{}, running since {}.</p>{room}\
+<dl class=\"vigil-facts\"><div><dt>Table display</dt><dd>{display_state}</dd></div><div><dt>Players join</dt><dd>{joining}</dd></div><div><dt>First played</dt><dd>{}</dd></div></dl>\
+<div class=\"actions\">{}</div><p class=\"hint\">{}</p>\
+<div class=\"stop-row\">{}<p class=\"hint\">Closing this window keeps the game running. Stop saves the game and ends it.</p></div></section>",
         lantern("lit"),
         escape(&run.game.name),
         escape(run.game.adventure.label()),
+        escape(&since(run.game.last_played)),
+        escape(&first_played(run.game.created)),
         display_controls(snapshot),
         joining_line(&snapshot.settings),
         button("/stop", "Stop and save", "danger", &[])
@@ -1267,6 +1329,44 @@ mod tests {
         }
         app.config_set("animations", "follow-windows").unwrap();
         assert!(text(&handle(&app, "GET", "/", b"")).contains("class=\"motion-follow-windows\""));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn a_running_game_has_the_page_to_itself_with_its_room_code() {
+        let (app, data) = app("running");
+        let mut snapshot = app.snapshot();
+        let game = SavedGame {
+            database: "df_test_running".to_owned(),
+            name: "The Iron Crown".to_owned(),
+            adventure: Adventure::Harbor,
+            created: 1,
+            last_played: 2,
+        };
+        snapshot.saves = vec![game.clone()];
+        snapshot.phase = Phase::Running(RunRecord {
+            game,
+            pid: 1,
+            server_exe: data.join("server.exe"),
+            stop_dir: data.clone(),
+            log: data.join("server.log"),
+            display_url: "http://127.0.0.1:63309/gameplay/display".to_owned(),
+            player_url: "http://127.0.0.1:63309/gameplay/player?room=ZOMATA".to_owned(),
+            postgres_started: false,
+            play_root: data.clone(),
+            postgres_bin: data.clone(),
+            database_port: 0,
+            stopping: false,
+            dev_control: None,
+        });
+        let page = home(&snapshot);
+        assert!(page.contains("<h1 id=\"running-name\">The Iron Crown</h1>"));
+        assert!(page.contains("<span class=\"room-code\">ZOMATA</span>"));
+        assert!(page.contains("class=\"ambience\" aria-hidden=\"true\""));
+        assert!(page.contains("Stop and save"));
+        assert!(!page.contains("Saved games"));
+        assert_eq!(room_code("http://x/gameplay/player?room=AB%3Cx"), None);
+        assert_eq!(room_code("http://x/gameplay/player"), None);
         std::fs::remove_dir_all(data).unwrap();
     }
 
