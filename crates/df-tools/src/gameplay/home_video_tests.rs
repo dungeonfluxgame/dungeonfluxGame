@@ -919,7 +919,7 @@ fn inputs_with_scene(
 }
 
 #[test]
-fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disabled_or_enabled() {
+fn the_scene_video_switch_is_opt_in_independent_of_provider_credentials() {
     let current = Path::new("/work");
     let off = home_video::home_video_settings(
         inputs_with_scene(None, Some("off"), Some("fixture-key"), None),
@@ -939,7 +939,7 @@ fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disab
     .expect("explicit scene mode can report the unavailable provider");
     assert_eq!(
         home_video::startup_line(&keyless),
-        "HOME VIDEO off (no FAL_KEY); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s (no FAL_KEY; request logging only)"
+        "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s (no FAL_KEY; request logging only)"
     );
 
     let invalid = home_video::home_video_settings(
@@ -1246,38 +1246,44 @@ async fn keyless_scene_clips_fail_without_provider_traffic() {
 }
 
 #[test]
-fn the_setting_is_on_with_a_key_and_the_default_model_and_off_without_one() {
+fn video_defaults_off_with_a_key_and_requires_independent_explicit_opt_ins() {
     let current = Path::new("/work");
-    let on =
-        home_video::home_video_settings(inputs(None, Some("fixture-key"), None), current, false)
-            .expect("valid settings");
-    assert!(
-        home_video::startup_line(&on).contains("SCENE VIDEO on"),
-        "scene clips are enabled by default when the media provider is configured"
-    );
-    assert_eq!(
-        home_video::startup_line(&on),
-        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
-    );
-    let without = home_video::home_video_settings(inputs(None, None, None), current, false)
-        .expect("a missing key is a state");
-    assert_eq!(
-        home_video::startup_line(&without),
-        "HOME VIDEO off (no FAL_KEY); SCENE VIDEO off (no FAL_KEY)"
-    );
-    let disabled = home_video::home_video_settings(
-        inputs(Some("off"), Some("fixture-key"), None),
+    for value in [None, Some(""), Some("off")] {
+        for key in [None, Some("fixture-key")] {
+            let settings = home_video::home_video_settings(
+                inputs_with_scene(value, value, key, None),
+                current,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                home_video::startup_line(&settings),
+                "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off); SCENE VIDEO off (DF_GAMEPLAY_SCENE_VIDEO=off)"
+            );
+        }
+    }
+    let home = home_video::home_video_settings(
+        inputs_with_scene(Some("on"), None, Some("fixture-key"), None),
         current,
         false,
     )
-    .expect("off is a state");
-    assert_eq!(
-        home_video::startup_line(&disabled),
-        "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
-    );
-    let qualification =
-        home_video::home_video_settings(inputs(None, Some("fixture-key"), None), current, true)
-            .expect("a qualification run is a state");
+    .unwrap();
+    assert!(home_video::startup_line(&home).starts_with("HOME VIDEO on"));
+    assert!(home_video::startup_line(&home).contains("SCENE VIDEO off"));
+    let scene = home_video::home_video_settings(
+        inputs_with_scene(None, Some("on"), Some("fixture-key"), None),
+        current,
+        false,
+    )
+    .unwrap();
+    assert!(home_video::startup_line(&scene).starts_with("HOME VIDEO off"));
+    assert!(home_video::startup_line(&scene).contains("SCENE VIDEO on"));
+    let qualification = home_video::home_video_settings(
+        inputs_with_scene(Some("on"), Some("on"), Some("fixture-key"), None),
+        current,
+        true,
+    )
+    .unwrap();
     assert_eq!(
         home_video::startup_line(&qualification),
         "HOME VIDEO off (qualification run); SCENE VIDEO off (qualification run)"
@@ -1288,7 +1294,7 @@ fn the_setting_is_on_with_a_key_and_the_default_model_and_off_without_one() {
 fn an_invalid_setting_is_refused_by_name_and_its_value_is_never_echoed() {
     let current = Path::new("/work");
     let model = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), Some("some/other-model")),
+        inputs(Some("on"), Some("fixture-key"), Some("some/other-model")),
         current,
         false,
     )

@@ -193,8 +193,8 @@ fn refused(name: &str) -> io::Error {
     io::Error::other(format!("{name} invalid"))
 }
 
-/// Validates both video settings. Scene clips default on when a media credential is configured;
-/// explicitly enabling clips without a key keeps the request visible but cannot submit it.
+/// Home and scene/kill video generation default off, even with a credential.
+/// Explicit `on` opts in; enabling scene clips without a key reports unavailable without submitting.
 pub(crate) fn home_video_settings(
     inputs: HomeVideoInputs,
     current: &Path,
@@ -211,42 +211,20 @@ pub(crate) fn home_video_settings(
             cache_dir: current.join(DEFAULT_CACHE),
         });
     }
-    let mode = match inputs.mode {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => String::new(),
-        Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO")),
-    };
-    match mode.as_str() {
-        "off" => {}
-        "" | "on" => {}
-        _ => return Err(refused("DF_GAMEPLAY_HOME_VIDEO")),
-    }
-    let scene_mode = match inputs.scene_mode {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => String::new(),
-        Err(_) => return Err(refused("DF_GAMEPLAY_SCENE_VIDEO")),
-    };
-    match scene_mode.as_str() {
-        "" | "on" | "off" => {}
-        _ => return Err(refused("DF_GAMEPLAY_SCENE_VIDEO")),
-    }
+    let home_requested = super::media_policy::enabled(inputs.mode, "DF_GAMEPLAY_HOME_VIDEO")?;
+    let scene_enabled = super::media_policy::enabled(inputs.scene_mode, "DF_GAMEPLAY_SCENE_VIDEO")?;
     let credential = match inputs.credential {
         Ok(value) if !value.is_empty() => Some(value),
         Err(std::env::VarError::NotPresent) | Ok(_) => None,
-        Err(_) if mode != "off" || scene_mode == "on" => return Err(refused("FAL_KEY")),
+        Err(_) if home_requested || scene_enabled => return Err(refused("FAL_KEY")),
         Err(_) => None,
     };
-    let scene_enabled = match scene_mode.as_str() {
-        "on" => true,
-        "off" => false,
-        _ => credential.is_some(),
-    };
-    let scene_off_reason = if scene_mode == "off" {
-        "DF_GAMEPLAY_SCENE_VIDEO=off"
-    } else {
+    let scene_off_reason = if scene_enabled {
         "no FAL_KEY"
+    } else {
+        "DF_GAMEPLAY_SCENE_VIDEO=off"
     };
-    let home_enabled = mode != "off" && credential.is_some();
+    let home_enabled = home_requested && credential.is_some();
     if (home_enabled || scene_enabled)
         && credential.as_ref().is_some_and(|value| {
             value.len() > 8192 || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
@@ -254,7 +232,7 @@ pub(crate) fn home_video_settings(
     {
         return Err(refused("FAL_KEY"));
     }
-    let home = if mode == "off" {
+    let home = if !home_requested {
         Err(HomeVideoOff::Disabled)
     } else if credential.is_none() {
         Err(HomeVideoOff::NoCredential)

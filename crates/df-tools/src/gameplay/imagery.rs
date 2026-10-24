@@ -73,7 +73,8 @@ pub(super) use artifact::{ArtifactSubject, SubjectRefusal, close_up_request};
 )]
 pub(super) use prompt::{
     AssembledPrompt, CharacterFacts, CharacterRole, FILM_LOOK, HeroVisualIdentity, LifeStage,
-    PlaceFacts, cast_expression, hero_cutout, hero_expression, hero_portrait, scene_refresh,
+    PlaceFacts, cast_expression, creator_portrait, hero_cutout, hero_expression, hero_portrait,
+    scene_refresh,
 };
 #[allow(
     unused_imports,
@@ -212,6 +213,7 @@ impl OutputSpec {
 }
 
 /// One request to the image service.
+#[derive(Clone)]
 pub(super) struct ImageRequest {
     pub(super) kind: ImageKind,
     pub(super) references: Vec<ReferenceImage>,
@@ -255,6 +257,10 @@ pub(super) enum ImageFailure {
     Refused,
     /// The provider failed, rejected the credential or was rate limited.
     Provider,
+    BflSubmit,
+    BflPoll,
+    BflDelivery,
+    BflDownload,
     /// The provider answered with an image that is not what was asked for.
     BadOutput,
     /// The flight ended without reporting.
@@ -269,6 +275,10 @@ impl ImageFailure {
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::Refused => "refused",
             Self::Provider => "provider_failed",
+            Self::BflSubmit => "bfl_submit_failed",
+            Self::BflPoll => "bfl_poll_failed",
+            Self::BflDelivery => "bfl_delivery_failed",
+            Self::BflDownload => "bfl_download_failed",
             Self::BadOutput => "bad_output",
             Self::Interrupted => "interrupted",
         }
@@ -283,6 +293,10 @@ impl ImageFailure {
             Self::DeadlineExceeded,
             Self::Refused,
             Self::Provider,
+            Self::BflSubmit,
+            Self::BflPoll,
+            Self::BflDelivery,
+            Self::BflDownload,
             Self::BadOutput,
             Self::Interrupted,
         ]
@@ -425,18 +439,20 @@ struct ManifestLine {
     width: u32,
     height: u32,
     transparent: bool,
-    micro_dollars: u64,
+    micro_dollars: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supplier_credits: Option<String>,
     /// PLAY-V09: how long the provider call took, in milliseconds; absent in older manifests.
     #[serde(default)]
     elapsed_ms: u64,
 }
 
-/// Where images are made. FLUX (fal) is the default whenever its key is set: the owner judged
-/// only FLUX's output a real photograph (2026-10-17); the OpenAI image-edit route remains for runs
-/// without a fal key and for the loopback test fakes.
+/// OpenAI is the default image route. FLUX remains an explicit development opt-in;
+/// merely configuring a fal credential never changes the selected image provider.
 pub(super) enum ImageRoute {
     OpenAi(NativeImageEditProvider),
     Flux(df_providers::NativeFalImageProvider),
+    Bfl(df_providers::NativeBflImageProvider),
 }
 
 impl From<NativeImageEditProvider> for ImageRoute {
@@ -446,20 +462,16 @@ impl From<NativeImageEditProvider> for ImageRoute {
 }
 
 impl ImageRoute {
-    /// `DF_GAMEPLAY_IMAGERY_PROVIDER` is `flux` (needs `FAL_KEY`), `openai`, or unset: FLUX when
-    /// `FAL_KEY` is set, OpenAI otherwise.
+    /// `DF_GAMEPLAY_IMAGERY_PROVIDER` is `flux` (needs `FAL_KEY`), `openai`, or unset.
+    /// Unset and empty choose OpenAI; the imagery configuration admits its credential first.
     fn configured(configuration: &ImageryConfiguration) -> Result<Self, io::Error> {
         let fal_key = std::env::var("FAL_KEY").ok().filter(|key| !key.is_empty());
-        let wanted = std::env::var("DF_GAMEPLAY_IMAGERY_PROVIDER").unwrap_or_default();
-        let flux = match (wanted.as_str(), &fal_key) {
-            ("openai", _) => None,
-            ("flux", None) => {
-                return Err(io::Error::other(
-                    "DF_GAMEPLAY_IMAGERY_PROVIDER=flux needs FAL_KEY",
-                ));
-            }
-            ("" | "flux", key) => key.clone(),
-            _ => return Err(io::Error::other("DF_GAMEPLAY_IMAGERY_PROVIDER refused")),
+        let flux = match super::media_policy::image_provider(
+            std::env::var("DF_GAMEPLAY_IMAGERY_PROVIDER"),
+            fal_key.is_some(),
+        )? {
+            super::media_policy::ImageProvider::OpenAi => None,
+            super::media_policy::ImageProvider::Flux => fal_key,
         };
         match flux {
             Some(key) => df_providers::NativeFalImageProvider::new(
@@ -483,6 +495,7 @@ impl ImageRoute {
         match self {
             Self::OpenAi(_) => model.model_id(),
             Self::Flux(_) => "flux-1.1-ultra-raw+kontext-max",
+            Self::Bfl(_) => "flux-3-image:latest:1.5k:grounding-off:safety-2",
         }
     }
 
@@ -490,10 +503,63 @@ impl ImageRoute {
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<df_providers::GeneratedImage, ImageEditError> {
+    ) -> Result<(df_providers::GeneratedImage, Option<String>), ImageFailure> {
         match self {
-            Self::OpenAi(provider) => provider.edit(edit, deadline).await,
-            Self::Flux(provider) => provider.edit(edit, deadline).await,
+            Self::OpenAi(provider) => provider
+                .edit(edit, deadline)
+                .await
+                .map(|image| (image, None))
+                .map_err(failure_of),
+            Self::Flux(provider) => provider
+                .edit(edit, deadline)
+                .await
+                .map(|image| (image, None))
+                .map_err(failure_of),
+            Self::Bfl(provider) => {
+                provider
+                    .edit_diagnosed(edit, deadline)
+                    .await
+                    .map_err(|failure| {
+                        let (error_class, http_status) = match failure.error {
+                    ImageEditError::InvalidRequest => ("invalid_request", None),
+                    ImageEditError::Refused => ("moderation_refused", None),
+                    ImageEditError::Unauthorized => ("unauthorized", None),
+                    ImageEditError::Provider(status) => ("http_status", Some(status)),
+                    ImageEditError::Transport(_) => ("transport", None),
+                    ImageEditError::Output => ("output_contract", None),
+                };
+                let http_status = failure.http_status.or(http_status);
+                let request_hash = format!("{:x}",Sha256::digest(edit.prompt.as_bytes()));
+                super::actor::record_audit_diagnostic(
+                    "gameplay.creator_bfl_boundary",
+                    format!("BFL_BOUNDARY provider=BFL stage={} error_class={error_class} error={:?} http_status={http_status:?} delivery_host={:?} admission_reason={:?} request_hash={request_hash}",failure.stage,failure.error,failure.delivery_host,failure.admission_reason),
+                    serde_json::Map::from_iter([
+                        ("provider".into(),serde_json::json!("BFL")),
+                        ("delivery_host".into(),serde_json::json!(failure.delivery_host)),
+                        ("admission_reason".into(),serde_json::json!(failure.admission_reason)),
+                        ("stage".into(),serde_json::json!(failure.stage)),
+                        ("error_class".into(),serde_json::json!(error_class)),
+                        ("http_status".into(),serde_json::json!(http_status)),
+                        ("request_hash".into(),serde_json::json!(request_hash)),
+                        ("error".into(),serde_json::json!(format!("{:?}",failure.error))),
+                    ]), &[]);
+                match failure.error {
+                            ImageEditError::Refused
+                            | ImageEditError::Transport(
+                                NativeHttpRefusal::Deadline | NativeHttpRefusal::Cancelled,
+                            ) => failure_of(failure.error),
+                            _ => match failure.stage {
+                                "submit" | "submit_response" | "validation" => {
+                                    ImageFailure::BflSubmit
+                                }
+                                "poll" | "poll_response" => ImageFailure::BflPoll,
+                                "delivery_admission" => ImageFailure::BflDelivery,
+                                "download" => ImageFailure::BflDownload,
+                                _ => ImageFailure::BadOutput,
+                            },
+                        }
+                    })
+            }
         }
     }
 }
@@ -647,7 +713,22 @@ impl Imagery {
         provider: impl Into<ImageRoute>,
         manifest_directory: Option<&Path>,
     ) -> Result<Self, io::Error> {
-        let provider = provider.into();
+        Self::new_in_hub(
+            configuration,
+            provider.into(),
+            manifest_directory,
+            super::resources::Hub::new(),
+            false,
+        )
+    }
+
+    pub(super) fn new_in_hub(
+        configuration: ImageryConfiguration,
+        provider: ImageRoute,
+        manifest_directory: Option<&Path>,
+        hub: super::resources::Hub,
+        creator_only: bool,
+    ) -> Result<Self, io::Error> {
         std::fs::create_dir_all(&configuration.cache_dir)?;
         let summary = format!(
             "IMAGERY on model={} interval={}s rating={} quality={}",
@@ -661,7 +742,6 @@ impl Imagery {
             },
         );
         let manifest = manifest_directory.map(|directory| directory.join(MANIFEST_NAME));
-        let hub = super::resources::Hub::new();
         let engine = Engine {
             provider,
             model: configuration.model,
@@ -685,7 +765,11 @@ impl Imagery {
         // The hub's bounds for the image kinds: a request may wait for a free provider slot and
         // then runs under the provider's own deadline, so the hub never fires before it.
         let wait = engine.deadline * (MAXIMUM_IN_FLIGHT as u32 + 1) + Duration::from_secs(10);
-        for kind in IMAGE_KINDS {
+        for kind in if creator_only {
+            vec![super::resources::ResourceKind::CreatorPortrait]
+        } else {
+            IMAGE_KINDS.to_vec()
+        } {
             hub.set_limits(
                 kind,
                 super::resources::Limits {
@@ -746,7 +830,7 @@ impl Imagery {
     pub(super) fn key_for(&self, request: &ImageRequest) -> ImageKey {
         let (model, quality, rating) = match &self.inner.mode {
             Mode::On { engine, .. } => (
-                engine.model.model_id(),
+                engine.provider.label(engine.model),
                 engine.quality_label(),
                 engine.rating.label(),
             ),
@@ -760,6 +844,21 @@ impl Imagery {
         &self.inner.hub
     }
 
+    pub(super) fn model_label(&self) -> &'static str {
+        match &self.inner.mode {
+            Mode::On { engine, .. } => engine.provider.label(engine.model),
+            Mode::Off(_) => "off",
+        }
+    }
+
+    /// Called only by the owned creator pipeline after its classification chooses a route.
+    pub(super) async fn render_creator(
+        &self,
+        request: ImageRequest,
+    ) -> Result<ImageKey, ImageFailure> {
+        self.render(request).await
+    }
+
     /// The one way to get an image made: describes the request as a typed resource, runs it
     /// through the hub (state, timeout, request cap, `RESOURCE` audit lines) and returns the key
     /// to load it by. `subject` names what the picture is about (`character:ant-wolf`,
@@ -770,9 +869,7 @@ impl Imagery {
         subject: &str,
         request: ImageRequest,
     ) -> Result<ImageKey, ImageFailure> {
-        use super::resources::{
-            DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec,
-        };
+        use super::resources::{DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec};
         use df_render::art_contract::Neutral;
         let key = self.key_for(&request);
         let key = key.as_str();
@@ -894,7 +991,6 @@ impl Imagery {
         locked(&self.inner.registry).register(&key, Registered { format });
         Some(key)
     }
-
 }
 
 impl Engine {
@@ -967,7 +1063,7 @@ impl Engine {
             "gameplay.imagery.render",
             &span_fields(
                 request.kind,
-                self.model.model_id(),
+                self.provider.label(self.model),
                 request.references.len(),
             ),
         );
@@ -1037,7 +1133,7 @@ impl Engine {
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
         let started = std::time::Instant::now();
-        let (mut stored_format, mut bytes, mut micro_dollars) =
+        let (mut stored_format, mut bytes, mut micro_dollars, supplier_credits) =
             self.generate(&edit, format).await?;
         // ART-01: a plate or empty room is judged before it is stored; one that fails is made
         // once more with the defect named, and a second failure stores nothing.
@@ -1058,7 +1154,7 @@ impl Engine {
                 ..edit
             };
             retry.validate().map_err(|_| ImageFailure::BadOutput)?;
-            let (retry_format, retry_bytes, retry_cost) = self.generate(&retry, format).await?;
+            let (retry_format, retry_bytes, retry_cost, _) = self.generate(&retry, format).await?;
             micro_dollars = micro_dollars.saturating_add(retry_cost);
             // Lettering is the one defect a retry may keep: a place with a little stray text on a
             // sign beats a place with no picture at all, where the cast stands on black (P6-183).
@@ -1074,8 +1170,15 @@ impl Engine {
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let stored = self.store(key, stored_format, bytes.clone()).await.is_ok();
         if stored {
-            self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
-                .await;
+            self.record(
+                key,
+                &request,
+                bytes.len() as u64,
+                micro_dollars,
+                supplier_credits,
+                elapsed_ms,
+            )
+            .await;
         }
         // A result that could not be cached is still served from memory for this key's first
         // requester only through the cache, so a failed write is a failed render.
@@ -1087,13 +1190,35 @@ impl Engine {
         &self,
         edit: &ImageEdit<'_>,
         format: ImageFormat,
-    ) -> Result<(ImageFormat, Bytes, u64), ImageFailure> {
+    ) -> Result<(ImageFormat, Bytes, u64, Option<String>), ImageFailure> {
         self.charge();
-        let generated = self
-            .provider
-            .edit(edit, self.deadline)
+        let (mut generated, supplier_credits) = self.provider.edit(edit, self.deadline).await?;
+        if matches!(self.provider, ImageRoute::Bfl(_)) && format == ImageFormat::Jpeg {
+            let source = generated.bytes;
+            let (width, height) = (edit.width, edit.height);
+            let source_format = match generated.format {
+                ImageFormat::Png => image::ImageFormat::Png,
+                ImageFormat::Jpeg => image::ImageFormat::Jpeg,
+                _ => return Err(ImageFailure::BadOutput),
+            };
+            generated.bytes = tokio::task::spawn_blocking(move || {
+                let image = image::load_from_memory_with_format(&source, source_format)
+                    .map_err(|_| ImageFailure::BadOutput)?;
+                let image =
+                    image.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+                let mut bytes = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 88)
+                    .encode_image(&image.to_rgb8())
+                    .map_err(|_| ImageFailure::BadOutput)?;
+                Ok::<_, ImageFailure>(bytes)
+            })
             .await
-            .map_err(failure_of)?;
+            .map_err(|_| ImageFailure::Interrupted)??;
+            generated.format = ImageFormat::Jpeg;
+            generated.has_alpha_channel = false;
+            generated.width = width;
+            generated.height = height;
+        }
         if generated.bytes.is_empty() || generated.bytes.len() as u64 > MAXIMUM_IMAGE_BYTES {
             return Err(ImageFailure::BadOutput);
         }
@@ -1108,6 +1233,7 @@ impl Engine {
             generated.format,
             Bytes::from(generated.bytes),
             micro_dollars,
+            supplier_credits,
         ))
     }
 
@@ -1192,6 +1318,7 @@ impl Engine {
         request: &ImageRequest,
         bytes: u64,
         micro_dollars: u64,
+        supplier_credits: Option<String>,
         elapsed_ms: u64,
     ) {
         let Some(path) = self.manifest.clone() else {
@@ -1200,7 +1327,7 @@ impl Engine {
         let line = ManifestLine {
             key: key.0.clone(),
             kind: request.kind.label().to_owned(),
-            model: self.model.model_id().to_owned(),
+            model: self.provider.label(self.model).to_owned(),
             prompt: request.prompt.as_str().to_owned(),
             references: request
                 .references
@@ -1214,7 +1341,8 @@ impl Engine {
             width: request.output.width,
             height: request.output.height,
             transparent: request.output.transparent,
-            micro_dollars,
+            micro_dollars: (!matches!(self.provider, ImageRoute::Bfl(_))).then_some(micro_dollars),
+            supplier_credits,
             elapsed_ms,
         };
         let appended = tokio::task::spawn_blocking(move || append_manifest(&path, &line)).await;
@@ -1301,6 +1429,9 @@ fn failure_of(error: ImageEditError) -> ImageFailure {
         ImageEditError::Refused => ImageFailure::Refused,
         ImageEditError::Unauthorized | ImageEditError::Provider(_) => ImageFailure::Provider,
         ImageEditError::Transport(NativeHttpRefusal::Deadline) => ImageFailure::DeadlineExceeded,
+        ImageEditError::Transport(NativeHttpRefusal::Unknown | NativeHttpRefusal::Cancelled) => {
+            ImageFailure::Interrupted
+        }
         ImageEditError::Transport(_) => ImageFailure::Provider,
         ImageEditError::Output => ImageFailure::BadOutput,
     }
@@ -1532,7 +1663,7 @@ pub(super) fn router(imagery: Imagery) -> Router {
         .with_state(imagery)
 }
 
-async fn serve_image(
+pub(super) async fn serve_image(
     State(imagery): State<Imagery>,
     RoutePath(key): RoutePath<String>,
     headers: HeaderMap,

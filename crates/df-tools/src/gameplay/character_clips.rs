@@ -1303,7 +1303,13 @@ type NativeProviders = (
 );
 
 fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
-    if !live {
+    if !live
+        || !super::media_policy::enabled(
+            std::env::var("DF_GAMEPLAY_CHARACTER_VIDEO"),
+            "DF_GAMEPLAY_CHARACTER_VIDEO",
+        )?
+    {
+        // Cached clips remain readable, but no clip-only image frames or video are generated.
         return Ok((None, None));
     }
     let image_key = std::env::var("OPENAI_API_KEY")
@@ -1313,6 +1319,9 @@ fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
         .or_else(|_| std::env::var("DF_FAL_KEY"))
         .ok()
         .filter(|key| !key.is_empty());
+    if fal_key.is_none() {
+        return Ok((None, None));
+    }
     let frames = image_key
         .map(|key| {
             df_providers::NativeImageEditProvider::new(
