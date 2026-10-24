@@ -690,8 +690,11 @@ Final qualification: after the shared IPv6 correction, a real creator UI request
 
 - **REF-062 — A table seats six heroes.** The lobby, seats, creation, scene plates, party lists on the TV and phones, and fights take up to six player heroes instead of four. Plates frame all six from their own character sheets (REF-058/060).
   - Date: 2026-10-24. Rationale: the owner asked to enable six characters on the home screen, not just four.
+  - Map exception, decided by the coordinator the same day: two scanned battle layouts (scan-valley-bridges-voxel-v1 north-south and scan-village-voxel-v1) cannot hold six hero start cells while every hero stays three steps from enemy cells and two exits stay free. There, seats 5 and 6 may start two steps from the nearest enemy cell; every other map rule is unchanged.
 - **REF-063 — Every SRD 5.2.1 species is playable as a Fighter.** Dragonborn, Dwarf, Elf, Gnome, Goliath, Halfling, Human, Orc and Tiefling can be created with the Fighter/Soldier build, with the species choices the source requires (ancestry, lineage, legacy, Human skill and Origin feat). Traits the engine can resolve are implemented from the source; traits that need machinery it lacks (spellcasting, conditions and their saves, Heroic Inspiration, flight, Large Form) are shown on the character sheet as "Not in play yet" and recorded as coverage gaps, never approximated (rules-support.md). Aasimar is not in SRD 5.2.1, so it stays a portrait-only choice until a licensed source is pinned. In-game images describe each species' anatomy, not just its name.
   - Date: 2026-10-24. Rationale: the owner asked for six characters of different races; the coordinator chose source-faithful traits with explicit gaps over a Dwarf-only table or approximated traits.
+- **REF-065 — A scene plate shows exactly the heroes at the table.** Every scene plate depicts as many player heroes as are seated (one to six), each from their own sheet, never an extra hero-like figure and never one left out. The plate prompt names the exact number, and the photo check that already judges every plate counts the hero figures against the seated party; a plate with the wrong number is rejected and generated again like any other failed plate, and the miss is logged.
+  - Date: 2026-10-24. Rationale: the owner asked that the display plate respect the quantity of players.
 
 ## Character storage: per campaign and long term — design, 2026-10-23
 
@@ -751,7 +754,7 @@ Requested stale compiler-cache cleanup was blocked before execution by automatic
 
 Append confirmed decisions using this format; keep unresolved alternatives in the discussion section.
 
-- ID: REF-065 (increment for each decision)
+- ID: REF-066 (increment for each decision)
 - Date: YYYY-MM-DD
 - Decision: The agreed behavior or requirement.
 - Rationale: Why it was selected.

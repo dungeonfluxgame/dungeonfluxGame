@@ -1662,3 +1662,26 @@ Found while creating two non-human-looking heroes (Mossgrave and Vix) on two pho
 | CRE-36 | 2 | A name the stored label cannot hold ("Vix Ashlantern") was refused as `REFUSAL action=CreateCharacter reason=CapabilityUnavailable step=session-engine-transition cause=InvalidCandidate` with no detail line, even after the HS7 logging work: the `RevisionLabel` error inside creation is not named. The phone showed nothing. | Live test after REF-061 | Name storage fixed with REF-061 (`hx:` form); still open: label and other in-engine errors should reach the REFUSAL cause, and a refused Confirm must tell the player why. |
 | TST-02 | 3 | Three living-scenes plate tests (`committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_references`, `visible_change_batch_uses_one_provider_edit_from_the_displayed_still`, `kill_shot_lethal_blow_generates_one_still_even_after_duplicate_delivery`) fail with `DeadlineExceeded` in a full df-tools run while several lanes compile, and pass alone on the same tree. | Clean-HEAD run for ca090262 | Open: drive their deadlines from a controlled clock instead of wall time (AGENTS.md timing checks). |
 | PLT-10 | 2 | The first plate cut Vix off at the right edge (face out of frame). A dev-directed plate (camera back about 5 ft, heroes facing each other) fixed it for that plate. | First plate, The Salt Gate | Open: HS9 (REF-060). |
+
+## 29. Six-hero roleplay play-test, 2026-10-24
+
+Six heroes (dwarf, elf, halfling, dragonborn, tiefling, goliath) created by hand on six phones in room BOPOGA, playing a
+talk-only travelling-salesman session. Round-0 adversarial judge verdict: NOT CLEAR.
+
+| ID | Sev | Issue | Seen in | Decision |
+|---|---|---|---|---|
+| RP-01 | 1 | Every typed line from any seat is refused in ~0.2 s before any model call: `UNAVAILABLE site=authority reason=InvalidCandidate step=living-scene-state`; phone says "Dialogue is unavailable". Menu choices work. Six new six-hero test failures on the same build (InvalidCandidate in creation and fights). | BOPOGA, Kazrak and Thorin | Open: lane HS20. |
+| RP-02 | 1 | The TV stopped applying views after its tunnel dropped (client diagnostics stopped at batch 8, console "WebSocket ... /gameplay/tunnel failed"): the ready plate never showed and "Updating scene..." stayed ~116 s, until a reload. Nothing logs the drop. | BOPOGA TV | Open: lane HS21. |
+| RP-03 | 1 | The opening ignores a trader party: a fixed escort-and-threat hook (courier, broken seal, armed enforcer) whose only menu route ends in a fight; no merchants, goods, prices, barter, flirt or threaten offers at the first place. | Opening beat | Open: after RP-01, check talking the enforcer down by typed dialogue; then a merchant-first opening option. |
+| RP-04 | 2 | A successful Insight check yields only "Courier is here." (`outcome=success finding=none`), and the check was labelled `examine_harbor_seal` while it watched the Courier. | Pip watches Courier | Open. |
+| RP-05 | 2 | "Look around" offers only people; no goods or objects to inspect. The select and the button are both labelled "Look around". | Salt Quay | Open. |
+| RP-06 | 2 | The Merchant background is offered in the creator but refused as "Gameplay rules for this combination are not ready" without naming the choice. | Kazrak | Open. |
+| RP-07 | 2 | Plate requests send `references=3` for a cast of 7-8; edge crops (Thorin left, Orla/Vesper right); dwarf and halfling drawn at human height; Pip's look changes between plates; the dialogue box covers a hero. Head location runs 4 lookups for 7-8 people and `actor_heads` maps 1-2. | All four plates | Open: HS16 (exact hero count) first, then a framing lane. |
+| RP-08 | 2 | The opening narration and the Courier's first line had no voice (`voice_start_ms=none`); only 3 voice requests in the session, all later. | Opening | Open. |
+| RP-09 | 2 | No tempo or music change is logged through the whole scene, even when the armed enforcer arrives; the startup music spec says "night" for a daylight plate. | Opening | Open: lane HS18. |
+| RP-10 | 2 | Roll card: name twice, no DC or outcome word, unexplained "Kept", empty lower half, covers the check's subject, text ghosts over the plate after it closes. | Pip's Insight card | Open. |
+| RP-11 | 2 | Logs: NPC/DM line text not recorded; STORY/PLATE/IMAGERY lines have no wall-clock time; every TV batch has `dropped_records=3-5`; `dev log` returned no lines after play; InvalidCandidate names no field; `held_ms=704055` on a line; hero names printed in STORY/CHECK/LINE. | Server log | Open: lane HS15. |
+| RP-12 | 3 | NPCs have no names ("Courier", "Bandit"); the same man is "Bandit" in the menu and "dockside enforcer" in narration; notebook entries are templated ("Status: given"). | Opening | Open. |
+| RP-13 | 3 | The party strip shows tiny dark portraits, two-line names and only HP. | TV | Open. |
+| RP-14 | 3 | "Read my description" is local word matching by design (hero_identity.rs read_local): "automatic reading is off". Meaning should come from a Jev judgement under a schema. | Creator | Open. |
+| RP-15 | 3 | Lobby: "Enter the Lantern Wharf" wraps onto two left-aligned lines in a full-width button at phone width. | Lobby | Open. |
