@@ -166,11 +166,11 @@ fn select_for(
     let required_threads;
     let alternatives = if phase == rpc::JourneyPhase::Room && *action == begin {
         let party = participants(current);
-        if party.len() != 2 || current.state().characters.len() != 2 {
+        if !super::party_ready(current) {
             return invalid("PartyCreationCountMismatch");
         }
         let sources = native_sources(current, &create, rpc::JourneyPhase::Room)?;
-        if sources.len() != 2 {
+        if sources.len() != party.len() {
             return invalid("CreationSourceCountMismatch");
         }
         let mut remaining = sources

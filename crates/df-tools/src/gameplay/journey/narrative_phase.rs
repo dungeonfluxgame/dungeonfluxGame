@@ -325,7 +325,7 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         return Ok(phase);
     }
     let party = participants(current);
-    if party.len() != 2 || state.characters.len() != 2 {
+    if !super::party_ready(current) {
         return invalid();
     }
     let build = model::content("dwarf-fighter-soldier")?;
@@ -343,7 +343,11 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
             Ok(who)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if actors.first() == actors.get(1) {
+    if actors
+        .iter()
+        .enumerate()
+        .any(|(index, actor)| actors[..index].contains(actor))
+    {
         return invalid();
     }
     let opening = source(state, "begin-story", rpc::JourneyPhase::Opening)?;

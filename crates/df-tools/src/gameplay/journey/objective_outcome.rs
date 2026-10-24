@@ -71,7 +71,12 @@ fn actors(state: &GameState) -> Result<Vec<EntityId>, RepositoryError> {
         .filter(|link| link.member.as_bytes() != &super::PLAYER)
         .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
         .collect::<Result<Vec<_>, _>>()?;
-    if actors.len() != 2 || actors.first() == actors.get(1) {
+    if !(1..=super::MAXIMUM_PARTY).contains(&actors.len())
+        || actors
+            .iter()
+            .enumerate()
+            .any(|(index, actor)| actors[..index].contains(actor))
+    {
         return invalid();
     }
     Ok(actors)

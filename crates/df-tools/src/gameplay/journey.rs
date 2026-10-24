@@ -58,8 +58,13 @@ pub(super) fn room_code() -> String {
     pack::with_content(|pack| pack.room_code.clone())
 }
 pub(super) const ROOM_ENTITY: [u8; 16] = [0x45; 16];
-const MEMBERS: [[u8; 16]; 2] = [[0x61; 16], [0x62; 16]];
-const ENTITIES: [[u8; 16]; 2] = [[0x63; 16], [0x64; 16]];
+pub(super) use df_rules::local_journey::MAXIMUM_PARTY;
+const MEMBERS: [[u8; 16]; MAXIMUM_PARTY] = [
+    [0x61; 16], [0x62; 16], [0x81; 16], [0x82; 16], [0x83; 16], [0x84; 16],
+];
+const ENTITIES: [[u8; 16]; MAXIMUM_PARTY] = [
+    [0x63; 16], [0x64; 16], [0x75; 16], [0x76; 16], [0x77; 16], [0x78; 16],
+];
 const BANDIT: [u8; 16] = [0x65; 16];
 const ENCOUNTER: [u8; 16] = [0x66; 16];
 pub(super) const THREAD_POLICY: &str = "local-journey-rpc-3-threads-1-rest-1-inn-1-npc-1";
@@ -165,7 +170,11 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     PACKET_THREAD,
     THREAT_THREAD,
 ];
-fn bad<T>(_: T) -> RepositoryError {
+fn bad<T: std::fmt::Debug>(error: T) -> RepositoryError {
+    refusal_detail::cause(
+        "journey-value",
+        format!("{}::{error:?}", std::any::type_name::<T>()),
+    );
     RepositoryError::InvalidCandidate
 }
 pub(super) fn rule() -> Result<RuleReference, RepositoryError> {
@@ -232,10 +241,45 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
     state.narrative.remaining_budget = pack::narrative_budget();
     model::checkpoint(model::basis()?, state)
 }
+// Deriving the phase and a hero's creation sheet re-validates every hero from their receipts,
+// and every view asks many times; with six heroes and their starting gear that kept the owner
+// thread CPU-bound and every call past its deadline (2026-10-24, live free roam). Both are pure
+// functions of the game state, so the owner thread remembers the last few results by exact state.
+thread_local! {
+    static PHASES: std::cell::RefCell<std::collections::VecDeque<(GameState, rpc::JourneyPhase)>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    static RECREATED: std::cell::RefCell<std::collections::VecDeque<(GameState, GameState)>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+const REMEMBERED_PHASES: usize = 8;
+const REMEMBERED_RECREATIONS: usize = 4;
+
 pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
     if let Some(phase) = tactical::development_phase(current)? {
         return Ok(phase);
     }
+    let remembered = PHASES.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(state, _)| state == current.state())
+            .map(|(_, phase)| *phase)
+    });
+    if let Some(phase) = remembered {
+        return Ok(phase);
+    }
+    let phase = derived_phase(current)?;
+    PHASES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= REMEMBERED_PHASES {
+            cache.pop_front();
+        }
+        cache.push_back((current.state().clone(), phase));
+    });
+    Ok(phase)
+}
+
+fn derived_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
     if let Some(phase) = super::beat_script::with_script(|script| {
         if script.uses_encounter() {
             None
@@ -260,8 +304,8 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let hero_hp = pack::with_creation(|rules| {
         Ok::<_, RepositoryError>(
             i64::from(rules.base_hit_points)
-                // SRD 5.2.1 p. 84: Dwarven Toughness is the largest admitted level-one bonus.
-                + i64::from(rules::HeroSpecies::Dwarf.combat_traits().hit_points_per_level)
+                // SRD 5.2.1 p. 87: Human Versatile can grant Tough (+2 HP per level).
+                + 2
                 + rules
                     .ability_arrays
                     .iter()
@@ -668,31 +712,41 @@ pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32
     let constitution = value(state, who, "constitution")?;
     let progression = fighter_progression(state, who)?;
     let base = pack::with_creation(|rules| rules.base_hit_points);
-    let species = state
+    let character = state
         .characters
         .iter()
         .find(|character| character.entity == who)
-        .and_then(|character| {
-            character
-                .choices
-                .iter()
-                .find(|choice| choice.offer.as_str() == "species")
-        })
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let species = character
+        .choices
+        .iter()
+        .find(|choice| choice.offer.as_str() == "species")
         .and_then(|choice| rules::HeroSpecies::from_choice(choice.selected.as_str()))
         .ok_or_else(|| {
             refusal_detail::note("sheet-species-hit-points");
             RepositoryError::InvalidCandidate
         })?;
+    let choices = character
+        .choices
+        .iter()
+        .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
+        .collect::<Vec<_>>();
+    let options =
+        df_rules::species::SpeciesOptions::from_choices(species, &choices).map_err(bad)?;
     if progression.level() > 1 {
         return Ok(u32::from(
             progression.hit_points(u8::try_from(constitution).map_err(bad)?, species),
-        ));
+        ) + if options.tough {
+            2 * u32::from(progression.level())
+        } else {
+            0
+        });
     }
     // SRD 5.2.1 p. 84: apply the accepted species' Toughness, not a shared Dwarf assumption.
     u32::try_from(
         i32::from(base)
             + rules::ability_modifier(constitution as u8)
-            + i32::from(species.combat_traits().hit_points_per_level),
+            + i32::from(options.combat_traits(species).hit_points_per_level),
     )
     .map_err(bad)
 }
@@ -718,7 +772,26 @@ pub(super) fn receipt_character_sheet(
     state: &GameState,
     who: EntityId,
 ) -> Result<rpc::CharacterSheet, RepositoryError> {
-    let mut sheet = character_sheet(state, who)?;
+    let mut creation = recreated_heroes(state)?;
+    creation.encounters.clear();
+    creation.decisions.clear();
+    creation.facts.clear();
+    let mut sheet = character_sheet(&creation, who)?;
+    // Saved creation receipts predate live custody facts. Preserve their exact creation-only
+    // wire shape while the current sheet reports what the hero actually carries now.
+    sheet
+        .facts
+        .retain(|fact| fact.label != "Current carried equipment");
+    for fact in &mut sheet.facts {
+        match fact.label.as_str() {
+            "Starting armor (provenance)" => fact.label = "Armor".to_owned(),
+            "Starting weapon (provenance)" => fact.label = "Weapon".to_owned(),
+            _ if fact.value == "Carried; readiness is shown in the scene" => {
+                fact.value = "Held".to_owned()
+            }
+            _ => {}
+        }
+    }
     sheet.identity = None;
     Ok(sheet)
 }
@@ -756,15 +829,28 @@ pub(super) fn character_sheet(
             value: model::source_revision(),
         });
     }
-    let option_label = |group: &str| -> Result<String, RepositoryError> {
+    let option_label = |group: &'static str| -> Result<String, RepositoryError> {
         pack::with_content(|pack| {
             pack.creation
                 .groups
                 .iter()
                 .find(|candidate| candidate.id == group)
-                .and_then(|group| group.options.first())
+                .and_then(|offered| {
+                    offered.options.iter().find(|option| {
+                        build
+                            .choices
+                            .iter()
+                            .any(|(key, value)| *key == group && *value == option.id)
+                    })
+                })
                 .map(|option| option.label.clone())
-                .ok_or(RepositoryError::InvalidCandidate)
+                .ok_or_else(|| {
+                    refusal_detail::cause(
+                        "sheet-accepted-option",
+                        format!("MissingAcceptedOption group={group}"),
+                    );
+                    RepositoryError::InvalidCandidate
+                })
         })
     };
     let equipment = if archer {
@@ -779,10 +865,9 @@ pub(super) fn character_sheet(
             .map(|row| u32::from(row.quantity))
             .sum::<u32>()
     };
-    if equipment
-        .iter()
-        .any(|row| row.item == "healers-kit" && row.quantity > 0)
-    {
+    if state.inventory.iter().any(|item| {
+        item.owner == who && item.origin.entry.as_str() == "healers-kit" && item.quantity > 0
+    }) {
         facts.push(rpc::SheetFact {
             label: "Healer's Kit".to_owned(),
             value: format!("{} uses", value(state, who, "healer-kit-uses")?),
@@ -793,7 +878,7 @@ pub(super) fn character_sheet(
         ("Class", option_label("class")?),
         ("Background", option_label("background")?),
         (
-            "Armor",
+            "Starting armor (provenance)",
             if archer {
                 "Studded Leather"
             } else {
@@ -802,7 +887,7 @@ pub(super) fn character_sheet(
             .to_owned(),
         ),
         (
-            "Weapon",
+            "Starting weapon (provenance)",
             if archer {
                 "Longbow · Slow · +2 Archery".to_owned()
             } else {
@@ -836,6 +921,22 @@ pub(super) fn character_sheet(
             value: value.to_owned(),
         });
     }
+    facts.push(rpc::SheetFact {
+        label: "Current carried equipment".to_owned(),
+        value: state
+            .inventory
+            .iter()
+            .filter(|item| item.owner == who && item.origin.entry.as_str() != "gold-piece")
+            .map(|item| {
+                format!(
+                    "{} x {}",
+                    item.quantity,
+                    item.origin.entry.as_str().replace('-', " ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    });
     let character = state
         .characters
         .iter()
@@ -980,34 +1081,159 @@ pub(super) fn character_sheet(
         }
         .to_owned(),
     });
+    let current_source_weapon = if archer {
+        "longbow".to_owned()
+    } else {
+        pack::hero_weapon_item()
+    };
     facts.push(rpc::SheetFact {
-        label: if archer {
-            weapon_display_name("longbow")
+        label: weapon_display_name(&current_source_weapon),
+        value: if state.inventory.iter().any(|item| {
+            item.owner == who
+                && item.quantity > 0
+                && item.origin.entry.as_str() == current_source_weapon
+        }) {
+            "Carried; readiness is shown in the scene"
         } else {
-            weapon_display_name(&pack::hero_weapon_item())
-        },
-        value: if value(state, who, "held-weapon")? != 0 {
-            "Held"
-        } else {
-            "Dropped; ownership retained"
+            "Not currently carried"
         }
         .to_owned(),
     });
     // SRD 5.2.1 pp. 47, 83-84: Fighter, Soldier and Dwarf traits belong to the accepted build.
     for (label, value) in [
-        ("Soldier skill proficiencies", "Athletics, Intimidation".to_owned()),
-        ("Saving throw proficiencies", "Strength, Constitution".to_owned()),
-        ("Proficiency Bonus", format!("+{}", if progression.level() > 1 { progression.proficiency_bonus() } else { pack::with_creation(|creation| creation.proficiency_bonus) })),
-        ("Speed", "30 ft".to_owned()),
-        ("Initiative", format!("{:+}", rules::ability_modifier(value(state, who, "dexterity")? as u8))),
+        (
+            "Soldier skill proficiencies",
+            "Athletics, Intimidation".to_owned(),
+        ),
+        (
+            "Saving throw proficiencies",
+            "Strength, Constitution".to_owned(),
+        ),
+        (
+            "Proficiency Bonus",
+            format!(
+                "+{}",
+                if progression.level() > 1 {
+                    progression.proficiency_bonus()
+                } else {
+                    pack::with_creation(|creation| creation.proficiency_bonus)
+                }
+            ),
+        ),
+        (
+            "Initiative",
+            format!(
+                "{:+}",
+                rules::ability_modifier(value(state, who, "dexterity")? as u8)
+            ),
+        ),
         ("Armor training", "Light, Medium, Heavy, Shields".to_owned()),
         ("Weapon proficiencies", "Simple, Martial".to_owned()),
-        ("Darkvision", "120 ft".to_owned()),
-        ("Dwarven Resilience", "Resistance to Poison damage; Advantage on saves against Poisoned".to_owned()),
-        ("Stonecunning", "Tremorsense 60 ft for 10 minutes on or touching stone; Proficiency Bonus uses per Long Rest".to_owned()),
     ] {
-        facts.push(rpc::SheetFact { label: label.to_owned(), value });
+        facts.push(rpc::SheetFact {
+            label: label.to_owned(),
+            value,
+        });
     }
+    fn species_sheet_facts(
+        choices: &[(&str, &str)],
+    ) -> Result<Vec<df_protocol::common::SheetFact>, df_rules::local_journey::JourneyRuleError>
+    {
+        use df_rules::local_journey::{HeroSpecies, JourneyRuleError, SpeciesSize};
+        let species = choices
+            .iter()
+            .find(|(key, _)| *key == "species")
+            .and_then(|(_, value)| HeroSpecies::from_choice(value))
+            .ok_or(JourneyRuleError::InvalidChoice)?;
+        let options = df_rules::species::SpeciesOptions::from_choices(species, choices)?;
+        let traits = options.combat_traits(species);
+        let mut facts = vec![];
+        let mut push = |label: &str, value: String| {
+            facts.push(df_protocol::common::SheetFact {
+                label: label.to_owned(),
+                value,
+            })
+        };
+        push("Species", species.choice_id().to_owned());
+        push(
+            "Size",
+            match traits.size {
+                SpeciesSize::Small => "Small",
+                SpeciesSize::Medium => "Medium",
+            }
+            .to_owned(),
+        );
+        push("Speed", format!("{} ft", traits.speed_ft));
+        push(
+            "Darkvision",
+            traits
+                .darkvision_ft
+                .map_or_else(|| "None".to_owned(), |range| format!("{range} ft")),
+        );
+        if let Some(resistance) = options.resistance(species) {
+            push(
+                if species == HeroSpecies::Dwarf {
+                    "Dwarven Resilience"
+                } else {
+                    "Damage Resistance"
+                },
+                resistance.id().to_owned(),
+            );
+        }
+        if species == HeroSpecies::Dwarf {
+            push("Stonecunning", "Tremorsense is not in play yet".to_owned());
+        }
+        for group in df_rules::species::choice_groups(species) {
+            if let Some((_, value)) = choices.iter().find(|(key, _)| *key == group.id) {
+                push(group.label, value.replace('-', " "));
+            }
+        }
+        for trait_name in match species {
+            HeroSpecies::Dwarf => vec!["Dwarven Toughness: +1 maximum HP per level"],
+            HeroSpecies::Halfling => vec![
+                "Luck: reroll natural 1 on D20 Tests",
+                "Halfling Nimbleness: pass through larger creatures; cannot stop in their space",
+            ],
+            HeroSpecies::Dragonborn => vec![
+                "Breath Weapon: 15-foot Cone or 30-foot Line; Dexterity save; Proficiency Bonus uses per Long Rest",
+            ],
+            HeroSpecies::Goliath
+                if options.ancestry
+                    != Some(df_rules::species::Ancestry::Giant(
+                        df_rules::species::GiantAncestry::Cloud,
+                    )) =>
+            {
+                vec!["Giant Ancestry: Proficiency Bonus uses per Long Rest"]
+            }
+            HeroSpecies::Human => vec!["Tough: +2 maximum HP per level"],
+            HeroSpecies::Orc => vec![
+                "Relentless Endurance: drop to 1 HP instead of 0 if not killed outright; once per Long Rest",
+            ],
+            _ => vec![],
+        } {
+            push("Species trait", trait_name.to_owned());
+        }
+        for gap in df_rules::species::not_in_play(species, options) {
+            push("Not in play yet", gap.to_owned());
+        }
+        for integration_gap in match species {
+            HeroSpecies::Dragonborn => vec!["Breath Weapon action offers"],
+            HeroSpecies::Goliath => vec!["Giant Ancestry action and reaction offers"],
+            HeroSpecies::Orc => vec!["Relentless Endurance resource carried across encounters"],
+            _ => vec![],
+        } {
+            push("Not in play yet", integration_gap.to_owned());
+        }
+        Ok(facts)
+    }
+
+    // SRD Species pp.84?86: project the accepted species, including explicit unsupported traits.
+    facts.extend(
+        species_sheet_facts(&selected)
+            .map_err(bad)?
+            .into_iter()
+            .filter(|fact| fact.label != "Species"),
+    );
     // SRD 5.2.1 pp. 6, 7, 47: accepted ability modifiers and Fighter save proficiencies.
     let proficiency = i32::from(if progression.level() > 1 {
         progression.proficiency_bonus()
@@ -1348,8 +1574,7 @@ fn handler_offered(
     }
     let mut result = match state {
         State::Lobby
-            if current.state().characters.len() == 2
-                && narrative_transition::story_permitted(current, member)? =>
+            if party_ready(current) && narrative_transition::story_permitted(current, member)? =>
         {
             vec![(
                 rpc::GameplayActionKind::BeginStory,
@@ -1473,8 +1698,7 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
             .narrative
             .open_threads
             .contains(&model::content(PACKET_THREAD)?)
-        || participants(current).len() != 2
-        || state.characters.len() != 2
+        || !party_ready(current)
     {
         return Ok(None);
     }
@@ -1664,7 +1888,7 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
     let [encounter] = state.encounters.as_slice() else {
         return Err(Error::Encounter);
     };
-    if party.len() != 2
+    if !(1..=MAXIMUM_PARTY).contains(&party.len())
         || encounter.id != RecordId::from_bytes(&ENCOUNTER).map_err(|_| Error::Encounter)?
         || encounter.definition != content("combat")?
         || encounter.combat_policy != content("normal-nonlethal-melee")?
@@ -1706,7 +1930,7 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
         return Err(Error::Start);
     }
     let source = rule().map_err(|_| Error::Start)?;
-    for ordinal in 0..3 {
+    for ordinal in 0..expected.len() as u32 {
         if !start_decision.draws.contains(&ordinal)
             || !state.draws.iter().any(|draw| {
                 draw.operation == start.operation
@@ -1920,6 +2144,17 @@ pub(super) fn decode_join(
         unhex(entity)?.try_into().map_err(bad)?,
     ))
 }
+/// Every joined seat has its own accepted hero; empty tables cannot begin.
+pub(super) fn party_ready(current: &Checkpoint) -> bool {
+    let party = participants(current);
+    (1..=MAXIMUM_PARTY).contains(&party.len())
+        && current.state().characters.len() == party.len()
+        && party.iter().all(|link| {
+            current.state().characters.iter().any(|character| {
+                Some(character.entity) == link.character && character.owner == link.member
+            })
+        })
+}
 pub(super) fn join_selection(
     current: &Checkpoint,
 ) -> Result<([u8; 16], [u8; 16]), RepositoryError> {
@@ -1996,7 +2231,11 @@ pub(super) fn stage_join(
         position: Some(if entity_id == ENTITIES[0] {
             Position { x: 0, y: 5, z: 0 }
         } else {
-            Position { x: 5, y: 0, z: 0 }
+            Position {
+                x: 5,
+                y: ((participants(current).len() - 1) * 5) as i64,
+                z: 0,
+            }
         }),
         identity_revision: model::label("joined-player-1")?,
     });
@@ -2590,7 +2829,8 @@ fn stage_authored_threads(
         ThreadDirectorLimits {
             directors: DirectorLimits {
                 maximum_checkpoint_bytes: model::limits().maximum_retained_bytes,
-                maximum_pass_bytes: 8 * 1024 * 1024,
+                // Preserve the eight-checkpoint staging budget when six-seat snapshots grow.
+                maximum_pass_bytes: 8 * model::limits().maximum_retained_bytes,
                 maximum_relationships: 512,
                 world: df_world::DueSelectionLimits {
                     queue_events: 512,
@@ -3281,7 +3521,7 @@ fn finish_combat(state: &mut GameState) -> Result<bool, RepositoryError> {
     let [encounter] = state.encounters.as_slice() else {
         return Err(RepositoryError::InvalidCandidate);
     };
-    if state.characters.len() != 2
+    if !(1..=MAXIMUM_PARTY).contains(&state.characters.len())
         || !matches!(
             encounter.objectives.as_slice(),
             [objective]
@@ -3487,7 +3727,7 @@ fn start_combat(
         .collect::<Result<Vec<_>, _>>()?;
     let admitted = encounter_admission::admission(current, command, state, &participants).map_err(
         |error| {
-            refusal_detail::note("combat-admission");
+            refusal_detail::cause("combat-admission", format!("{error:?}"));
             bad(error)
         },
     )?;
@@ -3518,7 +3758,7 @@ fn start_combat(
                     maximum_text_bytes: 128,
                     maximum_retained_bytes: 8192,
                 },
-                maximum_staged_bytes: 1024 * 1024,
+                maximum_staged_bytes: model::limits().maximum_retained_bytes,
             },
         },
         &admitted,
@@ -3572,13 +3812,18 @@ fn accept_character_at_level(
     choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
     test_level: u8,
 ) -> Result<(), RepositoryError> {
-    let encoded = choice(choices, "name")?;
+    let encoded = choice(choices, "name")
+        .inspect_err(|_| refusal_detail::cause("character-accept", "NameMissing".to_owned()))?;
     let encoded_name = if encoded == "empty-name" {
         Vec::new()
     } else {
-        unhex(encoded)?
+        unhex(encoded)
+            .inspect_err(|_| refusal_detail::cause("character-accept", "NameEncoding".to_owned()))?
     };
-    let name = std::str::from_utf8(&encoded_name).map_err(bad)?;
+    let name = std::str::from_utf8(&encoded_name).map_err(|error| {
+        refusal_detail::cause("character-accept", "NameEncoding".to_owned());
+        bad(error)
+    })?;
     let options = choices
         .iter()
         .filter(|(group, _)| {
@@ -3586,17 +3831,24 @@ fn accept_character_at_level(
         })
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
-    let mut build = pack::validate_character(name, &options).map_err(bad)?;
+    let mut build = pack::validate_character(name, &options).map_err(|error| {
+        refusal_detail::cause("character-accept", "CatalogValidation".to_owned());
+        bad(error)
+    })?;
     if test_level > 1 {
         rules::FighterProgression::new(test_level)
             .and_then(|progression| progression.apply(&mut build))
-            .map_err(bad)?;
+            .map_err(|error| {
+                refusal_detail::cause("character-accept", "Progression".to_owned());
+                bad(error)
+            })?;
     }
     if state
         .characters
         .iter()
         .any(|character| character.entity == who)
     {
+        refusal_detail::cause("character-accept", "AlreadyCreated".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     let source = rule()?;
@@ -3952,7 +4204,7 @@ fn observe_check(
         scene
             .findings
             .iter()
-            .find(|finding| finding.skill == requested)
+            .find(|finding| !finding.id.starts_with("observation-") && finding.skill == requested)
     });
     let skill = match (skill_choice, matching_finding, watch_person) {
         (None, None, Some(_)) => "insight",
@@ -4348,7 +4600,9 @@ fn stage_using(
             if super::beat_script::with_script(|script| {
                 script.mode != super::beat_script::ScriptMode::Freeplay
             }) {
-                courier_reaction::enter_opening(&mut state)?;
+                courier_reaction::enter_opening(&mut state).inspect_err(|error| {
+                    refusal_detail::cause("courier-enter-opening", format!("{error:?}"));
+                })?;
             }
         }
         rpc::GameplayActionKind::AskCourier | rpc::GameplayActionKind::EscortCourier => {
@@ -4571,7 +4825,10 @@ fn stage_using(
     }
     // A freeplay fight step stays on the freeplay beat, which no beat transition describes.
     if !scene_fight_step {
-        super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)?;
+        super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)
+            .inspect_err(|error| {
+                refusal_detail::cause("script-validate-step", format!("{error:?}"))
+            })?;
     }
     if private {
         super::courier_ai::append_request(candidate, command.operation)
@@ -4604,7 +4861,7 @@ pub(super) fn validate_script_characters(state: &GameState) -> Result<(), Reposi
     // A freeplay scene that has seen a fight also holds the fought people's resources, and its
     // heroes' combat resources and weapon counts are no longer their creation values.
     let fought = scene_fight::fought(state);
-    if state.characters.len() > 2
+    if state.characters.len() > MAXIMUM_PARTY
         || state.resources.iter().any(|r| {
             !state.characters.iter().any(|c| c.entity == r.owner)
                 && !(fought && scene_fight::is_person(state, r.owner))
@@ -4612,7 +4869,8 @@ pub(super) fn validate_script_characters(state: &GameState) -> Result<(), Reposi
     {
         return Err(RepositoryError::InvalidCandidate);
     }
-    let expected = recreated_heroes(state)?;
+    let mut expected = recreated_heroes(state)?;
+    living_scene::replay_starting_custody(state, &mut expected)?;
     let actual_items = state
         .entities
         .iter()
@@ -4656,6 +4914,28 @@ pub(super) fn validate_script_characters(state: &GameState) -> Result<(), Reposi
 /// character whose record does not belong to its member or its build. The replay of a creation
 /// receipt reads the sheet from this, because a freeplay fight changes a hero's combat resources.
 pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, RepositoryError> {
+    let remembered = RECREATED.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(input, _)| input == state)
+            .map(|(_, recreated)| recreated.clone())
+    });
+    if let Some(recreated) = remembered {
+        return Ok(recreated);
+    }
+    let recreated = derived_heroes(state)?;
+    RECREATED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= REMEMBERED_RECREATIONS {
+            cache.pop_front();
+        }
+        cache.push_back((state.clone(), recreated.clone()));
+    });
+    Ok(recreated)
+}
+
+fn derived_heroes(state: &GameState) -> Result<GameState, RepositoryError> {
     let source = rule()?;
     let bootstrap = bootstrap_member()?;
     let mut expected = state.clone();
@@ -4875,7 +5155,7 @@ pub(super) fn stage_with_supplier(
                     maximum_retained_bytes:
                         df_persistence::local_demo_scope::input_retained_bytes_max(input),
                 },
-                maximum_staged_bytes: 1024 * 1024,
+                maximum_staged_bytes: model::limits().maximum_retained_bytes,
             },
         },
         &registry,
@@ -4952,7 +5232,7 @@ mod tests {
     }
     fn finish_rest_keeping_dice(mut current: Checkpoint) -> Checkpoint {
         // b44a9198 made an eligible hero's spend-or-keep decision part of completing a rest.
-        for (index, bytes) in MEMBERS.into_iter().enumerate() {
+        for (index, bytes) in MEMBERS.into_iter().take(2).enumerate() {
             let member = MemberId::from_bytes(&bytes).unwrap();
             if hit_point_die_offered(current.state(), player_entity(member, &current).unwrap())
                 .unwrap()
@@ -5915,6 +6195,250 @@ mod tests {
         current
     }
 
+    pub(super) fn table_story(count: usize) -> Checkpoint {
+        let mut current = initial().unwrap();
+        assert!(!party_ready(&current));
+        for index in 0..count {
+            current = stage_join(
+                &current,
+                &input(
+                    &current,
+                    bootstrap_member().unwrap(),
+                    index as u8 + 1,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .unwrap();
+        }
+        for (index, name) in ["Brakka", "Sigrun", "Brynn", "Corin", "Elara", "Vix"]
+            .into_iter()
+            .take(count)
+            .enumerate()
+        {
+            assert!(!party_ready(&current));
+            let member = MemberId::from_bytes(&MEMBERS[index]).unwrap();
+            assert!(
+                !offered(&current, member)
+                    .unwrap()
+                    .iter()
+                    .any(|(kind, _)| *kind == rpc::GameplayActionKind::BeginStory)
+            );
+            let mut choices = build(name);
+            if count == MAXIMUM_PARTY {
+                // Exercise the accepted per-hero text caps, not just six minimal sheets.
+                let mut identity = super::super::hero_identity::Identity::from_menus(&[])
+                    .unwrap()
+                    .to_rpc();
+                identity.appearance.as_mut().unwrap().public_description =
+                    format!("{}\u{96ea}{}", "\u{1f409}".repeat(698), "a".repeat(1301));
+                identity.origin = "\u{1f409}".repeat(160);
+                identity.occupation = "\u{1f409}".repeat(160);
+                identity.motivation = "\u{1f409}".repeat(160);
+                identity.backstory = "\u{1f409}".repeat(480);
+                identity.facts = (0..6)
+                    .map(|fact| format!("{fact}{}", "\u{1f409}".repeat(159)))
+                    .collect();
+                let validated =
+                    super::super::hero_identity::Identity::from_rpc(identity.clone()).unwrap();
+                for (field, selected) in validated.canonical_appearance_choices() {
+                    choices.push((
+                        model::label(&format!("identity-appearance:{field}")).unwrap(),
+                        model::label(selected).unwrap(),
+                    ));
+                }
+                for (field, selected) in validated.canonical_public_choices() {
+                    choices.push((
+                        model::label(&field).unwrap(),
+                        model::label(&selected).unwrap(),
+                    ));
+                }
+                choices.extend(
+                    super::super::hero_library::identity_choices(Some(&rpc::CharacterSelection {
+                        name: name.to_owned(),
+                        identity: Some(identity),
+                        portrait_scenery: format!("{}{}", "\u{1f409}".repeat(136), "a".repeat(224)),
+                        ..Default::default()
+                    }))
+                    .unwrap(),
+                );
+            }
+
+            if !super::super::beat_script::with_script(|script| script.is_canonical()) {
+                choices.push((
+                    model::label(super::super::beat_script_runtime::CHOICE_GROUP).unwrap(),
+                    model::label("create-character").unwrap(),
+                ));
+            }
+            // Match the compact wire expansion: admission counts unused Vec capacity too.
+            // Keep every maximal identity field while avoiding allocation growth in this fixture.
+            choices.shrink_to_fit();
+            let creation = input(
+                &current,
+                member,
+                index as u8 + 10,
+                "create-character",
+                choices,
+            );
+            current =
+                stage_with_supplier(&current, &creation, &mut |_| panic!("creation cannot draw"))
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "seat {index} creation: {error:?}; bytes={:?}; detail={:?}; step={:?}",
+                            creation.retained_bytes(),
+                            df_session::submission::take_refusal_diagnostic(),
+                            refusal_detail::take()
+                        )
+                    });
+        }
+        assert!(party_ready(&current));
+        if count == MAXIMUM_PARTY {
+            assert_eq!(join_selection(&current), Err(RepositoryError::Capacity));
+            assert_eq!(
+                stage_join(
+                    &current,
+                    &input(
+                        &current,
+                        bootstrap_member().unwrap(),
+                        25,
+                        "join-room",
+                        vec![]
+                    )
+                ),
+                Err(RepositoryError::Capacity)
+            );
+        }
+        let choices = if super::super::beat_script::with_script(|script| script.is_canonical()) {
+            vec![]
+        } else {
+            vec![(
+                model::label(super::super::beat_script_runtime::CHOICE_GROUP).unwrap(),
+                model::label("begin-story").unwrap(),
+            )]
+        };
+        stage_with_supplier(
+            &current,
+            &input(
+                &current,
+                MemberId::from_bytes(&MEMBERS[0]).unwrap(),
+                26,
+                "begin-story",
+                choices,
+            ),
+            &mut |_| panic!("opening cannot draw"),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "table opening: {error:?}; detail={:?}; step={:?}",
+                df_session::submission::take_refusal_diagnostic(),
+                refusal_detail::take()
+            )
+        })
+    }
+
+    #[test]
+    fn one_to_six_joined_seats_begin_only_after_every_hero_is_accepted_and_resume() {
+        let codec = || df_persistence::NativeCodecLimits {
+            maximum_document_bytes: 4 * 1024 * 1024,
+            maximum_allocated_bytes: 4 * 1024 * 1024,
+            maximum_collection_items: 8192,
+            maximum_text_bytes: model::limits().maximum_text_bytes,
+        };
+        for count in 1..=MAXIMUM_PARTY {
+            let opening = table_story(count);
+            assert_eq!(phase(&opening).unwrap(), rpc::JourneyPhase::Opening);
+            assert_eq!(opening.state().characters.len(), count);
+            assert_eq!(participants(&opening).len(), count);
+            let bytes =
+                df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&opening, codec())
+                    .unwrap();
+            let restored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+                &bytes,
+                opening.basis(),
+                &model::pins().unwrap(),
+                &model::recovery().unwrap(),
+                codec(),
+            )
+            .unwrap();
+            assert_eq!(restored, opening);
+            assert_eq!(phase(&restored).unwrap(), rpc::JourneyPhase::Opening);
+            for (index, link) in participants(&restored).into_iter().enumerate() {
+                assert_eq!(link.member.as_bytes(), &MEMBERS[index]);
+                assert_eq!(link.character.unwrap().as_bytes(), &ENTITIES[index]);
+                let view = wire::journey_view(
+                    &restored,
+                    df_persistence::local_demo_scope::LocalDemoRole::Player,
+                    link.member,
+                )
+                .unwrap();
+                let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+                    panic!("player view");
+                };
+                assert_eq!(player.journey.unwrap().party.len(), count);
+            }
+        }
+        assert_eq!(MEMBERS[0], [0x61; 16]);
+        assert_eq!(MEMBERS[1], [0x62; 16]);
+        assert_eq!(ENTITIES[0], [0x63; 16]);
+        assert_eq!(ENTITIES[1], [0x64; 16]);
+    }
+
+    #[test]
+    fn one_to_six_heroes_finish_the_courier_fight_and_receive_the_inn_invitation() {
+        for count in 1..=MAXIMUM_PARTY {
+            let opening = table_story(count);
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let dialogue = stage_with_supplier(
+                &opening,
+                &input(&opening, first, 27, "escort-courier", vec![]),
+                &mut |_| panic!("dialogue cannot draw"),
+            )
+            .unwrap();
+            let mut ordinal = 0;
+            let mut current = stage_with_supplier(
+                &dialogue,
+                &input(&dialogue, first, 28, "defend-courier", vec![]),
+                &mut |_| {
+                    ordinal += 1;
+                    Ok(if ordinal <= count { 20 } else { 1 })
+                },
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{count}-hero courier start: {error:?}; detail={:?}; step={:?}",
+                    df_session::submission::take_refusal_diagnostic(),
+                    refusal_detail::take()
+                )
+            });
+            assert_eq!(current.state().encounters[0].turn_order.len(), count + 1);
+            assert_eq!(current.state().draws.len(), count + 1);
+            for operation in 30..100 {
+                if phase(&current).unwrap() == rpc::JourneyPhase::Complete {
+                    break;
+                }
+                let member = participants(&current)
+                    .into_iter()
+                    .map(|link| link.member)
+                    .find(|member| {
+                        offered(&current, *member)
+                            .unwrap()
+                            .iter()
+                            .any(|(kind, _)| *kind == rpc::GameplayActionKind::GreatswordAttack)
+                    })
+                    .unwrap();
+                current = stage_with_supplier(
+                    &current,
+                    &input(&current, member, operation, "greatsword-attack", vec![]),
+                    &mut |sides| Ok(sides),
+                )
+                .unwrap();
+            }
+            assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Complete);
+            assert!(combat_victory(current.state()).unwrap());
+            assert!(inn_source(&current).unwrap().is_some());
+        }
+    }
+
     pub(super) fn opening_story() -> Checkpoint {
         let current = prepared_story();
         stage_with_supplier(
@@ -5928,7 +6452,24 @@ mod tests {
             ),
             &mut |_| panic!("opening cannot draw"),
         )
-        .expect("registered opening")
+        .unwrap_or_else(|error| {
+            let source = narrative_transition::select(
+                &current,
+                &input(
+                    &current,
+                    MemberId::from_bytes(&MEMBERS[0]).unwrap(),
+                    5,
+                    "begin-story",
+                    vec![],
+                ),
+            )
+            .map(|_| ());
+            panic!(
+                "registered opening: {error:?}; source={source:?}; detail={:?}; step={:?}",
+                df_session::submission::take_refusal_diagnostic(),
+                refusal_detail::take()
+            );
+        })
     }
 
     #[test]
@@ -6302,7 +6843,7 @@ mod tests {
             Ok(started.clone())
         );
         assert_rest_preserves_battle(&defeated, &rested);
-        for bytes in ENTITIES {
+        for bytes in ENTITIES.into_iter().take(2) {
             let who = entity(bytes).unwrap();
             assert_eq!(value(rested.state(), who, "hit-points"), Ok(1));
             assert_eq!(value(rested.state(), who, "unconscious"), Ok(0));
@@ -7360,7 +7901,7 @@ mod tests {
         )
         .unwrap();
         for current in [&victory, &rest] {
-            for bytes in MEMBERS {
+            for bytes in MEMBERS.into_iter().take(2) {
                 let member = MemberId::from_bytes(&bytes).unwrap();
                 let offers = offered(current, member).unwrap();
                 // The rest is offered once per aftermath: at the victory,
@@ -8039,5 +8580,37 @@ mod tests {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_audit_tests {
+    use super::*;
+    #[test]
+    fn character_stage_refusal_prints_its_own_step_before_outer_session_step() {
+        refusal_detail::begin_action();
+        let mut state = initial().unwrap().state().clone();
+        let who = entity([5; 16]).unwrap();
+        let member = df_types::MemberId::from_bytes(&[6; 16]).unwrap();
+        assert_eq!(
+            accept_character_at_level(&mut state, who, member, &[], 1),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        // The session records its outer stage after the candidate stage has rejected.
+        df_session::submission::note_refusal_diagnostic(
+            "session-engine-transition",
+            "InvalidCandidate".to_owned(),
+        );
+        crate::gameplay::actor::record_refusal(
+            rpc::GameplayActionKind::CreateCharacter as i32,
+            "InvalidCandidate",
+            "refused",
+        );
+        let lines =
+            crate::gameplay::actor::audit_lines_containing("REFUSAL action=CreateCharacter");
+        assert!(lines.iter().any(|line| {
+            line.contains("step=character-accept outer=session-engine-transition")
+                && line.contains("cause=NameMissing")
+        }));
     }
 }

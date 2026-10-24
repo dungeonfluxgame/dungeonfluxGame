@@ -55,6 +55,7 @@ impl OperationScope for Scope {
 struct Database {
     current: Checkpoint,
     receipts: Vec<(Scope, DecisionReceipt)>,
+    refuse_commit: bool,
 }
 struct Repository(Rc<RefCell<Database>>);
 impl SessionRepository for Repository {
@@ -88,6 +89,9 @@ impl SessionRepository for Repository {
         _: &OperationContext,
     ) -> Result<CommitOutcome, RepositoryError> {
         let mut database = self.0.borrow_mut();
+        if database.refuse_commit {
+            return Err(RepositoryError::InvalidCandidate);
+        }
         if database.current.basis() != expected {
             return Err(RepositoryError::RevisionConflict);
         }
@@ -152,6 +156,7 @@ fn new_owner(current: Checkpoint) -> Owner {
         Repository(Rc::new(RefCell::new(Database {
             current: current.clone(),
             receipts: Vec::new(),
+            refuse_commit: false,
         }))),
         Engine,
         Publication,
@@ -159,6 +164,72 @@ fn new_owner(current: Checkpoint) -> Owner {
         256 * 1024,
     )
     .unwrap()
+}
+
+#[test]
+fn merchant_ledger_failed_commit_moves_no_goods_or_coin_and_confirmed_retry_is_atomic() {
+    use super::super::living_scene_tests::{barter_inventory, barter_market};
+    barter_market(|| {
+        let (current, member, judgement) = barter_inventory();
+        let operation = OperationId::from_bytes(&[90; 16]).unwrap();
+        let candidate = stage_exchange(
+            &current,
+            current.basis(),
+            operation,
+            "Brynn",
+            "fixture-fingerprint",
+            judgement,
+        )
+        .unwrap();
+        let database = Rc::new(RefCell::new(Database {
+            current: current.clone(),
+            receipts: Vec::new(),
+            refuse_commit: true,
+        }));
+        let mut owner = DurableOwner::new(
+            Repository(database.clone()),
+            Engine,
+            Publication,
+            current.clone(),
+            256 * 1024,
+        )
+        .unwrap();
+        let who = super::super::player_entity(member, &current).unwrap();
+        let scope = Scope(GameInput::Game(CommandInput {
+            basis: current.basis(),
+            observed_revision: current.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker: who,
+                text: "fixture-fingerprint".into(),
+                conversation: None,
+            },
+        }));
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: "HS19-ledger".into(),
+        };
+        assert!(matches!(
+            owner.commit_owner_candidate(&scope, &candidate, &context),
+            SubmissionOutcome::Refused(_)
+        ));
+        assert_eq!(owner.checkpoint(), &current);
+        assert_eq!(database.borrow().current, current);
+        assert!(database.borrow().receipts.is_empty());
+        database.borrow_mut().refuse_commit = false;
+        assert!(matches!(
+            owner.commit_owner_candidate(&scope, &candidate, &context),
+            SubmissionOutcome::Confirmed(_)
+        ));
+        assert_eq!(database.borrow().current, candidate);
+        assert_eq!(
+            balance_cp(owner.checkpoint().state(), who).unwrap(),
+            balance_cp(current.state(), who).unwrap() - 350
+        );
+        assert_eq!(database.borrow().receipts.len(), 1);
+        assert_eq!(round_trip(owner.checkpoint()), candidate);
+    });
 }
 fn submit(owner: &mut Owner, request: rpc::SubmitActionRequest, member: MemberId) {
     let input = crate::gameplay::wire::journey_input(&request, member, owner.checkpoint())

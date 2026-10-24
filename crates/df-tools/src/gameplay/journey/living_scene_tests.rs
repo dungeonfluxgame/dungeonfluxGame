@@ -3,6 +3,13 @@ use crate::gameplay::beat_script_tests::input;
 use df_persistence::local_demo_scope::LocalDemoRole;
 
 fn taproom(run: impl FnOnce()) {
+    taproom_with_model(|_| {}, run);
+}
+
+fn taproom_with_model(
+    mut adjust: impl FnMut(&mut crate::gameplay::adventure::scene_model::SceneModel),
+    run: impl FnOnce(),
+) {
     let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
     let mut pack: pack::PackFile = serde_json::from_slice(include_bytes!(
         "../../../../../content/harbor-journey/pack.json"
@@ -11,6 +18,7 @@ fn taproom(run: impl FnOnce()) {
     pack.creation.pick_lists.skill = vec!["perception".into(), "survival".into()];
     for scene in &mut pack.scenes {
         scene.setting = Some(generated.settings.scene(scene.key).clone());
+        adjust(scene.setting.as_mut().unwrap().model.as_mut().unwrap());
         let source = generated
             .pack
             .scenes
@@ -79,6 +87,494 @@ fn opened() -> (Checkpoint, MemberId) {
     )
     .unwrap();
     (current, member)
+}
+
+pub(super) fn barter_market(run: impl FnOnce()) {
+    taproom_with_model(
+        |model| {
+            let Some(template) = model.offers.first().cloned() else {
+                return;
+            };
+            for (id, name, cost) in [
+                ("barter-knife", "Dagger", 200),
+                ("barter-rope", "Rope", 100),
+                ("barter-lantern", "Hooded lantern", 500),
+                ("barter-blanket", "Blanket", 50),
+            ] {
+                let mut offer = template.clone();
+                offer.id = id.into();
+                offer.item_id = format!("item-{id}");
+                offer.name = name.into();
+                offer.aliases = vec![name.into()];
+                offer.cost_cp = cost;
+                model.offers.push(offer);
+            }
+            let merchant = model
+                .people
+                .iter_mut()
+                .find(|person| person.id == template.seller_id)
+                .unwrap();
+            merchant.coin_cp = 0;
+        },
+        run,
+    );
+}
+
+pub(super) fn barter_inventory() -> (Checkpoint, MemberId, merchant_bargaining::ExchangeJudgement) {
+    use merchant_bargaining::{
+        ExchangeChoice, ExchangeItem, ExchangeJudgement, ExchangeOffer, MerchantStance,
+    };
+    let (current, member) = opened();
+    let current = interact(&current, member, 80, "barter-knife", "buy");
+    let current = interact(&current, member, 81, "barter-rope", "buy");
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+    let merchant_id = scene
+        .setting
+        .unwrap()
+        .model
+        .unwrap()
+        .offer("barter-knife")
+        .unwrap()
+        .seller_id
+        .clone();
+    let item = |id: &str, catalog: &str| ExchangeItem {
+        item_id: format!("item-barter-{id}"),
+        catalog_id: catalog.into(),
+    };
+    let judgement = ExchangeJudgement {
+        merchant_id,
+        offer: ExchangeOffer {
+            hero_items: vec![item("knife", "dagger"), item("rope", "rope")],
+            merchant_items: vec![item("lantern", "lantern-hooded")],
+            hero_cp: 350,
+            merchant_cp: 0,
+        },
+        counter: None,
+        hero_commits_now: true,
+        choice: ExchangeChoice::Accept,
+        stance: MerchantStance::Fair,
+    };
+    (current, member, judgement)
+}
+
+fn stage_barter(
+    current: &Checkpoint,
+    op: u8,
+    judgement: merchant_bargaining::ExchangeJudgement,
+) -> Checkpoint {
+    living_scene::stage_exchange(
+        current,
+        current.basis(),
+        OperationId::from_bytes(&[op; 16]).unwrap(),
+        "Brynn",
+        "fixture-fingerprint",
+        judgement,
+    )
+    .unwrap_or_else(|error| panic!("{error:?}; {:?}", refusal_detail::take()))
+}
+
+fn hero_copper(current: &Checkpoint, member: MemberId) -> u64 {
+    living_scene::balance_cp(current.state(), player_entity(member, current).unwrap()).unwrap()
+}
+
+#[test]
+fn merchant_barter_settles_exact_custody_coin_and_revisions_and_replays() {
+    barter_market(|| {
+        let (current, member, judgement) = barter_inventory();
+        let before_balance = hero_copper(&current, member);
+        let merchant_id = judgement.merchant_id.clone();
+        let before_terms = living_scene::merchant_trade_terms(&current, "Brynn").unwrap();
+        let after = stage_barter(&current, 82, judgement.clone());
+        assert_eq!(
+            after.basis().revision.sequence(),
+            current.basis().revision.sequence() + 1
+        );
+        assert_eq!(
+            after.state().decisions.len(),
+            current.state().decisions.len() + 1
+        );
+        assert_eq!(hero_copper(&after, member), before_balance - 350);
+        let scene = crate::gameplay::beat_script_runtime::scene(after.state()).unwrap();
+        let now = living_scene::snapshot(after.state(), &scene)
+            .unwrap()
+            .unwrap();
+        for (id, owner) in [
+            ("item-barter-knife", merchant_id.as_str()),
+            ("item-barter-rope", merchant_id.as_str()),
+            ("item-barter-lantern", "Brynn"),
+        ] {
+            let thing = now
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == id)
+                .unwrap();
+            assert_eq!(thing.owner_id.as_deref(), Some(owner));
+            assert_eq!(thing.holder_id.as_deref(), Some(owner));
+        }
+        assert_eq!(
+            now.model
+                .people
+                .iter()
+                .find(|person| person.id == merchant_id)
+                .unwrap()
+                .coin_cp,
+            650
+        );
+        let terms = living_scene::merchant_trade_terms(&after, "Brynn").unwrap();
+        let before = before_terms
+            .iter()
+            .find(|term| term.item_id == "item-barter-lantern")
+            .unwrap();
+        let after_term = terms
+            .iter()
+            .find(|term| term.item_id == "item-barter-lantern")
+            .unwrap();
+        assert_eq!(after_term.stock_revision, before.stock_revision + 1);
+        assert_eq!(after_term.purse_revision, before.purse_revision + 1);
+        let text =
+            living_scene::line(after.state(), OperationId::from_bytes(&[82; 16]).unwrap()).unwrap();
+        for expected in [
+            "Done.",
+            "1 x Dagger",
+            "1 x Rope",
+            "1 x Hooded lantern",
+            "350 CP",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        let codec = df_persistence::NativeCodecLimits {
+            maximum_document_bytes: 4 * 1024 * 1024,
+            maximum_allocated_bytes: 8 * 1024 * 1024,
+            maximum_collection_items: 4096,
+            maximum_text_bytes: model::limits().maximum_text_bytes,
+        };
+        let encoded =
+            df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&after, codec).unwrap();
+        let recovered = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+            &encoded,
+            after.basis(),
+            after.pins(),
+            &model::recovery().unwrap(),
+            codec,
+        )
+        .unwrap();
+        assert_eq!(
+            living_scene::snapshot(recovered.state(), &scene)
+                .unwrap()
+                .unwrap(),
+            now
+        );
+        assert!(
+            living_scene::stage_exchange(
+                &after,
+                current.basis(),
+                OperationId::from_bytes(&[83; 16]).unwrap(),
+                "Brynn",
+                "fixture-fingerprint",
+                judgement
+            )
+            .is_err()
+        );
+    });
+}
+
+#[test]
+fn merchant_barter_counter_selects_goods_without_moving_them_then_acceptance_settles() {
+    barter_market(|| {
+        let (current, member, mut judgement) = barter_inventory();
+        let before = hero_copper(&current, member);
+        judgement.offer.hero_cp = 0;
+        judgement.counter = Some(merchant_bargaining::ExchangeOffer {
+            hero_items: judgement.offer.hero_items[..1].to_vec(),
+            merchant_items: judgement.offer.merchant_items.clone(),
+            hero_cp: 400,
+            merchant_cp: 0,
+        });
+        let countered = stage_barter(&current, 82, judgement);
+        let pending = living_scene::pending_exchange(&countered, "Brynn")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pending.outcome,
+            living_scene::MerchantExchangeOutcome::Countered
+        );
+        assert_eq!(hero_copper(&countered, member), before);
+        assert_eq!(pending.judgement.offer.hero_items.len(), 1);
+        let mut acceptance = pending.judgement;
+        acceptance.choice = merchant_bargaining::ExchangeChoice::Accept;
+        acceptance.hero_commits_now = true;
+        let settled = stage_barter(&countered, 83, acceptance);
+        assert_eq!(hero_copper(&settled, member), before - 400);
+        let scene = crate::gameplay::beat_script_runtime::scene(settled.state()).unwrap();
+        let now = living_scene::snapshot(settled.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            now.model
+                .things
+                .iter()
+                .find(|thing| thing.id == "item-barter-rope")
+                .unwrap()
+                .owner_id
+                .as_deref(),
+            Some("Brynn")
+        );
+    });
+}
+
+#[test]
+fn merchant_barter_refusal_and_unowned_goods_leave_every_purse_and_item_unchanged() {
+    barter_market(|| {
+        let (current, member, judgement) = barter_inventory();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let before = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap()
+            .model;
+        for (op, mut offer) in [(82, judgement.clone()), (83, judgement)] {
+            if op == 82 {
+                offer.choice = merchant_bargaining::ExchangeChoice::Refuse;
+            } else {
+                offer.offer.hero_items[0].item_id = "unowned-knife".into();
+            }
+            let after = stage_barter(&current, op, offer);
+            let record = living_scene::exchange_record(
+                after.state(),
+                OperationId::from_bytes(&[op; 16]).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                record.outcome,
+                living_scene::MerchantExchangeOutcome::Refused
+            );
+            assert_eq!(
+                living_scene::snapshot(after.state(), &scene)
+                    .unwrap()
+                    .unwrap()
+                    .model,
+                before
+            );
+            assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+            assert!(
+                !living_scene::line(after.state(), OperationId::from_bytes(&[op; 16]).unwrap())
+                    .unwrap()
+                    .contains("Done.")
+            );
+        }
+    });
+}
+
+#[test]
+fn merchant_barter_sale_without_enough_purse_counters_and_srd_half_price_is_exact() {
+    barter_market(|| {
+        let (current, member, mut judgement) = barter_inventory();
+        judgement.offer.merchant_items.clear();
+        judgement.offer.hero_cp = 0;
+        judgement.offer.merchant_cp = 500;
+        let counter = stage_barter(&current, 82, judgement);
+        let pending = living_scene::pending_exchange(&counter, "Brynn")
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.judgement.offer.merchant_cp, 150);
+        assert_eq!(hero_copper(&counter, member), hero_copper(&current, member));
+        let merchant_id = pending.judgement.merchant_id.clone();
+        let mut sale = pending.judgement;
+        sale.offer.merchant_cp = 150;
+        sale.choice = merchant_bargaining::ExchangeChoice::Accept;
+        let after = stage_barter(&counter, 83, sale);
+        assert_eq!(
+            hero_copper(&after, member),
+            hero_copper(&current, member) + 150
+        );
+        let scene = crate::gameplay::beat_script_runtime::scene(after.state()).unwrap();
+        assert_eq!(
+            living_scene::snapshot(after.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model
+                .people
+                .iter()
+                .find(|person| person.id == merchant_id)
+                .unwrap()
+                .coin_cp,
+            150
+        );
+    });
+}
+
+#[test]
+fn merchant_barter_goods_for_goods_needs_no_coin_and_preserves_other_items() {
+    barter_market(|| {
+        let (current, member, mut judgement) = barter_inventory();
+        judgement.offer.hero_items.remove(0);
+        judgement.offer.merchant_items = vec![merchant_bargaining::ExchangeItem {
+            item_id: "item-barter-blanket".into(),
+            catalog_id: "blanket".into(),
+        }];
+        judgement.offer.hero_cp = 0;
+        let after = stage_barter(&current, 82, judgement);
+        assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+        let record = living_scene::exchange_record(
+            after.state(),
+            OperationId::from_bytes(&[82; 16]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            record.outcome,
+            living_scene::MerchantExchangeOutcome::Settled
+        );
+        let scene = crate::gameplay::beat_script_runtime::scene(after.state()).unwrap();
+        let now = living_scene::snapshot(after.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            now.model
+                .things
+                .iter()
+                .find(|thing| thing.id == "item-barter-knife")
+                .unwrap()
+                .owner_id
+                .as_deref(),
+            Some("Brynn")
+        );
+        assert_eq!(
+            now.model
+                .things
+                .iter()
+                .find(|thing| thing.id == "item-barter-blanket")
+                .unwrap()
+                .owner_id
+                .as_deref(),
+            Some("Brynn")
+        );
+        assert_eq!(
+            now.model
+                .things
+                .iter()
+                .find(|thing| thing.id == "item-barter-rope")
+                .unwrap()
+                .owner_id
+                .as_deref(),
+            Some(record.judgement.merchant_id.as_str())
+        );
+    });
+}
+
+#[test]
+fn merchant_barter_empty_purse_counters_for_stock_without_taking_the_heros_goods() {
+    barter_market(|| {
+        use living_scene::{NpcInventoryAction, NpcInventoryProposal, NpcInventorySource};
+        let (_, _, mut judgement) = barter_inventory();
+        let (mut current, member) = opened();
+        for (op, target) in [(80, "item-barter-knife"), (81, "item-barter-rope")] {
+            current = living_scene::commit_npc_inventory_action(
+                &current,
+                NpcInventoryProposal {
+                    operation: OperationId::from_bytes(&[op; 16]).unwrap(),
+                    expected_basis: current.basis(),
+                    actor_id: judgement.merchant_id.clone(),
+                    target_id: target.into(),
+                    action: NpcInventoryAction::Give {
+                        recipient_id: "Brynn".into(),
+                        transfer_ownership: true,
+                        owner_consent_id: None,
+                    },
+                    source: Some(NpcInventorySource {
+                        source_line_id: format!("gift-{op}"),
+                        source_line_sequence: u64::from(op),
+                        source_revision: current.basis().revision,
+                        source_actor_id: judgement.merchant_id.clone(),
+                        source_text: "A committed fixture gift of the listed goods.".into(),
+                    }),
+                },
+            )
+            .unwrap();
+        }
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let before = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap()
+            .model;
+        judgement.offer.merchant_items.clear();
+        judgement.offer.hero_cp = 0;
+        judgement.offer.merchant_cp = 150;
+        let after = stage_barter(&current, 82, judgement);
+        let record = living_scene::exchange_record(
+            after.state(),
+            OperationId::from_bytes(&[82; 16]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            record.outcome,
+            living_scene::MerchantExchangeOutcome::Countered
+        );
+        assert_eq!(
+            living_scene::snapshot(after.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model,
+            before
+        );
+        assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+        assert!(
+            living_scene::line(after.state(), OperationId::from_bytes(&[82; 16]).unwrap())
+                .unwrap()
+                .contains("choose stock")
+        );
+    });
+}
+
+#[test]
+fn merchant_barter_judged_stance_moves_the_margin_without_changing_source_values() {
+    use merchant_bargaining::MerchantStance;
+    barter_market(|| {
+        let (current, member, judgement) = barter_inventory();
+        for (stance, expected_coin, expected_outcome) in [
+            (
+                MerchantStance::Eager,
+                300,
+                living_scene::MerchantExchangeOutcome::Settled,
+            ),
+            (
+                MerchantStance::Fair,
+                350,
+                living_scene::MerchantExchangeOutcome::Countered,
+            ),
+            (
+                MerchantStance::TightFisted,
+                375,
+                living_scene::MerchantExchangeOutcome::Countered,
+            ),
+            (
+                MerchantStance::Offended,
+                400,
+                living_scene::MerchantExchangeOutcome::Countered,
+            ),
+        ] {
+            let mut offer = judgement.clone();
+            offer.stance = stance;
+            // Equipment still contributes 150 CP; 300 CP makes this a 10% concession.
+            offer.offer.hero_cp = 300;
+            let after = stage_barter(&current, 82, offer);
+            let record = living_scene::exchange_record(
+                after.state(),
+                OperationId::from_bytes(&[82; 16]).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record.outcome, expected_outcome);
+            assert_eq!(record.judgement.offer.hero_cp, expected_coin);
+            assert_eq!(
+                hero_copper(&after, member),
+                hero_copper(&current, member)
+                    - if expected_outcome == living_scene::MerchantExchangeOutcome::Settled {
+                        300
+                    } else {
+                        0
+                    }
+            );
+        }
+    });
 }
 
 fn interact(
@@ -2143,5 +2639,830 @@ fn a_ware_bought_in_a_created_place_replays_once_and_the_scene_still_reads() {
         assert!(!model.offer_available(&offer.id));
         living_scene::publish(&bought).unwrap();
         assert_eq!(model_of(&bought).things, model.things);
+    });
+}
+
+#[test]
+fn hs39_living_scene_trade_unheld_goods_get_a_spoken_refusal_and_held_question_gets_srd_quote() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, teller};
+    use merchant_bargaining::{ExchangeChoice, MerchantStance};
+    barter_market(|| {
+        let (current, member, mut judgement) = barter_inventory();
+        judgement.offer.merchant_items.clear();
+        judgement.offer.hero_cp = 0;
+        judgement.offer.merchant_cp = 0;
+        judgement.hero_commits_now = false;
+        judgement.choice = ExchangeChoice::Counter;
+        judgement.stance = MerchantStance::Eager;
+        let held = stage_barter(&current, 181, judgement.clone());
+        let quote = living_scene::pending_exchange(&held, "Brynn")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            quote.judgement.offer.merchant_cp, 150,
+            "SRD half price, no eager inflation"
+        );
+        assert_eq!(hero_copper(&held, member), hero_copper(&current, member));
+
+        let mut plan = serde_json::to_value(judgement).unwrap();
+        plan["offer"]["hero_items"] = serde_json::json!([{"item_id":null,"catalog_id":null}]);
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(
+            serde_json::json!({"exchange":plan.to_string()}),
+        )]);
+        let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS39/unheld-sale")
+            .join(crate::gameplay::journey::hex(
+                &crate::gameplay::model::random::<16>().unwrap(),
+            ));
+        let storyteller = teller(
+            endpoint.address,
+            0,
+            std::time::Duration::from_secs(5),
+            &cache,
+        );
+        let judgement = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(merchant_bargaining::judge_exchange(
+                &storyteller,
+                &living_scene::exchange_facts(
+                    &current,
+                    "Brynn",
+                    "Would you buy my crate of rings?",
+                )
+                .unwrap(),
+            ))
+            .expect("unheld goods are a valid semantic judgement, not an error toast");
+        let refused = stage_barter(&current, 182, judgement);
+        assert_eq!(
+            living_scene::exchange_record(
+                refused.state(),
+                OperationId::from_bytes(&[182; 16]).unwrap()
+            )
+            .unwrap()
+            .outcome,
+            living_scene::MerchantExchangeOutcome::Refused
+        );
+        let line = living_scene::line(
+            refused.state(),
+            OperationId::from_bytes(&[182; 16]).unwrap(),
+        )
+        .unwrap();
+        assert!(line.contains("Show me the goods first"), "{line}");
+        assert_eq!(hero_copper(&refused, member), hero_copper(&current, member));
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        assert_eq!(
+            living_scene::snapshot(current.state(), &scene).unwrap(),
+            living_scene::snapshot(refused.state(), &scene).unwrap()
+        );
+    });
+}
+
+#[test]
+fn hs39_living_scene_trade_srd_sale_quote_can_be_accepted_for_every_merchant_stance() {
+    use merchant_bargaining::{ExchangeChoice, MerchantStance};
+    barter_market(|| {
+        let (current, member, judgement) = barter_inventory();
+        for stance in [
+            MerchantStance::Eager,
+            MerchantStance::Fair,
+            MerchantStance::TightFisted,
+            MerchantStance::Offended,
+        ] {
+            let mut question = judgement.clone();
+            question.offer.merchant_items.clear();
+            question.offer.hero_cp = 0;
+            question.offer.merchant_cp = 0;
+            question.hero_commits_now = false;
+            question.choice = ExchangeChoice::Counter;
+            question.stance = stance;
+            let quoted = stage_barter(&current, 183, question);
+            let mut accepted = living_scene::pending_exchange(&quoted, "Brynn")
+                .unwrap()
+                .unwrap()
+                .judgement;
+            assert_eq!(accepted.offer.merchant_cp, 150);
+            accepted.hero_commits_now = true;
+            accepted.choice = ExchangeChoice::Accept;
+            let settled = stage_barter(&quoted, 184, accepted);
+            assert_eq!(
+                living_scene::exchange_record(
+                    settled.state(),
+                    OperationId::from_bytes(&[184; 16]).unwrap()
+                )
+                .unwrap()
+                .outcome,
+                living_scene::MerchantExchangeOutcome::Settled
+            );
+            assert_eq!(
+                hero_copper(&settled, member),
+                hero_copper(&current, member) + 150
+            );
+        }
+    });
+}
+
+#[test]
+fn hs41_living_scene_weapon_readiness_is_journaled_per_hero_and_clears() {
+    use living_scene::readiness::confrontation;
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let weapon = |holder: &str| {
+            snapshot
+                .model
+                .things
+                .iter()
+                .find(|thing| {
+                    thing.holder_id.as_deref() == Some(holder) && thing.name == "greatsword"
+                })
+                .unwrap()
+                .id
+                .clone()
+        };
+        let brynn_weapon = weapon("Brynn");
+        let vale_weapon = weapon("Vale");
+        assert_ne!(brynn_weapon, vale_weapon);
+        let drawn = interact(&current, member, 190, &brynn_weapon, "draw");
+        let after = living_scene::snapshot(drawn.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert!(
+            after
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == brynn_weapon)
+                .unwrap()
+                .picture_description
+                .contains("drawn and ready")
+        );
+        assert_eq!(
+            after
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == vale_weapon)
+                .unwrap()
+                .position,
+            "sheathed"
+        );
+        assert!(
+            confrontation(drawn.state(), OperationId::from_bytes(&[190; 16]).unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            living_scene::scene_change_journal(&drawn)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.change.entity_id == brynn_weapon
+                    && entry.change.description.contains("draws"))
+        );
+        let vale_member = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let both = interact(&drawn, vale_member, 191, &vale_weapon, "draw");
+        assert!(
+            confrontation(both.state(), OperationId::from_bytes(&[191; 16]).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        let first_away = interact(&both, member, 192, &brynn_weapon, "sheathe");
+        let away = interact(&first_away, vale_member, 193, &vale_weapon, "sheathe");
+        let after = living_scene::snapshot(away.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert!(
+            after
+                .model
+                .things
+                .iter()
+                .filter(|thing| thing.id == brynn_weapon || thing.id == vale_weapon)
+                .all(|thing| thing.position == "sheathed"
+                    && thing.picture_description.contains("no blade in hand"))
+        );
+        let again = interact(&away, member, 194, &brynn_weapon, "draw");
+        assert!(
+            confrontation(again.state(), OperationId::from_bytes(&[194; 16]).unwrap())
+                .unwrap()
+                .is_some()
+        );
+    });
+}
+
+#[test]
+fn hs41_living_scene_departure_clears_drawn_weapons_on_return() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Brynn") && thing.name == "greatsword")
+            .unwrap()
+            .id
+            .clone();
+        let drawn = interact(&current, member, 195, &weapon, "draw");
+        let entry = crate::gameplay::place::PlaceEntry {
+            hero: "Brynn".into(),
+            line: "Brynn leaves the taproom.".into(),
+            change: crate::gameplay::place::PlaceMove {
+                from: scene.setting.as_ref().unwrap().place_id.clone(),
+                to: "elsewhere".into(),
+                exit: "dev".into(),
+                beat: "departure-readiness-fixture".into(),
+                created: None,
+            },
+        };
+        let moved = living_scene::commit_place_move(
+            &drawn,
+            OperationId::from_bytes(&[196; 16]).unwrap(),
+            &entry,
+        )
+        .unwrap();
+        let returned = living_scene::snapshot(moved.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            returned
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == weapon)
+                .unwrap()
+                .position,
+            "sheathed"
+        );
+        assert!(
+            returned
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == weapon)
+                .unwrap()
+                .picture_description
+                .contains("no blade in hand")
+        );
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs41_living_scene_model_routes_courier_packet_grab_to_influence_not_coin() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
+    let mut room: crate::gameplay::adventure::scene_model::SceneModel = serde_json::from_slice(
+        include_bytes!("../../../../../content/merchant-shop/scene-model.json"),
+    )
+    .unwrap();
+    let courier = room
+        .people
+        .iter_mut()
+        .find(|person| person.role != "hero")
+        .unwrap();
+    courier.name = "Finn Alder".into();
+    courier.coin_cp = 0;
+    let courier_id = courier.id.clone();
+    room.people.retain(|person| person.id == courier_id);
+    let mut packet = room.things[0].clone();
+    packet.id = "courier-packet".into();
+    packet.name = "packet".into();
+    packet.short = "A sealed packet in Finn's coat.".into();
+    packet.portable = true;
+    packet.in_scene = true;
+    packet.holder_id = Some(courier_id.clone());
+    packet.owner_id = Some(courier_id);
+    room.things = vec![packet];
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let result = living_scene::judge_take_target(&model(&endpoint), &room,
+        "Kazrak steps right up to Finn, greatsword out, and reaches for the packet in his coat. Hand it over, little courier.",
+        living_scene::InteractionMeaning::Steal).await.unwrap();
+    assert_eq!(result, Some(("courier-packet".into(), "intimidate")));
+    let body = endpoint.bodies();
+    let criteria = &body[0]["questions"]["q1"]["criteria"];
+    assert!(
+        criteria["o1"]
+            .as_str()
+            .unwrap()
+            .contains("packet carried by Finn Alder")
+    );
+    assert!(criteria["o3"].as_str().unwrap().contains("coin"));
+}
+
+#[test]
+fn hs41_living_scene_readiness_rejects_another_heros_weapon_and_supports_npc_custody() {
+    use living_scene::readiness::{self, WeaponReadiness};
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let other_weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Vale") && thing.name == "greatsword")
+            .unwrap();
+        let choices = vec![
+            (
+                model::label("scene-target").unwrap(),
+                model::label(&other_weapon.id).unwrap(),
+            ),
+            (
+                model::label("scene-option").unwrap(),
+                model::label("draw").unwrap(),
+            ),
+        ];
+        let refused = stage_with_supplier(
+            &current,
+            &input(&current, member, 197, "script-choice", choices),
+            &mut |_| panic!("draw never rolls"),
+        );
+        assert!(
+            refused.is_err(),
+            "a hero cannot ready someone else's weapon"
+        );
+        let weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Brynn") && thing.name == "greatsword")
+            .unwrap()
+            .id
+            .clone();
+        let npc = snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.role != "hero" && !person.is_background)
+            .unwrap()
+            .id
+            .clone();
+        let given = interact_with_recipient(&current, member, 198, &weapon, "give", &npc);
+        let after_give = living_scene::snapshot(given.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let drawn = readiness::commit(
+            &given,
+            OperationId::from_bytes(&[199; 16]).unwrap(),
+            &scene,
+            &after_give.model,
+            readiness::WeaponCondition {
+                item_id: weapon.clone(),
+                holder_id: npc.clone(),
+                readiness: WeaponReadiness::Drawn,
+                main_weapon_instead: false,
+            },
+        )
+        .unwrap();
+        let after_draw = living_scene::snapshot(drawn.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let held = after_draw
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == weapon)
+            .unwrap();
+        assert_eq!(held.holder_id.as_deref(), Some(npc.as_str()));
+        assert_eq!(held.position, "drawn");
+    });
+}
+
+#[test]
+fn hs41_living_scene_npc_draw_is_not_self_addressed_and_does_not_suppress_hero_reply() {
+    use living_scene::readiness::{self, WeaponCondition, WeaponReadiness};
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Brynn") && thing.name == "greatsword")
+            .unwrap()
+            .id
+            .clone();
+        let npc = snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.role != "hero" && !person.is_background)
+            .unwrap()
+            .id
+            .clone();
+        let given = interact_with_recipient(&current, member, 201, &weapon, "give", &npc);
+        let after_give = living_scene::snapshot(given.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let npc_drawn = readiness::commit(
+            &given,
+            OperationId::from_bytes(&[202; 16]).unwrap(),
+            &scene,
+            &after_give.model,
+            WeaponCondition {
+                item_id: weapon,
+                holder_id: npc.clone(),
+                readiness: WeaponReadiness::Drawn,
+                main_weapon_instead: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            readiness::confrontation(
+                npc_drawn.state(),
+                OperationId::from_bytes(&[202; 16]).unwrap()
+            )
+            .unwrap()
+            .is_none_or(|reaction| reaction.npc_id != npc)
+        );
+        let hero_weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Vale") && thing.name == "greatsword")
+            .unwrap()
+            .id
+            .clone();
+        let hero_drawn = interact(
+            &npc_drawn,
+            MemberId::from_bytes(&MEMBERS[1]).unwrap(),
+            203,
+            &hero_weapon,
+            "draw",
+        );
+        assert!(
+            readiness::confrontation(
+                hero_drawn.state(),
+                OperationId::from_bytes(&[203; 16]).unwrap()
+            )
+            .unwrap()
+            .is_some()
+        );
+    });
+}
+
+#[test]
+fn hs41_living_scene_model_approved_main_weapon_substitution_is_journaled_and_acknowledged() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let weapon = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.holder_id.as_deref() == Some("Brynn") && thing.name == "greatsword")
+            .unwrap()
+            .id
+            .clone();
+        let choices = vec![
+            (
+                model::label("scene-target").unwrap(),
+                model::label(&weapon).unwrap(),
+            ),
+            (
+                model::label("scene-option").unwrap(),
+                model::label("draw").unwrap(),
+            ),
+            (
+                model::label("scene-weapon-reading").unwrap(),
+                model::label("main_weapon_instead").unwrap(),
+            ),
+        ];
+        let committed = stage_with_supplier(
+            &current,
+            &input(&current, member, 204, "script-choice", choices),
+            &mut |_| panic!("readying does not roll"),
+        )
+        .unwrap();
+        let line = living_scene::line(
+            committed.state(),
+            OperationId::from_bytes(&[204; 16]).unwrap(),
+        )
+        .unwrap();
+        assert!(line.contains("has no such weapon"));
+        let entity = player_entity(member, &current).unwrap();
+        assert_eq!(
+            crate::gameplay::freeform_action::hero_possessive(current.state(), entity),
+            Some("their".into())
+        );
+        assert!(line.contains("readies their greatsword instead"), "{line}");
+        let semantic = committed
+            .state()
+            .decisions
+            .last()
+            .unwrap()
+            .semantic_output
+            .as_deref()
+            .unwrap();
+        assert!(semantic.contains("\"main_weapon_instead\":true"));
+    });
+}
+
+#[test]
+fn hs41_living_scene_renamed_weapon_keeps_its_source_type_and_real_committed_name() {
+    use crate::gameplay::adventure::scene_model::SceneItemProvenance;
+    taproom_with_model(
+        |model| {
+            let mut weapon = model.things[0].clone();
+            let owner = model
+                .people
+                .iter()
+                .find(|person| !person.is_background)
+                .unwrap()
+                .id
+                .clone();
+            weapon.id = "source-dawnblade".into();
+            weapon.name = "Dawnblade".into();
+            weapon.short = "A greatsword named Dawnblade.".into();
+            weapon.detail = "Dawnblade is a steel greatsword. Its hilt is bound in leather.".into();
+            weapon.picture_description = "A sheathed greatsword with a leather-bound hilt.".into();
+            weapon.portable = true;
+            weapon.in_use = false;
+            weapon.in_scene = true;
+            weapon.owner_id = Some(owner.clone());
+            weapon.holder_id = Some(owner);
+            weapon.aliases = vec!["Dawnblade".into()];
+            weapon.finding_id = None;
+            weapon.clue_fact_id = None;
+            weapon.provenance = SceneItemProvenance {
+                source_id: "greatsword".into(),
+                ..Default::default()
+            };
+            *model.things.last_mut().unwrap() = weapon;
+            model.validate_structure().unwrap();
+        },
+        || {
+            let (current, member) = opened();
+            let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+            let held = interact_with_roll(
+                &current,
+                member,
+                205,
+                "source-dawnblade",
+                "intimidate",
+                Some(20),
+            );
+            let entity = player_entity(member, &held).unwrap();
+            let situation = crate::gameplay::freeform_action::Situation::read(
+                held.state(),
+                entity,
+                &scene,
+                &crate::gameplay::wire::scene_cast(&scene),
+            )
+            .unwrap();
+            let target = situation
+                .options()
+                .into_iter()
+                .find(|target| target.id == "source-dawnblade")
+                .unwrap();
+            assert_eq!(target.name, "greatsword");
+            assert!(target.detail.contains("Dawnblade is a greatsword"));
+            let drawn = interact(&held, member, 206, "source-dawnblade", "draw");
+            assert!(
+                living_scene::line(drawn.state(), OperationId::from_bytes(&[206; 16]).unwrap())
+                    .unwrap()
+                    .contains("Dawnblade")
+            );
+            let after = living_scene::snapshot(drawn.state(), &scene)
+                .unwrap()
+                .unwrap();
+            let actual = after
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == "source-dawnblade")
+                .unwrap();
+            assert_eq!(actual.name, "Dawnblade");
+            assert_eq!(actual.position, "drawn");
+        },
+    );
+}
+
+#[test]
+fn hs50_living_scene_trade_item_details_are_first_write_and_replay_without_changing_stock_or_coin()
+{
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let setting = scene.setting.as_ref().unwrap();
+        let model = setting.model.as_ref().unwrap();
+        let offer = model.offers.first().unwrap();
+        let details = crate::gameplay::journey::merchant_bargaining::OfferDetails {
+            item_id: offer.canonical_item_id(),
+            material: None,
+            colours: vec!["amber".into()],
+            sizes: Some("a clay mug".into()),
+            quality: Some("freshly drawn".into()),
+            origin: Some("locally brewed".into()),
+        };
+        let operation = OperationId::from_bytes(&[192; 16]).unwrap();
+        let candidate = living_scene::commit_offer_details(
+            &current,
+            current.basis(),
+            operation,
+            "Brynn",
+            &offer.seller_id,
+            details.clone(),
+        )
+        .unwrap();
+        let facts = living_scene::merchant_offer_facts(
+            candidate.state(),
+            model,
+            &setting.place_id,
+            &offer.seller_id,
+        )
+        .unwrap();
+        let saved = facts
+            .iter()
+            .find(|fact| fact["item_id"] == details.item_id)
+            .unwrap();
+        assert_eq!(saved["details"], serde_json::to_value(&details).unwrap());
+        assert_eq!(
+            living_scene::merchant_offer_facts(
+                candidate.state(),
+                model,
+                &setting.place_id,
+                &offer.seller_id
+            )
+            .unwrap(),
+            facts
+        );
+        assert_eq!(
+            living_scene::merchant_trade_terms(&candidate, "Brynn").unwrap(),
+            living_scene::merchant_trade_terms(&current, "Brynn").unwrap()
+        );
+        assert_eq!(
+            hero_copper(&candidate, member),
+            hero_copper(&current, member)
+        );
+        assert!(
+            living_scene::commit_offer_details(
+                &candidate,
+                candidate.basis(),
+                OperationId::from_bytes(&[193; 16]).unwrap(),
+                "Brynn",
+                &offer.seller_id,
+                details.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            living_scene::commit_offer_details(
+                &candidate,
+                current.basis(),
+                operation,
+                "Brynn",
+                &offer.seller_id,
+                details.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            living_scene::commit_offer_details(
+                &current,
+                current.basis(),
+                operation,
+                "Brynn",
+                "someone-else",
+                details
+            )
+            .is_err()
+        );
+    });
+}
+#[test]
+fn market_stall_purchase_replays_once_across_the_square_and_close_view() {
+    use crate::gameplay::{
+        adventure::{RulesMode, record, shop},
+        beat_script_runtime as runtime, beat_script_variety_tests as native, place,
+        place_creation::{self, tests as drafts},
+        startup_configuration::ContentRating,
+    };
+    let generated = shop::generate(42, RulesMode::Standard, ContentRating::default()).unwrap();
+    let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+    pack::with_test_pack(loaded, || {
+        let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+        let market = place_creation::build(
+            &drafts::request(),
+            &drafts::place_slot().to_string(),
+            &drafts::people_slot().to_string(),
+            &drafts::things_slot().to_string(),
+        )
+        .unwrap();
+        let moved = |current: &Checkpoint,
+                     number: u8,
+                     from: &str,
+                     exit: &str,
+                     to: &str,
+                     created: Option<&place::PlaceRecord>| {
+            place::plan(
+                current,
+                "Brynn",
+                OperationId::from_bytes(&[number; 16]).unwrap(),
+                from,
+                exit,
+                to,
+                created,
+            )
+            .unwrap_or_else(|error| panic!("market move refused: {error:?}"))
+            .candidate
+        };
+        let model_of = |current: &Checkpoint| {
+            let scene = runtime::scene(current.state()).unwrap();
+            living_scene::snapshot(current.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model
+        };
+        let square = moved(
+            &opening,
+            40,
+            "place-mareks-cloth-shop",
+            "street-door",
+            &market.place_id,
+            Some(&market),
+        );
+        let keeper = market
+            .people
+            .iter()
+            .find(|person| person.name == "Yara")
+            .unwrap()
+            .clone();
+        let mut assistant = market.people[0].clone();
+        assistant.name = "Talla".into();
+        let mut spot = market.clone();
+        spot.place_id = "place-fish-stall".into();
+        spot.origin.id = market.place_id.clone();
+        spot.origin.name = market.name.clone();
+        spot.name = "fish stall".into();
+        spot.short = "the fish stall beside the fountain".into();
+        spot.narration = "The party reaches Yara's fish stall.".into();
+        spot.speaker.clear();
+        spot.greeting.clear();
+        spot.market = false;
+        spot.stalls.clear();
+        spot.exits.clear();
+        spot.landmarks.clear();
+        spot.local_spot = Some("the stall beside the fountain".into());
+        spot.local_keeper = Some(keeper.name.clone());
+        spot.people = vec![keeper.clone(), assistant];
+        spot.wares.retain(|ware| ware.seller == keeper.name);
+        spot.services.clear();
+        let exit = place::spot_exit(&spot.name);
+        let close = moved(
+            &square,
+            41,
+            &market.place_id,
+            &exit,
+            &spot.place_id,
+            Some(&spot),
+        );
+        let offer = model_of(&close).offers[0].clone();
+        let bought = interact(&close, native::first(), 42, &offer.id, "buy");
+        let returned = moved(
+            &bought,
+            43,
+            &spot.place_id,
+            place::WAY_BACK,
+            &market.place_id,
+            None,
+        );
+        let back = model_of(&returned);
+        assert!(!back.offer_available(&offer.canonical_item_id()));
+        assert_eq!(
+            back.people
+                .iter()
+                .find(|person| person.id == offer.seller_id)
+                .unwrap()
+                .coin_cp,
+            keeper.purse_cp + offer.cost_cp
+        );
+        assert_eq!(back, model_of(&returned));
+        let again = moved(&returned, 44, &market.place_id, &exit, &spot.place_id, None);
+        let close_again = model_of(&again);
+        assert!(!close_again.offer_available(&offer.canonical_item_id()));
+        assert_eq!(
+            close_again
+                .people
+                .iter()
+                .find(|person| person.id == offer.seller_id)
+                .unwrap()
+                .coin_cp,
+            keeper.purse_cp + offer.cost_cp
+        );
     });
 }

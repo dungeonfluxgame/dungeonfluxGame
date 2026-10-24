@@ -129,7 +129,13 @@ impl ParticipantOwner for CurrentJourney<'_> {
         }
         self.current
             .validate_resume(*current, &model::pins()?)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
+            .map_err(|_| {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-basis",
+                    "Resume".to_owned(),
+                );
+                RepositoryError::InvalidCandidate
+            })?;
         let GameCommand::ProposeAction {
             actor,
             action,
@@ -137,6 +143,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
             choices,
         } = &self.command.command
         else {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-command",
+                "InvalidCandidate".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         };
         // A hero's scene assault in a freeplay scene has no courier source to check: the freeplay
@@ -156,6 +166,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 || self.staged.logical_time != self.current.state().logical_time
                 || self.staged.entities.len() > 512
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-scene-offer",
+                    "InvalidCandidate".to_owned(),
+                );
                 return Err(RepositoryError::InvalidCandidate);
             }
             return Ok(());
@@ -170,6 +184,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 .iter()
                 .any(|(kind, _)| *kind == rpc::GameplayActionKind::DefendCourier)
         {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-offer",
+                "InvalidCandidate".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         }
         let note = model::content("private-courier-note")?;
@@ -226,6 +244,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
             }
         }
         if !scene_attack && !source {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-source",
+                "InvalidCandidate".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         }
         if !self.current.state().encounters.is_empty()
@@ -234,6 +256,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
             || self.staged.logical_time != self.current.state().logical_time
             || self.staged.entities.len() > 512
         {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-phase-staged",
+                "InvalidCandidate".to_owned(),
+            );
             return Err(RepositoryError::InvalidCandidate);
         }
         Ok(())
@@ -253,6 +279,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
             .iter()
             .find(|candidate| candidate.id == *actor)
         else {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-participant",
+                "Unknown".to_owned(),
+            );
             return Ok(ParticipantStatus::Unknown);
         };
         // The people of a freeplay scene assault were brought on stage by this very command.
@@ -288,6 +318,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                     .iter()
                     .any(|entity| entity.id == *actor)
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Undisclosed".to_owned(),
+                );
                 return Ok(ParticipantStatus::Undisclosed);
             }
         } else if scene_attack && *actor == monster {
@@ -300,6 +334,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 .any(|entity| entity.id == monster && entity.definition == courier_definition)
                 || candidate.position != Some(Position { x: 0, y: 0, z: 0 })
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Undisclosed".to_owned(),
+                );
                 return Ok(ParticipantStatus::Undisclosed);
             }
         } else if *actor == monster {
@@ -313,6 +351,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 || candidate.identity_revision != model::label("srd521-bandit-1")?
                 || candidate.position != Some(Position { x: 0, y: 0, z: 0 })
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Undisclosed".to_owned(),
+                );
                 return Ok(ParticipantStatus::Undisclosed);
             }
         } else {
@@ -320,6 +362,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 .into_iter()
                 .find(|link| link.character == Some(*actor))
             else {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Undisclosed".to_owned(),
+                );
                 return Ok(ParticipantStatus::Undisclosed);
             };
             let build = model::content("dwarf-fighter-soldier")?;
@@ -328,11 +374,19 @@ impl ParticipantOwner for CurrentJourney<'_> {
                     && character.owner == link.member
                     && character.build == build
             }) {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Undisclosed".to_owned(),
+                );
                 return Ok(ParticipantStatus::Undisclosed);
             }
             if value(self.current.state(), *actor, "hit-points")? == 0
                 || value(self.current.state(), *actor, "unconscious")? != 0
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Unavailable".to_owned(),
+                );
                 return Ok(ParticipantStatus::Unavailable);
             }
             if self
@@ -343,6 +397,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 .find(|entity| entity.id == *actor)
                 != Some(candidate)
             {
+                crate::gameplay::refusal_detail::cause(
+                    "combat-admission-participant",
+                    "Unavailable".to_owned(),
+                );
                 return Ok(ParticipantStatus::Unavailable);
             }
         }
@@ -353,6 +411,10 @@ impl ParticipantOwner for CurrentJourney<'_> {
             || value(self.staged, *actor, "hit-points")? == 0
             || value(self.staged, *actor, "unconscious")? != 0
         {
+            crate::gameplay::refusal_detail::cause(
+                "combat-admission-participant",
+                "Unavailable".to_owned(),
+            );
             return Ok(ParticipantStatus::Unavailable);
         }
         Ok(ParticipantStatus::Available)
@@ -381,14 +443,16 @@ pub(super) fn admission<'a>(
         command,
         staged,
     };
+    let maximum_participants =
+        df_rules::local_journey::MAXIMUM_PARTY + if super::tactical::enabled() { 4 } else { 1 };
     let admitted = validate_participants(
         &owner,
         &command.basis,
         &command.basis,
         actors,
         ParticipantLimits {
-            max_participants: if super::tactical::enabled() { 6 } else { 3 },
-            max_identity_comparisons: if super::tactical::enabled() { 15 } else { 3 },
+            max_participants: maximum_participants,
+            max_identity_comparisons: maximum_participants * (maximum_participants - 1) / 2,
         },
     )?;
     let expected = participants(current)
@@ -421,8 +485,7 @@ pub(super) fn admission<'a>(
             },
         )
         .collect::<Result<Vec<_>, _>>()?;
-    if expected.len() < 3
-        || (!super::tactical::enabled() && expected.len() != 3)
+    if !(2..=maximum_participants).contains(&expected.len())
         || admitted.actors() != expected.as_slice()
     {
         return Err(ParticipantError::Owner(RepositoryError::InvalidCandidate));
@@ -480,7 +543,7 @@ mod tests {
         draws: &[df_model::checkpoint::ActualDraw],
         resources: &[df_model::checkpoint::ResourceConstraint],
         pins: &df_model::checkpoint::CheckpointPins,
-    ) -> Result<[EntityId; 3], df_engine::encounter_start::EncounterStartError> {
+    ) -> Result<Vec<EntityId>, df_engine::encounter_start::EncounterStartError> {
         let source = super::super::rule().unwrap();
         df_engine::encounter_start::local_journey_turn_order(
             df_rules::RulesCommandInput {
@@ -1255,12 +1318,12 @@ mod tests {
             Err(ParticipantError::Owner(RepositoryError::RevisionConflict))
         );
         let mut crowded = actors.clone();
-        crowded.push(actors[0]);
+        crowded.resize(df_rules::local_journey::MAXIMUM_PARTY + 2, actors[0]);
         assert_eq!(
             validate(&current, &proposal(&current), combat.state(), &crowded),
             Err(ParticipantError::ParticipantCapacity {
-                required: 4,
-                limit: 3
+                required: df_rules::local_journey::MAXIMUM_PARTY + 2,
+                limit: df_rules::local_journey::MAXIMUM_PARTY + 1
             })
         );
         assert_eq!(

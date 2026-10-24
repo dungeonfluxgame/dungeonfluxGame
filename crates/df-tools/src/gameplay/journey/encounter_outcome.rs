@@ -102,16 +102,24 @@ pub(super) fn validate(
     let [encounter] = state.encounters.as_slice() else {
         return invalid();
     };
-    let [first, second, monster] = encounter.participants.as_slice() else {
+    let Some((monster, party)) = encounter.participants.split_last() else {
         return invalid();
     };
-    if *monster != entity(BANDIT)? {
+    let expected_party = super::participants(current)
+        .into_iter()
+        .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !(1..=super::MAXIMUM_PARTY).contains(&party.len())
+        || party != expected_party
+        || *monster != entity(BANDIT)?
+    {
         return invalid();
     }
-    let first_down = down(state, *first)?;
-    let second_down = down(state, *second)?;
+    let mut party_down = true;
+    for hero in party {
+        party_down &= down(state, *hero)?;
+    }
     let monster_down = down(state, *monster)?;
-    let party_down = first_down && second_down;
     let objective = model::content("defend-courier")?;
     if phase == rpc::JourneyPhase::Combat {
         let Some(active) = encounter.active_turn else {

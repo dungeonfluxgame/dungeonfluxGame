@@ -6,6 +6,97 @@ use crate::gameplay::storyteller::Storyteller;
 use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 
 use super::living_scene::{MerchantQuoteStatus, SceneTradeQuote};
+
+#[test]
+fn merchant_barter_source_values_use_srd_equipment_half_price_and_full_valuables() {
+    use super::merchant_bargaining::{ExchangeItem, exchange_item_value_cp};
+    let knife = ExchangeItem {
+        item_id: "knife-instance".into(),
+        catalog_id: "dagger".into(),
+    };
+    assert_eq!(exchange_item_value_cp(&knife, Some(999_999), false), None);
+    assert_eq!(exchange_item_value_cp(&knife, Some(200), true), Some(100));
+    let rope = ExchangeItem {
+        item_id: "rope-instance".into(),
+        catalog_id: "rope".into(),
+    };
+    assert_eq!(exchange_item_value_cp(&rope, Some(100), false), Some(100));
+    assert_eq!(exchange_item_value_cp(&rope, Some(100), true), Some(50));
+    for catalog in ["trade-good", "appraised-valuable"] {
+        let valuable = ExchangeItem {
+            item_id: "appraised-instance".into(),
+            catalog_id: catalog.into(),
+        };
+        assert_eq!(
+            exchange_item_value_cp(&valuable, Some(1000), true),
+            Some(1000)
+        );
+        assert_eq!(exchange_item_value_cp(&valuable, None, true), None);
+    }
+    assert_eq!(df_rules::local_journey::selling_value_cp(3, false), 1);
+    let unpriced = ExchangeItem {
+        item_id: "unknown".into(),
+        catalog_id: "invented-gear".into(),
+    };
+    assert_eq!(exchange_item_value_cp(&unpriced, Some(123), true), None);
+}
+
+#[test]
+fn merchant_barter_meaning_is_judged_and_stance_concessions_are_bounded() {
+    use super::merchant_bargaining::MerchantStance;
+    assert!(HeroTradeIntent::from_label("barter").unwrap().is_trade());
+    assert_eq!(
+        MerchantReplyCommitment::from_label("barter_terms")
+            .unwrap()
+            .meaning,
+        MerchantMeaning::BarterTerms
+    );
+    assert_eq!(MerchantStance::Eager.margin_permille(), 900);
+    assert_eq!(MerchantStance::Fair.margin_permille(), 1000);
+    assert_eq!(MerchantStance::TightFisted.margin_permille(), 1050);
+    assert_eq!(MerchantStance::Offended.margin_permille(), 1100);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn merchant_barter_judgement_uses_existing_fake_and_rejects_untyped_fields() {
+    use super::merchant_bargaining::{ExchangeChoice, MerchantStance, judge_exchange};
+    let plan = json!({
+        "merchant_id":"merchant", "offer":{
+            "hero_items":[{"item_id":"knife", "catalog_id":"dagger"}],
+            "merchant_items":[{"item_id":"rope", "catalog_id":"rope"}],
+            "hero_cp":0, "merchant_cp":0,
+        },
+        "counter":null, "hero_commits_now":true, "choice":"accept", "stance":"fair",
+    });
+    let lane = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS19/tmp");
+    let cache = lane.join(format!(
+        "judgement-{}",
+        super::hex(&super::model::random::<16>().unwrap())
+    ));
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"exchange":plan.to_string()}))]);
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(30), &cache);
+    let judgement = judge_exchange(
+        &storyteller,
+        &json!({"player_words":"My knife for your rope.", "goods":plan}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(judgement.choice, ExchangeChoice::Accept);
+    assert_eq!(judgement.stance, MerchantStance::Fair);
+    assert_eq!(judgement.offer.hero_items[0].item_id, "knife");
+    assert_eq!(endpoint.bodies().len(), 1);
+    let mut invalid = plan;
+    invalid["settled"] = json!(true);
+    assert!(
+        serde_json::from_value::<super::merchant_bargaining::ExchangeJudgement>(invalid).is_err()
+    );
+    assert!(
+        judge_exchange(&Storyteller::disabled(), &json!({}))
+            .await
+            .is_err()
+    );
+}
 use super::merchant_bargaining::{
     HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction,
     MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, OfferChoices, QuoteDecision,
@@ -1265,7 +1356,8 @@ fn hero_judgement_state_names_the_party_and_the_merchant_and_the_rule_excludes_h
         "hand-overs to a companion must be classified as not_trade"
     );
     assert!(
-        HERO_TRADE_INSTRUCTIONS.contains("only an exchange with the merchant for coin is trade")
+        HERO_TRADE_INSTRUCTIONS
+            .contains("an immediate exchange with the merchant for goods, coin, or both is trade")
     );
 }
 
@@ -2903,4 +2995,173 @@ async fn without_a_storyteller_the_bulk_pick_is_neutral() {
         .await
         .is_err()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs39_merchant_bargaining_unresolved_goods_parse_and_precise_rejection_reaches_audit() {
+    use super::merchant_bargaining::{ExchangeChoice, judge_exchange};
+    let plan = json!({
+        "merchant_id":"merchant", "offer":{
+            "hero_items":[{"item_id":"forged harness rings", "catalog_id":null}],
+            "merchant_items":[], "hero_cp":0, "merchant_cp":0,
+        },
+        "counter":null, "hero_commits_now":false, "choice":"counter", "stance":"fair",
+    });
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"exchange":"{\"merchant_id\":"})),
+        Reply::Output(json!({"exchange":plan.to_string()})),
+    ]);
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS39/judgement-parse-retry")
+        .join(crate::gameplay::journey::hex(
+            &crate::gameplay::model::random::<16>().unwrap(),
+        ));
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    let judgement = judge_exchange(
+        &storyteller,
+        &json!({
+            "player_words":"Would you buy a dozen forged harness rings?", "goods":[],
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(judgement.choice, ExchangeChoice::Counter);
+    assert!(!judgement.hero_commits_now);
+    assert_eq!(judgement.offer.hero_items[0].catalog_id, "");
+    assert_eq!(endpoint.connections(), 2);
+    assert!(
+        endpoint.bodies()[1]
+            .to_string()
+            .contains("previous_rejection")
+    );
+    assert!(
+        crate::gameplay::actor::audit_lines_containing("MERCHANT_JUDGEMENT rejected")
+            .iter()
+            .any(|line| line.contains("parse line=1 column=15") && line.contains("EOF"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs39_merchant_bargaining_bound_failure_names_the_exact_field() {
+    use super::merchant_bargaining::judge_exchange;
+    let plan = json!({
+        "merchant_id":"merchant", "offer":{
+            "hero_items":[{"item_id":"x".repeat(97), "catalog_id":"dagger"}],
+            "merchant_items":[], "hero_cp":0, "merchant_cp":0,
+        },
+        "counter":null, "hero_commits_now":false, "choice":"counter", "stance":"fair",
+    });
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"exchange":plan.to_string()})),
+        Reply::Output(json!({"exchange":plan.to_string()})),
+    ]);
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS39/judgement-bound-retry")
+        .join(crate::gameplay::journey::hex(
+            &crate::gameplay::model::random::<16>().unwrap(),
+        ));
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    assert!(
+        judge_exchange(&storyteller, &json!({"player_words":"Would you buy this?"}))
+            .await
+            .is_err()
+    );
+    assert_eq!(endpoint.connections(), 2);
+    assert!(
+        crate::gameplay::actor::audit_lines_containing("MERCHANT_JUDGEMENT rejected")
+            .iter()
+            .any(|line| line.contains("bound offer.hero_items[0].item_id exceeds 96 bytes"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs39_merchant_bargaining_low_bid_gets_witty_counter_within_server_margin() {
+    use crate::gameplay::{
+        npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
+        social::SocialLedger,
+    };
+    use df_protocol::common as rpc;
+    let mut buckle = terms(TradeDirection::HeroBuys);
+    buckle.item_name = "iron buckle".into();
+    buckle.minimum_price_cp = 5;
+    buckle.maximum_price_cp = 8;
+    let terms = [buckle];
+    let line = jev_line("offer_price", "Would you take five copper for the buckle?");
+    let facts = reply_context(&terms, "sigrun", "marek", line,
+        TradeFocus {tendered_item_id:None,picked_item_id:Some(CLOTHES_ITEM)},
+        &json!({"npc":{"name":"Marek", "wants":"Earn an honest living from good iron", "description":"Dry wit, proud of his workmanship"}})).unwrap();
+    let expected = "Seven copper. I save the bending for my accounts, not my iron.";
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply":expected}))]);
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS39/low-bid-counter")
+        .join(crate::gameplay::journey::hex(
+            &crate::gameplay::model::random::<16>().unwrap(),
+        ));
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    let loaded = crate::gameplay::pack::load_from_bytes(
+        include_bytes!("../../../../../content/merchant-shop/pack.json"),
+        include_bytes!("../../../../../content/merchant-shop/tuning.json"),
+    )
+    .unwrap();
+    let view = rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Player(
+            rpc::PlayerGameplayView {
+                narration: "A merchant's stall at the market.".into(),
+                scene: Some(rpc::GameplayScene {
+                    title: "Market".into(),
+                    cast: vec![rpc::SceneActor {
+                        id: "shop-merchant".into(),
+                        name: "Marek".into(),
+                        role: rpc::SceneRole::Contact as i32,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                journey: Some(rpc::JourneyView {
+                    speaker: "Marek".into(),
+                    own_character: Some(rpc::CharacterSheet {
+                        name: "Sigrun".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let mut context = NpcReplyContext::for_target(
+        &view,
+        df_types::MemberId::from_bytes(&[1; 16]).unwrap(),
+        line.words,
+        &StoryFacts::from_pack(&loaded.pack),
+        &SocialLedger::none(),
+        "Room",
+        Some("shop-merchant"),
+    )
+    .unwrap();
+    context.facts = facts;
+    context.merchant_trade_scope = true;
+    context.merchant_reply_bounds = super::merchant_bargaining::merchant_reply_bounds(
+        &terms,
+        "sigrun",
+        "marek",
+        line,
+        Some(CLOTHES_ITEM),
+        None,
+    );
+    let reply = NpcVoice::new(std::sync::Arc::new(storyteller))
+        .reply(context)
+        .await
+        .expect("actual NPC spoken-slot validation accepts this counter");
+    let exchange = TradeExchange {
+        hero: line,
+        merchant: MerchantReplyCommitment::from_label("firm_price").unwrap(),
+        merchant_reply: &reply,
+    };
+    let quote = quote_candidate_for_reply(&terms, "sigrun", "marek", &exchange, Some(CLOTHES_ITEM))
+        .unwrap();
+    assert_eq!(quote.price_cp, 7);
+    assert!(5 < quote.price_cp && quote.price_cp < 8);
+    assert!(endpoint.bodies()[0].to_string().contains("usually counter"));
 }

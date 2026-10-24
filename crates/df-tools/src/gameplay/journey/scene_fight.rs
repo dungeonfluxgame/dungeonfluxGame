@@ -1959,7 +1959,14 @@ mod tests {
         let input = wire::journey_input(&request, native::first(), current).unwrap();
         // A refusal's step names the first note since the last take; start from a clean slot.
         let _ = refusal_detail::take();
-        let mut initiative = [20_u32, 19, 1, 1, 1, 1].into_iter();
+        let fight = fight_of(current, super::super::command(&input)?)?
+            .expect("the offered assault names its foes");
+        let mut initiative = std::iter::once(20_u32)
+            .chain(std::iter::repeat_n(
+                19,
+                current.state().characters.len() - 1,
+            ))
+            .chain(std::iter::repeat_n(1, fight.foes.len()));
         stage_with_supplier(current, &input, &mut |sides| {
             Ok(if sides == 20 {
                 initiative.next().expect("initiative faces")
@@ -3103,6 +3110,35 @@ mod tests {
     }
 
     #[test]
+    fn a_freeplay_script_accepts_six_heroes_and_starts_a_scene_fight_for_every_seat() {
+        with_shop(|| {
+            let story = super::super::tests::table_story(super::super::MAXIMUM_PARTY);
+            let fight = start(&story, 28, "shop-adventurer", None);
+            let battle = tactical::read(fight.state()).unwrap();
+            assert_eq!(
+                battle
+                    .combatants()
+                    .iter()
+                    .filter(|actor| actor.side() == Side::Heroes)
+                    .count(),
+                6
+            );
+            let cells = battle
+                .combatants()
+                .iter()
+                .filter(|actor| actor.side() == Side::Heroes)
+                .map(|actor| actor.cell())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(cells.len(), 6);
+            assert_eq!(fight.state().characters.len(), 6);
+            assert_eq!(
+                super::super::phase(&fight).unwrap(),
+                rpc::JourneyPhase::Combat
+            );
+        });
+    }
+
+    #[test]
     fn closing_a_fight_with_every_hero_down_leaves_them_stable_and_tells_who_took_them() {
         with_shop(|| {
             let story = opening();
@@ -3119,7 +3155,7 @@ mod tests {
                 .collect::<Vec<_>>();
             for actor in snapshot["actors"].as_array_mut().unwrap() {
                 let id = actor["spec"]["id"].as_u64().unwrap();
-                if id <= 2 {
+                if id <= heroes.len() as u64 {
                     actor["health"]["hit_points"] = serde_json::json!(0);
                     actor["health"]["unconscious"] = serde_json::json!(true);
                     actor["health"]["prone"] = serde_json::json!(true);
@@ -3616,6 +3652,11 @@ pub(super) fn development_restore(
             .map(|hero| hero.entity)
             .ok_or(RepositoryError::InvalidCandidate)?
     };
+    let hero_maximum = if state.characters.iter().any(|hero| hero.entity == who) {
+        Some(i64::from(super::maximum_hit_points(state, who)?))
+    } else {
+        None
+    };
     let world = state
         .entities
         .iter_mut()
@@ -3630,7 +3671,7 @@ pub(super) fn development_restore(
     {
         match resource.resource.as_str() {
             "hit-points" => {
-                resource.value = resource.maximum;
+                resource.value = hero_maximum.unwrap_or(resource.maximum);
                 hp = true;
             }
             "unconscious" | "prone" | "dead" | "action-used" | "bonus-used" => resource.value = 0,

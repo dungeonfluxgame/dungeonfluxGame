@@ -125,6 +125,33 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
             // a2327cdd and 613839eb replaced the old art and attached authored geography.
             // Preserve complete parity for the other fields, and pin the new metadata below.
             let mut expected_view = expected_view.clone();
+            // REF-063 intentionally expands the creator's playable catalog. Its complete
+            // authored offer is checked by pack_tests; this fixture pins the story fields.
+            if let Some(creation) = actual
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.creation.as_ref())
+            {
+                assert_eq!(
+                    creation
+                        .supported_designs
+                        .iter()
+                        .map(|design| design.species_id.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "dwarf",
+                        "dragonborn",
+                        "elf",
+                        "gnome",
+                        "goliath",
+                        "halfling",
+                        "human",
+                        "orc",
+                        "tiefling"
+                    ]
+                );
+                expected_view.journey.as_mut().unwrap().creation = Some(creation.clone());
+            }
             let expected_scene = expected_view.scene.as_mut().unwrap();
             expected_scene.scene_asset = shipped_scene.asset.clone();
             if let Some(setting) = &shipped_scene.setting {

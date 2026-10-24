@@ -212,8 +212,8 @@ fn admit(
     if state.entities.len() > 512
         || state.resources.len() > 512
         || state.inventory.len() > 512
-        || state.members.len() > 3
-        || state.characters.len() > 2
+        || state.members.len() > super::MAXIMUM_PARTY + 1
+        || state.characters.len() > super::MAXIMUM_PARTY
     {
         return Err(RepositoryError::Capacity);
     }

@@ -2011,6 +2011,7 @@ fn start_on(
         });
         actors.push((id, entity));
     }
+    let hero_count = actors.len();
     let enemy_roster = if let Some(binding) = scene_binding {
         vec![(binding.entity, binding.creature.id.to_owned(), 0_u16)]
     } else if let Some(fight) = scene_fight {
@@ -2026,7 +2027,7 @@ fn start_on(
         .into_iter()
         .enumerate()
     {
-        let id = u32::try_from(index + 3).map_err(bad)?;
+        let id = u32::try_from(index + hero_count + 1).map_err(bad)?;
         let cell = *noted(
             "fight-enemy-spawn",
             map.enemy_spawns()
@@ -4390,7 +4391,13 @@ pub(super) mod tests {
             &input(&current, member, 5, "begin-story", vec![]),
             &mut |_| panic!("opening draws"),
         )
-        .unwrap()
+        .unwrap_or_else(|error| {
+            panic!(
+                "tactical opening: {error:?}; detail={:?}; step={:?}",
+                df_session::submission::take_refusal_diagnostic(),
+                refusal_detail::take()
+            )
+        })
     }
     /// Stages a fight with a chosen defend operation (which picks the layout) and dice
     /// faces (initiative first, in spec order, then the fight-start enemy turns).
@@ -4564,6 +4571,172 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn every_battle_layout_loads_six_distinct_legal_hero_start_cells() {
+        for (id, bytes) in SCENES {
+            let scene: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).unwrap();
+            for layout in &scene.layouts {
+                let map = scene_map(bytes, &layout.id).unwrap();
+                assert_eq!(map.hero_spawns().len(), MAXIMUM_PARTY, "{id}/{}", layout.id);
+                let unique = map
+                    .hero_spawns()
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(unique.len(), MAXIMUM_PARTY);
+                assert!(
+                    map.hero_spawns()
+                        .iter()
+                        .all(|cell| !map.is_blocked(*cell) && !map.enemy_spawns().contains(cell))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn six_heroes_and_four_enemies_have_distinct_spawns_ids_and_resolve_a_full_round() {
+        with_live(|| {
+            let opening = super::super::tests::table_story(MAXIMUM_PARTY);
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let dialogue = stage_with_supplier(
+                &opening,
+                &input(&opening, member, 27, "escort-courier", vec![]),
+                &mut |_| panic!("dialogue cannot draw"),
+            )
+            .unwrap();
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("salt-quay")));
+            TEST_FIGHT_OVERRIDE.with(|own| {
+                *own.borrow_mut() = Some(TestFight {
+                    enemies: MAXIMUM_ENEMIES,
+                    foe: Some("bandit".to_owned()),
+                })
+            });
+            let started =
+                start_fight_from(&dialogue, [28; 16], &[20, 20, 20, 20, 20, 20, 1, 1, 1, 1]);
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            // Keep the source roster fixed while the full round and its views are validated.
+            let mut current = started.unwrap_or_else(|error| {
+                panic!(
+                    "six-seat start: {error:?}; detail={:?}; step={:?}",
+                    df_session::submission::take_refusal_diagnostic(),
+                    refusal_detail::take()
+                )
+            });
+            let battle = read(current.state()).unwrap();
+            assert_eq!(battle.combatants().len(), MAXIMUM_PARTY + MAXIMUM_ENEMIES);
+            let heroes = battle
+                .combatants()
+                .iter()
+                .filter(|actor| actor.side() == Side::Heroes)
+                .collect::<Vec<_>>();
+            assert_eq!(heroes.len(), MAXIMUM_PARTY);
+            let cells = heroes
+                .iter()
+                .map(|actor| actor.cell())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(cells.len(), MAXIMUM_PARTY);
+            for id in 1..=(MAXIMUM_PARTY + MAXIMUM_ENEMIES) as u32 {
+                assert_eq!(
+                    battle.actor(id).unwrap().side(),
+                    if id <= MAXIMUM_PARTY as u32 {
+                        Side::Heroes
+                    } else {
+                        Side::Enemies
+                    }
+                );
+            }
+            let first_round = battle.round();
+            for operation in 30..70 {
+                if read(current.state()).unwrap().round() > first_round {
+                    break;
+                }
+                let kind = if read(current.state()).unwrap().reaction_offers().is_empty() {
+                    rpc::GameplayActionKind::EndTurn
+                } else {
+                    rpc::GameplayActionKind::DeclineReaction
+                };
+                let member = MEMBERS
+                    .into_iter()
+                    .map(|id| MemberId::from_bytes(&id).unwrap())
+                    .find(|member| {
+                        offered(&current, *member)
+                            .unwrap()
+                            .iter()
+                            .any(|(offer, _)| *offer == kind)
+                    })
+                    .expect("a hero owns the current turn or reaction");
+                current = stage_with_supplier(
+                    &current,
+                    &input(
+                        &current,
+                        member,
+                        operation,
+                        wire::action_entry(kind).unwrap(),
+                        vec![],
+                    ),
+                    &mut |_| Ok(1),
+                )
+                .unwrap();
+            }
+            assert!(read(current.state()).unwrap().round() > first_round);
+            assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Combat);
+            for link in participants(&current) {
+                let view = wire::journey_view(
+                    &current,
+                    df_persistence::local_demo_scope::LocalDemoRole::Player,
+                    link.member,
+                )
+                .unwrap();
+                assert!(view.encode_to_vec().len() <= df_rpc_bridge::RPC_MESSAGE_BYTES);
+            }
+            let resources = resources_for(current.state()).unwrap();
+            let assets = model::creator_portrait_assets(current.state()).unwrap();
+            let rules = [model::rule().unwrap(), rule().unwrap()];
+            let contents = model::contents().unwrap();
+            let mut minimum = 1;
+            let mut maximum = model::limits().maximum_records;
+            while minimum < maximum {
+                let middle = (minimum + maximum) / 2;
+                let candidate = Checkpoint::new(
+                    CHECKPOINT_SCHEMA,
+                    current.basis(),
+                    current.pins().clone(),
+                    current.state().clone(),
+                    ReferenceInventory {
+                        rules: &rules,
+                        content: &contents,
+                        resources: &resources,
+                        assets: &assets,
+                    },
+                    CheckpointLimits {
+                        maximum_records: middle,
+                        ..model::limits()
+                    },
+                );
+                if candidate.is_ok() {
+                    maximum = middle;
+                } else {
+                    minimum = middle + 1;
+                }
+            }
+            println!(
+                "six-hero/four-enemy round: records={minimum}, retained_bytes={}, receipt_text_max={}, record_limit={}",
+                current.retained_bytes().unwrap(),
+                current
+                    .state()
+                    .decisions
+                    .iter()
+                    .filter_map(|decision| decision.semantic_output.as_ref())
+                    .map(String::len)
+                    .max()
+                    .unwrap(),
+                model::limits().maximum_records
+            );
+            assert!(minimum < model::limits().maximum_records);
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+        });
+    }
+
+    #[test]
     fn three_scouts_opening_on_the_salt_quay_start_their_fight() {
         with_live(|| {
             let dialogue = dialogue_checkpoint(true, false).unwrap();
@@ -4611,21 +4784,21 @@ pub(super) mod tests {
         });
     }
     /// The budgets behind `model::limits().maximum_text_bytes`: one outcome
-    /// filled to every producer cap at once (48-byte names, 4 fight lines, a
-    /// 24-cell dash path, the longest source revision) encodes within 2,048
-    /// bytes, and a decision full of them (6 combatants x 12 outcomes)
+    /// filled to every producer cap at once (32-character UTF-8 names, 4 fight lines, a
+    /// 24-cell dash path, the longest source revision) encodes within 5,120
+    /// bytes, and a decision full of them (10 combatants x 12 outcomes)
     /// hex-encodes within the checkpoint text limit.
     #[test]
     fn a_worst_case_receipt_fits_the_checkpoint_text_limit() {
         let line = rpc::FightLine {
             role: rpc::TableRole::Hero as i32,
             hero_index: 1,
-            speaker: "s".repeat(48),
-            text: "t".repeat(160),
+            speaker: "\u{10400}".repeat(32),
+            text: "\u{10400}".repeat(160),
         };
         let outcome = rpc::CombatOutcome {
-            actor_name: "a".repeat(48),
-            target_name: "b".repeat(48),
+            actor_name: "\u{10400}".repeat(32),
+            target_name: "\u{10400}".repeat(32),
             attack_die: u32::MAX,
             attack_modifier: i32::MIN,
             attack_total: i32::MAX,
@@ -4667,9 +4840,9 @@ pub(super) mod tests {
             ..Default::default()
         };
         let encoded = outcome.encode_to_vec().len();
-        assert!(encoded <= 2048, "one worst-case outcome is {encoded} bytes");
+        assert!(encoded <= 5120, "one worst-case outcome is {encoded} bytes");
         let receipt = rpc::AcceptedAction {
-            combat: vec![outcome; 6 * 12],
+            combat: vec![outcome; (MAXIMUM_PARTY + 4) * 12],
             phase: rpc::JourneyPhase::Combat as i32,
             ..Default::default()
         };
@@ -5214,7 +5387,7 @@ pub(super) mod tests {
                 codec(),
             )
             .unwrap();
-            for bytes in MEMBERS {
+            for bytes in MEMBERS.into_iter().take(2) {
                 let member = MemberId::from_bytes(&bytes).unwrap();
                 assert_eq!(
                     offered(mid, member).unwrap(),
@@ -8441,12 +8614,24 @@ mod shared_scene_tests {
                             }
                         }
                     }
-                    for &hero in &drawn.heroes {
+                    for (seat, &hero) in drawn.heroes.iter().enumerate() {
+                        // REF-062 permits this distance only for the two added scan seats.
+                        let minimum_steps = if (4..6).contains(&seat)
+                            && ((id == "scan-valley-bridges-voxel-v1"
+                                && layout.id == "north-south")
+                                || id == "scan-village-voxel-v1")
+                        {
+                            2
+                        } else {
+                            3
+                        };
                         let distances = scan_distances(&grid, &free, hero, None);
                         for &enemy in &drawn.enemies {
                             assert!(
-                                distances.get(&enemy).is_some_and(|steps| *steps >= 3),
-                                "{id}/{}: hero {hero:?} and enemy {enemy:?} are fewer than three steps apart",
+                                distances
+                                    .get(&enemy)
+                                    .is_some_and(|steps| *steps >= minimum_steps),
+                                "{id}/{}: hero {hero:?} and enemy {enemy:?} are fewer than {minimum_steps} steps apart",
                                 layout.id
                             );
                         }
@@ -8664,7 +8849,7 @@ mod shared_scene_tests {
                 .unwrap_or_else(|error| panic!("{layout}: {error:?}"));
             assert_eq!(map.id(), layout);
             assert_eq!(map.dimensions(), (8, 6));
-            assert_eq!(map.hero_spawns().len(), 4);
+            assert_eq!(map.hero_spawns().len(), MAXIMUM_PARTY);
             assert_eq!(map.enemy_spawns().len(), 4);
         }
         let counter_side = tactical_rules::BattleMap::from_json(bytes, "counter-side").unwrap();
@@ -8710,7 +8895,11 @@ mod shared_scene_tests {
         };
         assert_eq!(
             super::super::super::table_log::audit_line(&kit),
-            "COMBAT stabilise actor=\"Brakka\" target=\"Sigrun\" method=kit uses_left=9"
+            format!(
+                "COMBAT stabilise actor_hash={} target_hash={} method=kit uses_left=9",
+                df_observe::seat_hash(b"Brakka"),
+                df_observe::seat_hash(b"Sigrun")
+            )
         );
         let lines = super::super::super::table_log::action_lines(
             rpc::GameplayActionKind::StabiliseWithHealersKit,
@@ -8735,7 +8924,11 @@ mod shared_scene_tests {
         };
         assert_eq!(
             super::super::super::table_log::audit_line(&medicine),
-            "COMBAT stabilise actor=\"Brakka\" target=\"Sigrun\" method=medicine die=7 modifier=1 dc=10 result=failure"
+            format!(
+                "COMBAT stabilise actor_hash={} target_hash={} method=medicine die=7 modifier=1 dc=10 result=failure",
+                df_observe::seat_hash(b"Brakka"),
+                df_observe::seat_hash(b"Sigrun")
+            )
         );
         let lines = super::super::super::table_log::action_lines(
             rpc::GameplayActionKind::StabiliseMedicine,
@@ -9405,6 +9598,15 @@ fn development_start(
                 .map_or(0, |item| item.quantity),
         )
         .map_err(|_| "invalid ammunition")?;
+        let actor = result
+            .battle
+            .actor(*id)
+            .map_err(|_| "hero combat profile unavailable")?;
+        let resource_limits = (
+            actor.health().maximum,
+            actor.spec().arrows,
+            actor.spec().second_wind_uses,
+        );
         result.battle = result
             .battle
             .with_hero_resources(
@@ -9417,7 +9619,9 @@ fn development_start(
                 )
                 .map_err(|_| "invalid resource")?,
             )
-            .map_err(|error| format!("hero resources refused: {error:?}"))?;
+            .map_err(|error| format!("hero resources refused: {error:?}; hp={:?}/{} arrows={}/{} second-wind={:?}/{}",
+                value(state, *who, "hit-points"), resource_limits.0, arrows, resource_limits.1,
+                value(state, *who, "second-wind"), resource_limits.2))?;
         if arrows > 20 {
             result.battle = result
                 .battle

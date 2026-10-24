@@ -107,15 +107,21 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
                 })?
             || self.staged.members != self.current.state().members
             || self.staged.characters != self.current.state().characters
-            || party.as_slice() != [entity(ENTITIES[0])?, entity(ENTITIES[1])?]
+            || !(1..=super::MAXIMUM_PARTY).contains(&party.len())
+            || party
+                != ENTITIES
+                    .into_iter()
+                    .take(party.len())
+                    .map(entity)
+                    .collect::<Result<Vec<_>, _>>()?
             || encounter.id
                 != RecordId::from_bytes(&ENCOUNTER)
                     .map_err(|_| RepositoryError::InvalidCandidate)?
             || encounter.definition != model::content("combat")?
             || encounter.combat_policy != observation.policy
             || encounter.active_turn != Some(monster)
-            || encounter.participants != [party[0], party[1], monster]
-            || encounter.turn_order.len() != 3
+            || encounter.participants != party.iter().copied().chain([monster]).collect::<Vec<_>>()
+            || encounter.turn_order.len() != party.len() + 1
             || encounter.participants.iter().any(|actor| {
                 encounter
                     .turn_order
@@ -180,12 +186,18 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             .iter()
             .find(|entity| entity.id == offer.target)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        let expected_position = if offer.target == entity(ENTITIES[0])? {
+        let index = ENTITIES
+            .iter()
+            .position(|id| offer.target.as_bytes() == id)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        let expected_position = if index == 0 {
             Position { x: 0, y: 5, z: 0 }
-        } else if offer.target == entity(ENTITIES[1])? {
-            Position { x: 5, y: 0, z: 0 }
         } else {
-            return Err(RepositoryError::InvalidCandidate);
+            Position {
+                x: 5,
+                y: ((index - 1) * 5) as i64,
+                z: 0,
+            }
         };
         let build = model::content("dwarf-fighter-soldier")?;
         let Some(character) = self
@@ -288,8 +300,8 @@ pub(super) fn select(
     if staged.entities.len() > 512
         || staged.resources.len() > 512
         || staged.inventory.len() > 512
-        || staged.members.len() > 3
-        || staged.characters.len() > 2
+        || staged.members.len() > super::MAXIMUM_PARTY + 1
+        || staged.characters.len() > super::MAXIMUM_PARTY
     {
         return Err(RepositoryError::Capacity);
     }
@@ -326,6 +338,12 @@ pub(super) fn select(
     };
     let offers = ENTITIES
         .into_iter()
+        .filter(|target| {
+            staged
+                .characters
+                .iter()
+                .any(|character| character.entity.as_bytes() == target)
+        })
         .map(|target| {
             Ok(NativeAttack {
                 actor,
@@ -343,9 +361,9 @@ pub(super) fn select(
         context,
         &offers,
         CandidateLimits {
-            max_offers: 2,
-            max_identity_comparisons: 1,
-            max_candidates: 2,
+            max_offers: super::MAXIMUM_PARTY,
+            max_identity_comparisons: super::MAXIMUM_PARTY * (super::MAXIMUM_PARTY - 1) / 2,
+            max_candidates: super::MAXIMUM_PARTY,
             max_candidate_bytes: 4096,
         },
     )
@@ -387,7 +405,7 @@ pub(super) fn select(
         &knowledge,
         &policy,
         UtilityLimits {
-            candidates: 2,
+            candidates: super::MAXIMUM_PARTY,
             contributions: 0,
             knowledge_records: 0,
             criteria: 0,
@@ -738,8 +756,17 @@ mod tests {
             ),
             Err(RepositoryError::InvalidCandidate)
         );
+        let mut duplicated = staged.clone();
+        duplicated.characters.push(staged.characters[0].clone());
+        assert_eq!(
+            select(&current, &duplicated, operation()),
+            Err(RepositoryError::InvalidCandidate)
+        );
         let mut over_capacity = staged.clone();
-        over_capacity.characters.push(staged.characters[0].clone());
+        over_capacity.characters.resize(
+            super::super::MAXIMUM_PARTY + 1,
+            staged.characters[0].clone(),
+        );
         assert_eq!(
             select(&current, &over_capacity, operation()),
             Err(RepositoryError::Capacity)

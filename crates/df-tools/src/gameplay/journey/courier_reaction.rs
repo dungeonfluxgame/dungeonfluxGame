@@ -10,7 +10,9 @@ use df_session::submission::RepositoryError;
 use df_types::OperationId;
 use sha2::{Digest, Sha256};
 
-use super::{ENTITIES, THREAD_POLICY, accepted, bad, entity};
+#[cfg(test)]
+use super::ENTITIES;
+use super::{THREAD_POLICY, accepted, bad, entity};
 use crate::gameplay::model;
 
 pub(super) const COURIER: [u8; 16] = [0x67; 16];
@@ -89,13 +91,9 @@ pub(super) fn enter_opening(state: &mut GameState) -> Result<(), RepositoryError
         beliefs: Vec::new(),
         secrets: Vec::new(),
     });
-    for bytes in ENTITIES {
-        let hero = entity(bytes)?;
-        if !state
-            .characters
-            .iter()
-            .any(|character| character.entity == hero)
-        {
+    for hero in state.characters.iter().map(|character| character.entity) {
+        if !joined_hero(state, hero) {
+            crate::gameplay::refusal_detail::cause("courier-opening", "HeroNotJoined".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
         state.relationships.push(Relationship {
@@ -312,7 +310,7 @@ fn relationship_limits() -> df_engine::relationship_staging::RelationshipStaging
         maximum_work: 1024 * 1024,
         maximum_inventory_records: 512,
         maximum_checkpoint_bytes: model::limits().maximum_retained_bytes,
-        maximum_pass_bytes: 8 * 1024 * 1024,
+        maximum_pass_bytes: 8 * model::limits().maximum_retained_bytes,
         checkpoint: model::limits(),
         reaction: ReactionLimits {
             maximum_entries: 1,
