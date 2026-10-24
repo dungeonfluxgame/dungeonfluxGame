@@ -85,6 +85,8 @@ fn apply_creature_faces(
                 id: id.clone(),
                 role: CharacterRole::Antagonist,
                 life_stage: LifeStage::Adult,
+                gender: None,
+                age: None,
                 name: participant.creature_id.replace('-', " "),
                 sprite,
                 dossier_id: None,
@@ -278,6 +280,8 @@ struct Member {
     id: String,
     role: CharacterRole,
     life_stage: LifeStage,
+    gender: Option<pack::Gender>,
+    age: Option<pack::Age>,
     name: String,
     /// The cut-out's asset stem, as the scene cast names it.
     sprite: String,
@@ -820,6 +824,8 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                 id: member.id.clone(),
                 role: role_of(member.role),
                 life_stage: LifeStage::from_age(member.age),
+                gender: member.gender,
+                age: member.age,
                 name: member.name.clone(),
                 sprite: member.sprite.clone(),
                 dossier_id: dossier.map(|dossier| dossier.npc_id.clone()),
@@ -933,10 +939,11 @@ impl KillStill {
 
 struct State {
     canonical: canonical::References,
+    clip_reads: BTreeSet<String>,
     kill_stills_seen: kill_shot::ShownShots,
     kill_stills_pending: Vec<KillStill>,
-    stage: Option<Stage>,
-    facts: Option<SceneFacts>,
+    stage: Option<Arc<Stage>>,
+    facts: Option<Arc<SceneFacts>>,
     tracker: MoodTracker,
     pacer: Pacer,
     backdrop: Option<BackdropOverlay>,
@@ -1514,6 +1521,8 @@ impl LivingScenes {
                     id: member.id.clone(),
                     role: role_of(member.role),
                     life_stage: LifeStage::from_age(member.age),
+                    gender: member.gender,
+                    age: member.age,
                     name: member.name.clone(),
                     sprite: member.sprite.clone(),
                     dossier_id: None,
@@ -1547,6 +1556,7 @@ impl LivingScenes {
     }
 
     /// Starts the director and its worker task. Must be called inside the runtime.
+    #[cfg(test)]
     pub(super) fn start(
         imagery: Imagery,
         references: ReferenceStore,
@@ -1556,6 +1566,35 @@ impl LivingScenes {
         plates_on: bool,
         checkpoints: watch::Receiver<df_model::checkpoint::Checkpoint>,
     ) -> Self {
+        Self::start_with_local_lore(
+            imagery,
+            references,
+            (
+                social,
+                Arc::new(crate::gameplay::npc_reply::local_lore::LocalLore::in_memory()),
+            ),
+            rating,
+            timing,
+            plates_on,
+            checkpoints,
+        )
+    }
+
+    pub(super) fn start_with_local_lore(
+        imagery: Imagery,
+        references: ReferenceStore,
+        social_and_lore: (
+            Arc<SocialLedger>,
+            Arc<crate::gameplay::npc_reply::local_lore::LocalLore>,
+        ),
+        rating: ContentRating,
+        timing: Timing,
+        plates_on: bool,
+        checkpoints: watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) -> Self {
+        let (social, lore) = social_and_lore;
+        let mut state = State::new(timing);
+        state.canonical = canonical::References::new(lore);
         let origin = Instant::now();
         let inner = Arc::new(Inner {
             imagery,
@@ -1563,7 +1602,7 @@ impl LivingScenes {
             social,
             rating,
             timing,
-            state: Mutex::new(State::new(timing)),
+            state: Mutex::new(state),
             wake: watch::channel(0).0,
             origin,
         });
@@ -1714,7 +1753,7 @@ impl Inner {
         let mut had_overlay = false;
         if changed_scene {
             had_overlay = state.backdrop.is_some() || !state.sprites.is_empty();
-            state.facts = Some(facts_of(&stage, &self.social));
+            state.facts = Some(Arc::new(facts_of(&stage, &self.social)));
             state.tracker.reset_scene();
             state.pacer.begin_scene(now);
             state.backdrop = None;
@@ -1728,7 +1767,7 @@ impl Inner {
             state.last_revision = stage.revision;
             state.pacer.note_action(now);
         }
-        state.stage = Some(stage);
+        state.stage = Some(Arc::new(stage));
         let health_changed = refresh_health(&mut state);
         let graph = state
             .stage
@@ -2605,6 +2644,7 @@ impl State {
     fn new(timing: Timing) -> Self {
         Self {
             canonical: canonical::References::default(),
+            clip_reads: BTreeSet::new(),
             kill_stills_seen: kill_shot::ShownShots::new(),
             kill_stills_pending: Vec::new(),
             stage: None,

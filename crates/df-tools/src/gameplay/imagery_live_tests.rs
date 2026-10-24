@@ -64,6 +64,7 @@ fn service(rating: ContentRating, out: &Path) -> Imagery {
                 Ok("high") => ImageQuality::High,
                 _ => ImageQuality::Medium,
             },
+            profile: Default::default(),
             interval: Duration::from_secs(30),
             deadline: Duration::from_secs(90),
             cache_dir: out.join("cache"),

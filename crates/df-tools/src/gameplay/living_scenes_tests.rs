@@ -180,6 +180,8 @@ fn facts(dossier: &Dossier) -> SceneFacts {
             id: "merchant".to_owned(),
             role: CharacterRole::Patron,
             life_stage: LifeStage::Adult,
+            gender: None,
+            age: None,
             name: "Brakka".to_owned(),
             sprite: "sprite-patron-merchant".to_owned(),
             dossier_id: Some(dossier.npc_id.clone()),
@@ -204,7 +206,7 @@ fn director(dossier: &Dossier) -> (Arc<Inner>, Arc<SocialLedger>) {
         origin: Instant::now(),
     });
     inner.observe_at(stage(1), Duration::ZERO);
-    locked(&inner.state).facts = Some(facts(dossier));
+    locked(&inner.state).facts = Some(Arc::new(facts(dossier)));
     (inner, ledger)
 }
 

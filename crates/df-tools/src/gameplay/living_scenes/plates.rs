@@ -134,6 +134,8 @@ struct PlateScene {
     scene_outcomes: Vec<String>,
     authored_room: Option<crate::gameplay::adventure::scene_model::SceneModel>,
     room_revision: Option<String>,
+    /// The picture of `snapshot`, serialized at most once per snapshot (see `picture`).
+    picture: std::sync::OnceLock<Result<Option<String>, ()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -280,7 +282,32 @@ impl PlateScene {
                 .model
                 .as_ref()
                 .and_then(super::canonical::room_revision),
+            picture: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The same value the old per-call `picture_state` gave: `Err` when serialization fails,
+    /// `Ok(None)` without a snapshot. Computed on first use.
+    fn picture(&self) -> Result<&Option<String>, ()> {
+        self.picture
+            .get_or_init(|| {
+                self.snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        // Free-roam ways are renamed as neighbours are prepared; that navigation
+                        // label must not invalidate a prepared picture (RP-98, lane HS55).
+                        if crate::gameplay::adventure::free_roam::world().is_some() {
+                            let mut model = snapshot.model.clone();
+                            crate::gameplay::place::physical_way_names(&mut model);
+                            model.picture_state().map_err(|_| ())
+                        } else {
+                            snapshot.model.picture_state().map_err(|_| ())
+                        }
+                    })
+                    .transpose()
+            })
+            .as_ref()
+            .map_err(|_| ())
     }
 
     /// The committed NPC reply is the canonical runtime focus for the next plate. Authored
@@ -981,6 +1008,7 @@ struct Book {
     activity: activity::Book,
     ahead: ahead::Queue,
     image_layouts: BTreeMap<String, PlatePlacement>,
+    measuring_images: std::collections::BTreeSet<String>,
     current: Option<Current>,
     entries: BTreeMap<String, Entry>,
     order: VecDeque<String>,
@@ -1034,6 +1062,7 @@ impl Book {
             activity: activity::Book::default(),
             ahead: ahead::Queue::default(),
             image_layouts: BTreeMap::new(),
+            measuring_images: std::collections::BTreeSet::new(),
             current: None,
             entries: BTreeMap::new(),
             order: VecDeque::new(),
@@ -1120,6 +1149,11 @@ impl Book {
             .as_ref()
             .is_some_and(|current| !current.in_combat)
             && (self.direct.shown.is_some()
+                || self.state_images.shown.is_some()
+                || self
+                    .current
+                    .as_ref()
+                    .is_some_and(|current| current.held.is_some())
                 || matches!(self.current_entry(), Some(Entry::Ready { .. })))
     }
 
@@ -1133,7 +1167,7 @@ impl Book {
             && (matches!(self.current_entry(), Some(Entry::Pending))
                 || matches!(self.edit, Edit::Pending(_))
                 || self.state_images.pending.is_some()
-                || self.state_images.flying
+                || self.state_images.has_in_flight()
                 || self.direct.pending)
     }
 }
@@ -1160,6 +1194,12 @@ enum Job {
         face: Face,
         heroes: Vec<u8>,
     },
+    /// Repairs a presented plate whose measurement was never queued or lost its queue slot.
+    Measure {
+        key: ImageKey,
+        scene: Box<PlateScene>,
+        heroes: Vec<u8>,
+    },
     /// Finds the heads in a plate that is already shown with its predicted layout.
     Locate {
         id: String,
@@ -1173,12 +1213,13 @@ struct Locate {
     actors: Vec<(String, String)>,
     key: ImageKey,
     spec: ShotSpec,
-    speaker: shot::SpeakerShot,
+    speaker: Option<shot::SpeakerShot>,
     actor_references: BTreeMap<String, ReferenceImage>,
 }
 
 enum Done {
     Cancelled,
+    Measured(ImageKey),
     State(state_images::Done),
     Directed {
         generation: u64,
@@ -1289,7 +1330,12 @@ impl Plates {
                     .map(|sheet| sheet.owned_items.clone())
                     .unwrap_or_default();
                 for item in &owned_items {
-                    let _ = self.request_hand_item(item, false, &scene.scene_contents_json);
+                    let _ = self.request_hand_item_with_priority(
+                        item,
+                        false,
+                        &scene.scene_contents_json,
+                        crate::gameplay::imagery::ImagePriority::Background,
+                    );
                 }
                 let (scene_key, _) = scene_identity("", scene);
                 let _revision = self.shared.apply_for_player(&scene_key, scene);
@@ -1415,9 +1461,9 @@ fn record_plate_render_diagnostic(
 }
 
 /// The locator accepts four short plain IDs per call. Canonical IDs remain in the indexed mapping.
-fn locator_targets(
+fn locator_targets<'a>(
     spec: &ShotSpec,
-    speaker: &shot::SpeakerShot,
+    speaker: impl Into<Option<&'a shot::SpeakerShot>>,
     actors: &[(String, String)],
     focus_actor_id: Option<&str>,
 ) -> (String, Vec<(String, String)>) {
@@ -1426,21 +1472,25 @@ fn locator_targets(
         .position(|(id, _)| Some(id.as_str()) == focus_actor_id);
     let focus_id = focus.map_or_else(|| "speaker".to_owned(), |index| format!("npc-{index}"));
     let bounded = |text: String| text.chars().take(300).collect::<String>();
-    let mut targets = vec![(
-        focus_id.clone(),
-        bounded(format!("{}, {}", speaker.look, speaker.task)),
-    )];
+    let mut targets = Vec::new();
+    if let Some(speaker) = speaker.into() {
+        targets.push((
+            focus_id.clone(),
+            bounded(format!("{}, {}", speaker.look, speaker.task)),
+        ));
+    }
     targets.extend(spec.heroes.iter().map(|hero| {
         (
             format!("hero-{}", hero.art),
             bounded(hero_locator_phrase(hero.art).to_owned()),
         )
     }));
+    let has_focus_target = targets.iter().any(|(id, _)| *id == focus_id);
     targets.extend(
         actors
             .iter()
             .enumerate()
-            .filter(|(index, _)| Some(*index) != focus)
+            .filter(|(index, _)| !has_focus_target || Some(*index) != focus)
             .map(|(index, (_, description))| {
                 (format!("npc-{index}"), bounded(description.clone()))
             }),
@@ -1488,6 +1538,15 @@ struct HeadResult {
 }
 
 /// The image job owns every borrowed request; one deadline drops all unfinished requests.
+/// Head batches run in waves of imagery's head pool (two slots); each batch gets its own
+/// provider deadline after its permit, so a third queued batch is not cut off by the first wave.
+fn head_collection_budget(batches: usize) -> Duration {
+    const HEAD_POOL_SLOTS: usize = 2;
+    const PREPARATION: Duration = Duration::from_secs(5);
+    let waves = batches.clamp(1, 4).div_ceil(HEAD_POOL_SLOTS) as u32;
+    HEAD_IMAGE_DEADLINE * waves + PREPARATION
+}
+
 async fn collect_head_results<F>(
     mut pending: FuturesUnordered<F>,
     count: usize,
@@ -1736,6 +1795,7 @@ fn wire_layout(placement: &PlatePlacement) -> rpc::PlateLayout {
                     } as i32,
                     inferred: figure.inferred,
                     mask_index: figure.mask_index,
+                    mask_url: figure.mask_url.clone(),
                 })
             })
             .collect(),
@@ -1963,12 +2023,31 @@ impl Shared {
         if view.proto_state() != rpc::HomeVideoState::None {
             return;
         }
-        let imagery = self.inner.imagery.clone();
+        if !locked(&self.inner.state)
+            .clip_reads
+            .insert(plate_key.to_owned())
+        {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
         let plate_key = plate_key.to_owned();
         tokio::spawn(async move {
-            if let Lookup::Image { bytes, .. } = imagery.image(&plate_key).await {
+            struct ReadFlight {
+                inner: Arc<Inner>,
+                key: String,
+            }
+            impl Drop for ReadFlight {
+                fn drop(&mut self) {
+                    locked(&self.inner.state).clip_reads.remove(&self.key);
+                }
+            }
+            let flight = ReadFlight {
+                inner,
+                key: plate_key,
+            };
+            if let Lookup::Image { bytes, .. } = flight.inner.imagery.image(&flight.key).await {
                 super::super::home_video::request_scene_clip(
-                    &plate_key,
+                    &flight.key,
                     bytes.to_vec(),
                     &description,
                     reason,
@@ -2014,13 +2093,18 @@ impl Shared {
         let mut scoped = view.clone();
         book.activity.scope(&mut scoped);
         let view = &scoped;
+        let projected = located
+            .as_ref()
+            .and_then(|scene| PlateScene::for_view(view, scene));
+        let same_place = !view.in_combat
+            && projected
+                .as_ref()
+                .is_some_and(|scene| state_images::same_place(&book, scene));
         if book
             .current
             .as_ref()
             .is_none_or(|current| current.scene_key != view.scene_key)
-            && let Some(scene) = located
-                .as_ref()
-                .and_then(|scene| PlateScene::for_view(view, scene))
+            && let Some(scene) = projected.clone()
         {
             self.reject_stale_ahead(&mut book, &scene);
         }
@@ -2029,10 +2113,7 @@ impl Shared {
             .pending
             .as_ref()
             .map(|pending| (pending.state.clone(), pending.revision));
-        if let Some(scene) = located
-            .as_ref()
-            .and_then(|scene| PlateScene::for_view(view, scene))
-        {
+        if let Some(scene) = projected.clone() {
             // Public entrants can be absent from an authored model's original people list.
             // Admit their photographic identity through the same canonical owner as ordinary
             // cast requests, so the settled redraw can actually pass its reference gate.
@@ -2046,6 +2127,8 @@ impl Shared {
                     id: member.id.clone(),
                     role: super::role_of(member.role),
                     life_stage: crate::gameplay::imagery::LifeStage::from_age(member.age),
+                    gender: member.gender,
+                    age: member.age,
                     name: member.name.clone(),
                     sprite: member.sprite.clone(),
                     dossier_id: None,
@@ -2056,7 +2139,7 @@ impl Shared {
             drop(state);
             state_images::observe(&mut book, view, &scene, self.inner.now());
         } else {
-            state_images::reset_scene(&mut book, view);
+            state_images::reset_scene(&mut book, view, self.inner.now());
         }
         let story_plate_started = book.state_images.pending.as_ref().is_some_and(|pending| {
             Some((pending.state.clone(), pending.revision)) != story_pending_before
@@ -2076,38 +2159,36 @@ impl Shared {
                 ],
             );
         }
-        let canonical_changed = located
-            .as_ref()
-            .and_then(|scene| PlateScene::for_view(view, scene))
-            .is_some_and(|scene| {
-                if let Some(model) = &scene.authored_room {
-                    self.inner.admit_canonical_room(
-                        &scene.place_id,
-                        model,
-                        &scene.cast,
-                        scene.authored_place_photo(),
-                    );
-                }
-                let faces = self.inner.hero_face_keys(&view.hero_names);
-                let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
-                book.current
+        let canonical_changed = projected.as_ref().is_some_and(|scene| {
+            if let Some(model) = &scene.authored_room {
+                self.inner.admit_canonical_room(
+                    &scene.place_id,
+                    model,
+                    &scene.cast,
+                    scene.authored_place_photo(),
+                    scene.room_revision.as_deref(),
+                );
+            }
+            let faces = self.inner.hero_face_keys(&view.hero_names);
+            let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
+            book.current
+                .as_ref()
+                .and_then(|current| current.reference_id.as_ref())
+                .is_some_and(|current| *current != id)
+                && book
+                    .current
                     .as_ref()
-                    .and_then(|current| current.reference_id.as_ref())
-                    .is_some_and(|current| *current != id)
-                    && book
-                        .current
-                        .as_ref()
-                        .and_then(|current| current.scene.as_ref())
-                        .is_some_and(|current| {
-                            current.speaker.as_ref().map(|speaker| &speaker.id)
-                                == scene.speaker.as_ref().map(|speaker| &speaker.id)
-                                && current
-                                    .identity_cast
-                                    .iter()
-                                    .map(|actor| &actor.id)
-                                    .eq(scene.identity_cast.iter().map(|actor| &actor.id))
-                        })
-            });
+                    .and_then(|current| current.scene.as_ref())
+                    .is_some_and(|current| {
+                        current.speaker.as_ref().map(|speaker| &speaker.id)
+                            == scene.speaker.as_ref().map(|speaker| &speaker.id)
+                            && current
+                                .identity_cast
+                                .iter()
+                                .map(|actor| &actor.id)
+                                .eq(scene.identity_cast.iter().map(|actor| &actor.id))
+                    })
+        });
         let scene_changed = book
             .current
             .as_ref()
@@ -2120,26 +2201,22 @@ impl Shared {
             .current
             .as_ref()
             .is_some_and(|current| current.graph_revision != view.graph_revision);
-        let activity_changed = located
-            .as_ref()
-            .and_then(|scene| PlateScene::for_view(view, scene))
-            .is_some_and(|scene| {
-                book.current
-                    .as_ref()
-                    .and_then(|current| current.scene.as_ref())
-                    .is_some_and(|current| {
-                        current.hero_activity != scene.hero_activity
-                            || current.scene_outcomes != scene.scene_outcomes
-                            || !current
-                                .identity_cast
-                                .iter()
-                                .map(|actor| &actor.id)
-                                .eq(scene.identity_cast.iter().map(|actor| &actor.id))
-                    })
-            });
-        let runtime_speaker = located
-            .as_ref()
-            .and_then(|scene| PlateScene::for_view(view, scene))
+        let activity_changed = projected.as_ref().is_some_and(|scene| {
+            book.current
+                .as_ref()
+                .and_then(|current| current.scene.as_ref())
+                .is_some_and(|current| {
+                    current.hero_activity != scene.hero_activity
+                        || current.scene_outcomes != scene.scene_outcomes
+                        || !current
+                            .identity_cast
+                            .iter()
+                            .map(|actor| &actor.id)
+                            .eq(scene.identity_cast.iter().map(|actor| &actor.id))
+                })
+        });
+        let runtime_speaker = projected
+            .clone()
             .and_then(|scene| scene.speaker.map(|speaker| speaker.id));
         let speaker_changed = book.current.as_ref().is_some_and(|current| {
             current
@@ -2163,33 +2240,35 @@ impl Shared {
         // 2026-10-14: "changes background too often where all the characters disappear").
         // Visible changes to a modelled scene's state are settled edits (state_images).
         if scene_changed || party_changed || canonical_changed {
-            let held = if scene_changed {
+            let held = if scene_changed && !same_place {
                 None
             } else {
                 let revision = book
                     .current
                     .as_ref()
                     .map_or(0, |current| current.graph_revision);
-                book.shown()
-                    .map(|(key, placement)| (key, placement, revision))
+                book.presented
+                    .as_ref()
+                    .map(|shown| (shown.key.clone(), shown.placement.clone(), shown.revision))
                     .or_else(|| {
-                        book.current
-                            .as_ref()
-                            .and_then(|current| current.held.clone())
+                        book.shown()
+                            .map(|(key, placement)| (key, placement, revision))
+                            .or_else(|| {
+                                book.current
+                                    .as_ref()
+                                    .and_then(|current| current.held.clone())
+                            })
                     })
             };
-            let mut scene = located
-                .as_ref()
-                .and_then(|scene| PlateScene::for_view(view, scene))
-                .or_else(|| {
-                    (!scene_changed && !party_changed)
-                        .then(|| {
-                            book.current
-                                .as_ref()
-                                .and_then(|current| current.scene.clone())
-                        })
-                        .flatten()
-                });
+            let mut scene = projected.clone().or_else(|| {
+                (!scene_changed && !party_changed)
+                    .then(|| {
+                        book.current
+                            .as_ref()
+                            .and_then(|current| current.scene.clone())
+                    })
+                    .flatten()
+            });
             if let Some(scene) = scene.as_mut() {
                 scene.hero_names = view
                     .hero_names
@@ -2280,10 +2359,7 @@ impl Shared {
             current.in_combat = view.in_combat;
             current.in_roll = view.in_roll;
             current.graph_revision = view.graph_revision;
-            if let Some(mut scene) = located
-                .as_ref()
-                .and_then(|scene| PlateScene::for_view(view, scene))
-            {
+            if let Some(mut scene) = projected.clone() {
                 scene.hero_names = view
                     .hero_names
                     .iter()
@@ -2329,7 +2405,16 @@ impl Shared {
         faces: &[(u8, ImageKey)],
         graph_revision: u64,
     ) -> String {
-        let id = scene.plate_id(heroes, faces, graph_revision);
+        let mut id = scene.plate_id(heroes, faces, graph_revision);
+        if let Some(revision) = scene.room_revision.as_deref() {
+            let state = locked(&self.inner.state);
+            let bound_revision = state
+                .canonical
+                .bound_room_revision(&scene.place_id, revision);
+            if bound_revision != revision {
+                id.push_str(&format!("|room={bound_revision}"));
+            }
+        }
         match self.inner.canonical_cast_binding(
             heroes,
             scene
@@ -2358,6 +2443,7 @@ impl Shared {
                 model,
                 &scene.cast,
                 scene.authored_place_photo(),
+                scene.room_revision.as_deref(),
             );
         }
         let id = self.canonical_plate_id(scene, heroes, faces, graph_revision);
@@ -2375,7 +2461,15 @@ impl Shared {
             self.inner
                 .canonical_npc_status(identity.id.strip_prefix("npc:").unwrap_or(&identity.id))
         }));
-        if let Some(revision) = scene.generated_room_revision() {
+        let has_place_canon = !locked(&self.inner.state)
+            .canonical
+            .committed_canon(Some(&scene.place_id), None)
+            .is_empty();
+        if let Some(revision) = if has_place_canon {
+            scene.room_revision.as_deref()
+        } else {
+            scene.generated_room_revision()
+        } {
             dependencies.push(
                 self.inner
                     .canonical_room_status_at(&scene.place_id, revision),
@@ -2607,10 +2701,17 @@ impl Shared {
             return None;
         }
         scene.plate_update_pending = book.current_update_pending(scene_key);
-        if (book.direct.shown.is_some()
-            || matches!(book.current_entry(), Some(Entry::Ready { .. })))
-            && let Some((key, placement)) = book.shown()
-        {
+        let item = book
+            .state_images
+            .item_projection(now)
+            .map(|key| (key, None));
+        let candidate = item.or_else(|| book.shown()).or_else(|| {
+            current
+                .held
+                .as_ref()
+                .map(|(key, placement, _)| (key.clone(), placement.clone()))
+        });
+        if let Some((key, placement)) = candidate {
             let revision = book
                 .state_images
                 .baked_revision
@@ -2618,7 +2719,7 @@ impl Shared {
             let held = book.presented.as_ref().is_some_and(|shown| {
                 shown.scene_key == scene_key
                     && shown.key != key
-                    && now.saturating_sub(shown.since) < Duration::from_secs(10)
+                    && now.saturating_sub(shown.since) < state_images::MINIMUM_PRESENTATION
             });
             book.presentation_held = held;
             // Geometry can arrive after the bitmap was presented. Refresh that same image's
@@ -2648,12 +2749,45 @@ impl Shared {
                     &[
                         ("scene.key", scene_key.to_owned()),
                         ("shown_at_ms", now.as_millis().to_string()),
-                        ("minimum_read_ms", "10000".into()),
+                        (
+                            "minimum_read_ms",
+                            state_images::MINIMUM_PRESENTATION.as_millis().to_string(),
+                        ),
                     ],
                 );
                 book.state_images.note_effective_projection(&effective, now);
             }
+            if let Some(key) = book.presented.as_ref().map(|shown| shown.key.clone())
+                && book.state_images.is_item_shot(&key)
+            {
+                book.state_images.note_effective_projection(&key, now);
+            }
             book.state_images.note_initial_projection(now);
+            if let Some(shown) = &book.presented {
+                let key = shown.key.clone();
+                if self.inner.imagery.is_on()
+                    && !book.state_images.is_item_shot(&key)
+                    && !book.image_layouts.contains_key(key.as_str())
+                    && !book.measuring_images.contains(key.as_str())
+                    && let Some(current) = book.current.as_ref()
+                    && let Some(source) = current.scene.as_ref()
+                    && self
+                        .jobs
+                        .try_send(Job::Measure {
+                            key: key.clone(),
+                            scene: Box::new(source.clone()),
+                            heroes: current.heroes.clone(),
+                        })
+                        .is_ok()
+                {
+                    book.measuring_images.insert(key.as_str().to_owned());
+                }
+                if let Some(placement) = book.image_layouts.get(key.as_str()).cloned()
+                    && let Some(shown) = book.presented.as_mut()
+                {
+                    shown.placement = Some(placement);
+                }
+            }
             if let Some(shown) = &book.presented {
                 scene.live_plate = shown.key.path();
                 scene.plate_layout = shown.placement.as_ref().map(wire_layout);
@@ -2862,6 +2996,12 @@ impl Shared {
     fn spawn(self: &Arc<Self>, tasks: &mut JoinSet<Done>, job: Job) {
         let shared = Arc::clone(self);
         match job {
+            Job::Measure { key, scene, heroes } => {
+                tasks.spawn(async move {
+                    shared.measure_scene_plate(&key, &scene, &heroes).await;
+                    Done::Measured(key)
+                });
+            }
             Job::State(job) => {
                 tasks.spawn(async move { Done::State(shared.render_state_image(job).await) });
             }
@@ -2914,10 +3054,13 @@ impl Shared {
                         // The plate is shown with its predicted layout as soon as it lands; the
                         // measured one follows. A full queue keeps the prediction.
                         if let Some(work) = locate {
-                            let _kept_prediction = shared.jobs.try_send(Job::Locate {
-                                id: id.clone(),
-                                work,
-                            });
+                            let key = work.key.as_str().to_owned();
+                            let mut book = locked(&shared.book);
+                            if !book.measuring_images.contains(&key)
+                                && shared.jobs.try_send(Job::Locate { id: id.clone(), work }).is_ok()
+                            {
+                                book.measuring_images.insert(key);
+                            }
                         }
                         (key, placement)
                     });
@@ -2937,7 +3080,7 @@ impl Shared {
                         .measured_or_predicted(
                             &work.key,
                             &work.spec,
-                            &work.speaker,
+                            work.speaker.as_ref(),
                             &work.actor_references,
                             &work.actors,
                             work.focus_actor_id.as_deref(),
@@ -3238,6 +3381,40 @@ impl Shared {
         Ok(staged)
     }
 
+    /// Both fresh plates and edits use the same canon-aware room photograph.
+    async fn plate_room_reference(
+        &self,
+        scene: &PlateScene,
+        has_committed_canon: bool,
+    ) -> Result<Option<ReferenceImage>, ImageFailure> {
+        if has_committed_canon {
+            let revision = scene
+                .room_revision
+                .as_deref()
+                .ok_or(ImageFailure::InvalidRequest)?;
+            return self
+                .inner
+                .canonical_room_reference_at(&scene.place_id, revision)
+                .await
+                .map(Some)
+                .ok_or(ImageFailure::Interrupted);
+        }
+        if let Some(photo) = scene.authored_place_photo()
+            && scene.room_revision.is_some()
+        {
+            return self.inner.load(photo.to_owned()).await.map(Some);
+        }
+        match scene.generated_room_revision() {
+            Some(revision) => self
+                .inner
+                .canonical_room_reference_at(&scene.place_id, revision)
+                .await
+                .map(Some)
+                .ok_or(ImageFailure::Interrupted),
+            None => Ok(None),
+        }
+    }
+
     /// A plate composed from the room photograph, the identity sheet and the speaker's portrait.
     /// `override_face` sets the speaker's expression (a face edit composed afresh); it is only read
     /// on the FLUX route.
@@ -3259,18 +3436,20 @@ impl Shared {
         let edit_harbor = scene.exterior
             && scene.place_id == "salt-quay"
             && scene.asset.contains(art_contract::HARBOR_PHOTO);
-        let place = if let Some(photo) = scene.authored_place_photo() {
-            self.inner.load(photo.to_owned()).await
-        } else if let Some(revision) = scene.generated_room_revision() {
-            self.inner
-                .canonical_room_reference_at(&scene.place_id, revision)
-                .await
-                .ok_or(ImageFailure::Interrupted)
-        } else {
-            self.inner.load(scene.asset.clone()).await
+        let committed_place_canon = locked(&self.inner.state)
+            .canonical
+            .committed_canon(Some(&scene.place_id), None);
+        let place = match self
+            .plate_room_reference(scene, !committed_place_canon.is_empty())
+            .await
+        {
+            Ok(Some(reference)) => Ok(reference),
+            Ok(None) => self.inner.load(scene.asset.clone()).await,
+            Err(error) => Err(error),
         };
         let (place, style_only) = match place {
             Ok(place) => (place, false),
+            Err(error) if !committed_place_canon.is_empty() => return Err(error),
             Err(_) if !edit_harbor => (
                 self.inner
                     .load(art_contract::HARBOR_PHOTO.to_owned())
@@ -3533,9 +3712,7 @@ impl Shared {
                 .imagery
                 .generate(&format!("plate:{}", scene.place_id), request)
                 .await?;
-            let Some(speaker) = &spec.speaker else {
-                return Ok((key, None, None));
-            };
+            let speaker = spec.speaker.as_ref();
             let actor_references = self.locator_references(scene, heroes).await?;
             if let Some(stored) = self
                 .stored_placement(&key, &scene.locator_actors(), &actor_references)
@@ -3546,7 +3723,10 @@ impl Shared {
             let actors = scene.locator_actors();
             let predicted = PlatePlacement {
                 figure_masks: Vec::new(),
-                speaker: speaker.layout,
+                speaker: speaker.map_or_else(
+                    || shot::measured_layout(0.45, 0.35, 0.55, 0.45),
+                    |speaker| speaker.layout,
+                ),
                 heroes: Vec::new(),
                 actors: Vec::new(),
             };
@@ -3555,7 +3735,7 @@ impl Shared {
                 actors,
                 key: key.clone(),
                 spec: spec.clone(),
-                speaker: speaker.clone(),
+                speaker: speaker.cloned(),
                 actor_references,
             };
             Ok((key, Some(predicted), Some(Box::new(work))))
@@ -3626,17 +3806,22 @@ impl Shared {
     /// plate and read back, so a later server run does not ask again. When the speaker cannot be
     /// found (no provider, a failure, an implausible answer) the layout the director predicted
     /// stands, with no hero positions. The image model does not place anyone where it is asked.
-    async fn measured_or_predicted(
+    async fn measured_or_predicted<'a>(
         &self,
         key: &ImageKey,
         spec: &ShotSpec,
-        speaker: &shot::SpeakerShot,
+        speaker: impl Into<Option<&'a shot::SpeakerShot>>,
         actor_references: &BTreeMap<String, ReferenceImage>,
         actors: &[(String, String)],
         focus_actor_id: Option<&str>,
     ) -> PlatePlacement {
-        let missing_focus_identity =
-            !focus_actor_id.is_some_and(|id| actors.iter().any(|(actor, _)| actor == id));
+        let speaker = speaker.into();
+        let predicted_layout = speaker.map_or_else(
+            || shot::measured_layout(0.45, 0.35, 0.55, 0.45),
+            |speaker| speaker.layout,
+        );
+        let missing_focus_identity = speaker.is_some()
+            && !focus_actor_id.is_some_and(|id| actors.iter().any(|(actor, _)| actor == id));
         if missing_focus_identity {
             HeadDiagnostic {
                 key,
@@ -3661,6 +3846,9 @@ impl Shared {
             return known;
         }
         if let Some(stored) = self.stored_placement(key, actors, actor_references).await {
+            locked(&self.book)
+                .image_layouts
+                .insert(key.as_str().to_owned(), stored.clone());
             return stored;
         }
         let (focus_id, targets) = self.hero_locator_targets(spec, speaker, actors, focus_actor_id);
@@ -3744,8 +3932,8 @@ impl Shared {
                 (batch, result)
             });
         }
-        let results =
-            collect_head_results(pending, batches.len(), started + HEAD_IMAGE_DEADLINE).await;
+        let budget = head_collection_budget(batches.len());
+        let results = collect_head_results(pending, batches.len(), started + budget).await;
         for (batch, (work, result)) in batches.iter().zip(results).enumerate() {
             let result = match result {
                 Some(result) => result,
@@ -3880,7 +4068,7 @@ impl Shared {
         let placement = PlatePlacement {
             figure_masks,
             actors: actor_heads,
-            speaker: focus_head.map_or(speaker.layout, |head| {
+            speaker: focus_head.map_or(predicted_layout, |head| {
                 shot::measured_layout(
                     head.head.left,
                     head.head.top,
@@ -3939,10 +4127,10 @@ impl Shared {
         Ok(references)
     }
 
-    fn hero_locator_targets(
+    fn hero_locator_targets<'a>(
         &self,
         spec: &ShotSpec,
-        speaker: &shot::SpeakerShot,
+        speaker: impl Into<Option<&'a shot::SpeakerShot>>,
         actors: &[(String, String)],
         focus_actor_id: Option<&str>,
     ) -> (String, Vec<(String, String)>) {
@@ -3964,9 +4152,7 @@ impl Shared {
         let Ok(spec) = scene.stage(heroes) else {
             return;
         };
-        let Some(speaker) = spec.speaker.as_ref() else {
-            return;
-        };
+        let speaker = spec.speaker.as_ref();
         let actor_references = match self.locator_references(scene, heroes).await {
             Ok(references) => references,
             Err(failure) => {
@@ -4111,6 +4297,11 @@ impl Shared {
         if matches!(done, Done::Cancelled) {
             return;
         }
+        if let Done::Measured(key) = done {
+            locked(&self.book).measuring_images.remove(key.as_str());
+            self.wake();
+            return;
+        }
         if let Done::State(done) = done {
             self.finish_state_image(done);
             return;
@@ -4126,7 +4317,7 @@ impl Shared {
             return;
         }
         let (kind, elapsed, outcome) = match &done {
-            Done::Cancelled | Done::State(_) => unreachable!("handled above"),
+            Done::Cancelled | Done::Measured(_) | Done::State(_) => unreachable!("handled above"),
             Done::Directed { .. } => unreachable!("handled above"),
             Done::Fresh {
                 elapsed, result, ..
@@ -4151,11 +4342,12 @@ impl Shared {
         );
         let mut book = locked(&self.book);
         match done {
-            Done::Cancelled | Done::State(_) => unreachable!("handled above"),
+            Done::Cancelled | Done::Measured(_) | Done::State(_) => unreachable!("handled above"),
             Done::Directed { .. } => unreachable!("handled above"),
             Done::Located {
                 id, key, placement, ..
             } => {
+                book.measuring_images.remove(key.as_str());
                 // The measured heads replace the prediction of the same plate, if it is still there.
                 if let Some(Entry::Ready {
                     key: shown,
@@ -4236,7 +4428,7 @@ impl Shared {
 
     fn poll_face_at(&self, now: Duration) {
         let mut book = locked(&self.book);
-        if book.state_images.pending.is_some() || book.state_images.flying {
+        if book.state_images.pending.is_some() || book.state_images.has_in_flight() {
             refresh_decision(&mut book, "face", "visible_state_pending");
             return;
         }
@@ -4247,12 +4439,13 @@ impl Shared {
         let Some(current) = &book.current else {
             return;
         };
-        let (Some(scene), false) = (current.scene.clone(), current.in_combat) else {
+        let (Some(scene_ref), false) = (current.scene.as_ref(), current.in_combat) else {
             return;
         };
-        let Some(speaker) = scene.speaker.clone() else {
+        let Some(speaker) = scene_ref.speaker.clone() else {
             return;
         };
+        let has_snapshot = scene_ref.snapshot.is_some();
         // A one-off directed shot is not a face edit's base; only a kept direction is.
         let Some((base, _)) = book.fresh_base(book.direct.keep.is_some()) else {
             return;
@@ -4266,8 +4459,14 @@ impl Shared {
         let state_rate_limited = book
             .state_images
             .last_started
-            .is_some_and(|last| now.saturating_sub(last) < Duration::from_secs(10));
-        if scene.snapshot.is_some() && (!book.face_refresh.ready(wanted, now) || state_rate_limited)
+            .is_some_and(|last| now.saturating_sub(last) < Duration::from_secs(15));
+        let face_rate_limited = book
+            .face_refresh
+            .last_started
+            .is_some_and(|last| now.saturating_sub(last) < Duration::from_secs(15));
+        if state_rate_limited
+            || face_rate_limited
+            || (has_snapshot && !book.face_refresh.ready(wanted, now))
         {
             refresh_decision(&mut book, "face", "settling_or_rate_limited");
             return;
@@ -4300,6 +4499,14 @@ impl Shared {
                     return;
                 }
                 let base_key = base.as_str().to_owned();
+                // Cloned only when an edit is queued, not on every one-second poll.
+                let Some(scene) = book
+                    .current
+                    .as_ref()
+                    .and_then(|current| current.scene.clone())
+                else {
+                    return;
+                };
                 let job = Job::Edit {
                     heroes,
                     scene_key,

@@ -1176,7 +1176,13 @@ impl FrameProvider for df_providers::NativeImageEditProvider {
                 references: &references,
                 width: 1024,
                 height: 1536,
-                quality: df_providers::ImageQuality::High,
+                // Dev play-tests draw clip frames at medium; production keeps high.
+                quality: match super::startup_configuration::ImageryProfile::from_environment() {
+                    Ok(super::startup_configuration::ImageryProfile::Dev) => {
+                        df_providers::ImageQuality::Medium
+                    }
+                    _ => df_providers::ImageQuality::High,
+                },
                 background: df_providers::ImageBackground::Transparent,
                 output: ImageFormat::Png,
                 moderation: df_providers::ImageModeration::Low,

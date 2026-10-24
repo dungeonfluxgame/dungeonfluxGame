@@ -10,7 +10,8 @@
 //! Like the voice lines, only registered keys are served: a key the server never registered is
 //! a 404. Results live in an on-disk cache keyed the same way, so a request never costs twice,
 //! not even across runs. There is no spend cap: every provider call is recorded in the hub's
-//! spend ledger (a call that was sent is never refunded); at most two calls fly at once; identical requests share one flight. Every
+//! spend ledger (a call that was sent is never refunded); separate pools reserve display capacity;
+//! identical requests share one flight. Every
 //! failure is typed and means "keep showing what is on screen": nothing in the game waits for
 //! an image, and a provider refusal is a failure, never retried with another wording or another
 //! model. Generated images are never written under `assets/` and never committed; each is
@@ -28,9 +29,11 @@ mod plate_prompt;
 mod prompt;
 mod references;
 mod scene_prompt;
+#[cfg(test)]
+pub(super) use canonical_prompt::canonical_room;
 pub(super) use canonical_prompt::{
-    canonical_cast_member, canonical_character, canonical_npc, canonical_room,
-    canonical_room_content,
+    RoomArchitectureContext, canonical_cast_member, canonical_character, canonical_npc,
+    canonical_room_content, canonical_room_with_context,
 };
 pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit, story_beat_edit};
 
@@ -40,7 +43,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -133,11 +136,41 @@ const MANIFEST_NAME: &str = "imagery.jsonl";
 /// Most recent registered keys kept; older ones can no longer be requested.
 const MAXIMUM_REGISTERED: usize = 512;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
-pub(super) const MAXIMUM_IN_FLIGHT: usize = 2;
+/// Current-place canonical work has its own OpenAI/FLUX image-call allocation.
+pub(super) const MAXIMUM_IN_FLIGHT: usize = 3;
+/// Reserved OpenAI/FLUX image-call allocation for visible plates and photo checks.
+const FOREGROUND_IN_FLIGHT: usize = 3;
+/// OpenAI/FLUX background image-call allocation; supplier HTTP 429 enforces account rate limits.
+pub(in crate::gameplay) const BACKGROUND_IN_FLIGHT: usize = 6;
+/// Independent OpenAI vision-call allocation: head measurements never queue behind image edits.
+const HEADS_IN_FLIGHT: usize = 2;
+const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(1);
+const MAXIMUM_RATE_LIMIT_RETRIES: u32 = 3;
 const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 /// How long one head-location call may take.
 const HEAD_LOCATE_DEADLINE: Duration = Duration::from_secs(25);
 const CACHE_CONTROL: &str = "private, max-age=86400, immutable";
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::gameplay) enum ImagePriority {
+    Foreground,
+    Presence,
+    Background,
+}
+
+impl ImagePriority {
+    fn for_kind(kind: ImageKind) -> Self {
+        match kind {
+            ImageKind::ScenePlate | ImageKind::ScenePlateEdit | ImageKind::SceneRefresh => {
+                Self::Foreground
+            }
+            ImageKind::CanonicalCharacter
+            | ImageKind::CanonicalRoom
+            | ImageKind::CastExpression => Self::Presence,
+            ImageKind::ArtifactCloseUp => Self::Background,
+        }
+    }
+}
 
 /// What a result is for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +199,75 @@ impl ImageKind {
             Self::ArtifactCloseUp => "artifact_close_up",
             Self::ScenePlate => "scene_plate",
             Self::ScenePlateEdit => "scene_plate_edit",
+        }
+    }
+}
+
+/// The quality and size a kind is drawn at. Dev play-tests draw plates at backdrop size and medium
+/// quality, rooms and close-ups at low quality, and people at medium so identity references hold;
+/// production draws everything at the configured quality and full size.
+fn drawn_for(
+    profile: super::startup_configuration::ImageryProfile,
+    configured: ImageQuality,
+    kind: ImageKind,
+    output: OutputSpec,
+) -> (ImageQuality, OutputSpec) {
+    use super::startup_configuration::ImageryProfile;
+    match profile {
+        ImageryProfile::Production => (configured, output),
+        ImageryProfile::Dev => match kind {
+            ImageKind::ScenePlate | ImageKind::ScenePlateEdit => (
+                ImageQuality::Medium,
+                if output == OutputSpec::PLATE {
+                    OutputSpec::BACKDROP
+                } else {
+                    output
+                },
+            ),
+            ImageKind::CanonicalRoom | ImageKind::ArtifactCloseUp | ImageKind::SceneRefresh => {
+                (ImageQuality::Low, output)
+            }
+            ImageKind::CanonicalCharacter | ImageKind::CastExpression => {
+                (ImageQuality::Medium, output)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod drawn_tests {
+    use super::*;
+    use crate::gameplay::startup_configuration::ImageryProfile;
+
+    #[test]
+    fn the_dev_profile_draws_cheaper_plates_rooms_and_close_ups_and_keeps_people() {
+        let dev = |kind, output| drawn_for(ImageryProfile::Dev, ImageQuality::High, kind, output);
+        assert_eq!(
+            dev(ImageKind::ScenePlate, OutputSpec::PLATE),
+            (ImageQuality::Medium, OutputSpec::BACKDROP)
+        );
+        assert_eq!(
+            dev(ImageKind::ScenePlateEdit, OutputSpec::PLATE),
+            (ImageQuality::Medium, OutputSpec::BACKDROP)
+        );
+        assert_eq!(
+            dev(ImageKind::CanonicalRoom, OutputSpec::BACKDROP),
+            (ImageQuality::Low, OutputSpec::BACKDROP)
+        );
+        assert_eq!(
+            dev(ImageKind::ArtifactCloseUp, OutputSpec::CLOSE_UP),
+            (ImageQuality::Low, OutputSpec::CLOSE_UP)
+        );
+        assert_eq!(
+            dev(ImageKind::CanonicalCharacter, OutputSpec::CUTOUT),
+            (ImageQuality::Medium, OutputSpec::CUTOUT)
+        );
+        for kind in [ImageKind::ScenePlate, ImageKind::CanonicalRoom, ImageKind::ArtifactCloseUp] {
+            assert_eq!(
+                drawn_for(ImageryProfile::Production, ImageQuality::High, kind, OutputSpec::PLATE),
+                (ImageQuality::High, OutputSpec::PLATE),
+                "production draws every kind as configured"
+            );
         }
     }
 }
@@ -224,6 +326,34 @@ pub(super) struct ImageRequest {
     pub(super) output: OutputSpec,
 }
 
+/// Cards depict the object itself. Custody, hero instance IDs and the current plate are not
+/// visual inputs, so identical catalog gear shares one flight and a persistent cache entry.
+pub(in crate::gameplay) fn item_image_request(
+    rating: ContentRating,
+    thing: &super::adventure::scene_model::SceneThing,
+    observed_detail: Option<&str>,
+) -> Result<ImageRequest, ImageFailure> {
+    // StartingPossession serializes custody into its picture description. Remove only that
+    // exact server-authored suffix; preserve custom descriptions and visible alterations.
+    let mut visual = thing.clone();
+    if let Some(owner) = &thing.owner_id {
+        let custody = format!(", {} by {owner}; not in hand", thing.position);
+        if let Some(description) = thing.picture_description.strip_suffix(&custody) {
+            visual.picture_description = description.to_owned();
+        }
+    }
+    let prompt = item_picture(rating, &visual, observed_detail)?.with_canonical_binding(&format!(
+        "Object source identity: {}.",
+        thing.provenance.source_id,
+    ));
+    Ok(ImageRequest {
+        kind: ImageKind::ArtifactCloseUp,
+        references: Vec::new(),
+        prompt,
+        output: OutputSpec::CLOSE_UP,
+    })
+}
+
 /// The identity of a result: lowercase hexadecimal SHA-256, safe as one URL path segment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageKey(String);
@@ -260,6 +390,7 @@ pub(super) enum ImageFailure {
     Refused,
     /// The provider failed, rejected the credential or was rate limited.
     Provider,
+    RateLimited,
     BflSubmit,
     BflPoll,
     BflDelivery,
@@ -278,6 +409,7 @@ impl ImageFailure {
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::Refused => "refused",
             Self::Provider => "provider_failed",
+            Self::RateLimited => "rate_limited",
             Self::BflSubmit => "bfl_submit_failed",
             Self::BflPoll => "bfl_poll_failed",
             Self::BflDelivery => "bfl_delivery_failed",
@@ -296,6 +428,7 @@ impl ImageFailure {
             Self::DeadlineExceeded,
             Self::Refused,
             Self::Provider,
+            Self::RateLimited,
             Self::BflSubmit,
             Self::BflPoll,
             Self::BflDelivery,
@@ -315,6 +448,18 @@ impl ImageFailure {
 }
 
 type Outcome = Result<(), ImageFailure>;
+
+#[derive(Clone, Copy, Default)]
+struct RequestTiming {
+    wait: Duration,
+    provider: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct FlightResult {
+    outcome: Outcome,
+    timing: RequestTiming,
+}
 
 /// The result of asking for the bytes of one key.
 #[derive(Debug, Eq, PartialEq)]
@@ -380,6 +525,7 @@ struct Engine {
     provider: ImageRoute,
     model: ImageEditModel,
     quality: ImageQuality,
+    profile: super::startup_configuration::ImageryProfile,
     rating: ContentRating,
     deadline: Duration,
     cache_dir: PathBuf,
@@ -388,8 +534,11 @@ struct Engine {
     calls: AtomicU32,
     cache_hits: AtomicU32,
     micro_dollars: AtomicU64,
-    permits: Arc<Semaphore>,
-    in_flight: Mutex<HashMap<String, watch::Receiver<Option<Outcome>>>>,
+    presence_permits: Semaphore,
+    permits: Semaphore,
+    background_permits: Semaphore,
+    head_permits: Semaphore,
+    in_flight: Mutex<HashMap<String, watch::Receiver<Option<FlightResult>>>>,
     /// PLAY-V09: finds the speaker's head in a finished plate; absent in tests and when the
     /// production provider could not be built.
     locator: std::sync::OnceLock<NativeHeadLocator>,
@@ -527,7 +676,12 @@ impl ImageRoute {
                 .edit(edit, deadline)
                 .await
                 .map(|image| (image, None))
-                .map_err(failure_of),
+                .map_err(|error| match error {
+                    // This adapter erases submit/poll stage. Repeating a possibly accepted
+                    // paid job is unsafe; fal must retry 429 at its HTTP exchange boundary.
+                    ImageEditError::Provider(429) => ImageFailure::Provider,
+                    error => failure_of(error),
+                }),
             Self::Bfl(provider) => {
                 provider
                     .edit_diagnosed(edit, deadline)
@@ -557,6 +711,13 @@ impl ImageRoute {
                         ("error".into(),serde_json::json!(format!("{:?}",failure.error))),
                     ]), &[]);
                 match failure.error {
+                            // Only a rejected submit is safe to resubmit. A poll failure may
+                            // already own a paid job and must retain its existing job identity.
+                            ImageEditError::Provider(429)
+                                if matches!(failure.stage, "submit" | "submit_response") =>
+                            {
+                                ImageFailure::RateLimited
+                            }
                             ImageEditError::Refused
                             | ImageEditError::Transport(
                                 NativeHttpRefusal::Deadline | NativeHttpRefusal::Cancelled,
@@ -667,26 +828,62 @@ impl Imagery {
             .iter()
             .map(|(id, description)| LocateTarget { id, description })
             .collect();
-        // Head measurement shares the existing provider concurrency owner with image edits.
-        // Its enclosing image job also bounds time spent waiting for this permit.
+        let queued = std::time::Instant::now();
         let _permit = engine
-            .permits
+            .head_permits
             .acquire()
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
-        locator
-            .locate(&picture, face.as_deref(), &targets, HEAD_LOCATE_DEADLINE)
-            .await
-            .map_err(|error| match error {
+        let wait = queued.elapsed();
+        // The deadline begins at provider dispatch, after the independent head queue.
+        let started = std::time::Instant::now();
+        let mut retries = 0;
+        let mut provider_elapsed = Duration::ZERO;
+        let result = loop {
+            let remaining = HEAD_LOCATE_DEADLINE.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break Err(ImageFailure::DeadlineExceeded);
+            }
+            let dispatched = std::time::Instant::now();
+            let result = locator
+                .locate(&picture, face.as_deref(), &targets, remaining)
+                .await;
+            let elapsed = dispatched.elapsed();
+            provider_elapsed += elapsed;
+            if matches!(result, Err(df_providers::HeadLocateError::Provider(429)))
+                && retries < MAXIMUM_RATE_LIMIT_RETRIES
+            {
+                record_provider_timing(
+                    "head_retry",
+                    key,
+                    Duration::ZERO,
+                    elapsed,
+                    Some(ImageFailure::RateLimited),
+                );
+                tokio::time::sleep((RATE_LIMIT_BACKOFF * (1 << retries)).min(remaining)).await;
+                retries += 1;
+                continue;
+            }
+            break result.map_err(|error| match error {
                 df_providers::HeadLocateError::InvalidRequest => ImageFailure::InvalidRequest,
                 df_providers::HeadLocateError::Output => ImageFailure::BadOutput,
+                df_providers::HeadLocateError::Provider(429) => ImageFailure::RateLimited,
                 df_providers::HeadLocateError::Transport(NativeHttpRefusal::Deadline) => {
                     ImageFailure::DeadlineExceeded
                 }
                 df_providers::HeadLocateError::Unauthorized
                 | df_providers::HeadLocateError::Provider(_)
                 | df_providers::HeadLocateError::Transport(_) => ImageFailure::Provider,
-            })
+            });
+        };
+        record_provider_timing(
+            "head_location",
+            key,
+            wait,
+            provider_elapsed,
+            result.as_ref().err().copied(),
+        );
+        result
     }
 
     pub(in crate::gameplay) async fn photo_evidence(
@@ -809,7 +1006,7 @@ impl Imagery {
     ) -> Result<Self, io::Error> {
         std::fs::create_dir_all(&configuration.cache_dir)?;
         let summary = format!(
-            "IMAGERY on model={} interval={}s rating={} quality={}",
+            "IMAGERY on model={} interval={}s rating={} quality={} profile={}",
             provider.label(configuration.model),
             configuration.interval.as_secs(),
             configuration.rating.label(),
@@ -818,12 +1015,14 @@ impl Imagery {
                 ImageQuality::Medium => "medium",
                 ImageQuality::High => "high",
             },
+            configuration.profile.label(),
         );
         let manifest = manifest_directory.map(|directory| directory.join(MANIFEST_NAME));
         let engine = Engine {
             provider,
             model: configuration.model,
             quality: configuration.quality,
+            profile: configuration.profile,
             rating: configuration.rating,
             deadline: configuration.deadline,
             cache_dir: configuration.cache_dir,
@@ -832,7 +1031,10 @@ impl Imagery {
             calls: AtomicU32::new(0),
             cache_hits: AtomicU32::new(0),
             micro_dollars: AtomicU64::new(0),
-            permits: Arc::new(Semaphore::new(MAXIMUM_IN_FLIGHT)),
+            presence_permits: Semaphore::new(MAXIMUM_IN_FLIGHT),
+            permits: Semaphore::new(FOREGROUND_IN_FLIGHT),
+            background_permits: Semaphore::new(BACKGROUND_IN_FLIGHT),
+            head_permits: Semaphore::new(HEADS_IN_FLIGHT),
             in_flight: Mutex::new(HashMap::new()),
             locator: std::sync::OnceLock::new(),
             figure_masks: figure_masks::FigureMaskCache::default(),
@@ -841,9 +1043,8 @@ impl Imagery {
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);
         let engine = Arc::new(engine);
-        // The hub's bounds for the image kinds: a request may wait for a free provider slot and
-        // then runs under the provider's own deadline, so the hub never fires before it.
-        let wait = engine.deadline * (MAXIMUM_IN_FLIGHT as u32 + 1) + Duration::from_secs(10);
+        // Two bounded permit waits and edits, with up to two 30-second photo checks.
+        let wait = engine.deadline * 4 + Duration::from_secs(70);
         for kind in if creator_only {
             vec![super::resources::ResourceKind::CreatorPortrait]
         } else {
@@ -910,7 +1111,7 @@ impl Imagery {
         let (model, quality, rating) = match &self.inner.mode {
             Mode::On { engine, .. } => (
                 engine.provider.label(engine.model),
-                engine.quality_label(),
+                engine.key_quality(request.kind),
                 engine.rating.label(),
             ),
             Mode::Off(_) => ("off", "off", "off"),
@@ -948,6 +1149,18 @@ impl Imagery {
         subject: &str,
         request: ImageRequest,
     ) -> Result<ImageKey, ImageFailure> {
+        let priority = ImagePriority::for_kind(request.kind);
+        self.generate_with_priority(subject, request, priority)
+            .await
+    }
+
+    /// Look-ahead callers explicitly use Background; current-place canonical work uses Presence.
+    pub(in crate::gameplay) async fn generate_with_priority(
+        &self,
+        subject: &str,
+        request: ImageRequest,
+        priority: ImagePriority,
+    ) -> Result<ImageKey, ImageFailure> {
         use super::resources::{DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec};
         use df_render::art_contract::Neutral;
         let staging_order = request.prompt.staging_order().to_vec();
@@ -955,27 +1168,44 @@ impl Imagery {
         let key = key.as_str();
         let result = match request.kind {
             ImageKind::ScenePlate => {
-                self.run(PlateSpec::new(subject, key, Neutral::Nothing), request)
-                    .await
+                self.run(
+                    PlateSpec::new(subject, key, Neutral::Nothing),
+                    request,
+                    priority,
+                )
+                .await
             }
             ImageKind::ScenePlateEdit => {
-                self.run(PlateEditSpec::new(subject, key, Neutral::Nothing), request)
-                    .await
+                self.run(
+                    PlateEditSpec::new(subject, key, Neutral::Nothing),
+                    request,
+                    priority,
+                )
+                .await
             }
             ImageKind::ArtifactCloseUp => {
-                self.run(ItemCloseUpSpec::new(subject, key, Neutral::Block), request)
-                    .await
+                self.run(
+                    ItemCloseUpSpec::new(subject, key, Neutral::Block),
+                    request,
+                    priority,
+                )
+                .await
             }
             ImageKind::CanonicalCharacter | ImageKind::CastExpression => {
                 self.run(
                     DepictionSpec::new(subject, key, Neutral::Silhouette),
                     request,
+                    priority,
                 )
                 .await
             }
             ImageKind::CanonicalRoom | ImageKind::SceneRefresh => {
-                self.run(DepictionSpec::new(subject, key, Neutral::Nothing), request)
-                    .await
+                self.run(
+                    DepictionSpec::new(subject, key, Neutral::Nothing),
+                    request,
+                    priority,
+                )
+                .await
             }
         };
         if let Ok(key) = &result {
@@ -1040,14 +1270,20 @@ impl Imagery {
         &self,
         spec: S,
         request: ImageRequest,
+        priority: ImagePriority,
     ) -> Result<ImageKey, ImageFailure> {
         use super::resources::{Generated, Generation, ResourceFailure};
+        let started = std::time::Instant::now();
+        let kind = request.kind;
         let key = self.key_for(&request);
+        let rendered = Arc::new(AtomicBool::new(false));
+        let dispatched = Arc::clone(&rendered);
         let original = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&original);
         let imagery = self.clone();
         let generation: Generation = Box::pin(async move {
-            match imagery.render(request).await {
+            dispatched.store(true, Ordering::SeqCst);
+            match imagery.render_with_priority(request, priority).await {
                 Ok(key) => Ok(Generated::new(key.as_str())),
                 Err(failure) => {
                     *locked(&slot) = Some(failure);
@@ -1059,20 +1295,40 @@ impl Imagery {
                 }
             }
         });
-        match self.hub().render(&spec, generation).await {
-            Ok(_) => Ok(key),
+        let result = match self.hub().render(&spec, generation).await {
+            Ok(_) => Ok(key.clone()),
             Err(ResourceFailure::TimedOut) => Err(ImageFailure::DeadlineExceeded),
             Err(failure) => Err(locked(&original)
                 .take()
                 .or_else(|| ImageFailure::from_label(failure.label()))
                 .unwrap_or(ImageFailure::Interrupted)),
+        };
+        // Hub cache hits and coalesced callers make no provider call of their own.
+        if !rendered.load(Ordering::SeqCst) {
+            record_image_result(
+                kind,
+                &key,
+                started.elapsed(),
+                RequestTiming::default(),
+                result.as_ref(),
+            );
         }
+        result
     }
 
     /// Renders `request`, or finds its cached result, and returns the key to load it by. The
     /// key is registered before any work so the route can serve it as soon as it exists. Only the
     /// hub (through `generate`) calls this.
     async fn render(&self, request: ImageRequest) -> Result<ImageKey, ImageFailure> {
+        let priority = ImagePriority::for_kind(request.kind);
+        self.render_with_priority(request, priority).await
+    }
+
+    async fn render_with_priority(
+        &self,
+        request: ImageRequest,
+        priority: ImagePriority,
+    ) -> Result<ImageKey, ImageFailure> {
         let started = std::time::Instant::now();
         let key = self.key_for(&request);
         let kind = request.kind;
@@ -1084,17 +1340,24 @@ impl Imagery {
             &attributes,
         );
         let Mode::On { engine, .. } = &self.inner.mode else {
-            record_image_result(kind, &key, started.elapsed(), Err(&ImageFailure::Off));
+            record_image_result(
+                kind,
+                &key,
+                started.elapsed(),
+                RequestTiming::default(),
+                Err(&ImageFailure::Off),
+            );
             return Err(ImageFailure::Off);
         };
         let format = request.output.format();
         locked(&self.inner.registry).register(&key, Registered { format });
-        let outcome = engine.image(&key, request).await;
-        let result = outcome.map(|()| key.clone());
+        let flight = engine.image(&key, request, priority).await;
+        let result = flight.outcome.map(|()| key.clone());
         record_image_result(
             kind,
             &key,
             started.elapsed(),
+            flight.timing,
             result.as_ref().map_err(|e| e),
         );
         result
@@ -1130,11 +1393,36 @@ impl Imagery {
 }
 
 impl Engine {
+    fn permits(&self, priority: ImagePriority) -> &Semaphore {
+        match priority {
+            ImagePriority::Foreground => &self.permits,
+            ImagePriority::Presence => &self.presence_permits,
+            ImagePriority::Background => &self.background_permits,
+        }
+    }
+
     fn quality_label(&self) -> &'static str {
         match self.quality {
             ImageQuality::Low => "low",
             ImageQuality::Medium => "medium",
             ImageQuality::High => "high",
+        }
+    }
+
+    /// The quality and size this kind is drawn at under the configured profile.
+    fn drawn(&self, kind: ImageKind, output: OutputSpec) -> (ImageQuality, OutputSpec) {
+        drawn_for(self.profile, self.quality, kind, output)
+    }
+
+    /// The quality part of a cache key: production keys are unchanged, and a dev picture never
+    /// stands in for a production one.
+    fn key_quality(&self, kind: ImageKind) -> &'static str {
+        use super::startup_configuration::ImageryProfile;
+        match (self.profile, self.drawn(kind, OutputSpec::PLATE).0) {
+            (ImageryProfile::Production, _) => self.quality_label(),
+            (ImageryProfile::Dev, ImageQuality::Low) => "dev-low",
+            (ImageryProfile::Dev, ImageQuality::Medium) => "dev-medium",
+            (ImageryProfile::Dev, ImageQuality::High) => "dev-high",
         }
     }
 
@@ -1157,11 +1445,19 @@ impl Engine {
         }
     }
 
-    async fn image(self: &Arc<Self>, key: &ImageKey, request: ImageRequest) -> Outcome {
+    async fn image(
+        self: &Arc<Self>,
+        key: &ImageKey,
+        request: ImageRequest,
+        priority: ImagePriority,
+    ) -> FlightResult {
         let format = request.output.format();
         if self.cache_has(key, format).await.is_some() {
             self.cache_hits.fetch_add(1, Ordering::SeqCst);
-            return Ok(());
+            return FlightResult {
+                outcome: Ok(()),
+                timing: RequestTiming::default(),
+            };
         }
         let mut receiver = {
             let mut flights = locked(&self.in_flight);
@@ -1170,16 +1466,19 @@ impl Engine {
                 None => {
                     let (sender, receiver) = watch::channel(None);
                     flights.insert(key.0.clone(), receiver.clone());
-                    tokio::spawn(Arc::clone(self).fly(key.clone(), request, sender));
+                    tokio::spawn(Arc::clone(self).fly(key.clone(), request, priority, sender));
                     receiver
                 }
             }
         };
-        let finished = receiver
-            .wait_for(Option::is_some)
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?;
-        finished.unwrap_or(Err(ImageFailure::Interrupted))
+        let interrupted = FlightResult {
+            outcome: Err(ImageFailure::Interrupted),
+            timing: RequestTiming::default(),
+        };
+        match receiver.wait_for(Option::is_some).await {
+            Ok(finished) => finished.unwrap_or(interrupted),
+            Err(_) => interrupted,
+        }
     }
 
     /// The one task of a key. Callers that go away do not cancel it: its charge is already
@@ -1188,7 +1487,8 @@ impl Engine {
         self: Arc<Self>,
         key: ImageKey,
         request: ImageRequest,
-        sender: watch::Sender<Option<Outcome>>,
+        priority: ImagePriority,
+        sender: watch::Sender<Option<FlightResult>>,
     ) {
         let context = OperationContext {
             trace_parent: String::new(),
@@ -1203,17 +1503,40 @@ impl Engine {
                 request.references.len(),
             ),
         );
-        let outcome = self.produce(&key, request).await;
+        let mut timing = RequestTiming::default();
+        let outcome = self
+            .retire_flight(&key, self.produce(&key, request, priority, &mut timing))
+            .await;
         span.finish_unmeasured(match outcome {
             Ok(()) => "rendered",
             Err(failure) => failure.label(),
         });
-        locked(&self.in_flight).remove(key.as_str());
         // No receiver left means every requester went away; the cache holds the result.
-        sender.send_replace(Some(outcome));
+        sender.send_replace(Some(FlightResult { outcome, timing }));
     }
 
-    async fn produce(&self, key: &ImageKey, request: ImageRequest) -> Outcome {
+    async fn retire_flight(
+        &self,
+        key: &ImageKey,
+        producing: impl std::future::Future<Output = Outcome>,
+    ) -> Outcome {
+        // Even an adapter panic retires this key so subsequent callers can retry.
+        use futures::FutureExt;
+        let outcome = std::panic::AssertUnwindSafe(producing)
+            .catch_unwind()
+            .await
+            .unwrap_or(Err(ImageFailure::Interrupted));
+        locked(&self.in_flight).remove(key.as_str());
+        outcome
+    }
+
+    async fn produce(
+        &self,
+        key: &ImageKey,
+        request: ImageRequest,
+        priority: ImagePriority,
+        timing: &mut RequestTiming,
+    ) -> Outcome {
         let format = request.output.format();
         // A flight that finished between the caller's cache check and this one wrote it.
         if self.cache_has(key, format).await.is_some() {
@@ -1244,13 +1567,14 @@ impl Engine {
                 bytes,
             })
             .collect();
+        let (quality, drawn) = self.drawn(request.kind, request.output);
         let edit = ImageEdit {
             model: self.model,
             prompt: request.prompt.as_str(),
             references: &references,
-            width: request.output.width,
-            height: request.output.height,
-            quality: self.quality,
+            width: drawn.width,
+            height: drawn.height,
+            quality,
             background: if request.output.transparent {
                 ImageBackground::Transparent
             } else {
@@ -1263,14 +1587,9 @@ impl Engine {
             },
         };
         edit.validate().map_err(|_| ImageFailure::InvalidRequest)?;
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?;
         let started = std::time::Instant::now();
         let (mut stored_format, mut bytes, mut micro_dollars, supplier_credits) =
-            self.generate(&edit, format).await?;
+            self.generate(&edit, format, key, priority, timing).await?;
         // ART-01: a plate or empty room is judged before it is stored; one that fails is made
         // once more with the defect named, and a second failure stores nothing.
         let gate = match request.kind {
@@ -1293,14 +1612,19 @@ impl Engine {
             .transpose()?;
         let mut visible_features = Vec::new();
         if let (Some(kind), Some(judge)) = (gate, self.judge.get()) {
-            let (failure, features) = photo_failure(
-                judge,
-                kind,
-                &bytes,
-                stored_format,
-                request.prompt.as_str(),
-                scene_party,
-                request.prompt.scene_hand_custody(),
+            let (failure, features) = scheduled_photo_failure(
+                self,
+                key,
+                timing,
+                PhotoCheckInput {
+                    judge,
+                    kind,
+                    bytes: &bytes,
+                    format: stored_format,
+                    prompt: request.prompt.as_str(),
+                    scene_party,
+                    hand_custody: request.prompt.scene_hand_custody(),
+                },
             )
             .await;
             visible_features = features;
@@ -1312,16 +1636,21 @@ impl Engine {
                 };
                 retry.validate().map_err(|_| ImageFailure::BadOutput)?;
                 let (retry_format, retry_bytes, retry_cost, _) =
-                    self.generate(&retry, format).await?;
+                    self.generate(&retry, format, key, priority, timing).await?;
                 micro_dollars = micro_dollars.saturating_add(retry_cost);
-                let (failure, features) = photo_failure(
-                    judge,
-                    kind,
-                    &retry_bytes,
-                    retry_format,
-                    &corrected,
-                    scene_party,
-                    request.prompt.scene_hand_custody(),
+                let (failure, features) = scheduled_photo_failure(
+                    self,
+                    key,
+                    timing,
+                    PhotoCheckInput {
+                        judge,
+                        kind,
+                        bytes: &retry_bytes,
+                        format: retry_format,
+                        prompt: &corrected,
+                        scene_party,
+                        hand_custody: request.prompt.scene_hand_custody(),
+                    },
                 )
                 .await;
                 match failure {
@@ -1396,9 +1725,35 @@ impl Engine {
         &self,
         edit: &ImageEdit<'_>,
         format: ImageFormat,
+        key: &ImageKey,
+        priority: ImagePriority,
+        timing: &mut RequestTiming,
     ) -> Result<(ImageFormat, Bytes, u64, Option<String>), ImageFailure> {
-        self.charge();
-        let (mut generated, supplier_credits) = self.provider.edit(edit, self.deadline).await?;
+        let mut retries = 0;
+        let (mut generated, supplier_credits) = loop {
+            let queued = std::time::Instant::now();
+            let permit =
+                tokio::time::timeout(self.deadline, self.permits(priority).acquire()).await;
+            let wait = queued.elapsed();
+            timing.wait += wait;
+            let permit = permit
+                .map_err(|_| ImageFailure::DeadlineExceeded)?
+                .map_err(|_| ImageFailure::Interrupted)?;
+            self.charge();
+            let started = std::time::Instant::now();
+            let result = self.provider.edit(edit, self.deadline).await;
+            let elapsed = started.elapsed();
+            timing.provider += elapsed;
+            drop(permit);
+            record_provider_timing("image", key, wait, elapsed, result.as_ref().err().copied());
+            match result {
+                Err(ImageFailure::RateLimited) if retries < MAXIMUM_RATE_LIMIT_RETRIES => {
+                    tokio::time::sleep(RATE_LIMIT_BACKOFF * (1 << retries)).await;
+                    retries += 1;
+                }
+                result => break result?,
+            }
+        };
         if matches!(self.provider, ImageRoute::Bfl(_)) && format == ImageFormat::Jpeg {
             let source = generated.bytes;
             let (width, height) = (edit.width, edit.height);
@@ -1544,8 +1899,9 @@ impl Engine {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |elapsed| elapsed.as_secs()),
             bytes,
-            width: request.output.width,
-            height: request.output.height,
+            // The size actually drawn under the profile, not the kind's nominal size.
+            width: self.drawn(request.kind, request.output).1.width,
+            height: self.drawn(request.kind, request.output).1.height,
             transparent: request.output.transparent,
             micro_dollars: (!matches!(self.provider, ImageRoute::Bfl(_))).then_some(micro_dollars),
             supplier_credits,
@@ -1596,19 +1952,88 @@ impl Engine {
 
 /// ART-01: the defect a finished image shows, or `None` when it passes. A judge that cannot answer
 /// lets the image through: the check is a quality gate, and the audit line records the gap.
-async fn photo_failure(
-    judge: &NativePlateJudge,
+struct PhotoCheckInput<'a> {
+    judge: &'a NativePlateJudge,
     kind: photo_check::PhotoCheckKind,
-    bytes: &[u8],
+    bytes: &'a [u8],
     format: ImageFormat,
-    prompt: &str,
-    scene_party: Option<(SceneParty, &ReferenceImage)>,
-    hand_custody: &str,
+    prompt: &'a str,
+    scene_party: Option<(SceneParty, &'a ReferenceImage)>,
+    hand_custody: &'a str,
+}
+
+async fn scheduled_photo_failure(
+    engine: &Engine,
+    key: &ImageKey,
+    timing: &mut RequestTiming,
+    input: PhotoCheckInput<'_>,
 ) -> (
     Option<photo_check::PhotoCheckFailure>,
     Vec<super::journey::living_scene::VisibleFeature>,
 ) {
-    let reading = match (kind, scene_party) {
+    let mut retries = 0;
+    let reading = loop {
+        let queued = std::time::Instant::now();
+        let permit = engine.permits.acquire().await;
+        let wait = queued.elapsed();
+        timing.wait += wait;
+        let Ok(permit) = permit else {
+            record_provider_timing(
+                "photo_check",
+                key,
+                wait,
+                Duration::ZERO,
+                Some(ImageFailure::Interrupted),
+            );
+            return (None, Vec::new());
+        };
+        let started = std::time::Instant::now();
+        let reading = read_photo(&input).await;
+        let elapsed = started.elapsed();
+        timing.provider += elapsed;
+        drop(permit);
+        let rate_limited = matches!(
+            reading,
+            Err(photo_check::PhotoCheckError::Judge(
+                df_providers::PlateJudgeError::Provider(429)
+            ))
+        );
+        record_provider_timing(
+            "photo_check",
+            key,
+            wait,
+            elapsed,
+            reading.as_ref().err().map(|_| {
+                if rate_limited {
+                    ImageFailure::RateLimited
+                } else {
+                    ImageFailure::Provider
+                }
+            }),
+        );
+        if rate_limited && retries < MAXIMUM_RATE_LIMIT_RETRIES {
+            tokio::time::sleep(RATE_LIMIT_BACKOFF * (1 << retries)).await;
+            retries += 1;
+            continue;
+        }
+        break reading;
+    };
+    photo_outcome(input, reading).await
+}
+
+async fn read_photo(
+    input: &PhotoCheckInput<'_>,
+) -> Result<photo_check::ScenePhotoReading, photo_check::PhotoCheckError> {
+    let PhotoCheckInput {
+        judge,
+        kind,
+        bytes,
+        format,
+        scene_party,
+        hand_custody,
+        ..
+    } = *input;
+    match (kind, scene_party) {
         (photo_check::PhotoCheckKind::ScenePlate, Some((party, sheet))) => {
             photo_check::read_scene_photo(
                 judge,
@@ -1627,7 +2052,50 @@ async fn photo_failure(
                 outcome,
                 visible_features: Vec::new(),
             }),
+    }
+}
+
+#[cfg(test)]
+async fn photo_failure(
+    judge: &NativePlateJudge,
+    kind: photo_check::PhotoCheckKind,
+    bytes: &[u8],
+    format: ImageFormat,
+    prompt: &str,
+    scene_party: Option<(SceneParty, &ReferenceImage)>,
+    hand_custody: &str,
+) -> (
+    Option<photo_check::PhotoCheckFailure>,
+    Vec<super::journey::living_scene::VisibleFeature>,
+) {
+    let input = PhotoCheckInput {
+        judge,
+        kind,
+        bytes,
+        format,
+        prompt,
+        scene_party,
+        hand_custody,
     };
+    let reading = read_photo(&input).await;
+    photo_outcome(input, reading).await
+}
+
+async fn photo_outcome(
+    input: PhotoCheckInput<'_>,
+    reading: Result<photo_check::ScenePhotoReading, photo_check::PhotoCheckError>,
+) -> (
+    Option<photo_check::PhotoCheckFailure>,
+    Vec<super::journey::living_scene::VisibleFeature>,
+) {
+    let PhotoCheckInput {
+        kind,
+        bytes,
+        format,
+        prompt,
+        scene_party,
+        ..
+    } = input;
     match reading {
         Ok(photo_check::ScenePhotoReading {
             outcome: photo_check::PhotoCheckOutcome::Pass,
@@ -1676,6 +2144,7 @@ fn failure_of(error: ImageEditError) -> ImageFailure {
     match error {
         ImageEditError::InvalidRequest => ImageFailure::InvalidRequest,
         ImageEditError::Refused => ImageFailure::Refused,
+        ImageEditError::Provider(429) => ImageFailure::RateLimited,
         ImageEditError::Unauthorized | ImageEditError::Provider(_) => ImageFailure::Provider,
         ImageEditError::Transport(NativeHttpRefusal::Deadline) => ImageFailure::DeadlineExceeded,
         ImageEditError::Transport(NativeHttpRefusal::Unknown | NativeHttpRefusal::Cancelled) => {
@@ -1792,10 +2261,39 @@ fn image_request_diagnostics(
     (line, fields, attributes)
 }
 
+fn record_provider_timing(
+    stage: &str,
+    key: &ImageKey,
+    wait: Duration,
+    elapsed: Duration,
+    failure: Option<ImageFailure>,
+) {
+    let failure = failure.map(ImageFailure::label);
+    super::actor::record_audit_diagnostic(
+        "gameplay.imagery.provider_timing",
+        format!(
+            "IMAGERY provider stage={stage} id={} wait_ms={} ms={} failure_category={}",
+            key.as_str(),
+            wait.as_millis(),
+            elapsed.as_millis(),
+            failure.unwrap_or("none"),
+        ),
+        serde_json::Map::from_iter([
+            ("stage".into(), serde_json::json!(stage)),
+            ("image_key".into(), serde_json::json!(key.as_str())),
+            ("wait_ms".into(), serde_json::json!(wait.as_millis())),
+            ("provider_ms".into(), serde_json::json!(elapsed.as_millis())),
+            ("failure_category".into(), serde_json::json!(failure)),
+        ]),
+        &[("gameplay.imagery.image_key", key.as_str().to_owned())],
+    );
+}
+
 fn record_image_result(
     kind: ImageKind,
     key: &ImageKey,
     elapsed: Duration,
+    timing: RequestTiming,
     result: Result<&ImageKey, &ImageFailure>,
 ) {
     let (status, failure_category) = match result {
@@ -1804,9 +2302,11 @@ fn record_image_result(
     };
     let elapsed_ms = elapsed.as_millis();
     let line = format!(
-        "IMAGERY {status} kind={} id={} ms={elapsed_ms} failure_category={}",
+        "IMAGERY {status} kind={} id={} wait_ms={} ms={} total_ms={elapsed_ms} failure_category={}",
         kind.label(),
         key.as_str(),
+        timing.wait.as_millis(),
+        timing.provider.as_millis(),
         failure_category.unwrap_or("none"),
     );
     let fields = serde_json::Map::from_iter([
@@ -1818,6 +2318,14 @@ fn record_image_result(
             serde_json::json!(failure_category),
         ),
         ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+        (
+            "wait_ms".to_owned(),
+            serde_json::json!(timing.wait.as_millis()),
+        ),
+        (
+            "provider_ms".to_owned(),
+            serde_json::json!(timing.provider.as_millis()),
+        ),
     ]);
     let attributes = [
         ("gameplay.imagery.kind", kind.label().to_owned()),
@@ -1917,7 +2425,45 @@ fn read_bounded_text(path: &Path) -> Option<String> {
 pub(super) fn router(imagery: Imagery) -> Router {
     Router::new()
         .route("/gameplay/imagery/{key}", get(serve_image))
+        .route(
+            "/gameplay/imagery/{key}/figure/{index}",
+            get(serve_focus_mask),
+        )
         .with_state(imagery)
+}
+
+async fn serve_focus_mask(
+    State(imagery): State<Imagery>,
+    RoutePath((key, index)): RoutePath<(String, u32)>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(bytes) = imagery.focus_mask(&key, index).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let etag = format!("\"{key}-figure-{index}-v1\"");
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+            ],
+        )
+            .into_response();
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "image/png".to_owned()),
+            (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+            (header::ETAG, etag),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 pub(super) async fn serve_image(

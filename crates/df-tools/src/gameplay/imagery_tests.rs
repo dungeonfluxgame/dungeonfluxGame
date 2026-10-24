@@ -534,6 +534,8 @@ enum Reply {
     WrongSize,
     OpaqueForTransparent,
     Oversize,
+    RateLimitedOnce,
+    BlockedBackground,
 }
 
 type Fields = BTreeMap<String, String>;
@@ -544,6 +546,7 @@ struct FakeOpenAi {
     peak: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<(Fields, usize)>>>,
     stop: Arc<AtomicBool>,
+    release_background: Arc<AtomicBool>,
 }
 
 struct FakeState {
@@ -551,6 +554,7 @@ struct FakeState {
     active: Arc<AtomicUsize>,
     peak: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<(Fields, usize)>>>,
+    release_background: Arc<AtomicBool>,
 }
 
 impl FakeOpenAi {
@@ -567,11 +571,13 @@ impl FakeOpenAi {
         let peak = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let release_background = Arc::new(AtomicBool::new(false));
         let state = Arc::new(FakeState {
             requests: requests.clone(),
             active,
             peak: peak.clone(),
             seen: seen.clone(),
+            release_background: release_background.clone(),
         });
         let stopped = stop.clone();
         thread::spawn(move || {
@@ -591,6 +597,7 @@ impl FakeOpenAi {
             peak,
             seen,
             stop,
+            release_background,
         }
     }
 
@@ -609,6 +616,7 @@ impl FakeOpenAi {
 
 impl Drop for FakeOpenAi {
     fn drop(&mut self) {
+        self.release_background.store(true, Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
     }
 }
@@ -696,13 +704,25 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
     } else {
         parse_multipart(&head, &body)
     };
-    state.requests.fetch_add(1, Ordering::SeqCst);
+    let attempt = state.requests.fetch_add(1, Ordering::SeqCst);
     let active = state.active.fetch_add(1, Ordering::SeqCst) + 1;
     state.peak.fetch_max(active, Ordering::SeqCst);
     state.seen.lock().unwrap().push((fields.clone(), images));
     thread::sleep(delay);
+    if reply == Reply::BlockedBackground && fields["prompt"].contains("hs58-blocked-background") {
+        while !state.release_background.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
     state.active.fetch_sub(1, Ordering::SeqCst);
-    let (status, payload) = payload_for(reply, &fields);
+    let (status, payload) = if reply == Reply::RateLimitedOnce && attempt == 0 {
+        (
+            "429 Too Many Requests",
+            r#"{"error":{"message":"rate limited"}}"#.to_owned(),
+        )
+    } else {
+        payload_for(reply, &fields)
+    };
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
@@ -738,7 +758,7 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
         }
         Reply::Image if png => ("200 OK", image(fake_png(width, height, transparent))),
         Reply::Image if webp => ("200 OK", image(fake_webp(width, height, transparent))),
-        Reply::Image => ("200 OK", image(fake_jpeg(width, height, 0))),
+        Reply::Image | Reply::RateLimitedOnce | Reply::BlockedBackground => ("200 OK", image(fake_jpeg(width, height, 0))),
         Reply::WrongSize if png => ("200 OK", image(fake_png(width + 16, height, transparent))),
         Reply::WrongSize if webp => (
             "200 OK",
@@ -887,6 +907,7 @@ fn imagery_in(
             credential: ImageryCredential::for_test("test-credential"),
             model: ImageEditModel::Gpt25Flare,
             quality: ImageQuality::Medium,
+            profile: Default::default(),
             interval: Duration::from_secs(30),
             deadline,
             cache_dir: cache.to_path_buf(),
@@ -943,6 +964,13 @@ impl DirectionFixture {
 
     pub(in crate::gameplay) fn calls(&self) -> usize {
         self.fake.calls()
+    }
+
+    pub(in crate::gameplay) fn photo_judge(&self, judge: df_providers::NativePlateJudge) {
+        let Mode::On { engine, .. } = &self.imagery.inner.mode else {
+            panic!("enabled fixture")
+        };
+        assert!(engine.judge.set(judge).is_ok());
     }
 
     pub(in crate::gameplay) fn image_count(&self) -> usize {
@@ -1241,7 +1269,7 @@ async fn identical_requests_in_flight_share_one_call() {
 }
 
 #[tokio::test]
-async fn at_most_two_calls_are_in_flight_at_once() {
+async fn foreground_calls_respect_the_reserved_three_slot_pool() {
     let fake = FakeOpenAi::start(Duration::from_millis(250), Reply::Image);
     let (service, _dir) = imagery(&fake, "limit");
     let moods = [
@@ -1254,7 +1282,7 @@ async fn at_most_two_calls_are_in_flight_at_once() {
     let results = futures::future::join_all(moods.map(|mood| service.render(refresh(mood)))).await;
     assert!(results.iter().all(Result::is_ok));
     assert_eq!(fake.calls(), 5);
-    assert_eq!(fake.peak_in_flight(), 2);
+    assert_eq!(fake.peak_in_flight(), FOREGROUND_IN_FLIGHT);
 }
 
 #[tokio::test]
@@ -2061,6 +2089,7 @@ mod settings {
             mode: Err(NotPresent),
             model: Err(NotPresent),
             quality: Err(NotPresent),
+            profile: Err(NotPresent),
             interval_seconds: Err(NotPresent),
             deadline_seconds: Err(NotPresent),
             cache: Err(NotPresent),
@@ -2161,4 +2190,254 @@ mod settings {
         unknown.model = Ok("gpt-image-2.5-sunburst; rm -rf".to_owned());
         assert!(settings(unknown).is_err());
     }
+}
+
+#[tokio::test]
+async fn hs54_panicking_image_flight_retires_its_key_and_next_request_can_render() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, _dir) = imagery(&fake, "hs54-panic");
+    let request = refresh(Mood::Calm);
+    let key = service.key_for(&request);
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("fake enabled")
+    };
+    let (_, receiver) = watch::channel(None);
+    locked(&engine.in_flight).insert(key.as_str().to_owned(), receiver);
+    let outcome = engine
+        .retire_flight(&key, async { panic!("injected adapter panic") })
+        .await;
+    assert_eq!(outcome, Err(ImageFailure::Interrupted));
+    assert!(!locked(&engine.in_flight).contains_key(key.as_str()));
+    assert!(service.render(request).await.is_ok());
+    assert_eq!(fake.calls(), 1);
+}
+
+#[tokio::test]
+async fn hs54_image_provider_permit_is_released_while_photo_judge_waits() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
+    let (service, _dir) = imagery(&fake, "hs54-permit");
+    let judge_endpoint = crate::gameplay::storyteller::tests::FakeEndpoint::start(vec![
+        crate::gameplay::storyteller::tests::Reply::Hang,
+    ]);
+    let judge = df_providers::NativePlateJudge::new(
+        df_providers::PlateJudgeConfig::loopback_fixture(judge_endpoint.address).unwrap(),
+        "fake-private",
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("fake enabled")
+    };
+    assert!(engine.judge.set(judge).is_ok());
+    let mut request = refresh(Mood::Calm);
+    request.kind = ImageKind::CanonicalRoom;
+    let rendering = service.clone();
+    let render = tokio::spawn(async move { rendering.render(request).await });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while judge_endpoint.bodies().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        engine.presence_permits.available_permits(),
+        MAXIMUM_IN_FLIGHT,
+        "judgement does not occupy an image provider slot"
+    );
+    drop(judge_endpoint);
+    let _outcome = tokio::time::timeout(Duration::from_secs(5), render)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+async fn hs58_saturate_background(
+    service: &Imagery,
+    fake: &FakeOpenAi,
+) -> Vec<tokio::task::JoinHandle<Result<ImageKey, ImageFailure>>> {
+    let initial_calls = fake.calls();
+    let mut jobs = Vec::new();
+    for index in 0..BACKGROUND_IN_FLIGHT {
+        let service = service.clone();
+        let mut request = refresh(Mood::Calm);
+        request.kind = ImageKind::ArtifactCloseUp;
+        request.prompt = request
+            .prompt
+            .with_canonical_binding(&format!("hs58-blocked-background-{index}"));
+        jobs.push(tokio::spawn(async move {
+            service.generate("item:saturation", request).await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fake.calls() < initial_calls + BACKGROUND_IN_FLIGHT {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("enabled fixture")
+    };
+    assert_eq!(engine.background_permits.available_permits(), 0);
+    jobs
+}
+
+#[tokio::test]
+async fn hs58_foreground_starts_while_six_background_providers_are_blocked() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
+    let (service, _dir) = imagery(&fake, "hs58-foreground");
+    let jobs = hs58_saturate_background(&service, &fake).await;
+    for kind in [
+        ImageKind::ScenePlate,
+        ImageKind::ScenePlateEdit,
+        ImageKind::CanonicalRoom,
+    ] {
+        let mut request = refresh(Mood::Warm);
+        request.kind = kind;
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            service.generate("plate:current", request),
+        )
+        .await;
+        eprintln!(
+            "HS58 {kind:?} under six blocked background calls: {} ms",
+            started.elapsed().as_millis()
+        );
+        assert!(result.unwrap().is_ok());
+        assert!(jobs.iter().all(|job| !job.is_finished()));
+    }
+    fake.release_background.store(true, Ordering::SeqCst);
+    for job in jobs {
+        job.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn hs58_head_location_completes_under_background_saturation() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply as HeadReply};
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
+    let (service, _dir) = imagery(&fake, "hs58-heads");
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("enabled fixture")
+    };
+    let key = service.key_for(&refresh(Mood::Grim));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(128, 128)
+        .write_to(&mut bytes, image::ImageFormat::Jpeg)
+        .unwrap();
+    engine
+        .store(&key, ImageFormat::Jpeg, Bytes::from(bytes.into_inner()))
+        .await
+        .unwrap();
+    locked(&service.inner.registry).register(
+        &key,
+        Registered {
+            format: ImageFormat::Jpeg,
+        },
+    );
+    let endpoint = FakeEndpoint::start(vec![HeadReply::Status(
+        200,
+        serde_json::json!({
+            "choices": [{"message": {"content": "{\"heads\":[{\"id\":\"speaker\",\"left\":0.1,\"top\":0.1,\"right\":0.2,\"bottom\":0.3}]}"}}]
+        }),
+    )]);
+    let locator = NativeHeadLocator::new(
+        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
+        "fake-private",
+        HEAD_LOCATE_DEADLINE,
+    )
+    .unwrap();
+    assert!(engine.locator.set(locator).is_ok());
+    let jobs = hs58_saturate_background(&service, &fake).await;
+    let started = std::time::Instant::now();
+    let heads = tokio::time::timeout(
+        Duration::from_secs(2),
+        service.locate_heads(&key, None, &[("speaker", "the adult speaker")]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    eprintln!(
+        "HS58 head location under six blocked background calls: {} ms (deadline {} ms)",
+        started.elapsed().as_millis(),
+        HEAD_LOCATE_DEADLINE.as_millis()
+    );
+    assert_eq!(heads.len(), 1);
+    assert!(jobs.iter().all(|job| !job.is_finished()));
+    fake.release_background.store(true, Ordering::SeqCst);
+    for job in jobs {
+        job.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn hs58_identical_hero_items_share_one_flight_and_cache_across_runs() {
+    let fake = FakeOpenAi::start(Duration::from_millis(100), Reply::Image);
+    let (service, dir) = imagery(&fake, "hs58-items");
+    let generated = adventure(40);
+    let mut first = generated.settings.meeting.model.unwrap().things.remove(0);
+    first.id = "equipment-hero-one".into();
+    first.provenance.source_id = "chain-mail".into();
+    first.owner_id = Some("hero-one".into());
+    first.position = "worn".into();
+    first.picture_description = "chain mail, worn by hero-one; not in hand".into();
+    let mut second = first.clone();
+    second.id = "equipment-hero-two".into();
+    second.owner_id = Some("hero-two".into());
+    second.holder_id = Some("hero-two".into());
+    second.position = "stowed".into();
+    second.picture_description = "chain mail, stowed by hero-two; not in hand".into();
+    let first_request = item_image_request(ContentRating::Mature, &first, None).unwrap();
+    let second_request = item_image_request(ContentRating::Mature, &second, None).unwrap();
+    assert!(first_request.references.is_empty());
+    let (first_key, second_key) = tokio::join!(
+        service.generate("item:hero-one", first_request.clone()),
+        service.generate("item:hero-two", second_request)
+    );
+    assert_eq!(first_key.unwrap(), second_key.unwrap());
+    assert_eq!(fake.calls(), 1);
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        None,
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    restarted
+        .generate("item:another-run", first_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(fake.calls(), 1);
+    second.broken = !second.broken;
+    assert_ne!(
+        service.key_for(&first_request),
+        service.key_for(&item_image_request(ContentRating::Mature, &second, None).unwrap())
+    );
+    second.broken = first.broken;
+    second.provenance.source_id = "different-source".into();
+    assert_ne!(
+        service.key_for(&first_request),
+        service.key_for(&item_image_request(ContentRating::Mature, &second, None).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn hs58_rate_limited_image_retries_after_backoff() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::RateLimitedOnce);
+    let (service, _dir) = imagery(&fake, "hs58-rate-limit");
+    let started = std::time::Instant::now();
+    service
+        .generate("plate:retry", refresh(Mood::Calm))
+        .await
+        .unwrap();
+    eprintln!(
+        "HS58 429 then success: {} ms, {} provider calls",
+        started.elapsed().as_millis(),
+        fake.calls()
+    );
+    assert!(started.elapsed() >= RATE_LIMIT_BACKOFF);
+    assert_eq!(fake.calls(), 2);
+    assert_eq!(service.stats().calls, 2);
 }

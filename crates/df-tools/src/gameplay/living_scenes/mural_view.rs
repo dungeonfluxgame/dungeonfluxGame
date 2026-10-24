@@ -48,6 +48,9 @@ impl MuralView {
 /// Merges only this validated presentation member on a same-revision scene update.
 /// The caller must first enforce its existing audience/scene identity checks.
 pub(super) fn merge_scene_contents(shown: &mut String, new: &str) -> bool {
+    if shown == new {
+        return false;
+    }
     let Some(mural) = MuralView::from_scene_contents(new) else {
         return false;
     };

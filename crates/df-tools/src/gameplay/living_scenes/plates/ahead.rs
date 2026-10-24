@@ -116,14 +116,23 @@ fn arrival_diagnostic(scene: &str, used: &str, wait_ms: u128, status: &str) {
 }
 
 fn same_picture(left: &PlateScene, right: &PlateScene) -> bool {
-    let picture = |scene: &PlateScene| {
-        scene
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.model.picture_state())
-            .transpose()
-    };
-    match (picture(left), picture(right)) {
+    if crate::gameplay::adventure::free_roam::is_active()
+        && let (Some(left), Some(right)) = (&left.snapshot, &right.snapshot)
+    {
+        let physical_picture = |model: &crate::gameplay::adventure::scene_model::SceneModel| {
+            let mut physical = model.clone();
+            place::physical_way_names(&mut physical);
+            physical.picture_state()
+        };
+        return match (
+            physical_picture(&left.model),
+            physical_picture(&right.model),
+        ) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        };
+    }
+    match (left.picture(), right.picture()) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -283,6 +292,7 @@ impl Shared {
                         model,
                         &candidate.scene.cast,
                         candidate.scene.authored_place_photo(),
+                        candidate.scene.room_revision.as_deref(),
                     );
                 }
                 continue;
@@ -417,6 +427,43 @@ impl Shared {
         let Some(current) = &book.current else {
             return;
         };
+        if let Some(scene) = &current.scene {
+            let mut references = Vec::new();
+            if let Some(revision) = scene.generated_room_revision() {
+                references.push((
+                    "room".to_owned(),
+                    self.inner
+                        .canonical_room_status_at(&scene.place_id, revision),
+                ));
+            }
+            references.extend(scene.identity_cast.iter().map(|person| {
+                (
+                    person.id.clone(),
+                    self.inner
+                        .canonical_npc_status(person.id.strip_prefix("npc:").unwrap_or(&person.id)),
+                )
+            }));
+            for (subject, status) in references {
+                let used = if status == super::super::canonical::ReferenceStatus::Ready {
+                    "hit"
+                } else {
+                    "miss"
+                };
+                record_plate_diagnostic(
+                    "gameplay.living_scene.reference_arrival",
+                    format!(
+                        "IMAGERY arrival place={} subject={subject} used={used} status={status:?}",
+                        scene.place_id
+                    ),
+                    serde_json::Map::from_iter([
+                        ("place".into(), serde_json::json!(scene.place_id)),
+                        ("subject".into(), serde_json::json!(subject)),
+                        ("used".into(), serde_json::json!(used)),
+                        ("status".into(), serde_json::json!(format!("{status:?}"))),
+                    ]),
+                );
+            }
+        }
         let Some(id) = current.id.clone() else {
             return;
         };
@@ -663,30 +710,33 @@ impl Shared {
             successors_in_from(script, &content.scenes, &current, Some(&beat_id))
         });
         scenes.extend(next.into_iter().map(|scene| (scene, Source::Beat)));
-        for ready in crate::gameplay::adventure::free_roam::prepared(checkpoint) {
-            if current
-                .setting
-                .as_ref()
-                .is_some_and(|setting| setting.place_id == ready.from)
-            {
-                let scene = place_move::destination_scene(checkpoint, &ready.place, &current)?;
-                let outcome = match crate::gameplay::place_music::installed() {
-                    Some(music) => match music.prepare_scene(&scene) {
-                        Ok(Some(plan)) => format!("outcome=planned plan_state={}", plan.state),
-                        Ok(None) => "outcome=no_plan".to_owned(),
-                        Err(error) => format!("outcome=projection_failed reason={error:?}"),
-                    },
-                    None => "outcome=disabled".to_owned(),
-                };
-                crate::gameplay::actor::record_audit_line(
-                    "gameplay.free_roam",
-                    format!(
-                        "FREE_ROAM ahead_media place={} kind=music_ambience {outcome}",
-                        ready.place.place_id
-                    ),
-                );
-                scenes.push((scene, Source::Generated));
-            }
+        for ready in crate::gameplay::adventure::free_roam::prepared(checkpoint)
+            .into_iter()
+            .filter(|ready| {
+                current
+                    .setting
+                    .as_ref()
+                    .is_some_and(|setting| setting.place_id == ready.from)
+            })
+            .take(2)
+        {
+            let scene = place_move::destination_scene(checkpoint, &ready.place, &current)?;
+            let outcome = match crate::gameplay::place_music::installed() {
+                Some(music) => match music.prepare_scene(&scene) {
+                    Ok(Some(plan)) => format!("outcome=planned plan_state={}", plan.state),
+                    Ok(None) => "outcome=no_plan".to_owned(),
+                    Err(error) => format!("outcome=projection_failed reason={error:?}"),
+                },
+                None => "outcome=disabled".to_owned(),
+            };
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.free_roam",
+                format!(
+                    "FREE_ROAM ahead_media place={} kind=music_ambience {outcome}",
+                    ready.place.place_id
+                ),
+            );
+            scenes.push((scene, Source::Generated));
         }
         Ok(Forecast {
             current,
@@ -779,6 +829,10 @@ mod free_roam_tests {
                     .find_map(|line| line.strip_prefix("FACTS: "))
                     .map(|line| serde_json::from_str(line).unwrap())
                     .unwrap();
+                // Every generated person is given a persona (HS69).
+                if facts["task"] == "person_persona" {
+                    return crate::gameplay::place_creation::tests::persona_answer(prompt);
+                }
                 if facts["task"] == "free_roam_city" {
                     return json!({
                         "name": "Alder", "character": "a canal city of workshops",
@@ -811,9 +865,9 @@ mod free_roam_tests {
                 fixtures::answer(&place, &json!(people), &fixtures::things_slot())
             });
         let endpoint =
-            FakeEndpoint::start((0..8).map(|_| Reply::Compute(compute.clone())).collect());
+            FakeEndpoint::start((0..32).map(|_| Reply::Compute(compute.clone())).collect());
         let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS42/tmp/forecast-{}",
+            "../../artifacts/tmp/lanes/HS55/tmp/forecast-{}",
             std::process::id()
         ));
         let storyteller = teller(endpoint.address, 0, Duration::from_secs(10), &cache);
@@ -823,6 +877,7 @@ mod free_roam_tests {
                 RulesMode::Standard,
                 ContentRating::default(),
                 &storyteller,
+                &crate::gameplay::place_creation::tests::jev(&crate::gameplay::place_creation::tests::accepting_persona_judge(32)),
             ))
             .unwrap();
         let (loaded, _) =
@@ -860,6 +915,26 @@ mod free_roam_tests {
             );
             let queued = PlateScene::of(&destination).unwrap();
             assert_eq!(queued.snapshot.as_ref().unwrap().model, expected);
+            // Canonical demand is checkpoint-owned, even before any plate/display forecast.
+            shared.inner.observe_checkpoint(&checkpoint);
+            for (destination, _) in &generated {
+                let scene = PlateScene::of(destination).unwrap();
+                assert_eq!(
+                    shared.inner.canonical_room_status_at(
+                        &scene.place_id,
+                        scene.generated_room_revision().unwrap()
+                    ),
+                    super::super::super::canonical::ReferenceStatus::Pending,
+                );
+                for person in &scene.identity_cast {
+                    assert_eq!(
+                        shared.inner.canonical_npc_status(
+                            person.id.strip_prefix("npc:").unwrap_or(&person.id)
+                        ),
+                        super::super::super::canonical::ReferenceStatus::Pending,
+                    );
+                }
+            }
             shared.plan_checkpoint(&checkpoint);
             assert_eq!(locked(&shared.book).ahead.candidates.len(), 2);
             assert!(
@@ -908,6 +983,37 @@ mod free_roam_tests {
                 .unwrap()
                 .heroes
                 .clone();
+            let mut destination = destination;
+            let model = destination
+                .setting
+                .as_mut()
+                .unwrap()
+                .model
+                .as_mut()
+                .unwrap();
+            let revision = super::super::super::canonical::room_revision(model);
+            place::name_exit(&mut model.ways_out[1], "Alder Garden");
+            assert_eq!(
+                super::super::super::canonical::room_revision(model),
+                revision
+            );
+            let mut closed = model.clone();
+            closed.ways_out[1].open = false;
+            assert_ne!(
+                super::super::super::canonical::room_revision(&closed),
+                revision
+            );
+            scene_model::publish_scene(
+                &place_id,
+                SceneNow {
+                    model: model.clone(),
+                    changes: Vec::new(),
+                },
+            );
+            assert!(same_picture(
+                &queued,
+                &PlateScene::of(&destination).unwrap()
+            ));
             let mut arrival = view(&destination, &heroes, false);
             arrival.hero_names = locked(&shared.book).ahead.party.clone();
             shared.observe_with(&arrival, Some(destination), Vec::new());
@@ -948,6 +1054,7 @@ mod free_roam_tests {
             let (updates_in, updates) = tokio::sync::watch::channel(restored.clone());
             let (sender, _inbox) = df_session::inbox::bounded_inbox();
             let service = crate::gameplay::Service {
+                look_ahead: Default::default(),
                 actor: sender,
                 display_credential: [0; 32],
                 updates,

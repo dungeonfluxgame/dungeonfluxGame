@@ -326,6 +326,15 @@ impl super::Imagery {
     }
 }
 
+/// Prepare bounded image bytes away from the async runtime worker.
+async fn prepare_picture(bytes: &[u8], format: ImageFormat) -> Result<Vec<u8>, PhotoCheckError> {
+    let bytes = bytes.to_vec();
+    tokio::task::spawn_blocking(move || super::vision_picture(&bytes, format, MAXIMUM_VISION_WIDTH))
+        .await
+        .map_err(|_| PhotoCheckError::ImagePreparation)?
+        .map_err(|_| PhotoCheckError::ImagePreparation)
+}
+
 /// Checks one generated image before publication. Provider failures remain typed errors; a
 /// returned `Fail` names the visible defect so the caller can make one corrected regeneration.
 pub(super) async fn check_photo(
@@ -335,8 +344,7 @@ pub(super) async fn check_photo(
     format: ImageFormat,
     deadline: Duration,
 ) -> Result<PhotoCheckOutcome, PhotoCheckError> {
-    let picture = super::vision_picture(bytes, format, MAXIMUM_VISION_WIDTH)
-        .map_err(|_| PhotoCheckError::ImagePreparation)?;
+    let picture = prepare_picture(bytes, format).await?;
     let answer = judge
         .judge_photo_quality(&picture, kind.into(), deadline)
         .await
@@ -398,10 +406,8 @@ pub(super) async fn read_scene_photo(
     custody: &str,
     deadline: Duration,
 ) -> Result<ScenePhotoReading, PhotoCheckError> {
-    let picture = super::vision_picture(bytes, format, MAXIMUM_VISION_WIDTH)
-        .map_err(|_| PhotoCheckError::ImagePreparation)?;
-    let sheet = super::vision_picture(&sheet.bytes, sheet.format, MAXIMUM_VISION_WIDTH)
-        .map_err(|_| PhotoCheckError::ImagePreparation)?;
+    let picture = prepare_picture(bytes, format).await?;
+    let sheet = prepare_picture(&sheet.bytes, sheet.format).await?;
     let mut instruction = format!(
         "Judge only candidate-1 for photographic quality and player-hero count; reference-sheet is identity reference only, never a candidate. Answer using the supplied labels. frame is single_photograph for one coherent camera photograph, grid_or_collage for panels or a contact sheet, cutout_composite for visibly pasted figures. medium is photograph for a convincing real-looking camera capture, painting_or_illustration for visible brushstrokes, drawn outlines or painted textures, cgi_or_render for visibly synthetic geometry, plastic-like materials or physically incoherent light and shadows. Require positive visible evidence of another medium: clean surfaces, even daylight, sharp detail, orderly composition, an empty street, polished lighting, a fantastical setting and absence of grain or lens flaws are not evidence of rendering. text is visible_text for any readable or invented lettering/signage, otherwise none. dress is modern_clothing for recognizably modern clothes, period for period-appropriate clothes, no_people if nobody is visible. setting is modern for recognizably modern architecture, electric lights, plate-glass shopfronts, malls, vehicles, plastic, printed packaging, cafe furniture, tourist chalkboards, drainpipes or utility fixtures; otherwise period. There must be exactly {} player heroes. Photographs 1 through {} on reference-sheet, read left to right then top to bottom, identify Hero 1 through Hero {}; later photographs identify NPCs. hero_count is the actual number of player-hero figures visible in candidate-1, including partly hidden figures, duplicates and any extra figure dressed or posed as a hero. Match the heroes against reference-sheet; do not count the known NPCs, speaker or ordinary background bystanders as player heroes. Count fantasy species as heroes too. Do not assume the requested count is present; report what you can actually see. Never count figures on reference-sheet itself.",
         party.heroes(),

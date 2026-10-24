@@ -20,6 +20,125 @@ pub(super) fn key(byte: char) -> ImageKey {
     ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
 }
 
+#[tokio::test]
+async fn hs71_committed_room_canon_invalidates_the_plate_even_when_layout_and_cast_are_unchanged() {
+    use crate::gameplay::npc_reply::{
+        fact_backfill::{Decision, FactDecision, Reason},
+        local_lore::{FactKind, LocalFact, LocalLore},
+    };
+    let (mut shared, _) = shared(16);
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS71/room-canon")
+        .join(std::process::id().to_string());
+    let fixture = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache);
+    let inner = Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner).unwrap();
+    inner.imagery = fixture.imagery.clone();
+    inner.references = crate::gameplay::imagery::ReferenceStore::new(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+    );
+    let lore = Arc::new(LocalLore::in_memory());
+    locked(&shared.inner.state).canonical = super::super::canonical::References::new(lore.clone());
+    locked(&shared.inner.state)
+        .canonical
+        .fixture_hero(1, "Hero 1", key('a'));
+    let mut current = scene(SceneKey::Opening, "Hearth and Loom", None);
+    current.asset = art_contract::HARBOR_PHOTO.into();
+    current.cast.clear();
+    current.setting.as_mut().unwrap().model = Some(
+        serde_json::from_slice(include_bytes!(
+            "../../../../../content/merchant-shop/scene-model.json"
+        ))
+        .unwrap(),
+    );
+    current
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .people
+        .clear();
+    let plate = PlateScene::of(&current).unwrap();
+    let admit = || {
+        shared.inner.admit_canonical_room(
+            &plate.place_id,
+            plate.authored_room.as_ref().unwrap(),
+            &plate.cast,
+            plate.authored_place_photo(),
+            plate.room_revision.as_deref(),
+        )
+    };
+    admit();
+    let authored = shared
+        .plate_room_reference(&plate, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = shared.canonical_plate_id(&plate, &[1], &[], 0);
+    let fact = LocalFact {
+        kind: FactKind::History,
+        name: "Shop sign".into(),
+        content: "The shop sign reads Hearth and Loom.".into(),
+        established_by: "Kestrel".into(),
+    };
+    lore.commit_fact_decision(
+        FactDecision {
+            scene: "Opening".into(),
+            place: plate.place_id.clone(),
+            npc_id: "scene-person:keeper".into(),
+            speaker: "Kestrel".into(),
+            question_hash: "1".repeat(64),
+            decision: Decision::Backfill,
+            reason: Reason::HarmlessMissingDetail,
+            fact: Some(fact.clone()),
+            answer: None,
+        },
+        Some(fact),
+    )
+    .unwrap();
+    admit();
+    let after = shared.canonical_plate_id(&plate, &[1], &[], 0);
+    assert_ne!(before, after);
+    assert!(after.contains("|room="));
+    assert_eq!(
+        after,
+        shared.canonical_plate_id(&plate, &[1], &[], 0),
+        "canon is stable on repeated admission"
+    );
+    loop {
+        let jobs = locked(&shared.inner.state).canonical.take_jobs();
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            if let super::super::Job::Canonical(work) = job {
+                let result = shared.inner.render_canonical(&work).await;
+                shared.inner.finish_canonical(work, result);
+            }
+        }
+    }
+    let facts = locked(&shared.inner.state)
+        .canonical
+        .committed_canon(Some(&plate.place_id), None);
+    assert!(!facts.is_empty());
+    let updated = shared
+        .plate_room_reference(&plate, !facts.is_empty())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        authored.sha256, updated.sha256,
+        "both fresh and edited plates must bypass the stale authored photo"
+    );
+    assert!(fixture.prompt().contains("Hearth and Loom"));
+    assert_eq!(
+        fixture.calls(),
+        1,
+        "one updated canonical room through the fake provider"
+    );
+}
+
 #[test]
 fn local_spot_plate_context_keeps_the_stall_in_front_and_the_recorded_street_behind() {
     use crate::gameplay::adventure::scene_model::{SceneModel, SceneWayOut};
@@ -230,6 +349,7 @@ fn authored_plate_waits_until_all_canonical_references_are_ready() {
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            persona: None,
             passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
@@ -295,6 +415,7 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            persona: None,
             passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
@@ -397,6 +518,7 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            persona: None,
             passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
@@ -1197,7 +1319,7 @@ fn narrative_focus_waits_for_pending_references_and_reports_terminal_reference_f
 }
 
 #[tokio::test]
-async fn authored_story_coalesces_latest_reply_and_refreshes_the_base_before_a_second_edit() {
+async fn authored_story_coalesces_latest_reply_without_a_serial_chain_refresh() {
     let current = scene(SceneKey::DialogueSeal, "Harbor story", Some("Kestrel"));
     let (shared, mut queue) = shared(16);
     admit_canonical_references(&shared.inner, &current);
@@ -1248,35 +1370,15 @@ async fn authored_story_coalesces_latest_reply_and_refreshes_the_base_before_a_s
         next.graph_revision = sequence;
         shared.observe_with(&next, Some(current.clone()), Vec::new());
     }
-    shared.poll_state_images_at(Duration::from_secs(33));
+    shared.poll_state_images_at(Duration::from_secs(18));
     assert!(drain(&mut queue).is_empty());
-    // The shown still is itself an edit and a story beat's edit carries no scene state, so the
-    // latest beat first gets a fresh render of the scene to start from.
-    shared.poll_state_images_at(Duration::from_secs(34));
-    let Job::Fresh { id: refreshed, .. } = drain(&mut queue).remove(0) else {
-        panic!("chain refresh before the second story edit")
-    };
-    assert_eq!(refreshed, id);
-    assert_eq!(
-        locked(&shared.book).shown().unwrap().0,
-        key('b'),
-        "the edited still stays up until its successor is ready"
-    );
-    ready(&shared, &id, 'c');
-    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
-    // The refresh counts as a render start for the configured interval.
-    shared.poll_state_images_at(Duration::from_secs(63));
-    assert!(drain(&mut queue).is_empty());
-    shared.poll_state_images_at(Duration::from_secs(64));
+    shared.poll_state_images_at(Duration::from_secs(19));
     let Job::State(state_images::Job::Bake { pending, base, .. }) = drain(&mut queue).remove(0)
     else {
-        panic!("latest story edit")
+        panic!("latest story edit without a serial fresh-base render")
     };
-    assert_eq!(
-        base,
-        key('c'),
-        "the story edit starts from the fresh plate, not from the edited still"
-    );
+    assert_eq!(base, key('a'), "each edit uses the original fresh base");
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
     assert_eq!(pending.story.as_ref().unwrap().sequence, 5);
     assert_eq!(
         pending.story.as_ref().unwrap().dialogue,
@@ -1387,7 +1489,7 @@ async fn a_face_edit_after_an_edit_asks_for_a_fresh_plate_before_it_is_made() {
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), angry);
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(0));
     let Job::Edit { base, face, .. } = drain(&mut queue).remove(0) else {
         panic!("first face edit")
     };
@@ -1396,7 +1498,7 @@ async fn a_face_edit_after_an_edit_asks_for_a_fresh_plate_before_it_is_made() {
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), contemptuous);
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(15));
     let Job::Fresh { id: refreshed, .. } = drain(&mut queue).remove(0) else {
         panic!("a fresh plate before the second face edit")
     };
@@ -1406,10 +1508,10 @@ async fn a_face_edit_after_an_edit_asks_for_a_fresh_plate_before_it_is_made() {
         key('b'),
         "the edited face stays up until its successor is ready"
     );
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(15));
     assert!(drain(&mut queue).is_empty());
     ready(&shared, &id, 'c');
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(30));
     let Job::Edit { base, face, .. } = drain(&mut queue).remove(0) else {
         panic!("second face edit")
     };
@@ -1434,7 +1536,7 @@ async fn a_failed_fresh_plate_for_an_edit_chain_is_not_asked_for_again_during_th
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), angry);
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(0));
     drain(&mut queue);
     show_face_edit(&shared, angry, key('b'));
     locked(&shared.inner.state).plate_wants.insert(
@@ -1444,7 +1546,7 @@ async fn a_failed_fresh_plate_for_an_edit_chain_is_not_asked_for_again_during_th
             tier: HealthTier::Healthy,
         },
     );
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(15));
     assert!(matches!(drain(&mut queue).remove(0), Job::Fresh { .. }));
     shared.finish(Done::Fresh {
         id: id.clone(),
@@ -1457,7 +1559,7 @@ async fn a_failed_fresh_plate_for_an_edit_chain_is_not_asked_for_again_during_th
         locked(&shared.book).entries.get(&id),
         Some(Entry::Ready { .. })
     ));
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(30));
     assert!(
         drain(&mut queue).is_empty(),
         "the failed refresh cools down instead of looping"
@@ -1729,10 +1831,22 @@ fn poll_story_edit(
 }
 
 #[tokio::test]
-async fn public_story_caller_counts_only_published_edits_and_resets_when_the_scene_changes() {
-    let loaded =
+async fn public_story_caller_counts_only_published_edits_and_resets_when_the_place_changes() {
+    let mut loaded =
         pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"))
             .unwrap();
+    // Authored dialogue phases at salt-quay remain one place. Exercise a real departure;
+    // the HS65 local-spot regressions cover retaining work within that same place.
+    loaded
+        .pack
+        .scenes
+        .iter_mut()
+        .find(|scene| scene.key == SceneKey::DialogueEscort)
+        .unwrap()
+        .setting
+        .as_mut()
+        .unwrap()
+        .place_id = "hs65-next-place".into();
     let current = loaded
         .pack
         .scenes
@@ -2127,7 +2241,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     assert_eq!(response["state"], "pending");
     shared.finish(done);
     let mut landed = display_message(&current);
-    apply_at(&shared, &mut landed, Duration::from_secs(10));
+    apply_at(&shared, &mut landed, Duration::from_secs(25));
     assert!(
         !shown_scene(&landed).plate_update_pending,
         "a landed directed plate clears the pending badge"
@@ -2232,6 +2346,8 @@ fn canonical_member(member: &pack::SceneCastMember) -> super::super::Member {
         id: member.id.clone(),
         role: super::super::role_of(member.role),
         life_stage: super::super::LifeStage::from_age(member.age),
+        gender: member.gender,
+        age: member.age,
         name: member.name.clone(),
         sprite: member.sprite.clone(),
         dossier_id: None,
@@ -2343,7 +2459,11 @@ fn fresh_ids(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Fresh { id, .. } => Some(id.clone()),
-            Job::State(_) | Job::Directed(_) | Job::Edit { .. } | Job::Locate { .. } => None,
+            Job::State(_)
+            | Job::Directed(_)
+            | Job::Edit { .. }
+            | Job::Locate { .. }
+            | Job::Measure { .. } => None,
         })
         .collect()
 }
@@ -2455,7 +2575,7 @@ fn speech_graph_revisions_do_not_edit_an_unchanged_modelled_room() {
 }
 
 #[tokio::test]
-async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_fast() {
+async fn settled_edits_use_admitted_jobs_and_a_thirty_second_presentation_clock() {
     let generated = crate::gameplay::npc_dossier_tests::adventure(41);
     let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
     current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
@@ -2473,12 +2593,16 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
         &plated,
         Duration::from_secs(15),
     );
+    shared.poll_state_images_at(Duration::from_secs(18));
+    let Job::State(state_images::Job::Bake { pending: first, .. }) = drain(&mut queue).remove(0) else {
+        panic!("admitted first state render")
+    };
     // A ready edit is held during a roll, then the roll ends.
     locked(&shared.book).current.as_mut().unwrap().in_roll = true;
     shared.finish_state_image_at(
         state_images::Done::Bake {
             scene: changed.scene_key.clone(),
-            state: pending_state(&shared),
+            state: first.state,
             revision: 2,
             story_actor: None,
             fresh: false,
@@ -2497,20 +2621,24 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
         &plated,
         Duration::from_secs(20),
     );
+    shared.poll_state_images_at(Duration::from_secs(33));
+    let Job::State(state_images::Job::Bake { pending: second, .. }) = drain(&mut queue).remove(0) else {
+        panic!("admitted second state render")
+    };
     shared.finish_state_image_at(
         state_images::Done::Bake {
             scene: changed.scene_key,
-            state: pending_state(&shared),
+            state: second.state,
             revision: 3,
             story_actor: None,
             fresh: false,
             result: Ok(key('c')),
         },
-        Duration::from_secs(21),
+        Duration::from_secs(34),
     );
-    shared.poll_state_images_at(Duration::from_secs(21));
+    shared.poll_state_images_at(Duration::from_secs(34));
     assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
-    shared.poll_state_images_at(Duration::from_secs(30));
+    shared.poll_state_images_at(Duration::from_secs(50));
     assert_eq!(locked(&shared.book).shown().unwrap().0, key('c'));
 }
 
@@ -2662,7 +2790,18 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
     shared.project_scene_contents(&mut public, None);
     assert!(public.item.is_none());
     plates.request_item("Brakka", &id, None, true).unwrap();
-    assert!(drain(&mut queue).is_empty());
+    plates.request_item("Brakka", &id, None, true).unwrap();
+    let jobs = drain(&mut queue);
+    assert_eq!(
+        jobs.len(),
+        1,
+        "explicit sharing admits one deduplicated focus edit"
+    );
+    assert!(matches!(&jobs[0], Job::State(state_images::Job::Item {
+        priority: crate::gameplay::imagery::ImagePriority::Foreground,
+        focus_hero: Some(hero),
+        ..
+    }) if hero == "Brakka"));
     shared.project_scene_contents(&mut public, None);
     assert_eq!(public.item.as_ref().unwrap().thing_id, id);
 }
@@ -3598,7 +3737,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
     let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     observe(&shared, &current, &[], &[1]);
     let id = fresh_ids(&drain(&mut queue)).remove(0);
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(0));
     assert!(
         drain(&mut queue).is_empty(),
         "nothing to edit before the plate exists"
@@ -3611,8 +3750,8 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), angry);
-    shared.poll_face();
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(0));
+    shared.poll_face_at(Duration::from_secs(15));
     let jobs = drain(&mut queue);
     assert_eq!(jobs.len(), 1, "one edit however often the face is polled");
     let Job::Edit { base, face, .. } = &jobs[0] else {
@@ -3657,7 +3796,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
         .insert("keeper".to_owned(), Face::AUTHORED);
     shared.poll_face();
     let mut message = display_message(&current);
-    apply_at(&shared, &mut message, Duration::from_secs(10));
+    apply_at(&shared, &mut message, Duration::from_secs(25));
     assert_eq!(
         shown_scene(&message).live_plate,
         format!("/gameplay/imagery/{}", "a".repeat(64)),
@@ -3946,6 +4085,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
                 &member.name,
                 canonical.role,
                 canonical.life_stage,
+                (canonical.gender, canonical.age, [].as_slice()).into(),
                 &reference.sha256,
             )
             .unwrap(),
@@ -4309,6 +4449,7 @@ fn figure_masks_survive_durable_placement_and_wire_identity_projection() {
         head_top_permille: [213, 100],
         free_left: true,
         inferred: true,
+        mask_url: "/gameplay/imagery/plate/figure/3".into(),
     };
     let actor = FigureGeometry {
         id: "npc:keeper".into(),
@@ -4338,6 +4479,10 @@ fn figure_masks_survive_durable_placement_and_wire_identity_projection() {
     );
     assert_eq!(wire.figure_masks[0].head_top_x_permille, 213);
     assert!(wire.figure_masks[0].inferred);
+    assert_eq!(
+        wire.figure_masks[0].mask_url,
+        "/gameplay/imagery/plate/figure/3"
+    );
 }
 
 #[test]
@@ -4363,6 +4508,7 @@ fn figure_masks_arriving_for_the_presented_bitmap_refresh_without_resetting_its_
             head_top_permille: [213, 100],
             free_left: true,
             inferred: true,
+            mask_url: String::new(),
         });
     shared.finish(Done::Located {
         id,
@@ -5688,8 +5834,9 @@ fn hs41_plates_prepare_each_thirty_second_frame_and_share_a_reading_clock_with_f
     let mut output = rpc::GameplayScene::default();
     shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(30));
     assert_eq!(output.live_plate, key('b').path());
+    shared.poll_state_images_at(Duration::from_secs(33));
     let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
-        panic!("next frame starts preparing when this one shows")
+        panic!("next frame starts thirty seconds after the previous start")
     };
     assert_eq!(pending.cadence_due, Some(Duration::from_secs(60)));
     locked(&shared.book).edit = Edit::Ready {
@@ -5711,12 +5858,14 @@ fn hs41_plates_prepare_each_thirty_second_frame_and_share_a_reading_clock_with_f
         key('b').path(),
         "phones cannot advance the display clock"
     );
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(40));
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(54));
+    assert_eq!(output.live_plate, key('b').path());
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(55));
     assert_eq!(output.live_plate, key('c').path());
 }
 
 #[test]
-fn hs41_plates_discard_prepared_old_dialogue_without_postponing_the_cadence() {
+fn hs41_plates_keep_prepared_dialogue_and_compose_the_next_from_the_latest_beat() {
     let (shared, mut queue, current, mut projected) = hs41_plate_clock_fixture();
     let line = |sequence, text: &str| StoryBeat {
         actor_id: current.cast[0].id.clone(),
@@ -5761,10 +5910,14 @@ fn hs41_plates_discard_prepared_old_dialogue_without_postponing_the_cadence() {
     );
     assert_eq!(locked(&shared.book).shown().unwrap().0, key('a'));
     shared.poll_state_images_at(Duration::from_secs(13));
+    assert!(drain(&mut queue).is_empty());
+    shared.poll_state_images_at(Duration::from_secs(30));
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+    shared.poll_state_images_at(Duration::from_secs(33));
     let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
         panic!("new cadence")
     };
-    assert_eq!(pending.cadence_due, Some(Duration::from_secs(30)));
+    assert_eq!(pending.cadence_due, Some(Duration::from_secs(60)));
     assert_eq!(pending.story.unwrap().sequence, 2);
 }
 
@@ -5896,5 +6049,190 @@ fn hs41_plates_public_actor_arrival_is_a_debounced_visible_change_even_without_a
             .identity_cast
             .iter()
             .any(|actor| actor.id == "npc:hs41-generated-person")
+    );
+}
+
+#[tokio::test]
+async fn photo_check_provider_failure_still_measures_and_projects_narrator_arrival() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS65/unjudged-arrival")
+        .join(std::process::id().to_string());
+    let fixture = DirectionFixture::photographic(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    cache_personal_heroes(&inner, &cache, &[1]).await;
+    let endpoint = crate::gameplay::storyteller::tests::FakeEndpoint::start(vec![
+        crate::gameplay::storyteller::tests::Reply::Status(
+            500,
+            serde_json::json!({"error":"injected photo check failure"}),
+        ),
+    ]);
+    fixture.photo_judge(
+        df_providers::NativePlateJudge::new(
+            df_providers::PlateJudgeConfig::loopback_fixture(endpoint.address).unwrap(),
+            "fake-private",
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+    );
+    let (jobs, mut queue) = mpsc::channel(8);
+    let shared = Arc::new(Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    });
+    let mut current = scene(SceneKey::Opening, "HS65 arrival", Some("Kestrel"));
+    current.speaker.clear();
+    current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+    observe(&shared, &current, &[], &[1]);
+    let Job::Fresh {
+        id,
+        graph_revision,
+        scene,
+        spec,
+        heroes,
+        faces,
+        ahead,
+    } = drain(&mut queue).remove(0)
+    else {
+        panic!("arrival render")
+    };
+    assert!(spec.speaker.is_none());
+    let (key, placement, locate) = shared
+        .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, ahead)
+        .await
+        .unwrap();
+    let work = locate.expect("a narrator-led arrival still measures every person");
+    assert_eq!(
+        endpoint.bodies().len(),
+        1,
+        "the photo check reached the failing fake"
+    );
+    assert!(work.speaker.is_none());
+    let Lookup::Image { bytes, .. } = shared.inner.imagery.image(key.as_str()).await else {
+        panic!("arrival bytes")
+    };
+    let masks = [10, 60]
+        .into_iter()
+        .enumerate()
+        .map(|(index, left)| {
+            serde_json::json!({"index":index,"score":0.99,
+            "runs":(10..90).map(|y| [y * 100 + left, 20]).collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    let scan = serde_json::json!({"revision":1,"model":"sam-3.1",
+        "image_sha256":format!("{:x}", sha2::Sha256::digest(&bytes)),
+        "width":100,"height":100,"source_width":100,"source_height":100,
+        "outcome":"complete","masks":masks});
+    std::fs::write(
+        cache.join(format!("{}.sam31-person-v1.json", key.as_str())),
+        serde_json::to_vec(&scan).unwrap(),
+    )
+    .unwrap();
+    shared.finish(Done::Fresh {
+        id,
+        graph_revision,
+        ahead,
+        elapsed: Duration::ZERO,
+        result: Ok((key.clone(), placement)),
+    });
+    let scene_key = view(&current, &[1], false).scene_key;
+    let mut output = rpc::GameplayScene::default();
+    // A saturated queue must leave the ready picture visible and retry measurement later.
+    for _ in 0..8 {
+        shared
+            .jobs
+            .try_send(Job::Measure {
+                key: key.clone(),
+                scene: Box::new(scene.clone()),
+                heroes: heroes.clone(),
+            })
+            .unwrap_or_else(|_| panic!("fill the bounded fixture queue"));
+    }
+    shared.apply_at(&scene_key, &mut output, Duration::from_secs(1));
+    assert_eq!(output.live_plate, key.path());
+    assert!(locked(&shared.book).measuring_images.is_empty());
+    assert_eq!(drain(&mut queue).len(), 8);
+    shared.apply_at(&scene_key, &mut output, Duration::from_secs(2));
+    let mut tasks = JoinSet::new();
+    let repair = queue
+        .try_recv()
+        .expect("the presented plate repairs an unqueued locator");
+    assert!(matches!(repair, Job::Measure { .. }));
+    shared.spawn(&mut tasks, repair);
+    shared.finish(tasks.join_next().await.unwrap().unwrap());
+    shared.apply_at(&scene_key, &mut output, Duration::from_secs(3));
+    let layout = output.plate_layout.unwrap();
+    assert_eq!(output.live_plate, key.path());
+    assert_eq!(layout.figure_masks.len(), 2);
+    assert!(
+        layout
+            .figure_masks
+            .iter()
+            .any(|mask| mask.person
+                == Some(rpc::plate_figure_mask::Person::ActorId("keeper".into())))
+    );
+    assert_eq!(
+        locked(&shared.book).presented.as_ref().unwrap().since,
+        Duration::from_secs(1)
+    );
+    assert!(
+        queue.try_recv().is_err(),
+        "measured views never repeat the provider work"
+    );
+}
+
+#[test]
+fn late_measurement_of_a_cadence_plate_projects_by_image_key_without_resetting_reading() {
+    let (shared, mut queue) = shared(8);
+    let current = scene(SceneKey::Opening, "HS65 cadence geometry", Some("Kestrel"));
+    let projected = view(&current, &[1], false);
+    shared.observe_with(&projected, Some(current), Vec::new());
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let mut output = rpc::GameplayScene::default();
+    shared.apply_at(&projected.scene_key, &mut output, Duration::ZERO);
+    locked(&shared.book).state_images.shown = Some((key('b'), None));
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(26));
+    assert_eq!(output.live_plate, key('b').path());
+    assert!(output.plate_layout.is_none());
+    let placement = PlatePlacement {
+        speaker: layout(),
+        heroes: Vec::new(),
+        actors: vec![ActorHead {
+            actor_id: "keeper".into(),
+            layout: shot::measured_layout(0.20, 0.20, 0.30, 0.35),
+        }],
+        figure_masks: Vec::new(),
+    };
+    locked(&shared.book)
+        .image_layouts
+        .insert(key('a').as_str().into(), placement.clone());
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(27));
+    assert!(
+        output.plate_layout.is_none(),
+        "another bitmap's heads never attach"
+    );
+    locked(&shared.book)
+        .image_layouts
+        .insert(key('b').as_str().into(), placement);
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(28));
+    assert_eq!(output.live_plate, key('b').path());
+    assert_eq!(output.plate_layout.unwrap().actors[0].actor_id, "keeper");
+    assert_eq!(
+        locked(&shared.book).presented.as_ref().unwrap().since,
+        Duration::from_secs(26)
     );
 }

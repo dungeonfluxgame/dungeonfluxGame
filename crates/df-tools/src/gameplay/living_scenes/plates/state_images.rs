@@ -3,14 +3,16 @@
 use super::*;
 use crate::gameplay::{
     adventure::scene_model::{SceneItemProvenance, SceneNow, SceneThing},
-    imagery::{item_picture, state_edit},
+    imagery::{ImagePriority, item_image_request, state_edit},
     narrative_focus::{NarrativeFocus, Presentation, Stage},
 };
 use serde_json::Value;
 
 const SETTLE: Duration = Duration::from_secs(3);
-const BAKE_INTERVAL: Duration = Duration::from_secs(10);
+const BAKE_INTERVAL: Duration = Duration::from_secs(15);
 const SCENE_CADENCE: Duration = Duration::from_secs(30);
+pub(super) const MINIMUM_PRESENTATION: Duration = Duration::from_secs(25);
+const MAXIMUM_PLATE_RENDERS: usize = 3;
 /// After a failed fresh render for a capped edit chain, no new one is asked for this long.
 const CHAIN_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 
@@ -20,15 +22,18 @@ pub(super) struct Book {
     observed: String,
     observed_graph: u64,
     pub(super) pending: Option<Pending>,
-    pub(super) flying: bool,
+    in_flight: BTreeMap<String, Composition>,
     pub(super) last_started: Option<Duration>,
     last_shown: Option<Duration>,
     pub(super) shown: Option<(ImageKey, Option<PlatePlacement>)>,
+    retained_base: Option<(ImageKey, Option<PlatePlacement>)>,
     pub(super) baked_revision: Option<u64>,
-    /// The finished image, its revision, its story actor and whether it was composed afresh.
-    ready: Option<(ImageKey, u64, Option<String>, bool)>,
+    ready: Option<Ready>,
+    shown_sequence: u64,
+    selected: Option<(ImageKey, Composition)>,
     pub(super) items: BTreeMap<String, Item>,
     pub(super) latest_items: BTreeMap<String, String>,
+    item_shot: Option<ItemShot>,
     last_story_actor: Option<String>,
     focus: Option<Presentation>,
     /// The still on screen is an edit, so it holds content the fresh base does not have.
@@ -38,17 +43,102 @@ pub(super) struct Book {
     refresh_failed_at: Option<Duration>,
     cadence_deadline: Option<Duration>,
     cadence_sequence: u64,
-    cadence_request: Option<(String, u64, Duration)>,
-    ready_at: Option<Duration>,
     latest_story: Option<StoryBeat>,
     projection_deadline: Option<(ImageKey, Duration)>,
-    cadence_missed: Option<Duration>,
     pub(super) subject_selection: Option<subject::Selection>,
     framed_subject: Option<subject::Frame>,
 }
 
+#[derive(Clone)]
+struct Composition {
+    sequence: u64,
+    scene: String,
+    retired: bool,
+    beat: u64,
+    started_at: Duration,
+    state: String,
+    revision: u64,
+    due: Duration,
+}
+
+struct Ready {
+    key: ImageKey,
+    composition: Composition,
+    story_actor: Option<String>,
+    fresh: bool,
+}
+
+struct ItemShot {
+    id: String,
+    hero: String,
+    connected: bool,
+    shown_at: Option<Duration>,
+}
+
+enum ItemRequest {
+    Explicit,
+    InspectionHands,
+    Hand(ImagePriority),
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ItemFocusPose {
+    Recorded,
+    InspectionHands,
+}
+
 impl Book {
+    fn scene_in_flight(&self) -> usize {
+        self.in_flight
+            .values()
+            .filter(|composition| composition.scene == self.scene)
+            .count()
+    }
+
+    pub(super) fn has_in_flight(&self) -> bool {
+        self.scene_in_flight() > 0 || self.refresh.is_some()
+    }
+
     pub(super) fn note_effective_projection(&mut self, key: &ImageKey, now: Duration) {
+        if self.is_item_shot(key) {
+            if let Some(shot) = self.item_shot.as_mut()
+                && shot.shown_at.is_none()
+                && let Some(item) = self.items.get(&shot.id)
+            {
+                shot.shown_at = Some(now);
+                crate::gameplay::actor::record_audit_diagnostic(
+                    "gameplay.living_scene.subject_presented",
+                    format!(
+                        "PLATE subject kind=item_focus id={} asking_hero={} connected={} image_key={}",
+                        item.thing.id,
+                        shot.hero,
+                        shot.connected,
+                        key.as_str()
+                    ),
+                    serde_json::Map::from_iter([
+                        ("subject_kind".into(), serde_json::json!("item_focus")),
+                        ("connected".into(), serde_json::json!(shot.connected)),
+                        ("subject_id".into(), serde_json::json!(item.thing.id)),
+                        ("asking_hero".into(), serde_json::json!(shot.hero)),
+                        ("image_key".into(), serde_json::json!(key.as_str())),
+                        ("shown_at_ms".into(), serde_json::json!(now.as_millis())),
+                        (
+                            "minimum_read_ms".into(),
+                            serde_json::json!(MINIMUM_PRESENTATION.as_millis()),
+                        ),
+                    ]),
+                    &[],
+                );
+            }
+            return;
+        }
+        if self
+            .item_shot
+            .as_ref()
+            .is_some_and(|shot| shot.shown_at.is_some())
+        {
+            self.item_shot = None;
+        }
         if self
             .projection_deadline
             .as_ref()
@@ -65,25 +155,20 @@ impl Book {
         let next = now.saturating_add(SCENE_CADENCE);
         self.last_shown = Some(now);
         self.cadence_deadline = Some(next);
-        if let Some(pending) = self
-            .pending
-            .as_mut()
-            .filter(|pending| pending.cadence_due.is_some())
-        {
-            pending.cadence_due = Some(next);
-        }
-        if let Some((_, revision, due)) = self.cadence_request.as_mut()
-            && *due != next
-        {
-            *due = next;
-            record_cadence("rescheduled_after_visible_projection", *revision, next, now);
-            if self.ready.is_some() {
-                self.ready_at = Some(next);
+        if let Some((expected, composition)) = self.selected.take() {
+            if expected == *key {
+                record_pipeline("presented", &composition, now, self.scene_in_flight());
+            } else {
+                self.selected = Some((expected, composition));
             }
         }
     }
 
     fn accepts_state(&self, state: &str) -> bool {
+        let state = self
+            .in_flight
+            .get(state)
+            .map_or(state, |composition| composition.state.as_str());
         if state == self.observed {
             return true;
         }
@@ -107,23 +192,35 @@ impl Book {
         }
     }
 
+    pub(super) fn is_item_shot(&self, key: &ImageKey) -> bool {
+        self.item_shot
+            .as_ref()
+            .and_then(|shot| self.items.get(&shot.id))
+            .and_then(|item| item.key.as_ref())
+            == Some(key)
+    }
+
+    pub(super) fn item_projection(&self, now: Duration) -> Option<ImageKey> {
+        let shot = self.item_shot.as_ref()?;
+        if shot
+            .shown_at
+            .is_some_and(|shown| now.saturating_sub(shown) >= MINIMUM_PRESENTATION)
+        {
+            return None;
+        }
+        self.items.get(&shot.id)?.key.clone()
+    }
+
     /// The first virtual time at which the current pending edit could pass its production
     /// settle and pacing gates. Tests use this instead of assuming that several expensive fake
     /// image operations fit inside a hard-coded wall-clock interval.
     pub(super) fn next_eligible_at(
         &self,
-        story_interval: Duration,
+        _story_interval: Duration,
         face_last_started: Option<Duration>,
     ) -> Option<Duration> {
         let pending = self.pending.as_ref()?;
-        let interval = if pending.story.is_some()
-            && pending.snapshot.is_none()
-            && pending.cadence_due.is_none()
-        {
-            story_interval.max(BAKE_INTERVAL)
-        } else {
-            BAKE_INTERVAL
-        };
+        let interval = BAKE_INTERVAL;
         let mut eligible = pending.changed_at.saturating_add(SETTLE);
         for last_started in [self.last_started, face_last_started].into_iter().flatten() {
             eligible = eligible.max(last_started.saturating_add(interval));
@@ -320,12 +417,17 @@ pub(super) enum Job {
         thing: SceneThing,
         detail: Option<String>,
         base: Option<ImageKey>,
+        priority: ImagePriority,
+        focus_hero: Option<String>,
+        focus_pose: ItemFocusPose,
     },
 }
 
 pub(super) struct IdentitySnapshot {
     pub(super) scene: PlateScene,
     heroes: Vec<u8>,
+    face: Option<Face>,
+    shot_sequence: u64,
 }
 
 pub(super) enum Done {
@@ -344,7 +446,7 @@ pub(super) enum Done {
     },
 }
 
-pub(super) fn reset_scene(book: &mut super::Book, view: &View) -> bool {
+pub(super) fn reset_scene(book: &mut super::Book, view: &View, now: Duration) -> bool {
     let images = &mut book.state_images;
     if images.scene == view.scene_key {
         return false;
@@ -356,7 +458,21 @@ pub(super) fn reset_scene(book: &mut super::Book, view: &View) -> bool {
         .filter(|story| images.observed == story.sha256)
         .map(|story| story.sha256.clone())
         .unwrap_or_default();
+    let in_flight = images.scene_in_flight();
+    for composition in images
+        .in_flight
+        .values_mut()
+        .filter(|composition| !composition.retired)
+    {
+        composition.retired = true;
+        record_pipeline("retired", composition, now, in_flight);
+    }
+    if let Some(ready) = images.ready.take() {
+        record_pipeline("retired", &ready.composition, now, in_flight);
+    }
     *images = Book {
+        cadence_sequence: images.cadence_sequence,
+        in_flight: std::mem::take(&mut images.in_flight),
         scene: view.scene_key.clone(),
         observed: retained_story,
         ..Book::default()
@@ -373,7 +489,6 @@ pub(super) fn finish_chain_refresh(
     now: Duration,
 ) {
     book.state_images.refresh = None;
-    book.state_images.flying = false;
     let current = book
         .current
         .as_ref()
@@ -397,7 +512,34 @@ pub(super) fn finish_chain_refresh(
 }
 
 pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
-    let scene_changed = reset_scene(book, view);
+    // A local spot changes the public scene title/key, but not the canonical place.
+    // Admitted pictures still depict this place and remain useful until a newer one wins.
+    if same_place(book, scene) && book.state_images.scene != view.scene_key {
+        let base = book.fresh_base(true);
+        let previous = book.state_images.scene.clone();
+        let images = &mut book.state_images;
+        if base.is_some() {
+            images.retained_base = base;
+        }
+        images.scene = view.scene_key.clone();
+        for composition in images
+            .in_flight
+            .values_mut()
+            .filter(|work| !work.retired && work.scene == previous)
+        {
+            composition.scene = view.scene_key.clone();
+        }
+        if let Some(ready) = images.ready.as_mut() {
+            ready.composition.scene = view.scene_key.clone();
+        }
+        if let Some((_, selected)) = images.selected.as_mut() {
+            selected.scene = view.scene_key.clone();
+        }
+        if let Some(shown) = book.presented.as_mut() {
+            shown.scene_key = view.scene_key.clone();
+        }
+    }
+    let scene_changed = reset_scene(book, view, now);
     let story_changed = book
         .state_images
         .latest_story
@@ -406,20 +548,12 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         != view.story.as_ref().map(|story| &story.sha256);
     book.state_images.latest_story = view.story.clone();
     if story_changed {
-        // A new line updates the queued moment without forcing an immediate redraw or moving
-        // its 30-second deadline. A flying older request is rejected by accepts_state.
-        if book
-            .state_images
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.cadence_due.is_some())
-        {
-            book.state_images.pending = None;
-        }
-        if let Some((_, revision, due)) = book.state_images.cadence_request.take() {
-            record_cadence("superseded", revision, due, now);
-            book.state_images.ready = None;
-            book.state_images.ready_at = None;
+        book.state_images.observed_graph = view.graph_revision;
+        // Only work not yet dispatched follows a new beat. Admitted renders retain their
+        // composition and may still reach the screen in monotonically increasing order.
+        if let Some(pending) = book.state_images.pending.as_mut() {
+            pending.story = view.story.clone().map(Box::new);
+            pending.revision = view.graph_revision;
         }
     }
     if scene_changed {
@@ -552,10 +686,6 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     }
     images.observed = state.clone();
     images.observed_graph = view.graph_revision;
-    images.ready = None;
-    images.ready_at = None;
-    images.cadence_request = None;
-    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
     let reason = if focus_changed {
         "committed dialogue selects a canonical narrative subject".to_owned()
     } else {
@@ -586,6 +716,14 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     });
 }
 
+pub(super) fn same_place(book: &super::Book, scene: &PlateScene) -> bool {
+    book.current
+        .as_ref()
+        .filter(|current| !current.in_combat)
+        .and_then(|current| current.scene.as_ref())
+        .is_some_and(|current| !scene.place_id.is_empty() && current.place_id == scene.place_id)
+}
+
 fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
     let images = &mut book.state_images;
     let Some(story) = &view.story else {
@@ -608,10 +746,6 @@ fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: D
     }
     images.observed = story.sha256.clone();
     images.observed_graph = view.graph_revision;
-    images.ready = None;
-    images.ready_at = None;
-    images.cadence_request = None;
-    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
     images.pending = Some(Pending {
         snapshot: None,
         story: Some(Box::new(story.clone())),
@@ -907,7 +1041,6 @@ impl Shared {
         // bounded render and its completion instead of queuing a duplicate refresh behind it.
         if matches!(book.current_entry(), Some(super::Entry::Pending)) {
             book.state_images.refresh = Some(id);
-            book.state_images.flying = true;
             book.state_images.last_started = Some(now);
             refresh_decision(book, pipeline, "awaiting_inflight_fresh_base");
             return true;
@@ -929,7 +1062,6 @@ impl Shared {
             return false;
         }
         book.state_images.refresh = Some(id);
-        book.state_images.flying = true;
         book.state_images.last_started = Some(now);
         refresh_decision(book, pipeline, "edit_chain_capped");
         true
@@ -941,31 +1073,28 @@ impl Shared {
 
     pub(super) fn poll_state_images_at(&self, now: Duration) {
         let mut book = locked(&self.book);
-        if let Some((_, revision, due)) = book.state_images.cadence_request.as_ref()
-            && now > *due
-            && book.state_images.ready.is_none()
-            && book.state_images.cadence_missed != Some(*due)
-        {
-            record_cadence("deadline_missed", *revision, *due, now);
-            book.state_images.cadence_missed = Some(*due);
-        }
         if book.presentation_held
             && book
                 .presented
                 .as_ref()
-                .is_some_and(|shown| now.saturating_sub(shown.since) >= BAKE_INTERVAL)
+                .is_some_and(|shown| now.saturating_sub(shown.since) >= MINIMUM_PRESENTATION)
         {
             self.wake();
+            book.presentation_held = false;
         }
         let Some(current) = &book.current else {
             return;
         };
+        if book.state_images.item_shot.as_ref().is_some_and(|shot| {
+            shot.shown_at
+                .is_some_and(|shown| now.saturating_sub(shown) >= MINIMUM_PRESENTATION)
+        }) {
+            self.wake();
+        }
         let blocked = if current.in_combat {
             Some("combat")
         } else if current.in_roll {
             Some("roll")
-        } else if book.state_images.flying {
-            Some("render_in_flight")
         } else {
             None
         };
@@ -977,52 +1106,32 @@ impl Shared {
         let graph_revision = current.graph_revision;
         let identities = current.scene.clone().map(|scene| {
             Box::new(IdentitySnapshot {
+                shot_sequence: book.state_images.cadence_sequence.saturating_add(1),
+                face: scene
+                    .speaker
+                    .as_ref()
+                    .and_then(|speaker| self.inner.plate_wanted_face(&speaker.id)),
                 scene,
                 heroes: current.heroes.clone(),
             })
         });
-        let can_show = book
-            .state_images
-            .last_shown
-            .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
-        if can_show
-            && book.state_images.ready_at.is_none_or(|due| now >= due)
-            && let Some((key, revision, story_actor, fresh)) = book.state_images.ready.take()
-        {
-            let layout = book.image_layouts.get(key.as_str()).cloned();
-            let observed = book.state_images.observed.clone();
-            focus_progress(
-                &mut book.state_images,
-                &observed,
-                revision,
-                Stage::Published,
-                Some(&key),
-                now,
-                None,
-            );
-            book.edit = Edit::Idle;
-            book.state_images.shown = Some((key, layout));
-            book.state_images.carried_edit = !fresh;
-            book.state_images.baked_revision = Some(revision);
-            book.state_images.last_shown = Some(now);
-            book.state_images.ready_at = None;
-            cadence_published(&mut book.state_images, now);
-
-            if let Some(actor) = story_actor {
-                book.state_images.last_story_actor = Some(actor);
-            }
-            self.wake();
-        }
+        self.present_state_image(&mut book, now);
         if book.state_images.pending.is_none()
-            && book.state_images.ready.is_none()
-            && book.shown().is_some()
+            && (book.shown().is_some()
+                || book
+                    .current
+                    .as_ref()
+                    .is_some_and(|current| current.held.is_some()))
             && let Some(deadline) = book.state_images.cadence_deadline
             && let Some(identity) = identities.as_deref()
+            && book
+                .state_images
+                .last_started
+                .is_none_or(|last| now.saturating_sub(last) >= SCENE_CADENCE)
         {
             let images = &mut book.state_images;
             images.observed_graph = graph_revision;
-            images.cadence_sequence = images.cadence_sequence.saturating_add(1);
-            let sequence = images.cadence_sequence;
+            let sequence = images.cadence_sequence.saturating_add(1);
             images.pending = Some(Pending {
                 snapshot: identity.scene.snapshot.clone(),
                 story: images.latest_story.clone().map(Box::new),
@@ -1050,9 +1159,6 @@ impl Shared {
             return;
         };
         let is_focus = pending.focus.is_some();
-        // Only a story beat's edit leaves the scene's state out of its prompt; every other edit
-        // carries the canonical current scene.
-        let lacks_scene_state = pending.snapshot.is_none();
         use super::super::canonical::ReferenceStatus;
         let status = identities
             .as_ref()
@@ -1092,15 +1198,13 @@ impl Shared {
             }
             ReferenceStatus::Ready => {}
         }
-        let interval = if pending.story.is_some()
-            && pending.snapshot.is_none()
-            && pending.cadence_due.is_none()
-        {
-            self.inner.timing.interval.max(BAKE_INTERVAL)
-        } else {
-            BAKE_INTERVAL
-        };
-        if now.saturating_sub(pending.changed_at) < SETTLE
+        let interval = BAKE_INTERVAL;
+        let cadence_due = book
+            .state_images
+            .last_started
+            .or(book.state_images.last_shown)
+            .is_some_and(|last| now.saturating_sub(last) >= SCENE_CADENCE);
+        if (now.saturating_sub(pending.changed_at) < SETTLE && !cadence_due)
             || book
                 .state_images
                 .last_started
@@ -1113,16 +1217,21 @@ impl Shared {
             refresh_decision(&mut book, "state", "settling_or_rate_limited");
             return;
         }
-        // Every edit starts from the fresh plate, never from the still on screen: an edit of an
-        // edit compounds the model's rendering loss. A story beat's edit has no scene state to
-        // carry, so while the still on screen is an edit it waits for a fresh render instead.
-        if lacks_scene_state && book.state_images.carried_edit {
-            self.request_chain_refresh(&mut book, now, "state");
+        if book.state_images.scene_in_flight()
+            + usize::from(book.state_images.refresh.is_some())
+            + usize::from(matches!(book.edit, Edit::Pending(_)))
+            + usize::from(book.direct.pending)
+            >= MAXIMUM_PLATE_RENDERS
+        {
+            refresh_decision(&mut book, "state", "pipeline_full");
             return;
         }
-        // Keep the settled change pending until the original plate is ready to edit.
-        // Re-requesting a fresh plate here used to restage the room and lose the pending edit.
-        let Some((base, _)) = book.fresh_base(true) else {
+        // A spot move can keep using this place's original fresh base while the new framing
+        // renders. Never turn a previously edited picture into the base of another edit.
+        let Some((base, _)) = book
+            .fresh_base(true)
+            .or_else(|| book.state_images.retained_base.clone())
+        else {
             refresh_decision(&mut book, "state", "awaiting_base_plate");
             return;
         };
@@ -1152,10 +1261,22 @@ impl Shared {
             base.as_str(),
             book.state_images.carried_edit,
         );
-        let cadence_request = pending
-            .cadence_due
-            .map(|due| (pending.state.clone(), pending.revision, due));
-        let focus_state = pending.state.clone();
+        let sequence = book.state_images.cadence_sequence.saturating_add(1);
+        let composition = Composition {
+            sequence,
+            scene: scene.clone(),
+            retired: false,
+            beat: pending.story.as_ref().map_or(0, |story| story.sequence),
+            started_at: now,
+            state: pending.state.clone(),
+            revision: pending.revision,
+            due: pending.cadence_due.unwrap_or(now),
+        };
+        // The completion carries an opaque unique token. It is looked up, never parsed; a
+        // return to the same scene/state cannot adopt a previous visit's render.
+        pending.state = format!("{}|composition={sequence}", pending.state);
+        let completion_token = pending.state.clone();
+        let focus_state = composition.state.clone();
         let focus_revision = pending.revision;
         let job = super::Job::State(Job::Bake {
             scene,
@@ -1169,12 +1290,17 @@ impl Shared {
             Ok(()) => {
                 queued = true;
                 crate::gameplay::actor::record_audit_line("gameplay.imagery.request", request_line);
-                book.state_images.flying = true;
                 book.state_images.last_started = Some(now);
-                book.state_images.cadence_request = cadence_request;
-                if let Some((_, revision, due)) = &book.state_images.cadence_request {
-                    record_cadence("requested", *revision, *due, now);
-                }
+                book.state_images.cadence_sequence = sequence;
+                book.state_images
+                    .in_flight
+                    .insert(completion_token, composition.clone());
+                record_pipeline(
+                    "start",
+                    &composition,
+                    now,
+                    book.state_images.scene_in_flight(),
+                );
                 focus_progress(
                     &mut book.state_images,
                     &focus_state,
@@ -1190,6 +1316,8 @@ impl Shared {
                 pending,
                 ..
             }))) => {
+                let mut pending = pending;
+                pending.state = composition.state;
                 book.state_images.pending = Some(pending);
                 refresh_decision(&mut book, "state", "queue_full");
             }
@@ -1229,7 +1357,13 @@ impl Shared {
             .map_err(|_| ImageFailure::InvalidRequest)?;
         spec.camera = camera;
         let (request, _) = self
-            .photographic_request(&identity.scene, &spec, &identity.heroes, None, None)
+            .photographic_request(
+                &identity.scene,
+                &spec,
+                &identity.heroes,
+                None,
+                identity.face,
+            )
             .await?;
         Ok(request)
     }
@@ -1280,21 +1414,16 @@ impl Shared {
         };
         let mut references = vec![base];
         let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
-        if let Some(photo) = identity.scene.authored_place_photo()
-            && identity.scene.room_revision.is_some()
+        let committed_place_canon = locked(&self.inner.state)
+            .canonical
+            .committed_canon(Some(&identity.scene.place_id), None);
+        match self
+            .plate_room_reference(&identity.scene, !committed_place_canon.is_empty())
+            .await?
         {
-            references.push(self.inner.load(photo.to_owned()).await?);
-        } else {
-            match identity.scene.generated_room_revision() {
-                Some(revision) => references.push(
-                    self.inner
-                        .canonical_room_reference_at(&identity.scene.place_id, revision)
-                        .await
-                        .ok_or(ImageFailure::Interrupted)?,
-                ),
-                None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
-                None => {}
-            }
+            Some(reference) => references.push(reference),
+            None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
+            None => {}
         }
         let prompt = {
             let super::PlateIdentities {
@@ -1405,11 +1534,10 @@ impl Shared {
                         spec.camera = crate::gameplay::shot::Camera::for_public_beat(
                             spec.camera, identity.scene.key,
                             pending.story.as_ref().map_or(shot::PublicBeat::Calm, |story| story.tempo),
-                            pending.cadence_due.map_or(0, |due| due.as_secs()),
+                            identity.shot_sequence,
                             shot::PublicDialogue::SameSpeakerFollowup,
                         );
-                        let face = identity.scene.speaker.as_ref()
-                            .and_then(|speaker| self.inner.plate_wanted_face(&speaker.id));
+                        let face = identity.face;
                         let (mut request, _) = self.photographic_request(
                             &identity.scene, &spec, &identity.heroes, None, face,
                         ).await?;
@@ -1442,6 +1570,7 @@ impl Shared {
                     if let Some(identity) = identities.as_deref() {
                         let mut scene = identity.scene.clone();
                         scene.snapshot = pending.snapshot.clone().or(scene.snapshot);
+                        scene.picture = std::sync::OnceLock::new();
                         request.prompt = super::photo_context(&scene, request.prompt)?;
                     }
                     if let Some(focus) = pending.focus.as_ref() {
@@ -1469,7 +1598,9 @@ impl Shared {
                         subject.record_request(pending.revision, &self.inner.imagery.key_for(&request));
                     }
                     let subject = format!("plate:{}", identities.as_deref().map_or("", |identity| identity.scene.place_id.as_str()));
-                    let key = self.inner.imagery.generate(&subject, request).await?;
+                    let key = self.inner.imagery.generate_with_priority(
+                        &subject, request, ImagePriority::Foreground,
+                    ).await?;
                     if pending.focus.is_none()
                         && let Some(identity) = identities.as_deref()
                         && let Some(story) = pending.story.as_deref()
@@ -1529,26 +1660,50 @@ impl Shared {
                 thing,
                 detail,
                 base,
+                priority,
+                focus_hero,
+                focus_pose,
             } => {
                 let result = async {
-                    let mut references = Vec::new();
-                    if let Some(base) = base
-                        && let Lookup::Image { bytes, format } =
-                            self.inner.imagery.image(base.as_str()).await
-                    {
-                        references.push(ReferenceImage::new(format, bytes));
+                    let request = item_image_request(self.inner.rating, &thing, detail.as_deref())?;
+                    let canonical = self
+                        .inner
+                        .imagery
+                        .generate_with_priority(&format!("item:{id}"), request, priority)
+                        .await?;
+                    let Some(hero) = focus_hero else {
+                        return Ok(canonical);
+                    };
+                    let base = base.ok_or(ImageFailure::Interrupted)?;
+                    let Lookup::Image { bytes, format } =
+                        self.inner.imagery.image(base.as_str()).await
+                    else {
+                        return Err(ImageFailure::Interrupted);
+                    };
+                    let base = ReferenceImage::new(format, bytes);
+                    let Lookup::Image { bytes, format } =
+                        self.inner.imagery.image(canonical.as_str()).await
+                    else {
+                        return Err(ImageFailure::Interrupted);
+                    };
+                    let canonical = ReferenceImage::new(format, bytes);
+                    let mut focus_thing = thing;
+                    if matches!(focus_pose, ItemFocusPose::InspectionHands) {
+                        focus_thing.holder_id = Some(hero.clone());
                     }
-                    let prompt = item_picture(self.inner.rating, &thing, detail.as_deref())?;
+                    let request = ImageRequest::item_focus(
+                        self.inner.rating,
+                        &focus_thing,
+                        detail.as_deref(),
+                        &hero,
+                        [base, canonical],
+                    )?;
                     self.inner
                         .imagery
-                        .generate(
-                            &format!("item:{id}"),
-                            ImageRequest {
-                                kind: ImageKind::ArtifactCloseUp,
-                                references,
-                                prompt,
-                                output: OutputSpec::CLOSE_UP,
-                            },
+                        .generate_with_priority(
+                            &format!("item-focus:{id}"),
+                            request,
+                            ImagePriority::Foreground,
                         )
                         .await
                 }
@@ -1566,6 +1721,61 @@ impl Shared {
         }
     }
 
+    fn present_state_image(&self, book: &mut super::Book, now: Duration) {
+        if book.state_images.item_shot.as_ref().is_some_and(|shot| {
+            book.state_images
+                .items
+                .get(&shot.id)
+                .is_some_and(|item| !item.failed)
+        }) {
+            return;
+        }
+        if book
+            .current
+            .as_ref()
+            .is_none_or(|current| current.in_combat || current.in_roll)
+            || book
+                .state_images
+                .last_shown
+                .is_some_and(|last| now.saturating_sub(last) < SCENE_CADENCE)
+        {
+            return;
+        }
+        let Some(ready) = book.state_images.ready.take() else {
+            return;
+        };
+        let Ready {
+            key,
+            composition,
+            story_actor,
+            fresh,
+        } = ready;
+        let layout = book.image_layouts.get(key.as_str()).cloned();
+        focus_progress(
+            &mut book.state_images,
+            &composition.state,
+            composition.revision,
+            Stage::Published,
+            Some(&key),
+            now,
+            None,
+        );
+        book.edit = Edit::Idle;
+        let images = &mut book.state_images;
+        images.shown = Some((key.clone(), layout));
+        images.carried_edit = !fresh;
+        images.baked_revision = Some(composition.revision);
+        images.shown_sequence = composition.sequence;
+        images.last_shown = Some(now);
+        images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
+        images.projection_deadline = Some((key.clone(), composition.due));
+        images.selected = Some((key, composition));
+        if let Some(actor) = story_actor {
+            images.last_story_actor = Some(actor);
+        }
+        self.wake();
+    }
+
     pub(super) fn finish_state_image(&self, done: Done) {
         self.finish_state_image_at(done, self.inner.now());
     }
@@ -1581,87 +1791,85 @@ impl Shared {
                 fresh,
                 result,
             } => {
-                // A late bake is never published over a more recent composition.
-                if book
+                let Some(composition) = book.state_images.in_flight.remove(&state) else {
+                    // Unknown completions cannot release or present another request's work.
+                    return;
+                };
+                if composition.retired {
+                    // Retirement was audited at scene exit. Keep the cached result only.
+                } else if book
                     .current
                     .as_ref()
-                    .is_some_and(|current| current.scene_key == scene)
+                    .is_none_or(|current| current.scene_key != composition.scene)
+                    || composition.sequence <= book.state_images.shown_sequence
                 {
-                    book.state_images.flying = false;
-                    if book.state_images.accepts_state(&state)
-                        && book.state_images.observed_graph == revision
-                    {
-                        match result {
-                            Ok(key) => {
-                                let cadence_due = book
-                                    .state_images
-                                    .cadence_request
-                                    .as_ref()
-                                    .filter(|(requested_state, requested_revision, _)| {
-                                        *requested_state == state && *requested_revision == revision
-                                    })
-                                    .map(|(_, _, due)| *due);
-                                if let Some(due) = cadence_due {
-                                    record_cadence("ready", revision, due, now);
-                                }
-                                book.state_images.ready_at = cadence_due;
-                                if cadence_due.is_some_and(|due| now < due)
-                                    || book
-                                        .current
-                                        .as_ref()
-                                        .is_some_and(|current| current.in_combat || current.in_roll)
-                                    || book.state_images.last_shown.is_some_and(|last| {
-                                        now.saturating_sub(last) < BAKE_INTERVAL
-                                    })
-                                {
-                                    book.state_images.ready =
-                                        Some((key, revision, story_actor, fresh));
-                                } else {
-                                    let layout = book.image_layouts.get(key.as_str()).cloned();
-                                    focus_progress(
-                                        &mut book.state_images,
-                                        &state,
-                                        revision,
-                                        Stage::Published,
-                                        Some(&key),
+                    record_pipeline(
+                        "retired",
+                        &composition,
+                        now,
+                        book.state_images.scene_in_flight(),
+                    );
+                } else {
+                    if scene != composition.scene {
+                        record(
+                            "gameplay.living_scene.plate_spot_completion",
+                            &[
+                                ("render.scene", scene),
+                                ("presentation.scene", composition.scene.clone()),
+                                ("sequence", composition.sequence.to_string()),
+                            ],
+                        );
+                    }
+                    match result {
+                        Ok(key) => {
+                            let ready = Ready {
+                                key,
+                                composition,
+                                story_actor,
+                                fresh,
+                            };
+                            if book.state_images.ready.as_ref().is_none_or(|waiting| {
+                                waiting.composition.sequence < ready.composition.sequence
+                            }) {
+                                if let Some(older) = book.state_images.ready.replace(ready) {
+                                    record_pipeline(
+                                        "retired",
+                                        &older.composition,
                                         now,
-                                        None,
+                                        book.state_images.scene_in_flight(),
                                     );
-                                    book.edit = Edit::Idle;
-                                    book.state_images.shown = Some((key, layout));
-                                    book.state_images.carried_edit = !fresh;
-                                    book.state_images.baked_revision = Some(revision);
-                                    book.state_images.last_shown = Some(now);
-                                    book.state_images.ready_at = None;
-                                    cadence_published(&mut book.state_images, now);
-                                    if let Some(actor) = story_actor {
-                                        book.state_images.last_story_actor = Some(actor);
-                                    }
                                 }
-                            }
-                            Err(failure) => {
-                                if let Some((_, revision, due)) =
-                                    book.state_images.cadence_request.take()
-                                {
-                                    record_cadence("failed", revision, due, now);
-                                }
-                                focus_progress(
-                                    &mut book.state_images,
-                                    &state,
-                                    revision,
-                                    Stage::Failed,
-                                    None,
+                            } else {
+                                record_pipeline(
+                                    "retired",
+                                    &ready.composition,
                                     now,
-                                    Some(failure.label()),
-                                );
-                                record(
-                                    "gameplay.living_scene.state_edit_failed",
-                                    &[("reason", failure.label().into())],
+                                    book.state_images.scene_in_flight(),
                                 );
                             }
+                            self.present_state_image(&mut book, now);
                         }
-                    } else {
-                        refresh_decision(&mut book, "story", "superseded_by_newer_beat");
+                        Err(failure) => {
+                            record_pipeline(
+                                "retired",
+                                &composition,
+                                now,
+                                book.state_images.scene_in_flight(),
+                            );
+                            focus_progress(
+                                &mut book.state_images,
+                                &composition.state,
+                                revision,
+                                Stage::Failed,
+                                None,
+                                now,
+                                Some(failure.label()),
+                            );
+                            record(
+                                "gameplay.living_scene.state_edit_failed",
+                                &[("reason", failure.label().into())],
+                            );
+                        }
                     }
                 }
             }
@@ -1721,12 +1929,24 @@ fn record_cadence(stage: &str, revision: u64, deadline: Duration, now: Duration)
     );
 }
 
-fn cadence_published(images: &mut Book, now: Duration) {
-    if let Some((_, revision, due)) = images.cadence_request.take() {
-        record_cadence("published", revision, due, now);
-        images.projection_deadline = images.shown.as_ref().map(|(key, _)| (key.clone(), due));
-    }
-    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
+fn record_pipeline(stage: &str, composition: &Composition, now: Duration, in_flight: usize) {
+    let age_ms = now.saturating_sub(composition.started_at).as_millis();
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.living_scene.plate_cadence",
+        format!(
+            "PLATE cadence stage={stage} seq={} beat={} age_ms={age_ms} in_flight={in_flight}",
+            composition.sequence, composition.beat
+        ),
+        serde_json::Map::from_iter([
+            ("stage".into(), serde_json::json!(stage)),
+            ("sequence".into(), serde_json::json!(composition.sequence)),
+            ("beat".into(), serde_json::json!(composition.beat)),
+            ("age_ms".into(), serde_json::json!(age_ms)),
+            ("in_flight".into(), serde_json::json!(in_flight)),
+            ("at_ms".into(), serde_json::json!(now.as_millis())),
+        ]),
+        &[],
+    );
 }
 
 fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
@@ -1755,6 +1975,632 @@ fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
 mod cadence_tests {
     use super::*;
 
+    use super::super::tests::{
+        admit_canonical_references, drain, finish_canonical_references, key, scene, shared, view,
+    };
+
+    fn pipeline_fixture() -> (
+        Arc<Shared>,
+        mpsc::Receiver<super::super::Job>,
+        pack::Scene,
+        View,
+    ) {
+        let mut current = scene(SceneKey::Opening, "HS61 cadence", Some("Kestrel"));
+        current.setting.as_mut().unwrap().model = Some(
+            serde_json::from_slice(include_bytes!(
+                "../../../../../../content/merchant-shop/scene-model.json"
+            ))
+            .unwrap(),
+        );
+        let (shared, mut queue) = shared(16);
+        admit_canonical_references(&shared.inner, &current);
+        finish_canonical_references(&shared.inner);
+        locked(&shared.inner.state)
+            .canonical
+            .fixture_hero(1, "Hero 1", key('a'));
+        let projected = view(&current, &[1], false);
+        shared.observe_with(&projected, Some(current.clone()), Vec::new());
+        drain(&mut queue);
+        {
+            let mut book = locked(&shared.book);
+            let id = book.current.as_ref().unwrap().id.clone().unwrap();
+            book.insert(
+                id,
+                super::super::Entry::Ready {
+                    key: key('a'),
+                    placement: None,
+                },
+            );
+        }
+        shared.apply_at(
+            &projected.scene_key,
+            &mut rpc::GameplayScene::default(),
+            Duration::ZERO,
+        );
+        (shared, queue, current, projected)
+    }
+
+    fn commit_beat(
+        shared: &Shared,
+        current: &pack::Scene,
+        projected: &mut View,
+        sequence: u64,
+        now: Duration,
+        modelled: bool,
+    ) {
+        projected.graph_revision = sequence;
+        projected.story = Some(StoryBeat {
+            actor_id: current.cast[0].id.clone(),
+            sequence,
+            speaker: current.cast[0].name.clone(),
+            text: format!("Recorded vendor moment {sequence}: examining the wares."),
+            sha256: sequence.to_string(),
+            tempo: shot::PublicBeat::Calm,
+            dialogue: shot::PublicDialogue::SameSpeakerFollowup,
+        });
+        let mut plate = PlateScene::for_view(projected, current).unwrap();
+        if !modelled {
+            plate.snapshot = None;
+        }
+        let mut book = locked(&shared.book);
+        observe(&mut book, projected, &plate, now);
+        let current = book.current.as_mut().unwrap();
+        current.scene = Some(plate);
+        current.graph_revision = sequence;
+    }
+
+    struct FakeRender {
+        scene: String,
+        pending: Pending,
+        finishes_at: Duration,
+    }
+
+    impl FakeRender {
+        fn from_job(job: super::super::Job, finishes_at: Duration) -> Self {
+            let super::super::Job::State(Job::Bake { scene, pending, .. }) = job else {
+                panic!("expected a plate bake")
+            };
+            Self {
+                scene,
+                pending,
+                finishes_at,
+            }
+        }
+
+        fn complete(self, shared: &Shared, now: Duration) {
+            let sequence =
+                locked(&shared.book).state_images.in_flight[&self.pending.state].sequence;
+            shared.finish_state_image_at(
+                Done::Bake {
+                    scene: self.scene,
+                    state: self.pending.state,
+                    revision: self.pending.revision,
+                    story_actor: self.pending.story.as_deref().map(StoryBeat::actor_key),
+                    fresh: true,
+                    result: Ok(ImageKey::parse(&format!("{sequence:064x}")).unwrap()),
+                },
+                now,
+            );
+        }
+    }
+
+    #[test]
+    fn hs61_plates_pipeline_sixty_to_eighty_second_renders_for_five_minutes() {
+        let (shared, mut queue, current, mut projected) = pipeline_fixture();
+        let mut renders: Vec<FakeRender> = Vec::new();
+        let mut starts = Vec::new();
+        let mut presentations = Vec::new();
+        let mut last_key = key('a').path();
+        let mut maximum_in_flight = 0;
+        for second in 0..=300 {
+            let now = Duration::from_secs(second);
+            if second % 7 == 0 {
+                commit_beat(&shared, &current, &mut projected, second / 7 + 1, now, true);
+            }
+            shared.poll_state_images_at(now);
+            for job in drain(&mut queue) {
+                let mut render = FakeRender::from_job(job, now);
+                let book = locked(&shared.book);
+                let composition = &book.state_images.in_flight[&render.pending.state];
+                assert_eq!(
+                    composition.beat,
+                    second / 7 + 1,
+                    "compose the beat current at start"
+                );
+                render.finishes_at =
+                    now + Duration::from_secs(60 + (composition.sequence - 1) % 5 * 5);
+                starts.push(second);
+                renders.push(render);
+            }
+            maximum_in_flight = maximum_in_flight.max(renders.len());
+            assert!(renders.len() <= 3);
+            let mut index = 0;
+            while index < renders.len() {
+                if renders[index].finishes_at <= now {
+                    renders.remove(index).complete(&shared, now);
+                } else {
+                    index += 1;
+                }
+            }
+            let mut output = rpc::GameplayScene::default();
+            shared.apply_at(&projected.scene_key, &mut output, now);
+            if output.live_plate != last_key {
+                presentations.push(second);
+                last_key = output.live_plate;
+            }
+        }
+        assert_eq!(maximum_in_flight, 3);
+        assert!(starts.windows(2).all(|pair| pair[1] - pair[0] >= 15));
+        assert!(presentations.len() >= 7, "timeline: {presentations:?}");
+        assert!(
+            presentations
+                .windows(2)
+                .all(|pair| (25..=35).contains(&(pair[1] - pair[0]))),
+            "timeline: {presentations:?}"
+        );
+        println!(
+            "HS61 starts_s={starts:?} presented_s={presentations:?} max_in_flight={maximum_in_flight}"
+        );
+    }
+
+    #[test]
+    fn hs61_plates_next_start_captures_the_new_subject_item_and_mood() {
+        use crate::gameplay::scene_mood::{Expression, HealthTier};
+        let (shared, mut queue, current, mut projected) = pipeline_fixture();
+        commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
+        shared.poll_state_images_at(Duration::from_secs(3));
+        let first = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        let target = {
+            let book = locked(&shared.book);
+            let model = &book
+                .current
+                .as_ref()
+                .unwrap()
+                .scene
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .model;
+            model
+                .things
+                .iter()
+                .find(|thing| thing.in_scene && thing.publicly_visible)
+                .unwrap()
+                .id
+                .clone()
+        };
+        locked(&shared.book).state_images.subject_selection = Some(subject::Selection {
+            scene: projected.scene_key.clone(),
+            hero: "Hero 1".into(),
+            target: target.clone(),
+        });
+        let angry = Face {
+            expression: Expression::Angry,
+            tier: HealthTier::Healthy,
+        };
+        locked(&shared.inner.state)
+            .plate_wants
+            .insert(current.cast[0].id.clone(), angry);
+        commit_beat(
+            &shared,
+            &current,
+            &mut projected,
+            2,
+            Duration::from_secs(4),
+            true,
+        );
+        shared.poll_state_images_at(Duration::from_secs(17));
+        assert!(
+            drain(&mut queue).is_empty(),
+            "all starts respect the fifteen-second gate"
+        );
+        shared.poll_state_images_at(Duration::from_secs(18));
+        let super::super::Job::State(Job::Bake {
+            pending,
+            identities,
+            ..
+        }) = drain(&mut queue).remove(0)
+        else {
+            panic!("next composition")
+        };
+        assert_eq!(first.pending.story.as_ref().unwrap().sequence, 1);
+        assert_eq!(pending.story.as_ref().unwrap().sequence, 2);
+        assert!(pending.framed_subject.is_some());
+        assert_eq!(pending.focus.as_ref().unwrap().subject.id(), target);
+        let identity = identities.unwrap();
+        assert_eq!(identity.face, Some(angry));
+        assert_eq!(
+            identity.scene.story_text,
+            projected.story.as_ref().unwrap().text
+        );
+        assert_eq!(
+            identity.scene.speaker.as_ref().unwrap().id,
+            projected.story.as_ref().unwrap().actor_id
+        );
+        locked(&shared.inner.state).plate_wants.clear();
+        assert_eq!(
+            identity.face,
+            Some(angry),
+            "later mood changes cannot mutate admitted work"
+        );
+        assert_eq!(locked(&shared.book).state_images.scene_in_flight(), 2);
+    }
+
+    #[test]
+    fn hs61_plates_new_beats_do_not_cancel_renders_and_out_of_order_never_regresses() {
+        let (shared, mut queue, current, mut projected) = pipeline_fixture();
+        let mut renders = Vec::new();
+        for (sequence, second) in [(1, 0), (2, 15), (3, 30)] {
+            commit_beat(
+                &shared,
+                &current,
+                &mut projected,
+                sequence,
+                Duration::from_secs(second),
+                false,
+            );
+            shared.poll_state_images_at(Duration::from_secs(second + 3));
+            let render = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+            assert_eq!(render.pending.story.as_ref().unwrap().sequence, sequence);
+            renders.push(render);
+        }
+        shared.poll_state_images_at(Duration::from_secs(63));
+        assert!(
+            drain(&mut queue).is_empty(),
+            "three admitted renders bound the pipeline"
+        );
+        // Second render takes 60 seconds, first takes 80: the newer composition wins.
+        renders.remove(1).complete(&shared, Duration::from_secs(78));
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(78));
+        let newer = output.live_plate.clone();
+        renders.remove(0).complete(&shared, Duration::from_secs(83));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(83));
+        assert_eq!(
+            output.live_plate, newer,
+            "old completion cannot step backwards"
+        );
+        renders.remove(0).complete(&shared, Duration::from_secs(93));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(102));
+        assert_eq!(
+            output.live_plate, newer,
+            "hold a finished plate for reading time"
+        );
+        shared.poll_state_images_at(Duration::from_secs(108));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(108));
+        assert_ne!(
+            output.live_plate, newer,
+            "deliver waiting newer work within 35 seconds"
+        );
+        assert_eq!(locked(&shared.book).state_images.shown_sequence, 3);
+    }
+
+    #[test]
+    fn hs61_plates_scene_exit_retires_work_even_after_returning_to_the_same_scene() {
+        let (shared, mut queue, current, mut projected) = pipeline_fixture();
+        commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, false);
+        shared.poll_state_images_at(Duration::from_secs(3));
+        let old = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        let original = projected.clone();
+        projected.scene_key = "another-scene".into();
+        {
+            let mut book = locked(&shared.book);
+            reset_scene(&mut book, &projected, Duration::from_secs(10));
+            assert!(
+                book.state_images
+                    .in_flight
+                    .values()
+                    .all(|composition| composition.retired)
+            );
+            reset_scene(&mut book, &original, Duration::from_secs(20));
+        }
+        projected = original;
+        commit_beat(
+            &shared,
+            &current,
+            &mut projected,
+            2,
+            Duration::from_secs(20),
+            false,
+        );
+        shared.poll_state_images_at(Duration::from_secs(23));
+        let newer = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        old.complete(&shared, Duration::from_secs(83));
+        {
+            let book = locked(&shared.book);
+            assert!(book.state_images.shown.is_none());
+            assert!(book.state_images.ready.is_none());
+            assert!(
+                book.state_images.has_in_flight(),
+                "an old completion cannot release newer work"
+            );
+        }
+        newer.complete(&shared, Duration::from_secs(84));
+        assert_eq!(locked(&shared.book).state_images.shown_sequence, 2);
+    }
+
+    #[test]
+    fn hs65_local_spot_keeps_the_presented_plate_until_its_replacement_is_ready() {
+        let (shared, mut queue, current, projected) = pipeline_fixture();
+        let mut spot = current.clone();
+        spot.title = "Oren's stall".into();
+        spot.setting.as_mut().unwrap().short = "Oren's stall in the same courtyard".into();
+        let at_stall = view(&spot, &[1], false);
+        assert_ne!(projected.scene_key, at_stall.scene_key);
+        shared.observe_with(&at_stall, Some(spot.clone()), Vec::new());
+        drain(&mut queue);
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&at_stall.scene_key, &mut output, Duration::from_secs(10));
+        assert_eq!(output.live_plate, key('a').path());
+        assert_eq!(output.plate_state, rpc::PlateState::Ready as i32);
+        assert_eq!(
+            locked(&shared.book).presented.as_ref().unwrap().since,
+            Duration::ZERO
+        );
+
+        spot.title = "Another place".into();
+        spot.setting.as_mut().unwrap().place_id = "different-canonical-place".into();
+        let elsewhere = view(&spot, &[1], false);
+        shared.observe_with(&elsewhere, Some(spot), Vec::new());
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&elsewhere.scene_key, &mut output, Duration::from_secs(11));
+        assert_ne!(
+            output.live_plate,
+            key('a').path(),
+            "a real place change cannot hold the old picture"
+        );
+    }
+
+    #[test]
+    fn hs65_local_spot_keeps_in_flight_cadence_and_newer_stall_work_supersedes_it() {
+        let (shared, mut queue, current, mut projected) = pipeline_fixture();
+        commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, false);
+        shared.poll_state_images_at(Duration::from_secs(3));
+        let old = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        let mut spot = current.clone();
+        spot.title = "Oren's stall".into();
+        let at_stall = view(&spot, &[1], false);
+        shared.observe_with(&at_stall, Some(spot.clone()), Vec::new());
+        drain(&mut queue);
+        {
+            let book = locked(&shared.book);
+            assert_eq!(book.state_images.scene_in_flight(), 1);
+            assert!(
+                book.state_images
+                    .in_flight
+                    .values()
+                    .all(|work| !work.retired)
+            );
+        }
+        old.complete(&shared, Duration::from_secs(31));
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&at_stall.scene_key, &mut output, Duration::from_secs(31));
+        assert_eq!(output.live_plate, format!("/gameplay/imagery/{:064x}", 1));
+        projected = at_stall;
+        commit_beat(
+            &shared,
+            &spot,
+            &mut projected,
+            2,
+            Duration::from_secs(33),
+            false,
+        );
+        shared.poll_state_images_at(Duration::from_secs(36));
+        let newer = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        newer.complete(&shared, Duration::from_secs(62));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(62));
+        assert_eq!(output.live_plate, format!("/gameplay/imagery/{:064x}", 2));
+    }
+
+    #[tokio::test]
+    async fn hs65_committed_ware_is_foreground_and_the_next_shot_then_returns_to_the_scene() {
+        use crate::gameplay::imagery::tests::DirectionFixture;
+        let (mut shared, mut queue, current, mut projected) = pipeline_fixture();
+        let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS71/item-shot")
+            .join(std::process::id().to_string());
+        let fixture = DirectionFixture::photographic(&cache);
+        Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner)
+            .unwrap()
+            .imagery = fixture.imagery.clone();
+        let model = current.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let before = model.public_contents().unwrap();
+        // Offer-only stock is projected for inspection, never materialized into inventory.
+        let offer = &model.offers[0];
+        let mut ware = model.things[0].clone();
+        ware.id = offer.item_id.clone();
+        ware.name = offer.name.clone();
+        ware.detail = offer.description.clone();
+        ware.picture_description = offer.description.clone();
+        ware.owner_id = Some(offer.seller_id.clone());
+        ware.holder_id = Some(offer.seller_id.clone());
+        assert!(model.things.iter().all(|thing| thing.id != ware.id));
+        // Unlike the old object-only card, a focus shot reads the real current plate bytes.
+        let base = fixture
+            .imagery
+            .generate_with_priority(
+                "fixture-scene",
+                item_image_request(shared.inner.rating, &ware, None).unwrap(),
+                ImagePriority::Foreground,
+            )
+            .await
+            .unwrap();
+        {
+            let mut book = locked(&shared.book);
+            let id = book.current.as_ref().unwrap().id.clone().unwrap();
+            book.insert(
+                id,
+                super::super::Entry::Ready {
+                    key: base.clone(),
+                    placement: None,
+                },
+            );
+            let shown = book.presented.as_mut().unwrap();
+            shown.key = base.clone();
+            shown.since = Duration::ZERO;
+        }
+        commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
+        shared.poll_state_images_at(Duration::from_secs(3));
+        let cadence = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        let plates = Plates {
+            shared: Arc::clone(&shared),
+            _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+        };
+        plates
+            .request_committed_item(
+                "Brynn",
+                &ware,
+                Some("The folded linen has a blue hem.".into()),
+                true,
+            )
+            .unwrap();
+        let super::super::Job::State(job) = drain(&mut queue).remove(0) else {
+            panic!("item job")
+        };
+        assert!(matches!(
+            &job,
+            Job::Item {
+                priority: ImagePriority::Foreground,
+                ..
+            }
+        ));
+        let done = shared.render_state_image(job).await;
+        let Done::Item {
+            result: Ok(item_key),
+            ..
+        } = &done
+        else {
+            panic!("fake artifact_close_up completed")
+        };
+        let item_key = item_key.clone();
+        assert_eq!(
+            fixture.calls(),
+            3,
+            "current plate, canonical item, then one scene-focus edit"
+        );
+        assert!(fixture.prompt().contains(&ware.name));
+        assert_eq!(
+            fixture.image_count(),
+            2,
+            "scene and canonical item references"
+        );
+        assert!(fixture.prompt().contains("centre of the frame"));
+        assert!(fixture.prompt().contains("softly out of focus"));
+        assert!(!fixture.prompt().contains(&ware.closer_look));
+        shared.finish_state_image_at(done, Duration::from_secs(5));
+        cadence.complete(&shared, Duration::from_secs(20));
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(24));
+        assert_eq!(
+            output.live_plate,
+            base.path(),
+            "keep the scene's reading hold"
+        );
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(25));
+        assert_eq!(
+            output.live_plate,
+            item_key.path(),
+            "the item precedes the ready cadence picture"
+        );
+        assert!(
+            output.plate_layout.is_none(),
+            "never lend the item the scene's people"
+        );
+        assert_eq!(
+            locked(&shared.book)
+                .state_images
+                .item_shot
+                .as_ref()
+                .unwrap()
+                .hero,
+            "Brynn"
+        );
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(49));
+        assert_eq!(output.live_plate, item_key.path());
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(50));
+        assert_eq!(output.live_plate, base.path());
+        assert!(locked(&shared.book).state_images.item_shot.is_none());
+        shared.poll_state_images_at(Duration::from_secs(80));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(81));
+        assert_eq!(output.live_plate, format!("/gameplay/imagery/{:064x}", 1));
+        assert_eq!(model.public_contents().unwrap(), before);
+        assert_eq!(
+            locked(&shared.book)
+                .current
+                .as_ref()
+                .unwrap()
+                .scene
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .model
+                .public_contents()
+                .unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn hs58_inventory_waits_for_a_plate_and_does_not_fill_the_plate_queue() {
+        use super::super::tests::{drain, key, shared};
+        let (shared, mut queue) = shared(16);
+        let plates = Plates {
+            shared: Arc::clone(&shared),
+            _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+        };
+        let card = |index| rpc::SceneItemCard {
+            thing_id: format!("equipment-{index}"),
+            name: "chain mail".into(),
+            detail: "Iron chain mail".into(),
+            picture_description: "Linked iron rings".into(),
+            holder: "hero".into(),
+            ..Default::default()
+        };
+        plates
+            .request_hand_item_with_priority(&card(0), false, "{}", ImagePriority::Background)
+            .unwrap();
+        assert!(drain(&mut queue).is_empty());
+        assert!(locked(&shared.book).state_images.items.is_empty());
+        locked(&shared.book).state_images.shown = Some((key('a'), None));
+        for index in 0..120 {
+            plates
+                .request_hand_item_with_priority(
+                    &card(index),
+                    false,
+                    "{}",
+                    ImagePriority::Background,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            drain(&mut queue).len(),
+            crate::gameplay::imagery::BACKGROUND_IN_FLIGHT
+        );
+        let first = locked(&shared.book)
+            .state_images
+            .items
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        shared.finish_state_image(Done::Item {
+            id: first,
+            result: Ok(key('b')),
+        });
+        plates
+            .request_hand_item_with_priority(&card(119), false, "{}", ImagePriority::Background)
+            .unwrap();
+        assert_eq!(
+            drain(&mut queue).len(),
+            1,
+            "later projections admit deferred cards as capacity returns"
+        );
+    }
+
     #[test]
     fn hs41_plates_player_text_cannot_be_mistaken_for_a_cadence_completion_marker() {
         let book = Book {
@@ -1768,12 +2614,15 @@ mod cadence_tests {
 }
 
 fn inventory_custody(scene_contents_json: &str, item_id: &str) -> (String, String) {
-    let Some(row) = serde_json::from_str::<Value>(scene_contents_json)
-        .ok()
-        .and_then(|contents| contents.get("inventory").and_then(Value::as_array).cloned())
+    let Some(contents) = serde_json::from_str::<Value>(scene_contents_json).ok() else {
+        return (String::new(), String::new());
+    };
+    let Some(row) = contents
+        .get("inventory")
+        .and_then(Value::as_array)
         .and_then(|entries| {
             entries
-                .into_iter()
+                .iter()
                 .find(|entry| entry.get("item_id").and_then(Value::as_str) == Some(item_id))
         })
     else {
@@ -1788,6 +2637,28 @@ fn inventory_custody(scene_contents_json: &str, item_id: &str) -> (String, Strin
     (id("owner_id"), id("holder_id"))
 }
 
+impl crate::gameplay::living_scenes::LivingScenes {
+    /// Render-only temporary handling; authoritative stock, owner and holder remain unchanged.
+    pub(in crate::gameplay) fn request_inspected_item_in_hands(
+        &self,
+        hero: &str,
+        thing: &SceneThing,
+        detail: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.plates
+            .as_ref()
+            .ok_or("scene pictures are unavailable")?
+            .request_item_with_visibility(
+                hero,
+                &thing.id,
+                Some(thing.clone()),
+                detail,
+                true,
+                ItemRequest::InspectionHands,
+            )
+    }
+}
+
 impl Plates {
     /// Called only for a committed examination/take/share. The detail must already be listener-safe.
     pub(in crate::gameplay) fn request_item(
@@ -1797,7 +2668,14 @@ impl Plates {
         detail: Option<String>,
         shared: bool,
     ) -> Result<(), &'static str> {
-        self.request_item_with_visibility(hero, thing_id, None, detail, shared, shared)
+        self.request_item_with_visibility(
+            hero,
+            thing_id,
+            None,
+            detail,
+            shared,
+            ItemRequest::Explicit,
+        )
     }
 
     /// Uses the authoritative post-commit Thing. Generated stock becomes a canonical
@@ -1816,7 +2694,7 @@ impl Plates {
             Some(thing.clone()),
             detail,
             shared,
-            shared,
+            ItemRequest::Explicit,
         )
     }
 
@@ -1828,7 +2706,28 @@ impl Plates {
         shared: bool,
         scene_contents_json: &str,
     ) -> Result<(), &'static str> {
+        self.request_hand_item_with_priority(
+            card,
+            shared,
+            scene_contents_json,
+            ImagePriority::Foreground,
+        )
+    }
+
+    pub(in crate::gameplay) fn request_hand_item_with_priority(
+        &self,
+        card: &rpc::SceneItemCard,
+        shared: bool,
+        scene_contents_json: &str,
+        priority: ImagePriority,
+    ) -> Result<(), &'static str> {
         let mut book = locked(&self.shared.book);
+        // Projection repeatedly visits every starting inventory card. Admit that automatic
+        // background work only after the current place has a plate; explicit examinations
+        // still enter through request_item/request_committed_item immediately.
+        if matches!(priority, ImagePriority::Background) && book.shown().is_none() {
+            return Ok(());
+        }
         let now = self.shared.inner.now();
         let cached = book
             .state_images
@@ -1844,17 +2743,35 @@ impl Plates {
             .max_by_key(|(_, item)| item.requested_at)
             .map(|(id, _)| id.clone());
         if let Some(id) = cached {
+            let mut changed = false;
             if let Some(item) = book.state_images.items.get_mut(&id) {
+                changed = shared && !item.shared;
                 item.shared |= shared;
                 if shared {
                     item.requested_at = now;
                 }
             }
-            book.state_images
+            let previous = book
+                .state_images
                 .latest_items
-                .insert(card.holder.clone(), id);
+                .insert(card.holder.clone(), id.clone());
+            changed |= previous.as_deref() != Some(id.as_str());
             drop(book);
-            self.shared.wake();
+            if changed {
+                self.shared.wake();
+            }
+            return Ok(());
+        }
+        // Do not fill the plate director's bounded job set with inventory cards waiting for
+        // background permits. Later projections retry cards that have not been admitted yet.
+        if book
+            .state_images
+            .items
+            .values()
+            .filter(|item| item.key.is_none() && !item.failed)
+            .count()
+            >= crate::gameplay::imagery::BACKGROUND_IN_FLIGHT
+        {
             return Ok(());
         }
         drop(book);
@@ -1867,7 +2784,7 @@ impl Plates {
             Some(thing),
             None,
             shared,
-            false,
+            ItemRequest::Hand(priority),
         )
     }
 
@@ -1878,8 +2795,17 @@ impl Plates {
         committed_thing: Option<SceneThing>,
         detail: Option<String>,
         shared: bool,
-        explicitly_shared: bool,
+        request: ItemRequest,
     ) -> Result<(), &'static str> {
+        let (explicitly_shared, priority, focus_pose) = match request {
+            ItemRequest::Explicit => (shared, ImagePriority::Foreground, ItemFocusPose::Recorded),
+            ItemRequest::InspectionHands => (
+                true,
+                ImagePriority::Foreground,
+                ItemFocusPose::InspectionHands,
+            ),
+            ItemRequest::Hand(priority) => (false, priority, ItemFocusPose::Recorded),
+        };
         let mut book = locked(&self.shared.book);
         let thing = committed_thing
             .or_else(|| {
@@ -1900,9 +2826,31 @@ impl Plates {
         if thing.id != thing_id {
             return Err("committed object identity does not match the request");
         }
+        let base = book.shown().map(|shown| shown.0);
+        let focus = shared && explicitly_shared;
         let state = item_revision(&thing, detail.as_deref());
-        let id = format!("{}:{state}", thing.id);
+        let id = if focus {
+            format!(
+                "{}:{state}:focus:{hero}:{}:{}:inspection_hands={}",
+                thing.id,
+                thing.holder_id.as_deref().unwrap_or_default(),
+                base.as_ref().map_or("", ImageKey::as_str),
+                matches!(focus_pose, ItemFocusPose::InspectionHands),
+            )
+        } else {
+            format!("{}:{state}", thing.id)
+        };
         let now = self.shared.inner.now();
+        let shot = (shared && explicitly_shared).then(|| ItemShot {
+            id: id.clone(),
+            hero: hero.to_owned(),
+            connected: thing
+                .finding_id
+                .as_deref()
+                .is_some_and(|id| id != format!("item-story-ordinary-{}", thing.id))
+                || thing.clue_fact_id.is_some(),
+            shown_at: None,
+        });
         if let Some(item) = book.state_images.items.get_mut(&id) {
             // Holder and owner do not change the close-up image identity. Refresh them from the
             // authoritative snapshot so a reused image follows the current custody state.
@@ -1914,6 +2862,9 @@ impl Plates {
                 item.requested_at = now;
             }
             book.state_images.latest_items.insert(hero.to_owned(), id);
+            if let Some(shot) = shot {
+                book.state_images.item_shot = Some(shot);
+            }
             drop(book);
             self.shared.wake();
             return Ok(());
@@ -1921,12 +2872,14 @@ impl Plates {
         if book.state_images.items.len() >= 128 {
             return Err("object picture cache is full");
         }
-        let base = book.shown().map(|shown| shown.0);
         let admission = self.shared.jobs.try_send(super::Job::State(Job::Item {
             id: id.clone(),
             thing: thing.clone(),
             detail: detail.clone(),
             base,
+            priority,
+            focus_hero: focus.then(|| hero.to_owned()),
+            focus_pose,
         }));
         book.state_images.items.insert(
             id.clone(),
@@ -1941,6 +2894,11 @@ impl Plates {
             },
         );
         book.state_images.latest_items.insert(hero.to_owned(), id);
+        if admission.is_ok()
+            && let Some(shot) = shot
+        {
+            book.state_images.item_shot = Some(shot);
+        }
         drop(book);
         self.shared.wake();
         match admission {
@@ -2044,7 +3002,21 @@ impl Plates {
                 .unwrap_or(false),
             searched_by: Vec::new(),
             aliases: Vec::new(),
-            provenance: SceneItemProvenance::default(),
+            provenance: SceneItemProvenance {
+                source_id: contents
+                    .get("inventory")
+                    .and_then(Value::as_array)
+                    .and_then(|entries| {
+                        entries.iter().find(|entry| {
+                            entry.get("item_id").and_then(Value::as_str) == Some(&card.thing_id)
+                        })
+                    })
+                    .and_then(|entry| entry.get("source_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                ..SceneItemProvenance::default()
+            },
         })
     }
 }

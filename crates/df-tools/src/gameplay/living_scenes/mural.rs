@@ -143,7 +143,8 @@ impl Inner {
                 Lookup::Image { bytes, format } => {
                     references.push(ReferenceImage::new(format, bytes))
                 }
-                _ => return Err(ImageFailure::InvalidRequest),
+                // A temporarily missing approved reference can become available again.
+                _ => return Err(ImageFailure::Interrupted),
             }
         }
         if !locked(&self.state)
@@ -163,17 +164,29 @@ impl Inner {
             .map(|hero| hero.person.clone())
             .collect::<Vec<_>>();
         // ScenePlate carries SceneParty metadata through the existing photo/count/custody gate.
-        self.imagery
-            .generate(
+        let request = ImageRequest {
+            kind: ImageKind::ScenePlate,
+            references: vec![sheet],
+            prompt: party_mural(&people, &work.binding)?,
+            output: OutputSpec::BACKDROP,
+        };
+        if work.regenerate {
+            use crate::gameplay::resources::{Invalidate, PlateSpec, ResourceKey, ResourceStatus};
+            let image_key = self.imagery.key_for(&request);
+            let spec = PlateSpec::new(
                 "party-mural",
-                ImageRequest {
-                    kind: ImageKind::ScenePlate,
-                    references: vec![sheet],
-                    prompt: party_mural(&people, &work.binding)?,
-                    output: OutputSpec::BACKDROP,
-                },
-            )
-            .await
+                image_key.as_str(),
+                art_contract::Neutral::Nothing,
+            );
+            let key = ResourceKey::of(&spec);
+            if matches!(
+                self.imagery.hub().status(&key),
+                ResourceStatus::Failed(_, _)
+            ) {
+                self.imagery.hub().invalidate(Invalidate::Key(&key));
+            }
+        }
+        self.imagery.generate("party-mural", request).await
     }
 }
 
@@ -228,6 +241,93 @@ mod tests {
                 _ => None,
             })
             .expect("one mural request")
+    }
+
+    #[tokio::test]
+    async fn hs54_transient_mural_reference_miss_requeues_only_after_cooldown() {
+        let cache = std::env::temp_dir().join(format!("hs54-mural-retry-{}", std::process::id()));
+        let fixture = DirectionFixture::photographic(&cache);
+        let inner = inner(fixture.imagery.clone());
+        ready_party(&inner).await;
+        let work = take_mural(&inner);
+        let mut missing = work.clone();
+        let Source::Mural(heroes) = &mut missing.source else {
+            panic!("mural")
+        };
+        heroes[0].image = ImageKey::parse(&"f".repeat(64)).unwrap();
+        assert_eq!(
+            inner.render_canonical(&missing).await,
+            Err(ImageFailure::Interrupted)
+        );
+        inner.finish_canonical(work.clone(), Err(ImageFailure::Interrupted));
+        // Simulate an exhausted hub entry for the exact request, so retry must invalidate the
+        // ScenePlate resource key rather than the distinct Depiction kind.
+        let Source::Mural(heroes) = &work.source else {
+            panic!("mural")
+        };
+        let mut references = Vec::new();
+        for hero in heroes {
+            let Lookup::Image { bytes, format } = inner.imagery.image(hero.image.as_str()).await
+            else {
+                panic!("reference")
+            };
+            references.push(ReferenceImage::new(format, bytes));
+        }
+        let request = ImageRequest {
+            kind: ImageKind::ScenePlate,
+            references: vec![party_sheet(&references).unwrap()],
+            prompt: party_mural(
+                &heroes
+                    .iter()
+                    .map(|hero| hero.person.clone())
+                    .collect::<Vec<_>>(),
+                &work.binding,
+            )
+            .unwrap(),
+            output: OutputSpec::BACKDROP,
+        };
+        let image_key = inner.imagery.key_for(&request);
+        let spec = crate::gameplay::resources::PlateSpec::new(
+            "party-mural",
+            image_key.as_str(),
+            art_contract::Neutral::Nothing,
+        );
+        assert!(
+            inner
+                .imagery
+                .hub()
+                .render(
+                    &spec,
+                    Box::pin(async {
+                        Err(crate::gameplay::resources::ResourceFailure::Permanent(
+                            "fixture",
+                        ))
+                    })
+                )
+                .await
+                .is_err()
+        );
+        {
+            let mut state = locked(&inner.state);
+            state.canonical.admit_mural();
+            assert!(state.canonical.take_jobs().is_empty());
+            state
+                .canonical
+                .entries
+                .get_mut(&Target::Mural)
+                .unwrap()
+                .started = Some(Instant::now() - ROOM_RETRY_COOLDOWN);
+            state.canonical.admit_mural();
+        }
+        let retry = take_mural(&inner);
+        assert_eq!(retry.binding, work.binding);
+        assert!(retry.regenerate);
+        assert_eq!(fixture.calls(), 0);
+        assert!(
+            inner.render_canonical(&retry).await.is_ok(),
+            "cooldown retry clears the exhausted PlateSpec"
+        );
+        assert_eq!(fixture.calls(), 1);
     }
 
     #[tokio::test]

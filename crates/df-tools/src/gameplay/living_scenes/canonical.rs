@@ -39,19 +39,27 @@ enum Source {
     },
     Npc {
         person: ScenePerson,
+        gender: Option<pack::Gender>,
+        age: Option<pack::Age>,
         identity_photo: Option<String>,
         identity_figure_photo: Option<String>,
+        canon: Vec<serde_json::Value>,
     },
     Room {
         model: SceneModel,
         place: String,
+        context: Option<imagery::RoomArchitectureContext>,
+        canon: Vec<serde_json::Value>,
     },
     ReviewedRoom {
         asset: String,
     },
     /// A cast member with no authored description and no reviewed photograph (a creature, a
     /// patron or a foe the adventure names), made on demand by the art contract's rule.
-    Cast(Member),
+    Cast {
+        member: Member,
+        canon: Vec<serde_json::Value>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +89,9 @@ struct Entry {
 
 #[derive(Default)]
 pub(super) struct References {
+    lore: Option<Arc<crate::gameplay::npc_reply::local_lore::LocalLore>>,
+    room_revisions: BTreeMap<(String, String), String>,
+    hero_checkpoint: Option<(Checkpoint, crate::gameplay::pack::CacheIdentity)>,
     mural_enabled: bool,
     mural_expected_count: usize,
     scope: String,
@@ -124,6 +135,13 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 impl References {
+    pub(super) fn new(lore: Arc<crate::gameplay::npc_reply::local_lore::LocalLore>) -> Self {
+        Self {
+            lore: Some(lore),
+            ..Self::default()
+        }
+    }
+
     fn select(&mut self, target: Target, source: Source, revision: &str) {
         let binding = digest(
             format!(
@@ -137,8 +155,10 @@ impl References {
         {
             // Re-admission after cooldown is an explicit hub invalidation, not a side retry
             // loop. Each generation batch still uses the hub/imagery attempt bounds.
-            if matches!(target, Target::Room { .. })
+            if (matches!(target, Target::Room { .. })
                 && matches!(entry.status, Status::Failed(ImageFailure::BadOutput))
+                || matches!(target, Target::Mural)
+                    && matches!(entry.status, Status::Failed(ImageFailure::Interrupted)))
                 && entry
                     .started
                     .is_some_and(|finished| finished.elapsed() >= ROOM_RETRY_COOLDOWN)
@@ -216,25 +236,54 @@ impl References {
 
     /// The art contract's on-demand request for a cast member whose picture is first needed in a
     /// view. Idempotent per subject: a person already admitted (from a scene model, with an
-    /// authored description) or already requested is left alone, so at most one request is ever
-    /// in flight for a subject key. Server only; no test or client render loop calls this.
+    /// authored description) is left alone; a cast source is refreshed only when its accepted
+    /// presentation or committed appearance canon changes. Server only.
     pub(super) fn admit_cast(&mut self, member: &Member) {
         let target = Target::Npc(member.id.clone());
-        if self.scope.is_empty() || self.entries.contains_key(&target) {
+        if self.scope.is_empty()
+            || self
+                .entries
+                .get(&target)
+                .is_some_and(|entry| !matches!(entry.work.source, Source::Cast { .. }))
+        {
             return;
         }
-        let revision = digest(
-            serde_json::json!({
-                "id": member.id,
-                "name": member.name,
-                "role": format!("{:?}", member.role),
-                "life_stage": format!("{:?}", member.life_stage),
-                "regen": self.regen.get(&member.id),
-            })
-            .to_string()
-            .as_bytes(),
+        let canon = self.committed_canon(None, Some(&member.id));
+        if !matches!(
+            member.gender,
+            Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
+        ) || member.age.is_none()
+        {
+            super::super::actor::record_audit_line(
+                "gameplay.imagery",
+                format!("IMAGERY presentation_missing person={}", member.id),
+            );
+        }
+        let mut revision_content = serde_json::json!({
+            "id": member.id,
+            "name": member.name,
+            "role": format!("{:?}", member.role),
+            "life_stage": format!("{:?}", member.life_stage),
+            "regen": self.regen.get(&member.id),
+        });
+        if let Some(gender) = member.gender {
+            revision_content["gender"] = serde_json::json!(gender);
+        }
+        if let Some(age) = member.age {
+            revision_content["age"] = serde_json::json!(age);
+        }
+        if !canon.is_empty() {
+            revision_content["canon"] = serde_json::json!(canon);
+        }
+        let revision = digest(revision_content.to_string().as_bytes());
+        self.select(
+            target,
+            Source::Cast {
+                member: member.clone(),
+                canon,
+            },
+            &revision,
         );
-        self.select(target, Source::Cast(member.clone()), &revision);
     }
 
     /// Writes one `ART resolve` line per subject and source: what a view first found for it.
@@ -319,6 +368,59 @@ impl References {
         Some((entity, self.status(&Target::Hero(entity))))
     }
 
+    pub(super) fn bound_room_revision<'a>(&'a self, place: &str, revision: &'a str) -> &'a str {
+        self.room_revisions
+            .get(&(place.to_owned(), revision.to_owned()))
+            .map_or(revision, String::as_str)
+    }
+
+    /// Only committed harmless journal facts with an exact owner reach imagery. Journal
+    /// reasons, questions, answers and protected engine context never enter this projection.
+    pub(super) fn committed_canon(
+        &self,
+        place: Option<&str>,
+        person: Option<&str>,
+    ) -> Vec<serde_json::Value> {
+        use crate::gameplay::npc_reply::{
+            fact_backfill::{Decision, Reason},
+            local_lore::FactKind,
+        };
+        let Some(lore) = &self.lore else {
+            return Vec::new();
+        };
+        let secret_terms = pack::with_content(|content| content.secret_terms.clone());
+        lore.development_decisions()
+            .into_iter()
+            .filter(|decision| {
+                decision.decision == Decision::Backfill
+                    && decision.reason == Reason::HarmlessMissingDetail
+            })
+            .filter(|decision| match (place, person) {
+                (Some(place), _) => decision.place == place,
+                (_, Some(person)) => decision.npc_id == person,
+                _ => false,
+            })
+            .filter_map(|decision| {
+                let fact = decision.fact?;
+                // The journal has no separate visual-applicability field. Person is the only
+                // typed appearance source; history/rumours are not portrait instructions.
+                if person.is_some() && fact.kind != FactKind::Person {
+                    return None;
+                }
+                if secret_terms.iter().any(|term| {
+                    crate::gameplay::adventure::dossier::mentions_term(&fact.name, term)
+                        || crate::gameplay::adventure::dossier::mentions_term(&fact.content, term)
+                }) {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "kind": fact.kind.label(), "name": fact.name, "content": fact.content,
+                    "person_id": decision.npc_id, "place_id": decision.place,
+                }))
+            })
+            .collect()
+    }
+
     fn status(&self, target: &Target) -> ReferenceStatus {
         match self.entries.get(target).map(|entry| &entry.status) {
             None => ReferenceStatus::Missing,
@@ -333,6 +435,7 @@ impl References {
     }
 
     fn room_at(&self, place: &str, revision: &str) -> Option<ImageKey> {
+        let revision = self.bound_room_revision(place, revision);
         self.ready(&Target::Room {
             place: place.to_owned(),
             revision: revision.to_owned(),
@@ -356,6 +459,228 @@ mod tests {
         startup_configuration::ImageryOff,
     };
     use std::path::PathBuf;
+
+    fn fact_decision(
+        place: &str,
+        person: &str,
+        kind: crate::gameplay::npc_reply::local_lore::FactKind,
+        name: &str,
+        content: &str,
+    ) -> crate::gameplay::npc_reply::fact_backfill::FactDecision {
+        use crate::gameplay::npc_reply::{
+            fact_backfill::{Decision, FactDecision, Reason},
+            local_lore::LocalFact,
+        };
+        FactDecision {
+            scene: "market".to_owned(),
+            place: place.to_owned(),
+            npc_id: person.to_owned(),
+            speaker: "Bram Weller".to_owned(),
+            question_hash: "a".repeat(64),
+            decision: Decision::Backfill,
+            reason: Reason::HarmlessMissingDetail,
+            fact: Some(LocalFact {
+                kind,
+                name: name.to_owned(),
+                content: content.to_owned(),
+                established_by: "Bram Weller".to_owned(),
+            }),
+            answer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_room_canon_reaches_the_fake_and_changes_the_reference_once() {
+        use crate::gameplay::npc_reply::{
+            fact_backfill::{Decision, Reason},
+            local_lore::{FactKind, LocalLore},
+        };
+        let lore = Arc::new(LocalLore::in_memory());
+        let mut canonical = references("hs66-room-canon");
+        canonical.lore = Some(lore.clone());
+        room(&mut canonical, "layout");
+        let original_binding = selected_room_binding(&canonical).to_owned();
+        let jobs = canonical.take_jobs();
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS66/fake-room-canon")
+            .join(std::process::id().to_string());
+        let fixture = DirectionFixture::photographic(&cache);
+        let inner = inner(fixture.imagery.clone(), canonical);
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical room")
+            };
+            let result = inner.render_canonical(&work).await;
+            assert!(result.is_ok(), "{result:?}");
+            inner.finish_canonical(work, result);
+        }
+        assert!(!fixture.prompt().contains("The Last Stitch"));
+        let proposal = fact_decision(
+            "same-place",
+            "bram",
+            FactKind::History,
+            "Shop sign",
+            "Bram Weller's shop is called The Last Stitch, as its sign says.",
+        );
+        // A model proposal that has not crossed commit never reaches the picture source.
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_eq!(selected_room_binding(&state.canonical), original_binding);
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        let foreign = fact_decision(
+            "other-place",
+            "other-person",
+            FactKind::History,
+            "Other shop",
+            "The other shop is called FOREIGN_SHOP.",
+        );
+        lore.commit_fact_decision(foreign.clone(), foreign.fact.clone())
+            .unwrap();
+        let mut blank = proposal.clone();
+        blank.decision = Decision::LeaveBlank;
+        blank.reason = Reason::Secret;
+        blank.fact = None;
+        lore.commit_fact_decision(blank, None).unwrap();
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_eq!(selected_room_binding(&state.canonical), original_binding);
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        lore.commit_fact_decision(proposal.clone(), proposal.fact.clone())
+            .unwrap();
+        let base_revision = room_revision(&{
+            let mut authored = model();
+            authored.weather = "layout".to_owned();
+            authored
+        })
+        .unwrap();
+        let jobs = {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_ne!(selected_room_binding(&state.canonical), original_binding);
+            let jobs = state.canonical.take_jobs();
+            assert_eq!(jobs.len(), 1);
+            jobs
+        };
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical room")
+            };
+            let result = inner.render_canonical(&work).await;
+            assert!(result.is_ok(), "{result:?}");
+            inner.finish_canonical(work, result);
+        }
+        let prompt = fixture.prompt();
+        assert!(
+            prompt.contains("The Last Stitch, as its sign says."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("visible sign carries the recorded name exactly"));
+        assert!(!prompt.contains("No signage and no writing"));
+        assert!(!prompt.contains("FOREIGN_SHOP"));
+        assert!(!prompt.contains("question_hash"));
+        assert!(!prompt.contains("harmless_missing_detail"));
+        assert!(!prompt.contains("protected_constraints"));
+        assert_eq!(
+            inner.canonical_room_status_at("same-place", &base_revision),
+            ReferenceStatus::Ready
+        );
+        assert!(
+            inner
+                .canonical_room_reference_at("same-place", &base_revision)
+                .await
+                .is_some()
+        );
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        assert_eq!(fixture.calls(), 2);
+    }
+
+    #[test]
+    fn person_canon_uses_the_exact_journal_owner_and_excludes_history() {
+        use crate::gameplay::npc_reply::local_lore::{FactKind, LocalLore};
+        let lore = Arc::new(LocalLore::in_memory());
+        let mut canonical = references("hs66-person-canon");
+        canonical.lore = Some(lore.clone());
+        for decision in [
+            fact_decision(
+                "same-place",
+                "bram",
+                FactKind::Person,
+                "Appearance",
+                "Bram wears a blue wool cap.",
+            ),
+            fact_decision(
+                "same-place",
+                "tessa",
+                FactKind::Person,
+                "Other appearance",
+                "Tessa wears a red scarf.",
+            ),
+            fact_decision(
+                "same-place",
+                "bram",
+                FactKind::History,
+                "History",
+                "Bram once lived beside the river.",
+            ),
+        ] {
+            lore.commit_fact_decision(decision.clone(), decision.fact.clone())
+                .unwrap();
+        }
+        let canon = canonical.committed_canon(None, Some("bram"));
+        assert_eq!(canon.len(), 1);
+        assert_eq!(canon[0]["content"], "Bram wears a blue wool cap.");
+        assert_eq!(canon[0]["person_id"], "bram");
+        assert!(!serde_json::to_string(&canon).unwrap().contains("reason"));
+    }
+
+    #[test]
+    fn cast_presentation_is_bound_and_missing_values_are_audited() {
+        let mut canonical = references("hs66-cast-presentation");
+        let mut member = Member {
+            id: "hs66-presentation".to_owned(),
+            role: CharacterRole::Contact,
+            life_stage: LifeStage::Adult,
+            gender: Some(pack::Gender::They),
+            age: Some(pack::Age::Adult),
+            name: "Oren Vale".to_owned(),
+            sprite: String::new(),
+            dossier_id: None,
+            opposes: false,
+            starting_attitude: None,
+        };
+        canonical.admit_cast(&member);
+        let target = Target::Npc(member.id.clone());
+        let first = canonical.entries[&target].work.binding.clone();
+        member.gender = Some(pack::Gender::She);
+        canonical.admit_cast(&member);
+        assert_ne!(canonical.entries[&target].work.binding, first);
+        let second = canonical.entries[&target].work.binding.clone();
+        member.age = Some(pack::Age::Elder);
+        canonical.admit_cast(&member);
+        assert_ne!(canonical.entries[&target].work.binding, second);
+        for (gender, age) in [
+            (None, Some(pack::Age::Adult)),
+            (Some(pack::Gender::They), None),
+        ] {
+            member.gender = gender;
+            member.age = age;
+            canonical.admit_cast(&member);
+            assert!(
+                !crate::gameplay::actor::audit_lines_containing(
+                    "IMAGERY presentation_missing person=hs66-presentation"
+                )
+                .is_empty()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn custom_seats_use_full_public_design_and_only_their_approved_references() {
@@ -594,6 +919,7 @@ mod tests {
         let mut authored = model();
         authored.people.push(ScenePerson {
             passive_perception: 10,
+            persona: None,
             id: "merchant".to_owned(),
             name: "Marek".to_owned(),
             role: "cloth merchant".to_owned(),
@@ -642,6 +968,7 @@ mod tests {
             person,
             identity_photo,
             identity_figure_photo,
+            ..
         } = &work.source
         else {
             panic!("Marek NPC identity source");
@@ -887,10 +1214,26 @@ mod tests {
         let morning = model();
         let mut evening = morning.clone();
         evening.time_of_day = "evening".to_owned();
-        let morning_revision = room_revision(&morning).unwrap();
-        let evening_revision = room_revision(&evening).unwrap();
-        canonical.admit_room("shared-place", &morning, &[], true);
-        canonical.admit_room("shared-place", &evening, &[], true);
+        let morning_revision = room_revision_with_context(&morning, None).unwrap();
+        let evening_revision = room_revision_with_context(&evening, None).unwrap();
+        canonical.admit_room_with_asset_and_context(
+            "shared-place",
+            &morning,
+            &[],
+            true,
+            None,
+            None,
+            None,
+        );
+        canonical.admit_room_with_asset_and_context(
+            "shared-place",
+            &evening,
+            &[],
+            true,
+            None,
+            None,
+            None,
+        );
         assert_eq!(canonical.entries.len(), 2);
         let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
         let work = locked(&inner.state).canonical.take_jobs();
@@ -918,7 +1261,15 @@ mod tests {
         drop(state);
         locked(&inner.state)
             .canonical
-            .admit_room("shared-place", &morning, &[], true);
+            .admit_room_with_asset_and_context(
+                "shared-place",
+                &morning,
+                &[],
+                true,
+                None,
+                None,
+                None,
+            );
         assert_eq!(inner.canonical_room_key("shared-place"), Some(first));
         assert!(
             locked(&inner.state).canonical.take_jobs().is_empty(),
@@ -932,6 +1283,7 @@ mod tests {
         let mut changed_cast = original.clone();
         changed_cast.people.push(ScenePerson {
             passive_perception: 10,
+            persona: None,
             id: "merchant".to_owned(),
             name: "Marek".to_owned(),
             role: "cloth merchant".to_owned(),
@@ -949,9 +1301,22 @@ mod tests {
         });
 
         assert_eq!(
-            room_revision(&original),
-            room_revision(&changed_cast),
+            room_revision_with_context(&original, None),
+            room_revision_with_context(&changed_cast, None),
             "cast changes belong to character references; the canonical room is empty"
+        );
+        let brightwater = imagery::RoomArchitectureContext {
+            name: "Brightwater".to_owned(),
+            character: "pale stone houses and striped awnings".to_owned(),
+        };
+        let eastmere = imagery::RoomArchitectureContext {
+            name: "Eastmere".to_owned(),
+            character: "red brick houses and timber awnings".to_owned(),
+        };
+        assert_ne!(
+            room_revision_with_context(&original, Some(&brightwater)),
+            room_revision_with_context(&original, Some(&eastmere)),
+            "a changed city architecture context regenerates the room"
         );
     }
 
@@ -1056,10 +1421,13 @@ mod tests {
         assert_eq!(canonical.current_npcs, people);
         // What the photograph is asked for is the street's own layout, never the shop's.
         let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
-        let prompt = imagery::canonical_room(
+        let context = room_architecture_context("place-market-street");
+        let prompt = imagery::canonical_room_with_context(
             ContentRating::Restrained,
             model,
             "place-market-street",
+            context.as_ref(),
+            &[],
             "binding",
         )
         .unwrap();
@@ -1070,8 +1438,15 @@ mod tests {
             .iter()
             .find(|person| person.name == "Hobb")
             .unwrap();
-        let person =
-            imagery::canonical_npc(ContentRating::Restrained, hobb, false, false, "b").unwrap();
+        let person = imagery::canonical_npc(
+            ContentRating::Restrained,
+            hobb,
+            (None, None, &[] as &[_]).into(),
+            false,
+            false,
+            "b",
+        )
+        .unwrap();
         assert!(person.as_str().contains("broad carter"));
     }
     #[test]
@@ -1123,7 +1498,8 @@ mod tests {
             model: Some(model.clone()),
         });
         let place = scene.setting.as_ref().unwrap().place_id.clone();
-        let revision = room_revision(&model).unwrap();
+        let context = room_architecture_context(&place);
+        let revision = room_revision_with_context(&model, context.as_ref()).unwrap();
         let mut canonical = references("HS37-authored-admission");
         canonical.observe_room(&scene);
         // An ahead admission without another asset cannot resurrect room generation.
@@ -1199,6 +1575,7 @@ mod tests {
             &[],
             true,
             Some(art_contract::ROOM_PHOTO),
+            None,
         );
         assert!(
             canonical
@@ -1212,6 +1589,7 @@ mod tests {
             &[],
             true,
             Some(art_contract::HARBOR_PHOTO),
+            None,
         );
         let jobs = canonical.take_jobs();
         assert_eq!(jobs.len(), 1);
@@ -1354,11 +1732,36 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         if state.canonical.scope != scope {
+            // A new scope starts fresh references but keeps the run's lore source, so committed
+            // facts keep reaching room prompts and plate invalidation (HS71 finding).
             state.canonical = References {
                 scope,
+                lore: state.canonical.lore.clone(),
                 ..Default::default()
             };
         }
+        let source = crate::gameplay::pack::cache_identity();
+        let expected = super::super::journey::participants(checkpoint)
+            .iter()
+            .filter(|member| member.character.is_some())
+            .count();
+        if state
+            .canonical
+            .hero_checkpoint
+            .as_ref()
+            .is_some_and(|(known, pack)| known == checkpoint && *pack == source)
+            && state.canonical.seats.len() == expected
+            && state
+                .canonical
+                .seats
+                .values()
+                .all(|entity| state.canonical.entries.contains_key(&Target::Hero(*entity)))
+        {
+            // Mural cooldowns still advance even when no hero source changed.
+            state.canonical.refresh_mural();
+            return;
+        }
+        state.canonical.hero_checkpoint = Some((checkpoint.clone(), source));
         state.canonical.mural_expected_count = super::super::journey::participants(checkpoint)
             .iter()
             .filter(|member| member.character.is_some())
@@ -1480,6 +1883,52 @@ impl Inner {
             .entries
             .retain(|target, _| !matches!(target, Target::Hero(_)) || accepted.contains(target));
         state.canonical.refresh_mural();
+        drop(state);
+        if !crate::gameplay::adventure::free_roam::is_active() {
+            return;
+        }
+        // Checkpoint-owned lookahead also runs without a display subscription. Canonical room
+        // and person requests share the normal bounded worker and its current-scene priority.
+        let scene = match crate::gameplay::beat_script_runtime::scene(checkpoint.state()) {
+            Ok(scene) => scene,
+            Err(error) => {
+                record(
+                    "gameplay.living_scene.plate_plan_failed",
+                    &[("failure", format!("{error:?}"))],
+                );
+                return;
+            }
+        };
+        let Some(setting) = &scene.setting else {
+            return;
+        };
+        for ready in crate::gameplay::adventure::free_roam::prepared(checkpoint)
+            .into_iter()
+            .filter(|ready| ready.from == setting.place_id)
+            .take(2)
+        {
+            match crate::gameplay::place_move::destination_scene(checkpoint, &ready.place, &scene) {
+                Ok(destination) => {
+                    if let Some(model) = destination
+                        .setting
+                        .as_ref()
+                        .and_then(|setting| setting.model.as_ref())
+                    {
+                        self.admit_canonical_room(
+                            &ready.place.place_id,
+                            model,
+                            &destination.cast,
+                            Some(&destination.asset),
+                            None,
+                        );
+                    }
+                }
+                Err(error) => record(
+                    "gameplay.living_scene.plate_plan_failed",
+                    &[("failure", format!("{error:?}"))],
+                ),
+            }
+        }
     }
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
@@ -1545,13 +1994,17 @@ impl Inner {
             ),
             Source::Npc {
                 person,
+                gender,
+                age,
                 identity_photo,
                 identity_figure_photo,
+                canon,
             } => (
                 ImageKind::CanonicalCharacter,
                 imagery::canonical_npc(
                     self.rating,
                     person,
+                    (*gender, *age, canon.as_slice()).into(),
                     identity_photo.is_some(),
                     identity_figure_photo.is_some(),
                     &work.binding,
@@ -1565,12 +2018,24 @@ impl Inner {
                     .register_reviewed(&subject(&work.target).key(), reference)
                     .await;
             }
-            Source::Room { model, place } => (
+            Source::Room {
+                model,
+                place,
+                context,
+                canon,
+            } => (
                 ImageKind::CanonicalRoom,
-                imagery::canonical_room(self.rating, model, place, &work.binding)?,
+                imagery::canonical_room_with_context(
+                    self.rating,
+                    model,
+                    place,
+                    context.as_ref(),
+                    canon,
+                    &work.binding,
+                )?,
                 OutputSpec::BACKDROP,
             ),
-            Source::Cast(member) => (
+            Source::Cast { member, canon } => (
                 ImageKind::CanonicalCharacter,
                 imagery::canonical_cast_member(
                     self.rating,
@@ -1578,6 +2043,7 @@ impl Inner {
                     &member.name,
                     member.role,
                     member.life_stage,
+                    (member.gender, member.age, canon.as_slice()).into(),
                     &work.binding,
                 )?,
                 OutputSpec::CUTOUT,
@@ -1666,16 +2132,26 @@ impl Inner {
         model: &SceneModel,
         cast: &[pack::SceneCastMember],
         asset: Option<&str>,
+        known_revision: Option<&str>,
     ) {
-        locked(&self.state)
-            .canonical
-            .admit_room_with_asset(place, model, cast, false, asset);
+        locked(&self.state).canonical.admit_room_with_asset(
+            place,
+            model,
+            cast,
+            false,
+            asset,
+            known_revision,
+        );
     }
 
     pub(super) fn canonical_room_status_at(&self, place: &str, revision: &str) -> ReferenceStatus {
-        locked(&self.state).canonical.status(&Target::Room {
+        let state = locked(&self.state);
+        state.canonical.status(&Target::Room {
             place: place.to_owned(),
-            revision: revision.to_owned(),
+            revision: state
+                .canonical
+                .bound_room_revision(place, revision)
+                .to_owned(),
         })
     }
 
@@ -1803,10 +2279,60 @@ impl Inner {
     }
 }
 
+fn room_architecture_context(place: &str) -> Option<imagery::RoomArchitectureContext> {
+    if let Some(world) = crate::gameplay::adventure::free_roam::world() {
+        return Some(imagery::RoomArchitectureContext {
+            name: world.city.name,
+            character: world.city.character,
+        });
+    }
+    pack::with_content(|content| {
+        content
+            .scenes
+            .iter()
+            .filter_map(|scene| scene.setting.as_ref())
+            .find(|setting| setting.place_id == place)
+            .map(|setting| imagery::RoomArchitectureContext {
+                name: setting.name.clone(),
+                character: setting.short.clone(),
+            })
+    })
+}
+
 pub(super) fn room_revision(model: &SceneModel) -> Option<String> {
-    let (layout, goods) = imagery::canonical_room_content(model).ok()?;
+    let context = if crate::gameplay::adventure::free_roam::is_active() {
+        room_architecture_context("")
+    } else {
+        pack::with_content(|content| {
+            content
+                .scenes
+                .iter()
+                .filter_map(|scene| scene.setting.as_ref())
+                .find(|setting| setting.model.as_ref() == Some(model))
+                .map(|setting| imagery::RoomArchitectureContext {
+                    name: setting.name.clone(),
+                    character: setting.short.clone(),
+                })
+        })
+    };
+    room_revision_with_context(model, context.as_ref())
+}
+
+fn room_revision_with_context(
+    model: &SceneModel,
+    context: Option<&imagery::RoomArchitectureContext>,
+) -> Option<String> {
+    let mut physical;
+    let model = if crate::gameplay::adventure::free_roam::is_active() {
+        physical = model.clone();
+        crate::gameplay::place::physical_way_names(&mut physical);
+        &physical
+    } else {
+        model
+    };
+    let (layout, goods, context) = imagery::canonical_room_content(model, context).ok()?;
     Some(digest(
-        serde_json::json!({"layout": layout, "goods": goods})
+        serde_json::json!({"layout": layout, "goods": goods, "context": context})
             .to_string()
             .as_bytes(),
     ))
@@ -1841,6 +2367,7 @@ impl References {
             &scene.cast,
             true,
             Some(&scene.asset),
+            None,
         );
     }
 
@@ -1852,7 +2379,7 @@ impl References {
         cast: &[pack::SceneCastMember],
         select: bool,
     ) {
-        self.admit_room_with_asset(place, model, cast, select, None);
+        self.admit_room_with_asset(place, model, cast, select, None, None);
     }
 
     fn admit_room_with_asset(
@@ -1862,17 +2389,67 @@ impl References {
         cast: &[pack::SceneCastMember],
         select: bool,
         asset: Option<&str>,
+        known_revision: Option<&str>,
+    ) {
+        self.admit_room_with_asset_and_context(
+            place,
+            model,
+            cast,
+            select,
+            asset,
+            known_revision,
+            room_architecture_context(place),
+        );
+    }
+
+    fn admit_room_with_asset_and_context(
+        &mut self,
+        place: &str,
+        model: &SceneModel,
+        cast: &[pack::SceneCastMember],
+        select: bool,
+        asset: Option<&str>,
+        known_revision: Option<&str>,
+        context: Option<imagery::RoomArchitectureContext>,
     ) {
         if self.scope.is_empty() {
             return;
         }
-        let Some(revision) = room_revision(model) else {
+        let canon = self.committed_canon(Some(place), None);
+        let Some(base_revision) = known_revision
+            .map(str::to_owned)
+            .or_else(|| room_revision_with_context(model, context.as_ref()))
+        else {
             return;
         };
+        let revision = if canon.is_empty() {
+            base_revision.clone()
+        } else {
+            digest(
+                serde_json::json!({"layout_revision": base_revision, "canon": canon})
+                    .to_string()
+                    .as_bytes(),
+            )
+        };
+        let previous = self
+            .room_revisions
+            .insert((place.to_owned(), base_revision), revision.clone());
         let target = Target::Room {
             place: place.to_owned(),
             revision: revision.clone(),
         };
+        if previous.as_ref().is_some_and(|previous| {
+            self.selected_rooms.get(place)
+                == Some(&Target::Room {
+                    place: place.to_owned(),
+                    revision: previous.clone(),
+                })
+        }) {
+            if self.current_room == self.selected_rooms.get(place).cloned() {
+                self.current_room = Some(target.clone());
+            }
+            self.selected_rooms.insert(place.to_owned(), target.clone());
+        }
         // A prepared destination must be discoverable by the photographic world source before
         // it becomes current. Lookahead cannot replace an already selected room revision.
         self.selected_rooms
@@ -1884,10 +2461,14 @@ impl References {
             self.current_npcs = model
                 .people
                 .iter()
+                .filter(|person| person.role != "hero")
                 .map(|person| person.id.clone())
                 .collect();
         }
-        if let Some(asset) = asset.and_then(authored_place_photo) {
+        if let Some(asset) = asset
+            .and_then(authored_place_photo)
+            .filter(|_| canon.is_empty())
+        {
             // The owned worker loads reviewed bytes locally. Existing key-based consumers
             // receive the same photograph, and superseded generated completions are fenced.
             self.authored_rooms.insert(target.clone(), asset.to_owned());
@@ -1899,16 +2480,22 @@ impl References {
                 &format!("reviewed|{asset}|{revision}"),
             );
         } else if !self.authored_rooms.contains_key(&target) {
+            let mut physical = model.clone();
+            if crate::gameplay::adventure::free_roam::is_active() {
+                crate::gameplay::place::physical_way_names(&mut physical);
+            }
             self.select(
                 target,
                 Source::Room {
-                    model: model.clone(),
+                    model: physical,
                     place: place.to_owned(),
+                    context,
+                    canon,
                 },
                 &revision,
             );
         }
-        for person in &model.people {
+        for person in model.people.iter().filter(|person| person.role != "hero") {
             // Lookahead may prepare a new person but cannot redefine an identity already
             // selected by the current accepted room merely because that person is doing
             // something different in a successor's authored description.
@@ -1930,25 +2517,49 @@ impl References {
             // reference, not two copies of the same image.
             let identity_photo =
                 identity_photo.filter(|photo| Some(photo) != identity_figure_photo.as_ref());
-            let revision = digest(
-                serde_json::json!({
-                    "id": person.id,
-                    "name": person.name,
-                    "role": person.role,
-                    "description": person.description,
-                    "regen": self.regen.get(&person.id),
-                    "identity_photo": identity_photo,
-                    "identity_figure_photo": identity_figure_photo,
-                })
-                .to_string()
-                .as_bytes(),
-            );
+            let (gender, age) = match matching_cast.as_slice() {
+                [member] => (member.gender, member.age),
+                _ => (None, None),
+            };
+            if !matches!(
+                gender,
+                Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
+            ) || age.is_none()
+            {
+                super::super::actor::record_audit_line(
+                    "gameplay.imagery",
+                    format!("IMAGERY presentation_missing person={}", person.id),
+                );
+            }
+            let canon = self.committed_canon(None, Some(&person.id));
+            let mut revision_content = serde_json::json!({
+                "id": person.id,
+                "name": person.name,
+                "role": person.role,
+                "description": person.description,
+                "regen": self.regen.get(&person.id),
+                "identity_photo": identity_photo,
+                "identity_figure_photo": identity_figure_photo,
+            });
+            if !canon.is_empty() {
+                revision_content["canon"] = serde_json::json!(canon);
+            }
+            if let Some(gender) = gender {
+                revision_content["gender"] = serde_json::json!(gender);
+            }
+            if let Some(age) = age {
+                revision_content["age"] = serde_json::json!(age);
+            }
+            let revision = digest(revision_content.to_string().as_bytes());
             self.select(
                 Target::Npc(person.id.clone()),
                 Source::Npc {
                     person: person.clone(),
+                    gender,
+                    age,
                     identity_photo,
                     identity_figure_photo,
+                    canon,
                 },
                 &revision,
             );
@@ -1973,7 +2584,13 @@ impl LivingScenes {
             return Ok(());
         };
         let expanded = destination.expand()?;
-        inner.admit_canonical_room(&destination.place_id, &expanded.model, &expanded.cast, None);
+        inner.admit_canonical_room(
+            &destination.place_id,
+            &expanded.model,
+            &expanded.cast,
+            None,
+            None,
+        );
         if inner.canonical_room_status(&destination.place_id) == ReferenceStatus::Ready {
             super::super::fight_foresight::request_prepared_world(&destination.place_id);
         }

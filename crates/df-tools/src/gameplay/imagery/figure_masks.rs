@@ -19,9 +19,10 @@ const REVISION: u32 = 1;
 #[derive(Default)]
 pub(super) struct FigureMaskCache {
     pub(super) provider: OnceLock<NativeFalSegmenter>,
-    // One owner covers the disk check, sent marker and completed note. Holding this async lock
-    // across the provider call deliberately coalesces concurrent head batches for a plate.
-    gate: tokio::sync::Mutex<()>,
+    // Coalesce one plate without making unrelated cached plates wait for its provider call.
+    gates: std::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -100,6 +101,8 @@ pub(in crate::gameplay) struct StagedFigure<'a> {
 pub(in crate::gameplay) struct FigureGeometry {
     pub(in crate::gameplay) id: String,
     pub(in crate::gameplay) mask_index: u32,
+    #[serde(default)]
+    pub(in crate::gameplay) mask_url: String,
     pub(in crate::gameplay) source_width: u32,
     pub(in crate::gameplay) source_height: u32,
     pub(in crate::gameplay) bounds: [u32; 4],
@@ -135,7 +138,8 @@ impl ResourceSpec for SegmentsSpec<'_> {
 
 impl FigureMaskCache {
     pub(super) fn configure(&self) {
-        let Ok(key) = std::env::var("DF_FAL_KEY") else {
+        // The launcher hands fal's credential over as FAL_KEY; DF_FAL_KEY serves direct runs.
+        let Ok(key) = std::env::var("FAL_KEY").or_else(|_| std::env::var("DF_FAL_KEY")) else {
             return;
         };
         match NativeFalSegmenter::new(FalSegmentConfig::live(SegmentModel::Sam31), &key, DEADLINE) {
@@ -150,6 +154,34 @@ impl FigureMaskCache {
         }
     }
 
+    fn gate_for(&self, key: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut gates = locked(&self.gates);
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = gates.get(key).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        let gate = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        gates.insert(key.to_owned(), std::sync::Arc::downgrade(&gate));
+        gate
+    }
+
+    async fn read_note(path: PathBuf) -> Result<Option<StoredScan>, ImageFailure> {
+        tokio::task::spawn_blocking(move || {
+            // An existing but corrupt note is a refusal, not permission to spend again.
+            if !path.try_exists()? {
+                return Ok(None);
+            }
+            let bytes = read_cache_file(&path)
+                .ok_or_else(|| std::io::Error::other("unreadable segmentation note"))?;
+            let scan =
+                serde_json::from_slice::<StoredScan>(&bytes).map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>(Some(scan))
+        })
+        .await
+        .map_err(|_| ImageFailure::Interrupted)?
+        .map_err(|_| ImageFailure::BadOutput)
+    }
+
     async fn read_or_scan(
         &self,
         path: PathBuf,
@@ -158,33 +190,30 @@ impl FigureMaskCache {
         format: df_providers::ImageFormat,
         engine: &super::Engine,
     ) -> Result<StoredScan, ImageFailure> {
-        let _owner = self.gate.lock().await;
-        let cached_path = path.clone();
-        let cached = tokio::task::spawn_blocking(move || {
-            // An existing but corrupt note is a refusal, not permission to spend again.
-            if !cached_path.try_exists()? {
-                return Ok(None);
+        let gate = self.gate_for(key);
+        let (cached, _owner) = match Self::read_note(path.clone()).await? {
+            Some(scan) => (Some(scan), None),
+            None => {
+                let owner = gate.lock().await;
+                (Self::read_note(path.clone()).await?, Some(owner))
             }
-            let bytes = read_cache_file(&cached_path)
-                .ok_or_else(|| std::io::Error::other("unreadable segmentation note"))?;
-            let scan =
-                serde_json::from_slice::<StoredScan>(&bytes).map_err(std::io::Error::other)?;
-            Ok::<_, std::io::Error>(Some(scan))
-        })
-        .await
-        .map_err(|_| ImageFailure::Interrupted)?
-        .map_err(|_| ImageFailure::BadOutput)?;
+        };
         if let Some(scan) = cached {
             diagnostic(
                 "cache_hit",
                 key,
                 serde_json::json!({"cache_outcome": scan.outcome}),
             );
-            if scan.image_sha256 != format!("{:x}", Sha256::digest(bytes)) {
-                return Err(ImageFailure::BadOutput);
-            }
-            scan.instances()?;
-            return Ok(scan);
+            let image = bytes.to_vec();
+            return tokio::task::spawn_blocking(move || {
+                if scan.image_sha256 != format!("{:x}", Sha256::digest(&image)) {
+                    return Err(ImageFailure::BadOutput);
+                }
+                scan.instances()?;
+                Ok(scan)
+            })
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?;
         }
         let provider = self.provider.get().ok_or(ImageFailure::Off)?;
         let image_sha256 = format!("{:x}", Sha256::digest(bytes));
@@ -378,7 +407,7 @@ impl Imagery {
         staging_order_known: bool,
     ) -> Result<Vec<FigureGeometry>, ImageFailure> {
         let scan = self.plate_masks(key).await?;
-        let figures = match_figures(&scan, heads, staged, hero_count, staging_order_known)?;
+        let mut figures = match_figures(&scan, heads, staged, hero_count, staging_order_known)?;
         diagnostic(
             "assignments",
             key.as_str(),
@@ -387,6 +416,7 @@ impl Imagery {
         );
         for person in staged {
             if !figures.iter().any(|figure| figure.id == person.id) {
+                focus_diagnostic("missing", key.as_str(), person.id, 0, Some("unassigned"));
                 diagnostic(
                     "miss",
                     key.as_str(),
@@ -395,22 +425,173 @@ impl Imagery {
             }
         }
         if let Mode::On { engine, .. } = &self.inner.mode {
-            let _owner = engine.figure_masks.gate.lock().await;
+            let gate = engine.figure_masks.gate_for(key.as_str());
+            let _owner = gate.lock().await;
             let path = engine
                 .cache_dir
                 .join(format!("{}.figures-v1.json", key.as_str()));
             let staging = path.with_extension(format!("{}.tmp", std::process::id()));
             let stored = figures.clone();
-            tokio::task::spawn_blocking(move || {
-                let note = serde_json::to_vec(&stored).map_err(std::io::Error::other)?;
+            let cache_dir = engine.cache_dir.clone();
+            let plate_key = key.as_str().to_owned();
+            figures = tokio::task::spawn_blocking(move || {
+                let mut stored = stored;
+                let instances = scan.instances()?;
+                for figure in &mut stored {
+                    let result =
+                        cache_focus_mask(&cache_dir, &plate_key, &scan, &instances, figure);
+                    match result {
+                        Ok(()) => {
+                            figure.mask_url = format!(
+                                "/gameplay/imagery/{plate_key}/figure/{}",
+                                figure.mask_index
+                            );
+                        }
+                        Err(failure) => focus_diagnostic(
+                            "missing",
+                            &plate_key,
+                            &figure.id,
+                            figure.mask_index,
+                            Some(failure.label()),
+                        ),
+                    }
+                }
+                let note = serde_json::to_vec(&stored).map_err(|_| ImageFailure::BadOutput)?;
                 super::write_cache_file(&staging, &path, &note)
+                    .map_err(|_| ImageFailure::Provider)?;
+                Ok::<_, ImageFailure>(stored)
             })
             .await
-            .map_err(|_| ImageFailure::Interrupted)?
-            .map_err(|_| ImageFailure::Provider)?;
+            .map_err(|_| ImageFailure::Interrupted)??;
         }
         Ok(figures)
     }
+
+    /// Read only derived, assigned masks; an HTTP request never starts a SAM/provider job.
+    pub(super) async fn focus_mask(&self, key: &str, index: u32) -> Option<bytes::Bytes> {
+        let missing = || {
+            focus_diagnostic("missing", key, "unassigned", index, None);
+            None
+        };
+        let Some(key) = ImageKey::parse(key) else {
+            return missing();
+        };
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return missing();
+        };
+        if !locked(&self.inner.registry)
+            .by_key
+            .contains_key(key.as_str())
+        {
+            return missing();
+        }
+        let directory = engine.cache_dir.clone();
+        let audit_key = key.clone();
+        match tokio::task::spawn_blocking(move || {
+            let figures =
+                read_cache_file(&directory.join(format!("{}.figures-v1.json", key.as_str())))
+                    .and_then(|bytes| serde_json::from_slice::<Vec<FigureGeometry>>(&bytes).ok());
+            let person = figures.as_ref().and_then(|figures| {
+                figures
+                    .iter()
+                    .find(|figure| figure.mask_index == index && !figure.mask_url.is_empty())
+            });
+            let bytes = person
+                .and_then(|_| read_cache_file(&focus_mask_path(&directory, key.as_str(), index)));
+            focus_diagnostic(
+                if bytes.is_some() { "served" } else { "missing" },
+                key.as_str(),
+                person.map_or("unassigned", |figure| figure.id.as_str()),
+                index,
+                None,
+            );
+            bytes.map(bytes::Bytes::from)
+        })
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                focus_diagnostic(
+                    "missing",
+                    audit_key.as_str(),
+                    "unavailable",
+                    index,
+                    Some("interrupted"),
+                );
+                None
+            }
+        }
+    }
+}
+
+fn focus_mask_path(directory: &std::path::Path, key: &str, index: u32) -> PathBuf {
+    directory.join(format!("{key}.figure-{index}-v1.png"))
+}
+
+fn cache_focus_mask(
+    directory: &std::path::Path,
+    key: &str,
+    scan: &StoredScan,
+    instances: &[SegmentInstance],
+    figure: &FigureGeometry,
+) -> Result<(), ImageFailure> {
+    let path = focus_mask_path(directory, key, figure.mask_index);
+    if path.try_exists().map_err(|_| ImageFailure::Provider)? {
+        return Ok(());
+    }
+    let instance = instances
+        .iter()
+        .find(|instance| instance.index == figure.mask_index)
+        .ok_or(ImageFailure::BadOutput)?;
+    let bytes = raster_focus_mask(scan, &instance.mask)?;
+    let staging = path.with_extension(format!("{}.tmp", std::process::id()));
+    super::write_cache_file(&staging, &path, &bytes).map_err(|_| ImageFailure::Provider)?;
+    focus_diagnostic("made", key, &figure.id, figure.mask_index, None);
+    Ok(())
+}
+
+fn raster_focus_mask(scan: &StoredScan, mask: &MaskRows) -> Result<Vec<u8>, ImageFailure> {
+    let longest = scan.source_width.max(scan.source_height);
+    if longest == 0 || mask.width() == 0 || mask.height() == 0 {
+        return Err(ImageFailure::BadOutput);
+    }
+    let scale = 768.0 / f64::from(longest.max(768));
+    let width = (f64::from(scan.source_width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(scan.source_height) * scale).round().max(1.0) as u32;
+    let mut alpha = image::GrayImage::new(width, height);
+    let project = |pixel: u32, output: u32, input: u32| {
+        ((u64::from(pixel) * u64::from(output) + u64::from(input / 2)) / u64::from(input)) as u32
+    };
+    for (row, from, to) in mask.row_segments() {
+        for y in project(row, height, mask.height())..project(row + 1, height, mask.height()) {
+            for x in project(from, width, mask.width())..project(to, width, mask.width()) {
+                alpha.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+    }
+    // Three Gaussian sigmas cover about 1.5% of the plate height on either side of the edge.
+    let alpha = image::imageops::blur(&alpha, (height as f32 * 0.005).max(0.5));
+    let rgba = image::RgbaImage::from_fn(width, height, |x, y| {
+        image::Rgba([255, 255, 255, alpha.get_pixel(x, y).0[0]])
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|_| ImageFailure::BadOutput)?;
+    Ok(png.into_inner())
+}
+
+fn focus_diagnostic(stage: &str, key: &str, person: &str, index: u32, failure: Option<&str>) {
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.imagery.focus_mask",
+        format!("PLATE focus_mask stage={stage} key={key} person={person}"),
+        serde_json::json!({"stage": stage, "key": key, "person": person, "mask_index": index,
+            "failure": failure})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+        &[],
+    );
 }
 
 fn diagnostic(outcome: &str, key: &str, value: serde_json::Value) {
@@ -628,6 +809,7 @@ fn match_figures(
         figures.push(FigureGeometry {
             id,
             mask_index: instance.index,
+            mask_url: String::new(),
             source_width: scan.source_width,
             source_height: scan.source_height,
             bounds: [
@@ -656,6 +838,27 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[tokio::test]
+    async fn hs54_sam_gates_coalesce_only_the_same_plate() {
+        let cache = FigureMaskCache::default();
+        let first = cache.gate_for("first");
+        let same = cache.gate_for("first");
+        let other = cache.gate_for("other");
+        assert!(Arc::ptr_eq(&first, &same));
+        let _held = first.lock().await;
+        assert!(same.try_lock().is_err());
+        assert!(
+            other.try_lock().is_ok(),
+            "another plate never waits behind this SAM call"
+        );
+        drop(other);
+        let _next = cache.gate_for("next");
+        assert!(
+            !locked(&cache.gates).contains_key("other"),
+            "unused keyed locks are reclaimed"
+        );
+    }
 
     fn rectangle(left: u32, top: u32, right: u32, bottom: u32) -> StoredMask {
         StoredMask {
@@ -807,6 +1010,29 @@ mod tests {
         assert_eq!(matched[0].head_top, [150, 50]);
     }
 
+    #[test]
+    fn figure_masks_raster_png_keeps_plate_aspect_and_feathers_alpha() {
+        let mut scan = scan(vec![rectangle(10, 5, 30, 15)]);
+        scan.source_width = 2400;
+        scan.source_height = 1200;
+        let instances = scan.instances().unwrap();
+        let png = raster_focus_mask(&scan, &instances[0].mask).unwrap();
+        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (768, 384));
+        assert_eq!(decoded.get_pixel(384, 192).0, [255, 255, 255, 255]);
+        assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
+        let edge = decoded.get_pixel(192, 192).0[3];
+        assert!(edge > 0 && edge < 255, "alpha at feathered edge: {edge}");
+        assert_eq!(decoded.get_pixel(180, 192).0[3], 0);
+        assert_eq!(decoded.get_pixel(204, 192).0[3], 255);
+        scan.source_width = 400;
+        scan.source_height = 800;
+        let portrait =
+            image::load_from_memory(&raster_focus_mask(&scan, &instances[0].mask).unwrap())
+                .unwrap();
+        assert_eq!((portrait.width(), portrait.height()), (384, 768));
+    }
+
     fn imagery(directory: PathBuf) -> Imagery {
         use crate::gameplay::startup_configuration::{
             ContentRating, ImageryConfiguration, ImageryCredential,
@@ -816,6 +1042,7 @@ mod tests {
                 credential: ImageryCredential::for_test("fixture-key"),
                 model: df_providers::ImageEditModel::Gpt25Flare,
                 quality: df_providers::ImageQuality::Medium,
+                profile: Default::default(),
                 interval: Duration::from_secs(20),
                 deadline: Duration::from_secs(5),
                 cache_dir: directory,
@@ -892,7 +1119,7 @@ mod tests {
                 .unwrap();
         });
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS51")
+            .join("../../artifacts/tmp/lanes/HS62")
             .join(format!(
                 "mask-fixture-{}-{}",
                 std::process::id(),
@@ -948,6 +1175,45 @@ mod tests {
         assert!(figures.iter().any(|figure| figure.id == "npc-0"
             && !figure.inferred
             && figure.bounds == [26, 3, 35, 19]));
+        let figure = figures.iter().find(|figure| figure.id == "npc-0").unwrap();
+        assert_eq!(
+            figure.mask_url,
+            format!("{}/figure/{}", key.path(), figure.mask_index)
+        );
+        let cached_mask = focus_mask_path(&directory, key.as_str(), figure.mask_index);
+        let mask_modified = std::fs::metadata(&cached_mask).unwrap().modified().unwrap();
+        let response = super::super::serve_focus_mask(
+            axum::extract::State(imagery.clone()),
+            axum::extract::Path((key.as_str().to_owned(), figure.mask_index)),
+            axum::http::HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "image/png"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            super::super::CACHE_CONTROL
+        );
+        let etag = response.headers()[axum::http::header::ETAG].clone();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let png = image::load_from_memory(&body).unwrap();
+        assert_eq!((png.width(), png.height()), (40, 20));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::IF_NONE_MATCH, etag);
+        let unchanged = super::super::serve_focus_mask(
+            axum::extract::State(imagery.clone()),
+            axum::extract::Path((key.as_str().to_owned(), figure.mask_index)),
+            headers,
+        )
+        .await;
+        assert_eq!(unchanged.status(), axum::http::StatusCode::NOT_MODIFIED);
+        assert!(imagery.focus_mask(key.as_str(), 999).await.is_none());
+        assert!(imagery.focus_mask("../invalid", 0).await.is_none());
         assert_eq!(submits.load(Ordering::SeqCst), 1);
         assert_eq!(engine.ledger.snapshot(Unit::SegmentCall).committed, 1);
         assert_eq!(
@@ -968,6 +1234,10 @@ mod tests {
         );
         assert_eq!(submits.load(Ordering::SeqCst), 1);
         let cached_note = directory.join(format!("{}.sam31-person-v1.json", key.as_str()));
+        assert_eq!(
+            std::fs::metadata(cached_mask).unwrap().modified().unwrap(),
+            mask_modified
+        );
         assert!(matches!(
             engine
                 .figure_masks
