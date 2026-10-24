@@ -679,6 +679,20 @@ Final qualification: after the shared IPv6 correction, a real creator UI request
 - **REF-058 — Player heroes are always the character the player created.** Everywhere a player hero is shown or described (TV scene plates, canonical hero images, health variants, party and turn portraits, phone sheets, battlefield figures and kill shots), it comes from that player's accepted character sheet: name, look controls, public description, species/class/background and gear, with the player's approved creator portrait as the image reference when one exists and otherwise an image generated from that description. Stock quick-start characters (stock portraits, figure photos, sprites and locator phrases) are never used for a player hero, and the stock "Hero appearance" choice is removed from character creation. Old saves that hold a stock portrait choice still load; their display uses their own look, or the stock entry's written description as words only.
   - Date: 2026-10-24. Rationale: the owner rejected stock characters on the display and asked for the player-created character sheets (live play showed the plates using stock art numbers and dropping heroes whose look differed from the stock photo).
 
+- **REF-059 — Every hero gets a self-portrait when the player locks in the design.** Confirming the character is the explicit action that creates the portrait: if the current design has no approved portrait, the creator generates one from the player's own sheet (the same Jev-classified route as Generate) and then commits the hero with it attached, so the portrait is the hero's sheet, party, HUD and turn image and the reference for their canonical plate figure. A portrait already generated for the unchanged design is reused, never paid for twice. If generation fails or its result is unknown, the hero still joins and every display uses the hero's canonical image from the same sheet, never a stock picture or a bare initial once that image exists. This refines REF-032: editing still never generates.
+  - Date: 2026-10-24. Rationale: the owner saw a hero without a self-portrait in play and asked that it happen when the player locks in their character design.
+
+- **REF-060 — Scene plates frame the party wider, with the heroes facing each other.** The display plate's camera sits about 5 feet (1.5 m) further back than the current framing, so the heroes and the surrounding place read as one wider shot, and the party heroes are composed facing each other (profile or three-quarter, as if in conversation) rather than all turned toward the speaker. Every hero still comes from their own character sheet (REF-058/059). The TV's live figures follow the same direction: heroes look at each other.
+  - Date: 2026-10-24. Rationale: the owner asked to zoom the display plate out by 5 feet and have the players look at each other.
+
+- **REF-061 — Hero names may be simple or complex.** A hero name is one word or several, in letters from any alphabet, up to 32 characters: single spaces, apostrophes, hyphens and periods may join letters ("Vix", "Vix Ashlantern", "D'Artagnan", "Jean-Luc", "Ælfwyn", "St. Brynn"). One rule (`df_rules::local_journey::valid_character_name`) decides for both the phone and the server, and the phone marks the name field itself, with the rule in words, as soon as a name breaks it. This replaces the earlier limit of 24 ASCII letters, hyphens and underscores; underscores stay accepted so older heroes still load.
+  - Date: 2026-10-24. Rationale: the owner saw "Vix Ashlantern" refused for its space and asked for names to be simple or complex.
+
+- **REF-062 — A table seats six heroes.** The lobby, seats, creation, scene plates, party lists on the TV and phones, and fights take up to six player heroes instead of four. Plates frame all six from their own character sheets (REF-058/060).
+  - Date: 2026-10-24. Rationale: the owner asked to enable six characters on the home screen, not just four.
+- **REF-063 — Every SRD 5.2.1 species is playable as a Fighter.** Dragonborn, Dwarf, Elf, Gnome, Goliath, Halfling, Human, Orc and Tiefling can be created with the Fighter/Soldier build, with the species choices the source requires (ancestry, lineage, legacy, Human skill and Origin feat). Traits the engine can resolve are implemented from the source; traits that need machinery it lacks (spellcasting, conditions and their saves, Heroic Inspiration, flight, Large Form) are shown on the character sheet as "Not in play yet" and recorded as coverage gaps, never approximated (rules-support.md). Aasimar is not in SRD 5.2.1, so it stays a portrait-only choice until a licensed source is pinned. In-game images describe each species' anatomy, not just its name.
+  - Date: 2026-10-24. Rationale: the owner asked for six characters of different races; the coordinator chose source-faithful traits with explicit gaps over a Dwarf-only table or approximated traits.
+
 ## Character storage: per campaign and long term — design, 2026-10-23
 
 Governing decisions: REF-021, REF-026, REF-031 and REF-046–049. Governing documents: [Storage architecture](storage-architecture.md), [Runtime reliability](runtime-reliability.md), [RPC API](rpc-api.md), [Client architecture](client-architecture.md). This section is the implementation design for those decisions; items marked *reading* are the coordinator's interpretation, open to correction.
@@ -733,7 +747,7 @@ Requested stale compiler-cache cleanup was blocked before execution by automatic
 
 Append confirmed decisions using this format; keep unresolved alternatives in the discussion section.
 
-- ID: REF-059 (increment for each decision)
+- ID: REF-064 (increment for each decision)
 - Date: YYYY-MM-DD
 - Decision: The agreed behavior or requirement.
 - Rationale: Why it was selected.
