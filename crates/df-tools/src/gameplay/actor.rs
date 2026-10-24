@@ -204,6 +204,11 @@ fn watch_scope_identity(
 }
 
 pub(super) enum Call {
+    LibraryHero {
+        credential: [u8; 32],
+        request: rpc::WatchViewRequest,
+        reply: oneshot::Sender<Result<super::hero_library::SeatSnapshot, tonic::Status>>,
+    },
     PublicSceneAsset {
         reply: oneshot::Sender<Result<String, tonic::Status>>,
     },
@@ -495,7 +500,9 @@ impl ActorInput for Call {
                         },
                     )
             }
-            Self::View { request, .. } | Self::TelemetryIdentity { request, .. } => request
+            Self::View { request, .. }
+            | Self::TelemetryIdentity { request, .. }
+            | Self::LibraryHero { request, .. } => request
                 .session_id
                 .as_ref()
                 .map_or(0, |id| bytes(&id.value))
@@ -3164,7 +3171,8 @@ impl Actor {
                                 .map(|choice| (choice.offer.clone(), choice.selected.clone()))
                                 .collect::<Vec<_>>()
                         });
-                    let mut fresh = Vec::new();
+                    let mut fresh =
+                        super::hero_library::identity_choices(request.character.as_ref())?;
                     if let Some(portrait) = portrait {
                         for (field, value) in [
                             ("key", portrait.key),
@@ -4388,6 +4396,29 @@ impl Reducer<Call> for Actor {
         // The unauthenticated player shell may learn only the public scene picture name.
         // Reading it is cheap presentation work and must not consume the game call budget.
         let call = match call {
+            Call::LibraryHero {
+                credential,
+                request,
+                reply,
+            } => {
+                let result = (|| {
+                    if self.session_lost() {
+                        return Err(session_lost_status());
+                    }
+                    require_readable(self.fenced)?;
+                    let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
+                    if role != LocalDemoRole::Player {
+                        return Err(tonic::Status::permission_denied("Player seat required"));
+                    }
+                    let principal = self.issuer.principal(&credential).map_err(unavailable)?;
+                    let checkpoint = self.owner.checkpoint();
+                    let member =
+                        watch_scope_identity(checkpoint.basis(), role, principal, &request)?;
+                    super::hero_library::snapshot(checkpoint, member)
+                })();
+                let _delivered = reply.send(result);
+                return;
+            }
             Call::PublicSceneAsset { reply } => {
                 let _delivered = reply.send(self.public_scene_asset());
                 return;
@@ -4502,8 +4533,10 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
-                Call::Presence { .. } | Call::Presented { .. } | Call::TelemetryIdentity { .. } => {
-                }
+                Call::LibraryHero { .. }
+                | Call::Presence { .. }
+                | Call::Presented { .. }
+                | Call::TelemetryIdentity { .. } => {}
             }
             return;
         }
@@ -4678,7 +4711,10 @@ impl Reducer<Call> for Actor {
                     super::dev_control::direct::admit(&mut history, &view, order)
                 }))
                 .is_ok(),
-            Call::Presence { .. } | Call::Presented { .. } | Call::TelemetryIdentity { .. } => true,
+            Call::LibraryHero { .. }
+            | Call::Presence { .. }
+            | Call::Presented { .. }
+            | Call::TelemetryIdentity { .. } => true,
         };
         span.finish_unmeasured(if delivered {
             "actor_outcome_delivered"

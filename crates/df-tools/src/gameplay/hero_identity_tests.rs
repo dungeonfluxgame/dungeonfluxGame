@@ -91,11 +91,13 @@ fn defaults_do_not_invent_masculine_gender_or_a_beard() {
 
 #[test]
 fn quickstart_portraits_supply_distinct_full_public_identities_when_identity_is_absent() {
-    let (first, first_dossier) = accepted_quickstart_identity("portrait-hero-1").unwrap();
-    let (second, second_dossier) = accepted_quickstart_identity("portrait-hero-2").unwrap();
+    let first_dossier = accepted_visual_dossier("portrait-hero-1").unwrap();
+    let second_dossier = accepted_visual_dossier("portrait-hero-2").unwrap();
+    let first = first_dossier.identity().unwrap();
+    let second = second_dossier.identity().unwrap();
 
-    assert_eq!(first_dossier.figure_reference, "figure-hero-1");
-    assert_eq!(second_dossier.figure_reference, "figure-hero-2");
+    assert!(first_dossier.description.contains("copper-red hair"));
+    assert!(second_dossier.description.contains("auburn hair"));
     assert_ne!(
         first.canonical_appearance_choices(),
         second.canonical_appearance_choices()
@@ -122,12 +124,8 @@ fn quickstart_portraits_supply_distinct_full_public_identities_when_identity_is_
         .collect::<Vec<_>>();
     accepted.push((
         "identity-appearance:accepted-profile".to_owned(),
-        first_dossier.portrait.to_owned(),
+        "portrait-hero-1".to_owned(),
     ));
-    assert_eq!(
-        ValidatedIdentity::accepted_visual_dossier_from_choices(&accepted),
-        Ok(Some(first_dossier))
-    );
     assert_eq!(
         ValidatedIdentity::from_canonical_appearance_choices(&accepted),
         Ok(first)

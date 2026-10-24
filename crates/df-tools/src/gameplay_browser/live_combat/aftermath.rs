@@ -182,6 +182,12 @@ pub(super) fn present_display(
         .enumerate()
         .map(|(index, member)| member_key(index, member))
         .collect();
+    let portraits = view
+        .journey
+        .party
+        .iter()
+        .map(|member| super::sheet::player_portrait_token(&member.name))
+        .collect::<Vec<_>>();
     let party: Vec<AftermathPartyMember<'_>> = view
         .journey
         .party
@@ -196,13 +202,7 @@ pub(super) fn present_display(
                 current: member.hit_points,
                 maximum: member.maximum_hit_points,
             }),
-            portrait: Some(
-                member
-                    .portrait
-                    .strip_prefix("portrait-")
-                    .filter(|_| !member.portrait.is_empty())
-                    .unwrap_or(if index == 0 { "hero-1" } else { "hero-2" }),
-            ),
+            portrait: Some(&portraits[index]),
         })
         .collect();
     host.set_attribute("data-outcome", &outcome_word(view).to_lowercase())?;

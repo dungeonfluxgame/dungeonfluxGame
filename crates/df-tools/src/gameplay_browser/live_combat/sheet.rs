@@ -515,7 +515,7 @@ fn class_line(sheet: &rpc::CharacterSheet) -> String {
     }
 }
 
-/// Portrait token by party order: the first joined hero uses `hero-1`, the second `hero-2`.
+/// The own-sheet image is the unique accepted party hero's server-published personal image.
 pub(in crate::gameplay_browser) fn portrait_token<'a>(
     party: &'a [rpc::PartyMemberView],
     own: &rpc::CharacterSheet,
@@ -525,13 +525,49 @@ pub(in crate::gameplay_browser) fn portrait_token<'a>(
         .enumerate()
         .filter(|(_, member)| member.name == own.name);
     match (matches.next(), matches.next()) {
-        (Some((_, member)), None) if !member.portrait.is_empty() => member
-            .portrait
-            .strip_prefix("portrait-")
-            .unwrap_or(&member.portrait),
-        (Some((1, _)), None) => "hero-2",
-        _ => "hero-1",
+        (Some((_, member)), None) => {
+            df_render::art_contract::player_hero_image(&member.portrait).unwrap_or("")
+        }
+        _ => "",
     }
+}
+
+/// A bounded df-ui decoration key, independent of stock art and accepted image availability.
+pub(in crate::gameplay_browser) fn player_portrait_token(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(name.as_bytes()));
+    format!("player-{}", &digest[..24])
+}
+
+pub(in crate::gameplay_browser) fn sync_personal_portraits(
+    root: &Element,
+    journey: &rpc::JourneyView,
+) -> Result<(), JsValue> {
+    let nodes = root.query_selector_all("[data-portrait]")?;
+    for index in 0..nodes.length() {
+        let Some(node) = nodes
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        else {
+            continue;
+        };
+        let reference = node.get_attribute("data-portrait").unwrap_or_default();
+        let personal = df_render::art_contract::player_hero_image(&reference).or_else(|| {
+            journey
+                .party
+                .iter()
+                .find(|member| player_portrait_token(&member.name) == reference)
+                .and_then(|member| df_render::art_contract::player_hero_image(&member.portrait))
+        });
+        if let Some(url) = personal {
+            node.set_attribute("data-personal-art", "")?;
+            node.set_attribute("style", &format!("--personal-portrait:url({url})"))?;
+        } else if node.has_attribute("data-personal-art") {
+            node.remove_attribute("data-personal-art")?;
+            node.remove_attribute("style")?;
+        }
+    }
+    Ok(())
 }
 
 /// The modifier printed beside an ability score on a character sheet. This is display
@@ -550,6 +586,10 @@ fn portrait(
     let document = client.borrow().document.clone();
     let portrait = node(&document, parent, "div", "live-portrait", "")?;
     portrait.set_attribute("data-portrait", token)?;
+    if let Some(url) = df_render::art_contract::player_hero_image(token) {
+        portrait.set_attribute("data-personal-art", "")?;
+        portrait.set_attribute("style", &format!("--personal-portrait:url({url})"))?;
+    }
     node(&document, &portrait, "span", "", &initial(name))?;
     Ok(())
 }
@@ -566,11 +606,7 @@ pub(super) fn mount_head(
         previous.remove();
     }
     let head = node(&document, host, "div", "live-hero-head", "")?;
-    if sheet
-        .portrait_uri
-        .starts_with("/gameplay/creator-portrait/")
-        && sheet.portrait_uri.len() <= 128
-    {
+    if df_render::art_contract::player_hero_image(&sheet.portrait_uri).is_some() {
         let image = node(&document, &head, "img", "live-portrait", "")?;
         image.set_attribute("src", &sheet.portrait_uri)?;
         image.set_attribute("alt", &format!("{} portrait", sheet.name))?;
@@ -660,11 +696,7 @@ pub(in crate::gameplay_browser) fn mount_inline(
     section.set_id("hero-sheet");
     section.set_attribute("aria-label", "Character sheet")?;
     let head = node(&document, &section, "div", "live-sheet-head", "")?;
-    if sheet
-        .portrait_uri
-        .starts_with("/gameplay/creator-portrait/")
-        && sheet.portrait_uri.len() <= 128
-    {
+    if df_render::art_contract::player_hero_image(&sheet.portrait_uri).is_some() {
         let image = node(&document, &head, "img", "live-portrait", "")?;
         image.set_attribute("src", &sheet.portrait_uri)?;
         image.set_attribute("alt", &format!("{} portrait", sheet.name))?;
@@ -815,7 +847,12 @@ pub(in crate::gameplay_browser) fn summary(
     parent: &Element,
     sheet: &rpc::CharacterSheet,
 ) -> Result<(), JsValue> {
-    mount_inline(client, parent, sheet, "hero-1")
+    mount_inline(
+        client,
+        parent,
+        sheet,
+        df_render::art_contract::player_hero_image(&sheet.portrait_uri).unwrap_or(""),
+    )
 }
 
 fn open_from_button(client: Rc<RefCell<Client>>) {

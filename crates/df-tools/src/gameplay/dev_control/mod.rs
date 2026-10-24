@@ -44,6 +44,7 @@ mod art;
 mod economy;
 pub(crate) mod fight;
 mod fx;
+mod heroes;
 pub(crate) mod history;
 mod jumps;
 pub(super) mod layout;
@@ -205,6 +206,10 @@ pub(super) fn setup(
     let state = Arc::new(shared);
     let mut router = Router::new()
         .route("/dev/health", get(health))
+        .route("/dev/heroes", get(heroes::list))
+        .route("/dev/heroes/{id}", get(heroes::show))
+        .route("/dev/heroes/{id}/revisions", get(heroes::revisions))
+        .route("/dev/heroes/{id}/delete", post(heroes::delete))
         .route("/dev/join", post(actions::join_seat))
         .route("/dev/reclaim", post(actions::reclaim_seat))
         .route("/dev/create", post(actions::create_hero))

@@ -392,11 +392,15 @@ pub(super) fn recovery() -> Result<NativeRecoverySource, RepositoryError> {
         resources: super::journey::resources()?,
         resource_resolver: Some(super::journey::resources_for),
         assets: vec![],
+        asset_resolver: Some(creator_portrait_assets),
         limits: limits(),
     })
 }
 pub(super) fn checkpoint(basis: Basis, state: GameState) -> Result<Checkpoint, RepositoryError> {
     let resources = super::journey::resources_for(&state)?;
+    let assets = creator_portrait_assets(&state).inspect_err(|_| {
+        super::refusal_detail::note("checkpoint-creator-portrait-assets");
+    })?;
     Checkpoint::new(
         CHECKPOINT_SCHEMA,
         basis,
@@ -406,11 +410,122 @@ pub(super) fn checkpoint(basis: Basis, state: GameState) -> Result<Checkpoint, R
             rules: &[rule()?, super::journey::rule()?],
             content: &contents()?,
             resources: &resources,
-            assets: &[],
+            assets: &assets,
         },
         limits(),
     )
-    .map_err(invalid)
+    .map_err(|error| {
+        super::refusal_detail::note("checkpoint-validation");
+        super::actor::record_audit_line(
+            "gameplay.checkpoint_invalid",
+            format!("CHECKPOINT invalid error={error:?}"),
+        );
+        invalid(error)
+    })
+}
+
+/// Only server-attached creator metadata can register an appearance during recovery.
+/// The wire rejects these choice fields from clients; approved bytes are checked separately
+/// when attached/served. This pure resolver never consults caches or regenerates missing media.
+pub(super) fn creator_portrait_assets(
+    state: &GameState,
+) -> Result<Vec<AssetReference>, RepositoryError> {
+    let maximum = limits().maximum_records;
+    if state.characters.len() > maximum || state.continuity.canonical_packs.len() > maximum {
+        return Err(RepositoryError::Capacity);
+    }
+    let mut records = state.characters.len();
+    for character in &state.characters {
+        records = records
+            .checked_add(character.choices.len())
+            .ok_or(RepositoryError::Capacity)?;
+        if records > maximum {
+            return Err(RepositoryError::Capacity);
+        }
+    }
+    for pack in &state.continuity.canonical_packs {
+        records = records
+            .checked_add(pack.identities.len())
+            .ok_or(RepositoryError::Capacity)?;
+        if records > maximum {
+            return Err(RepositoryError::Capacity);
+        }
+        for identity in &pack.identities {
+            records = records
+                .checked_add(identity.appearances.len())
+                .ok_or(RepositoryError::Capacity)?;
+            if records > maximum {
+                return Err(RepositoryError::Capacity);
+            }
+        }
+    }
+    let mut assets = Vec::<AssetReference>::new();
+    assets
+        .try_reserve_exact(state.characters.len())
+        .map_err(|_| RepositoryError::Capacity)?;
+    for character in &state.characters {
+        let field = |name: &str| -> Result<Option<&str>, RepositoryError> {
+            let mut choices = character
+                .choices
+                .iter()
+                .filter(|choice| choice.offer.as_str() == name);
+            let selected = choices.next().map(|choice| choice.selected.as_str());
+            if choices.next().is_some() {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            Ok(selected)
+        };
+        let metadata = [
+            field("identity-portrait:key")?,
+            field("identity-portrait:digest")?,
+            field("identity-portrait:bytes")?,
+            field("identity-portrait:revision")?,
+        ];
+        if metadata.iter().all(Option::is_none) {
+            continue;
+        }
+        let [Some(key), Some(digest), Some(bytes), Some(revision)] = metadata else {
+            return Err(RepositoryError::InvalidCandidate);
+        };
+        let lowercase_hex = |text: &str| {
+            text.len() == 64
+                && text
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        };
+        let bytes = bytes.parse::<u64>().map_err(invalid)?;
+        if !lowercase_hex(key)
+            || !lowercase_hex(digest)
+            || bytes == 0
+            || bytes > 6 * 1024 * 1024
+            || revision.parse::<u64>().map_err(invalid)? == 0
+        {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let asset = super::hero_identity::approved_portrait_asset(state, character.entity)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        if assets
+            .iter()
+            .any(|registered| registered.key == asset.key && registered != asset)
+        {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        if !assets.contains(asset) {
+            assets.push(asset.clone());
+        }
+    }
+    for pack in &state.continuity.canonical_packs {
+        for identity in &pack.identities {
+            for asset in &identity.appearances {
+                if super::hero_identity::approved_portrait_asset(state, identity.entity)
+                    != Some(asset)
+                {
+                    return Err(RepositoryError::InvalidCandidate);
+                }
+            }
+        }
+    }
+    Ok(assets)
 }
 
 pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
@@ -757,7 +872,7 @@ fn stage_scene(current: &Checkpoint, input: &GameInput) -> Result<Checkpoint, Re
             rules: &[rule()?],
             content: &contents()?,
             resources: &super::journey::resources_for(current.state())?,
-            assets: &[],
+            assets: &creator_portrait_assets(current.state())?,
         },
         CommandLimits {
             maximum_records: 16,
@@ -880,7 +995,7 @@ impl HarborEngine {
                     rules: std::slice::from_ref(&source),
                     content: &contents()?,
                     resources: &super::journey::resources_for(current.state())?,
-                    assets: &[],
+                    assets: &creator_portrait_assets(current.state())?,
                 },
                 limits: CommandEntryLimits {
                     command: CommandLimits {
@@ -1169,6 +1284,288 @@ mod tuning_pin_tests {
                     .source_revision
                     .ends_with(&suffix)
             );
+        });
+    }
+}
+
+#[cfg(test)]
+mod creator_portrait_recovery_tests {
+    use super::*;
+    use crate::gameplay::{beat_script_tests, hero_library, journey, pack, wire};
+    use df_protocol::common as rpc;
+    use df_types::OperationId;
+
+    fn with_hero(run: impl FnOnce(Checkpoint, AssetReference, MemberId)) {
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "fixtures/harbor-journey-tuning-baseline.json"
+        ))
+        .unwrap();
+        tuning["tactical"] =
+            serde_json::json!({"enemies":[{"srd_id":"bandit","count":3,"ammunition":20}]});
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = journey::initial().unwrap();
+            let joined = journey::stage_join(
+                &current,
+                &beat_script_tests::input(
+                    &current,
+                    journey::bootstrap_member().unwrap(),
+                    1,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .unwrap();
+            let member = MemberId::from_bytes(&[0x61; 16]).unwrap();
+            let mut identity = crate::gameplay::hero_identity::Identity::from_menus(&[])
+                .unwrap()
+                .to_rpc();
+            identity.appearance.as_mut().unwrap().public_description =
+                "Silver horns, emerald skin and a violet coat.".to_owned();
+            let selection = rpc::CharacterSelection {
+                name: "Neris".into(),
+                choices: [
+                    ("species", "dwarf"),
+                    ("class", "fighter-1"),
+                    ("background", "soldier"),
+                    ("language-1", "dwarvish"),
+                    ("language-2", "elvish"),
+                    ("skill-1", "acrobatics"),
+                    ("skill-2", "survival"),
+                    ("gaming-set", "playing-cards"),
+                    ("allied-ties", "join-order"),
+                    ("alignment", "chaotic-good"),
+                    ("build-package", "melee-stalwart"),
+                ]
+                .into_iter()
+                .map(|(group, option)| rpc::JourneyChoice {
+                    group_id: group.into(),
+                    option_id: option.into(),
+                })
+                .collect(),
+                identity: Some(identity),
+                ..Default::default()
+            };
+            let request = rpc::SubmitActionRequest {
+                session_id: Some(rpc::SessionId {
+                    value: Some(joined.basis().session.as_bytes().to_vec()),
+                }),
+                run_id: Some(rpc::RunId {
+                    value: Some(joined.basis().run.as_bytes().to_vec()),
+                }),
+                operation_id: Some(rpc::OperationId {
+                    value: Some(vec![2; 16]),
+                }),
+                observed_revision: Some(wire::revision(joined.basis().revision)),
+                offer_id: journey::offer_id(&joined, rpc::GameplayActionKind::CreateCharacter),
+                action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+                character: Some(selection),
+                ..Default::default()
+            };
+            let mut input = wire::journey_input(&request, member, &joined).unwrap();
+            let GameInput::Game(command) = &mut input else {
+                panic!("game command")
+            };
+            let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+                panic!("creation")
+            };
+            choices.extend(hero_library::identity_choices(request.character.as_ref()).unwrap());
+            // The actor's trusted approved-attachment hook, after wire rejects client metadata.
+            let image = AssetReference {
+                key: label(&"a".repeat(64)).unwrap(),
+                digest: ContentDigest(
+                    Sha256::digest(b"approved synthetic creator portrait").into(),
+                ),
+                byte_length: b"approved synthetic creator portrait".len() as u64,
+                kind: AssetKind::Image,
+            };
+            for (field, value) in [
+                ("key", image.key.as_str().to_owned()),
+                ("digest", journey::hex(&image.digest.0)),
+                ("bytes", image.byte_length.to_string()),
+                ("revision", "7".to_owned()),
+            ] {
+                choices.push((
+                    label(&format!("identity-portrait:{field}")).unwrap(),
+                    label(&value).unwrap(),
+                ));
+            }
+            let accepted = HarborEngine
+                .decide_admitted(&joined, &input, OperationId::from_bytes(&[2; 16]).unwrap())
+                .expect("approved portrait must not prevent accepting the hero");
+            run(accepted, image, member);
+        });
+    }
+
+    fn codec_limits() -> df_persistence::NativeCodecLimits {
+        df_persistence::NativeCodecLimits {
+            maximum_document_bytes: 2 * 1024 * 1024,
+            maximum_allocated_bytes: 4 * 1024 * 1024,
+            maximum_collection_items: 8192,
+            maximum_text_bytes: 4096,
+        }
+    }
+
+    #[test]
+    fn accepted_creator_portrait_survives_candidate_codec_recovery_and_library_seat_save() {
+        with_hero(|accepted, image, member| {
+            assert_eq!(
+                creator_portrait_assets(accepted.state()).unwrap(),
+                vec![image.clone()]
+            );
+            let source = recovery().unwrap();
+            let encoded = source
+                .encode_candidate(&accepted, accepted.pins(), codec_limits())
+                .unwrap();
+            let restored = source
+                .decode_checkpoint(&encoded, accepted.basis(), accepted.pins(), codec_limits())
+                .unwrap();
+            assert_eq!(restored, accepted);
+            let saved = hero_library::snapshot(&restored, member).unwrap();
+            let hero = saved.hero.unwrap();
+            assert_eq!(hero.name, "Neris");
+            assert_eq!(
+                hero.identity
+                    .unwrap()
+                    .appearance
+                    .unwrap()
+                    .public_description,
+                "Silver horns, emerald skin and a violet coat."
+            );
+            let portrait = saved
+                .portrait
+                .expect("the library save reads the committed portrait");
+            assert_eq!(portrait.key, image.key.as_str());
+            assert_eq!(portrait.digest, image.digest.0);
+            assert_eq!(portrait.bytes, image.byte_length);
+            assert_eq!(portrait.revision, 7);
+            let mut fixed = source.clone();
+            fixed.asset_resolver = None;
+            assert_eq!(
+                fixed.decode_checkpoint(
+                    &encoded,
+                    accepted.basis(),
+                    accepted.pins(),
+                    codec_limits()
+                ),
+                Err(RepositoryError::InvalidCandidate)
+            );
+        });
+    }
+
+    #[test]
+    fn tampered_or_foreign_creator_metadata_is_refused_locally_and_on_decoded_recovery() {
+        with_hero(|accepted, image, _| {
+            for defect in 0..8 {
+                let mut state = accepted.state().clone();
+                let appearance = &mut state.continuity.canonical_packs[0].identities[0];
+                match defect {
+                    0 => appearance.appearances[0].digest.0[0] ^= 1,
+                    1 => appearance.appearances[0].byte_length += 1,
+                    2 => appearance.appearances[0].kind = AssetKind::Audio,
+                    3 => appearance.appearances[0].key = label("foreign").unwrap(),
+                    4 => appearance.entity = journey::room_entity().unwrap(),
+                    5 => state.characters[0]
+                        .choices
+                        .retain(|choice| choice.offer.as_str() != "identity-portrait:revision"),
+                    6 => {
+                        state.characters[0]
+                            .choices
+                            .iter_mut()
+                            .find(|choice| choice.offer.as_str() == "identity-portrait:bytes")
+                            .unwrap()
+                            .selected = label("0").unwrap()
+                    }
+                    7 => {
+                        state.characters[0]
+                            .choices
+                            .iter_mut()
+                            .find(|choice| choice.offer.as_str() == "identity-portrait:key")
+                            .unwrap()
+                            .selected = label(&"A".repeat(64)).unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    checkpoint(accepted.basis(), state.clone()).is_err(),
+                    "defect {defect}"
+                );
+                // Encode an otherwise model-valid candidate with a caller-supplied inventory.
+                // Native candidate admission and recovery must still refuse it.
+                let candidate_assets = state
+                    .continuity
+                    .canonical_packs
+                    .iter()
+                    .flat_map(|pack| &pack.identities)
+                    .flat_map(|identity| &identity.appearances)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let candidate = Checkpoint::new(
+                    CHECKPOINT_SCHEMA,
+                    accepted.basis(),
+                    accepted.pins().clone(),
+                    state,
+                    ReferenceInventory {
+                        rules: &[rule().unwrap(), journey::rule().unwrap()],
+                        content: &contents().unwrap(),
+                        resources: &journey::resources_for(accepted.state()).unwrap(),
+                        assets: &candidate_assets,
+                    },
+                    limits(),
+                )
+                .expect(
+                    "metadata defect is model-valid only under the caller's supplied inventory",
+                );
+                {
+                    let source = recovery().unwrap();
+                    assert!(
+                        source
+                            .encode_candidate(&candidate, accepted.pins(), codec_limits())
+                            .is_err(),
+                        "defect {defect}"
+                    );
+                    let encoded = df_persistence::local_demo_scope::encode_owned_demo_checkpoint(
+                        &candidate,
+                        codec_limits(),
+                    )
+                    .unwrap();
+                    assert!(
+                        source
+                            .decode_checkpoint(
+                                &encoded,
+                                accepted.basis(),
+                                accepted.pins(),
+                                codec_limits()
+                            )
+                            .is_err(),
+                        "defect {defect}"
+                    );
+                }
+            }
+            let mut state = accepted.state().clone();
+            let duplicate = state.characters[0]
+                .choices
+                .iter()
+                .find(|choice| choice.offer.as_str() == "identity-portrait:key")
+                .unwrap()
+                .clone();
+            state.characters[0].choices.push(duplicate);
+            assert!(creator_portrait_assets(&state).is_err());
+            let mut state = accepted.state().clone();
+            state.continuity.canonical_packs[0].identities[0]
+                .appearances
+                .push(image.clone());
+            state.continuity.canonical_packs[0].identities[0]
+                .appearances
+                .last_mut()
+                .unwrap()
+                .digest
+                .0[0] ^= 1;
+            assert!(creator_portrait_assets(&state).is_err());
         });
     }
 }

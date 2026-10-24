@@ -237,22 +237,9 @@ pub(super) fn journey_input(
         }
         super::creator_catalog::checked_scenery(&character.portrait_scenery)
             .map_err(|_| tonic::Status::invalid_argument("Review your public portrait scenery"))?;
-        let (identity, visual_dossier) = match character.identity.clone() {
-            Some(identity) => (super::hero_identity::Identity::from_rpc(identity), None),
-            None => {
-                let mut portraits = character
-                    .choices
-                    .iter()
-                    .filter(|choice| choice.group_id == "portrait");
-                let portrait = portraits.next().ok_or_else(invalid)?;
-                if portraits.next().is_some() {
-                    return Err(invalid());
-                }
-                let (identity, dossier) =
-                    super::hero_identity::accepted_quickstart_identity(&portrait.option_id)
-                        .map_err(|_| invalid())?;
-                (Ok(identity), Some(dossier))
-            }
+        let identity = match character.identity.clone() {
+            Some(identity) => super::hero_identity::Identity::from_rpc(identity),
+            None => super::hero_identity::Identity::from_menus(&[]),
         };
         let identity = identity.map_err(|_| {
             super::refusal_detail::note("hero-identity-invalid");
@@ -272,12 +259,6 @@ pub(super) fn journey_input(
                 model::label(&selected).map_err(|_| invalid())?,
             ));
         }
-        if let Some(dossier) = visual_dossier {
-            choices.push((
-                model::label("identity-appearance:accepted-profile").map_err(|_| invalid())?,
-                model::label(dossier.portrait).map_err(|_| invalid())?,
-            ));
-        }
         let encoded_name = if character.name.is_empty() {
             "empty-name".to_owned()
         } else {
@@ -290,7 +271,7 @@ pub(super) fn journey_input(
         for selection in &character.choices {
             if selection.group_id.starts_with("identity-portrait:")
                 || selection.group_id.starts_with("identity-appearance:")
-                || selection.group_id.starts_with("identity-public-look:v1:")
+                || selection.group_id.starts_with("identity-public-look:")
             {
                 return Err(invalid());
             }
@@ -304,6 +285,9 @@ pub(super) fn journey_input(
                 model::label(&selection.option_id).map_err(|_| invalid())?,
             ));
         }
+        // The actor appends the creator record and up to four approved portrait fields.
+        // Reserve their exact space so Vec growth cannot exhaust creation's 32 KiB budget.
+        choices.reserve_exact(super::hero_library::identity_choices(Some(character))?.len() + 4);
     }
     if super::journey::tactical::present(current.state())
         && (request.savage_attacker || request.graze)
@@ -432,12 +416,8 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                 }
             }
         }
-        let package_ids = if tactical {
+        if tactical {
             let packages = pack::build_packages().map_err(|_| RepositoryError::InvalidCandidate)?;
-            let package_ids = packages
-                .iter()
-                .map(|package| package.id.clone())
-                .collect::<Vec<_>>();
             groups.push(rpc::JourneyGroup {
                 group_id: "build-package".to_owned(),
                 label: "Starting package".to_owned(),
@@ -451,50 +431,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                     })
                     .collect(),
             });
-            package_ids
-        } else {
-            Vec::new()
-        };
-        let portraits: &[(&str, &str)] = if tactical {
-            &[
-                ("portrait-hero-1", "Red-bearded dwarf fighter"),
-                ("portrait-hero-2", "Auburn-braided dwarf fighter"),
-                ("portrait-hero-3", "Brown-braided dwarf archer"),
-            ]
-        } else {
-            &[
-                ("portrait-hero-1", "Red-bearded dwarf fighter"),
-                ("portrait-hero-2", "Auburn-braided dwarf fighter"),
-            ]
-        };
-        groups.push(rpc::JourneyGroup {
-            group_id: "portrait".to_owned(),
-            label: "Hero appearance".to_owned(),
-            options: portraits
-                .iter()
-                .filter_map(|(id, label)| {
-                    let requires_options = package_ids
-                        .iter()
-                        .filter(|package| pack::appearance_fits_package(id, package))
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    (package_ids.is_empty() || !requires_options.is_empty()).then(|| {
-                        rpc::JourneyOption {
-                            option_id: (*id).to_owned(),
-                            label: (*label).to_owned(),
-                            description: String::new(),
-                            // Tactical appearances are limited to compatible build packages.
-                            requires_group: if package_ids.is_empty() {
-                                String::new()
-                            } else {
-                                "build-package".to_owned()
-                            },
-                            requires_options,
-                        }
-                    })
-                })
-                .collect(),
-        });
+        }
         let supported_designs = super::creator_catalog::supported_designs(&groups);
         super::creator_catalog::expand_groups(&mut groups);
         Ok(rpc::CharacterCreationOffer {
@@ -550,17 +487,8 @@ fn party_member(
 
         ..Default::default()
     };
-    if ready
-        && let Some(character) = state
-            .characters
-            .iter()
-            .find(|character| character.entity == who)
-        && let Some(portrait) = character
-            .choices
-            .iter()
-            .find(|choice| choice.offer.as_str() == "portrait")
-    {
-        view.portrait = portrait.selected.as_str().to_owned();
+    if ready {
+        view.portrait = super::hero_identity::approved_portrait_uri(state, who).unwrap_or_default();
     }
     if journey::tactical::present(state) && ready {
         journey::tactical::project_member(state, who, &mut view)?;
@@ -1162,6 +1090,23 @@ pub(super) fn project_journey(
                 "view-character-sheet",
                 journey::character_sheet(state, who),
             )?);
+            if state.characters.iter().any(|character| {
+                character.owner == principal
+                    && character.choices.iter().any(|choice| {
+                        choice
+                            .offer
+                            .as_str()
+                            .starts_with("identity-portrait:creator-v1:")
+                    })
+            }) {
+                let identity = super::hero_library::snapshot(current, principal)
+                    .map_err(|_| refused("view-owner-identity"))?
+                    .hero
+                    .and_then(|hero| hero.identity);
+                if let Some(sheet) = own.as_mut() {
+                    sheet.identity = identity;
+                }
+            }
         } else {
             creation = Some(stage("view-creation-offer", creation_offer())?);
         }

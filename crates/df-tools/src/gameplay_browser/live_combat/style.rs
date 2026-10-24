@@ -24,7 +24,7 @@ pub(super) fn generated_asset_url(stem: &str) -> Option<String> {
 pub(super) const BATTLE_BACKDROP: &str = "var(--asset-battle-backdrop,none)";
 
 /// CSS custom property -> generated art stem, with the shape each slot expects.
-pub(super) const ART_SLOTS: [(&str, &str); 18] = [
+pub(super) const ART_SLOTS: [(&str, &str); 14] = [
     ("--asset-d20", "d20"),                       // about 11:12, blank top face
     ("--asset-ribbon-success", "ribbon-success"), // about 8:1
     ("--asset-ribbon-failure", "ribbon-failure"), // about 8:1
@@ -37,11 +37,7 @@ pub(super) const ART_SLOTS: [(&str, &str); 18] = [
     ("--asset-icon-short-rest", "icon-short-rest"),
     ("--asset-icon-journey", "icon-journey"),
     ("--asset-icon-character", "icon-character"),
-    ("--asset-portrait-hero-1", "portrait-hero-1"), // 1:1
-    ("--asset-portrait-hero-2", "portrait-hero-2"),
     ("--asset-portrait-bandit", "portrait-bandit"),
-    ("--asset-portrait-hero-1-full", "portrait-hero-1-full"), // 2:3
-    ("--asset-portrait-hero-2-full", "portrait-hero-2-full"),
     ("--asset-portrait-bandit-full", "portrait-bandit-full"),
 ];
 
@@ -55,9 +51,6 @@ pub(super) fn stylesheet() -> String {
     }
     let mut portraits = String::new();
     for stem in [
-        "hero-1",
-        "hero-2",
-        "hero-3",
         "ant-bandit",
         "ant-cultist",
         "ant-guard",
@@ -85,6 +78,8 @@ pub(super) fn stylesheet() -> String {
 }
 
 const COMMON: &str = r#"
+.live-screen .combat-actor[data-personal-art] .combat-initiative-value::before,.live-portrait[data-personal-art]::before,.live-screen .aftermath-member[data-personal-art] .aftermath-portrait::before{background-image:var(--personal-portrait);background-size:240% auto;background-position:50% 0}
+.live-screen[data-role=display] .live-keyart[data-personal-art]{background-image:var(--personal-portrait)}
 .live-screen{position:relative;isolation:isolate;color:#f4eddf;font-family:Georgia,'Times New Roman',serif}
 .live-screen *{box-sizing:border-box;min-width:0}
 @S .combat-topbar,@S .combat-connection,@S .combat-story .combat-overline,@S .combat-initiative>h2{display:none}

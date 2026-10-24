@@ -20,6 +20,56 @@ fn key(byte: char) -> ImageKey {
     ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
 }
 
+/// Registered synthetic personal references: cache hits keep plate-call budget assertions exact.
+async fn cache_personal_heroes(inner: &Inner, cache: &std::path::Path, seats: &[u8]) {
+    use crate::gameplay::hero_identity::Identity;
+    let identity = Identity::from_menus(&[]).unwrap();
+    for seat in seats {
+        let name = format!("Accepted hero {seat}");
+        let request = ImageRequest {
+            kind: ImageKind::CanonicalCharacter,
+            references: Vec::new(),
+            prompt: crate::gameplay::imagery::canonical_character(
+                inner.rating,
+                crate::gameplay::imagery::HeroVisualIdentity {
+                    identity: &identity,
+                    species: "dwarf",
+                    held_gear: &[],
+                },
+                None,
+                &format!("{{\"name\":\"{name}\",\"actual_gear\":[]}}"),
+                false,
+                &name,
+            )
+            .unwrap(),
+            output: OutputSpec::CUTOUT,
+        };
+        let key = inner.imagery.key_for(&request);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            32,
+            48,
+            image::Rgba([*seat * 40, 120, 180, 255]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::WebP)
+        .unwrap();
+        std::fs::create_dir_all(cache).unwrap();
+        std::fs::write(
+            cache.join(format!("{}.webp", key.as_str())),
+            encoded.into_inner(),
+        )
+        .unwrap();
+        let ready = inner
+            .imagery
+            .generate(&format!("character:accepted-seat-{seat}"), request)
+            .await
+            .unwrap();
+        locked(&inner.state)
+            .canonical
+            .fixture_hero(*seat, &name, ready);
+    }
+}
+
 #[test]
 fn failed_canonical_dependency_projects_terminal_plate_failure_without_redispatch() {
     use crate::gameplay::adventure::scene_model::SceneModel;
@@ -1852,6 +1902,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         book: Mutex::new(Book::new()),
         jobs,
     });
+    cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
     let plates = Plates {
         shared: shared.clone(),
         _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
@@ -3482,6 +3533,7 @@ async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party()
         book: Mutex::new(Book::new()),
         jobs,
     };
+    cache_personal_heroes(&shared.inner, &cache, &[1, 2, 3]).await;
     let lobby = scene(SceneKey::Room, "The Gathering", None);
     let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     for heroes in [&[][..], &[1][..], &[1, 2][..]] {
@@ -3553,6 +3605,7 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
         book: Mutex::new(Book::new()),
         jobs,
     };
+    cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
     let mut current = scene(SceneKey::DialogueSeal, "Two on the Stage", Some("Kestrel"));
     current.cast.push(member(
         "antagonist",
@@ -3670,6 +3723,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
             shared.inner.finish_canonical(work, Ok(key.clone()));
         }
     }
+    cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
     assert_eq!(fixture.calls(), 0, "reviewed references are already cached");
     let mut scene = PlateScene::of(&current).unwrap();
     let spec = scene.stage(&[1, 2]).unwrap();
@@ -3680,8 +3734,16 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     assert_eq!(request.references.len(), 3);
     assert_eq!(request.references[0].sha256, base.sha256);
     assert_eq!(request.references[2].sha256, courier.sha256);
-    assert!(request.prompt.as_str().contains("hero:1"));
-    assert!(request.prompt.as_str().contains("hero:2"));
+    for seat in [1_u8, 2] {
+        let entity = df_model::checkpoint::EntityId::from_bytes(&[seat; 16]).unwrap();
+        use sha2::{Digest, Sha256};
+        assert!(
+            request
+                .prompt
+                .as_str()
+                .contains(&format!("hero:{:x}", Sha256::digest(entity.as_bytes())))
+        );
+    }
     for identity in &scene.identity_cast {
         assert!(request.prompt.as_str().contains(&identity.id));
     }
@@ -4433,4 +4495,141 @@ fn missing_focus_identity_never_borrows_a_named_or_speaker_reference() {
     assert_eq!(diagnostic["status"], "failed");
     assert_eq!(diagnostic["failure_category"], "missing_focus_identity");
     assert_eq!(diagnostic["cache_source"], "identity_validation");
+}
+
+#[tokio::test]
+async fn custom_seat_plates_bind_canonical_images_locators_and_identity_revisions() {
+    use super::super::canonical::hero_identity_fixture;
+    use crate::gameplay::{imagery::tests::DirectionFixture, model};
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/HS5/custom-plate-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::photographic(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let committed = hero_identity_fixture::checkpoint(true);
+    inner.observe_checkpoint(&committed);
+    // The canonical pipeline is exercised separately; complete both slots with real fixture bytes.
+    let canonical_jobs = locked(&inner.state).canonical.take_jobs();
+    for (index, job) in canonical_jobs.into_iter().enumerate() {
+        let super::super::Job::Canonical(work) = job else {
+            panic!("hero work")
+        };
+        // Generate actual registered bytes with distinct request bindings, without portrait I/O.
+        let request = crate::gameplay::imagery::ImageRequest {
+            kind: crate::gameplay::imagery::ImageKind::CanonicalCharacter,
+            references: Vec::new(),
+            prompt: crate::gameplay::imagery::cast_expression(
+                ContentRating::Restrained,
+                crate::gameplay::imagery::CharacterFacts {
+                    role: crate::gameplay::imagery::CharacterRole::Hero,
+                    life_stage: crate::gameplay::imagery::LifeStage::Adult,
+                },
+                Expression::Neutral,
+                HealthTier::Healthy,
+                false,
+            )
+            .unwrap()
+            .with_canonical_binding(&format!("custom-seat-{index}")),
+            output: crate::gameplay::imagery::OutputSpec::CUTOUT,
+        };
+        let image = fixture
+            .imagery
+            .generate(&format!("character:seat-{index}"), request)
+            .await
+            .unwrap();
+        inner.finish_canonical(work, Ok(image));
+    }
+    let (jobs, _) = mpsc::channel(8);
+    let shared = Shared {
+        inner: inner.clone(),
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
+    let authored = scene(
+        SceneKey::DialogueSeal,
+        "Custom heroes at the bell chamber",
+        Some("Kestrel"),
+    );
+    let mut plate = PlateScene::of(&authored).unwrap();
+    plate.identity_cast.clear();
+    plate.hero_names = vec!["Brakka".to_owned(), "Sigrun".to_owned()];
+    let spec = plate.stage(&[1, 2]).unwrap();
+    let (sheet, _, people) = shared.identity_sheet(&plate, &[1, 2]).await.unwrap();
+    assert!(!sheet.bytes.is_empty());
+    for (name, look) in ["Brakka", "Sigrun"]
+        .into_iter()
+        .zip(hero_identity_fixture::LOOKS)
+    {
+        let person = people.iter().find(|person| person.name == name).unwrap();
+        assert_eq!(
+            person.appearance.as_deref(),
+            Some(format!("{name}, {look}").as_str())
+        );
+    }
+    let (_, targets) =
+        shared.hero_locator_targets(&spec, spec.speaker.as_ref().unwrap(), &[], None);
+    let references = shared.locator_references(&plate, &[1, 2]).await.unwrap();
+    for seat in [1, 2] {
+        let (_, canonical) = inner.canonical_hero_reference(seat).await.unwrap();
+        assert_eq!(references[&format!("hero-{seat}")].sha256, canonical.sha256);
+        let locator = &targets
+            .iter()
+            .find(|(id, _)| id == &format!("hero-{seat}"))
+            .unwrap()
+            .1;
+        assert_eq!(locator, &inner.canonical_hero_locator(seat).unwrap());
+        assert!(locator.chars().count() <= 300);
+    }
+    let first_id = shared.canonical_plate_id(&plate, &[1, 2], &[], 0);
+    let first_key = inner.canonical_hero_reference(1).await.unwrap().1;
+    let mut revised = committed.state().clone();
+    let identity_choice = revised.characters[0]
+        .choices
+        .iter_mut()
+        .find(|choice| choice.offer.as_str() == "identity-appearance:build")
+        .unwrap();
+    identity_choice.selected = model::label("broad").unwrap();
+    let revised = hero_identity_fixture::recheckpoint(committed.basis(), revised);
+    inner.observe_checkpoint(&revised);
+    assert_ne!(first_id, shared.canonical_plate_id(&plate, &[1, 2], &[], 0));
+    assert!(inner.canonical_hero_reference(1).await.is_none());
+    assert!(inner.canonical_hero_reference(2).await.is_some());
+    let facts = crate::gameplay::imagery::CharacterFacts {
+        role: crate::gameplay::imagery::CharacterRole::Hero,
+        life_stage: crate::gameplay::imagery::LifeStage::Adult,
+    };
+    let old = super::super::Character {
+        id: "old".to_owned(),
+        art: format!("/gameplay/imagery/{}", "a".repeat(64)),
+        facts,
+    };
+    let new = super::super::Character {
+        id: "new".to_owned(),
+        art: format!("/gameplay/imagery/{}", "b".repeat(64)),
+        facts,
+    };
+    let first_health = inner
+        .hero_health_request(&old, first_key.clone(), HealthTier::Hurt)
+        .unwrap();
+    let next_health = inner
+        .hero_health_request(&new, first_key, HealthTier::Hurt)
+        .unwrap();
+    assert_ne!(
+        fixture.imagery.key_for(&first_health),
+        fixture.imagery.key_for(&next_health),
+        "equal pixels in a new canonical revision still own distinct health variants"
+    );
 }

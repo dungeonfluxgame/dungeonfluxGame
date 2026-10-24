@@ -957,3 +957,47 @@ field dungeonflux.public.v1.HeroPortraitRequest 10 background type=9 label=1 pre
 field dungeonflux.public.v1.HeroPortraitRequest 11 scenery type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSelection 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterCreationOffer 7 portrait_scenery_options type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyOption oneof=-
+
+service dungeonflux.public.v1.HeroLibraryService
+method dungeonflux.public.v1.HeroLibraryService ListMyHeroes .dungeonflux.public.v1.ListMyHeroesRequest .dungeonflux.public.v1.ListMyHeroesResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService LoadHero .dungeonflux.public.v1.LoadHeroRequest .dungeonflux.public.v1.LoadHeroResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService SaveMySeatHero .dungeonflux.public.v1.SaveMySeatHeroRequest .dungeonflux.public.v1.SaveMySeatHeroResponse client-stream=false server-stream=false
+message dungeonflux.public.v1.ListMyHeroesRequest
+field dungeonflux.public.v1.ListMyHeroesRequest 1 key type=12 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.ListMyHeroesResponse
+field dungeonflux.public.v1.ListMyHeroesResponse 1 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
+message dungeonflux.public.v1.LibraryHeroSummary
+field dungeonflux.public.v1.LibraryHeroSummary 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 2 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 3 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 4 species type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 5 character_class type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 6 portrait type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 7 portrait_media_type type=9 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.LoadHeroRequest
+field dungeonflux.public.v1.LoadHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.LibraryHeroIdentity
+field dungeonflux.public.v1.LibraryHeroIdentity 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 2 design type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyChoice oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 5 private_backstory type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 6 sealed_backstory type=9 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.LoadHeroResponse
+field dungeonflux.public.v1.LoadHeroResponse 1 hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroIdentity oneof=-
+field dungeonflux.public.v1.LoadHeroResponse 2 summary type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
+message dungeonflux.public.v1.SaveMySeatHeroRequest
+field dungeonflux.public.v1.SaveMySeatHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroRequest 2 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroRequest 3 loaded_hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroReference oneof=-
+message dungeonflux.public.v1.LibraryHeroReference
+field dungeonflux.public.v1.LibraryHeroReference 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroReference 2 revision type=4 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.SaveMySeatHeroResponse
+field dungeonflux.public.v1.SaveMySeatHeroResponse 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroResponse 2 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroRequest 3 new_hero type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ListMyHeroesRequest 2 after_hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ListMyHeroesResponse 2 next_cursor type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 8 portrait_key type=9 label=1 presence=false target=- oneof=-

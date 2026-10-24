@@ -1458,8 +1458,14 @@ mod tests {
         std::fs::write(generated.join("sfx/unlisted.mp3"), b"no").unwrap();
         std::fs::write(generated.join("icon-sword.webp"), b"chrome").unwrap();
         std::fs::write(
-            generated.join("sprite-hero-1-documentary-photo.png"),
+            generated.join("sprite-courier-documentary-photo.png"),
             b"reviewed photograph",
+        )
+        .unwrap();
+        // REF-058: stock hero photographs are no longer served for player heroes.
+        std::fs::write(
+            generated.join("sprite-hero-1-documentary-photo.png"),
+            b"stock hero photograph",
         )
         .unwrap();
         // Painted depictions are refused even when the file is on disk, listed by name in an
@@ -1487,7 +1493,7 @@ mod tests {
             [
                 ("/assets/ui/generated/icon-sword", "image/webp"),
                 (
-                    "/assets/ui/generated/sprite-hero-1-documentary-photo",
+                    "/assets/ui/generated/sprite-courier-documentary-photo",
                     "image/png"
                 ),
                 ("/assets/ui/generated/sfx/hit", "audio/mpeg"),

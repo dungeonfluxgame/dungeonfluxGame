@@ -435,7 +435,7 @@ fn archer_creation_as_second_player_accepts_the_complete_phone_selection() {
     });
 }
 #[test]
-fn appearance_must_match_the_combat_package_on_the_server() {
+fn legacy_portrait_metadata_does_not_constrain_the_mechanical_package() {
     live_pack(|| {
         let with = |package: &'static str, portrait: &'static str| {
             let mut choices = PHONE_SHARED.to_vec();
@@ -444,10 +444,10 @@ fn appearance_must_match_the_combat_package_on_the_server() {
             pack::validate_character("Sylvie", &choices).is_ok()
         };
         assert!(with("archer", "portrait-hero-3"));
-        assert!(!with("archer", "portrait-hero-1"));
+        assert!(with("archer", "portrait-hero-1"));
         assert!(with("melee-stalwart", "portrait-hero-1"));
         assert!(with("melee-stalwart", "portrait-hero-2"));
-        assert!(!with("melee-stalwart", "portrait-hero-3"));
+        assert!(with("melee-stalwart", "portrait-hero-3"));
     });
 }
 #[test]
@@ -463,14 +463,8 @@ fn each_offered_package_states_the_ability_scores_the_server_gives_its_hero() {
         };
         let mut seen = std::collections::BTreeSet::new();
         for package in &group("build-package").options {
-            let appearance = group("portrait")
-                .options
-                .iter()
-                .find(|look| look.requires_options.contains(&package.option_id))
-                .expect("every package has a look");
             let mut choices = PHONE_SHARED.to_vec();
             choices.push(("build-package", package.option_id.as_str()));
-            choices.push(("portrait", appearance.option_id.as_str()));
             let [
                 strength,
                 dexterity,
@@ -499,34 +493,61 @@ fn each_offered_package_states_the_ability_scores_the_server_gives_its_hero() {
     });
 }
 #[test]
-fn the_offer_lists_each_appearance_only_with_the_packages_the_server_accepts_it_with() {
+fn every_package_completes_creation_without_a_stock_portrait_choice() {
     live_pack(|| {
-        let offer = wire::creation_offer().expect("creation offer");
-        let appearances = offer
-            .groups
-            .iter()
-            .find(|group| group.group_id == "portrait")
-            .expect("appearance group");
+        let offer = wire::creation_offer().unwrap();
+        assert!(
+            !offer
+                .groups
+                .iter()
+                .any(|group| group.group_id == "portrait")
+        );
         let packages = offer
             .groups
             .iter()
             .find(|group| group.group_id == "build-package")
-            .expect("package group");
-        assert!(!appearances.options.is_empty() && !packages.options.is_empty());
-        for appearance in &appearances.options {
-            assert_eq!(appearance.requires_group, "build-package");
-            for package in &packages.options {
-                let mut choices = PHONE_SHARED.to_vec();
-                choices.push(("build-package", package.option_id.as_str()));
-                choices.push(("portrait", appearance.option_id.as_str()));
-                assert_eq!(
-                    appearance.requires_options.contains(&package.option_id),
-                    pack::validate_character("Sylvie", &choices).is_ok(),
-                    "{} with {}",
-                    appearance.option_id,
-                    package.option_id
-                );
-            }
+            .unwrap();
+        for package in &packages.options {
+            let current = joined_room();
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let mut choices = PHONE_SHARED.to_vec();
+            choices.push(("build-package", &package.option_id));
+            let mut request = phone_create(&current, 3, "Sigrun", &choices);
+            let mut identity = super::super::hero_identity::Identity::from_menus(&[])
+                .unwrap()
+                .to_rpc();
+            identity.appearance.as_mut().unwrap().public_description =
+                "An emerald-skinned elder with silver horns and a violet coat.".to_owned();
+            request.character.as_mut().unwrap().identity = Some(identity);
+            let input = creator_input(&current, member, &request);
+            let next = model::HarborEngine
+                .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+                .unwrap();
+            let entity = player_entity(member, &next).unwrap();
+            let character = next
+                .state()
+                .characters
+                .iter()
+                .find(|hero| hero.entity == entity)
+                .unwrap();
+            assert!(
+                !character
+                    .choices
+                    .iter()
+                    .any(|choice| choice.offer.as_str() == "portrait")
+            );
+            let saved = super::super::hero_library::snapshot(&next, member).unwrap();
+            assert!(
+                saved
+                    .hero
+                    .unwrap()
+                    .identity
+                    .unwrap()
+                    .appearance
+                    .unwrap()
+                    .public_description
+                    .contains("silver horns")
+            );
         }
     });
 }
@@ -611,6 +632,269 @@ fn creator_catalog_unsupported_design_is_rejected_at_the_live_wire_boundary() {
                 &current
             )
             .is_ok()
+        );
+    });
+}
+
+/// Match the session owner's borrowed-decision admission. A plain clone shrinks Strings and
+/// Vecs, hiding excess retained capacity in the candidate that the owner actually checks.
+fn creation_receipt_with_original_capacities(
+    checkpoint: &Checkpoint,
+) -> df_session::submission::DecisionReceipt {
+    let original = checkpoint
+        .state()
+        .decisions
+        .last()
+        .expect("creation decision");
+    let mut decision = original.clone();
+    decision
+        .facts
+        .reserve_exact(original.facts.capacity() - decision.facts.len());
+    decision
+        .draws
+        .reserve_exact(original.draws.capacity() - decision.draws.len());
+    decision
+        .effects
+        .reserve_exact(original.effects.capacity() - decision.effects.len());
+    let text = decision.semantic_output.as_mut().expect("creation result");
+    text.reserve_exact(original.semantic_output.as_ref().unwrap().capacity() - text.len());
+    assert_eq!(decision.facts.capacity(), original.facts.capacity());
+    assert_eq!(decision.draws.capacity(), original.draws.capacity());
+    assert_eq!(decision.effects.capacity(), original.effects.capacity());
+    assert_eq!(
+        decision.semantic_output.as_ref().unwrap().capacity(),
+        original.semantic_output.as_ref().unwrap().capacity()
+    );
+    df_session::submission::DecisionReceipt::new(
+        checkpoint.basis(),
+        decision,
+        df_persistence::local_demo_scope::RECEIPT_RETAINED_BYTES_MAX,
+    )
+    .expect("the actual retained creation receipt fits the live bound")
+}
+
+fn creator_identity_at_bounds(unicode: bool) -> rpc::HeroIdentity {
+    let mut identity = super::super::hero_identity::Identity::from_menus(&[])
+        .unwrap()
+        .to_rpc();
+    // Reach both public-look bounds: 2,000 characters and, with Unicode, 4,096 bytes.
+    identity.appearance.as_mut().unwrap().public_description = if unicode {
+        format!("{}\u{96ea}{}", "\u{1f409}".repeat(698), "a".repeat(1301))
+    } else {
+        "a".repeat(2000)
+    };
+    let character = if unicode { "\u{1f409}" } else { "a" };
+    identity.origin = character.repeat(160);
+    identity.occupation = character.repeat(160);
+    identity.motivation = character.repeat(160);
+    identity.backstory = character.repeat(480);
+    identity.facts = (0..6)
+        .map(|index| {
+            let first = char::from_u32(if unicode {
+                0x1f409 + index
+            } else {
+                0x61 + index
+            })
+            .unwrap();
+            format!("{first}{}", character.repeat(159))
+        })
+        .collect();
+    super::super::hero_identity::Identity::from_rpc(identity.clone())
+        .expect("identity reaches the admitted bounds");
+    identity
+}
+
+fn creator_input(
+    current: &Checkpoint,
+    member: MemberId,
+    request: &rpc::SubmitActionRequest,
+) -> GameInput {
+    let mut input = wire::journey_input(request, member, current)
+        .expect("the complete creator phone request converts");
+    let GameInput::Game(command) = &mut input else {
+        panic!("game input")
+    };
+    let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+        panic!("creation action")
+    };
+    // Same trusted attachment hook as Actor::submit; clients cannot supply these choices.
+    choices
+        .extend(super::super::hero_library::identity_choices(request.character.as_ref()).unwrap());
+    assert!(choices.len() <= 256, "creation record count");
+    assert!(
+        input.retained_bytes().unwrap()
+            <= df_persistence::local_demo_scope::input_retained_bytes_max(&input)
+    );
+    input
+}
+
+#[test]
+fn stalwart_then_every_package_with_maximal_creator_identity_fits_and_saves_losslessly() {
+    live_pack(|| {
+        let offer = wire::creation_offer().unwrap();
+        let packages = offer
+            .groups
+            .iter()
+            .find(|group| group.group_id == "build-package")
+            .unwrap();
+        for mode in ["default", "maximum-ascii", "maximum-unicode"] {
+            let identity = match mode {
+                "maximum-ascii" => creator_identity_at_bounds(false),
+                "maximum-unicode" => creator_identity_at_bounds(true),
+                _ => super::super::hero_identity::Identity::from_menus(&[])
+                    .unwrap()
+                    .to_rpc(),
+            };
+            // Include the maximum public scenery as well; it shares the creator record budget.
+            let scenery = format!("{}{}", "\u{1f409}".repeat(136), "a".repeat(224));
+            for second_package in &packages.options {
+                let mut current = joined_room();
+                for (index, package) in ["melee-stalwart", second_package.option_id.as_str()]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let member = MemberId::from_bytes(&MEMBERS[index]).unwrap();
+                    let mut choices = PHONE_SHARED.to_vec();
+                    choices.push(("build-package", package));
+                    let operation = 3 + index as u8;
+                    let mut request =
+                        phone_create(&current, operation, ["Brakka", "Sigrun"][index], &choices);
+                    let selection = request.character.as_mut().unwrap();
+                    selection.identity = Some(identity.clone());
+                    selection.portrait_scenery = scenery.clone();
+                    let input = creator_input(&current, member, &request);
+                    let input_bytes = input.retained_bytes().unwrap();
+                    current = model::HarborEngine
+                        .decide_admitted(
+                            &current,
+                            &input,
+                            OperationId::from_bytes(&[operation; 16]).unwrap(),
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("{mode} {package} seat {index} refused: {error:?}")
+                        });
+                    let receipt = creation_receipt_with_original_capacities(&current);
+                    let sheet = accepted(receipt.decision()).unwrap().character.unwrap();
+                    assert!(
+                        sheet.identity.is_none(),
+                        "full identity stays in committed state"
+                    );
+                    assert_eq!(sheet.name, request.character.as_ref().unwrap().name);
+                    println!(
+                        "HS3 AFTER mode={mode} seat={} package={package} input={input_bytes} receipt={} semantic={}",
+                        index + 1,
+                        receipt.retained_bytes().unwrap(),
+                        receipt.decision().semantic_output.as_ref().unwrap().len()
+                    );
+                }
+                // The live store must save what the rules accepted: encode, decode and compare
+                // the two-hero checkpoint under the server's own codec limits.
+                model::recovery()
+                    .unwrap()
+                    .encode_candidate(
+                        &current,
+                        current.pins(),
+                        crate::gameplay::live_codec_limits(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{mode} {second_package:?} checkpoint not storable: {error:?}")
+                    });
+                // SaveMySeatHero snapshots the committed seat, never the phone's identity.
+                // Recover both after the second acceptance, and round-trip the actual library bytes.
+                for (index, seat) in MEMBERS.iter().enumerate() {
+                    let member = MemberId::from_bytes(seat).unwrap();
+                    let saved = super::super::hero_library::snapshot(&current, member)
+                        .unwrap()
+                        .hero
+                        .unwrap();
+                    let recovered =
+                        rpc::LibraryHeroIdentity::decode(saved.encode_to_vec().as_slice()).unwrap();
+                    assert_eq!(recovered.name, ["Brakka", "Sigrun"][index]);
+                    assert_eq!(recovered.identity, Some(identity.clone()));
+                    assert_eq!(recovered.portrait_scenery, scenery);
+                    assert_eq!(recovered.design.len(), 3);
+                    assert!(recovered.design.iter().all(|choice| matches!(
+                        choice.group_id.as_str(),
+                        "species" | "class" | "background"
+                    )));
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn legacy_public_look_and_48_byte_creator_chunks_still_recover_the_full_identity() {
+    live_pack(|| {
+        let current = joined_room();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let mut choices = PHONE_SHARED.to_vec();
+        choices.extend([
+            ("build-package", "melee-stalwart"),
+            ("portrait", "portrait-hero-1"),
+        ]);
+        let mut request = phone_create(&current, 3, "Brakka", &choices);
+        let mut identity = super::super::hero_identity::Identity::from_menus(&[])
+            .unwrap()
+            .to_rpc();
+        identity.appearance.as_mut().unwrap().public_description =
+            "Old look\n\u{96ea}\t\u{1f409}".repeat(10);
+        identity.backstory = "The exact accepted story survives.".into();
+        request.character.as_mut().unwrap().identity = Some(identity.clone());
+        let mut input = creator_input(&current, member, &request);
+        let GameInput::Game(command) = &mut input else {
+            panic!("game input")
+        };
+        let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+            panic!("creation action")
+        };
+        choices.retain(|(field, _)| !field.as_str().starts_with("identity-public-look:"));
+        let public = identity
+            .appearance
+            .as_ref()
+            .unwrap()
+            .public_description
+            .as_bytes();
+        choices.push((
+            model::label("identity-public-look:v1:count").unwrap(),
+            model::label(&public.len().div_ceil(32).to_string()).unwrap(),
+        ));
+        for (index, chunk) in public.chunks(32).enumerate() {
+            choices.push((
+                model::label(&format!("identity-public-look:v1:{index:03}")).unwrap(),
+                model::label(&hex(chunk)).unwrap(),
+            ));
+        }
+        let mut record = Vec::new();
+        for (field, value) in choices
+            .iter()
+            .filter(|(field, _)| field.as_str().starts_with("identity-portrait:creator-v1:"))
+        {
+            assert!(
+                field
+                    .as_str()
+                    .ends_with(&format!("{:04}", record.len().div_ceil(96)))
+            );
+            record.extend(super::super::hero_library::decode_record_chunk(value.as_str()).unwrap());
+        }
+        choices.retain(|(field, _)| !field.as_str().starts_with("identity-portrait:creator-v1:"));
+        for (index, chunk) in record.chunks(48).enumerate() {
+            choices.push((
+                model::label(&format!("identity-portrait:creator-v1:{index:04}")).unwrap(),
+                model::label(&super::super::hero_library::encode_record_chunk(chunk)).unwrap(),
+            ));
+        }
+        let next = model::HarborEngine
+            .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+            .unwrap();
+        creation_receipt_with_original_capacities(&next);
+        assert_eq!(
+            super::super::hero_library::snapshot(&next, member)
+                .unwrap()
+                .hero
+                .unwrap()
+                .identity,
+            Some(identity)
         );
     });
 }

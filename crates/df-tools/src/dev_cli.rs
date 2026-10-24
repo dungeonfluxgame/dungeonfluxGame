@@ -239,6 +239,7 @@ fn print_help() {
          audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
          art [list <prefix>]          generated depictions on the hub; art regenerate|clear character:<id>|place:<id>\n\
+         heroes list|show <id>|revisions <id>|delete <id>  inspect or delete local library heroes\n\
          fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
          place [list|go <exit|place>]  where the party stands, its exits and the places the run knows; go moves the whole party (an exit to a new place creates it)\n\
          dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
@@ -483,6 +484,11 @@ async fn dispatch(
         "npc" => npc(client, positional, options).await,
         "economy" => economy(client, positional, options).await,
         "art" => art(client, positional).await,
+        "heroes" => match heroes_path(positional) {
+            Ok((true, path)) => post(client, &path, &json!({})).await,
+            Ok((false, path)) => get(client, &path).await,
+            Err(message) => client.print_error(message),
+        },
         "clips" => clips(client, positional).await,
         "fx" => fx(client, positional).await,
         "dice" => dice::run(client, positional, options).await,
@@ -644,6 +650,28 @@ fn selection_flags(body: &mut Value, options: &[(String, String)]) -> Result<(),
         }
     }
     Ok(())
+}
+
+fn heroes_path(positional: &[String]) -> Result<(bool, String), String> {
+    let usage =
+        "usage: dev heroes list | show <id> | revisions <id> | delete <id> (positive i64 id)";
+    match positional.get(1).map(String::as_str) {
+        Some("list") if positional.len() == 2 => Ok((false, "/dev/heroes".into())),
+        Some(command @ ("show" | "revisions" | "delete")) if positional.len() == 3 => {
+            let id = positional[2]
+                .parse::<i64>()
+                .ok()
+                .filter(|id| *id > 0)
+                .ok_or(usage)?;
+            let suffix = match command {
+                "revisions" => "/revisions",
+                "delete" => "/delete",
+                _ => "",
+            };
+            Ok((command == "delete", format!("/dev/heroes/{id}{suffix}")))
+        }
+        _ => Err(usage.into()),
+    }
 }
 
 fn photo_check_path(positional: &[String], options: &[(String, String)]) -> Result<String, String> {
@@ -1508,6 +1536,39 @@ fn split_words(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heroes_commands_parse_routes_and_require_positive_i64_ids() {
+        let words = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        for (args, post, path) in [
+            (vec!["heroes", "list"], false, "/dev/heroes"),
+            (vec!["heroes", "show", "42"], false, "/dev/heroes/42"),
+            (
+                vec!["heroes", "revisions", "42"],
+                false,
+                "/dev/heroes/42/revisions",
+            ),
+            (
+                vec!["heroes", "delete", "42"],
+                true,
+                "/dev/heroes/42/delete",
+            ),
+        ] {
+            assert_eq!(heroes_path(&words(&args)).unwrap(), (post, path.into()));
+        }
+        for args in [
+            vec!["heroes"],
+            vec!["heroes", "list", "1"],
+            vec!["heroes", "show"],
+            vec!["heroes", "show", "0"],
+            vec!["heroes", "delete", "-1"],
+            vec!["heroes", "revisions", "9223372036854775808"],
+            vec!["heroes", "show", "1/other"],
+            vec!["heroes", "unknown", "1"],
+        ] {
+            assert!(heroes_path(&words(&args)).is_err(), "{args:?}");
+        }
+    }
 
     #[test]
     fn photo_check_parses_a_saved_path_and_requires_a_closed_kind() {

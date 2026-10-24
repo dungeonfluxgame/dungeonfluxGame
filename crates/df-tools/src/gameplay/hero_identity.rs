@@ -10,7 +10,8 @@ use sha2::{Digest, Sha256};
 
 const MENUS: &str = include_str!("../../../../content/hero-tables/identity-menu.json");
 const READING_DEADLINE: Duration = Duration::from_secs(8);
-const PUBLIC_LOOK_PREFIX: &str = "identity-public-look:v1:";
+const LEGACY_PUBLIC_LOOK_PREFIX: &str = "identity-public-look:v1:";
+const PUBLIC_LOOK_PREFIX: &str = "identity-public-look:v2:";
 const MAX_PUBLIC_LOOK_BYTES: usize = 4096;
 
 pub(super) fn validate_public_description(text: &str) -> Result<(), IdentityError> {
@@ -89,19 +90,15 @@ pub(crate) struct Identity {
     pub(crate) facts: Vec<String>,
 }
 
-/// The reviewed quickstart portrait that defines a hero when creation omits a custom identity.
+/// Written migration data for saves made before the public look controls existed.
 /// The dossier is public physical identity only; it carries no story or private fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AcceptedVisualDossier {
-    pub(crate) portrait: &'static str,
-    pub(crate) figure_reference: &'static str,
     pub(crate) description: &'static str,
     appearance_choices: &'static [(&'static str, &'static str)],
 }
 
 const QUICKSTART_HERO_ONE: AcceptedVisualDossier = AcceptedVisualDossier {
-    portrait: "portrait-hero-1",
-    figure_reference: "figure-hero-1",
     description: "Adult male mountain dwarf, about 45, with a weathered broad face and powerful compact shoulders. He has copper-red hair and a long braided beard with plain iron rings, steady grey eyes and a scarred brow. He wears chain mail beneath a dark blue soldier's tabard.",
     appearance_choices: &[
         ("presentation", "masculine"),
@@ -118,8 +115,6 @@ const QUICKSTART_HERO_ONE: AcceptedVisualDossier = AcceptedVisualDossier {
 };
 
 const QUICKSTART_HERO_TWO: AcceptedVisualDossier = AcceptedVisualDossier {
-    portrait: "portrait-hero-2",
-    figure_reference: "figure-hero-2",
     description: "Adult female mountain dwarf, about 40, with a broad strong jaw and compact powerful build. She has dark auburn hair in tight practical warrior braids, hazel eyes and a small healed notch at the left ear. She wears chain mail, a worn leather pauldron and dark blue garment accents.",
     appearance_choices: &[
         ("presentation", "feminine"),
@@ -136,8 +131,6 @@ const QUICKSTART_HERO_TWO: AcceptedVisualDossier = AcceptedVisualDossier {
 };
 
 const QUICKSTART_HERO_THREE: AcceptedVisualDossier = AcceptedVisualDossier {
-    portrait: "portrait-hero-3",
-    figure_reference: "figure-hero-3",
     description: "Adult female dwarf archer with pale skin and long brown hair in two practical braids. She wears a blue wool cloak over worn brown leather armor and linen, with a longbow and quiver of arrows.",
     appearance_choices: &[
         ("presentation", "feminine"),
@@ -162,20 +155,13 @@ pub(crate) fn accepted_visual_dossier(portrait: &str) -> Option<&'static Accepte
     }
 }
 
-pub(crate) fn accepted_quickstart_identity(
-    portrait: &str,
-) -> Result<(ValidatedIdentity, &'static AcceptedVisualDossier), IdentityError> {
-    let dossier = accepted_visual_dossier(portrait).ok_or(IdentityError::InvalidOption)?;
-    Ok((dossier.identity()?, dossier))
-}
-
-/// Name and story identity metadata are outside pack validation; portrait remains because the
-/// pack validates that the selected appearance matches the accepted build's equipment.
+/// Identity metadata and legacy portrait choices never constrain mechanical packages.
 pub(crate) fn is_character_pack_validation_choice(group: &str) -> bool {
     group != "name"
+        && group != "portrait"
         && group != "test-fighter-level"
         && !group.starts_with("identity-appearance:")
-        && !group.starts_with("identity-public-look:v1:")
+        && !group.starts_with("identity-public-look:")
         && !group.starts_with("identity-portrait:")
 }
 
@@ -183,14 +169,49 @@ impl AcceptedVisualDossier {
     pub(crate) fn identity(&self) -> Result<ValidatedIdentity, IdentityError> {
         Identity::from_menus(self.appearance_choices)
     }
+}
 
-    pub(crate) fn agrees_with_portrait(&self, portrait: &str) -> bool {
-        self.portrait == portrait
-    }
+/// The accepted portrait must be attached to this entity with the exact committed metadata.
+pub(super) fn approved_portrait_asset(
+    state: &df_model::checkpoint::GameState,
+    entity: df_model::checkpoint::EntityId,
+) -> Option<&df_model::checkpoint::AssetReference> {
+    let character = state
+        .characters
+        .iter()
+        .find(|character| character.entity == entity)?;
+    let selected = |field: &str| {
+        character
+            .choices
+            .iter()
+            .find(|choice| choice.offer.as_str() == field)
+            .map(|choice| choice.selected.as_str())
+    };
+    state
+        .continuity
+        .canonical_packs
+        .iter()
+        .rev()
+        .flat_map(|pack| &pack.identities)
+        .filter(|identity| identity.entity == entity)
+        .flat_map(|identity| &identity.appearances)
+        .find(|asset| {
+            asset.kind == df_model::checkpoint::AssetKind::Image
+                && Some(asset.key.as_str()) == selected("identity-portrait:key")
+                && selected("identity-portrait:digest")
+                    == Some(super::journey::hex(&asset.digest.0).as_str())
+                && selected("identity-portrait:bytes").and_then(|value| value.parse::<u64>().ok())
+                    == Some(asset.byte_length)
+        })
+}
 
-    pub(crate) fn agrees_with_identity(&self, identity: &ValidatedIdentity) -> bool {
-        identity.canonical_appearance_choices() == self.appearance_choices
-    }
+pub(super) fn approved_portrait_uri(
+    state: &df_model::checkpoint::GameState,
+    entity: df_model::checkpoint::EntityId,
+) -> Option<String> {
+    let asset = approved_portrait_asset(state, entity)?;
+    let path = format!("/gameplay/creator-portrait/{}", asset.key.as_str());
+    df_render::art_contract::player_hero_image(&path).map(str::to_owned)
 }
 
 /// Only a checked identity may reach stored choices, story context or image prompts.
@@ -499,12 +520,12 @@ impl ValidatedIdentity {
         }
         let mut choices = vec![(
             format!("{PUBLIC_LOOK_PREFIX}count"),
-            bytes.len().div_ceil(32).to_string(),
+            bytes.len().div_ceil(96).to_string(),
         )];
-        for (index, chunk) in bytes.chunks(32).enumerate() {
+        for (index, chunk) in bytes.chunks(96).enumerate() {
             choices.push((
                 format!("{PUBLIC_LOOK_PREFIX}{index:03}"),
-                super::journey::hex(chunk),
+                super::hero_library::encode_record_chunk(chunk),
             ));
         }
         choices
@@ -520,15 +541,35 @@ impl ValidatedIdentity {
                 (field != "accepted-profile").then_some((field, value.as_str()))
             })
             .collect::<Vec<_>>();
+        // Pre-creator saves have only a portrait id. Recover its written look, never its photo.
+        if selected.is_empty()
+            && let Some((_, portrait)) = choices.iter().find(|(field, _)| field == "portrait")
+        {
+            let dossier = accepted_visual_dossier(portrait).ok_or(IdentityError::InvalidOption)?;
+            let mut identity = dossier.identity()?.0;
+            identity.appearance.public_description = dossier.description.to_owned();
+            return identity.validate();
+        }
         let mut identity = Identity::from_menus(&selected)?.0;
         let public = choices
             .iter()
-            .filter(|(field, _)| field.starts_with(PUBLIC_LOOK_PREFIX))
+            .filter(|(field, _)| {
+                field.starts_with(PUBLIC_LOOK_PREFIX)
+                    || field.starts_with(LEGACY_PUBLIC_LOOK_PREFIX)
+            })
             .collect::<Vec<_>>();
         if !public.is_empty() {
+            let prefix = if public
+                .iter()
+                .any(|(field, _)| field.starts_with(PUBLIC_LOOK_PREFIX))
+            {
+                PUBLIC_LOOK_PREFIX
+            } else {
+                LEGACY_PUBLIC_LOOK_PREFIX
+            };
             let counts = public
                 .iter()
-                .filter(|(field, _)| field == &format!("{PUBLIC_LOOK_PREFIX}count"))
+                .filter(|(field, _)| field == &format!("{prefix}count"))
                 .collect::<Vec<_>>();
             let [(_, count)] = counts.as_slice() else {
                 return Err(IdentityError::DuplicateField);
@@ -539,7 +580,7 @@ impl ValidatedIdentity {
             }
             let mut bytes = Vec::new();
             for index in 0..count {
-                let field = format!("{PUBLIC_LOOK_PREFIX}{index:03}");
+                let field = format!("{prefix}{index:03}");
                 let chunks = public
                     .iter()
                     .filter(|(name, _)| name == &field)
@@ -547,34 +588,24 @@ impl ValidatedIdentity {
                 let [(_, value)] = chunks.as_slice() else {
                     return Err(IdentityError::DuplicateField);
                 };
-                if value.len() > 64 {
-                    return Err(IdentityError::TextLength);
+                if prefix == LEGACY_PUBLIC_LOOK_PREFIX {
+                    if value.len() > 64 {
+                        return Err(IdentityError::TextLength);
+                    }
+                    bytes.extend(
+                        super::journey::unhex(value).map_err(|_| IdentityError::InvalidOption)?,
+                    );
+                } else {
+                    bytes.extend(
+                        super::hero_library::decode_record_chunk(value)
+                            .ok_or(IdentityError::InvalidOption)?,
+                    );
                 }
-                bytes.extend(
-                    super::journey::unhex(value).map_err(|_| IdentityError::InvalidOption)?,
-                );
             }
             identity.appearance.public_description =
                 String::from_utf8(bytes).map_err(|_| IdentityError::UnsafeText)?;
         }
         identity.validate()
-    }
-
-    pub(crate) fn accepted_visual_dossier_from_choices(
-        choices: &[(String, String)],
-    ) -> Result<Option<&'static AcceptedVisualDossier>, IdentityError> {
-        let mut profiles = choices
-            .iter()
-            .filter(|(field, _)| field == "identity-appearance:accepted-profile");
-        let Some((_, selected)) = profiles.next() else {
-            return Ok(None);
-        };
-        if profiles.next().is_some() {
-            return Err(IdentityError::DuplicateField);
-        }
-        accepted_visual_dossier(selected)
-            .map(Some)
-            .ok_or(IdentityError::InvalidOption)
     }
 
     pub(crate) fn identity(&self) -> &Identity {

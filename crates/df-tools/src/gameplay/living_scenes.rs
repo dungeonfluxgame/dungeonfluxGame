@@ -34,7 +34,7 @@ use super::{
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKey, ImageKind, ImageRequest, Imagery,
         LifeStage, Lookup, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
-        party_sheet, scene_refresh,
+        scene_refresh,
     },
     pack::{self, SceneKey},
     scene_mood::{
@@ -49,36 +49,14 @@ use super::{
 use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
 use super::{actor, home_video::kill_shot, resources};
 
-/// The authored cut-out of the party's hero at this position. Used only as the source of a
-/// health variant before that hero's live canonical picture exists; once it does, variants are
-/// made from the live picture so a hurt hero still looks like themselves.
-fn hero_art(index: usize) -> String {
-    format!(
-        "assets/ui/generated/sprite-hero-{}-documentary-photo",
-        index + 1
-    )
-}
-
-/// The cut-out the battlefield dresses the hero at this party position in (the dwarf fighter, the
-/// archer, then the second fighter) before a live picture exists. SWITCH POINT: this must match
-/// `snapshot_of` in `gameplay_browser/live_battlefield.rs`, so a fallback health variant is made
-/// from the art the fight shows.
-fn battle_hero_art(index: usize) -> String {
-    let art = [1, 3, 2][index % 3];
-    format!("assets/ui/generated/sprite-hero-{art}-documentary-photo")
-}
-
-/// The hero's own live picture, when one exists: the canonical hero at their seat, otherwise
-/// the standing cut-out made from the opening party sheet. This is the picture a hero's battle
-/// face falls back to and the source their health variants are made from.
+/// The hero's accepted canonical picture is the source for every health variant and battle face.
 fn live_hero_key(state: &State, hero: &StageHero) -> Option<ImageKey> {
-    let canonical = u8::try_from(hero.index + 1).ok().and_then(|seat| {
+    u8::try_from(hero.index + 1).ok().and_then(|seat| {
         state
             .canonical
             .hero_at_seat(seat)
             .and_then(|(entity, _)| state.canonical.hero(entity))
-    });
-    canonical.or_else(|| state.hero_cutouts.get(&hero.name).cloned())
+    })
 }
 
 /// Combat-only creatures do not occur in the story cast. Admit their stable public identity
@@ -125,9 +103,9 @@ fn apply_creature_faces(
 }
 
 /// The characters whose art a hero's health variants are made from: one character sourced from
-/// the hero's live picture when it exists (the same variant serves the stage and the
-/// battlefield), otherwise the authored stage and battlefield arts.
-fn hero_characters(hero: &StageHero, live: Option<ImageKey>) -> Vec<Character> {
+/// the hero's canonical picture when it exists (the same variant serves the stage and battlefield).
+/// Without that picture, no variant is requested.
+fn hero_characters(_hero: &StageHero, live: Option<ImageKey>) -> Vec<Character> {
     let facts = CharacterFacts {
         role: CharacterRole::Hero,
         life_stage: LifeStage::Adult,
@@ -140,26 +118,12 @@ fn hero_characters(hero: &StageHero, live: Option<ImageKey>) -> Vec<Character> {
             facts,
         }];
     }
-    let mut arts = vec![hero_art(hero.index)];
-    let battle = battle_hero_art(hero.index);
-    if !arts.contains(&battle) {
-        arts.push(battle);
-    }
-    arts.into_iter()
-        .map(|art| Character {
-            id: art.clone(),
-            art,
-            facts: CharacterFacts {
-                role: CharacterRole::Hero,
-                life_stage: LifeStage::Adult,
-            },
-        })
-        .collect()
+    Vec::new()
 }
 
 /// The picture a hero shows on each screen now: the health variant of their current tier when
 /// one exists, otherwise their own live picture. `None` on a screen means no live picture
-/// exists yet, so that screen keeps its authored (stock) art.
+/// exists yet, so that screen shows a name placeholder.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HeroFace {
     /// The picture for the exploration stage.
@@ -638,10 +602,7 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
     let mut owned = Vec::with_capacity(stage.heroes.len() + stage.cast.len());
     for hero in &stage.heroes {
         let art = u8::try_from(hero.index + 1).ok()?;
-        let fallback_art = match art {
-            1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-documentary-photo"),
-            _ => format!("/assets/ui/generated/figure-hero-{art}-documentary-photo"),
-        };
+        let fallback_art = art_contract::NEUTRAL.to_owned();
         let live_art = state.and_then(|state| {
             state
                 .hero_faces
@@ -937,7 +898,6 @@ const KILL_REFERENCE_DEADLINE: Duration = Duration::from_secs(120);
 enum KillSubject {
     Hero {
         entity: df_model::checkpoint::EntityId,
-        name: String,
     },
     Npc(String),
 }
@@ -956,10 +916,7 @@ impl KillStill {
         for (index, subject) in self.subjects.iter().enumerate() {
             if self.references[index].is_none() {
                 self.references[index] = match subject {
-                    KillSubject::Hero { entity, name } => state
-                        .canonical
-                        .hero(*entity)
-                        .or_else(|| state.hero_cutouts.get(name).cloned()),
+                    KillSubject::Hero { entity, .. } => state.canonical.hero(*entity),
                     KillSubject::Npc(id) => state.canonical.npc(id),
                 };
             }
@@ -1001,10 +958,6 @@ struct State {
     health_sprites: BTreeMap<String, SpriteOverlay>,
     /// The health variant each hero shows now, by name.
     hero_faces: BTreeMap<String, HeroFace>,
-    /// The standing cut-outs, requested once per hero from the opening party sheet.
-    hero_cutouts: BTreeMap<String, ImageKey>,
-    hero_cutouts_in_flight: BTreeSet<String>,
-    failed_hero_cutouts: BTreeSet<String>,
     scene_graph: Option<SceneGraph>,
 }
 
@@ -1015,11 +968,6 @@ enum Job {
         references: [ImageKey; 3],
     },
     Canonical(canonical::Work),
-    HeroCutout {
-        name: String,
-        index: usize,
-        party: Vec<usize>,
-    },
     Expression {
         member: Member,
         face: Face,
@@ -1051,10 +999,6 @@ enum Done {
     },
     Canonical {
         work: canonical::Work,
-        result: Result<ImageKey, ImageFailure>,
-    },
-    HeroCutout {
-        name: String,
         result: Result<ImageKey, ImageFailure>,
     },
     Expression {
@@ -1114,24 +1058,71 @@ pub(super) struct LivingScenes {
 
 /// The heroes' pictures, by name, on a view's journey. Every hero in `hero_faces` is
 /// published, hurt or not; an empty sprite or battle sprite means no live picture exists yet
-/// and that screen keeps its authored (stock) art.
+/// and that screen shows a name placeholder.
 fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
-    if let Some(journey) = journey {
-        journey.live_faces = state
-            .hero_faces
+    let Some(journey) = journey else {
+        return;
+    };
+    journey.live_faces.clear();
+    for (index, member) in journey.party.iter_mut().enumerate() {
+        let entity = if member.participant_id.is_empty() {
+            u8::try_from(index + 1)
+                .ok()
+                .and_then(|seat| state.canonical.hero_at_seat(seat))
+                .map(|(entity, _)| entity)
+        } else {
+            df_model::checkpoint::EntityId::from_bytes(&member.participant_id).ok()
+        };
+        let personal = entity
+            .and_then(|entity| state.canonical.hero_path(entity))
+            .or_else(|| art_contract::player_hero_image(&member.portrait).map(str::to_owned));
+        // A changed identity cannot retain the old identity's cached health face while queued.
+        let face = entity
+            .filter(|entity| state.canonical.hero(*entity).is_some())
+            .and_then(|_| state.hero_faces.get(&member.name));
+        let stage = face
+            .and_then(|face| face.stage.as_ref())
+            .map(ImageKey::path)
+            .or_else(|| personal.clone());
+        let battle = face
+            .and_then(|face| face.battle.as_ref())
+            .map(ImageKey::path)
+            .or(personal);
+        member.portrait = stage.clone().unwrap_or_default();
+        journey.live_faces.push(rpc::LiveFace {
+            name: member.name.clone(),
+            sprite: stage.unwrap_or_default(),
+            battle_sprite: battle.unwrap_or_default(),
+        });
+    }
+    if let Some(combat) = &mut journey.combat {
+        for member in combat
+            .participants
+            .iter_mut()
+            .filter(|member| member.side == 1)
+        {
+            member.portrait = journey
+                .party
+                .iter()
+                .find(|hero| hero.participant_id == member.participant_id)
+                .map(|hero| hero.portrait.clone())
+                .unwrap_or_default();
+        }
+    }
+    if let Some(own) = &mut journey.own_character {
+        // Names are unique at creation; personal art never comes from party position here.
+        own.portrait_uri = journey
+            .party
             .iter()
-            .map(|(name, face)| rpc::LiveFace {
-                name: name.clone(),
-                sprite: face.stage.as_ref().map(ImageKey::path).unwrap_or_default(),
-                battle_sprite: face.battle.as_ref().map(ImageKey::path).unwrap_or_default(),
-            })
-            .collect();
+            .find(|member| member.name == own.name)
+            .map(|member| member.portrait.clone())
+            .unwrap_or_default();
     }
 }
 
 /// The characters whose art has health variants in this stage: the party's heroes first, then
 /// the scene's cast. A hero with a live picture contributes one character sourced from it;
-/// a hero without one contributes the authored stage and battlefield arts.
+/// a hero without one contributes no health-variant request.
 fn characters_of(
     stage: &Stage,
     facts: &SceneFacts,
@@ -1234,9 +1225,9 @@ fn refresh_health(state: &mut State) -> bool {
         return false;
     };
     // Every hero is published, hurt or not: the health variant of their tier when one exists,
-    // otherwise their own live picture, otherwise nothing (the screen keeps its stock art).
+    // otherwise their own live picture, otherwise nothing (the screen shows their name).
     // A hero with a live picture has one variant source, so the stage and the battlefield
-    // show the same variant; a hero without one keeps the separate authored sources.
+    // show the same variant; a hero without one waits for their own image.
     let mut hero_faces = BTreeMap::new();
     for hero in &stage.heroes {
         let live = live_hero_key(state, hero);
@@ -1250,10 +1241,7 @@ fn refresh_health(state: &mut State) -> bool {
                 let variant = nearest(&key.path());
                 (variant.clone(), variant)
             }
-            None => (
-                nearest(&hero_art(hero.index)),
-                nearest(&battle_hero_art(hero.index)),
-            ),
+            None => (None, None),
         };
         hero_faces.insert(
             hero.name.clone(),
@@ -1350,7 +1338,6 @@ impl LivingScenes {
             {
                 return Some(KillSubject::Hero {
                     entity: hero.entity,
-                    name: name.to_owned(),
                 });
             }
             scene
@@ -1627,6 +1614,7 @@ impl Inner {
         let mut state = locked(&self.state);
         match message.audience.as_mut() {
             Some(rpc::view_message::Audience::Display(display)) => {
+                apply_hero_faces(&state, display.journey.as_mut());
                 let Some(stage) = stage else {
                     return;
                 };
@@ -1809,16 +1797,6 @@ impl Inner {
                     Done::Canonical { work, result }
                 });
             }
-            Job::HeroCutout { name, index, party } => {
-                tasks.spawn(async move {
-                    let result = inner.render_hero_cutout(index, &party).await;
-                    super::actor::record_audit_line(
-                        "gameplay.imagery_complete",
-                        image_completion_line("hero_cutout", started.elapsed(), result.as_ref()),
-                    );
-                    Done::HeroCutout { name, result }
-                });
-            }
             Job::Expression { member, face } => {
                 tasks.spawn(async move {
                     let result = inner.render_expression(&member, face).await;
@@ -1837,7 +1815,15 @@ impl Inner {
             Job::Warm { character, tier } => {
                 tasks.spawn(async move {
                     let result = match inner.load_health_reference(&character).await {
-                        Ok(sprite) => inner.render_health(sprite, character.facts, tier).await,
+                        Ok(sprite) => {
+                            let subject =
+                                format!("character:health:{}:{tier:?}", &sprite.sha256[..12]);
+                            let request = inner.hero_health_request(&character, sprite, tier);
+                            match request {
+                                Ok(request) => inner.imagery.generate(&subject, request).await,
+                                Err(failure) => Err(failure),
+                            }
+                        }
                         Err(failure) => Err(failure),
                     };
                     super::actor::record_audit_line(
@@ -1856,9 +1842,9 @@ impl Inner {
                     let mut found = Vec::new();
                     if let Ok(sprite) = inner.load_health_reference(&character).await {
                         for tier in GENERATED_TIERS {
-                            if let Some(key) = inner
-                                .peek_health(sprite.clone(), character.facts, tier)
-                                .await
+                            if let Ok(request) =
+                                inner.hero_health_request(&character, sprite.clone(), tier)
+                                && let Some(key) = inner.imagery.peek(&request).await
                             {
                                 found.push((tier, key));
                             }
@@ -1995,24 +1981,6 @@ impl Inner {
         }
     }
 
-    async fn render_hero_cutout(
-        &self,
-        index: usize,
-        party: &[usize],
-    ) -> Result<ImageKey, ImageFailure> {
-        let mut figures = Vec::with_capacity(party.len());
-        for hero_index in party {
-            figures.push(self.load_figure(&hero_art(*hero_index)).await?);
-        }
-        let sheet = party_sheet(&figures).map_err(|_| ImageFailure::InvalidRequest)?;
-        self.imagery
-            .generate(
-                &format!("character:hero-seat-{index}"),
-                scene_graph::hero_cutout_request(self.rating, sheet, index, party.len())?,
-            )
-            .await
-    }
-
     /// The art the stage shows for this character: the full-body twin of the cut-out where there
     /// is one (every non-player character stands with their feet on screen), otherwise the
     /// cut-out. The expression is made from that art so it replaces it in place, floor contact
@@ -2029,8 +1997,7 @@ impl Inner {
 
     /// The source a health variant is made from: a hero's live picture (named by its served
     /// path) is read back from the image cache, so the variant is made from the hero
-    /// themselves; any other art is the authored figure on disk. The stock art is therefore
-    /// the source only before a hero's live picture exists.
+    /// themselves. Authored figure art remains available only for non-player cast members.
     async fn load_health_reference(
         &self,
         character: &Character,
@@ -2104,27 +2071,20 @@ impl Inner {
         })
     }
 
-    async fn render_health(
+    /// A canonical hero revision owns its variants even when two revisions render equal bytes.
+    fn hero_health_request(
         &self,
+        character: &Character,
         sprite: ReferenceImage,
-        facts: CharacterFacts,
         tier: HealthTier,
-    ) -> Result<ImageKey, ImageFailure> {
-        let subject = format!("character:health:{}:{tier:?}", &sprite.sha256[..12]);
-        self.imagery
-            .generate(&subject, self.health_request(sprite, facts, tier)?)
-            .await
-    }
-
-    /// The key of a health variant if it is already cached. Never calls the provider.
-    async fn peek_health(
-        &self,
-        sprite: ReferenceImage,
-        facts: CharacterFacts,
-        tier: HealthTier,
-    ) -> Option<ImageKey> {
-        let request = self.health_request(sprite, facts, tier).ok()?;
-        self.imagery.peek(&request).await
+    ) -> Result<ImageRequest, ImageFailure> {
+        let mut request = self.health_request(sprite, character.facts, tier)?;
+        if character.facts.role == CharacterRole::Hero
+            && character.art.starts_with("/gameplay/imagery/")
+        {
+            request.prompt = request.prompt.with_canonical_binding(&character.art);
+        }
+        Ok(request)
     }
 
     async fn render_refresh(
@@ -2181,7 +2141,6 @@ impl Inner {
         };
         let (kind, outcome) = match &done {
             Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => return,
-            Done::HeroCutout { result, .. } => ("hero_cutout", label_of(result)),
             Done::Expression { result, .. } => ("expression", label_of(result)),
             Done::Refresh { result, .. } => ("refresh", label_of(result)),
             Done::Warm { result, .. } => ("health", label_of(result)),
@@ -2194,19 +2153,6 @@ impl Inner {
         let mut state = locked(&self.state);
         match done {
             Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => return,
-            Done::HeroCutout { name, result } => {
-                state.hero_cutouts_in_flight.remove(&name);
-                match result {
-                    Ok(key) => {
-                        state.hero_cutouts.insert(name, key);
-                        drop(state);
-                        self.wake.send_modify(|count| *count += 1);
-                    }
-                    Err(_) => {
-                        state.failed_hero_cutouts.insert(name);
-                    }
-                }
-            }
             Done::Warm { id, tier, result } => {
                 match result {
                     Ok(key) => state.book.learn(&id, tier, key),
@@ -2362,35 +2308,6 @@ impl Inner {
         };
         let verdict = state.tracker.update(now, &inputs);
         let mut jobs = Vec::new();
-        if !in_combat
-            && stage
-                .story_scene
-                .as_ref()
-                .is_some_and(|scene| scene.key == SceneKey::Opening)
-        {
-            let party: Vec<usize> = stage.heroes.iter().map(|hero| hero.index).collect();
-            for (index, hero) in stage.heroes.iter().enumerate() {
-                if u8::try_from(hero.index + 1)
-                    .ok()
-                    .and_then(|seat| state.canonical.hero_at_seat(seat))
-                    .is_some()
-                {
-                    continue;
-                }
-                if state.hero_cutouts.contains_key(&hero.name)
-                    || state.hero_cutouts_in_flight.contains(&hero.name)
-                    || state.failed_hero_cutouts.contains(&hero.name)
-                {
-                    continue;
-                }
-                state.hero_cutouts_in_flight.insert(hero.name.clone());
-                jobs.push(Job::HeroCutout {
-                    name: hero.name.clone(),
-                    index,
-                    party: party.clone(),
-                });
-            }
-        }
         if !in_combat {
             for (id, face) in &verdict.face_changes {
                 // PLAY-V09: the plate director edits the plate; a cut-out nobody sees is not drawn.
@@ -2551,9 +2468,6 @@ impl State {
             book: Book::default(),
             health_sprites: BTreeMap::new(),
             hero_faces: BTreeMap::new(),
-            hero_cutouts: BTreeMap::new(),
-            hero_cutouts_in_flight: BTreeSet::new(),
-            failed_hero_cutouts: BTreeSet::new(),
             scene_graph: None,
         }
     }

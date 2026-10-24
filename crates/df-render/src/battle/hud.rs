@@ -243,7 +243,9 @@ fn portrait_url(stem: Option<&str>) -> Option<String> {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_/".contains(&byte)
         })
     };
-    if stem.starts_with(crate::art_contract::LIVE_IMAGERY_PREFIX) {
+    if crate::art_contract::player_hero_image(stem).is_some()
+        || stem.starts_with(crate::art_contract::LIVE_IMAGERY_PREFIX)
+    {
         return safe(stem).then(|| stem.to_owned());
     }
     if !safe(stem) {

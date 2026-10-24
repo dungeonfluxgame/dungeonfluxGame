@@ -64,7 +64,7 @@ impl ReferenceStore {
     }
 
     /// Reads the reviewed photograph that answers `path`: a reviewed stem
-    /// (`sprite-courier-documentary-photo`), an identity key that has one (`portrait-hero-1`) or
+    /// (`sprite-courier-documentary-photo`), an identity key that has one (`portrait-patron-merchant`) or
     /// a base stem whose `-documentary-photo` form is reviewed. Only the last path segment is
     /// used, and it must be lowercase letters, digits, `-` and `_` with an optional `.webp` or
     /// `.png`. Anything else that names a depiction is `NotPhotographic`.
@@ -175,12 +175,15 @@ mod tests {
         let read = |name: &str| store.load(name).map(|image| image.bytes.to_vec());
         assert_eq!(
             read("figure-hero-1-documentary-photo"),
-            Ok(b"hero webp".to_vec())
+            Err(ReferenceError::NotPhotographic)
         );
-        assert_eq!(read("portrait-hero-1"), Ok(b"hero webp".to_vec()));
+        assert_eq!(
+            read("portrait-hero-1"),
+            Err(ReferenceError::NotPhotographic)
+        );
         assert_eq!(
             read("/assets/ui/generated/figure-hero-1.webp"),
-            Ok(b"hero webp".to_vec())
+            Err(ReferenceError::NotPhotographic)
         );
         assert_eq!(read("sprite-courier"), Ok(b"courier png".to_vec()));
         assert_eq!(

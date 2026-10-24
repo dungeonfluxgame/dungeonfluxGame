@@ -41,6 +41,7 @@ pub(crate) enum CodecError {
     TrailingBytes,
     Checkpoint(CheckpointError),
     ResourceResolution(df_session::submission::RepositoryError),
+    AssetResolution(df_session::submission::RepositoryError),
 }
 
 /// Every allocation and collection is bounded before reading storage-controlled lengths.
@@ -505,7 +506,7 @@ pub(crate) fn decode_checkpoint_with_recovery(
     inventory: ReferenceInventory<'_>,
     checkpoint_limits: CheckpointLimits,
     codec_limits: CodecLimits,
-    resource_resolver: Option<crate::decision_adapter::ResourceResolver>,
+    recovery: Option<&crate::decision_adapter::RecoverySource>,
 ) -> Result<Checkpoint, CodecError> {
     let limits = codec_limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
@@ -544,12 +545,33 @@ pub(crate) fn decode_checkpoint_with_recovery(
     if input.offset != bytes.len() {
         return Err(CodecError::TrailingBytes);
     }
-    let resolved_resources = resource_resolver
+    let resolved_resources = recovery
+        .and_then(|source| source.resource_resolver)
         .map(|resolve| resolve(&state))
         .transpose()
         .map_err(CodecError::ResourceResolution)?;
+    let resolved_assets = recovery
+        .and_then(|source| source.asset_resolver)
+        .map(|resolve| resolve(&state))
+        .transpose()
+        .map_err(CodecError::AssetResolution)?;
+    if resolved_assets.as_ref().is_some_and(|assets| {
+        assets.len() > checkpoint_limits.maximum_records
+            || assets.len() > limits.maximum_collection_items
+            || assets
+                .iter()
+                .try_fold(0_usize, |retained, asset| {
+                    retained
+                        .checked_add(size_of::<AssetReference>())?
+                        .checked_add(asset.key.retained_heap_bytes())
+                })
+                .is_none_or(|retained| retained > limits.maximum_allocated_bytes)
+    }) {
+        return Err(CodecError::Capacity);
+    }
     let inventory = ReferenceInventory {
         resources: resolved_resources.as_deref().unwrap_or(inventory.resources),
+        assets: resolved_assets.as_deref().unwrap_or(inventory.assets),
         ..inventory
     };
     let checkpoint = Checkpoint::new(
@@ -2409,6 +2431,7 @@ mod tests {
             resources: resource_constraints(),
             resource_resolver: None,
             assets: vec![],
+            asset_resolver: None,
             limits: limits(),
         }
     }
@@ -2472,6 +2495,7 @@ mod tests {
         let bytes = encode_checkpoint(&checkpoint(state()).unwrap(), codec_limits()).unwrap();
         let mut recovery = recovery_source();
         recovery.resource_resolver = Some(|_| panic!("resolver reached before bounded decode"));
+        recovery.asset_resolver = Some(|_| panic!("asset resolver reached before bounded decode"));
         let mut too_small = codec_limits();
         too_small.maximum_allocated_bytes = 1;
         for (bytes, bounds) in [
@@ -2489,6 +2513,114 @@ mod tests {
             recovery
                 .decode_checkpoint(&trailing, basis(), &pins(), codec_limits())
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn trusted_asset_resolver_registers_exact_appearances_for_recovery_and_candidates() {
+        use df_session::submission::RepositoryError;
+        let asset = AssetReference {
+            key: label("fixture-approved-portrait"),
+            digest: ContentDigest([27; 32]),
+            byte_length: 123,
+            kind: AssetKind::Image,
+        };
+        let mut state = appearance_state(Some(appearance()));
+        state.continuity.canonical_packs[0].identities[0]
+            .appearances
+            .push(asset.clone());
+        let original = Checkpoint::new(
+            CHECKPOINT_SCHEMA,
+            basis(),
+            pins(),
+            state,
+            ReferenceInventory {
+                rules: &[rule()],
+                content: &[content()],
+                resources: &resource_constraints(),
+                assets: std::slice::from_ref(&asset),
+            },
+            limits(),
+        )
+        .unwrap();
+        let bytes = encode_checkpoint(&original, codec_limits()).unwrap();
+        let mut recovery = recovery_source();
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        recovery.asset_resolver = Some(|state| {
+            let asset = &state.continuity.canonical_packs[0].identities[0].appearances[0];
+            if asset.key != label("fixture-approved-portrait")
+                || asset.digest != ContentDigest([27; 32])
+                || asset.byte_length != 123
+                || asset.kind != AssetKind::Image
+            {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            Ok(vec![asset.clone()])
+        });
+        assert_eq!(
+            recovery
+                .decode_checkpoint(&bytes, basis(), &pins(), codec_limits())
+                .unwrap(),
+            original
+        );
+        assert_eq!(
+            recovery
+                .encode_candidate(&original, &pins(), codec_limits())
+                .unwrap(),
+            bytes
+        );
+        recovery.asset_resolver = Some(|_| Err(RepositoryError::Capacity));
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::Capacity)
+        );
+        recovery.asset_resolver = Some(|_| Ok(vec![]));
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        recovery.asset_resolver = Some(|_| {
+            Ok(vec![AssetReference {
+                key: label("fixture-approved-portrait"),
+                digest: ContentDigest([28; 32]),
+                byte_length: 123,
+                kind: AssetKind::Image,
+            }])
+        });
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        recovery.asset_resolver = Some(|_| {
+            Ok(vec![AssetReference {
+                key: label("fixture-approved-portrait"),
+                digest: ContentDigest([27; 32]),
+                byte_length: 124,
+                kind: AssetKind::Image,
+            }])
+        });
+        assert_eq!(
+            recovery.encode_candidate(&original, &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        recovery.asset_resolver = Some(|_| {
+            Ok(vec![
+                AssetReference {
+                    key: label("fixture-approved-portrait"),
+                    digest: ContentDigest([27; 32]),
+                    byte_length: 123,
+                    kind: AssetKind::Image,
+                };
+                101
+            ])
+        });
+        recovery.limits.maximum_records = 100;
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
         );
     }
 

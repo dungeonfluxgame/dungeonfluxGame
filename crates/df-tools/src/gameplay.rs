@@ -34,6 +34,7 @@ mod health_faces;
 #[cfg(test)]
 mod hero_catalog;
 mod hero_identity;
+mod hero_library;
 mod home_theme;
 #[cfg(test)]
 mod home_theme_tests;
@@ -289,6 +290,7 @@ impl rpc::action_service_server::ActionService for Service {
             self.portraits
                 .accepted(credential, request.character.as_ref())
                 .await?
+                .or_else(|| hero_library::loaded_portrait(credential, request.character.as_ref()))
         } else {
             None
         };
@@ -775,12 +777,26 @@ fn jev_settings() -> Result<Option<startup_configuration::ApproachSettings>, io:
     )
 }
 
+/// The live store's codec bounds: they admit every checkpoint the model's own limits admit
+/// (records, per-text bytes and retained bytes, all larger for a tactical pack), so a state the
+/// rules accept can always be saved. A fixed 1,024-item bound refused the first hero created in
+/// a tactical harbor game once creation carried the player's full character sheet.
+fn live_codec_limits() -> NativeCodecLimits {
+    let model = model::limits();
+    NativeCodecLimits {
+        maximum_document_bytes: model.maximum_retained_bytes,
+        maximum_allocated_bytes: 2 * model.maximum_retained_bytes,
+        maximum_collection_items: model.maximum_records,
+        maximum_text_bytes: model.maximum_text_bytes,
+    }
+}
 async fn serve_run(
     #[cfg(windows)] mut console_stop: watch::Receiver<bool>,
     database: tokio_postgres::Config,
     first_run: bool,
     fresh_seed: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    hero_library::configure(database.clone());
     let interactive = std::env::args().nth(4).is_none();
     // Every paid capability's switch, read once; generation sites ask `media_policy::gates()`.
     let gates = media_policy::Gates::from_environment()?;
@@ -1139,12 +1155,7 @@ async fn serve_run(
     let plates_enabled = startup_configuration::plates_enabled(
         media_policy::gates().input(media_policy::Capability::Plates),
     )?;
-    let codec = NativeCodecLimits {
-        maximum_document_bytes: 1024 * 1024,
-        maximum_allocated_bytes: 2 * 1024 * 1024,
-        maximum_collection_items: 1024,
-        maximum_text_bytes: 4096,
-    };
+    let codec = live_codec_limits();
     let recovery =
         model::recovery().map_err(|_| io::Error::other("source recovery inventory invalid"))?;
     // DEVCTL-001: admitted references for development candidate rebuilds. Used
@@ -2034,6 +2045,11 @@ async fn serve_run(
                 .max_encoding_message_size(8192),
         )
         .add_service(
+            rpc::hero_library_service_server::HeroLibraryServiceServer::new(service.clone())
+                .max_decoding_message_size(1024)
+                .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
+        )
+        .add_service(
             rpc::action_service_server::ActionServiceServer::new(service.clone())
                 .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
                 .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
@@ -2098,6 +2114,7 @@ async fn serve_run(
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
         .merge(creator_portraits::router(service.clone()))
+        .merge(hero_library::router())
         .merge(music_routes)
         .merge(home_video::router())
         .merge(speech_input::router(

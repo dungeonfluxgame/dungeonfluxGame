@@ -400,11 +400,15 @@ pub(super) struct Figures {
 fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'static str, String)> {
     let mut candidates: Vec<(&'static str, String)> = Vec::new();
     let mut push = |kind: &'static str, reference: &str| {
-        if let Some(target) = art_contract::fetch_target(reference) {
-            let url = format!("{GENERATED}/{target}");
-            if !candidates.iter().any(|(_, known)| *known == url) {
-                candidates.push((kind, url));
-            }
+        let url = art_contract::player_hero_image(reference)
+            .map(str::to_owned)
+            .or_else(|| {
+                art_contract::fetch_target(reference).map(|target| format!("{GENERATED}/{target}"))
+            });
+        if let Some(url) = url
+            && !candidates.iter().any(|(_, known)| *known == url)
+        {
+            candidates.push((kind, url));
         }
     };
     if full_body && let Some(photo) = art_contract::figure_photo(sprite) {

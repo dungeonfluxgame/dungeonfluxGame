@@ -238,7 +238,9 @@ struct ArtFade {
 /// The URL of a picture: a server-made health variant is already a path, an authored picture is a
 /// stem in the generated-art directory.
 fn art_url(stem: &str) -> String {
-    if stem.starts_with("/gameplay/imagery/") {
+    if crate::art_contract::player_hero_image(stem).is_some()
+        || stem.starts_with("/gameplay/imagery/")
+    {
         stem.to_owned()
     } else {
         format!("{GENERATED}/{stem}")

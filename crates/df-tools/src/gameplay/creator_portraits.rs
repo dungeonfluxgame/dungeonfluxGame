@@ -297,6 +297,64 @@ impl Portraits {
     }
 }
 
+/// Reads only a committed approved image reference, with the accepted length and digest.
+/// No creator request, provider call or raw camera source is consulted here.
+pub(super) async fn approved_reference(
+    asset: &df_model::checkpoint::AssetReference,
+) -> Result<imagery::ReferenceImage, imagery::ImageFailure> {
+    let root = std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("artifacts/tmp/play/imagery-cache"));
+    approved_reference_at(asset, &root).await
+}
+
+async fn approved_reference_at(
+    asset: &df_model::checkpoint::AssetReference,
+    root: &Path,
+) -> Result<imagery::ReferenceImage, imagery::ImageFailure> {
+    use imagery::ImageFailure;
+    let key = asset.key.as_str();
+    if key.len() != 64
+        || !key.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || asset.kind != df_model::checkpoint::AssetKind::Image
+        || asset.byte_length == 0
+        || asset.byte_length > 6 * 1024 * 1024
+    {
+        return Err(ImageFailure::InvalidRequest);
+    }
+    let path = root.join(format!("{key}.jpg"));
+    let asset = asset.clone();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let file = std::fs::File::open(path).map_err(|_| ImageFailure::InvalidRequest)?;
+        if file
+            .metadata()
+            .map_err(|_| ImageFailure::InvalidRequest)?
+            .len()
+            != asset.byte_length
+        {
+            return Err(ImageFailure::InvalidRequest);
+        }
+        let mut bytes = Vec::new();
+        file.take(6 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        if bytes.len() as u64 != asset.byte_length
+            || <[u8; 32]>::from(Sha256::digest(&bytes)) != asset.digest.0
+        {
+            return Err(ImageFailure::InvalidRequest);
+        }
+        Ok(imagery::ReferenceImage::new(
+            df_providers::ImageFormat::Jpeg,
+            bytes.into(),
+        ))
+    })
+    .await
+    .map_err(|_| ImageFailure::Interrupted)?
+}
+
 struct PreparedPortrait {
     identity: super::hero_identity::ValidatedIdentity,
     public: String,
@@ -698,6 +756,40 @@ async fn serve(
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn approved_reference_checks_digest_length_key_and_kind_before_use() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS5/approved-reference");
+        std::fs::create_dir_all(&root).unwrap();
+        let bytes = b"approved generated portrait fixture";
+        let mut asset = df_model::checkpoint::AssetReference {
+            key: super::super::model::label(&"5".repeat(64)).unwrap(),
+            digest: df_model::checkpoint::ContentDigest(Sha256::digest(bytes).into()),
+            byte_length: bytes.len() as u64,
+            kind: df_model::checkpoint::AssetKind::Image,
+        };
+        std::fs::write(root.join(format!("{}.jpg", asset.key.as_str())), bytes).unwrap();
+        assert_eq!(
+            approved_reference_at(&asset, &root)
+                .await
+                .unwrap()
+                .bytes
+                .as_ref(),
+            bytes
+        );
+        asset.digest.0[0] ^= 1;
+        assert!(approved_reference_at(&asset, &root).await.is_err());
+        asset.digest.0[0] ^= 1;
+        asset.byte_length += 1;
+        assert!(approved_reference_at(&asset, &root).await.is_err());
+        asset.byte_length -= 1;
+        asset.kind = df_model::checkpoint::AssetKind::Audio;
+        assert!(approved_reference_at(&asset, &root).await.is_err());
+        asset.kind = df_model::checkpoint::AssetKind::Image;
+        asset.key = super::super::model::label("unapproved-key").unwrap();
+        assert!(approved_reference_at(&asset, &root).await.is_err());
+    }
 
     #[test]
     fn creator_catalog_real_request_preparation_freezes_full_design_and_rejects_unknown_ids() {

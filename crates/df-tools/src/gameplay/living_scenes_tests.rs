@@ -152,7 +152,6 @@ fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
             Job::Refresh { look, reason, .. } => Some((*look, *reason)),
             Job::Canonical(_)
             | Job::KillShot { .. }
-            | Job::HeroCutout { .. }
             | Job::Expression { .. }
             | Job::Warm { .. }
             | Job::Peek { .. } => None,
@@ -166,7 +165,6 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
             Job::Expression { face, .. } => Some(*face),
             Job::Canonical(_)
             | Job::KillShot { .. }
-            | Job::HeroCutout { .. }
             | Job::Refresh { .. }
             | Job::Warm { .. }
             | Job::Peek { .. } => None,
@@ -358,7 +356,8 @@ fn a_finished_backdrop_waits_for_a_quiet_moment_and_then_wakes_the_watchers() {
 // ---------------------------------------------------------------------------------------------
 // Health faces.
 
-const HERO_ONE_ART: &str = "assets/ui/generated/sprite-hero-1-documentary-photo";
+const HERO_ONE_ART: &str =
+    "/gameplay/imagery/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn hurt_stage(revision: u64, in_combat: bool, hero_hp: u32, foe_hp: u32) -> Stage {
     Stage {
@@ -378,7 +377,6 @@ fn job_labels(jobs: &[Job]) -> Vec<String> {
         .map(|job| match job {
             Job::Canonical(_) => "canonical-reference".to_owned(),
             Job::KillShot { .. } => "kill-shot".to_owned(),
-            Job::HeroCutout { name, .. } => format!("hero-cutout {name}"),
             Job::Warm { character, tier } => format!("warm {} {}", character.art, tier.label()),
             Job::Peek { character } => format!("peek {}", character.art),
             Job::Expression { .. } => "expression".to_owned(),
@@ -397,6 +395,7 @@ fn learn(inner: &Inner, art: &str, tier: HealthTier, byte: char) {
 fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
+    give_live_picture(&inner, "Rowan", 'a');
     let scene_facts = facts(&dossier);
     // Both are badly hurt, and nothing is cached.
     let fight = hurt_stage(2, true, 4, 2);
@@ -412,14 +411,14 @@ fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() 
     );
     // The hero is at Bloodied and the foe at Critical: those are the only variants made.
     let mut book = Book::default();
-    let characters = characters_of(&fight, &scene_facts, &[]);
+    let characters = characters_of(&fight, &scene_facts, &[Some(key('a'))]);
     assert_eq!(
         job_labels(&warm_jobs(
             &mut book,
             &fight,
             &scene_facts,
             &characters,
-            &[],
+            &[Some(key('a'))],
         )),
         [
             format!("warm {HERO_ONE_ART} bloodied"),
@@ -437,8 +436,8 @@ fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() 
         display.journey.as_ref().unwrap().live_faces,
         [rpc::LiveFace {
             name: "Rowan".to_owned(),
-            sprite: String::new(),
-            battle_sprite: String::new(),
+            sprite: key('a').path(),
+            battle_sprite: key('a').path(),
         }]
     );
     assert_eq!(display.scene.as_ref().unwrap().cast[0].live_sprite, "");
@@ -462,21 +461,27 @@ fn a_character_asks_for_the_tier_it_reaches_and_no_other() {
     let mut book = Book::default();
     // Eight of thirteen is Hurt; the foe at full health asks for nothing.
     let hurt = hurt_stage(2, false, 8, 13);
-    let characters = characters_of(&hurt, &scene_facts, &[]);
+    let characters = characters_of(&hurt, &scene_facts, &[Some(key('a'))]);
     assert_eq!(
-        job_labels(&warm_jobs(&mut book, &hurt, &scene_facts, &characters, &[],)),
+        job_labels(&warm_jobs(
+            &mut book,
+            &hurt,
+            &scene_facts,
+            &characters,
+            &[Some(key('a'))],
+        )),
         [format!("warm {HERO_ONE_ART} hurt")]
     );
     // Three of thirteen is Critical: the hero asks for Critical, and nothing else is new.
     let worse = hurt_stage(3, false, 3, 13);
-    let characters = characters_of(&worse, &scene_facts, &[]);
+    let characters = characters_of(&worse, &scene_facts, &[Some(key('a'))]);
     assert_eq!(
         job_labels(&warm_jobs(
             &mut book,
             &worse,
             &scene_facts,
             &characters,
-            &[],
+            &[Some(key('a'))],
         )),
         [format!("warm {HERO_ONE_ART} critical")]
     );
@@ -486,6 +491,7 @@ fn a_character_asks_for_the_tier_it_reaches_and_no_other() {
 fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
+    give_live_picture(&inner, "Rowan", 'a');
     inner.observe_at(hurt_stage(2, true, 4, 1), seconds(20));
     // Only Bloodied is cached for both: the hero (Bloodied) shows it exactly, and the foe at
     // Critical (one tier away, against three from the authored art) shows it too.
@@ -514,7 +520,14 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         revision: None,
         audience: Some(rpc::view_message::Audience::Player(
             rpc::PlayerGameplayView {
-                journey: Some(rpc::JourneyView::default()),
+                journey: Some(rpc::JourneyView {
+                    party: vec![rpc::PartyMemberView {
+                        name: "Rowan".to_owned(),
+                        character_ready: true,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         )),
@@ -536,15 +549,17 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         display.journey.as_ref().unwrap().live_faces,
         [rpc::LiveFace {
             name: "Rowan".to_owned(),
-            sprite: String::new(),
-            battle_sprite: String::new(),
+            sprite: key('a').path(),
+            battle_sprite: key('a').path(),
         }]
     );
 }
 
 fn give_live_picture(inner: &Inner, name: &str, byte: char) {
     let mut state = locked(&inner.state);
-    state.hero_cutouts.insert(name.to_owned(), key(byte));
+    state
+        .canonical
+        .fixture_hero(if name == "Thrain" { 2 } else { 1 }, name, key(byte));
     refresh_health(&mut state);
 }
 
@@ -607,7 +622,12 @@ fn a_hurt_heros_variant_is_made_from_their_live_picture_not_the_stock_photo() {
     inner.observe_at(hurt_stage(2, true, 4, 13), seconds(20));
     // While the variant is being made the hero shows their own live picture, and a variant
     // cached earlier from the stock art is not shown for them.
-    learn(&inner, HERO_ONE_ART, HealthTier::Bloodied, '5');
+    learn(
+        &inner,
+        "assets/ui/generated/sprite-hero-1-documentary-photo",
+        HealthTier::Bloodied,
+        '5',
+    );
     assert_eq!(published_face(&inner).sprite, key('a').path());
     assert_eq!(published_face(&inner).battle_sprite, key('a').path());
     // The one variant asked for is sourced from the live picture, for both screens.
@@ -647,7 +667,7 @@ fn a_hurt_heros_variant_is_made_from_their_live_picture_not_the_stock_photo() {
 }
 
 #[test]
-fn the_stock_photo_is_the_source_and_face_only_before_a_live_picture_exists() {
+fn a_hero_waits_for_their_own_image_without_requesting_a_stock_health_variant() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
     // Bloodied, nothing cached and no live picture yet.
@@ -659,7 +679,7 @@ fn the_stock_photo_is_the_source_and_face_only_before_a_live_picture_exists() {
             sprite: String::new(),
             battle_sprite: String::new(),
         },
-        "empty fields keep the authored (stock) art on every screen"
+        "empty fields show the player name while their own image is pending"
     );
     let scene_facts = facts(&dossier);
     let stage = hurt_stage(2, true, 4, 13);
@@ -673,7 +693,7 @@ fn the_stock_photo_is_the_source_and_face_only_before_a_live_picture_exists() {
             &characters,
             &[],
         )),
-        [format!("warm {HERO_ONE_ART} bloodied")]
+        Vec::<String>::new()
     );
     // As soon as the live picture exists the face and the variant source switch to it.
     give_live_picture(&inner, "Rowan", 'a');
@@ -703,6 +723,7 @@ fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
         wake: watch::channel(0).0,
         origin: Instant::now(),
     });
+    give_live_picture(&inner, "Rowan", 'a');
     inner.observe_at(hurt_stage(2, false, 3, 13), seconds(20));
     let labels = job_labels(&inner.evaluate_at(seconds(25)));
     assert_eq!(
@@ -719,7 +740,7 @@ fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
 }
 
 #[test]
-fn opening_scene_requests_each_hero_cutout_once_and_caches_successes() {
+fn opening_scene_never_requests_a_second_stock_hero_cutout() {
     let timing = timing();
     let inner = Arc::new(Inner {
         imagery: Imagery::disabled(ImageryOff::Qualification),
@@ -777,30 +798,15 @@ fn opening_scene_requests_each_hero_cutout_once_and_caches_successes() {
     ];
     inner.observe_at(opening_stage, Duration::ZERO);
 
-    let cutout_names = |jobs: Vec<Job>| {
-        jobs.into_iter()
-            .filter_map(|job| match job {
-                Job::HeroCutout { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        cutout_names(inner.evaluate_at(seconds(20))),
-        vec!["Brakka".to_owned(), "Sigrun".to_owned()]
-    );
-    assert!(cutout_names(inner.evaluate_at(seconds(21))).is_empty());
-
-    inner.finish(Done::HeroCutout {
-        name: "Brakka".to_owned(),
-        result: Ok(key('a')),
-    });
-    inner.finish(Done::HeroCutout {
-        name: "Sigrun".to_owned(),
-        result: Ok(key('b')),
-    });
-    assert!(cutout_names(inner.evaluate_at(seconds(22))).is_empty());
-    assert_eq!(locked(&inner.state).hero_cutouts.len(), 2);
+    for time in [20, 21, 22] {
+        assert!(
+            inner
+                .evaluate_at(seconds(time))
+                .iter()
+                .all(|job| !matches!(job, Job::Canonical(_))),
+            "only checkpoint canonical admission may draw heroes"
+        );
+    }
 }
 
 #[test]
@@ -907,7 +913,11 @@ fn the_foes_of_the_adventures_fights_are_looked_for_after_the_party_and_the_stag
         // Already on this stage: listed once, with the stage.
         foe("sprite-patron-merchant"),
     ];
-    let characters = characters_of(&hurt_stage(2, false, 13, 13), &scene_facts, &[]);
+    let characters = characters_of(
+        &hurt_stage(2, false, 13, 13),
+        &scene_facts,
+        &[Some(key('a'))],
+    );
     let arts: Vec<&str> = characters
         .iter()
         .map(|character| character.art.as_str())
@@ -919,9 +929,11 @@ fn the_foes_of_the_adventures_fights_are_looked_for_after_the_party_and_the_stag
 }
 
 #[test]
-fn the_second_hero_gets_variants_of_the_art_the_battlefield_dresses_the_seat_in() {
+fn the_second_hero_gets_the_same_personal_health_variant_on_every_screen() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
+    give_live_picture(&inner, "Rowan", 'a');
+    give_live_picture(&inner, "Thrain", 'b');
     let mut stage = hurt_stage(2, true, 4, 13);
     stage.heroes.push(StageHero {
         index: 1,
@@ -929,35 +941,36 @@ fn the_second_hero_gets_variants_of_the_art_the_battlefield_dresses_the_seat_in(
         vitals: Vitals::new(4, 13),
     });
     inner.observe_at(stage, seconds(20));
-    // The exploration stage shows hero two as `sprite-hero-2`, the fight as the archer
-    // `sprite-hero-3`: both are looked for, and a fight shows the variant of the fight's art.
     let labels = job_labels(&inner.evaluate_at(seconds(60)));
-    assert!(
-        labels.contains(&"peek assets/ui/generated/sprite-hero-2-documentary-photo".to_owned())
-    );
-    assert!(
-        labels.contains(&"peek assets/ui/generated/sprite-hero-3-documentary-photo".to_owned())
-    );
-    learn(
-        &inner,
-        "assets/ui/generated/sprite-hero-2-documentary-photo",
-        HealthTier::Bloodied,
-        'c',
-    );
-    learn(
-        &inner,
-        "assets/ui/generated/sprite-hero-3-documentary-photo",
-        HealthTier::Bloodied,
-        'd',
-    );
+    assert!(labels.contains(&format!("peek {}", key('b').path())));
+    assert!(!labels.iter().any(|label| label.contains("sprite-hero")));
+    learn(&inner, &key('b').path(), HealthTier::Bloodied, 'd');
     let mut message = display_message(true);
+    if let Some(rpc::view_message::Audience::Display(display)) = &mut message.audience {
+        display
+            .journey
+            .as_mut()
+            .unwrap()
+            .party
+            .push(rpc::PartyMemberView {
+                name: "Thrain".to_owned(),
+                character_ready: true,
+                ..Default::default()
+            });
+    }
     inner.apply(stage_of(&message).as_ref(), &mut message);
     let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
-        panic!("display view");
+        panic!("display");
     };
-    let faces = &display.journey.as_ref().unwrap().live_faces;
-    let thrain = faces.iter().find(|face| face.name == "Thrain").unwrap();
-    assert_eq!(thrain.sprite, key('c').path());
+    let thrain = display
+        .journey
+        .as_ref()
+        .unwrap()
+        .live_faces
+        .iter()
+        .find(|face| face.name == "Thrain")
+        .unwrap();
+    assert_eq!(thrain.sprite, key('d').path());
     assert_eq!(thrain.battle_sprite, key('d').path());
 }
 
@@ -1090,6 +1103,11 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     floor: None,
                 }),
                 journey: Some(rpc::JourneyView {
+                    party: vec![rpc::PartyMemberView {
+                        name: "Rowan".to_owned(),
+                        character_ready: true,
+                        ..Default::default()
+                    }],
                     phase: if in_combat {
                         rpc::JourneyPhase::Combat as i32
                     } else {
@@ -1228,6 +1246,7 @@ fn published_art_changes_only_the_art_fields_of_the_display_view() {
     // Put the two art fields back: every other field, the revision included, is untouched.
     scene.live_backdrop.clear();
     scene.cast[0].live_sprite.clear();
+    display.journey.as_mut().unwrap().live_faces.clear();
     assert_eq!(after, before);
 }
 
@@ -1252,6 +1271,9 @@ fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
     let before = display_message(false);
     let mut after = before.clone();
     living.apply(&mut after);
+    if let Some(rpc::view_message::Audience::Display(display)) = &mut after.audience {
+        display.journey.as_mut().unwrap().live_faces.clear();
+    }
     assert_eq!(after, before);
 }
 
@@ -1281,12 +1303,13 @@ async fn an_expression_is_made_from_the_art_the_stage_shows_for_that_character()
         wake: watch::channel(0).0,
         origin: Instant::now(),
     });
-    // A hero has a full-body twin and the stage shows it wherever feet are on screen.
-    let figure = inner
-        .load_figure("assets/ui/generated/sprite-hero-1-documentary-photo")
-        .await
-        .unwrap();
-    assert_eq!(&figure.bytes[..], b"figure-hero-1-documentary-photo.webp");
+    // Archived hero images are never a permitted source for player health/expression work.
+    assert!(
+        inner
+            .load_figure("assets/ui/generated/sprite-hero-1-documentary-photo")
+            .await
+            .is_err()
+    );
     // A shop character has only the knees-up cut-out.
     let cutout = inner
         .load_figure("assets/ui/generated/sprite-shop-soldier-documentary-photo")

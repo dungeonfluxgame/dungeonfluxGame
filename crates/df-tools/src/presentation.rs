@@ -7,8 +7,8 @@ use df_render::art_contract;
 
 /// Longest text a compact table line shows, in characters.
 const LINE_LIMIT: usize = 90;
-/// The fixed class of the two playable heroes; the server offers no other.
-pub(crate) const HERO_ROLE: &str = "Dwarf Fighter";
+/// Party membership identifies a hero; the shared view does not carry their class.
+pub(crate) const HERO_ROLE: &str = "Hero";
 const GENERATED: &str = "/assets/ui/generated";
 
 /// How the encounter looks in one view.
@@ -425,13 +425,14 @@ pub(crate) fn closing_card(
         heroes: journey
             .party
             .iter()
-            .enumerate()
             .take(2)
-            .filter(|(_, member)| member.character_ready)
-            .map(|(index, member)| CardHero {
+            .filter(|member| member.character_ready)
+            .map(|member| CardHero {
                 name: member.name.clone(),
                 role: HERO_ROLE.to_owned(),
-                portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
+                portrait: df_render::art_contract::player_hero_image(&member.portrait)
+                    .unwrap_or("")
+                    .to_owned(),
             })
             .collect(),
     }
@@ -448,17 +449,18 @@ pub(crate) fn end_card(journey: &rpc::JourneyView, adventure: &str, outcome: &st
         heroes: journey
             .party
             .iter()
-            .enumerate()
             .take(2)
-            .filter(|(_, member)| member.character_ready)
-            .map(|(index, member)| CardHero {
+            .filter(|member| member.character_ready)
+            .map(|member| CardHero {
                 name: member.name.clone(),
                 role: if member.unconscious || member.hit_points == 0 {
                     "down".to_owned()
                 } else {
                     format!("{} / {} HP", member.hit_points, member.maximum_hit_points)
                 },
-                portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
+                portrait: df_render::art_contract::player_hero_image(&member.portrait)
+                    .unwrap_or("")
+                    .to_owned(),
             })
             .collect(),
     }
@@ -870,8 +872,12 @@ pub(crate) fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) ->
             actor_id: String::new(),
             name: member.name.clone(),
             role: HERO_ROLE.to_owned(),
-            sprite: format!("{GENERATED}/sprite-hero-{}", index + 1),
-            portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
+            sprite: df_render::art_contract::player_hero_image(&member.portrait)
+                .unwrap_or("")
+                .to_owned(),
+            portrait: df_render::art_contract::player_hero_image(&member.portrait)
+                .unwrap_or("")
+                .to_owned(),
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
             down: is_down(member),
@@ -880,7 +886,8 @@ pub(crate) fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) ->
                 .live_faces
                 .iter()
                 .find(|face| face.name == member.name)
-                .and_then(|face| imagery_url(&face.sprite)),
+                .and_then(|face| df_render::art_contract::player_hero_image(&face.sprite))
+                .map(str::to_owned),
         })
         .collect();
     let participants = journey
@@ -1131,6 +1138,18 @@ impl StageActor {
     /// already made for them, else the portrait, else the cut-out, each as a served URL. A reference
     /// that names no servable picture is skipped, so `None` means nothing exists yet.
     pub(crate) fn picture_source(&self) -> Option<(PictureSource, String)> {
+        if matches!(self.slot, ActorSlot::Hero(_)) {
+            return [
+                (PictureSource::Live, self.live_sprite.as_deref()),
+                (PictureSource::Portrait, Some(self.portrait.as_str())),
+                (PictureSource::Cutout, Some(self.sprite.as_str())),
+            ]
+            .into_iter()
+            .find_map(|(source, path)| {
+                path.and_then(art_contract::player_hero_image)
+                    .map(|uri| (source, uri.to_owned()))
+            });
+        }
         self.live_sprite
             .as_deref()
             .and_then(imagery_url)
@@ -3501,7 +3520,7 @@ mod tests {
         assert_eq!(cast.len(), 3);
         assert_eq!(cast[0].slot, ActorSlot::Hero(0));
         assert_eq!(cast[0].hit_points, Some((13, 13)));
-        assert_eq!(cast[0].sprite, "/assets/ui/generated/sprite-hero-1");
+        assert!(cast[0].sprite.is_empty());
         assert_eq!(cast[1].slot, ActorSlot::Npc(0));
         assert_eq!(cast[1].name, "Fenn");
         // A painted stem resolves to nothing under the art contract: the stage then shows the
@@ -3613,15 +3632,95 @@ mod tests {
         assert_eq!(won.subline, "The bandit yields.");
         let names: Vec<&str> = won.heroes.iter().map(|hero| hero.name.as_str()).collect();
         assert_eq!(names, ["Brakka", "Thrain"]);
-        assert_eq!(
-            won.heroes[1].portrait,
-            "/assets/ui/generated/figure-hero-2-documentary-photo"
-        );
+        assert!(won.heroes[1].portrait.is_empty());
         let lost = closing_card(&ended, &closing, "Darkness.", false);
         assert_eq!(lost.kind, CardKind::Defeat);
         assert_ne!(lost.kicker, won.kicker);
         ended.party[1].character_ready = false;
         assert_eq!(closing_card(&ended, &closing, "x", true).heroes.len(), 1);
+    }
+
+    #[test]
+    fn personal_hero_uris_follow_the_named_members_through_stage_and_closing_cards() {
+        let creator = format!("/gameplay/creator-portrait/{}", "a".repeat(64));
+        let canonical = format!("/gameplay/imagery/{}", "b".repeat(64));
+        let mut shown = journey(rpc::JourneyPhase::Complete, true, vec![]);
+        for (member, (name, uri)) in shown
+            .party
+            .iter_mut()
+            .zip([("Neris", &creator), ("Violet", &canonical)])
+        {
+            member.name = name.to_owned();
+            member.character_ready = true;
+            member.portrait = uri.clone();
+        }
+        let scene = scene();
+        let cast = cast_of(&shown, &scene);
+        let won = closing_card(&shown, &scene, "Home.", true);
+        let end = end_card(&shown, "Lantern", "Home.");
+        for (index, (name, uri)) in [("Neris", &creator), ("Violet", &canonical)]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(cast[index].name, name);
+            assert_eq!(&cast[index].sprite, uri);
+            assert_eq!(&cast[index].portrait, uri);
+            assert_eq!(cast[index].picture(), Some(uri.clone()));
+            assert_eq!(
+                caption_picture(&cast, CaptionSpeaker::Hero(index)),
+                Some(uri.clone())
+            );
+            assert_eq!(won.heroes[index].name, name);
+            assert_eq!(&won.heroes[index].portrait, uri);
+            assert_eq!(end.heroes[index].name, name);
+            assert_eq!(&end.heroes[index].portrait, uri);
+        }
+        shown.live_faces = vec![rpc::LiveFace {
+            name: "Violet".into(),
+            sprite: creator.clone(),
+            ..Default::default()
+        }];
+        let cast = cast_of(&shown, &scene);
+        assert_eq!(cast[0].live_sprite, None);
+        assert_eq!(
+            cast[1].picture_source(),
+            Some((PictureSource::Live, creator))
+        );
+    }
+
+    #[test]
+    fn stock_or_malformed_hero_uris_leave_named_placeholders_on_stage_and_cards() {
+        for uri in [
+            "/assets/ui/generated/portrait-hero-1-full",
+            "/assets/ui/generated/figure-hero-2-documentary-photo",
+            "/gameplay/creator-portrait/../../portrait",
+            "https://example.com/portrait.jpg",
+        ] {
+            let mut shown = journey(rpc::JourneyPhase::Complete, true, vec![]);
+            for member in &mut shown.party {
+                member.character_ready = true;
+                member.portrait = uri.to_owned();
+            }
+            let scene = scene();
+            assert!(cast_of(&shown, &scene).iter().all(|actor| {
+                !actor.name.is_empty()
+                    && actor.sprite.is_empty()
+                    && actor.portrait.is_empty()
+                    && actor.picture().is_none()
+            }));
+            assert!(
+                closing_card(&shown, &scene, "Home.", true)
+                    .heroes
+                    .iter()
+                    .all(|hero| hero.portrait.is_empty())
+            );
+            assert!(
+                end_card(&shown, "Lantern", "Home.")
+                    .heroes
+                    .iter()
+                    .all(|hero| hero.portrait.is_empty())
+            );
+        }
     }
 
     #[test]
@@ -3861,12 +3960,8 @@ mod caption_speakers {
         let npc = stage_actor("merchant", ActorSlot::Npc(0), "", Some(live_path()), false);
         let cast = [hero, npc];
 
-        // The hero's cut-out names the reviewed photograph it is served from; the bare stem is not
-        // a file the server serves.
-        assert_eq!(
-            caption_picture(&cast, CaptionSpeaker::Hero(1)),
-            Some("/assets/ui/generated/sprite-hero-2-documentary-photo".to_owned())
-        );
+        // Archived stock art cannot stand in for this player's accepted character.
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Hero(1)), None);
         assert_eq!(caption_picture(&cast, CaptionSpeaker::Hero(0)), None);
     }
 

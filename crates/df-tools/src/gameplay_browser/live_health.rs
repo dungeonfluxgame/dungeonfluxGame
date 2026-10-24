@@ -356,25 +356,26 @@ pub(super) fn phone_sync(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let Some(journey) = player.journey.as_ref() else {
         return Ok(());
     };
-    // The character faces of every hero, for the initiative strip and the hero card.
-    for (index, member) in journey.party.iter().enumerate().take(2) {
-        let token = format!("hero-{}", index + 1);
-        let face = journey
-            .live_faces
+    super::live_combat::sheet::sync_personal_portraits(&root, journey)?;
+    for card in select_all(&root, ".party-card,.join-participant")? {
+        let name = card
+            .query_selector(".member-name,.join-participant-name")?
+            .and_then(|node| node.text_content())
+            .unwrap_or_default();
+        let Some(sigil) = card.query_selector(".sigil span,.join-sigil")? else {
+            continue;
+        };
+        let image = journey
+            .party
             .iter()
-            .find(|face| face.name == member.name)
-            .and_then(|face| crate::presentation::imagery_url(&face.sprite));
-        let selector = format!("[data-portrait=\"{token}\"]");
-        for node in select_all(&root, &selector)? {
-            match &face {
-                Some(url) => {
-                    node.set_attribute("style", &format!("--asset-portrait-{token}:url({url})"))?;
-                    node.set_attribute("data-crop", "face")?;
-                }
-                None => {
-                    node.remove_attribute("style")?;
-                    node.remove_attribute("data-crop")?;
-                }
+            .find(|member| member.name == name)
+            .and_then(|member| df_render::art_contract::player_hero_image(&member.portrait));
+        match image {
+            Some(url) => {
+                sigil.set_attribute("style", &format!("background-image:url({url});background-size:cover;background-position:center top;width:36px;height:36px;border-radius:50%;font-size:0"))?;
+            }
+            None => {
+                sigil.remove_attribute("style")?;
             }
         }
     }

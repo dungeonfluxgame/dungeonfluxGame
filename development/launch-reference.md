@@ -280,3 +280,34 @@ Real mature-content acceptance and actual supplier
 charges remain unqualified until a scoped live check; offline fixtures are not
 vendor acceptance evidence.
 
+
+
+## Local hero library and phone drafts
+
+REF-046-049 use `df_gameplay_demo_library` in the same PostgreSQL cluster and with
+its existing role/port. The library database and schema are created lazily on the
+first library operation; a library failure does not prevent accepting or playing
+a campaign hero. Keep this database when retaining heroes across saved games.
+Immutable identity revisions contain portrait bytes and their SHA-256, independent
+of the disposable imagery cache. Campaigns retain their own hero and a library
+hero/revision link; level, gear, rolled scores and campaign facts do not transfer.
+
+The phone stores unfinished drafts under `df.creator.draft.v1`, debounced by 350 ms,
+and its 32-byte random library key under `df.library.key.v1`, generated on first
+save. These are browser-local, origin-specific entries. Clearing browser storage
+loses draft and library access until accounts/claiming exist. A different PC,
+browser, hostname or port has separate browser storage. Keys travel only in private
+RPC bodies; they never belong in URLs or logs. Local LAN HTTP remains unencrypted.
+
+The generated `HeroLibraryService` uses the existing gRPC-over-WebSocket tunnel:
+`ListMyHeroes`, `LoadHero`, and `SaveMySeatHero`. The save request carries a key and
+seat scope; identity comes exclusively from the server's committed campaign seat.
+A failed save stays "Not yet saved to your heroes" and retries on reconnect.
+
+Authenticated development routes are `GET /dev/heroes`, `GET /dev/heroes/<id>`,
+`GET /dev/heroes/<id>/revisions`, and `POST /dev/heroes/<id>/delete`. Delete marks
+a hero deleted and preserves immutable revision history. Every operation uses the
+shared audit path without phone keys or private story payloads. CLI spellings are
+`dev heroes list`, `show <id>`, `revisions <id>`, and `delete <id>` after the CLI
+parser wiring is integrated. HS1's browser mount and CLI parser integration request
+is retained in its lane handoff; these routes alone do not establish browser acceptance.

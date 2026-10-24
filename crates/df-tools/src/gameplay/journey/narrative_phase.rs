@@ -283,7 +283,7 @@ fn validate_thread_progress(
                 rules: &[model::rule()?, rule()?],
                 content: &model::contents()?,
                 resources: &super::resources_for(before.state())?,
-                assets: &[],
+                assets: &crate::gameplay::model::creator_portrait_assets(before.state())?,
             },
             checkpoint_limits: model::limits(),
             selections: last.as_slice(),

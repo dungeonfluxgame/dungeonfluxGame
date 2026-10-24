@@ -142,3 +142,13 @@
 
 .hero-choice-description{display:block;margin-top:7px;font-size:13px;line-height:1.5;color:#aebfc3;font-weight:400;overflow-wrap:anywhere}
 .hero-design-status{margin:14px 0 20px;padding:10px 13px;border-left:3px solid #c6a36b;color:#d7dcda;font-size:14px;line-height:1.5;background:#10252e}
+
+.hero-library{padding:1rem clamp(1rem,3vw,2.5rem);border-block:1px solid #806a4670;background:#121716}
+.hero-library h2{margin:0 0 .75rem;font-size:1.2rem;color:#e8d3a5}
+.hero-library-list{display:flex;gap:.75rem;overflow-x:auto;padding:.5rem 0}
+.hero-library-item{display:grid;grid-template-columns:3rem minmax(6rem,1fr);gap:.2rem .7rem;min-width:12rem;text-align:left;min-height:4rem}
+.hero-library-item img{grid-row:span 2;width:3rem;height:4rem;object-fit:cover;border-radius:.3rem}
+.hero-library-item span{font-size:.85rem;color:#c6c8ba}
+.hero-library-status,.hero-draft-status{font-size:.85rem;line-height:1.5;color:#d2ceb9;padding:.5rem 1rem}
+.hero-library button{min-height:44px}
+@media(max-width:420px){.hero-library-list{gap:.5rem}.hero-library-item{min-width:11rem}}

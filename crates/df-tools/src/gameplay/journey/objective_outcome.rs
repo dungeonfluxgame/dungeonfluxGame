@@ -480,6 +480,7 @@ pub(super) fn stage(
     let pins = model::pins()?;
     let content = model::contents()?;
     let resources = super::resources_for(candidate.state())?;
+    let assets = model::creator_portrait_assets(candidate.state())?;
     let proposal = propose_objective_transitions(
         &CurrentObjective {
             before,
@@ -494,7 +495,7 @@ pub(super) fn stage(
                 rules: &rules,
                 content: &content,
                 resources: &resources,
-                assets: &[],
+                assets: &assets,
             },
             transitions: &transitions,
             checkpoint_limits: model::limits(),

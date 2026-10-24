@@ -422,20 +422,14 @@ impl DecisionAdapter {
         validate_decision_projection(checkpoint, decision)?;
         check_receipt_capacity(decision, maximum_receipt_bytes)?;
         let receipt = DecisionReceipt::new(basis, decision.clone(), maximum_receipt_bytes)?;
-        let document = encode_checkpoint(checkpoint, codec_limits)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
         // A caller's Checkpoint constructor is not source admission. Revalidate the
         // actual complete encoded candidate with the root's admitted reference inventory.
         let recovery = self
             .recovery
             .as_ref()
             .ok_or(RepositoryError::InvalidCandidate)?;
-        let validated =
-            recovery.decode_checkpoint(&document, basis, scope.admitted_pins(), codec_limits)?;
-        if &validated != checkpoint {
-            return Err(RepositoryError::InvalidCandidate);
-        }
-        drop(validated);
+        let document =
+            recovery.encode_candidate(checkpoint, scope.admitted_pins(), codec_limits)?;
         let receipt_document =
             encode_receipt(&receipt, codec_limits).map_err(|_| RepositoryError::InvalidReceipt)?;
         insert_checkpoint(transaction, scope, checkpoint, &document).await?;
@@ -489,6 +483,12 @@ pub type ResourceResolver =
         &df_model::checkpoint::GameState,
     ) -> Result<Vec<df_model::checkpoint::ResourceConstraint>, RepositoryError>;
 
+/// A trusted resolver verifies accepted asset metadata against its owning state.
+/// It must bound its output, refuse foreign/mismatched records and perform no I/O or paid calls.
+pub type AssetResolver = fn(
+    &df_model::checkpoint::GameState,
+) -> Result<Vec<df_model::checkpoint::AssetReference>, RepositoryError>;
+
 /// The native root supplies its admitted canonical inventories; stored bytes cannot admit them.
 #[derive(Clone)]
 pub struct RecoverySource {
@@ -499,9 +499,29 @@ pub struct RecoverySource {
     /// None retains the fixed admitted inventory.
     pub resource_resolver: Option<ResourceResolver>,
     pub assets: Vec<df_model::checkpoint::AssetReference>,
+    /// Some replaces `assets` after complete bounded decoding, before model validation.
+    pub asset_resolver: Option<AssetResolver>,
     pub limits: df_model::checkpoint::CheckpointLimits,
 }
 impl RecoverySource {
+    /// Encode a candidate only after round-trip validation against this source's inventories.
+    /// The returned bytes are the exact complete envelope validated for native commit.
+    pub fn encode_candidate(
+        &self,
+        checkpoint: &Checkpoint,
+        pins: &df_model::checkpoint::CheckpointPins,
+        codec_limits: crate::checkpoint_codec::CodecLimits,
+    ) -> Result<Vec<u8>, RepositoryError> {
+        let document = encode_checkpoint(checkpoint, codec_limits)
+            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        let validated =
+            self.decode_checkpoint(&document, checkpoint.basis(), pins, codec_limits)?;
+        if &validated != checkpoint {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        Ok(document)
+    }
+
     /// Decode and validate the original canonical state before admitting a checkpoint.
     /// This performs no I/O and grants no database or session authority.
     pub fn decode_checkpoint(
@@ -518,10 +538,11 @@ impl RecoverySource {
             self.inventory(),
             self.limits,
             codec_limits,
-            self.resource_resolver,
+            Some(self),
         )
         .map_err(|error| match error {
-            crate::checkpoint_codec::CodecError::ResourceResolution(error) => error,
+            crate::checkpoint_codec::CodecError::ResourceResolution(error)
+            | crate::checkpoint_codec::CodecError::AssetResolution(error) => error,
             _ => RepositoryError::InvalidCandidate,
         })
     }
@@ -533,7 +554,7 @@ impl RecoverySource {
         current_basis: Basis,
         codec_limits: crate::checkpoint_codec::CodecLimits,
     ) -> Result<Checkpoint, RepositoryError> {
-        if self.resource_resolver.is_none() {
+        if self.resource_resolver.is_none() && self.asset_resolver.is_none() {
             return crate::decision_rows::load_current(
                 transaction,
                 scope,
@@ -570,7 +591,7 @@ impl RecoverySource {
         pins: &df_model::checkpoint::CheckpointPins,
         codec_limits: crate::checkpoint_codec::CodecLimits,
     ) -> Result<Checkpoint, RepositoryError> {
-        if self.resource_resolver.is_none() {
+        if self.resource_resolver.is_none() && self.asset_resolver.is_none() {
             return crate::decision_rows::decode_current_row(
                 row,
                 current_basis.session,

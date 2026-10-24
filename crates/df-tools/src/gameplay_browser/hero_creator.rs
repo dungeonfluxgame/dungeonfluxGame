@@ -10,8 +10,11 @@ use df_protocol::common as rpc;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlButtonElement, HtmlSelectElement, HtmlTextAreaElement};
 
+#[path = "hero_draft_storage.rs"]
+mod draft_storage;
 #[path = "hero_portrait_state.rs"]
 mod portrait_state;
+use prost::Message;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IdentityDraft {
@@ -187,6 +190,9 @@ struct Controls {
     version: Rc<Cell<u64>>,
     pending: Rc<Cell<bool>>,
     text_reviewed: Rc<Cell<bool>>,
+    draft_timer: Rc<RefCell<Option<gloo_timers::callback::Timeout>>>,
+    storage_status: Element,
+    loaded_hero: Rc<RefCell<Option<draft_storage::LoadedHero>>>,
 }
 
 fn choices(controls: &[(rpc::JourneyGroup, HtmlSelectElement)]) -> Vec<rpc::JourneyChoice> {
@@ -555,7 +561,181 @@ impl Controls {
     fn edited(&self) {
         self.version.set(self.version.get().saturating_add(1));
         self.update_missing();
+        self.autosave();
     }
+
+    fn storage_selection(&self) -> rpc::CharacterSelection {
+        let field = |id: &str| {
+            self.appearance
+                .iter()
+                .find(|(group, _)| group.group_id == id)
+                .map(|(_, input)| input.value())
+                .unwrap_or_default()
+        };
+        let draft = self.draft();
+        rpc::CharacterSelection {
+            name: draft.name,
+            choices: draft.choices,
+            portrait_scenery: draft.portrait_scenery,
+            identity: Some(rpc::HeroIdentity {
+                appearance: Some(rpc::HeroAppearance {
+                    public_description: self.appearance_text.value(),
+                    presentation: field("presentation"),
+                    pronouns: field("pronouns"),
+                    age: field("age"),
+                    build: field("build"),
+                    skin: field("skin"),
+                    hair: field("hair"),
+                    hair_color: field("hair-color"),
+                    eyes: field("eyes"),
+                    mark: field("mark"),
+                    attire: field("attire"),
+                }),
+                origin: draft.identity.origin,
+                occupation: draft.identity.occupation,
+                motivation: draft.identity.motivation,
+                backstory: draft.identity.backstory,
+                facts: draft.identity.facts,
+            }),
+        }
+    }
+
+    fn stored(&self) -> Result<draft_storage::StoredDraft, JsValue> {
+        Ok(draft_storage::StoredDraft {
+            version: 1,
+            selection: self.storage_selection().encode_to_vec(),
+            appearance_text: self.appearance_text.value(),
+            backstory_text: self.backstory_text.value(),
+            facts: self.facts.iter().map(HtmlTextAreaElement::value).collect(),
+            story_menus: self
+                .story_menus
+                .iter()
+                .map(|(group, select)| (group.group_id.clone(), select.value()))
+                .collect(),
+            scenery_option: self.scenery.value(),
+            scenery_custom: self.scenery_custom.value(),
+            paragraph_edited: self.paragraph_edited.get(),
+            text_reviewed: self.text_reviewed.get(),
+            portrait_uri: if self.portrait_version.get().is_some() {
+                self.stage_preview
+                    .borrow()
+                    .get_attribute("src")
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            portrait_revision: self.portrait_version.get(),
+            look_revision: self.look_version.get(),
+            loaded_hero: self.loaded_hero.borrow().clone(),
+        })
+    }
+
+    fn save_draft(&self) {
+        let result = (|| {
+            let text = self
+                .stored()?
+                .encode()
+                .ok_or_else(|| JsValue::from_str("Draft too large"))?;
+            phone_storage()?.set_item(draft_storage::DRAFT_KEY, &text)
+        })();
+        self.storage_status
+            .set_text_content(Some(if result.is_ok() {
+                "Draft saved on this browser"
+            } else {
+                "This browser could not save your draft. Keep this page open."
+            }));
+    }
+
+    fn autosave(&self) {
+        let controls = self.clone();
+        self.draft_timer
+            .borrow_mut()
+            .replace(gloo_timers::callback::Timeout::new(350, move || {
+                controls.save_draft();
+                controls.draft_timer.borrow_mut().take();
+            }));
+    }
+
+    fn apply_stored(&self, stored: &draft_storage::StoredDraft) -> Result<(), JsValue> {
+        let selected = stored
+            .selection()
+            .ok_or_else(|| JsValue::from_str("Draft invalid"))?;
+        let identity = IdentityDraft::from_rpc(
+            selected
+                .identity
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("Draft identity absent"))?,
+        )?;
+        *self.loaded_hero.borrow_mut() = stored.loaded_hero.clone();
+        self.name.set_value(&selected.name);
+        for (group, input) in &self.choices {
+            if let Some(choice) = selected
+                .choices
+                .iter()
+                .find(|choice| choice.group_id == group.group_id)
+            {
+                // Preserve unavailable carried catalog ids visibly; validation still refuses them.
+                if !group
+                    .options
+                    .iter()
+                    .any(|option| option.option_id == choice.option_id)
+                    && let Some(document) = input.owner_document()
+                {
+                    let option = node(
+                        &document,
+                        input,
+                        "option",
+                        "",
+                        &format!("{} (not available here)", choice.option_id),
+                    )?;
+                    option.set_attribute("value", &choice.option_id)?;
+                }
+                input.set_value(&choice.option_id);
+            }
+        }
+        for (group, input) in &self.appearance {
+            if let Some(choice) = identity
+                .appearance
+                .iter()
+                .find(|choice| choice.group_id == group.group_id)
+            {
+                input.set_value(&choice.option_id);
+            }
+        }
+        self.story.origin.set_value(&identity.origin);
+        self.story.occupation.set_value(&identity.occupation);
+        self.story.motivation.set_value(&identity.motivation);
+        self.paragraph.set_value(&identity.backstory);
+        for (input, text) in self.facts.iter().zip(&stored.facts) {
+            input.set_value(text);
+        }
+        for (group, input) in &self.story_menus {
+            if let Some((_, text)) = stored
+                .story_menus
+                .iter()
+                .find(|(id, _)| id == &group.group_id)
+            {
+                input.set_value(text);
+            }
+        }
+        self.appearance_text.set_value(&stored.appearance_text);
+        self.backstory_text.set_value(&stored.backstory_text);
+        self.scenery.set_value(&stored.scenery_option);
+        self.scenery_custom.set_value(&stored.scenery_custom);
+        self.paragraph_edited.set(stored.paragraph_edited);
+        self.text_reviewed.set(stored.text_reviewed);
+        self.version.set(self.version.get().saturating_add(1));
+        self.update_missing();
+        self.look_version.set(stored.look_revision);
+        Ok(())
+    }
+}
+
+fn phone_storage() -> Result<web_sys::Storage, JsValue> {
+    web_sys::window()
+        .ok_or_else(|| JsValue::from_str("Browser unavailable"))?
+        .local_storage()?
+        .ok_or_else(|| JsValue::from_str("Storage unavailable"))
 }
 
 pub(super) struct HeroCreator {
@@ -565,6 +745,8 @@ pub(super) struct HeroCreator {
     portrait_listeners: RefCell<Vec<Listener>>,
     placeholder_url: String,
     feedback: Element,
+    initial_draft: draft_storage::StoredDraft,
+    pagehide: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 fn node(
@@ -788,7 +970,11 @@ impl HeroCreator {
             "These choices come from this adventure’s rules and starting path.",
         )?;
         let mut build = Vec::new();
-        for group in &offer.groups {
+        for group in offer
+            .groups
+            .iter()
+            .filter(|group| group.group_id != "portrait")
+        {
             let parent = if matches!(
                 group.group_id.as_str(),
                 "species" | "class" | "background" | "build-package"
@@ -1053,7 +1239,17 @@ impl HeroCreator {
             version: Rc::new(Cell::new(0)),
             pending: Rc::new(Cell::new(false)),
             text_reviewed: Rc::new(Cell::new(true)),
+            draft_timer: Rc::new(RefCell::new(None)),
+            loaded_hero: Rc::new(RefCell::new(None)),
+            storage_status: node(
+                document,
+                &footer,
+                "p",
+                "hero-draft-status",
+                "Drafts stay in this browser. Clearing browser storage loses access to your saved heroes until accounts are available.",
+            )?,
         };
+        let initial_draft = controls.stored()?;
         let on_event = Rc::new(on_event);
         let mut surface = Self {
             root,
@@ -1062,6 +1258,8 @@ impl HeroCreator {
             portrait_listeners: RefCell::new(Vec::new()),
             placeholder_url,
             feedback,
+            initial_draft,
+            pagehide: None,
         };
         for (active, (button, _)) in tabs.iter().enumerate() {
             let sections = tabs.clone();
@@ -1262,6 +1460,46 @@ impl HeroCreator {
             },
         )?;
         surface.controls.update_missing();
+        let restored = (|| -> Result<(), JsValue> {
+            let storage = phone_storage()?;
+            if let Some(text) = storage.get_item(draft_storage::DRAFT_KEY)? {
+                if let Some(stored) = draft_storage::StoredDraft::decode(&text) {
+                    if surface.controls.apply_stored(&stored).is_ok() {
+                        surface
+                            .controls
+                            .storage_status
+                            .set_text_content(Some("Draft restored from this browser"));
+                        if !stored.portrait_uri.is_empty() {
+                            surface.load_portrait_reference(
+                                stored.look_revision,
+                                &stored.portrait_uri,
+                                stored.portrait_revision.unwrap_or(stored.look_revision),
+                            )?;
+                        }
+                    } else {
+                        storage.remove_item(draft_storage::DRAFT_KEY)?;
+                    }
+                } else {
+                    storage.remove_item(draft_storage::DRAFT_KEY)?;
+                }
+            }
+            Ok(())
+        })();
+        if restored.is_err() {
+            surface.controls.storage_status.set_text_content(Some(
+                "This browser could not restore your draft. You can still make a hero.",
+            ));
+        }
+        if let Some(window) = web_sys::window() {
+            let controls = surface.controls.clone();
+            let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
+                controls.draft_timer.borrow_mut().take();
+                controls.save_draft();
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            window
+                .add_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref())?;
+            surface.pagehide = Some(callback);
+        }
         Ok(surface)
     }
 
@@ -1291,6 +1529,9 @@ impl HeroCreator {
     }
 
     pub(super) fn dispose(self) -> Result<(), JsValue> {
+        if self.controls.draft_timer.borrow_mut().take().is_some() {
+            self.controls.save_draft();
+        }
         self.root.remove();
         // Dropping the surface releases the listeners it owns, independently of page redraws.
         Ok(())
@@ -1383,6 +1624,15 @@ impl HeroCreator {
     }
 
     fn load_portrait(&self, version: u64, uri: &str) -> Result<(), JsValue> {
+        self.load_portrait_reference(version, uri, version)
+    }
+
+    fn load_portrait_reference(
+        &self,
+        version: u64,
+        uri: &str,
+        portrait_revision: u64,
+    ) -> Result<(), JsValue> {
         self.portrait_listeners.borrow_mut().clear();
         if let Some(previous) = self.controls.incoming_preview.borrow_mut().take() {
             previous.remove();
@@ -1422,15 +1672,20 @@ impl HeroCreator {
                 if event == "load" {
                     controls.stage_preview.borrow().remove();
                     controls.stage_preview.replace(current.clone());
-                    controls.portrait_version.set(Some(version));
+                    controls.portrait_version.set(Some(portrait_revision));
+                    controls.autosave();
                     let _ = current.set_attribute("data-loaded", "true");
                     controls.set_portrait_pending(false);
                     controls
                         .portrait_button
                         .set_text_content(Some("Regenerate portrait"));
-                    controls
-                        .portrait_status
-                        .set_text_content(Some("Your portrait is ready."));
+                    controls.portrait_status.set_text_content(Some(
+                        if portrait_revision == version {
+                            "Your portrait is ready."
+                        } else {
+                            "Your look has changed. Regenerate to update this portrait."
+                        },
+                    ));
                 } else {
                     current.remove();
                     controls.set_portrait_pending(false);
@@ -1685,6 +1940,507 @@ mod tests {
 
 impl Drop for HeroCreator {
     fn drop(&mut self) {
+        self.controls.draft_timer.borrow_mut().take();
+        if let (Some(window), Some(callback)) = (web_sys::window(), self.pagehide.take()) {
+            let _removed = window
+                .remove_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref());
+        }
         let _ = web_sys::Url::revoke_object_url(&self.placeholder_url);
     }
+}
+
+fn library_key(create: bool) -> Result<Option<Vec<u8>>, JsValue> {
+    let storage = phone_storage()?;
+    if let Some(text) = storage.get_item(draft_storage::LIBRARY_KEY)? {
+        if let Some(key) = draft_storage::decode_library_key(&text) {
+            return Ok(Some(key));
+        }
+        storage.remove_item(draft_storage::LIBRARY_KEY)?;
+    }
+    if !create {
+        return Ok(None);
+    }
+    let mut key = [0_u8; 32];
+    web_sys::window()
+        .ok_or_else(|| JsValue::from_str("Browser unavailable"))?
+        .crypto()?
+        .get_random_values_with_u8_array(&mut key)?;
+    let encoded = key
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    storage.set_item(draft_storage::LIBRARY_KEY, &encoded)?;
+    Ok(Some(key.to_vec()))
+}
+
+type LibraryClient =
+    rpc::hero_library_service_client::HeroLibraryServiceClient<df_rpc_bridge::BrowserChannel>;
+async fn connect_library() -> Result<(df_rpc_bridge::BrowserConnection, LibraryClient), String> {
+    let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
+    let (connection, channel) = df_rpc_bridge::BrowserConnection::connect(&url)
+        .await
+        .map_err(|_| "Your heroes could not connect".to_owned())?;
+    Ok((
+        connection,
+        LibraryClient::new(channel).max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
+    ))
+}
+fn library_request<T>(body: T, credential: &str) -> Result<tonic::Request<T>, String> {
+    let mut request = super::request(body, credential)?;
+    request.set_timeout(std::time::Duration::from_secs(20));
+    Ok(request)
+}
+fn portrait_data(summary: &rpc::LibraryHeroSummary) -> Result<String, JsValue> {
+    if summary.portrait.is_empty() {
+        return Ok(String::new());
+    }
+    if !matches!(
+        summary.portrait_media_type.as_str(),
+        "image/jpeg" | "image/png" | "image/webp"
+    ) || summary.portrait.len() > 6 * 1024 * 1024
+    {
+        return Err(JsValue::from_str("Portrait invalid"));
+    }
+    let binary = summary
+        .portrait
+        .iter()
+        .map(|byte| char::from(*byte))
+        .collect::<String>();
+    let encoded = web_sys::window()
+        .ok_or_else(|| JsValue::from_str("Browser unavailable"))?
+        .btoa(&binary)?;
+    Ok(format!(
+        "data:{};base64,{encoded}",
+        summary.portrait_media_type
+    ))
+}
+impl HeroCreator {
+    fn apply_library(
+        &self,
+        hero: rpc::LibraryHeroIdentity,
+        summary: rpc::LibraryHeroSummary,
+    ) -> Result<(), JsValue> {
+        let identity = hero
+            .identity
+            .ok_or_else(|| JsValue::from_str("Hero details unavailable"))?;
+        let selection = rpc::CharacterSelection {
+            name: hero.name,
+            choices: hero.design,
+            identity: Some(identity.clone()),
+            portrait_scenery: hero.portrait_scenery.clone(),
+        };
+        let mut stored = self.controls.stored()?;
+        stored.selection = selection.encode_to_vec();
+        stored.loaded_hero = Some(draft_storage::LoadedHero {
+            hero_id: summary.hero_id,
+            revision: summary.revision,
+        });
+        stored.appearance_text = identity
+            .appearance
+            .as_ref()
+            .map(|look| look.public_description.clone())
+            .unwrap_or_default();
+        stored.backstory_text.clear();
+        stored.facts = identity.facts;
+        #[path = "../gameplay/living_scenes/plates/scenery_selection.rs"]
+        mod scenery_selection;
+        match scenery_selection::saved_option(
+            &self.controls.scenery_options,
+            &hero.portrait_scenery,
+        ) {
+            Some(option) => {
+                stored.scenery_option = option.to_owned();
+                stored.scenery_custom.clear();
+            }
+            None => {
+                stored.scenery_option = "custom".to_owned();
+                stored.scenery_custom = hero.portrait_scenery;
+            }
+        }
+        stored.paragraph_edited = true;
+        stored.text_reviewed = true;
+        stored.look_revision = self.controls.look_version.get().saturating_add(1);
+        stored.portrait_revision = Some(stored.look_revision);
+        self.controls.apply_stored(&stored)?;
+        if summary.portrait.is_empty() {
+            self.controls.portrait_version.set(None);
+            self.controls.set_portrait_pending(false);
+        }
+        if !summary.portrait.is_empty() {
+            // The server imports checked library bytes into the accepted portrait path on Load.
+            let key = summary.portrait_key;
+            if key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(JsValue::from_str("Portrait reference invalid"));
+            }
+            self.load_portrait(
+                stored.look_revision,
+                &format!("/gameplay/library-portrait/{key}"),
+            )?;
+        }
+        self.controls.save_draft();
+        Ok(())
+    }
+}
+
+thread_local! {
+    static LIBRARY_SAVING: Cell<bool> = const {Cell::new(false)};
+    static LIBRARY_SAVED: RefCell<String> = const {RefCell::new(String::new())};
+}
+
+/// Called by the player renderer after it has applied a current, authenticated journey.
+/// The game remains playable when any library operation fails. A reconnect redraw retries.
+pub(super) fn sync_library(
+    client: &Rc<RefCell<super::Client>>,
+    journey: &rpc::JourneyView,
+) -> Result<(), JsValue> {
+    if client.borrow().role != "player" {
+        return Ok(());
+    }
+    if journey.creation.is_none()
+        && let Some(own) = journey.own_character.as_ref()
+    {
+        let credential = client.borrow().credential.clone();
+        let stored_origin = (|| -> Result<_, JsValue> {
+            let storage = phone_storage()?;
+            let draft = if let Some(creator) = client.borrow().creation.as_ref() {
+                creator.controls.draft_timer.borrow_mut().take();
+                Some(creator.controls.stored()?)
+            } else {
+                storage
+                    .get_item(draft_storage::DRAFT_KEY)?
+                    .as_deref()
+                    .and_then(draft_storage::StoredDraft::decode)
+            };
+            let origin = if let Some(draft) = draft {
+                let origin = draft_storage::SeatOrigin {
+                    credential: credential.clone(),
+                    loaded_hero: draft.loaded_hero,
+                };
+                storage.set_item(
+                    draft_storage::ORIGIN_KEY,
+                    &origin
+                        .encode()
+                        .ok_or_else(|| JsValue::from_str("Hero reference invalid"))?,
+                )?;
+                Some(origin)
+            } else {
+                storage
+                    .get_item(draft_storage::ORIGIN_KEY)?
+                    .as_deref()
+                    .and_then(|text| draft_storage::SeatOrigin::decode(text, &credential))
+            };
+            storage.remove_item(draft_storage::DRAFT_KEY)?;
+            Ok(origin
+                .and_then(|origin| origin.loaded_hero)
+                .map(|origin| origin.to_rpc()))
+        })();
+        let draft_cleared = stored_origin.is_ok();
+        let document = client.borrow().document.clone();
+        let root = client.borrow().root.clone();
+        let status = match root.query_selector(".hero-library-status")? {
+            Some(status) => status,
+            None => node(
+                &document,
+                &root,
+                "p",
+                "hero-library-status",
+                "Not yet saved to your heroes",
+            )?,
+        };
+        status.set_attribute("role", "status")?;
+        if !draft_cleared {
+            status.set_text_content(Some(
+                "Your hero is accepted. This browser could not clear its old draft.",
+            ));
+        }
+        use sha2::{Digest, Sha256};
+        let signature = format!(
+            "{}|{}|{}|{:x}",
+            client.borrow().credential,
+            own.name,
+            own.portrait_uri,
+            Sha256::digest(
+                own.identity
+                    .as_ref()
+                    .map(Message::encode_to_vec)
+                    .unwrap_or_default()
+            )
+        );
+        if LIBRARY_SAVED.with(|saved| *saved.borrow() == signature) {
+            status.set_text_content(Some("Saved to your heroes"));
+            return Ok(());
+        }
+        if LIBRARY_SAVING.with(|saving| saving.replace(true)) {
+            return Ok(());
+        }
+        status.set_text_content(Some(
+            "Not yet saved to your heroes - retrying when connected",
+        ));
+        let key = match library_key(true) {
+            Ok(Some(key)) => key,
+            _ => {
+                LIBRARY_SAVING.with(|saving| saving.set(false));
+                return Ok(());
+            }
+        };
+        let state = client.borrow();
+        let credential = state.credential.clone();
+        let body = rpc::SaveMySeatHeroRequest {
+            loaded_hero: match stored_origin {
+                Ok(origin) => origin,
+                Err(_) => {
+                    LIBRARY_SAVING.with(|saving| saving.set(false));
+                    status.set_text_content(Some("Not yet saved to your heroes - this browser could not retain the hero reference"));
+                    return Ok(());
+                }
+            },
+            key,
+            scope: Some(rpc::WatchViewRequest {
+                session_id: state.session.clone(),
+                run_id: state.run.clone(),
+                client_binding_id: state.binding.clone(),
+                after_revision: None,
+            }),
+        };
+        drop(state);
+        let weak = Rc::downgrade(client);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = async {
+                let (connection, mut library) = connect_library().await?;
+                let result = library
+                    .save_my_seat_hero(library_request(body, &credential)?)
+                    .await;
+                connection.close();
+                result.map_err(|_| "Hero not yet saved".to_owned())
+            }
+            .await;
+            LIBRARY_SAVING.with(|saving| saving.set(false));
+            let Some(client) = weak.upgrade() else {
+                return;
+            };
+            if client.borrow().credential != credential {
+                return;
+            }
+            if let Ok(response) = result {
+                let saved = response.into_inner();
+                let origin = draft_storage::SeatOrigin {
+                    credential: credential.clone(),
+                    loaded_hero: Some(draft_storage::LoadedHero {
+                        hero_id: saved.hero_id,
+                        revision: saved.revision,
+                    }),
+                };
+                let retained = phone_storage().and_then(|storage| {
+                    storage.set_item(
+                        draft_storage::ORIGIN_KEY,
+                        &origin
+                            .encode()
+                            .ok_or_else(|| JsValue::from_str("Hero reference invalid"))?,
+                    )
+                });
+                if retained.is_err() {
+                    status.set_text_content(Some(
+                        "Saved to your heroes. This browser could not retain the hero reference.",
+                    ));
+                    return;
+                }
+                LIBRARY_SAVED.with(|saved| *saved.borrow_mut() = signature);
+                status.set_text_content(Some("Saved to your heroes"));
+            } else {
+                status.set_text_content(Some("Not yet saved to your heroes - reconnect to retry"));
+            }
+        });
+        return Ok(());
+    }
+    let mut state = client.borrow_mut();
+    let Some(creator) = state.creation.as_mut() else {
+        return Ok(());
+    };
+    if creator.root.has_attribute("data-library-mounted") {
+        return Ok(());
+    }
+    creator.root.set_attribute("data-library-mounted", "true")?;
+    let document = creator
+        .root
+        .owner_document()
+        .ok_or_else(|| JsValue::from_str("Document unavailable"))?;
+    let picker = node(&document, &creator.root, "section", "hero-library", "")?;
+    if let Some(layout) = creator.root.query_selector(".hero-layout")? {
+        creator.root.insert_before(&picker, Some(&layout))?;
+    }
+    node(&document, &picker, "h2", "", "Your heroes")?;
+    let new = node(&document, &picker, "button", "hero-library-new", "New hero")?;
+    new.set_attribute("type", "button")?;
+    let defaults = creator.initial_draft.clone();
+    let controls = creator.controls.clone();
+    creator.listen(new, "click", move |_| {
+        let mut draft = defaults.clone();
+        draft.loaded_hero = None;
+        draft.appearance_text.clear();
+        draft.backstory_text.clear();
+        draft.portrait_uri.clear();
+        draft.portrait_revision = None;
+        controls.draft_timer.borrow_mut().take();
+        if controls.apply_stored(&draft).is_ok() {
+            controls.portrait_version.set(None);
+            controls.set_portrait_pending(false);
+            controls.save_draft();
+        }
+    })?;
+    let list = node(&document, &picker, "div", "hero-library-list", "")?;
+    let credential = state.credential.clone();
+    drop(state);
+    let key = match library_key(false) {
+        Ok(Some(key)) => key,
+        _ => return Ok(()),
+    };
+    let weak = Rc::downgrade(client);
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = async {
+            let (connection, mut library) = connect_library().await?;
+            let result = async {
+                let started = web_time::Instant::now();
+                let mut heroes = Vec::new();
+                let mut cursor = 0;
+                for _ in 0..100 {
+                    let page = library
+                        .list_my_heroes(library_request(
+                            rpc::ListMyHeroesRequest {
+                                key: key.clone(),
+                                after_hero_id: cursor,
+                            },
+                            &credential,
+                        )?)
+                        .await
+                        .map_err(|_| {
+                            "Your heroes are unavailable. You can still make a new hero.".to_owned()
+                        })?
+                        .into_inner();
+                    heroes.extend(page.heroes);
+                    if page.next_cursor == 0 || heroes.len() >= 100 {
+                        return Ok(rpc::ListMyHeroesResponse {
+                            heroes,
+                            next_cursor: page.next_cursor,
+                        });
+                    }
+                    if page.next_cursor <= cursor
+                        || started.elapsed() > std::time::Duration::from_secs(20)
+                    {
+                        return Err(
+                            "Your heroes took too long to load. Reconnect to retry.".to_owned()
+                        );
+                    }
+                    cursor = page.next_cursor;
+                }
+                Err("Your heroes could not finish loading.".to_owned())
+            }
+            .await;
+            connection.close();
+            result
+        }
+        .await;
+        let Some(client) = weak.upgrade() else {
+            return;
+        };
+        let result = (|| -> Result<(), JsValue> {
+            let rows = result.map_err(|message| JsValue::from_str(&message))?;
+            let mut state = client.borrow_mut();
+            let Some(creator) = state.creation.as_mut() else {
+                return Ok(());
+            };
+            if !list.is_connected() {
+                return Ok(());
+            }
+            for row in rows.heroes {
+                let button = node(&document, &list, "button", "hero-library-item", "")?;
+                button.set_attribute("type", "button")?;
+                if !row.portrait.is_empty() {
+                    let image = node(&document, &button, "img", "", "")?;
+                    image.set_attribute("alt", "")?;
+                    image.set_attribute("src", &portrait_data(&row)?)?;
+                }
+                node(&document, &button, "strong", "", &row.name)?;
+                node(
+                    &document,
+                    &button,
+                    "span",
+                    "",
+                    &format!(
+                        "{} / {}",
+                        row.species,
+                        row.character_class.trim_end_matches("-1")
+                    ),
+                )?;
+                let weak = Rc::downgrade(&client);
+                let key = key.clone();
+                let credential = credential.clone();
+                let hero_id = row.hero_id;
+                creator.listen(button, "click", move |_| {
+                    let weak = weak.clone();
+                    let key = key.clone();
+                    let credential = credential.clone();
+                    let Some(owner)=weak.upgrade() else {return;};
+                    let state=owner.borrow();let Some(creator)=state.creation.as_ref() else {return;};
+                    if creator.controls.pending.get() {return;}
+                    creator.set_pending(true);
+                    creator.show_error("Loading your hero...");
+                    let version=Some(creator.controls.version.get());
+                    drop(state);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let result = async {
+                            let (connection, mut library) = connect_library().await?;
+                            let result = library
+                                .load_hero(library_request(
+                                    rpc::LoadHeroRequest {
+                                        key,
+                                        hero_id,
+                                        new_hero: false,
+                                    },
+                                    &credential,
+                                )?)
+                                .await;
+                            connection.close();
+                            result
+                                .map(|response| response.into_inner())
+                                .map_err(|_| "Hero could not load".to_owned())
+                        }
+                        .await;
+                        let Some(client) = weak.upgrade() else {
+                            return;
+                        };
+                        let state = client.borrow();
+                        let Some(creator) = state.creation.as_ref() else {
+                            return;
+                        };
+                        creator.set_pending(false);
+                        if Some(creator.controls.version.get()) != version {
+                            creator.show_error("Your newer edits are kept. Choose the saved hero again to replace them.");
+                            return;
+                        }
+                        creator.show_error("");
+                        match result {
+                            Ok(loaded) => {
+                                if let (Some(hero), Some(summary)) = (loaded.hero, loaded.summary)
+                                    && creator.apply_library(hero, summary).is_err()
+                                {
+                                        creator.show_error(
+                                            "Hero details could not load. Your draft is kept.",
+                                        );
+                                }
+                            }
+                            Err(_) => creator
+                                .show_error("Your heroes could not load. Your draft is kept."),
+                        }
+                    });
+                })?;
+            }
+            Ok(())
+        })();
+        if result.is_err() && list.is_connected() {
+            list.set_text_content(Some(
+                "Your heroes could not load. You can still make a new hero.",
+            ));
+        }
+    });
+    Ok(())
 }

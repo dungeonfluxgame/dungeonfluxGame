@@ -199,6 +199,7 @@ pub(super) fn observe_registered_recovery_lease(
             content: entries,
             resources,
             resource_resolver: None,
+            asset_resolver: None,
             assets: vec![],
             limits: limits(),
         },

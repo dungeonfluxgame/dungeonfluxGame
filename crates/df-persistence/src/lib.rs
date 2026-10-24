@@ -27,7 +27,8 @@ pub mod story_memory;
 pub use checkpoint_codec::CodecLimits as NativeCodecLimits;
 #[cfg(not(target_arch = "wasm32"))]
 pub use decision_adapter::{
-    RecoverySource as NativeRecoverySource, ResourceResolver as NativeResourceResolver,
+    AssetResolver as NativeAssetResolver, RecoverySource as NativeRecoverySource,
+    ResourceResolver as NativeResourceResolver,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_bridge::{
@@ -70,3 +71,6 @@ mod protected_recovery_overlay_contract;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod story_memory_pg_fixture;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hero_library;

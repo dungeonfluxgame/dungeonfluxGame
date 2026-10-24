@@ -481,6 +481,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
             Some(live_screens::ServerImage::install(image, &url, None)?);
     }
     mount_chrome(client, &host, view, screen == Screen::Combat)?;
+    sheet::sync_personal_portraits(&host, view.journey)?;
     mount_rules_badge(client, &host, custom_rules)?;
     // The display has no pointer for a disclosure; the phones carry the rules note.
     if player {
@@ -527,6 +528,7 @@ fn present_stage(
     // The shared display is read-only. Action affordances stay on player devices,
     // including when this combat/aftermath path updates the persistent TV stage.
     stage.set_choices(&[], true)?;
+    stage.update_party_images(view.journey)?;
     let art = combat_picture(view).unwrap_or_default();
     stage.set_art(&live_tv::image_layers(&art, ""))?;
     stage.figures().update(

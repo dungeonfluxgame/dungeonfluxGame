@@ -2618,6 +2618,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
             render_dead_hero_notice(client, &surface, &journey, &offers)?;
         }
         creation(client, &surface, creation_offer, offered)?;
+        hero_creator::sync_library(client, &journey)?;
         dialogue_recovery::mount(client, &surface, &offers)?;
         // Recovery remains reachable while a creation submission is uncertain.
         // The feedback node is kept (and moved last) so its message survives redraws.
@@ -2639,6 +2640,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         recovery_details(client, &surface)?;
         return Ok(());
     }
+    hero_creator::sync_library(client, &journey)?;
     cancel_creation_preview(&mut client.borrow_mut());
     client.borrow_mut().creation_offer = None;
     if let Some(creation) = client.borrow_mut().creation.take() {

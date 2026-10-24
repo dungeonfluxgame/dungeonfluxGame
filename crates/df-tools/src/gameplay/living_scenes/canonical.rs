@@ -3,7 +3,7 @@
 use super::*;
 use crate::gameplay::{
     adventure::scene_model::{SceneModel, ScenePerson},
-    hero_identity::{AcceptedVisualDossier, ValidatedIdentity},
+    hero_identity::ValidatedIdentity,
     imagery::{self, HeroVisualIdentity, Lookup},
 };
 use df_model::checkpoint::{Checkpoint, EntityId};
@@ -22,10 +22,13 @@ pub(super) enum Target {
 #[derive(Clone, Debug)]
 enum Source {
     Hero {
-        identity: ValidatedIdentity,
-        visual_dossier: Option<&'static AcceptedVisualDossier>,
+        name: String,
+        identity: Box<ValidatedIdentity>,
         species: String,
         gear: Vec<&'static str>,
+        public_design: String,
+        portrait: Option<df_model::checkpoint::AssetReference>,
+        locator: String,
     },
     Npc {
         person: ScenePerson,
@@ -258,6 +261,44 @@ impl References {
         self.ready(&Target::Hero(entity))
     }
 
+    #[cfg(test)]
+    pub(super) fn fixture_hero(&mut self, seat: u8, name: &str, key: ImageKey) {
+        let entity = EntityId::from_bytes(&[seat; 16]).unwrap();
+        if self.scope.is_empty() {
+            self.scope = "health-fixture".to_owned();
+        }
+        self.select(
+            Target::Hero(entity),
+            Source::Hero {
+                name: name.to_owned(),
+                identity: Box::new(
+                    crate::gameplay::hero_identity::Identity::from_menus(&[]).unwrap(),
+                ),
+                species: "dwarf".to_owned(),
+                gear: Vec::new(),
+                public_design: name.to_owned(),
+                portrait: None,
+                locator: name.to_owned(),
+            },
+            name,
+        );
+        self.seats.insert(seat, entity);
+        self.entries.get_mut(&Target::Hero(entity)).unwrap().status = Status::Ready(key);
+    }
+
+    pub(super) fn hero_path(&self, entity: EntityId) -> Option<String> {
+        if let Some(key) = self.hero(entity) {
+            return Some(key.path());
+        }
+        match &self.entries.get(&Target::Hero(entity))?.work.source {
+            Source::Hero {
+                portrait: Some(asset),
+                ..
+            } => Some(format!("/gameplay/creator-portrait/{}", asset.key.as_str())),
+            _ => None,
+        }
+    }
+
     pub(super) fn hero_at_seat(&self, seat: u8) -> Option<(EntityId, ReferenceStatus)> {
         let entity = *self.seats.get(&seat)?;
         Some((entity, self.status(&Target::Hero(entity))))
@@ -289,6 +330,10 @@ impl References {
 }
 
 #[cfg(test)]
+#[path = "plates/hero_identity_fixture.rs"]
+pub(super) mod hero_identity_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::gameplay::{
@@ -296,6 +341,195 @@ mod tests {
         startup_configuration::ImageryOff,
     };
     use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn custom_seats_use_full_public_design_and_only_their_approved_references() {
+        use hero_identity_fixture::{LOOKS, checkpoint, portrait_asset, portrait_bytes};
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../artifacts/tmp/lanes/HS5/canonical-custom-{}",
+            std::process::id()
+        ));
+        let fixture = DirectionFixture::photographic(&cache);
+        let inner = inner(fixture.imagery.clone(), References::default());
+        inner.observe_checkpoint(&checkpoint(true));
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        assert_eq!(jobs.len(), 2, "one canonical image per accepted seat");
+        let portrait_root = std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("artifacts/tmp/play/imagery-cache"));
+        std::fs::create_dir_all(&portrait_root).unwrap();
+        std::fs::write(
+            portrait_root.join(format!("{}.jpg", portrait_asset().key.as_str())),
+            portrait_bytes(),
+        )
+        .unwrap();
+        for (index, job) in jobs.into_iter().enumerate() {
+            let Job::Canonical(work) = job else {
+                panic!("canonical work")
+            };
+            let Source::Hero {
+                portrait,
+                public_design,
+                locator,
+                ..
+            } = &work.source
+            else {
+                panic!("hero source")
+            };
+            assert_eq!(portrait.is_some(), index == 0);
+            assert!(public_design.contains(if index == 0 { "dragonborn" } else { "tiefling" }));
+            assert!(locator.contains(if index == 0 { "Brakka" } else { "Sigrun" }));
+            let key = inner.render_canonical(&work).await.unwrap();
+            assert_eq!(fixture.image_count(), usize::from(index == 0));
+            let prompt = fixture.prompt();
+            let design: serde_json::Value = serde_json::from_str(public_design).unwrap();
+            let appearance = design["public_appearance"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap();
+            let appearance: serde_json::Value = serde_json::from_str(appearance).unwrap();
+            assert_eq!(appearance["public_visual_details"], LOOKS[index]);
+            assert!(prompt.contains(public_design));
+            assert!(prompt.contains("actual_gear"));
+            assert!(prompt.contains(if index == 0 { "greatsword" } else { "longbow" }));
+            assert!(!prompt.contains("SEALED_STORY_NEVER_IMAGE"));
+            assert!(!prompt.contains("PRIVATE_ORIGIN_NEVER_IMAGE"));
+            assert!(!prompt.contains("SCENERY_NEVER_CANONICAL"));
+            assert!(!prompt.contains("long braided beard with plain iron rings"));
+            inner.finish_canonical(work, Ok(key));
+        }
+        assert_eq!(fixture.calls(), 2);
+        inner.observe_checkpoint(&checkpoint(true));
+        assert!(locked(&inner.state).canonical.take_jobs().is_empty());
+        // Mutable inventory is not a new identity or permission to buy another canonical image.
+        let accepted = checkpoint(true);
+        let mut changed = accepted.state().clone();
+        changed.inventory[0].quantity += 1;
+        inner.observe_checkpoint(&hero_identity_fixture::recheckpoint(
+            accepted.basis(),
+            changed,
+        ));
+        assert!(locked(&inner.state).canonical.take_jobs().is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_quickstart_uses_only_its_written_look_without_a_stock_reference() {
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../artifacts/tmp/lanes/HS5/canonical-legacy-{}",
+            std::process::id()
+        ));
+        let fixture = DirectionFixture::photographic(&cache);
+        let inner = inner(fixture.imagery.clone(), References::default());
+        let checkpoint = hero_identity_fixture::checkpoint(false);
+        let mut saved = checkpoint.state().clone();
+        for character in &mut saved.characters {
+            character
+                .choices
+                .retain(|choice| !choice.offer.as_str().starts_with("identity-"));
+        }
+        let saved = crate::gameplay::model::checkpoint(checkpoint.basis(), saved).unwrap();
+        inner.observe_checkpoint(&saved);
+        let Job::Canonical(work) = locked(&inner.state).canonical.take_jobs().remove(0) else {
+            panic!("canonical hero")
+        };
+        inner.render_canonical(&work).await.unwrap();
+        assert_eq!(fixture.image_count(), 0);
+        assert!(
+            fixture
+                .prompt()
+                .contains("long braided beard with plain iron rings")
+        );
+    }
+
+    #[test]
+    fn accepted_personal_art_reaches_party_sheet_combat_and_live_faces_without_stock_fallbacks() {
+        let inner = inner(
+            Imagery::disabled(ImageryOff::Qualification),
+            References::default(),
+        );
+        let committed = hero_identity_fixture::checkpoint(true);
+        inner.observe_checkpoint(&committed);
+        let party = committed
+            .state()
+            .characters
+            .iter()
+            .enumerate()
+            .map(|(index, hero)| rpc::PartyMemberView {
+                name: ["Brakka", "Sigrun"][index].to_owned(),
+                participant_id: hero.entity.as_bytes().to_vec(),
+                character_ready: true,
+                side: 1,
+                portrait: "portrait-hero-1".to_owned(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let mut journey = rpc::JourneyView {
+            party: party.clone(),
+            own_character: Some(rpc::CharacterSheet {
+                name: "Sigrun".to_owned(),
+                ..Default::default()
+            }),
+            combat: Some(rpc::CombatView {
+                participants: party,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        {
+            let state = locked(&inner.state);
+            apply_hero_faces(&state, Some(&mut journey));
+        }
+        assert_eq!(
+            journey.party[0].portrait,
+            format!("/gameplay/creator-portrait/{}", "4".repeat(64))
+        );
+        assert!(
+            journey.party[1].portrait.is_empty(),
+            "no photo without an approved or ready personal image"
+        );
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        for (index, job) in jobs.into_iter().enumerate() {
+            let Job::Canonical(work) = job else {
+                panic!("hero");
+            };
+            inner.finish_canonical(
+                work,
+                Ok(ImageKey::parse(&["a", "b"][index].repeat(64)).unwrap()),
+            );
+        }
+        apply_hero_faces(&locked(&inner.state), Some(&mut journey));
+        for (index, member) in journey.party.iter().enumerate() {
+            let path = format!("/gameplay/imagery/{}", ["a", "b"][index].repeat(64));
+            assert_eq!(member.portrait, path);
+            assert_eq!(journey.live_faces[index].sprite, path);
+            assert_eq!(journey.live_faces[index].battle_sprite, path);
+            assert_eq!(
+                journey.combat.as_ref().unwrap().participants[index].portrait,
+                path
+            );
+            assert_eq!(
+                df_render::art_contract::player_hero_image(&path),
+                Some(path.as_str())
+            );
+        }
+        assert_eq!(
+            journey.own_character.unwrap().portrait_uri,
+            journey.party[1].portrait
+        );
+        for stock in [
+            "portrait-hero-1",
+            "figure-hero-2",
+            "sprite-hero-3",
+            "assets/ui/generated/figure-hero-1-documentary-photo",
+        ] {
+            assert!(
+                df_render::art_contract::fetch_target(stock).is_none(),
+                "{stock}"
+            );
+        }
+    }
 
     fn model() -> SceneModel {
         SceneModel {
@@ -453,10 +687,13 @@ mod tests {
         room(&mut second, "layout-a");
         assert_ne!(selected_room_binding(&second), first_binding);
         let source = Source::Hero {
-            identity: Identity::from_menus(&[]).unwrap(),
-            visual_dossier: None,
+            name: "Test hero".to_owned(),
+            identity: Box::new(Identity::from_menus(&[]).unwrap()),
             species: "orc".to_owned(),
             gear: vec!["a greatsword"],
+            public_design: String::new(),
+            portrait: None,
+            locator: "Test hero".to_owned(),
         };
         first.select(
             Target::Hero(EntityId::from_bytes(&[1; 16]).unwrap()),
@@ -1000,68 +1237,83 @@ impl Inner {
                 })
                 .collect::<Vec<_>>();
             let identity = ValidatedIdentity::from_canonical_appearance_choices(&choices);
-            let visual_dossier = ValidatedIdentity::accepted_visual_dossier_from_choices(&choices);
-            let species = choices
-                .iter()
-                .find(|(field, _)| field == "species")
-                .map(|(_, value)| value.clone());
-            let archer = choices
-                .iter()
-                .any(|(field, value)| field == "build-package" && value == "archer");
-            let weapon = if archer {
-                "longbow".to_owned()
-            } else {
-                pack::hero_weapon_item()
+            let selected = |field: &str| {
+                choices
+                    .iter()
+                    .find(|(name, _)| name == field)
+                    .map(|(_, value)| value.as_str())
             };
-            let gear = match weapon.as_str() {
-                "greatsword" => Some(vec!["a greatsword"]),
-                "longbow" => Some(vec!["a longbow and quiver of arrows"]),
-                "flail" => Some(vec!["a flail"]),
-                "javelin" => Some(vec!["a javelin"]),
-                _ => None,
-            };
-            let (Ok(identity), Ok(visual_dossier), Some(species), Some(gear)) =
-                (identity, visual_dossier, species, gear)
-            else {
+            let species = selected("species").unwrap_or("");
+            let Ok(identity) = identity else {
                 record(
                     "gameplay.canonical_reference.invalid_identity",
                     &[("reference.entity", digest(entity.as_bytes()))],
                 );
                 continue;
             };
-            let portrait = choices
-                .iter()
-                .find(|(field, _)| field == "portrait")
-                .map(|(_, value)| value.as_str());
-            if visual_dossier.is_some_and(|dossier| {
-                !portrait.is_some_and(|portrait| dossier.agrees_with_portrait(portrait))
-                    || !dossier.agrees_with_identity(&identity)
-            }) {
+            let Ok((appearance, _)) = crate::gameplay::creator_catalog::portrait_context(
+                &identity,
+                species,
+                selected("class").unwrap_or(""),
+                selected("background").unwrap_or(""),
+            ) else {
                 record(
                     "gameplay.canonical_reference.invalid_identity",
                     &[("reference.entity", digest(entity.as_bytes()))],
                 );
                 continue;
-            }
+            };
+            let actual_gear = checkpoint.state().inventory.iter()
+                .filter(|item| item.owner == entity && item.quantity > 0)
+                .map(|item| serde_json::json!({"item": item.origin.entry.as_str(), "quantity": item.quantity}))
+                .collect::<Vec<_>>();
+            let Ok(name) = crate::gameplay::journey::name(checkpoint.state(), entity) else {
+                record(
+                    "gameplay.canonical_reference.invalid_identity",
+                    &[("reference.entity", digest(entity.as_bytes()))],
+                );
+                continue;
+            };
+            let public_design = serde_json::json!({
+                "name": name,
+                "public_appearance": appearance,
+                "actual_gear": actual_gear,
+            })
+            .to_string();
+            let portrait =
+                crate::gameplay::hero_identity::approved_portrait_asset(checkpoint.state(), entity)
+                    .cloned();
             let revision = format!(
-                "{:?}|{:?}|{species}|{gear:?}",
+                "{:?}|{name}|{appearance}|{portrait:?}",
                 checkpoint
                     .state()
                     .entities
                     .iter()
                     .find(|world| world.id == entity)
-                    .map(|world| &world.identity_revision),
-                choices
+                    .map(|world| &world.identity_revision)
             );
+            let public_look = &identity.identity().appearance.public_description;
+            let locator_look = if public_look.is_empty() {
+                appearance.as_str()
+            } else {
+                public_look.as_str()
+            };
+            let locator = format!("{name}, {locator_look}")
+                .chars()
+                .take(300)
+                .collect();
             let target = Target::Hero(entity);
             accepted.insert(target.clone());
             state.canonical.select(
                 target,
                 Source::Hero {
-                    identity,
-                    visual_dossier,
-                    species,
-                    gear,
+                    name,
+                    identity: Box::new(identity),
+                    species: species.to_owned(),
+                    gear: Vec::new(),
+                    public_design,
+                    portrait,
+                    locator,
                 },
                 &revision,
             );
@@ -1080,9 +1332,12 @@ impl Inner {
         let mut references = Vec::new();
         match &work.source {
             Source::Hero {
-                visual_dossier: Some(dossier),
+                portrait: Some(asset),
                 ..
-            } => references.push(self.load(dossier.figure_reference.to_owned()).await?),
+            } => {
+                references
+                    .push(crate::gameplay::creator_portraits::approved_reference(asset).await?);
+            }
             Source::Npc {
                 identity_photo,
                 identity_figure_photo,
@@ -1108,9 +1363,11 @@ impl Inner {
         let (kind, prompt, output) = match &work.source {
             Source::Hero {
                 identity,
-                visual_dossier,
                 species,
                 gear,
+                public_design,
+                portrait,
+                ..
             } => (
                 ImageKind::CanonicalCharacter,
                 imagery::canonical_character(
@@ -1120,7 +1377,9 @@ impl Inner {
                         species,
                         held_gear: gear,
                     },
-                    visual_dossier.map(|dossier| dossier.description),
+                    None,
+                    public_design,
+                    portrait.is_some(),
                     &work.binding,
                 )?,
                 OutputSpec::CUTOUT,
@@ -1279,6 +1538,36 @@ impl Inner {
             .canonical
             .hero_at_seat(seat)
             .map_or(ReferenceStatus::Missing, |(_, status)| status)
+    }
+
+    pub(super) fn canonical_hero_name(&self, seat: u8) -> Option<String> {
+        let state = locked(&self.state);
+        let (entity, _) = state.canonical.hero_at_seat(seat)?;
+        match &state
+            .canonical
+            .entries
+            .get(&Target::Hero(entity))?
+            .work
+            .source
+        {
+            Source::Hero { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn canonical_hero_locator(&self, seat: u8) -> Option<String> {
+        let state = locked(&self.state);
+        let (entity, _) = state.canonical.hero_at_seat(seat)?;
+        match &state
+            .canonical
+            .entries
+            .get(&Target::Hero(entity))?
+            .work
+            .source
+        {
+            Source::Hero { locator, .. } => Some(locator.clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn canonical_cast_binding<'a>(

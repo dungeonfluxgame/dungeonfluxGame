@@ -2376,7 +2376,13 @@ impl TvStage {
         for hero in &card.heroes {
             let item = node(document, &shown.heroes, "li", "tv-bigcard-hero", "")?;
             let crest = node(document, &item, "span", "tv-bigcard-crest", "")?;
-            crest.set_attribute("style", &format!("background-image:url({})", hero.portrait))?;
+            let personal = df_render::art_contract::player_hero_image(&hero.portrait);
+            crest.set_attribute(
+                "style",
+                &personal
+                    .map(|url| format!("background-image:url({url})"))
+                    .unwrap_or_default(),
+            )?;
             node(document, &item, "b", "tv-bigcard-name", &hero.name)?;
             node(document, &item, "span", "tv-bigcard-role", &hero.role)?;
         }
@@ -2806,6 +2812,23 @@ impl TvStage {
         &self.dock
     }
 
+    pub(super) fn update_party_images(&self, journey: &rpc::JourneyView) -> Result<(), JsValue> {
+        for (index, card) in self.cards.iter().enumerate() {
+            let image = journey
+                .party
+                .get(index)
+                .filter(|member| member.character_ready)
+                .and_then(|member| df_render::art_contract::player_hero_image(&member.portrait));
+            card.portrait.set_attribute(
+                "style",
+                &image
+                    .map(|url| format!("background-image:url({url})"))
+                    .unwrap_or_default(),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn update(&self, model: &TvModel) -> Result<(), JsValue> {
         let lobby = model.mode == TvMode::Lobby;
         if self.root.get_attribute("data-scene-key").as_deref() != Some(&model.scene_key) {
@@ -2974,17 +2997,7 @@ impl TvStage {
                     } else {
                         "?"
                     })));
-                    card.portrait.set_attribute(
-                        "style",
-                        &if member.ready {
-                            format!(
-                                "background-image:url({GENERATED}/figure-hero-{}-documentary-photo)",
-                                index + 1
-                            )
-                        } else {
-                            String::new()
-                        },
-                    )?;
+                    card.portrait.set_attribute("style", "")?;
                 }
                 None => {
                     card.root.set_attribute("data-empty", "")?;

@@ -676,6 +676,9 @@ Final qualification: after the shared IPv6 correction, a real creator UI request
 - **REF-049 — Unfinished creator drafts live in the phone's browser.** An unfinished draft (selections, free text, scenery and the latest portrait reference) is kept in that phone browser's own storage, so a reload on the same phone restores it. It does not follow the player to another phone or browser. Accepting the hero clears the draft.
   - Date: 2026-10-23. Rationale: the user selected the phone browser over server-side per-seat drafts.
 
+- **REF-058 — Player heroes are always the character the player created.** Everywhere a player hero is shown or described (TV scene plates, canonical hero images, health variants, party and turn portraits, phone sheets, battlefield figures and kill shots), it comes from that player's accepted character sheet: name, look controls, public description, species/class/background and gear, with the player's approved creator portrait as the image reference when one exists and otherwise an image generated from that description. Stock quick-start characters (stock portraits, figure photos, sprites and locator phrases) are never used for a player hero, and the stock "Hero appearance" choice is removed from character creation. Old saves that hold a stock portrait choice still load; their display uses their own look, or the stock entry's written description as words only.
+  - Date: 2026-10-24. Rationale: the owner rejected stock characters on the display and asked for the player-created character sheets (live play showed the plates using stock art numbers and dropping heroes whose look differed from the stock photo).
+
 ## Character storage: per campaign and long term — design, 2026-10-23
 
 Governing decisions: REF-021, REF-026, REF-031 and REF-046–049. Governing documents: [Storage architecture](storage-architecture.md), [Runtime reliability](runtime-reliability.md), [RPC API](rpc-api.md), [Client architecture](client-architecture.md). This section is the implementation design for those decisions; items marked *reading* are the coordinator's interpretation, open to correction.
@@ -730,7 +733,7 @@ Requested stale compiler-cache cleanup was blocked before execution by automatic
 
 Append confirmed decisions using this format; keep unresolved alternatives in the discussion section.
 
-- ID: REF-058 (increment for each decision)
+- ID: REF-059 (increment for each decision)
 - Date: YYYY-MM-DD
 - Decision: The agreed behavior or requirement.
 - Rationale: Why it was selected.

@@ -2792,12 +2792,9 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
     render_log(client, &journey.party)
 }
 
-/// The picture behind a hero's table-log chip, by the art contract: `portrait-hero-N` answers the
-/// reviewed `figure-hero-N-documentary-photo`, the art that exists. A portrait id with no reviewed
-/// photograph has no URL, so the chip stays plain instead of asking for a missing file.
+/// Table chips only display the server-published image for this player.
 fn hero_chip_url(portrait_id: &str) -> Option<String> {
-    df_render::art_contract::fetch_target(portrait_id)
-        .map(|target| format!("{}/{target}", live_tv::GENERATED))
+    df_render::art_contract::player_hero_image(portrait_id).map(str::to_owned)
 }
 
 /// The compact "table log": the latest lines with their speaker above the phone's choices.
@@ -2843,7 +2840,10 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
         let chip = node(&document, &row, "span", "table-chip", "")?;
         match line.role {
             TableRole::Hero(index) if party.get(index).is_some() => {
-                if let Some(url) = hero_chip_url(&format!("portrait-hero-{}", index + 1)) {
+                if let Some(url) = party
+                    .get(index)
+                    .and_then(|member| hero_chip_url(&member.portrait))
+                {
                     chip.set_attribute("style", &format!("background-image:url({url})"))?;
                 }
             }
@@ -2881,9 +2881,11 @@ mod tests {
     #[test]
     fn hero_chip_never_names_the_missing_portrait_file() {
         let url = super::hero_chip_url("portrait-hero-1");
+        assert!(url.is_none());
+        let personal = format!("/gameplay/imagery/{}", "a".repeat(64));
         assert_eq!(
-            url.as_deref(),
-            Some("/assets/ui/generated/figure-hero-1-documentary-photo")
+            super::hero_chip_url(&personal).as_deref(),
+            Some(personal.as_str())
         );
         assert_ne!(url.as_deref(), Some("/assets/ui/generated/portrait-hero-1"));
     }

@@ -373,7 +373,7 @@ where
                 rules: &rules,
                 content: &content,
                 resources: &resources,
-                assets: &[],
+                assets: &crate::gameplay::model::creator_portrait_assets(current.state())?,
             },
             requests: request.as_slice(),
             entries: &entries,
@@ -469,7 +469,7 @@ pub(super) fn propose_on_defend(
         rules: &[],
         content: &content,
         resources: &resources,
-        assets: &[],
+        assets: &crate::gameplay::model::creator_portrait_assets(current.state())?,
     };
     let policy = ReactionPolicy::new(
         current,

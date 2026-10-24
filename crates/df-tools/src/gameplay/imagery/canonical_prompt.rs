@@ -54,13 +54,25 @@ pub(in crate::gameplay) fn canonical_character(
     rating: ContentRating,
     hero: HeroVisualIdentity<'_>,
     accepted_dossier: Option<&'static str>,
+    public_design: &str,
+    approved_portrait: bool,
     binding: &str,
 ) -> Result<AssembledPrompt, ImageFailure> {
-    let mut prompt = hero_portrait(rating, hero)
-        .map_err(|_| ImageFailure::InvalidRequest)?
-        .with_canonical_binding(binding);
+    let mut prompt = if public_design.is_empty() {
+        hero_portrait(rating, hero)
+            .map_err(|_| ImageFailure::InvalidRequest)?
+            .with_canonical_binding(binding)
+    } else {
+        assembled(rating, "Photograph exactly one adult fantasy hero, alone, full-body from head to boots in a clear three-quarter view against a plain transparent cutout background. Face, hair, body, clothing and actual gear must match the accepted public design below. The actual_gear list is authoritative for equipment; appearance text and reference scenery grant no extra gear. No writing, labels, panels or additional people.".to_owned(), binding)?
+    };
     if let Some(dossier) = accepted_dossier {
         prompt = prompt.with_accepted_appearance_dossier(dossier);
+    }
+    if !public_design.is_empty() {
+        prompt = prompt.with_public_hero_design(public_design, approved_portrait);
+    }
+    if prompt.character_count() > df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS {
+        return Err(ImageFailure::InvalidRequest);
     }
     Ok(prompt)
 }
@@ -216,6 +228,8 @@ mod tests {
                 held_gear: &["a longbow and quiver of arrows"],
             },
             None,
+            "",
+            false,
             "accepted-run-entity-revision",
         )
         .unwrap();
@@ -256,6 +270,8 @@ mod tests {
                 held_gear: &["a greatsword"],
             },
             Some(first.description),
+            "",
+            false,
             "hero-one-binding",
         )
         .unwrap();
@@ -267,6 +283,8 @@ mod tests {
                 held_gear: &["a greatsword"],
             },
             Some(second.description),
+            "",
+            false,
             "hero-two-binding",
         )
         .unwrap();

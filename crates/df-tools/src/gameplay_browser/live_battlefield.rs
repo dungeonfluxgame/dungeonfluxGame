@@ -2144,7 +2144,9 @@ fn participant_live_art(
         live_faces
             .iter()
             .find(|face| face.name == member.name)
-            .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
+            .and_then(|face| {
+                df_render::art_contract::player_hero_image(&face.battle_sprite).map(str::to_owned)
+            })
     } else {
         live_faces
             .iter()
@@ -2181,31 +2183,28 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             } else {
                 index < party
             };
-            // Seats wear the hero art in this order: the dwarf fighter, then the archer (the
-            // owner asked for a female long-range player in the party), then the second fighter.
-            let hero_art = [1, 3, 2][index % 3];
             let creature = Some(member.creature_id.as_str())
                 .filter(|id| !id.is_empty())
                 .unwrap_or("bandit");
-            let portrait = if authoritative && !member.portrait.is_empty() {
+            let portrait = if hero {
+                df_render::art_contract::player_hero_image(&member.portrait)
+                    .unwrap_or("")
+                    .to_owned()
+            } else if authoritative && !member.portrait.is_empty() {
                 member.portrait.clone()
-            } else if hero {
-                format!("portrait-hero-{hero_art}")
             } else {
                 // The preview path has no authoritative portrait: the creature id the server
                 // sent names the family, the bandit when it sent none.
                 format!("portrait-ant-{creature}")
             };
-            let figure = if authoritative && !portrait.is_empty() {
-                portrait.replacen("portrait-", "figure-", 1)
-            } else if hero {
-                format!("figure-hero-{hero_art}")
+            let figure = if hero {
+                portrait.clone()
             } else {
                 portrait.replacen("portrait-", "figure-", 1)
             };
             // A hero wears their own picture: the live battle face the server publishes (their
-            // canonical cut-out, or its health variant when hurt); the stock seat art only until
-            // one exists (B-08). Scene fighters likewise receive their own canonical picture on
+            // canonical cut-out, or its health variant when hurt); otherwise a neutral token.
+            // Scene fighters likewise receive their own canonical picture on
             // every view, including art that became ready after the stage mounted (B-17).
             let live_face =
                 participant_live_art(member, hero, view.scene, &view.journey.live_faces);

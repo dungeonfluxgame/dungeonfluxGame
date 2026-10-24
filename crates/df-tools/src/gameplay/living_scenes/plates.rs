@@ -49,6 +49,8 @@ use super::{
 };
 
 mod direct;
+#[cfg(test)]
+mod scenery_selection;
 mod state_images;
 
 /// Plates kept in the book; the oldest not in use are forgotten first.
@@ -2564,7 +2566,7 @@ impl Shared {
     /// Scenes with an authored room cannot substitute a static archetype for a missing identity.
     async fn canonical_hero_identity(
         &self,
-        scene: &PlateScene,
+        _scene: &PlateScene,
         seat: u8,
     ) -> Result<Option<(String, ReferenceImage)>, ImageFailure> {
         match self.inner.canonical_hero_status(seat) {
@@ -2579,10 +2581,7 @@ impl Shared {
             }
             super::canonical::ReferenceStatus::Pending => Err(ImageFailure::Interrupted),
             super::canonical::ReferenceStatus::Failed(failure) => Err(failure),
-            super::canonical::ReferenceStatus::Missing if scene.requires_canonical_identity() => {
-                Err(ImageFailure::InvalidRequest)
-            }
-            super::canonical::ReferenceStatus::Missing => Ok(None),
+            super::canonical::ReferenceStatus::Missing => Err(ImageFailure::InvalidRequest),
         }
     }
 
@@ -2600,18 +2599,16 @@ impl Shared {
         let mut cells: Vec<(String, FluxPerson)> = Vec::new();
         for (index, art) in heroes.iter().enumerate() {
             if let Some((id, figure)) = self.canonical_hero_identity(scene, *art).await? {
-                cells.push((id.clone(), hero_person(scene, index)));
+                let mut person = hero_person(scene, index);
+                person.name = self
+                    .inner
+                    .canonical_hero_name(*art)
+                    .ok_or(ImageFailure::InvalidRequest)?;
+                person.appearance = self.inner.canonical_hero_locator(*art);
+                cells.push((id.clone(), person));
                 cast.push(CastIdentity { id, figure });
             } else {
-                let (figure, _) = self.speaker_art(&format!("sprite-hero-{art}")).await;
-                let Some(figure) = figure else {
-                    return Err(ImageFailure::InvalidRequest);
-                };
-                cells.push((format!("hero:{art}"), hero_person(scene, index)));
-                cast.push(CastIdentity {
-                    id: format!("hero:{art}"),
-                    figure,
-                });
+                return Err(ImageFailure::InvalidRequest);
             }
         }
         for IdentityReference {
@@ -2828,6 +2825,20 @@ impl Shared {
         } else {
             prompt
         };
+        let public_heroes = people
+            .iter()
+            .enumerate()
+            .filter_map(|(index, person)| {
+                Some(
+                    serde_json::json!({"photograph": index + 1, "name": person.name,
+                "public_look": person.appearance.as_ref()?}),
+                )
+            })
+            .collect::<Vec<_>>();
+        let legend = format!(
+            "{legend}. Public hero locators (quoted data): {}. Party heroes are seen from behind, facing into the scene.",
+            serde_json::to_string(&public_heroes).map_err(|_| ImageFailure::InvalidRequest)?
+        );
         let prompt = prompt.with_cast_sheet(2, &legend);
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(direction),
@@ -3016,7 +3027,7 @@ impl Shared {
         if let Some(stored) = self.stored_placement(key, actors, actor_references).await {
             return stored;
         }
-        let (focus_id, targets) = locator_targets(spec, speaker, actors, focus_actor_id);
+        let (focus_id, targets) = self.hero_locator_targets(spec, speaker, actors, focus_actor_id);
         let started = tokio::time::Instant::now();
         let mut located = Vec::new();
         let batches = referenced_locator_batches(&targets, actors, actor_references);
@@ -3215,14 +3226,31 @@ impl Shared {
         for art in heroes.iter().take(16) {
             let reference = match self.canonical_hero_identity(scene, *art).await? {
                 Some((_, reference)) => reference,
-                None => {
-                    let (figure, face) = self.speaker_art(&format!("sprite-hero-{art}")).await;
-                    face.or(figure).ok_or(ImageFailure::InvalidRequest)?
-                }
+                None => return Err(ImageFailure::InvalidRequest),
             };
             references.insert(format!("hero-{art}"), reference);
         }
         Ok(references)
+    }
+
+    fn hero_locator_targets(
+        &self,
+        spec: &ShotSpec,
+        speaker: &shot::SpeakerShot,
+        actors: &[(String, String)],
+        focus_actor_id: Option<&str>,
+    ) -> (String, Vec<(String, String)>) {
+        let (focus, mut targets) = locator_targets(spec, speaker, actors, focus_actor_id);
+        for hero in &spec.heroes {
+            if let Some(locator) = self.inner.canonical_hero_locator(hero.art)
+                && let Some((_, description)) = targets
+                    .iter_mut()
+                    .find(|(id, _)| *id == format!("hero-{}", hero.art))
+            {
+                *description = locator;
+            }
+        }
+        (focus, targets)
     }
 
     /// Every edited image owns its measured heads; an earlier photograph's boxes are never reused.
@@ -3575,7 +3603,26 @@ impl Inner {
         let state = locked(&self.state);
         heroes
             .iter()
-            .filter_map(|(art, name)| Some((*art, state.hero_faces.get(name)?.stage.clone()?)))
+            .filter_map(|(art, name)| {
+                if let Some((entity, _)) = state.canonical.hero_at_seat(*art) {
+                    let canonical = state.canonical.hero(entity)?;
+                    let tier = state
+                        .stage
+                        .as_ref()?
+                        .heroes
+                        .iter()
+                        .find(|hero| hero.index + 1 == usize::from(*art))
+                        .and_then(|hero| super::tier_of(hero.vitals))?;
+                    return Some((
+                        *art,
+                        state
+                            .book
+                            .nearest(&canonical.path(), tier)
+                            .map_or(canonical, |(_, key)| key.clone()),
+                    ));
+                }
+                Some((*art, state.hero_faces.get(name)?.stage.clone()?))
+            })
             .collect()
     }
 

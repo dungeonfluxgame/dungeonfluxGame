@@ -132,12 +132,7 @@ pub fn tremor() -> Option<Reaction> {
 /// A published picture is only ever a server-made image: `/gameplay/imagery/` and a 64-digit
 /// lowercase hexadecimal key.
 pub fn valid_variant(path: &str) -> bool {
-    path.strip_prefix("/gameplay/imagery/").is_some_and(|key| {
-        key.len() == 64
-            && key
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    })
+    crate::art_contract::player_hero_image(path).is_some()
 }
 
 /// Publishes the health variants the server has made, by combatant name (replacing the previous

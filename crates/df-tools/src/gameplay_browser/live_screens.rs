@@ -909,13 +909,30 @@ pub(super) fn render(
 
 /// The cast of the view being drawn, from the one function that derives it.
 pub(super) fn current_cast(client: &Rc<RefCell<Client>>) -> Vec<crate::presentation::StageActor> {
-    client
-        .borrow()
-        .views
-        .as_ref()
-        .and_then(|views| views.current())
-        .map(crate::presentation::scene_cast)
-        .unwrap_or_default()
+    let state = client.borrow();
+    let Some(message) = state.views.as_ref().and_then(|views| views.current()) else {
+        return Vec::new();
+    };
+    let mut cast = crate::presentation::scene_cast(message);
+    let journey = match &message.audience {
+        Some(rpc::view_message::Audience::Display(view)) => view.journey.as_ref(),
+        Some(rpc::view_message::Audience::Player(view)) => view.journey.as_ref(),
+        None => None,
+    };
+    for actor in &mut cast {
+        if let crate::presentation::ActorSlot::Hero(index) = actor.slot {
+            let personal = journey
+                .and_then(|journey| journey.party.get(index))
+                .and_then(|member| df_render::art_contract::player_hero_image(&member.portrait))
+                .unwrap_or("");
+            actor.sprite = personal.to_owned();
+            actor.portrait = personal.to_owned();
+            if actor.live_sprite.is_none() && !personal.is_empty() {
+                actor.live_sprite = Some(personal.to_owned());
+            }
+        }
+    }
+    cast
 }
 
 fn render_display(
@@ -925,6 +942,18 @@ fn render_display(
 ) -> Result<(), JsValue> {
     let mut model = tv_model(input)?;
     model.cast = current_cast(client);
+    if let Some(card) = &mut model.end {
+        for hero in &mut card.heroes {
+            hero.portrait = input
+                .journey
+                .party
+                .iter()
+                .find(|member| member.name == hero.name)
+                .and_then(|member| df_render::art_contract::player_hero_image(&member.portrait))
+                .unwrap_or("")
+                .to_owned();
+        }
+    }
     let (graph, baked_revision, check, encounter_xp) = {
         let state = client.borrow();
         state
@@ -960,6 +989,7 @@ fn render_display(
             return Err(JsValue::from_str("display stage absent"));
         };
         stage.update(&model)?;
+        stage.update_party_images(input.journey)?;
         let generation = state.generation.to_string();
         if stage
             .root()

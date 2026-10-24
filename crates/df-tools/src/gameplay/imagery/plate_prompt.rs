@@ -562,8 +562,7 @@ const FLUX_PLACE_IMAGE: &str = "Image 1 is the place photograph: keep its archit
 const FLUX_SHEET_IMAGE: &str = "Image 2 shows separate identity photographs, one person per photograph in the order below. Match faces and costumes only; never copy their layout, grid or panels.";
 const ONE_FRAME_EDIT: &str = "Keep it ONE single continuous photographic camera frame.";
 const FLUX_KEEP_FACE: &str = "keep this exact face and clothing.";
-const FLUX_ACTION: &str =
-    "Only the listed people and things exist. The people face the speaker, not the camera.";
+const FLUX_ACTION: &str = "Only the listed people and things exist. The people face the speaker, not the camera. Party heroes are seen from behind.";
 const FLUX_FACE_SHOWS: &str = "The speaker's face shows";
 const FLUX_LOOK: &str = "Photographic still from a live-action fantasy TV drama, shot on a real camera with a prime lens: real adult performers, real skin pores and woven fabric texture, practical costume, real dressed location, natural practical light, fine film grain. ONE single continuous camera frame only. No grid, panels, numbers, text, signage, letters or glamour.";
 

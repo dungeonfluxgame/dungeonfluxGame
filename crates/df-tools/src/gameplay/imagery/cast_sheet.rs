@@ -176,15 +176,19 @@ mod tests {
         assert!(cast_sheet(vec![identity("hero:1", 10), identity("hero:1", 20)]).is_err());
     }
     #[test]
-    fn reviewed_harbor_photographs_supply_every_hero_and_npc_identity() {
+    fn reviewed_harbor_photographs_supply_npc_identities_and_refuse_stock_heroes() {
         let directory =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated");
         let store = super::super::ReferenceStore::new(directory);
+        // REF-058: player heroes come from their own character sheets, never stock figures.
+        for stock in ["figure-hero-1", "figure-hero-2", "figure-hero-3"] {
+            assert!(
+                store.load(stock).is_err(),
+                "{stock} must not be a hero reference"
+            );
+        }
         let mut cast = Vec::new();
         for (id, source) in [
-            ("hero:1", "figure-hero-1"),
-            ("hero:2", "figure-hero-2"),
-            ("hero:3", "figure-hero-3"),
             ("npc:courier", "sprite-courier"),
             ("npc:bandit", "sprite-bandit"),
         ] {
@@ -194,8 +198,8 @@ mod tests {
             });
         }
         let (sheet, legend) = cast_sheet(cast).unwrap();
-        assert!(legend.contains("slot 5 = npc:courier"));
-        assert!(legend.contains("hero:2"));
+        assert!(legend.contains("npc:courier"));
+        assert!(legend.contains("npc:bandit"));
         let output = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/tmp/plate-continuity");
         std::fs::create_dir_all(&output).unwrap();

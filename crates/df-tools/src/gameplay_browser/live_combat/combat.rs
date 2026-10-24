@@ -418,7 +418,9 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
             active = Some(key.clone());
         }
         // Participants are the party in join order followed by the opposing creature.
-        let portrait = if !member.portrait.is_empty() {
+        let portrait = if member.side == 1 || index < view.journey.party.len() {
+            super::sheet::player_portrait_token(&member.name)
+        } else if !member.portrait.is_empty() {
             member
                 .portrait
                 .strip_prefix("portrait-")
@@ -427,8 +429,7 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
         } else {
             match index.checked_sub(view.journey.party.len()) {
                 Some(_) => "bandit",
-                None if index == 0 => "hero-1",
-                None => "hero-2",
+                None => "",
             }
             .to_owned()
         };

@@ -210,6 +210,7 @@ impl Fixture {
                     content: model::contents().unwrap(),
                     resources: journey::resources_for(current.state()).unwrap(),
                     resource_resolver: None,
+                    asset_resolver: None,
                     assets: Vec::new(),
                     limits: model::limits(),
                 },

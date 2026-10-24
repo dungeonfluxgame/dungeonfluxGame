@@ -98,13 +98,7 @@ pub const REVIEWED_SUFFIX: &str = "-documentary-photo";
 
 /// Every reviewed photographic library asset, by file stem. Each is listed in
 /// `assets/ui/generated/documentary-photo-v2.assets.json` and exists on disk (tests check both).
-pub const REVIEWED_PHOTOS: [&str; 16] = [
-    "figure-hero-1-documentary-photo",
-    "figure-hero-2-documentary-photo",
-    "figure-hero-3-documentary-photo",
-    "sprite-hero-1-documentary-photo",
-    "sprite-hero-2-documentary-photo",
-    "sprite-hero-3-documentary-photo",
+pub const REVIEWED_PHOTOS: [&str; 10] = [
     "sprite-courier-documentary-photo",
     "sprite-bandit-documentary-photo",
     "scene-salt-quay-arrival-documentary-photo",
@@ -181,21 +175,6 @@ pub fn identity_photo(key: &str) -> Option<&'static str> {
         .take(3)
         .find_map(|prefix| key.strip_prefix(prefix))?;
     let (figure, sprite, portrait) = match name {
-        "hero-1" => (
-            "figure-hero-1-documentary-photo",
-            "sprite-hero-1-documentary-photo",
-            "figure-hero-1-documentary-photo",
-        ),
-        "hero-2" => (
-            "figure-hero-2-documentary-photo",
-            "sprite-hero-2-documentary-photo",
-            "figure-hero-2-documentary-photo",
-        ),
-        "hero-3" => (
-            "figure-hero-3-documentary-photo",
-            "sprite-hero-3-documentary-photo",
-            "figure-hero-3-documentary-photo",
-        ),
         "courier" => (
             "sprite-courier-documentary-photo",
             "sprite-courier-documentary-photo",
@@ -233,8 +212,8 @@ pub fn identity_photo(key: &str) -> Option<&'static str> {
 }
 
 /// The reviewed full-body photograph of a reference, when one exists: the reviewed `figure-`
-/// photograph that goes with the picture the reference resolves to. Heroes have one; a shop
-/// character has only the cut-out.
+/// photograph that goes with a non-player library reference, when one exists.
+/// Player heroes require their own accepted image.
 pub fn figure_photo(reference: &str) -> Option<&'static str> {
     let photo = match classify(reference) {
         Reference::Reviewed(photo) => photo,
@@ -262,10 +241,11 @@ pub fn is_identity_key(stem: &str) -> bool {
         return true;
     }
     let stem = stem.strip_suffix("-full").unwrap_or(stem);
-    DEPICTION_PREFIXES
-        .iter()
-        .take(3)
-        .any(|prefix| stem.strip_prefix(prefix).is_some_and(creature_family))
+    DEPICTION_PREFIXES.iter().take(3).any(|prefix| {
+        stem.strip_prefix(prefix).is_some_and(|name| {
+            matches!(name, "hero-1" | "hero-2" | "hero-3") || creature_family(name)
+        })
+    })
 }
 
 fn creature_family(name: &str) -> bool {
@@ -315,6 +295,19 @@ impl Token {
     }
 }
 
+/// A server-published personal hero image. Seat numbers and library art are never identities.
+/// Creator bytes are checked by their serving boundary; canonical bytes by the imagery cache.
+pub fn player_hero_image(reference: &str) -> Option<&str> {
+    let key = reference
+        .strip_prefix("/gameplay/imagery/")
+        .or_else(|| reference.strip_prefix("/gameplay/creator-portrait/"))?;
+    (key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(reference)
+}
+
 /// What a reference string is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Reference<'a> {
@@ -344,7 +337,7 @@ pub fn classify(reference: &str) -> Reference<'_> {
     if reference.is_empty() {
         return Reference::Empty;
     }
-    if reference.starts_with(LIVE_IMAGERY_PREFIX) {
+    if player_hero_image(reference).is_some() || reference.starts_with(LIVE_IMAGERY_PREFIX) {
         return Reference::Live(reference);
     }
     let stem = stem_of(reference);
@@ -602,6 +595,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn player_images_are_personal_server_paths_and_never_stock_characters() {
+        for prefix in ["/gameplay/imagery/", "/gameplay/creator-portrait/"] {
+            let path = format!("{prefix}{}", "a".repeat(64));
+            assert_eq!(player_hero_image(&path), Some(path.as_str()));
+            assert_eq!(fetch_target(&path), Some(path.as_str()));
+        }
+        for rejected in [
+            "portrait-hero-1",
+            "figure-hero-2",
+            "sprite-hero-3-documentary-photo",
+            "/gameplay/imagery/short",
+            "/gameplay/creator-portrait/../../secret",
+            "https://camera.invalid/raw.jpg",
+        ] {
+            assert!(player_hero_image(rejected).is_none());
+        }
+        for seat in [1, 2, 3] {
+            assert!(identity_photo(&format!("portrait-hero-{seat}")).is_none());
+            assert!(fetch_target(&format!("sprite-hero-{seat}-documentary-photo")).is_none());
+        }
+    }
+
+    #[test]
     fn chrome_is_not_a_depiction_and_depictions_are_by_prefix() {
         for stem in [
             "icon-sword",
@@ -628,7 +644,7 @@ mod tests {
     #[test]
     fn only_chrome_and_reviewed_photographs_are_servable() {
         assert!(is_servable_stem("icon-attack"));
-        assert!(is_servable_stem("figure-hero-1-documentary-photo"));
+        assert!(!is_servable_stem("figure-hero-1-documentary-photo"));
         for painted in [
             "portrait-hero-1",
             "figure-hero-1",
@@ -645,13 +661,10 @@ mod tests {
 
     #[test]
     fn identity_keys_map_to_reviewed_photographs_or_to_nothing() {
-        assert_eq!(
-            identity_photo("portrait-hero-2"),
-            Some("figure-hero-2-documentary-photo")
-        );
+        assert_eq!(identity_photo("portrait-hero-2"), None);
         assert_eq!(
             identity_photo("/assets/ui/generated/sprite-hero-3.webp"),
-            Some("sprite-hero-3-documentary-photo")
+            None
         );
         assert_eq!(
             identity_photo("portrait-patron-merchant-full"),
@@ -670,15 +683,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_heroes_have_a_reviewed_full_body_photograph() {
+    fn stock_hero_figures_never_resolve_to_a_photograph() {
         assert_eq!(
             figure_photo("assets/ui/generated/sprite-hero-2-documentary-photo"),
-            Some("figure-hero-2-documentary-photo")
+            None
         );
-        assert_eq!(
-            figure_photo("sprite-hero-3"),
-            Some("figure-hero-3-documentary-photo")
-        );
+        assert_eq!(figure_photo("sprite-hero-3"), None);
         for none in [
             "sprite-courier",
             "sprite-shop-soldier-documentary-photo",
@@ -719,7 +729,7 @@ mod tests {
             classify("portrait-hero-1"),
             Reference::Identity {
                 key: "portrait-hero-1",
-                photo: Some("figure-hero-1-documentary-photo")
+                photo: None
             }
         );
     }
@@ -765,14 +775,8 @@ mod tests {
             Some("/gameplay/imagery/key")
         );
         assert_eq!(fetch_target("icon-attack"), Some("icon-attack"));
-        assert_eq!(
-            fetch_target("sprite-hero-1-documentary-photo"),
-            Some("sprite-hero-1-documentary-photo")
-        );
-        assert_eq!(
-            fetch_target("portrait-hero-1"),
-            Some("figure-hero-1-documentary-photo")
-        );
+        assert_eq!(fetch_target("sprite-hero-1-documentary-photo"), None);
+        assert_eq!(fetch_target("portrait-hero-1"), None);
         for refused in [
             "",
             "live-room-photo",
@@ -792,7 +796,6 @@ mod tests {
             hero.walk().collect::<Vec<_>>(),
             vec![
                 Step::LiveCached(LiveSource::CanonicalCharacter),
-                Step::Reviewed("figure-hero-1-documentary-photo"),
                 Step::RequestLive(LiveSource::CanonicalCharacter),
                 Step::Neutral(Neutral::Silhouette),
             ]
@@ -882,7 +885,7 @@ mod tests {
         );
         assert_eq!(
             plan(Role::GenerationReference, "figure-hero-2").reviewed,
-            Some("figure-hero-2-documentary-photo")
+            None
         );
     }
 

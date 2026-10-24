@@ -1131,12 +1131,7 @@ pub(super) fn character_sheet(
         } else {
             None
         },
-        portrait_uri: character
-            .choices
-            .iter()
-            .find(|choice| choice.offer.as_str() == "identity-portrait:key")
-            .map(|choice| format!("/gameplay/creator-portrait/{}", choice.selected.as_str()))
-            .unwrap_or_default(),
+        portrait_uri: super::hero_identity::approved_portrait_uri(state, who).unwrap_or_default(),
         portrait_draft_revision: character
             .choices
             .iter()
@@ -1933,7 +1928,7 @@ pub(super) fn stage_join(
             rules: &[model::rule()?, rule()?],
             content: &model::contents()?,
             resources: &resources_for(current.state())?,
-            assets: &[],
+            assets: &model::creator_portrait_assets(current.state())?,
         },
         df_model::commands::CommandLimits {
             maximum_records: if df_persistence::local_demo_scope::input_retained_bytes_max(input)
@@ -2572,7 +2567,7 @@ fn stage_authored_threads(
                 rules: &[model::rule()?, source_rule],
                 content: &model::contents()?,
                 resources: &resources_for(candidate.state())?,
-                assets: &[],
+                assets: &model::creator_portrait_assets(candidate.state())?,
             },
             checkpoint_limits: model::limits(),
             selections: &selections,
@@ -3500,7 +3495,7 @@ fn start_combat(
                 rules: &[model::rule()?, source.clone()],
                 content: &model::contents()?,
                 resources: &resources_for(current.state())?,
-                assets: &[],
+                assets: &model::creator_portrait_assets(current.state())?,
             },
             limits: df_engine::command_entry::CommandEntryLimits {
                 command: df_model::commands::CommandLimits {
@@ -4046,7 +4041,7 @@ fn stage_using(
             rules: &[model::rule()?, rule()?],
             content: &model::contents()?,
             resources: &resources_for(current.state())?,
-            assets: &[],
+            assets: &model::creator_portrait_assets(current.state())?,
         },
         df_model::commands::CommandLimits {
             maximum_records: if df_persistence::local_demo_scope::input_retained_bytes_max(input)
@@ -4477,7 +4472,14 @@ fn stage_using(
         phase: phase_from_state(current, &state, &selected.id)
             .inspect_err(|_| refusal_detail::note("short-rest-phase"))? as i32,
     };
-    let semantic = Some(hex(&result.encode_to_vec()));
+    let encoded = hex(&result.encode_to_vec());
+    // Admission counts retained capacity, not text length. Hex collection can retain an
+    // 8 KiB buffer for a 4 KiB Archer sheet; creation must not keep that allocation slack.
+    let semantic = Some(if kind == rpc::GameplayActionKind::CreateCharacter {
+        encoded.into_boxed_str().into_string()
+    } else {
+        encoded
+    });
     // The recorded receipt is the largest text a checkpoint holds; refuse here,
     // by name, rather than as an opaque checkpoint failure in `finish`.
     if semantic
@@ -4842,7 +4844,7 @@ pub(super) fn stage_with_supplier(
                 rules: &[model::rule()?, source.clone()],
                 content: &model::contents()?,
                 resources: &resources_for(prepared.state())?,
-                assets: &[],
+                assets: &model::creator_portrait_assets(prepared.state())?,
             },
             limits: df_engine::command_entry::CommandEntryLimits {
                 command: df_model::commands::CommandLimits {

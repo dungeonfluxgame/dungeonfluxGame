@@ -153,6 +153,9 @@ fn default_creation_choices(view: &Value, seat: usize) -> Result<Value, String> 
                 "creation group {group_id:?} appears more than once"
             ));
         }
+        if group_id == "portrait" {
+            continue;
+        }
         let options = group["options"]
             .as_array()
             .ok_or_else(|| format!("creation group {group_id:?} has no options"))?;
@@ -223,7 +226,7 @@ fn creation_option_index(group: &str, seat: usize, option_count: usize) -> usize
         return 0;
     }
     let seat_offset = seat.saturating_sub(1);
-    if matches!(group, "build-package" | "portrait") {
+    if group == "build-package" {
         return seat_offset.min(option_count - 1);
     }
     if !matches!(group, "language-1" | "language-2" | "skill-1" | "skill-2") {
@@ -435,12 +438,12 @@ mod tests {
 
         let first = default_creation_choices(&view, 1).unwrap();
         let second = default_creation_choices(&view, 2).unwrap();
-        assert_eq!(first.as_object().unwrap().len(), 7);
-        assert_eq!(second.as_object().unwrap().len(), 7);
+        assert_eq!(first.as_object().unwrap().len(), 6);
+        assert_eq!(second.as_object().unwrap().len(), 6);
         assert_eq!(first["build-package"], "stalwart");
-        assert_eq!(first["portrait"], "portrait-hero-1");
+        assert!(first.get("portrait").is_none());
         assert_eq!(second["build-package"], "vanguard");
-        assert_eq!(second["portrait"], "portrait-hero-2");
+        assert!(second.get("portrait").is_none());
         for (choices, first_group, second_group) in [
             (&first, "language-1", "language-2"),
             (&first, "skill-1", "skill-2"),
@@ -454,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn non_tactical_creation_defaults_still_select_distinct_accepted_portraits() {
+    fn non_tactical_creation_defaults_omit_stale_portrait_groups() {
         let view = json!({"journey":{"creation":{"groups":[
             {"group_id":"species","options":[{"option_id":"dwarf"}]},
             {"group_id":"portrait","options":[
@@ -466,8 +469,8 @@ mod tests {
         let first = default_creation_choices(&view, 1).unwrap();
         let second = default_creation_choices(&view, 2).unwrap();
 
-        assert_eq!(first["portrait"], "portrait-hero-1");
-        assert_eq!(second["portrait"], "portrait-hero-2");
+        assert!(first.get("portrait").is_none());
+        assert!(second.get("portrait").is_none());
     }
 
     #[test]

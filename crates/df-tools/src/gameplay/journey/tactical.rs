@@ -904,27 +904,36 @@ fn creature_can_speak(kind: tactical_rules::CreatureKind) -> bool {
         .is_some_and(|creature| creature.can_speak())
 }
 
-/// The cry pool family of one combatant: heroes cry from the hero pools by their chosen
-/// portrait, enemies from the enemy pools by creature kind. Mirrors the voice families
+fn hero_is_feminine(state: &GameState, entity: EntityId) -> bool {
+    let Some(character) = state
+        .characters
+        .iter()
+        .find(|character| character.entity == entity)
+    else {
+        return false;
+    };
+    let choices = character
+        .choices
+        .iter()
+        .map(|choice| {
+            (
+                choice.offer.as_str().to_owned(),
+                choice.selected.as_str().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    super::super::hero_identity::ValidatedIdentity::from_canonical_appearance_choices(&choices)
+        .is_ok_and(|identity| identity.identity().appearance.presentation == "feminine")
+}
+
+/// The cry pool family of one combatant: heroes cry from the hero pools by their accepted
+/// presentation, enemies from the enemy pools by creature kind. Mirrors the voice families
 /// the participant views carry for effort, pain and fall sounds.
 fn cry_pool(state: &GameState, battle: &Battle, actor: u32, hero: bool) -> &'static str {
     if hero {
-        let female = state
-            .characters
-            .iter()
-            .find(|character| canonical(state, actor).is_ok_and(|who| character.entity == who))
-            .and_then(|character| {
-                character
-                    .choices
-                    .iter()
-                    .find(|choice| choice.offer.as_str() == "portrait")
-            })
-            .is_some_and(|choice| {
-                matches!(
-                    choice.selected.as_str(),
-                    "portrait-hero-2" | "portrait-hero-3"
-                )
-            });
+        let female = canonical(state, actor)
+            .ok()
+            .is_some_and(|who| hero_is_feminine(state, who));
         return if female { "hero-female" } else { "hero-male" };
     }
     let kind = battle
@@ -3830,19 +3839,7 @@ pub(in crate::gameplay) fn project_member(
     view.maximum_hit_points = u32::from(actor.health().maximum);
     view.conditions = actor.conditions().into_iter().map(str::to_owned).collect();
     let portrait = if actor.side() == Side::Heroes {
-        state
-            .characters
-            .iter()
-            .find(|character| character.entity == who)
-            .and_then(|character| {
-                character
-                    .choices
-                    .iter()
-                    .find(|choice| choice.offer.as_str() == "portrait")
-            })
-            .map(|choice| choice.selected.as_str())
-            .unwrap_or("portrait-hero-1")
-            .to_owned()
+        super::super::hero_identity::approved_portrait_uri(state, who).unwrap_or_default()
     } else {
         use tactical_rules::CreatureKind as C;
         let source = match actor.spec().kind {
@@ -3882,7 +3879,7 @@ pub(in crate::gameplay) fn project_member(
         tactical_rules::Size::Huge => rpc::CreatureSize::Huge,
     } as i32;
     view.voice_set = if actor.side() == Side::Heroes {
-        if matches!(portrait.as_str(), "portrait-hero-2" | "portrait-hero-3") {
+        if hero_is_feminine(state, who) {
             "hero-female"
         } else {
             "hero-male"
@@ -5904,15 +5901,12 @@ pub(super) mod tests {
                     .len(),
                 3
             );
-            assert_eq!(
+            // REF-058: no stock "Hero appearance" choice; heroes are drawn from their own sheets.
+            assert!(
                 creation
                     .groups
                     .iter()
-                    .find(|group| group.group_id == "portrait")
-                    .unwrap()
-                    .options
-                    .len(),
-                3
+                    .all(|group| group.group_id != "portrait")
             );
             assert!(creation.groups.iter().all(|group| !matches!(
                 group.group_id.as_str(),
@@ -9872,7 +9866,7 @@ pub(super) fn development_stage(
             rules: &[model::rule()?, rule()?],
             content: &model::contents()?,
             resources: &super::resources_for(current.state())?,
-            assets: &[],
+            assets: &model::creator_portrait_assets(current.state())?,
         },
         df_model::commands::CommandLimits {
             maximum_records: 32,
