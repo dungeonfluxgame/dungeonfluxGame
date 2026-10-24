@@ -173,6 +173,10 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
                 "Turn on the server's authenticated developer commands (df-transport-fixture dev).",
             ),
             (
+                "dev_overrides",
+                "Let those developer commands also change the game (an NPC line, a standing, a fight).",
+            ),
+            (
                 "game_folder",
                 "Folder holding content/ and assets/. Empty: found automatically.",
             ),

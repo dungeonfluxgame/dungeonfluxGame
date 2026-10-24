@@ -252,6 +252,7 @@ fn post(app: &Arc<App>, path: &str, body: &[u8]) -> Page {
         "/start" => {
             let adventure = match form.get("adventure") {
                 Some("random") => Adventure::Random,
+                Some("free-roam") => Adventure::FreeRoam,
                 _ => Adventure::Harbor,
             };
             app.start_new(adventure);
@@ -353,6 +354,9 @@ fn save_picture(snapshot: &Snapshot, game: &SavedGame) -> String {
             Adventure::Harbor => {
                 "<span class=\"shot art\"><img src=\"/art/salt-quay.webp\" alt=\"\"></span>"
                     .to_owned()
+            }
+            Adventure::FreeRoam => {
+                "<span class=\"shot art\"><img src=\"/art/compass.svg\" alt=\"\"></span>".to_owned()
             }
             Adventure::Random => {
                 "<span class=\"shot art die\"><img src=\"/art/d20.webp\" alt=\"\"></span>"
@@ -639,6 +643,7 @@ fn idle(snapshot: &Snapshot, notice: Option<&str>) -> String {
 <form method=\"post\" action=\"/start\" class=\"new-game\"><fieldset><legend>Choose your adventure</legend><div class=\"adventures\">\
 <label class=\"adventure\"><input type=\"radio\" name=\"adventure\" value=\"harbor\" checked><span class=\"adventure-art\"><img src=\"/art/salt-quay.webp\" alt=\"\"></span><span class=\"adventure-text\"><strong>The harbor adventure</strong><small>The written story on the salt quay. A good first game.</small></span></label>\
 <label class=\"adventure\"><input type=\"radio\" name=\"adventure\" value=\"random\"><span class=\"adventure-art die\"><img src=\"/art/d20.webp\" alt=\"\"></span><span class=\"adventure-text\"><strong>A newly rolled adventure</strong><small>Fresh places, people and trouble from the adventure tables.</small></span></label>\
+<label class=\"adventure\"><input type=\"radio\" name=\"adventure\" value=\"free-roam\"><span class=\"adventure-art\"><img src=\"/art/compass.svg\" alt=\"\"></span><span class=\"adventure-text\"><strong>Free roam</strong><small>Walk through a city gate, explore its streets and meet its people at your own pace.</small></span></label>\
 </div></fieldset>{}<button class=\"primary start\">Start new game</button></form>",
         lantern("unlit"),
         notice_line(notice),
@@ -1535,7 +1540,7 @@ fn developer_section(snapshot: &Snapshot, fields: &Fields<'_>) -> String {
         Err(missing) => format!("<p class=\"alert\">{}</p>", escape(missing)),
     };
     format!(
-        "<section id=\"developer\"><h2>Developer</h2><p class=\"section-note\">For working on DungeonFlux. Players can leave these alone.</p>{}{}{}<h3>Folders</h3><p class=\"section-note\">Leave a folder empty to use the one DungeonFlux finds. Currently in use:</p>{detected}{}{}{}{}</section>",
+        "<section id=\"developer\"><h2>Developer</h2><p class=\"section-note\">For working on DungeonFlux. Players can leave these alone.</p>{}{}{}{}<h3>Folders</h3><p class=\"section-note\">Leave a folder empty to use the one DungeonFlux finds. Currently in use:</p>{detected}{}{}{}{}</section>",
         fields.radios("server_mode", "Game server", &[
             ("managed", "DungeonFlux starts its own server", "The normal way to play. Start, resume and stop work from the Play page."),
             ("external", "Connect to a server that is already running", "For a server you started yourself, such as development/run-gameplay.sh or dev-gameplay.py. DungeonFlux won't stop it."),
@@ -1545,6 +1550,7 @@ fn developer_section(snapshot: &Snapshot, fields: &Fields<'_>) -> String {
         }),
         fields.text("external_url", "Server address", "Used when connecting to a running server.", &settings.external_url, "http://127.0.0.1:63309", "url"),
         fields.check("dev_control", "Developer control", "Turns on the server's authenticated developer commands (df-transport-fixture dev). Off for normal play.", settings.dev_control),
+        fields.check("dev_overrides", "Developer changes", "Lets developer commands change the game too: make a character speak, set a standing, run a fight action. Off for normal play.", settings.dev_overrides),
         fields.text("game_folder", "Game folder", "The folder holding content/ and assets/.", &settings.game_folder, "Found automatically", "text"),
         fields.text("build_folder", "Game build", "A build folder holding debug/df-transport-fixture.exe and play-web/.", &settings.build_folder, "Found automatically", "text"),
         fields.text("postgres_folder", "PostgreSQL folder", "The folder holding pg_ctl.exe and initdb.exe.", &settings.postgres_folder, "Found automatically", "text"),
@@ -1635,6 +1641,17 @@ mod tests {
 
     fn text(page: &Page) -> String {
         String::from_utf8(page.body.clone()).unwrap()
+    }
+
+    #[test]
+    fn free_roam_is_the_third_plain_adventure_choice() {
+        let (app, data) = app("free-roam");
+        let page = text(&handle(&app, "GET", "/", b""));
+        assert_eq!(page.matches("name=\"adventure\"").count(), 3);
+        assert!(page.contains("value=\"free-roam\""));
+        assert!(page.contains("<strong>Free roam</strong>"));
+        assert!(page.contains("at your own pace."));
+        std::fs::remove_dir_all(data).unwrap();
     }
 
     #[test]

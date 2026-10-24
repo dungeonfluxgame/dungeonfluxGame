@@ -137,6 +137,8 @@ pub struct Settings {
     pub server_mode: ServerMode,
     pub external_url: String,
     pub dev_control: bool,
+    /// Lets the developer commands also change game state (an NPC line, a standing, a fight).
+    pub dev_overrides: bool,
     pub game_folder: String,
     pub build_folder: String,
     pub postgres_folder: String,
@@ -175,6 +177,7 @@ impl Default for Settings {
             server_mode: ServerMode::Managed,
             external_url: String::new(),
             dev_control: false,
+            dev_overrides: false,
             game_folder: String::new(),
             build_folder: String::new(),
             postgres_folder: String::new(),
@@ -346,6 +349,7 @@ impl Settings {
             });
         }
         next.dev_control = checked("dev_control");
+        next.dev_overrides = checked("dev_overrides");
         for (field, slot) in [
             ("game_folder", &mut next.game_folder),
             ("build_folder", &mut next.build_folder),
@@ -415,6 +419,7 @@ impl Settings {
             ("DF_GAMEPLAY_SCENE_VIDEO", switch(self.scene_video)),
             ("DF_GAMEPLAY_CHARACTER_VIDEO", switch(self.character_video)),
             ("DF_GAMEPLAY_DEV_CONTROL", switch(self.dev_control)),
+            ("DF_GAMEPLAY_DEV_OVERRIDES", switch(self.dev_overrides)),
         ]
     }
 }

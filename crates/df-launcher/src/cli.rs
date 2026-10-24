@@ -17,7 +17,7 @@ usage: dungeonflux [--data-dir <folder>] [--config <file>] [command]
 Without a command, opens the launcher window.
 
 Commands (for agents and scripts; no window opens):
-  start [harbor|random] [--dev-control] [--to <phase>] [--open-display]
+  start [harbor|random|free-roam] [--dev-control] [--to <phase>] [--open-display]
         Start a new game and leave it running. Prints READY with the display and player links.
   resume <name or database> [--dev-control] [--to <phase>] [--open-display]
         Resume a saved game.
@@ -171,7 +171,8 @@ pub fn parse(name: &str, rest: &[String]) -> Result<Command, String> {
                 [] => Adventure::Harbor,
                 [one] if one == "harbor" => Adventure::Harbor,
                 [one] if one == "random" => Adventure::Random,
-                _ => return Err("start takes harbor or random".to_owned()),
+                [one] if one == "free-roam" => Adventure::FreeRoam,
+                _ => return Err("start takes harbor, random or free-roam".to_owned()),
             };
             Ok(Command::Start { adventure, flags })
         }

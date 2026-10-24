@@ -93,6 +93,8 @@ server_mode = "managed"
 external_url = ""
 # Turn on the server's authenticated developer commands (df-transport-fixture dev).
 dev_control = false
+# Let those developer commands also change the game (an NPC line, a standing, a fight).
+dev_overrides = false
 # Folder holding content/ and assets/. Empty: found automatically.
 game_folder = ""
 # Build holding debug/df-transport-fixture.exe and play-web/. Empty: found automatically.

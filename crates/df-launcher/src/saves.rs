@@ -11,6 +11,8 @@ pub enum Adventure {
     Harbor,
     /// A freshly rolled adventure.
     Random,
+    /// A city to explore at the party's own pace.
+    FreeRoam,
 }
 
 impl Adventure {
@@ -18,6 +20,7 @@ impl Adventure {
         match self {
             Self::Harbor => "harbor",
             Self::Random => "random",
+            Self::FreeRoam => "free-roam",
         }
     }
 
@@ -26,6 +29,7 @@ impl Adventure {
         match self {
             Self::Harbor => "Harbor adventure",
             Self::Random => "Rolled adventure",
+            Self::FreeRoam => "Free roam",
         }
     }
 
@@ -33,6 +37,7 @@ impl Adventure {
         match self {
             Self::Harbor => "The harbor adventure",
             Self::Random => "A newly rolled adventure",
+            Self::FreeRoam => "Free roam",
         }
     }
 }
@@ -211,6 +216,17 @@ mod tests {
             last_played,
             played_seconds: 0,
         }
+    }
+
+    #[test]
+    fn free_roam_adventure_round_trips_and_passes_the_server_value() {
+        let mut saved = game("df_gameplay_demo_free_roam", "Alder", 10);
+        saved.adventure = Adventure::FreeRoam;
+        let encoded = toml::to_string(&saved).unwrap();
+        assert!(encoded.contains("adventure = \"free-roam\""));
+        assert_eq!(toml::from_str::<SavedGame>(&encoded).unwrap(), saved);
+        assert_eq!(saved.adventure.server_value(), "free-roam");
+        assert_eq!(saved.adventure.short_label(), "Free roam");
     }
 
     #[test]
