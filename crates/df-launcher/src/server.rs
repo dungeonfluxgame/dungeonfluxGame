@@ -89,8 +89,9 @@ fn needed(settings: &Settings, credential: Credential) -> bool {
             settings.home_video
                 || settings.scene_video
                 || settings.character_video
-                || (settings.scene_pictures
-                    && settings.picture_provider == crate::settings::PictureProvider::Flux)
+                // Scene pictures segment their figures (speaker masks) through fal's SAM
+                // whichever provider paints them.
+                || settings.scene_pictures
         }
         Credential::Jev => settings.action_reading,
         Credential::Worldlabs => settings.splat_worlds,
