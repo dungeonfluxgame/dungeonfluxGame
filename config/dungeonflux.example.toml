@@ -20,6 +20,8 @@ display = "window"
 display_screen = "second"
 # "on-second-screen", "always" or "never".
 full_screen = "on-second-screen"
+# The launcher's page changes: "lively", "gentle" (short fades) or "follow-windows" (gentle when Windows' Animation effects are off).
+animations = "lively"
 
 # Story and sound.
 [story]

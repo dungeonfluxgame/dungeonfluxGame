@@ -281,9 +281,11 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 }
 /* Moving between Play and Settings: the brass pill slides to its new tab while the arriving
    page is revealed by a widening circle of lantern light from that tab; the leaving page dims
-   and sinks away. Cross-document view transitions: no script. A refresh of the same page only
+   and sinks away. The circle is sized to the window, not the page: Settings is several
+   screens tall, so a page-relative circle covered the window at once. Cross-document view
+   transitions: no script. A refresh of the same page only
    cross-fades, because its old and new snapshots pair up. */
-@view-transition { navigation: auto; }
+/* The opt-in, `@view-transition { navigation: auto; }`, is inline in every page (ui.rs, shell). */
 .brand { view-transition-name: brand; }
 .masthead nav { view-transition-name: nav; }
 .masthead nav a[aria-current="page"] { view-transition-name: nav-current; }
@@ -292,26 +294,41 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 ::view-transition-group(nav-current) { animation-duration: .55s; animation-timing-function: cubic-bezier(.34, 1.45, .5, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .5s; }
 ::view-transition-group(play-page), ::view-transition-group(settings-page) { animation-duration: .25s; }
-::view-transition-new(settings-page):only-child { animation: lantern-reveal-settings .75s cubic-bezier(.2, .7, .2, 1) both; }
-::view-transition-new(play-page):only-child { animation: lantern-reveal-play .75s cubic-bezier(.2, .7, .2, 1) both; }
+::view-transition-new(settings-page):only-child { animation: lantern-reveal-settings .8s cubic-bezier(.45, .05, .25, 1) both; }
+::view-transition-new(play-page):only-child { animation: lantern-reveal-play .8s cubic-bezier(.45, .05, .25, 1) both; }
 ::view-transition-old(settings-page):only-child, ::view-transition-old(play-page):only-child { animation: page-sink .45s ease-in both; }
 @keyframes lantern-reveal-settings {
   from { clip-path: circle(0 at calc(100% - 56px) -46px); filter: brightness(1.9) sepia(.7) saturate(1.4); }
   55% { filter: brightness(1.2) sepia(.25); }
-  to { clip-path: circle(160% at calc(100% - 56px) -46px); filter: none; }
+  to { clip-path: circle(150vmax at calc(100% - 56px) -46px); filter: none; }
 }
 @keyframes lantern-reveal-play {
   from { clip-path: circle(0 at calc(100% - 150px) -46px); filter: brightness(1.9) sepia(.7) saturate(1.4); }
   55% { filter: brightness(1.2) sepia(.25); }
-  to { clip-path: circle(160% at calc(100% - 150px) -46px); filter: none; }
+  to { clip-path: circle(150vmax at calc(100% - 150px) -46px); filter: none; }
 }
 @keyframes page-sink { to { opacity: 0; transform: translateY(14px) scale(.97); filter: blur(3px) brightness(.55); } }
 
+/* Settings, Table display, Launcher animations: "lively" (the default) always plays the above,
+   "gentle" swaps every movement for a short fade, and "follow-windows" is gentle only when
+   Windows' Animation effects are off (which browsers report as reduced motion). */
+@keyframes gentle-in { from { opacity: 0; } }
+@keyframes gentle-out { to { opacity: 0; } }
+  :root.motion-gentle::view-transition-group(*) { animation-duration: .18s; animation-timing-function: ease; }
+  :root.motion-gentle::view-transition-new(settings-page):only-child, :root.motion-gentle::view-transition-new(play-page):only-child { animation: gentle-in .22s ease both; }
+  :root.motion-gentle::view-transition-old(settings-page):only-child, :root.motion-gentle::view-transition-old(play-page):only-child { animation: gentle-out .18s ease both; }
+  :root.motion-gentle { scroll-behavior: auto; }
+  :root.motion-gentle .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
+  :root.motion-gentle .lantern[data-state="lit"] { animation: none; }
+  :root.motion-gentle .adventure, :root.motion-gentle .adventure-art img, :root.motion-gentle button { transition: none; }
+  :root.motion-gentle .adventure:has(input:checked) .adventure-art img { transform: none; }
 @media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
-  html { scroll-behavior: auto; }
-  .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
-  .lantern[data-state="lit"] { animation: none; }
-  .adventure, .adventure-art img, button { transition: none; }
-  .adventure:has(input:checked) .adventure-art img { transform: none; }
+  :root.motion-follow-windows::view-transition-group(*) { animation-duration: .18s; animation-timing-function: ease; }
+  :root.motion-follow-windows::view-transition-new(settings-page):only-child, :root.motion-follow-windows::view-transition-new(play-page):only-child { animation: gentle-in .22s ease both; }
+  :root.motion-follow-windows::view-transition-old(settings-page):only-child, :root.motion-follow-windows::view-transition-old(play-page):only-child { animation: gentle-out .18s ease both; }
+  :root.motion-follow-windows { scroll-behavior: auto; }
+  :root.motion-follow-windows .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
+  :root.motion-follow-windows .lantern[data-state="lit"] { animation: none; }
+  :root.motion-follow-windows .adventure, :root.motion-follow-windows .adventure-art img, :root.motion-follow-windows button { transition: none; }
+  :root.motion-follow-windows .adventure:has(input:checked) .adventure-art img { transform: none; }
 }

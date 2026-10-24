@@ -265,7 +265,10 @@ pub fn run(
             }
             Event::UserEvent(UserEvent::Window(request, reply)) => {
                 let answer = match &request {
-                    control::Request::Read => Ok(()),
+                    control::Request::Read => {
+                        log::event("WINDOW_READ", "");
+                        Ok(())
+                    }
                     control::Request::Set { name, value } => {
                         let mut windows = Windows {
                             control: &control,

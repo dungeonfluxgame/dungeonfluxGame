@@ -58,6 +58,10 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
                 "full_screen",
                 "\"on-second-screen\", \"always\" or \"never\".",
             ),
+            (
+                "animations",
+                "The launcher's page changes: \"lively\", \"gentle\" (short fades) or \"follow-windows\" (gentle when Windows' Animation effects are off).",
+            ),
         ],
     ),
     (

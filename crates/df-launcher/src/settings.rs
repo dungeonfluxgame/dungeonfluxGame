@@ -39,6 +39,30 @@ pub enum FullScreen {
     Never,
 }
 
+/// How much the launcher's own pages move.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Animations {
+    /// The lantern-light page changes and glowing lantern, whatever Windows says.
+    #[default]
+    Lively,
+    /// Short fades instead of movement.
+    Gentle,
+    /// Gentle when Windows' Animation effects are off, otherwise lively.
+    FollowWindows,
+}
+
+impl Animations {
+    /// The class on the page's root element that picks the CSS.
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::Lively => "motion-lively",
+            Self::Gentle => "motion-gentle",
+            Self::FollowWindows => "motion-follow-windows",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContentRating {
@@ -85,6 +109,7 @@ pub struct Settings {
     pub display: DisplayTarget,
     pub display_screen: DisplayScreen,
     pub full_screen: FullScreen,
+    pub animations: Animations,
 
     pub content_rating: ContentRating,
     pub storyteller: bool,
@@ -127,6 +152,7 @@ impl Default for Settings {
             display: DisplayTarget::Window,
             display_screen: DisplayScreen::Second,
             full_screen: FullScreen::OnSecondScreen,
+            animations: Animations::Lively,
             content_rating: ContentRating::Mature,
             storyteller: true,
             story_memory: true,
@@ -242,6 +268,17 @@ impl Settings {
             ],
         )
         .unwrap_or(self.full_screen);
+        next.animations = choice(
+            form,
+            "animations",
+            &mut errors,
+            &[
+                ("lively", Animations::Lively),
+                ("gentle", Animations::Gentle),
+                ("follow-windows", Animations::FollowWindows),
+            ],
+        )
+        .unwrap_or(self.animations);
         next.content_rating = choice(
             form,
             "content_rating",
@@ -474,6 +511,7 @@ mod tests {
             ("display", "window"),
             ("display_screen", "second"),
             ("full_screen", "on-second-screen"),
+            ("animations", "gentle"),
             ("content_rating", "mature"),
             ("storyteller", "on"),
             ("picture_quality", "medium"),
@@ -521,6 +559,7 @@ mod tests {
         assert!(!next.music);
         assert!(!next.scene_pictures);
         assert_eq!(next.content_rating, ContentRating::Restrained);
+        assert_eq!(next.animations, Animations::Gentle);
         assert_eq!(next.display, DisplayTarget::Browser);
         assert_eq!(next.picture_quality, PictureQuality::High);
     }

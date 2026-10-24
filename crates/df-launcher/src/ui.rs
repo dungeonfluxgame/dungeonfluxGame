@@ -8,8 +8,8 @@ use crate::{
     form::Form,
     saves::{Adventure, SavedGame},
     settings::{
-        ContentRating, DisplayScreen, DisplayTarget, FieldError, FullScreen, PictureProvider,
-        PictureQuality, ServerMode, Settings,
+        Animations, ContentRating, DisplayScreen, DisplayTarget, FieldError, FullScreen,
+        PictureProvider, PictureQuality, ServerMode, Settings,
     },
 };
 
@@ -54,6 +54,7 @@ impl Page {
                 "Not found",
                 "plain-page",
                 false,
+                Animations::default(),
                 "<main class=\"plain\"><h1>That page does not exist.</h1><p><a href=\"/\">Back to DungeonFlux</a></p></main>",
             ),
         )
@@ -195,6 +196,7 @@ fn post(app: &Arc<App>, path: &str, body: &[u8]) -> Page {
                 "Not sent",
                 "plain-page",
                 false,
+                Animations::default(),
                 "<main class=\"plain\"><h1>That form could not be read.</h1><p><a href=\"/\">Back to DungeonFlux</a></p></main>",
             ),
         );
@@ -330,9 +332,12 @@ pub fn escape(text: &str) -> String {
 
 /// `refresh` re-reads the page every two seconds while a start or stop is in progress, the
 /// script-free way to follow progress (the desktop window also reloads on each change).
-fn shell(title: &str, page: &str, refresh: bool, body: &str) -> String {
+/// The page-change opt-in is inline: on a short page the browser styles the body before
+/// `style.css` arrives, finds no opt-in and cancels the arriving transition (Play never animated).
+fn shell(title: &str, page: &str, refresh: bool, motion: Animations, body: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"color-scheme\" content=\"dark\">{}<title>{}</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"{page}\">{body}</body></html>",
+        "<!doctype html><html lang=\"en\" class=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"color-scheme\" content=\"dark\">{}<title>{}</title><style>@view-transition{{navigation:auto}}</style><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"{page}\">{body}</body></html>",
+        motion.class(),
         if refresh {
             "<meta http-equiv=\"refresh\" content=\"2\">"
         } else {
@@ -435,6 +440,7 @@ fn home(snapshot: &Snapshot) -> String {
         "DungeonFlux",
         "home-page",
         busy,
+        snapshot.settings.animations,
         &format!(
             "{}<main class=\"home\"><div class=\"play\">{state}</div>{saves}</main>",
             masthead(View::Home)
@@ -942,7 +948,7 @@ fn settings_page(
         fields.text("database_port", "Database port", "The port of the game's own database on this PC.", &settings.database_port.to_string(), "55517", "text"),
     );
     let display = format!(
-        "<section id=\"display\"><h2>Table display</h2>{}{}{}</section>",
+        "<section id=\"display\"><h2>Table display</h2>{}{}{}{}</section>",
         fields.radios(
             "display",
             "When the game is ready, open the table display",
@@ -1005,6 +1011,32 @@ fn settings_page(
                 FullScreen::OnSecondScreen => "on-second-screen",
                 FullScreen::Always => "always",
                 FullScreen::Never => "never",
+            }
+        ),
+        fields.radios(
+            "animations",
+            "Launcher animations",
+            &[
+                (
+                    "lively",
+                    "Lively",
+                    "Pages open in a spreading lantern glow and the lantern flickers."
+                ),
+                (
+                    "gentle",
+                    "Gentle",
+                    "Pages change with a short fade; nothing moves."
+                ),
+                (
+                    "follow-windows",
+                    "Follow Windows",
+                    "Gentle when Windows' Animation effects are turned off, lively otherwise."
+                ),
+            ],
+            match settings.animations {
+                Animations::Lively => "lively",
+                Animations::Gentle => "gentle",
+                Animations::FollowWindows => "follow-windows",
             }
         ),
     );
@@ -1088,6 +1120,7 @@ fn settings_page(
         "DungeonFlux settings",
         "settings-page",
         false,
+        snapshot.settings.animations,
         &format!(
             "{}<main class=\"settings\">{index}<div class=\"settings-body\"><h1>Settings</h1>{}{general_error}{summary}{alert}{running_note}{form}{keys}{files}</div></main>",
             masthead(View::Settings),
@@ -1220,6 +1253,24 @@ mod tests {
     }
 
     #[test]
+    fn every_page_opts_into_page_changes_before_its_stylesheet_and_names_its_motion() {
+        let (app, data) = app("motion");
+        for path in ["/", "/settings", "/nowhere"] {
+            let page = text(&handle(&app, "GET", path, b""));
+            let opt_in = page.find("<style>@view-transition{navigation:auto}</style>");
+            let stylesheet = page.find("<link rel=\"stylesheet\"");
+            assert!(opt_in.is_some() && opt_in < stylesheet, "{path}");
+            assert!(
+                page.contains("<html lang=\"en\" class=\"motion-lively\">"),
+                "{path}"
+            );
+        }
+        app.config_set("animations", "follow-windows").unwrap();
+        assert!(text(&handle(&app, "GET", "/", b"")).contains("class=\"motion-follow-windows\""));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
     fn escape_neutralises_markup() {
         assert_eq!(
             escape("<a href=\"x\">'&'</a>"),
@@ -1258,7 +1309,7 @@ mod tests {
     #[test]
     fn settings_save_round_trips_and_errors_keep_the_page() {
         let (app, data) = app("settings");
-        let body = b"game_port=64001&database_port=55517&display=browser&display_screen=main&full_screen=never&content_rating=restrained&picture_quality=low&picture_provider=openai&server_mode=managed&storyteller=on";
+        let body = b"game_port=64001&database_port=55517&display=browser&display_screen=main&full_screen=never&animations=follow-windows&content_rating=restrained&picture_quality=low&picture_provider=openai&server_mode=managed&storyteller=on";
         let saved = handle(&app, "POST", "/settings", body);
         assert_eq!(saved.location.as_deref(), Some("/settings?saved=1"));
         let page = text(&handle(&app, "GET", "/settings", b""));

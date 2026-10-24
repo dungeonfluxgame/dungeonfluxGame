@@ -20,17 +20,22 @@ pub fn serve(app: Arc<App>, address: SocketAddr) -> io::Result<()> {
     let local = listener.local_addr()?;
     println!("PREVIEW url=http://{local}/ data={}", app.data().display());
     crate::log::event("PREVIEW_LISTENING", format!("address={local}"));
-    let hosts = [local.to_string(), format!("localhost:{}", local.port())];
+    let hosts = Arc::new([local.to_string(), format!("localhost:{}", local.port())]);
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
         };
-        if let Err(error) = answer(&app, stream, &hosts) {
-            crate::log::event(
-                "PREVIEW_REQUEST_FAILED",
-                format!("error={}", crate::log::value(error.to_string())),
-            );
-        }
+        // One thread per connection: a browser's idle pre-connect must not hold up the page's
+        // stylesheet (which delayed the first paint and skipped the page-change animation).
+        let (app, hosts) = (Arc::clone(&app), Arc::clone(&hosts));
+        std::thread::spawn(move || {
+            if let Err(error) = answer(&app, stream, hosts.as_slice()) {
+                crate::log::event(
+                    "PREVIEW_REQUEST_FAILED",
+                    format!("error={}", crate::log::value(error.to_string())),
+                );
+            }
+        });
     }
     Ok(())
 }
