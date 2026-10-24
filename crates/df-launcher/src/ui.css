@@ -46,8 +46,7 @@ img { display: block; max-width: 100%; }
   inset: 0;
   background:
     linear-gradient(90deg, rgba(9, 19, 29, .9) 0%, rgba(9, 19, 29, .55) 36%, rgba(9, 19, 29, 0) 60%),
-    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 55%, rgba(9, 19, 29, .9) 100%),
-    url("/art/harbor-hall.png") 64% 30% / cover no-repeat;
+    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 55%, rgba(9, 19, 29, .9) 100%);
 }
 .settings-page::before {
   position: absolute;
@@ -270,6 +269,79 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 .plain-page main { padding: 48px 40px; }
 .plain-page main p { margin-top: 12px; }
 
+/* The Play pages' backdrop: a slideshow of the harbor hall and nine scenes (REF-064). The page
+   draws twelve slides in a random order with random arrivals (ui.rs, backdrop); here each slide
+   gets a five-second turn in a sixty-second show. A slide arrives over 1.6 s above the one
+   before (z-index 2), holds and drifts until the next has fully arrived, then leaves. The
+   page's own gradients (::before) darken the slides where the text sits. */
+.backdrop { position: fixed; inset: 0; z-index: -2; overflow: hidden; background: var(--ink); pointer-events: none; }
+.slide {
+  position: absolute; inset: 0; opacity: 0;
+  background-position: center 38%; background-size: cover; background-repeat: no-repeat;
+  animation-duration: 60s; animation-timing-function: linear; animation-iteration-count: infinite;
+  animation-delay: calc(var(--slide) * 5s - 2s);
+  will-change: opacity, transform;
+}
+.slide-fade { animation-name: slide-fade; }
+.slide-zoom { animation-name: slide-zoom; }
+.slide-drift { animation-name: slide-drift; }
+.slide-rise { animation-name: slide-rise; }
+.slide-iris { animation-name: slide-iris; }
+.slide-curtain { animation-name: slide-curtain; }
+/* 0% arrive, 2.67% (1.6 s) arrived, 8.33% (5 s) the next begins above, 11% (6.6 s) leave. */
+@keyframes slide-fade {
+  0% { opacity: 0; z-index: 2; transform: scale(1.08); animation-timing-function: cubic-bezier(.3, .6, .2, 1); }
+  2.67% { opacity: 1; z-index: 2; }
+  8.33% { opacity: 1; z-index: 1; }
+  11% { opacity: 1; z-index: 1; transform: scale(1); }
+  11.01%, 100% { opacity: 0; z-index: 0; transform: scale(1); }
+}
+@keyframes slide-zoom {
+  0% { opacity: 0; z-index: 2; transform: scale(1.3); filter: blur(10px) brightness(1.4); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  2.67% { opacity: 1; z-index: 2; transform: scale(1.08); filter: blur(0) brightness(1); }
+  8.33% { opacity: 1; z-index: 1; }
+  11% { opacity: 1; z-index: 1; transform: scale(1.02); filter: none; }
+  11.01%, 100% { opacity: 0; z-index: 0; transform: scale(1.02); filter: none; }
+}
+@keyframes slide-drift {
+  0% { opacity: 0; z-index: 2; transform: translateX(7%) scale(1.12); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  2.67% { opacity: 1; z-index: 2; transform: translateX(1.5%) scale(1.1); }
+  8.33% { opacity: 1; z-index: 1; }
+  11% { opacity: 1; z-index: 1; transform: translateX(-1.5%) scale(1.1); }
+  11.01%, 100% { opacity: 0; z-index: 0; transform: translateX(-1.5%) scale(1.1); }
+}
+@keyframes slide-rise {
+  0% { opacity: 0; z-index: 2; transform: translateY(6%) scale(1.1); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  2.67% { opacity: 1; z-index: 2; transform: translateY(1%) scale(1.08); }
+  8.33% { opacity: 1; z-index: 1; }
+  11% { opacity: 1; z-index: 1; transform: translateY(-1%) scale(1.08); }
+  11.01%, 100% { opacity: 0; z-index: 0; transform: translateY(-1%) scale(1.08); }
+}
+/* A circle of lantern light opening from where the lantern hangs. */
+@keyframes slide-iris {
+  0% { opacity: 1; z-index: 2; clip-path: circle(0% at 50% 30%); transform: scale(1.06); animation-timing-function: cubic-bezier(.45, .05, .25, 1); }
+  2.67% { opacity: 1; z-index: 2; clip-path: circle(120% at 50% 30%); }
+  8.33% { opacity: 1; z-index: 1; clip-path: circle(120% at 50% 30%); }
+  11% { opacity: 1; z-index: 1; clip-path: circle(120% at 50% 30%); transform: scale(1); }
+  11.01%, 100% { opacity: 0; z-index: 0; clip-path: circle(120% at 50% 30%); transform: scale(1); }
+}
+/* A curtain drawn from the right, its edge softened by the fade underneath. */
+@keyframes slide-curtain {
+  0% { opacity: .4; z-index: 2; clip-path: inset(0 0 0 100%); transform: scale(1.06); animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
+  2.67% { opacity: 1; z-index: 2; clip-path: inset(0 0 0 0); }
+  8.33% { opacity: 1; z-index: 1; clip-path: inset(0 0 0 0); }
+  11% { opacity: 1; z-index: 1; clip-path: inset(0 0 0 0); transform: scale(1); }
+  11.01%, 100% { opacity: 0; z-index: 0; clip-path: inset(0 0 0 0); transform: scale(1); }
+}
+/* Gentle: every slide simply crossfades, without movement. */
+@keyframes slide-still-fade {
+  0% { opacity: 0; z-index: 2; }
+  2.67% { opacity: 1; z-index: 2; }
+  8.33% { opacity: 1; z-index: 1; }
+  11% { opacity: 1; z-index: 1; }
+  11.01%, 100% { opacity: 0; z-index: 0; }
+}
+
 /* A game in play: the page keeps one subject, centred under the lit lantern. The hall darkens
    around the centre instead of the left, drifts very slowly, and three quiet layers give it air:
    a pool of lantern light that breathes, warm motes rising through it and harbor fog along the
@@ -278,10 +350,7 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 .running-page::before {
   background:
     radial-gradient(ellipse 72% 66% at 50% 40%, rgba(9, 19, 29, .2) 0%, rgba(9, 19, 29, .5) 55%, rgba(9, 19, 29, .86) 100%),
-    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 60%, rgba(9, 19, 29, .9) 100%),
-    url("/art/harbor-hall.png") 62% 30% / cover no-repeat;
-  transform-origin: 56% 38%;
-  animation: hall-drift 54s ease-in-out infinite alternate;
+    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 60%, rgba(9, 19, 29, .9) 100%);
 }
 .ambience { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 .ambience span { position: absolute; display: block; }
@@ -316,7 +385,6 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   filter: blur(14px);
   animation: fog-drift 80s ease-in-out infinite alternate;
 }
-@keyframes hall-drift { from { transform: scale(1); } to { transform: scale(1.06) translate(-1%, -.6%); } }
 @keyframes pool-breathe { from { opacity: .82; scale: .97; } to { opacity: 1; scale: 1.03; } }
 @keyframes pool-flicker { 0%, 100% { filter: brightness(1); } 23% { filter: brightness(.94); } 24% { filter: brightness(1.02); } 61% { filter: brightness(.97); } 62% { filter: brightness(1); } }
 @keyframes motes-rise { from { background-position: 0 0; } to { background-position: 0 -460px; } }
@@ -533,6 +601,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--brass); box-shad
   :root.motion-gentle .adventure, :root.motion-gentle .adventure-art img, :root.motion-gentle button { transition: none; }
   :root.motion-gentle .adventure:has(input:checked) .adventure-art img { transform: none; }
   :root.motion-gentle .running-page::before, :root.motion-gentle .ambience span { animation: none; }
+  :root.motion-gentle .slide { animation-name: slide-still-fade; transform: none; filter: none; clip-path: none; }
   :root.motion-gentle button:hover, :root.motion-gentle button:active, :root.motion-gentle .adventure:hover, :root.motion-gentle .adventure:active, :root.motion-gentle .saves li:hover, :root.motion-gentle .readiness li:hover, :root.motion-gentle .tablet:hover, :root.motion-gentle .lantern:hover, :root.motion-gentle .hero:hover, :root.motion-gentle .brand:hover img, :root.motion-gentle .adventure:hover .adventure-art img, :root.motion-gentle .continue:hover .shot img, :root.motion-gentle .saves li:hover .shot img, :root.motion-gentle .hero:hover .hero-face img { transform: none; }
   :root.motion-gentle .hero:hover .hero-face img { transform: scale(1.45); }
   :root.motion-gentle button.primary::after { display: none; }
@@ -548,6 +617,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--brass); box-shad
   :root.motion-follow-windows .adventure, :root.motion-follow-windows .adventure-art img, :root.motion-follow-windows button { transition: none; }
   :root.motion-follow-windows .adventure:has(input:checked) .adventure-art img { transform: none; }
   :root.motion-follow-windows .running-page::before, :root.motion-follow-windows .ambience span { animation: none; }
+  :root.motion-follow-windows .slide { animation: none; }
+  :root.motion-follow-windows .slide:first-child { opacity: 1; }
   :root.motion-follow-windows button:hover, :root.motion-follow-windows button:active, :root.motion-follow-windows .adventure:hover, :root.motion-follow-windows .adventure:active, :root.motion-follow-windows .saves li:hover, :root.motion-follow-windows .readiness li:hover, :root.motion-follow-windows .tablet:hover, :root.motion-follow-windows .lantern:hover, :root.motion-follow-windows .hero:hover, :root.motion-follow-windows .brand:hover img, :root.motion-follow-windows .adventure:hover .adventure-art img, :root.motion-follow-windows .continue:hover .shot img, :root.motion-follow-windows .saves li:hover .shot img, :root.motion-follow-windows .hero:hover .hero-face img { transform: none; }
   :root.motion-follow-windows .hero:hover .hero-face img { transform: scale(1.45); }
   :root.motion-follow-windows button.primary::after { display: none; }

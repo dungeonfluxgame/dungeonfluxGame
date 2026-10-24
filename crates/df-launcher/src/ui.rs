@@ -138,6 +138,51 @@ const ART: &[(&str, &str, &[u8])] = &[
         "image/svg+xml",
         include_bytes!("../../../assets/ui/section-ornament.svg"),
     ),
+    (
+        "bg-rain-quay.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/rain-quay.webp"),
+    ),
+    (
+        "bg-tavern-embers.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/tavern-embers.webp"),
+    ),
+    (
+        "bg-lighthouse-dusk.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/lighthouse-dusk.webp"),
+    ),
+    (
+        "bg-fog-village.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/fog-village.webp"),
+    ),
+    (
+        "bg-map-room.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/map-room.webp"),
+    ),
+    (
+        "bg-market-lane.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/market-lane.webp"),
+    ),
+    (
+        "bg-cliff-chapel.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/cliff-chapel.webp"),
+    ),
+    (
+        "bg-ship-hold.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/ship-hold.webp"),
+    ),
+    (
+        "bg-sea-stairs.webp",
+        "image/webp",
+        include_bytes!("../../../assets/ui/launcher/sea-stairs.webp"),
+    ),
 ];
 
 pub fn handle(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Page {
@@ -458,8 +503,60 @@ fn home(snapshot: &Snapshot) -> String {
         page,
         busy,
         snapshot.settings.animations,
-        &format!("{}{main}", masthead(View::Home)),
+        &format!("{}{}{main}", backdrop(), masthead(View::Home)),
     )
+}
+
+/// The Play pages' pictures: the harbor hall and the nine scenes made for the launcher.
+const BACKDROPS: [&str; 10] = [
+    "harbor-hall.png",
+    "bg-rain-quay.webp",
+    "bg-tavern-embers.webp",
+    "bg-lighthouse-dusk.webp",
+    "bg-fog-village.webp",
+    "bg-map-room.webp",
+    "bg-market-lane.webp",
+    "bg-cliff-chapel.webp",
+    "bg-ship-hold.webp",
+    "bg-sea-stairs.webp",
+];
+/// How a slide arrives; each has its keyframes in ui.css (`slide-<name>`).
+const TRANSITIONS: [&str; 6] = ["fade", "zoom", "drift", "rise", "iris", "curtain"];
+/// Slides in one turn of the show; ui.css times a 60-second turn, one slide every 5 seconds.
+const SLIDES: usize = 12;
+
+/// The Play pages' backdrop: twelve slides drawn from the pictures in a fresh random order,
+/// never the same picture twice in a row (the last leads back to the first), each arriving with
+/// a randomly chosen transition. CSS brings in one slide every five seconds; the window runs no
+/// script, so the randomness is drawn here, once per page.
+fn backdrop() -> String {
+    let mut noise = [0_u8; 2 * SLIDES];
+    // Without system randomness the zeros still give a valid show, only a fixed one.
+    if getrandom::getrandom(&mut noise).is_err() {
+        noise = std::array::from_fn(|index| u8::try_from(index * 7 % 251).unwrap_or(0));
+    }
+    let mut pictures = [0_usize; SLIDES];
+    for slide in 0..SLIDES {
+        let mut picture = usize::from(noise[2 * slide]) % BACKDROPS.len();
+        while (slide > 0 && picture == pictures[slide - 1])
+            || (slide == SLIDES - 1 && picture == pictures[0])
+        {
+            picture = (picture + 1) % BACKDROPS.len();
+        }
+        pictures[slide] = picture;
+    }
+    let slides: String = pictures
+        .iter()
+        .enumerate()
+        .map(|(slide, picture)| {
+            let transition = TRANSITIONS[usize::from(noise[2 * slide + 1]) % TRANSITIONS.len()];
+            format!(
+                "<div class=\"slide slide-{transition}\" style=\"--slide: {slide}; background-image: url(/art/{})\"></div>",
+                BACKDROPS[*picture]
+            )
+        })
+        .collect();
+    format!("<div class=\"backdrop\" aria-hidden=\"true\">{slides}</div>")
 }
 
 /// The running page's ambience, drawn by CSS alone: a pool of lantern light, two layers of
@@ -1574,6 +1671,31 @@ mod tests {
         assert!(panel.contains("style=\"--health: 0.500\""));
         assert!(panel.contains("Vix &lt;Ashlantern&gt;"));
         assert!(panel.contains("Creating their hero"));
+    }
+
+    #[test]
+    fn the_backdrop_shows_twelve_known_pictures_never_twice_in_a_row() {
+        for _ in 0..50 {
+            let show = backdrop();
+            let pictures: Vec<&str> = show
+                .split("url(/art/")
+                .skip(1)
+                .map(|rest| rest.split(')').next().unwrap())
+                .collect();
+            assert_eq!(pictures.len(), SLIDES);
+            assert!(pictures.iter().all(|picture| BACKDROPS.contains(picture)));
+            for slide in 0..SLIDES {
+                assert_ne!(pictures[slide], pictures[(slide + 1) % SLIDES], "{show}");
+            }
+            assert!(
+                TRANSITIONS
+                    .iter()
+                    .any(|transition| show.contains(&format!("slide slide-{transition}\"")))
+            );
+            for picture in BACKDROPS {
+                assert!(ART.iter().any(|(name, _, _)| *name == picture), "{picture}");
+            }
+        }
     }
 
     #[test]
