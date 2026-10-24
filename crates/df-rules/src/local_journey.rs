@@ -2,8 +2,20 @@
 //! This is an explicitly bounded playable subset, not full 2024 rules coverage.
 use serde::{Deserialize, Serialize};
 
+pub const MAXIMUM_PARTY: usize = 6;
+
+/// SRD 5.2.1, Equipment, "Selling Equipment", printed page 89. Equipment sells
+/// for half its cost; trade goods and valuables retain full value. Fractions of CP round down.
+pub const fn selling_value_cp(cost_cp: u32, retains_full_value: bool) -> u32 {
+    if retains_full_value {
+        cost_cp
+    } else {
+        cost_cp / 2
+    }
+}
+
 pub const SOURCE_REVISION: &str = "SRD5.2.1-2024-local-journey-3";
-pub const SOURCE: &str = "Wizards of the Coast LLC SRD 5.2.1 English; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; CC BY4.0; PDF SHA256 8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87; creation pages19-22; Fighter47-48; Soldier83; species84-86; Origin feats83,87-88; Defense88; Graze90; weapons91; armor92; initiative13; attack7,14; damage16; knockout17; ShortRest187; Unconscious191; Bandit261. Selected level1 Dwarf, Halfling, or Orc Fighter/Soldier; Defense; Greatsword/Flail/Javelin or archer equipment; standard arrays; normal adjacent attack; SecondWind; nonlethal melee encounter; uninterrupted after-combat ShortRest without HitPointDice; no full-rest or general rest catalog.";
+pub const SOURCE: &str = "Wizards of the Coast LLC SRD 5.2.1 English; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; CC BY4.0; PDF SHA256 8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87; creation pages19-22; Fighter47-48; Soldier83; species84-86; Origin feats83,87-88; Defense88; Graze90; weapons91; armor92; initiative13; attack7,14; damage16; knockout17; ShortRest187; Unconscious191; Bandit261. Selected level1 SRD species Fighter/Soldier; Defense; Greatsword/Flail/Javelin or archer equipment; standard arrays; normal adjacent attack; SecondWind; nonlethal melee encounter; uninterrupted after-combat ShortRest without HitPointDice; no full-rest or general rest catalog.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JourneyRuleError {
@@ -83,8 +95,8 @@ impl HeroSpecies {
         }
     }
 
-    /// Level-one combat traits from SRD 5.2.1 pp. 84-86. Lineage choices and
-    /// combat features without an implemented rules handler remain unavailable.
+    /// Base combat traits from SRD 5.2.1 pp. 84-86. SpeciesOptions applies source
+    /// lineage and size choices; features without handlers remain explicit coverage gaps.
     pub const fn combat_traits(self) -> SpeciesCombatTraits {
         use SpeciesSize::{Medium, Small};
         match self {
@@ -285,7 +297,18 @@ impl FighterProgression {
             }
             character.abilities[ability] += 2;
         }
-        character.hit_points = u32::from(self.hit_points(character.abilities[2], species));
+        let choices = character
+            .choices
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let options = crate::species::SpeciesOptions::from_choices(species, &choices)?;
+        character.hit_points = u32::from(self.hit_points(character.abilities[2], species))
+            + if options.tough {
+                2 * u32::from(self.level)
+            } else {
+                0
+            };
         character.proficiency_bonus = u32::from(self.proficiency_bonus());
         character.second_wind_uses = u32::from(self.second_wind_maximum());
         if archer {
@@ -652,11 +675,11 @@ pub fn validate_character(
     if !valid_character_name(name) {
         return Err(JourneyRuleError::InvalidName);
     }
-    if choices.len() != BUILD_GROUPS.len() {
+    if choices.len() < BUILD_GROUPS.len() {
         return Err(JourneyRuleError::MissingChoice);
     }
     for (index, (group, _)) in choices.iter().enumerate() {
-        if !BUILD_GROUPS.contains(group) {
+        if !BUILD_GROUPS.contains(group) && !crate::species::is_choice_group(group) {
             return Err(JourneyRuleError::InvalidChoice);
         }
         if choices[..index]
@@ -675,12 +698,7 @@ pub fn validate_character(
     };
     let species =
         HeroSpecies::from_choice(choice("species")?).ok_or(JourneyRuleError::InvalidChoice)?;
-    if !matches!(
-        species,
-        HeroSpecies::Dwarf | HeroSpecies::Halfling | HeroSpecies::Orc
-    ) {
-        return Err(JourneyRuleError::InvalidChoice);
-    }
+    let species_options = crate::species::SpeciesOptions::from_choices(species, choices)?;
     for (group, expected) in [
         ("class", "fighter-1"),
         ("background", "soldier"),
@@ -725,7 +743,8 @@ pub fn validate_character(
         // SRD 5.2.1 pp. 47, 84: Fighter's d10 maximum plus Constitution and Dwarven Toughness.
         hit_points: (i32::from(rules.base_hit_points)
             + ability_modifier(abilities[2])
-            + i32::from(species.combat_traits().hit_points_per_level)) as u32,
+            + i32::from(species_options.combat_traits(species).hit_points_per_level))
+            as u32,
         armor_class: u32::from(rules.armor_class),
         proficiency_bonus: u32::from(rules.proficiency_bonus),
         second_wind_uses: u32::from(rules.second_wind_uses_max),
@@ -735,11 +754,13 @@ pub const fn ability_modifier(score: u8) -> i32 {
     (score as i32 - 10).div_euclid(2)
 }
 
-/// Order this local three-participant subset from supplied d20 faces and Dexterity scores.
+/// Order this local participant subset from supplied d20 faces and Dexterity scores.
 /// Initiative uses the cited SRD d20 + Dexterity modifier; equal totals retain the
 /// existing authored participant order. General player/DM tie choices remain outside
 /// this subset. No draw, identity, state mutation or implicit random input occurs here.
-pub fn initiative_order(participants: [(u32, u8); 3]) -> Result<[usize; 3], JourneyRuleError> {
+pub fn initiative_order<const N: usize>(
+    participants: [(u32, u8); N],
+) -> Result<[usize; N], JourneyRuleError> {
     if participants.iter().any(|(die, _)| !(1..=20).contains(die)) {
         return Err(JourneyRuleError::InvalidDie);
     }
@@ -750,7 +771,7 @@ pub fn initiative_order(participants: [(u32, u8); 3]) -> Result<[usize; 3], Jour
         return Err(JourneyRuleError::InvalidChoice);
     }
     let totals = participants.map(|(die, dexterity)| die as i32 + ability_modifier(dexterity));
-    let mut order = [0, 1, 2];
+    let mut order = std::array::from_fn(|index| index);
     // All indices are internal members of the fixed participant array.
     order.sort_by_key(|index| (std::cmp::Reverse(totals[*index]), *index));
     Ok(order)
@@ -1575,7 +1596,7 @@ mod tests {
         selected[0].1 = "dragonborn";
         assert_eq!(
             validate_character(&CreationRules::srd_521(), "Brynn", &selected),
-            Err(JourneyRuleError::InvalidChoice)
+            Err(JourneyRuleError::MissingChoice)
         );
     }
     #[test]
@@ -1818,7 +1839,7 @@ mod tests {
         selected[0].1 = "human";
         assert_eq!(
             validate_character(&rules, "Brynn", &selected),
-            Err(JourneyRuleError::InvalidChoice)
+            Err(JourneyRuleError::MissingChoice)
         );
         selected = choices();
         selected[6].1 = selected[5].1;

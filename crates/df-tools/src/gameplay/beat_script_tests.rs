@@ -335,15 +335,17 @@ fn canonical_phone_offers_look_around_with_scene_findings_srd_521_pages_187_189(
             .expect("story scenes offer look around");
         assert_eq!(offer.label, "Look around");
         assert_eq!(offer.input_groups.len(), 1);
-        assert_eq!(offer.input_groups[0].label, "Look around");
-        assert_eq!(
-            offer.input_groups[0]
-                .options
-                .iter()
-                .map(|option| option.option_id.as_str())
-                .collect::<Vec<_>>(),
-            ["errand-truth", "enemy-position", "watch-courier"]
-        );
+        assert_eq!(offer.input_groups[0].label, "What catches your eye?");
+        assert_eq!(offer.input_groups[0].group_id, "attempt-thing");
+        assert_ne!(offer.label, offer.input_groups[0].label);
+        assert!(offer.input_groups[0].options.iter().any(|option| {
+            option.option_id == "person-courier" && option.label == "Study Finn Alder's manner"
+        }));
+        // Unbound clues are not visible objects. Existing explicit finding submissions below
+        // remain replay-compatible, but their secret ids are no longer exposed in the menu.
+        assert!(!offer.input_groups[0].options.iter().any(|option| {
+            matches!(option.option_id.as_str(), "errand-truth" | "enemy-position")
+        }));
         let checked = stage_with_supplier(
             &current,
             &input(
@@ -945,4 +947,91 @@ fn impossible_outcome_only_fights_rest_without_action_duplicate_effects_and_wron
             "case {case}"
         );
     }
+}
+
+#[test]
+fn look_around_phone_offer_inspects_stock_with_price_and_resolves_its_real_target() {
+    let mut loaded = pack::load_from_bytes(SHOP_PACK, SHOP_TUNING).unwrap();
+    let model: super::adventure::scene_model::SceneModel = serde_json::from_slice(include_bytes!(
+        "../../../../content/merchant-shop/scene-model.json"
+    ))
+    .unwrap();
+    for scene in &mut loaded.pack.scenes {
+        if let Some(setting) = scene.setting.as_mut() {
+            setting.model = Some(model.clone());
+        }
+    }
+    pack::with_test_pack(loaded, || {
+        let current = opening_story();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let view = wire::journey_view(
+            &current,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            panic!("player view")
+        };
+        let offer = player
+            .offers
+            .iter()
+            .find(|offer| {
+                offer.action_kind == rpc::GameplayActionKind::ExamineHarborSeal as i32
+                    && offer
+                        .input_groups
+                        .iter()
+                        .any(|group| group.group_id == "attempt-thing")
+            })
+            .expect("typed observation offer");
+        let group = &offer.input_groups[0];
+        assert_eq!(group.label, "What catches your eye?");
+        assert_eq!(offer.label, "Look around");
+        assert!(group.options.len() > 8);
+        let item = group
+            .options
+            .iter()
+            .find(|option| option.option_id == "offer-warm-cloak-wool")
+            .unwrap();
+        assert_eq!(item.label, "Inspect the warm wool cloak");
+        assert!(item.description.contains("3 gp"));
+        let request = rpc::SubmitActionRequest {
+            session_id: Some(rpc::SessionId {
+                value: Some(current.basis().session.as_bytes().to_vec()),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(current.basis().run.as_bytes().to_vec()),
+            }),
+            operation_id: Some(rpc::OperationId {
+                value: Some(vec![0x76; 16]),
+            }),
+            observed_revision: Some(wire::revision(current.basis().revision)),
+            offer_id: offer.offer_id.clone(),
+            action_kind: offer.action_kind,
+            action_choices: vec![rpc::JourneyChoice {
+                group_id: group.group_id.clone(),
+                option_id: item.option_id.clone(),
+            }],
+            ..Default::default()
+        };
+        let input = wire::journey_input(&request, member, &current).unwrap();
+        let inspected = stage_with_supplier(&current, &input, &mut |_| Ok(20)).unwrap();
+        let receipt =
+            super::journey::accepted(inspected.state().decisions.last().unwrap()).unwrap();
+        let check = receipt.check.unwrap();
+        assert!(
+            check
+                .source_revision
+                .ends_with(":investigation:target-offer-warm-cloak-wool"),
+            "{}",
+            check.source_revision
+        );
+        let scene = super::beat_script_runtime::scene(current.state()).unwrap();
+        let observation = super::investigation::observation(&scene, &check).unwrap();
+        assert!(observation.finding.unwrap().contains("3 gp"));
+        assert_eq!(
+            super::journey::phase(&inspected).unwrap(),
+            rpc::JourneyPhase::Opening
+        );
+    });
 }

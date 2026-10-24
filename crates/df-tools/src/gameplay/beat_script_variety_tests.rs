@@ -67,12 +67,7 @@ fn loaded(bytes: &[u8]) -> pack::LoadedPack {
     pack::load_from_bytes(&serde_json::to_vec(&content).unwrap(), TUNING).unwrap()
 }
 pub(super) fn persisted(current: &Checkpoint) -> Checkpoint {
-    let codec = df_persistence::NativeCodecLimits {
-        maximum_document_bytes: 1024 * 1024,
-        maximum_allocated_bytes: 2 * 1024 * 1024,
-        maximum_collection_items: 4096,
-        maximum_text_bytes: 4096,
-    };
+    let codec = super::live_codec_limits();
     let bytes =
         df_persistence::local_demo_scope::encode_owned_demo_checkpoint(current, codec).unwrap();
     let recovered = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(

@@ -214,6 +214,16 @@ pub fn combine_sources(sources: &[ModeSource]) -> (RollMode, Vec<ModeSource>) {
     }
 }
 
+/// Standard Influence roll mode, including Help or other admitted circumstances. Sources on
+/// opposite sides cancel and multiple sources on one side never stack (SRD 5.2.1 p. 8).
+/// Word quality is deliberately absent: the standard path changes attitude, never adds a bonus.
+pub fn roll_mode(attitude: Attitude, extra_sources: &[ModeSource]) -> RollMode {
+    let mut sources = Vec::with_capacity(extra_sources.len() + 1);
+    sources.extend(attitude_source(attitude));
+    sources.extend_from_slice(extra_sources);
+    combine_sources(&sources).0
+}
+
 /// Default DC rule (p. 184): 15 or the monster's Intelligence score, whichever
 /// is higher. The GM chooses which check is made; the score (not its modifier)
 /// sets the floor above 15.
@@ -262,6 +272,8 @@ pub struct InfluenceResult {
     pub mode: RollMode,
     /// Reasons that applied to the roll; empty when Normal.
     pub applied: Vec<ModeSource>,
+    /// Every admitted source, retained even when Advantage and Disadvantage cancel.
+    pub sources: Vec<ModeSource>,
     pub faces: Vec<u8>,
     /// Face that counted (highest with Advantage, lowest with Disadvantage);
     /// `None` when no roll was made.
@@ -341,6 +353,7 @@ pub fn resolve(input: InfluenceInput<'_>) -> Result<InfluenceResult, InfluenceEr
                 skill: input.skill,
                 mode: RollMode::Normal,
                 applied: Vec::new(),
+                sources: Vec::new(),
                 faces: Vec::new(),
                 counted: None,
                 ability_modifier: input.ability_modifier,
@@ -356,6 +369,7 @@ pub fn resolve(input: InfluenceInput<'_>) -> Result<InfluenceResult, InfluenceEr
                 skill: input.skill,
                 mode: RollMode::Normal,
                 applied: Vec::new(),
+                sources: Vec::new(),
                 faces: Vec::new(),
                 counted: None,
                 ability_modifier: input.ability_modifier,
@@ -413,6 +427,7 @@ pub fn resolve(input: InfluenceInput<'_>) -> Result<InfluenceResult, InfluenceEr
         skill: input.skill,
         mode,
         applied,
+        sources,
         faces: input.faces.to_vec(),
         counted: Some(counted),
         ability_modifier: input.ability_modifier,
@@ -951,6 +966,31 @@ mod tests {
                 .unwrap()
                 .reason
                 .contains("does not assign")
+        );
+    }
+}
+
+#[cfg(test)]
+mod opening_help_tests {
+    use super::*;
+
+    #[test]
+    fn influence_help_advantage_cancels_hostile_and_does_not_stack() {
+        let help = ModeSource {
+            advantage: true,
+            label: "Help from an ally".to_owned(),
+        };
+        assert_eq!(
+            roll_mode(Attitude::Indifferent, std::slice::from_ref(&help)),
+            RollMode::Advantage
+        );
+        assert_eq!(
+            roll_mode(Attitude::Hostile, std::slice::from_ref(&help)),
+            RollMode::Normal
+        );
+        assert_eq!(
+            roll_mode(Attitude::Indifferent, &[help.clone(), help]),
+            RollMode::Advantage
         );
     }
 }

@@ -17,6 +17,9 @@ pub(super) const LOOK_AROUND_OFFER_ID: &str = "look-around";
 pub(super) struct BeatScript {
     #[serde(default, skip_serializing_if = "ScriptMode::is_story")]
     pub(super) mode: ScriptMode,
+    /// Immutable free-roam city and initial prepared geography, saved with this script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) free_roam: Option<super::adventure::free_roam::World>,
     pub(super) entry: String,
     pub(super) terminal: Vec<String>,
     pub(super) beats: Vec<Beat>,
@@ -249,6 +252,9 @@ impl BeatScript {
         });
     }
     pub(super) fn validate(&self, content: &pack::PackFile) -> Result<(), ScriptError> {
+        if self.free_roam.is_some() && self.mode != ScriptMode::Freeplay {
+            return Err(refuse(&self.entry, ScriptErrorReason::HandlerWiring));
+        }
         if self.mode == ScriptMode::Freeplay {
             return self.validate_freeplay(content);
         }
@@ -757,6 +763,11 @@ impl BeatScript {
     }
     fn validate_freeplay(&self, content: &pack::PackFile) -> Result<(), ScriptError> {
         use ScriptErrorReason as E;
+        if let Some(world) = &self.free_roam
+            && world.validate(content).is_err()
+        {
+            return Err(refuse(&self.entry, E::HandlerWiring));
+        }
         // This is an explicit social session contract, not an escape from graph validation.
         // Only native creation/begin handlers may change its two durable states. Ordinary
         // interactions append their own validated journal without completing a story beat.

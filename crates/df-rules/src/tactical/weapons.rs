@@ -38,6 +38,11 @@ pub enum DamageType {
     Bludgeoning,
     Necrotic,
     Poison,
+    Acid,
+    Cold,
+    Fire,
+    Lightning,
+    Thunder,
 }
 
 impl DamageType {
@@ -49,6 +54,11 @@ impl DamageType {
             Self::Bludgeoning => "bludgeoning",
             Self::Necrotic => "necrotic",
             Self::Poison => "poison",
+            Self::Acid => "acid",
+            Self::Cold => "cold",
+            Self::Fire => "fire",
+            Self::Lightning => "lightning",
+            Self::Thunder => "thunder",
         }
     }
 }

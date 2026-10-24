@@ -1,5 +1,170 @@
 use super::*;
 
+#[tokio::test]
+async fn perception_title_names_the_attempt_in_the_actual_open_street() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let mut scene = merchant_shop_room();
+    let setting = scene.setting.as_mut().unwrap();
+    setting.name = "Gullwatch Market Street".into();
+    setting.short = "a rain-slick open market street".into();
+    setting.exterior = true;
+    let expression = FakeEndpoint::start(vec![Reply::Output(json!({"intention":
+        json!({"action":"watches the stallholders' hands"}).to_string()}))]);
+    let jev = FakeEndpoint::start(vec![answer("o1")]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/intention")
+        .join(std::process::id().to_string());
+    let storyteller = teller(expression.address, 0, Duration::from_secs(5), &cache);
+    let intention = check_intention(
+        &storyteller,
+        &model(&jev),
+        &scene,
+        "Pip",
+        "I watch the stallholders' hands for anything out of place.",
+    )
+    .await
+    .unwrap();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        die: 16,
+        total: 18,
+        source_revision: "srd521-p6:market:perception:target-room".into(),
+        ..Default::default()
+    };
+    let observed = observation(&scene, &check).unwrap();
+    let line = observed.roll_line_with_intention("Pip", &check, Some(&intention));
+    assert!(line.starts_with("Pip watches the stallholders' hands:"));
+    assert!(!line.contains("searches the room"));
+    assert!(
+        observed
+            .roll_line("Pip", &check)
+            .contains("Gullwatch Market Street")
+    );
+    assert!(
+        expression.bodies()[0]["input"]
+            .as_str()
+            .unwrap()
+            .contains("Gullwatch Market Street")
+    );
+}
+
+#[tokio::test]
+async fn question_finding_answers_the_question_and_reuses_an_approved_physical_detail() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let scene = merchant_shop_room();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 18,
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let detail = "The counter's legs sit flat and steady on the boards.";
+    let text = "Pip finds the counter steady; none of its legs rocks on the boards.";
+    let jev = FakeEndpoint::start(vec![answer("o1"), answer("o1"), answer("o1"), answer("o1")]);
+    let expression = FakeEndpoint::start(vec![
+        Reply::Output(
+            json!({"answer":json!({"answer":text, "established_detail":detail}).to_string()}),
+        ),
+        Reply::Output(
+            json!({"answer":json!({"answer":text, "established_detail":null}).to_string()}),
+        ),
+    ]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/question-finding")
+        .join(std::process::id().to_string());
+    let storyteller = teller(expression.address, 0, Duration::from_secs(5), &cache);
+    let first = complete_finding_for_question(
+        &storyteller,
+        &model(&jev),
+        &scene,
+        &check,
+        "Pip",
+        "Does the counter wobble?",
+        None,
+    )
+    .await;
+    assert!(!first.unavailable);
+    assert_eq!(first.text, text);
+    assert_eq!(first.established_detail.as_ref().unwrap().detail, detail);
+    assert!(
+        first.selected_source_ids.is_empty(),
+        "new detail is not an authored source id"
+    );
+    let again = complete_finding_for_question(
+        &storyteller,
+        &model(&jev),
+        &scene,
+        &check,
+        "Pip",
+        "Is it still steady?",
+        first.established_detail.as_ref(),
+    )
+    .await;
+    assert_eq!(again.text, text);
+    assert!(!again.unavailable);
+    assert!(again.established_detail.is_none());
+    let bodies = expression.bodies();
+    let first_prompt = bodies[0]["input"].as_str().unwrap();
+    assert!(first_prompt.contains("Does the counter wobble?"));
+    let repeat_prompt = bodies[1]["input"].as_str().unwrap();
+    assert!(repeat_prompt.contains(detail));
+    assert!(repeat_prompt.contains("Is it still steady?"));
+}
+
+#[tokio::test]
+async fn question_finding_failed_roll_and_extra_schema_fields_cannot_establish_facts() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let scene = merchant_shop_room();
+    for (case, (succeeded, candidate)) in [
+        (
+            false,
+            json!({"answer":"Pip sees a steady counter.", "established_detail":"The legs are steady."}).to_string(),
+        ),
+        (
+            true,
+            json!({"answer":"Pip sees the marks.", "established_detail":null, "secret":"A hidden vault."}).to_string(),
+        ),
+        (true, r#"{"answer":"Pip sees the marks.","answer":"Pip sees new marks.","established_detail":null}"#.into()),
+    ].into_iter().enumerate() {
+        let check = rpc::AbilityCheckResult {
+            succeeded,
+            total: 18,
+            source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+            ..Default::default()
+        };
+        let jev = FakeEndpoint::start(vec![answer("o1")]);
+        let expression =
+            FakeEndpoint::start(vec![Reply::Output(json!({"answer":candidate}))]);
+        let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS40/question-rejection")
+            .join(format!("{}-{case}", std::process::id()));
+        let storyteller = teller(expression.address, 0, Duration::from_secs(5), &cache);
+        let result = complete_finding_for_question(
+            &storyteller,
+            &model(&jev),
+            &scene,
+            &check,
+            "Pip",
+            "Does the counter wobble?",
+            None,
+        )
+        .await;
+        assert!(result.unavailable);
+        assert!(result.established_detail.is_none());
+        assert!(result.selected_source_ids.is_empty());
+        assert_eq!(jev.connections(), 1, "a malformed candidate must not reach consistency approval");
+    }
+}
+
 fn room() -> Vec<Target> {
     [
         (
@@ -729,9 +894,12 @@ fn registered_search_accepts_repeated_and_different_targets_without_unrelated_fi
             let result = observation(&scene, &check).unwrap();
             assert_eq!(result.target.id, target.id, "{words}");
             assert!(!result.fallback().is_empty());
-            assert!(
-                result.finding.is_none(),
-                "{words} must not reveal a clue on another target"
+            // Salt Quay now records the courier's own purpose (RP-04). That exact
+            // inspection fact is allowed; the unrelated rat/document clues still are not.
+            assert_eq!(
+                result.finding,
+                recorded_finding(&scene, &target, skill).map(|finding| finding.sentence),
+                "{words} may reveal only its recorded target's inspection fact"
             );
             if index == 1 {
                 assert!(result.repeated);
@@ -1178,4 +1346,629 @@ fn a_plain_look_names_the_hero_and_the_place_and_never_says_you() {
         "Brakka looks around The Open Market. Tavin, the fruit seller, is at his stall."
     );
     assert!(!line.contains("You") && !line.contains("the room"));
+}
+
+#[test]
+fn successful_person_read_and_item_inspection_have_recorded_findings() {
+    let scene = merchant_shop_room();
+    let check_for = |skill: &str, target: &str| rpc::AbilityCheckResult {
+        succeeded: true,
+        source_revision: format!("srd521-p6:room:{skill}:target-{target}"),
+        ..Default::default()
+    };
+    let person = observation(&scene, &check_for("insight", "person-merchant")).unwrap();
+    let finding = person
+        .finding
+        .as_ref()
+        .expect("a successful read shows the recorded want");
+    assert!(
+        finding.contains("Sell suitable clothing at a fair price"),
+        "{finding}"
+    );
+    assert!(!finding.contains("is here"));
+    assert!(person.fallback_for("Pip", None).contains(finding));
+    assert!(person.public_view().fallback().contains(finding));
+    let item = observation(&scene, &check_for("investigation", "thing-shop-counter")).unwrap();
+    assert!(
+        item.finding
+            .unwrap()
+            .contains("years of repeated measurements")
+    );
+}
+
+#[test]
+fn failed_item_inspection_cannot_reveal_the_recorded_closer_look() {
+    let mut check = rpc::AbilityCheckResult {
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let scene = merchant_shop_room();
+    let failed = observation(&scene, &check).unwrap();
+    assert!(failed.finding.is_none());
+    let line = failed.fallback_for("Pip", None);
+    assert!(line.contains("can't make out any further detail"), "{line}");
+    assert!(
+        failed
+            .fallback()
+            .contains("can't make out any further detail")
+    );
+    assert!(
+        !failed
+            .facts()
+            .to_string()
+            .contains("years of repeated measurements")
+    );
+    check.succeeded = true;
+    check.source_revision = "srd521-p6:room:investigation:repeat-target-thing-shop-counter".into();
+    let repeated = observation(&scene, &check).unwrap();
+    assert!(repeated.finding.is_none());
+    assert!(repeated.fallback().contains("already examined"));
+}
+
+#[test]
+fn item_inspection_has_the_source_price_and_recorded_condition() {
+    let scene = merchant_shop_room();
+    let options = offered_targets(&scene);
+    let item = options
+        .iter()
+        .find(|target| target.id == "offer-warm-cloak-wool")
+        .unwrap();
+    let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+    let offer = model
+        .offers
+        .iter()
+        .find(|offer| offer.id == "warm-cloak-wool")
+        .unwrap();
+    assert!(item.description.contains("3 gp"), "{}", item.description);
+    assert!(
+        item.description
+            .contains(offer.description.trim_end_matches('.'))
+    );
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        source_revision: "srd521-p6:room:investigation:target-offer-warm-cloak-wool".into(),
+        ..Default::default()
+    };
+    let inspected = observation(&scene, &check).unwrap();
+    let line = inspected.fallback_for("Pip", None);
+    assert!(line.contains("Pip inspects"));
+    assert!(line.contains("3 gp"));
+    assert!(line.contains(offer.description.trim_end_matches('.')));
+    let failed = observation(
+        &scene,
+        &rpc::AbilityCheckResult {
+            succeeded: false,
+            ..check
+        },
+    )
+    .unwrap();
+    let failure_line = failed.fallback_for("Pip", None);
+    assert!(failure_line.contains("can't make out"));
+    assert!(failure_line.contains("3 gp"));
+    assert!(failure_line.contains(offer.description.trim_end_matches('.')));
+    assert!(failed.public_view().fallback().contains("3 gp"));
+}
+
+#[test]
+fn look_around_offers_people_goods_and_props_beyond_the_old_eight_option_limit() {
+    let mut scene = merchant_shop_room();
+    let options = offered_targets(&scene);
+    assert!(options.len() > 8);
+    assert!(options.iter().any(|target| target.id == "person-merchant"));
+    assert!(
+        options
+            .iter()
+            .any(|target| target.id == "thing-shop-counter")
+    );
+    assert!(
+        options
+            .iter()
+            .any(|target| target.id == "offer-clothes-fine")
+    );
+    let model = scene.setting.as_mut().unwrap().model.as_mut().unwrap();
+    let hidden = model
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == "folded-label")
+        .unwrap();
+    hidden.publicly_visible = false;
+    assert!(
+        !offered_targets(&scene)
+            .iter()
+            .any(|target| target.id == "thing-folded-label")
+    );
+}
+
+#[test]
+fn legacy_watch_finding_requires_its_target_binding_and_insight_skill() {
+    let mut scene = merchant_shop_room();
+    scene.speaker = "Marek".into();
+    scene.cast[0].id = "merchant".into();
+    scene.cast[0].name = "Marek".into();
+    scene.findings.push(pack::Finding {
+        id: "errand-truth".into(),
+        sentence: "Marek wants the frayed cloth sold before winter.".into(),
+        skill: pack::FindingSkill::Insight,
+        dc: 10,
+        private: false,
+        consequence: None,
+    });
+    let mut check = rpc::AbilityCheckResult {
+        succeeded: true,
+        source_revision: "srd521-p6:room:insight:watch-merchant".into(),
+        ..Default::default()
+    };
+    let found = crate::gameplay::beat_script_runtime::observation_finding(&scene, &check).unwrap();
+    assert_eq!(found.id, "errand-truth");
+    check.succeeded = false;
+    assert!(crate::gameplay::beat_script_runtime::observation_finding(&scene, &check).is_none());
+}
+
+#[tokio::test]
+async fn observation_completion_jev_selects_real_source_once_and_expression_sees_only_it() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let scene = merchant_shop_room();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 18,
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let sources = observation_sources(&scene, &check);
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.text.contains("repeated measurements"))
+    );
+    let jev = FakeEndpoint::start(vec![answer("o2")]);
+    let text = "Pip notices the marks left by years of repeated measurements.";
+    let expression = FakeEndpoint::start(vec![Reply::Output(json!({"finding": text}))]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/HS23/test-expression-success-{}",
+        std::process::id()
+    ));
+    let storyteller = teller(expression.address, 20_000, Duration::from_secs(5), &cache);
+    let (ids, line, unavailable) =
+        complete_finding(&storyteller, &model(&jev), &scene, &check, "Pip").await;
+    assert_eq!(ids, vec![sources[0].id.clone()]);
+    assert_eq!(line, text);
+    assert!(!unavailable);
+    assert_eq!(jev.connections(), 1);
+    assert_eq!(expression.connections(), 1);
+    assert!(!expression.bodies()[0].to_string().contains("knowledge"));
+}
+
+#[tokio::test]
+async fn observation_completion_failure_and_provider_failure_never_disclose_success() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let mut scene = merchant_shop_room();
+    scene.findings.push(pack::Finding {
+        id: "private-proof".into(),
+        sentence: "PRIVATE-CANARY-DESTINATION".into(),
+        skill: pack::FindingSkill::Investigation,
+        dc: 5,
+        private: true,
+        consequence: None,
+    });
+    let check = rpc::AbilityCheckResult {
+        succeeded: false,
+        total: 4,
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let jev = FakeEndpoint::start(vec![answer("o1")]);
+    let expression = FakeEndpoint::start(vec![Reply::Output(
+        json!({"finding": "Pip cannot make out any further detail."}),
+    )]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/HS23/test-expression-failure-{}",
+        std::process::id()
+    ));
+    let storyteller = teller(expression.address, 20_000, Duration::from_secs(5), &cache);
+    let (ids, line, unavailable) =
+        complete_finding(&storyteller, &model(&jev), &scene, &check, "Pip").await;
+    assert!(ids.is_empty());
+    assert_eq!(line, "Pip cannot make out any further detail.");
+    assert!(!unavailable);
+    for body in jev.bodies().into_iter().chain(expression.bodies()) {
+        assert!(!body.to_string().contains("PRIVATE-CANARY"));
+    }
+    let succeeded = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 20,
+        ..check
+    };
+    let (ids, line, unavailable) = complete_finding(
+        &Storyteller::disabled(),
+        &Default::default(),
+        &scene,
+        &succeeded,
+        "Pip",
+    )
+    .await;
+    assert!(ids.is_empty());
+    assert!(unavailable);
+    assert!(line.contains("can't make it out"));
+    assert!(!line.contains("repeated measurements"));
+    let jev = FakeEndpoint::start(vec![answer("o2")]);
+    let (ids, line, unavailable) = complete_finding(
+        &Storyteller::disabled(),
+        &model(&jev),
+        &scene,
+        &succeeded,
+        "Pip",
+    )
+    .await;
+    assert!(ids.is_empty());
+    assert!(unavailable);
+    assert!(line.contains("can't make it out"));
+    assert_eq!(jev.connections(), 1);
+}
+
+#[test]
+fn observation_completion_private_facts_and_harder_dc_are_not_eligible_sources() {
+    let mut scene = merchant_shop_room();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 10,
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let model = scene.setting.as_mut().unwrap().model.as_mut().unwrap();
+    model.people[0].knowledge[0].statement = "PRIVATE-ALPHA".into();
+    let first = serde_json::to_value(observation_sources(&scene, &check)).unwrap();
+    scene
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .people[0]
+        .knowledge[0]
+        .statement = "PRIVATE-BETA".into();
+    assert_eq!(
+        first,
+        serde_json::to_value(observation_sources(&scene, &check)).unwrap()
+    );
+    let counter = scene
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == "shop-counter")
+        .unwrap();
+    counter.dc = 25;
+    counter.closer_look = "HARDER-CANARY".into();
+    assert!(
+        !serde_json::to_string(&observation_sources(&scene, &check))
+            .unwrap()
+            .contains("HARDER-CANARY")
+    );
+    counter_private_sources(&mut scene, &check);
+}
+
+fn counter_private_sources(scene: &mut pack::Scene, check: &rpc::AbilityCheckResult) {
+    let counter = scene
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == "shop-counter")
+        .unwrap();
+    counter.publicly_visible = false;
+    counter.picture_description = "PRIVATE-OBJECT-CANARY".into();
+    assert!(
+        !serde_json::to_string(&observation_sources(scene, check))
+            .unwrap()
+            .contains("PRIVATE-OBJECT-CANARY")
+    );
+}
+
+#[test]
+fn observation_journal_duplicate_stale_and_phone_tv_notebook_use_exact_stored_text() {
+    use crate::gameplay::{beat_script_runtime, journey, model, notebook, wire};
+    use prost::Message;
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+    )
+    .unwrap();
+    pack::with_test_pack(loaded, || {
+        let (current, member) = opening();
+        let choices = [
+            ("attempt-skill", "insight"),
+            ("attempt-thing", "person-courier"),
+        ]
+        .into_iter()
+        .map(|(group, option)| (model::label(group).unwrap(), model::label(option).unwrap()))
+        .collect();
+        let input = crate::gameplay::beat_script_tests::input(
+            &current,
+            member,
+            77,
+            "script-choice",
+            choices,
+        );
+        let checked = journey::stage_with_supplier(&current, &input, &mut |_| Ok(18)).unwrap();
+        let check = journey::accepted(checked.state().decisions.last().unwrap())
+            .unwrap()
+            .check
+            .unwrap();
+        let scene = beat_script_runtime::scene(checked.state()).unwrap();
+        let operation = checked.state().decisions.last().unwrap().operation;
+        let who = journey::player_entity(member, &checked).unwrap();
+        let sources = observation_sources(&scene, &check);
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.text != "Courier is here.")
+        );
+        let record = journey::living_scene::ObservationFinding {
+            id: format!("observation-{}", journey::hex(operation.as_bytes())),
+            operation: journey::hex(operation.as_bytes()),
+            actor: journey::hex(who.as_bytes()),
+            hero: journey::name(checked.state(), who).unwrap(),
+            audience: "shared".into(),
+            check: journey::hex(&check.encode_to_vec()),
+            target: "person-courier".into(),
+            source_revision: check.source_revision.clone(),
+            source_epoch: checked.basis().revision.epoch().get(),
+            source_sequence: checked.basis().revision.sequence(),
+            source_hash: journey::living_scene::observation_source_hash(&scene).unwrap(),
+            scene: scene.key,
+            selected_source_ids: vec![sources[0].id.clone()],
+            text: format!("Brynn notices: {}", sources[0].text),
+            unavailable: false,
+        };
+        let completed =
+            journey::living_scene::commit_observation(&checked, checked.basis(), record.clone())
+                .unwrap();
+        let duplicate =
+            journey::living_scene::commit_observation(&completed, checked.basis(), record.clone())
+                .unwrap();
+        assert_eq!(duplicate, completed);
+        assert_eq!(
+            journey::living_scene::observation_for(completed.state(), operation).unwrap(),
+            Some(record.clone())
+        );
+        let mut stale = checked.basis();
+        stale.revision = stale.revision.next_sequence().unwrap();
+        assert!(
+            journey::living_scene::commit_observation(&checked, stale, record.clone()).is_err()
+        );
+        let mut wrong_source = record.clone();
+        wrong_source.source_hash = "changed".into();
+        assert!(
+            journey::living_scene::commit_observation(&checked, checked.basis(), wrong_source)
+                .is_err()
+        );
+        let mut tampered = completed.state().clone();
+        let decision = tampered.decisions.last_mut().unwrap();
+        let text = decision
+            .semantic_output
+            .as_deref()
+            .unwrap()
+            .strip_prefix("living-scene-2:")
+            .unwrap();
+        let mut encoded: serde_json::Value = serde_json::from_str(text).unwrap();
+        encoded["observation"]["source_sequence"] = json!(record.source_sequence + 1);
+        decision.semantic_output = Some(format!("living-scene-2:{}", encoded));
+        assert!(journey::living_scene::observation_journal(&tampered).is_err());
+        let projected = beat_script_runtime::scene(completed.state()).unwrap();
+        assert_eq!(
+            beat_script_runtime::observation_finding(&projected, &check)
+                .unwrap()
+                .sentence,
+            record.text
+        );
+        let phone = wire::journey_view(
+            &completed,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let Some(rpc::view_message::Audience::Player(phone)) = phone.audience else {
+            panic!("phone audience");
+        };
+        assert_eq!(phone.narration, record.text);
+        assert_eq!(phone.check, Some(check.clone()));
+        let tv = wire::journey_view(
+            &completed,
+            df_persistence::local_demo_scope::LocalDemoRole::Display,
+            member,
+        )
+        .unwrap();
+        let Some(rpc::view_message::Audience::Display(tv)) = tv.audience else {
+            panic!("tv audience");
+        };
+        assert_eq!(tv.check, Some(check));
+        let ledger = notebook::NotebookLedger::none();
+        let other_member = MemberId::from_bytes(&[0x62; 16]).unwrap();
+        ledger
+            .add_clue(
+                member,
+                &record.hero,
+                &record.id,
+                &record.text,
+                "The Broken Seal",
+            )
+            .unwrap();
+        assert!(ledger.visible_to(other_member).is_empty());
+        let table = crate::gameplay::table_log::TableLog::new();
+        let mut published = Default::default();
+        for _ in 0..2 {
+            crate::gameplay::actor::materialize_observation(
+                &table,
+                &ledger,
+                &mut published,
+                member,
+                &record,
+            )
+            .unwrap();
+        }
+        assert_eq!(ledger.visible_to(member)[0].text, record.text);
+        assert_eq!(ledger.visible_to(member).len(), 1);
+        assert_eq!(ledger.visible_to(other_member)[0].text, record.text);
+        assert_eq!(table.lines().last().unwrap().text, record.text);
+        assert_eq!(table.lines().len(), 1);
+    });
+}
+
+#[test]
+fn salt_quay_opening_catalog_has_recorded_visible_objects_and_safe_inspection_sources() {
+    let content: pack::PackFile = serde_json::from_slice(include_bytes!(
+        "../../../../content/harbor-journey/pack.json"
+    ))
+    .unwrap();
+    let scene = content
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap();
+    let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+    model.validate_structure().unwrap();
+    let offers = offered_targets(scene);
+    for id in [
+        "sealed-packet",
+        "broken-seal",
+        "salted-fish-crates",
+        "moored-boat",
+        "rope-coils",
+        "lantern-post",
+    ] {
+        assert!(
+            offers
+                .iter()
+                .any(|target| target.id == format!("thing-{id}")),
+            "missing {id}"
+        );
+    }
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 13,
+        source_revision: "srd521-p6:opening:insight:target-person-courier".into(),
+        ..Default::default()
+    };
+    let sources = serde_json::to_string(&observation_sources(scene, &check)).unwrap();
+    assert!(sources.contains("delivering the packet"));
+    assert!(!sources.contains("Vell"));
+    assert!(!sources.contains("Harbor Inn"));
+}
+
+#[tokio::test]
+async fn observation_completion_hidden_target_names_do_not_change_jev_or_expression_prompts() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let mut scene = merchant_shop_room();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 20,
+        source_revision: "srd521-p6:room:investigation:target-thing-shop-counter".into(),
+        ..Default::default()
+    };
+    let jev = FakeEndpoint::start(vec![answer("o1"), answer("o1")]);
+    let line = "Pip cannot make out anything certain about the scene.";
+    let expression = FakeEndpoint::start(vec![Reply::Output(json!({"finding": line}))]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/HS23/hidden-target-{}",
+        std::process::id()
+    ));
+    let storyteller = teller(expression.address, 20_000, Duration::from_secs(5), &cache);
+    let mut outcomes = Vec::new();
+    for hidden in ["PRIVATE-NAME-ALPHA", "PRIVATE-NAME-BETA"] {
+        let thing = scene
+            .setting
+            .as_mut()
+            .unwrap()
+            .model
+            .as_mut()
+            .unwrap()
+            .things
+            .iter_mut()
+            .find(|thing| thing.id == "shop-counter")
+            .unwrap();
+        thing.publicly_visible = false;
+        thing.name = hidden.into();
+        thing.picture_description = format!("PRIVATE-PICTURE-{hidden}");
+        outcomes.push(complete_finding(&storyteller, &model(&jev), &scene, &check, "Pip").await);
+    }
+    assert_eq!(outcomes[0], outcomes[1]);
+    assert_eq!(outcomes[0].1, line);
+    for body in jev.bodies().into_iter().chain(expression.bodies()) {
+        assert!(!body.to_string().contains("PRIVATE-NAME"));
+        assert!(!body.to_string().contains("PRIVATE-PICTURE"));
+    }
+}
+
+#[test]
+fn private_observation_grants_ignore_shared_projection_rows_with_identical_check_bytes() {
+    use prost::Message;
+    let mut scene = merchant_shop_room();
+    let person = scene
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .people
+        .iter_mut()
+        .find(|person| person.id == "merchant")
+        .unwrap();
+    person.knowledge[0].fact_id = "private-inspection".into();
+    let check = rpc::AbilityCheckResult {
+        succeeded: true,
+        total: 18,
+        source_revision: "srd521-p6:room:insight:target-person-merchant".into(),
+        ..Default::default()
+    };
+    scene.findings.push(pack::Finding {
+        id: "private-inspection".into(),
+        sentence: "MEMBER-PRIVATE-FACT".into(),
+        skill: pack::FindingSkill::Insight,
+        dc: 10,
+        private: true,
+        consequence: None,
+    });
+    scene.findings.push(pack::Finding {
+        id: "observation-prior-hero".into(),
+        sentence: "First hero's public line.".into(),
+        skill: pack::FindingSkill::Perception,
+        dc: 0,
+        private: false,
+        consequence: Some(format!(
+            "observation-check:{}",
+            crate::gameplay::journey::hex(&check.encode_to_vec())
+        )),
+    });
+    for _hero in ["first hero", "second hero"] {
+        assert_eq!(
+            private_observation_finding(&scene, &check)
+                .unwrap()
+                .sentence,
+            "MEMBER-PRIVATE-FACT"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&observation_sources(&scene, &check))
+            .unwrap()
+            .contains("MEMBER-PRIVATE-FACT")
+    );
 }

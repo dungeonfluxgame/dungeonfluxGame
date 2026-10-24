@@ -87,6 +87,7 @@ fn melee(id: u32, cell: Cell) -> CombatantSpec {
         size: Size::Medium,
         kind: CreatureKind::Hero,
         species: Some(crate::local_journey::HeroSpecies::Dwarf),
+        species_options: Default::default(),
         abilities: [17, 13, 15, 10, 12, 8],
         armor_class: 17,
         hit_points: 13,
@@ -3272,4 +3273,696 @@ fn r2_sunlit_wight_group_initiative_uses_one_disadvantaged_source_check() {
     );
     assert_eq!(result.battle.development_initiative(3), Some(7));
     assert_eq!(result.battle.development_initiative(4), Some(7));
+}
+
+fn species_hero(
+    id: u32,
+    species: &'static str,
+    extra: &[(&'static str, &'static str)],
+    cell: Cell,
+) -> CombatantSpec {
+    let mut choices = archer_choices();
+    for (key, value) in &mut choices {
+        *value = match *key {
+            "species" => species,
+            "array" => "stalwart",
+            "equipment" => "fighter-a-soldier-a",
+            "style-masteries" => "defense-greatsword-flail-javelin",
+            _ => *value,
+        };
+    }
+    choices.extend(extra.iter().copied());
+    let character = crate::local_journey::validate_character(
+        &crate::local_journey::CreationRules::srd_521(),
+        "Brynn",
+        &choices,
+    )
+    .unwrap();
+    CombatantSpec::melee_hero(&character, id, cell).unwrap()
+}
+fn species_step(
+    battle: &Battle,
+    actor: u32,
+    action: SpeciesAction,
+    faces: &[(u32, u32)],
+) -> Resolution {
+    let source = source();
+    resolve_species(
+        battle,
+        actor,
+        &action,
+        binding(&source),
+        &records(&source, faces),
+    )
+    .unwrap()
+}
+#[test]
+fn srd_521_all_nine_species_reach_tactical_validation_and_keep_their_derived_profiles() {
+    for (species, extra, hp, speed, size) in [
+        (
+            "dragonborn",
+            vec![("draconic-ancestry", "red")],
+            12,
+            30,
+            Size::Medium,
+        ),
+        ("dwarf", vec![], 13, 30, Size::Medium),
+        (
+            "elf",
+            vec![
+                ("elven-lineage", "wood-elf"),
+                ("keen-senses", "insight"),
+                ("species-spellcasting", "wisdom"),
+            ],
+            12,
+            35,
+            Size::Medium,
+        ),
+        (
+            "gnome",
+            vec![
+                ("gnomish-lineage", "forest-gnome"),
+                ("species-spellcasting", "wisdom"),
+            ],
+            12,
+            30,
+            Size::Small,
+        ),
+        (
+            "goliath",
+            vec![("giant-ancestry", "fire")],
+            12,
+            35,
+            Size::Medium,
+        ),
+        ("halfling", vec![], 12, 30, Size::Small),
+        (
+            "human",
+            vec![
+                ("species-size", "small"),
+                ("human-skill", "arcana"),
+                ("versatile", "tough"),
+            ],
+            14,
+            30,
+            Size::Small,
+        ),
+        ("orc", vec![], 12, 30, Size::Medium),
+        (
+            "tiefling",
+            vec![
+                ("fiendish-legacy", "infernal"),
+                ("species-size", "medium"),
+                ("species-spellcasting", "charisma"),
+            ],
+            12,
+            30,
+            Size::Medium,
+        ),
+    ] {
+        let spec = species_hero(1, species, &extra, Cell(1, 1));
+        assert_eq!(
+            (spec.hit_points, spec.speed_ft, spec.size),
+            (hp, speed, size),
+            "{species}"
+        );
+        let state = battle(vec![
+            spec.clone(),
+            CombatantSpec::creature(3, "bandit", Cell(5, 1), 0).unwrap(),
+        ]);
+        assert_eq!(
+            Battle::from_snapshot(map("open-court"), &state.snapshot().unwrap()).unwrap(),
+            state
+        );
+        assert!(spec.at_fighter_level(5).is_ok(), "{species}");
+    }
+}
+#[test]
+fn srd_521_halfling_nimbleness_crosses_larger_enemy_but_cannot_stop_or_cross_equal_size() {
+    let halfling = species_hero(1, "halfling", &[], Cell(1, 1));
+    let state = battle(vec![
+        halfling,
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    assert_eq!(state.validate_path(1, &[Cell(2, 1), Cell(3, 1)]), Ok(15));
+    assert_eq!(
+        state.validate_path(1, &[Cell(2, 1)]),
+        Err(RuleError::Occupied)
+    );
+    let state = battle(vec![
+        species_hero(1, "halfling", &[], Cell(1, 1)),
+        CombatantSpec::creature(3, "goblin-warrior", Cell(2, 1), 0).unwrap(),
+    ]);
+    assert_eq!(
+        state.validate_path(1, &[Cell(2, 1), Cell(3, 1)]),
+        Err(RuleError::Occupied)
+    );
+}
+#[test]
+fn srd_521_dragonborn_breath_saves_include_allies_resistance_and_do_not_use_attack_roll_criticals()
+{
+    let dragon = species_hero(1, "dragonborn", &[("draconic-ancestry", "red")], Cell(1, 1));
+    let ally = species_hero(
+        2,
+        "tiefling",
+        &[
+            ("fiendish-legacy", "infernal"),
+            ("species-size", "small"),
+            ("species-spellcasting", "wisdom"),
+        ],
+        Cell(2, 1),
+    );
+    let state = battle(vec![
+        dragon,
+        ally,
+        CombatantSpec::creature(3, "bandit", Cell(3, 1), 0).unwrap(),
+    ]);
+    let result = species_step(
+        &state,
+        1,
+        SpeciesAction::BreathWeapon {
+            shape: BreathShape::Line,
+            direction: BreathDirection { column: 1, row: 0 },
+            spend: AttackSpend::Action,
+        },
+        &[(10, 9), (20, 1), (20, 20)],
+    );
+    assert_eq!(result.saving_throws.len(), 2);
+    assert_eq!(
+        (
+            result.saving_throws[0].dc,
+            result.saving_throws[0].modifier,
+            result.saving_throws[0].damage
+        ),
+        (12, 1, 4)
+    );
+    assert!(!result.saving_throws[0].success);
+    assert!(result.saving_throws[1].success);
+    assert_eq!(result.saving_throws[1].damage, 4);
+    assert_eq!(result.battle.actor(1).unwrap().species_uses_remaining(), 1);
+    assert_eq!(result.battle.actor(2).unwrap().health().hit_points, 8);
+    assert_eq!(result.battle.actor(3).unwrap().health().hit_points, 7);
+    rejects(&result.battle, 1, Action::Dodge, RuleError::ActionSpent);
+    assert_eq!(
+        Battle::from_snapshot(map("open-court"), &result.battle.snapshot().unwrap()).unwrap(),
+        result.battle
+    );
+}
+#[test]
+fn srd_521_dragonborn_breath_shapes_and_extra_attack_and_exhaustion_follow_source() {
+    let dragon = species_hero(
+        1,
+        "dragonborn",
+        &[("draconic-ancestry", "blue")],
+        Cell(1, 2),
+    )
+    .at_fighter_level(5)
+    .unwrap();
+    let state = battle(vec![
+        dragon,
+        CombatantSpec::creature(3, "bandit", Cell(3, 3), 0).unwrap(),
+        CombatantSpec::creature(4, "bandit", Cell(5, 2), 0).unwrap(),
+    ]);
+    let action = SpeciesAction::BreathWeapon {
+        shape: BreathShape::Cone,
+        direction: BreathDirection { column: 1, row: 0 },
+        spend: AttackSpend::Action,
+    };
+    let result = species_step(&state, 1, action.clone(), &[(10, 2), (10, 3), (20, 1)]);
+    assert_eq!(
+        result
+            .saving_throws
+            .iter()
+            .map(|save| save.target)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    assert_eq!(result.battle.actor(1).unwrap().extra_attacks, 1);
+    let state = result.battle.with_hero_species_uses(1, 0).unwrap();
+    let src = source();
+    assert_eq!(
+        resolve_species(&state, 1, &action, binding(&src), &[]),
+        Err(RuleError::RecoveryUnavailable)
+    );
+}
+#[test]
+fn srd_521_goliath_fire_frost_and_hill_are_optional_spend_only_on_damage_and_keep_expiry() {
+    for ancestry in ["fire", "frost", "hill"] {
+        let state = battle(vec![
+            species_hero(1, "goliath", &[("giant-ancestry", ancestry)], Cell(1, 1)),
+            CombatantSpec::creature(3, "ogre", Cell(2, 1), 0).unwrap(),
+        ]);
+        let Action::Attack {
+            target,
+            weapon,
+            spend,
+        } = strike(3, Weapon::Greatsword, false)
+        else {
+            panic!("attack")
+        };
+        let action = SpeciesAction::AncestryAttack {
+            target,
+            weapon,
+            spend,
+        };
+        let miss = species_step(&state, 1, action.clone(), &[(20, 2)]);
+        assert_eq!(miss.battle.actor(1).unwrap().species_uses_remaining(), 2);
+        let mut faces = vec![(20, 15), (6, 2), (6, 3)];
+        if ancestry == "fire" {
+            faces.push((10, 7));
+        }
+        if ancestry == "frost" {
+            faces.push((6, 4));
+        }
+        let result = species_step(&state, 1, action, &faces);
+        assert_eq!(result.battle.actor(1).unwrap().species_uses_remaining(), 1);
+        let foe = result.battle.actor(3).unwrap();
+        assert_eq!(foe.health().prone, ancestry == "hill");
+        if ancestry == "frost" {
+            assert_eq!(foe.speed_ft(), 30);
+        }
+        if ancestry == "fire" {
+            assert_eq!(result.attacks[0].ancestry_damage, 7);
+        }
+        let restored =
+            Battle::from_snapshot(map("open-court"), &result.battle.snapshot().unwrap()).unwrap();
+        assert_eq!(restored, result.battle);
+        let next = next_turn(result.battle, 1);
+        assert_eq!(next.actor(3).unwrap().speed_ft(), 40);
+    }
+}
+#[test]
+fn srd_521_goliath_stone_and_storm_offer_owner_reactions_and_snapshot_pending_damage() {
+    for ancestry in ["stone", "storm"] {
+        let state = battle(vec![
+            species_hero(1, "goliath", &[("giant-ancestry", ancestry)], Cell(1, 1)),
+            CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+        ]);
+        let state = next_turn(state, 3);
+        let result = step(
+            &state,
+            3,
+            strike(1, Weapon::Scimitar, false),
+            &[(20, 18), (6, 5)],
+        );
+        assert_eq!(
+            result.battle.species_reaction_offer().map(|offer| offer.0),
+            Some(1)
+        );
+        let state =
+            Battle::from_snapshot(map("open-court"), &result.battle.snapshot().unwrap()).unwrap();
+        rejects(&state, 3, Action::EndTurn, RuleError::PendingReaction);
+        let src = source();
+        assert_eq!(
+            resolve_species(
+                &state,
+                3,
+                &SpeciesAction::Reaction { use_trait: true },
+                binding(&src),
+                &[]
+            ),
+            Err(RuleError::InvalidReaction)
+        );
+        let result = species_step(
+            &state,
+            1,
+            SpeciesAction::Reaction { use_trait: true },
+            &[if ancestry == "stone" { (12, 3) } else { (8, 4) }],
+        );
+        assert!(result.battle.species_reaction_offer().is_none());
+        assert_eq!(result.battle.actor(1).unwrap().species_uses_remaining(), 1);
+        assert!(result.battle.actor(1).unwrap().budget().reaction_used);
+        assert_eq!(
+            result.battle.actor(1).unwrap().health().hit_points,
+            if ancestry == "stone" { 11 } else { 6 }
+        );
+        assert_eq!(
+            result.battle.actor(3).unwrap().health().hit_points,
+            if ancestry == "stone" { 11 } else { 7 }
+        );
+        let declined = species_step(&state, 1, SpeciesAction::Reaction { use_trait: false }, &[]);
+        assert_eq!(
+            declined.battle.actor(1).unwrap().species_uses_remaining(),
+            2
+        );
+        assert!(!declined.battle.actor(1).unwrap().budget().reaction_used);
+    }
+}
+#[test]
+fn srd_521_species_uses_and_orc_endurance_survive_encounters_and_recharge_only_on_long_rest() {
+    for (species, extra) in [
+        ("orc", vec![]),
+        ("dragonborn", vec![("draconic-ancestry", "black")]),
+        ("goliath", vec![("giant-ancestry", "stone")]),
+    ] {
+        let mut state = battle(vec![
+            species_hero(1, species, &extra, Cell(1, 1)),
+            CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+        ]);
+        state.actor_mut(3).unwrap().health.dead = true;
+        state.actor_mut(3).unwrap().health.hit_points = 0;
+        if species == "orc" {
+            state = state.with_hero_feature_resources(1, 10, false).unwrap();
+        } else {
+            state = state.with_hero_species_uses(1, 0).unwrap();
+        }
+        let state = step(
+            &state,
+            1,
+            Action::ShortRest {
+                elapsed_seconds: 3600,
+            },
+            &[],
+        )
+        .battle;
+        assert!(
+            !state
+                .actor(1)
+                .unwrap()
+                .spec()
+                .relentless_endurance_available
+        );
+        assert_eq!(state.actor(1).unwrap().species_uses_remaining(), 0);
+        let state = step(
+            &state,
+            1,
+            Action::LongRest {
+                elapsed_seconds: 28800,
+            },
+            &[],
+        )
+        .battle;
+        if species == "orc" {
+            assert!(
+                state
+                    .actor(1)
+                    .unwrap()
+                    .spec()
+                    .relentless_endurance_available
+            );
+        } else {
+            assert_eq!(state.actor(1).unwrap().species_uses_remaining(), 2);
+        }
+    }
+}
+
+#[test]
+fn srd_521_goliath_critical_hit_doubles_added_attack_damage_dice() {
+    let state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "fire")], Cell(1, 1)),
+        CombatantSpec::creature(3, "ogre", Cell(2, 1), 0).unwrap(),
+    ]);
+    let Action::Attack {
+        target,
+        weapon,
+        spend,
+    } = strike(3, Weapon::Greatsword, false)
+    else {
+        panic!("attack")
+    };
+    let result = species_step(
+        &state,
+        1,
+        SpeciesAction::AncestryAttack {
+            target,
+            weapon,
+            spend,
+        },
+        &[(20, 20), (6, 2), (6, 3), (6, 2), (6, 3), (10, 4), (10, 5)],
+    );
+    assert!(result.attacks[0].critical);
+    assert_eq!(result.attacks[0].ancestry_damage, 9);
+    assert_eq!(result.battle.actor(1).unwrap().species_uses_remaining(), 1);
+}
+#[test]
+fn srd_521_wight_breath_save_uses_published_dexterity_save_not_initiative_modifier() {
+    let state = battle(vec![
+        species_hero(1, "dragonborn", &[("draconic-ancestry", "red")], Cell(1, 1)),
+        CombatantSpec::creature(3, "wight", Cell(2, 1), 0).unwrap(),
+    ]);
+    let result = species_step(
+        &state,
+        1,
+        SpeciesAction::BreathWeapon {
+            shape: BreathShape::Line,
+            direction: BreathDirection { column: 1, row: 0 },
+            spend: AttackSpend::Action,
+        },
+        &[(10, 7), (20, 10)],
+    );
+    assert_eq!(result.saving_throws[0].modifier, 2);
+    assert!(result.saving_throws[0].success);
+    assert_eq!(result.saving_throws[0].damage, 3);
+}
+#[test]
+fn srd_521_pending_stone_reaction_on_opportunity_attack_resumes_the_saved_move() {
+    let state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "stone")], Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    let moved = step(&state, 1, Action::Move(vec![Cell(0, 1)]), &[]);
+    assert_eq!(moved.battle.reaction_offers(), [3]);
+    let Action::Attack { weapon, .. } = strike(1, Weapon::Scimitar, false) else {
+        panic!("attack")
+    };
+    let attacked = step(
+        &moved.battle,
+        3,
+        Action::Opportunity {
+            attack: Some(weapon),
+        },
+        &[(20, 18), (6, 4)],
+    );
+    assert!(attacked.battle.species_reaction_offer().is_some());
+    let restored =
+        Battle::from_snapshot(map("open-court"), &attacked.battle.snapshot().unwrap()).unwrap();
+    let reacted = species_step(
+        &restored,
+        1,
+        SpeciesAction::Reaction { use_trait: true },
+        &[(12, 5)],
+    );
+    assert_eq!(reacted.battle.actor(1).unwrap().cell(), Cell(0, 1));
+    assert_eq!(reacted.battle.actor(1).unwrap().health().hit_points, 12);
+    assert!(reacted.battle.reaction_offers().is_empty());
+}
+
+#[test]
+fn srd_521_dodge_retains_dexterity_save_advantage_when_breath_source_is_unseen() {
+    let mut state = battle_with_map(
+        map("open-court").with_lighting(Lighting::Darkness),
+        vec![
+            species_hero(1, "dragonborn", &[("draconic-ancestry", "red")], Cell(1, 1)),
+            species_hero(
+                2,
+                "human",
+                &[
+                    ("species-size", "medium"),
+                    ("human-skill", "arcana"),
+                    ("versatile", "tough"),
+                ],
+                Cell(2, 1),
+            ),
+            CombatantSpec::creature(3, "bandit", Cell(9, 1), 0).unwrap(),
+        ],
+    );
+    state.actor_mut(2).unwrap().budget.dodging = true;
+    state.actor_mut(2).unwrap().budget.action_used = true;
+    assert!(!state.can_see_actor(state.actor(2).unwrap(), state.actor(1).unwrap()));
+    let result = species_step(
+        &state,
+        1,
+        SpeciesAction::BreathWeapon {
+            shape: BreathShape::Line,
+            direction: BreathDirection { column: 1, row: 0 },
+            spend: AttackSpend::Action,
+        },
+        &[(10, 9), (20, 2), (20, 18)],
+    );
+    assert_eq!(result.saving_throws[0].die, 18);
+    assert!(result.saving_throws[0].success);
+    assert_eq!(result.saving_throws[0].damage, 4);
+}
+
+#[test]
+fn srd_521_breath_total_cover_uses_small_and_large_target_heights() {
+    for (creature, height, expected) in [("goblin-warrior", 1.2, 0), ("ogre", 1.8, 1)] {
+        let data = serde_json::json!({"schema":2,"grid":{"cols":10,"rows":5,"blocked":[]},
+            "layouts":[{"id":"breath-height","obstacles":[{"id":"barrier","kind":"wall","cells":[[2,1]],"blocks_movement":false,"cover":"total","height_m":height}],
+            "difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[3,1]]}}]});
+        let map = BattleMap::from_json(data.to_string().as_bytes(), "breath-height").unwrap();
+        let state = battle_with_map(
+            map,
+            vec![
+                species_hero(1, "dragonborn", &[("draconic-ancestry", "red")], Cell(1, 1)),
+                CombatantSpec::creature(3, creature, Cell(3, 1), 0).unwrap(),
+            ],
+        );
+        let faces = if expected == 0 {
+            vec![(10, 7)]
+        } else {
+            vec![(10, 7), (20, 10)]
+        };
+        let result = species_step(
+            &state,
+            1,
+            SpeciesAction::BreathWeapon {
+                shape: BreathShape::Line,
+                direction: BreathDirection { column: 1, row: 0 },
+                spend: AttackSpend::Action,
+            },
+            &faces,
+        );
+        assert_eq!(result.saving_throws.len(), expected, "{creature}");
+        if expected == 1 {
+            assert_eq!(result.saving_throws[0].modifier, 1);
+        }
+    }
+}
+
+#[test]
+fn srd_521_species_acid_and_fire_inhibit_troll_regeneration_for_exactly_one_turn() {
+    for colour in ["black", "red"] {
+        let mut state = battle(vec![
+            species_hero(
+                1,
+                "dragonborn",
+                &[("draconic-ancestry", colour)],
+                Cell(1, 1),
+            ),
+            CombatantSpec::creature(3, "troll", Cell(3, 1), 0).unwrap(),
+        ]);
+        state.actor_mut(3).unwrap().health.hit_points = 20;
+        let result = species_step(
+            &state,
+            1,
+            SpeciesAction::BreathWeapon {
+                shape: BreathShape::Line,
+                direction: BreathDirection { column: 1, row: 0 },
+                spend: AttackSpend::Action,
+            },
+            &[(10, 7), (20, 1)],
+        );
+        let state =
+            Battle::from_snapshot(map("open-court"), &result.battle.snapshot().unwrap()).unwrap();
+        let state = next_turn(state, 3);
+        assert_eq!(state.actor(3).unwrap().health().hit_points, 13, "{colour}");
+        let state = next_turn(state, 1);
+        let state = next_turn(state, 3);
+        assert_eq!(state.actor(3).unwrap().health().hit_points, 28, "{colour}");
+    }
+}
+#[test]
+fn srd_521_troll_dies_at_zero_on_inhibited_turn_and_cold_does_not_inhibit() {
+    for colour in ["red", "black", "silver"] {
+        let mut state = battle(vec![
+            species_hero(
+                1,
+                "dragonborn",
+                &[("draconic-ancestry", colour)],
+                Cell(1, 1),
+            ),
+            CombatantSpec::creature(3, "troll", Cell(3, 1), 0).unwrap(),
+        ]);
+        state.actor_mut(3).unwrap().health.hit_points = 1;
+        let result = species_step(
+            &state,
+            1,
+            SpeciesAction::BreathWeapon {
+                shape: BreathShape::Line,
+                direction: BreathDirection { column: 1, row: 0 },
+                spend: AttackSpend::Action,
+            },
+            &[(10, 7), (20, 1)],
+        );
+        assert_eq!(result.battle.actor(3).unwrap().health().hit_points, 0);
+        assert!(!result.battle.actor(3).unwrap().health().dead);
+        let state = next_turn(result.battle, 3);
+        assert_eq!(state.actor(3).unwrap().health().dead, colour != "silver");
+        assert_eq!(
+            state.actor(3).unwrap().health().hit_points,
+            if colour == "silver" { 15 } else { 0 }
+        );
+    }
+}
+#[test]
+fn srd_521_goliath_fire_inhibits_troll_regeneration_on_a_damaging_hit() {
+    let mut state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "fire")], Cell(1, 1)),
+        CombatantSpec::creature(3, "troll", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.actor_mut(3).unwrap().health.hit_points = 20;
+    let Action::Attack {
+        target,
+        weapon,
+        spend,
+    } = strike(3, Weapon::Greatsword, false)
+    else {
+        panic!("attack")
+    };
+    let result = species_step(
+        &state,
+        1,
+        SpeciesAction::AncestryAttack {
+            target,
+            weapon,
+            spend,
+        },
+        &[(20, 15), (6, 2), (6, 3), (10, 4)],
+    );
+    let state = next_turn(result.battle, 3);
+    assert_eq!(state.actor(3).unwrap().health().hit_points, 8);
+}
+
+#[test]
+fn srd_521_goliath_ancestry_can_be_chosen_for_an_off_turn_opportunity_attack() {
+    let state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "fire")], Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    let state = next_turn(state, 3);
+    let moved = step(&state, 3, Action::Move(vec![Cell(3, 1)]), &[]);
+    assert_eq!(moved.battle.reaction_offers(), [1]);
+    let Action::Attack { weapon, .. } = strike(3, Weapon::Greatsword, false) else {
+        panic!("attack")
+    };
+    let result = species_step(
+        &moved.battle,
+        1,
+        SpeciesAction::AncestryOpportunity { attack: weapon },
+        &[(20, 15), (6, 1), (6, 1), (10, 2)],
+    );
+    assert_eq!(result.attacks[0].ancestry_damage, 2);
+    assert_eq!(result.battle.actor(1).unwrap().species_uses_remaining(), 1);
+    assert!(result.battle.actor(1).unwrap().budget().reaction_used);
+    assert_eq!(result.battle.actor(3).unwrap().cell(), Cell(3, 1));
+}
+
+#[test]
+fn srd_521_resumed_damage_uses_wide_zombie_save_arithmetic_at_the_snapshot_boundary() {
+    let state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "stone")], Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "zombie", Cell(4, 1), 0).unwrap(),
+    ]);
+    let state = next_turn(state, 3);
+    let hit = step(
+        &state,
+        3,
+        strike(1, Weapon::Scimitar, false),
+        &[(20, 18), (6, 4)],
+    );
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&hit.battle.snapshot().unwrap()).unwrap();
+    snapshot["species_damage"].as_array_mut().unwrap().push(serde_json::json!({"source":3,"target":4,"amount":u16::MAX,"critical":false,"knockout":false,"applied":false}));
+    let restored =
+        Battle::from_snapshot(map("open-court"), &serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let result = species_step(
+        &restored,
+        1,
+        SpeciesAction::Reaction { use_trait: false },
+        &[(20, 20)],
+    );
+    assert!(result.battle.actor(4).unwrap().health().dead);
+    assert_eq!(result.battle.actor(4).unwrap().health().hit_points, 0);
 }

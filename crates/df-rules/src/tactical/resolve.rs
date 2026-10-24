@@ -68,6 +68,7 @@ pub enum D20Test {
     DeathSave,
     AbilityCheck,
     Initiative,
+    SavingThrow,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct D20Reroll {
@@ -167,6 +168,8 @@ pub struct AttackSummary {
     pub damage: u16,
     pub damage_type: DamageType,
     pub necrotic_damage: u16,
+    pub ancestry_damage: u16,
+    pub ancestry_damage_type: Option<DamageType>,
     pub graze: bool,
     pub knocked_out: bool,
     pub killed: bool,
@@ -226,6 +229,158 @@ pub struct Resolution {
     pub helps: Vec<HelpSummary>,
     pub stabilizations: Vec<StabilizationSummary>,
     pub rerolls: Vec<D20Reroll>,
+    pub saving_throws: Vec<super::SavingThrowSummary>,
+}
+
+/// Source-specific actions remain separate from the existing weapon/movement protocol.
+/// The session owner offers and authorizes these typed decisions, then commits this successor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SpeciesAction {
+    BreathWeapon {
+        shape: super::BreathShape,
+        direction: super::BreathDirection,
+        spend: AttackSpend,
+    },
+    AncestryAttack {
+        target: u32,
+        weapon: AttackUse,
+        spend: AttackSpend,
+    },
+    /// The ancestry trigger also applies to damaging opportunity attack hits (SRD p.85).
+    AncestryOpportunity {
+        attack: AttackUse,
+    },
+    Reaction {
+        use_trait: bool,
+    },
+}
+/// Resolve a species action using the same draw binding, action economy and detached battle.
+pub fn resolve_species(
+    battle: &Battle,
+    actor: u32,
+    action: &SpeciesAction,
+    binding: DrawBinding<'_>,
+    records: &[ActualDraw],
+) -> Result<Resolution, RuleError> {
+    let mut next = battle.clone();
+    let mut draws = Draws::new(binding, records)?;
+    let mut rerolls = Vec::new();
+    let mut saving_throws = Vec::new();
+    let mut attacks = Vec::new();
+    let mut moves = Vec::new();
+    if let SpeciesAction::Reaction { use_trait } = action {
+        super::species::react_damage(&mut next, actor, *use_trait, &mut draws)?;
+        if let Some(pending) = &next.pending
+            && (next.actor(pending.actor)?.health.incapacitated() || next.finished())
+        {
+            next.pending = None;
+        }
+        if next.species_reaction_offer().is_none()
+            && next
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.eligible.is_empty())
+        {
+            let mover = next
+                .pending
+                .as_ref()
+                .ok_or(RuleError::NoPendingReaction)?
+                .actor;
+            let from = next.actor(mover)?.cell();
+            let mut steps = Vec::new();
+            continue_move(&mut next, true, &mut steps)?;
+            moves.extend(move_summary(&next, mover, from, steps)?);
+        }
+    } else if let SpeciesAction::AncestryOpportunity { attack } = action {
+        if next.species_reaction_offer().is_some() {
+            return Err(RuleError::PendingReaction);
+        }
+        super::species::validate_boon(&next, actor)?;
+        react(
+            &mut next,
+            actor,
+            OpportunityChoice {
+                attack: Some(*attack),
+                use_ancestry: true,
+            },
+            &mut draws,
+            &mut attacks,
+            &mut moves,
+            &mut rerolls,
+        )?;
+    } else {
+        if next.pending.is_some() || next.species_reaction_offer().is_some() {
+            return Err(RuleError::PendingReaction);
+        }
+        if next.finished() {
+            return Err(RuleError::Finished);
+        }
+        if next.active_actor() != Some(actor) {
+            return Err(RuleError::NotYourTurn);
+        }
+        if next.actor(actor)?.health.incapacitated() {
+            return Err(RuleError::Incapacitated);
+        }
+        if next.needs_death_save {
+            return Err(RuleError::NeedDeathSave);
+        }
+        match action {
+            SpeciesAction::BreathWeapon {
+                shape,
+                direction,
+                spend,
+            } => {
+                saving_throws.extend(super::species::breath(
+                    &mut next,
+                    actor,
+                    *shape,
+                    *direction,
+                    *spend,
+                    &mut draws,
+                    &mut rerolls,
+                )?);
+            }
+            SpeciesAction::AncestryAttack {
+                target,
+                weapon,
+                spend,
+            } => {
+                super::species::validate_boon(&next, actor)?;
+                if *spend == AttackSpend::Nick && !weapon.use_mastery {
+                    return Err(RuleError::InvalidExtraAttack);
+                }
+                admit_attack(&next, actor, *target, *weapon)?;
+                spend_attack(&mut next, actor, weapon.weapon, *spend)?;
+                attacks.push(attack(
+                    &mut next,
+                    actor,
+                    *target,
+                    *weapon,
+                    AttackOptions {
+                        spend: *spend,
+                        use_ancestry: true,
+                    },
+                    &mut draws,
+                    &mut rerolls,
+                )?);
+            }
+            SpeciesAction::Reaction { .. } | SpeciesAction::AncestryOpportunity { .. } => {
+                return Err(RuleError::InvalidReaction);
+            }
+        }
+    }
+    Ok(Resolution {
+        battle: next,
+        draws: draws.finish()?,
+        attacks,
+        moves,
+        rerolls,
+        saving_throws,
+        death_saves: vec![],
+        recoveries: vec![],
+        helps: vec![],
+        stabilizations: vec![],
+    })
 }
 
 pub(crate) struct Draws<'a> {
@@ -332,11 +487,17 @@ pub fn resolve(
     let mut helps = Vec::new();
     let mut stabilizations = Vec::new();
     let mut rerolls = Vec::new();
-    if let Action::Opportunity { attack } = action {
+    let saving_throws = Vec::new();
+    if next.species_reaction_offer().is_some() {
+        return Err(RuleError::PendingReaction);
+    } else if let Action::Opportunity { attack } = action {
         react(
             &mut next,
             actor,
-            *attack,
+            OpportunityChoice {
+                attack: *attack,
+                use_ancestry: false,
+            },
             &mut draws,
             &mut attacks,
             &mut moves,
@@ -360,6 +521,12 @@ pub fn resolve(
                     .fighter_level()
                     .ok_or(RuleError::InvalidCombatant)?;
                 combatant.health.hit_points = combatant.health.maximum;
+                // SRD pp.84?86: species uses and Orc endurance recover only on a Long Rest.
+                combatant.species_uses_spent = 0;
+                combatant.spec.relentless_endurance_available = combatant
+                    .spec
+                    .species
+                    .is_some_and(|species| species.combat_traits().relentless_endurance);
                 combatant.spec.second_wind_uses = progression.second_wind_maximum();
                 combatant.action_surge_spent = false;
                 combatant.additional_actions = 0;
@@ -552,7 +719,10 @@ pub fn resolve(
                             actor,
                             *target,
                             *weapon,
-                            *spend,
+                            AttackOptions {
+                                spend: *spend,
+                                use_ancestry: false,
+                            },
                             &mut draws,
                             &mut rerolls,
                         )?);
@@ -650,6 +820,7 @@ pub fn resolve(
         helps,
         stabilizations,
         rerolls,
+        saving_throws,
     })
 }
 
@@ -997,7 +1168,7 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     }
     Ok(())
 }
-fn spend_attack(
+pub(super) fn spend_attack(
     battle: &mut Battle,
     id: u32,
     weapon: Weapon,
@@ -1185,15 +1356,23 @@ fn modifiers(
     }
     Ok((advantage, disadvantage, attack_modifier, damage_modifier))
 }
+struct AttackOptions {
+    spend: AttackSpend,
+    use_ancestry: bool,
+}
 fn attack(
     battle: &mut Battle,
     id: u32,
     target: u32,
     usage: AttackUse,
-    spend: AttackSpend,
+    options: AttackOptions,
     draws: &mut Draws<'_>,
     rerolls: &mut Vec<D20Reroll>,
 ) -> Result<AttackSummary, RuleError> {
+    let AttackOptions {
+        spend,
+        use_ancestry,
+    } = options;
     let (advantage, disadvantage, modifier, ability_modifier) =
         modifiers(battle, id, target, usage)?;
     let roll_mode = match (advantage.is_empty(), disadvantage.is_empty()) {
@@ -1436,14 +1615,24 @@ fn attack(
     {
         battle.actor_mut(target)?.health.prone = true;
     }
-    apply_damage(
+    let (ancestry_damage, ancestry_damage_type) =
+        if use_ancestry && hit && damage + necrotic_damage > 0 {
+            super::species::attack_boon(battle, id, target, critical, draws)?
+        } else {
+            (0, None)
+        };
+    if let Some(damage_type) = ancestry_damage_type {
+        mark_regeneration_inhibition(battle, target, damage_type, ancestry_damage)?;
+    }
+    super::species::queue_damage(
         battle,
+        id,
         target,
-        damage + necrotic_damage,
+        damage + necrotic_damage + ancestry_damage,
         critical,
         usage.knockout,
-        draws,
     )?;
+    super::species::flush_damage(battle, draws)?;
     if critical
         && battle
             .actor(id)?
@@ -1476,6 +1665,8 @@ fn attack(
         damage,
         damage_type: usage.weapon.damage_type(),
         necrotic_damage,
+        ancestry_damage,
+        ancestry_damage_type,
         graze,
         knocked_out: target_actor.health.knocked_out,
         killed: target_actor.health.dead,
@@ -1489,12 +1680,22 @@ struct DamageDefenses<'a> {
 }
 
 fn source_damage_defenses(spec: &CombatantSpec) -> DamageDefenses<'static> {
-    // SRD 5.2.1 p. 84: "You have Resistance to Poison damage." (Dwarven Resilience.)
-    if spec.kind == CreatureKind::Hero
-        && spec.species == Some(crate::local_journey::HeroSpecies::Dwarf)
+    // SRD Species pp.84?86: the validated ancestry selects resistance; Dwarf uses its trait flag.
+    if let Some(resistance) = spec
+        .species
+        .and_then(|species| spec.species_options.resistance(species))
     {
+        let resistances: &'static [DamageType] = match resistance {
+            DamageType::Acid => &[DamageType::Acid],
+            DamageType::Cold => &[DamageType::Cold],
+            DamageType::Fire => &[DamageType::Fire],
+            DamageType::Lightning => &[DamageType::Lightning],
+            DamageType::Poison => &[DamageType::Poison],
+            DamageType::Necrotic => &[DamageType::Necrotic],
+            _ => &[],
+        };
         return DamageDefenses {
-            resistances: &[DamageType::Poison],
+            resistances,
             immunities: &[],
             vulnerabilities: &[],
         };
@@ -1526,6 +1727,27 @@ fn source_damage_defenses(spec: &CombatantSpec) -> DamageDefenses<'static> {
     }
 }
 
+/// SRD p.333: only actual Acid or Fire damage suppresses Troll regeneration.
+pub(super) fn mark_regeneration_inhibition(
+    battle: &mut Battle,
+    target: u32,
+    kind: DamageType,
+    amount: u16,
+) -> Result<(), RuleError> {
+    let actor = battle.actor_mut(target)?;
+    if actor.spec.kind == CreatureKind::Troll
+        && amount > 0
+        && matches!(kind, DamageType::Acid | DamageType::Fire)
+    {
+        actor.regeneration_inhibited = true;
+    }
+    Ok(())
+}
+
+pub(super) fn defended_damage(spec: &CombatantSpec, kind: DamageType, amount: u16) -> u16 {
+    apply_typed_defenses([(kind, amount), (kind, 0)], source_damage_defenses(spec))[0]
+}
+
 fn apply_typed_defenses(parts: [(DamageType, u16); 2], defenses: DamageDefenses<'_>) -> [u16; 2] {
     parts.map(|(kind, amount)| {
         if defenses.immunities.contains(&kind) {
@@ -1545,7 +1767,7 @@ fn apply_typed_defenses(parts: [(DamageType, u16); 2], defenses: DamageDefenses<
     })
 }
 
-fn apply_damage(
+pub(super) fn apply_damage(
     battle: &mut Battle,
     target: u32,
     damage: u16,
@@ -1582,7 +1804,7 @@ fn apply_damage(
     }
     if hp > 0 && actor.spec.kind == CreatureKind::Zombie && !critical {
         let die = draws.take(20)?;
-        if die as u16 + 3 >= 5 + damage {
+        if die + 3 >= 5 + u32::from(damage) {
             actor.health.hit_points = 1;
             return Ok(());
         }
@@ -1691,16 +1913,23 @@ pub(super) fn begin_turn(battle: &mut Battle, next: u32) -> Result<(), RuleError
     let actor = battle.actor_mut(next)?;
     actor.turn_count = actor.turn_count.checked_add(1).ok_or(RuleError::Capacity)?;
     let turn = actor.turn_count;
-    // SRD 5.2.1 p.333: regeneration works even at zero. No admitted attack deals
-    // Acid or Fire; those damage handlers must supply next-turn inhibition before admission.
+    // SRD 5.2.1 p.333 Regeneration: Acid/Fire inhibits exactly the next turn's
+    // regeneration. A Troll dies only when it starts at 0 HP and cannot regenerate.
     if actor.spec.kind == CreatureKind::Troll && !actor.health.dead {
-        actor.health.hit_points = actor
-            .health
-            .hit_points
-            .saturating_add(15)
-            .min(actor.health.maximum);
-        actor.health.unconscious = false;
-        actor.health.knocked_out = false;
+        if actor.regeneration_inhibited {
+            if actor.health.hit_points == 0 {
+                actor.health.dead = true;
+            }
+        } else {
+            actor.health.hit_points = actor
+                .health
+                .hit_points
+                .saturating_add(15)
+                .min(actor.health.maximum);
+            actor.health.unconscious = false;
+            actor.health.knocked_out = false;
+        }
+        actor.regeneration_inhibited = false;
     }
     actor.budget = super::Budget {
         action_used: false,
@@ -1724,6 +1953,9 @@ pub(super) fn begin_turn(battle: &mut Battle, next: u32) -> Result<(), RuleError
     for actor in &mut battle.actors {
         actor
             .slow
+            .retain(|effect| effect.origin != next || effect.expires_turn > turn);
+        actor
+            .frost_chill
             .retain(|effect| effect.origin != next || effect.expires_turn > turn);
         actor
             .sap
@@ -1792,15 +2024,23 @@ fn continue_move(
     }
     Ok(())
 }
+struct OpportunityChoice {
+    attack: Option<AttackUse>,
+    use_ancestry: bool,
+}
 fn react(
     battle: &mut Battle,
     reactor: u32,
-    usage: Option<AttackUse>,
+    choice: OpportunityChoice,
     draws: &mut Draws<'_>,
     attacks: &mut Vec<AttackSummary>,
     moves: &mut Vec<MoveSummary>,
     rerolls: &mut Vec<D20Reroll>,
 ) -> Result<(), RuleError> {
+    let OpportunityChoice {
+        attack: usage,
+        use_ancestry,
+    } = choice;
     let pending = battle
         .pending
         .as_ref()
@@ -1829,7 +2069,10 @@ fn react(
             reactor,
             mover,
             usage,
-            AttackSpend::Action,
+            AttackOptions {
+                spend: AttackSpend::Action,
+                use_ancestry,
+            },
             draws,
             rerolls,
         )?);
@@ -1843,7 +2086,14 @@ fn react(
         .as_mut()
         .ok_or(RuleError::NoPendingReaction)?;
     pending.eligible.remove(0);
-    if pending.eligible.is_empty() {
+    if battle.species_reaction_offer().is_some() {
+        return Ok(());
+    }
+    if battle
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.eligible.is_empty())
+    {
         let from = battle.actor(mover)?.cell();
         let mut steps = Vec::new();
         continue_move(battle, true, &mut steps)?;

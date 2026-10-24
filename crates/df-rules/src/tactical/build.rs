@@ -18,6 +18,7 @@ pub const LEVEL_FIVE_BUILDS: [&str; 3] = [
 pub struct ArcherBuild {
     character: LegalCharacter,
     species: HeroSpecies,
+    species_options: crate::species::SpeciesOptions,
 }
 impl ArcherBuild {
     pub fn character(&self) -> &LegalCharacter {
@@ -25,7 +26,9 @@ impl ArcherBuild {
     }
     /// Derived combat profile, never client-supplied bonuses or AC.
     pub fn combatant(&self, id: u32, cell: Cell) -> CombatantSpec {
-        let traits = self.species.combat_traits();
+        // validate_archer has already admitted these exact source choices.
+        let species_options = self.species_options;
+        let traits = species_options.combat_traits(self.species);
         CombatantSpec {
             id,
             side: Side::Heroes,
@@ -36,6 +39,7 @@ impl ArcherBuild {
             },
             kind: CreatureKind::Hero,
             species: Some(self.species),
+            species_options,
             abilities: self.character.abilities,
             armor_class: 15,
             hit_points: self.character.hit_points as u16,
@@ -56,7 +60,7 @@ impl ArcherBuild {
 /// Same submitted choices/pick-list contract as the existing journey. The new fixed
 /// equipment/style/array IDs are admitted together; mixing packages is rejected.
 pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBuild, RuleError> {
-    if choices.len() != local_journey::BUILD_GROUPS.len() {
+    if choices.len() < local_journey::BUILD_GROUPS.len() {
         return Err(RuleError::InvalidBuild);
     }
     let mut mapped = Vec::with_capacity(choices.len());
@@ -85,13 +89,19 @@ pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBui
             .ok_or(RuleError::InvalidBuild)?,
     )
     .ok_or(RuleError::InvalidBuild)?;
+    let species_options = crate::species::SpeciesOptions::from_choices(species, choices)
+        .map_err(|_| RuleError::InvalidBuild)?;
     character.hit_points = (10_i32
         + local_journey::ability_modifier(character.abilities[2])
-        + i32::from(species.combat_traits().hit_points_per_level))
+        + i32::from(species_options.combat_traits(species).hit_points_per_level))
         as u32;
     character.choices = choices
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
-    Ok(ArcherBuild { character, species })
+    Ok(ArcherBuild {
+        character,
+        species,
+        species_options,
+    })
 }

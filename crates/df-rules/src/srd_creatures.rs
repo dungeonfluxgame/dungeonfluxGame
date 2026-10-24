@@ -933,7 +933,7 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "Regeneration",
         Trait,
         Implemented,
-        "Regains 15 HP at turn start, including from zero; ordinary weapon damage cannot kill it. Acid/Fire inhibition is unreachable: no admitted action deals those types.",
+        "Regains 15 HP at turn start, including from zero. Actual Acid/Fire damage inhibits the next turn only; starts at zero without regeneration means death. Dragonborn Breath Weapon and Goliath Fire now reach this interaction.",
     ),
     feature(
         "troll",

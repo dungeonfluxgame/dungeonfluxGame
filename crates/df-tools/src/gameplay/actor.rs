@@ -1,3 +1,5 @@
+#[path = "npc_voice_confrontation.rs"]
+pub(in crate::gameplay) mod confrontation_voice;
 #[path = "place_actor.rs"]
 pub(super) mod place_actor;
 #[path = "tempo.rs"]
@@ -29,6 +31,169 @@ use super::{
     wire,
 };
 use crate::gameplay::investigation::the_phrase;
+
+/// The authenticated member comes from the actor's credential binding, never the words.
+pub(in crate::gameplay) fn stage_opening_help_request(
+    current: &Checkpoint,
+    member: df_types::MemberId,
+    request: &rpc::RawDialogueRequest,
+    expected_basis: df_model::checkpoint::Basis,
+    beneficiary: df_types::MemberId,
+    skill: super::beat_script_runtime::OpeningSkill,
+) -> Result<Checkpoint, tonic::Status> {
+    super::dialogue::validate_opening_social_request(request, current.basis())?;
+    if current.basis() != expected_basis {
+        return Err(tonic::Status::aborted(
+            "the Help declaration's scene changed",
+        ));
+    }
+    let operation = df_api::operation_id(request.input_id.as_ref())
+        .map_err(|_| tonic::Status::invalid_argument("Help operation required"))?;
+    super::beat_script_runtime::opening_help::stage(
+        current,
+        operation,
+        super::beat_script_runtime::opening_help::Declaration {
+            helper: member,
+            beneficiary,
+            skill,
+            source_line: &request.text,
+            reason: "Jev judged the helper's own concrete assistance genuine and possible",
+        },
+    )
+    .map_err(unavailable)
+}
+
+pub(in crate::gameplay) fn stage_opening_social_proposal(
+    current: &Checkpoint,
+    member: df_types::MemberId,
+    social: &super::social::SocialLedger,
+    proposal: &super::dialogue::OpeningSocialProposal,
+    supplier: &mut impl FnMut(u32) -> Result<u32, RepositoryError>,
+) -> Result<super::beat_script_runtime::OpeningSocialOutcome, tonic::Status> {
+    use super::beat_script_runtime::{self as runtime, OpeningSocialAttempt};
+    use df_rules::influence::{Attitude, Willingness};
+    super::dialogue::validate_opening_social_request(&proposal.request, current.basis())?;
+    if current.basis() != proposal.expected_basis {
+        return Err(tonic::Status::aborted("the social request's scene changed"));
+    }
+    if wire::opening_talk_offer(current)
+        .map_err(unavailable)?
+        .is_none()
+    {
+        return Err(tonic::Status::failed_precondition(
+            "the opening threat is no longer available",
+        ));
+    }
+    let previous = runtime::previous_opening_social(current).map_err(unavailable)?;
+    if previous.as_ref().is_some_and(|(_, words)| words.is_none()) {
+        return Err(tonic::Status::failed_precondition(
+            "the previous failed offer's source is unavailable",
+        ));
+    }
+    if previous.as_ref().map(|(operation, _)| *operation) != proposal.changed_after {
+        return Err(tonic::Status::failed_precondition(
+            "the failed request changed",
+        ));
+    }
+    let (attitude, emotional) =
+        super::dialogue::opening_social_standing(current, social, member).map_err(unavailable)?;
+    if attitude != proposal.attitude || emotional != proposal.emotional {
+        return Err(tonic::Status::aborted("the enforcer's standing changed"));
+    }
+    let willingness = if emotional
+        .as_ref()
+        .is_some_and(|feelings| feelings.never_forgives.is_some())
+    {
+        Willingness::Unwilling
+    } else {
+        proposal.willingness
+    };
+    let enforcer = super::dialogue::opening_social_enforcer(current).map_err(unavailable)?;
+    let party_baseline = runtime::opening_party_attitude(current.state())
+        .map_err(unavailable)?
+        .map(|(attitude, _)| attitude)
+        .unwrap_or_else(|| super::dialogue::opening_scene_attitude(enforcer.attitude));
+    if proposal
+        .approved_party_easing
+        .is_some_and(|before| before != party_baseline)
+    {
+        return Err(tonic::Status::aborted("the party attitude changed"));
+    }
+    let hero = super::journey::name(
+        current.state(),
+        super::journey::player_entity(member, current).map_err(unavailable)?,
+    )
+    .map_err(unavailable)?;
+    let has_exception = enforcer.attitudes.contains_key(&hero);
+    let attitude_for_request = if (proposal.roleplay_softened
+        || proposal.approved_party_easing.is_some())
+        && !has_exception
+    {
+        if attitude != Attitude::Hostile || willingness != Willingness::Hesitant {
+            return Err(tonic::Status::failed_precondition(
+                "the attitude appraisal no longer applies",
+            ));
+        }
+        Attitude::Indifferent
+    } else {
+        attitude
+    };
+    let sources = if willingness == Willingness::Hesitant {
+        runtime::opening_help::source_for(current, member, proposal.skill)
+            .map_err(unavailable)?
+            .map(|(_, source)| source)
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let faces = if willingness == Willingness::Hesitant {
+        let count = match df_rules::influence::roll_mode(attitude_for_request, &sources) {
+            df_rules::influence::RollMode::Normal => 1,
+            df_rules::influence::RollMode::Advantage
+            | df_rules::influence::RollMode::Disadvantage => 2,
+        };
+        (0..count)
+            .map(|_| {
+                supplier(20)
+                    .and_then(|face| u8::try_from(face).map_err(|_| RepositoryError::Unavailable))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(unavailable)?
+    } else {
+        Vec::new()
+    };
+    let operation = df_api::operation_id(proposal.request.input_id.as_ref())
+        .map_err(|_| tonic::Status::invalid_argument("social operation required"))?;
+    let mut staged = runtime::stage_opening_social_appraised(
+        current,
+        operation,
+        OpeningSocialAttempt {
+            member,
+            skill: proposal.skill,
+            attitude: attitude_for_request,
+            willingness,
+            faces: &faces,
+            changed_after: proposal.changed_after,
+        },
+        &sources,
+        proposal.approved_party_easing,
+    )
+    .map_err(unavailable)?;
+    runtime::bind_opening_social_source(&mut staged, &proposal.request.text)
+        .map_err(unavailable)?;
+    record_audit_line(
+        "gameplay.opening_social.attitude",
+        format!(
+            "OPENING_SOCIAL_ATTITUDE before={} for_request={} roleplay_softened={} mode={}",
+            attitude.word(),
+            attitude_for_request.word(),
+            proposal.roleplay_softened,
+            staged.result.mode.word()
+        ),
+    );
+    Ok(staged)
+}
 
 #[derive(Clone)]
 pub(super) struct QualificationSnapshot {
@@ -204,6 +369,28 @@ fn watch_scope_identity(
 }
 
 pub(super) enum Call {
+    PictureFeatures {
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        source_hash: String,
+        record: super::journey::living_scene::PictureFeatures,
+        reply: oneshot::Sender<Result<df_types::SessionRevision, tonic::Status>>,
+    },
+    ObservationSubmit {
+        credential: [u8; 32],
+        request: rpc::SubmitActionRequest,
+        intention: String,
+        reply: oneshot::Sender<Result<rpc::SubmitActionResponse, tonic::Status>>,
+    },
+    ObservationFinding {
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        record: super::journey::living_scene::ObservationFinding,
+        detail: Option<super::journey::living_scene::EstablishedDetail>,
+        reply: oneshot::Sender<
+            Result<super::journey::living_scene::ObservationFinding, tonic::Status>,
+        >,
+    },
     LibraryHero {
         credential: [u8; 32],
         request: rpc::WatchViewRequest,
@@ -257,6 +444,21 @@ pub(super) enum Call {
     },
     /// A change of place (see `place`): the owner repeats every check and commits the journal
     /// entry, or says why it did not.
+    OpeningHelp {
+        credential: [u8; 32],
+        request: rpc::RawDialogueRequest,
+        expected_basis: df_model::checkpoint::Basis,
+        beneficiary: df_types::MemberId,
+        skill: super::beat_script_runtime::OpeningSkill,
+        reply: oneshot::Sender<Result<Checkpoint, tonic::Status>>,
+    },
+    OpeningSocial {
+        credential: [u8; 32],
+        proposal: super::dialogue::OpeningSocialProposal,
+        reply: oneshot::Sender<
+            Result<super::beat_script_runtime::OpeningSocialOutcome, tonic::Status>,
+        >,
+    },
     PlaceMove {
         credential: [u8; 32],
         proposal: place_actor::MoveProposal,
@@ -400,6 +602,18 @@ impl ActorInput for Call {
             value.as_ref().map_or(0, Vec::capacity)
         }
         match self {
+            Self::PictureFeatures {
+                record,
+                source_hash,
+                ..
+            } => serde_json::to_vec(record)
+                .ok()
+                .map(|bytes| bytes.len() + source_hash.capacity()),
+            Self::ObservationFinding { record, detail, .. } => {
+                serde_json::to_vec(&(record, detail))
+                    .ok()
+                    .map(|bytes| bytes.len())
+            }
             Self::FightAftermath { preparation, .. } => {
                 preparation.as_ref().map_or(Some(0), |value| {
                     serde_json::to_vec(value).ok().map(|bytes| bytes.len())
@@ -423,6 +637,12 @@ impl ActorInput for Call {
             | Self::NpcEvent { .. }
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
+            Self::OpeningHelp { request, .. } => {
+                Some(request.text.capacity() + request.offer_id.capacity() + 256)
+            }
+            Self::OpeningSocial { proposal, .. } => {
+                Some(proposal.request.text.capacity() + proposal.request.offer_id.capacity() + 256)
+            }
             Self::PlaceMove { proposal, .. } => Some(proposal.retained_bytes()),
             Self::Dev { order, .. } => order.retained_heap_bytes(),
             Self::DevDirect { order, request, .. } => order
@@ -438,7 +658,9 @@ impl ActorInput for Call {
                         .map_or(0, |id| bytes(&id.value)),
                 ),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
-            Self::Submit { request, .. } | Self::SubmitAppearance { request, .. } => {
+            Self::ObservationSubmit { request, .. }
+            | Self::Submit { request, .. }
+            | Self::SubmitAppearance { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
                     let choice_bytes = character.choices.iter().try_fold(
                         character.name.capacity().checked_add(
@@ -673,9 +895,9 @@ fn with_reaction_window(candidate: Checkpoint) -> Checkpoint {
                 record_audit_line(
                     "gameplay.reaction_window",
                     format!(
-                        "REACTION window hero={:?} provoker={:?} action={} opened_ms={} deadline_ms={}",
-                        pending.reactor_name,
-                        pending.provoker_name,
+                        "REACTION window reactor_hash={} provoker_hash={} action={} opened_ms={} deadline_ms={}",
+                        df_observe::seat_hash(pending.reactor_name.as_bytes()),
+                        df_observe::seat_hash(pending.provoker_name.as_bytes()),
                         pending.provocation_name(),
                         window.opened_unix_ms,
                         window.deadline_unix_ms
@@ -767,6 +989,7 @@ pub(super) struct SessionState {
     /// Kept by the owner through combat; a recovered service registers its configured voice
     /// before dialogue. The durable observation, rather than this handle, owns pending work.
     fight_voice: Option<std::sync::Arc<super::npc_reply::NpcVoice>>,
+    observation_lines: std::collections::BTreeSet<String>,
 }
 
 impl Default for SessionState {
@@ -775,6 +998,7 @@ impl Default for SessionState {
             seat_clock: super::room::SeatClock::default(),
             reaction: ReactionTimer::default(),
             fight_voice: None,
+            observation_lines: Default::default(),
             attempt: None,
             commit_millis: 0,
             fence: None,
@@ -866,8 +1090,9 @@ impl ReactionTimer {
             record_audit_line(
                 "gameplay.reaction_window",
                 format!(
-                    "REACTION window hero={:?} provoker={:?} deadline_ms={deadline} source=owner-start",
-                    pending.reactor_name, pending.provoker_name
+                    "REACTION window reactor_hash={} provoker_hash={} deadline_ms={deadline} source=owner-start",
+                    df_observe::seat_hash(pending.reactor_name.as_bytes()),
+                    df_observe::seat_hash(pending.provoker_name.as_bytes())
                 ),
             );
             return None;
@@ -967,14 +1192,21 @@ fn authority_unavailable() -> tonic::Status {
 pub(super) fn record_unavailable(site: &'static str, reason: &str) {
     let noted = refusal_detail::step_or_unknown();
     let diagnostic = df_session::submission::take_refusal_diagnostic();
-    let step = diagnostic.as_ref().map_or_else(
-        || if noted == "unknown" { site } else { noted },
-        |detail| detail.step,
-    );
+    let outer = diagnostic
+        .as_ref()
+        .map_or(site, |detail| detail.outer.unwrap_or(detail.step));
+    let step = if noted == "unknown" {
+        diagnostic.as_ref().map_or(outer, |detail| detail.step)
+    } else {
+        noted
+    };
     let cause = diagnostic
         .as_ref()
         .map_or(reason, |detail| detail.cause.as_str());
-    println!("UNAVAILABLE site={site} reason={reason} step={step} cause={cause}");
+    record_audit_line(
+        "gameplay.unavailable",
+        format!("UNAVAILABLE site={site} reason={reason} step={step} outer={outer} cause={cause}"),
+    );
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -992,7 +1224,11 @@ pub(super) fn record_unavailable(site: &'static str, reason: &str) {
     span.finish_unmeasured("unavailable");
     // An enclosing submit still needs the same typed cause on its terminal REFUSAL.
     if let Some(detail) = diagnostic {
+        let cause = detail.cause.clone();
         df_session::submission::note_refusal_diagnostic(detail.step, detail.cause);
+        if let Some(outer) = detail.outer {
+            df_session::submission::note_refusal_diagnostic(outer, cause);
+        }
     }
     refusal_detail::note(step);
 }
@@ -1006,23 +1242,32 @@ pub(super) fn record_refusal(action_kind: i32, reason: &str, status: &str) {
         .map_or_else(|_| action_kind.to_string(), |kind| format!("{kind:?}"));
     let noted = refusal_detail::step_or_unknown();
     let diagnostic = df_session::submission::take_refusal_diagnostic();
-    let step = diagnostic.as_ref().map_or_else(
-        || {
-            if noted == "unknown" {
-                "action-admission"
-            } else {
-                noted
-            }
-        },
-        |detail| detail.step,
-    );
+    let outer = diagnostic.as_ref().map_or("action-admission", |detail| {
+        detail.outer.unwrap_or(detail.step)
+    });
+    let step = if noted == "unknown" {
+        diagnostic.as_ref().map_or(outer, |detail| detail.step)
+    } else {
+        noted
+    };
     let cause = diagnostic
         .as_ref()
         .map_or(reason, |detail| detail.cause.as_str());
-    emit_refusal(&kind, reason, status, step, cause);
+    emit_refusal(&kind, reason, status, step, outer, cause);
 }
 
 /// Async ingress passes explicit safe facts; it never reads thread-local actor diagnostics.
+pub(super) fn record_ingress_refusal_scoped(
+    audit: &df_observe::AuditContext,
+    action_kind: i32,
+    step: &'static str,
+    cause: &str,
+    code: tonic::Code,
+) {
+    let _scope = df_observe::audit_scope(audit.clone());
+    record_ingress_refusal(action_kind, step, cause, code);
+}
+
 pub(super) fn record_ingress_refusal(
     action_kind: i32,
     step: &'static str,
@@ -1043,18 +1288,18 @@ pub(super) fn record_ingress_refusal(
             "rpc-refused"
         },
         step,
+        "ingress",
         cause,
     );
 }
 
-fn emit_refusal(kind: &str, reason: &str, status: &str, step: &str, cause: &str) {
-    let line =
-        format!("REFUSAL action={kind} reason={reason} status={status} step={step} cause={cause}");
-    #[cfg(test)]
-    if let Ok(mut lines) = AUDIT_TAP.lock() {
-        lines.push(line.clone());
-    }
-    println!("{line}");
+fn emit_refusal(kind: &str, reason: &str, status: &str, step: &str, outer: &str, cause: &str) {
+    record_audit_line(
+        "gameplay.action_refused",
+        format!(
+            "REFUSAL action={kind} reason={reason} status={status} step={step} outer={outer} cause={cause}"
+        ),
+    );
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -1133,6 +1378,7 @@ pub(super) fn audit_lines_containing(needle: &str) -> Vec<String> {
 }
 
 pub(super) fn record_audit_line(event: &'static str, line: String) {
+    let line = df_observe::audit_line(line);
     #[cfg(test)]
     AUDIT_TAP
         .lock()
@@ -1151,7 +1397,7 @@ pub(super) fn record_audit_line(event: &'static str, line: String) {
         "audit.line"
     };
     span.event(event, &[(field, line)]);
-    span.finish_unmeasured("recorded");
+    span.finish_audit_record();
 }
 
 pub(super) fn record_audit_diagnostic(
@@ -1160,6 +1406,7 @@ pub(super) fn record_audit_diagnostic(
     fields: serde_json::Map<String, serde_json::Value>,
     attributes: &[(&'static str, String)],
 ) {
+    let line = df_observe::audit_line(line);
     super::dev_control::timeline::record_structured(event, &line, fields);
     println!("{line}");
     let context = OperationContext {
@@ -1168,7 +1415,7 @@ pub(super) fn record_audit_diagnostic(
     };
     let mut span = df_observe::begin(&context, event);
     span.event(event, attributes);
-    span.finish_unmeasured("recorded");
+    span.finish_audit_record();
 }
 
 pub(super) fn record_enemy_turn(
@@ -1191,7 +1438,7 @@ pub(super) fn record_enemy_turn(
         reason,
         detail,
     );
-    println!("{line}");
+    record_audit_line("gameplay.enemy_turn", line);
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -1200,14 +1447,23 @@ pub(super) fn record_enemy_turn(
     span.event(
         "gameplay.enemy_turn",
         &[
-            ("combat.actor", actor.to_owned()),
+            (
+                "combat.actor_hash",
+                df_observe::seat_hash(actor.as_bytes()).to_string(),
+            ),
             ("operation.id", operation.to_owned()),
             ("session.run", run.to_owned()),
             ("session.revision", revision.to_string()),
             ("combat.policy_revision", policy_revision.to_owned()),
             ("combat.action", action.to_owned()),
-            ("combat.reason", reason.to_owned()),
-            ("combat.action_detail", detail.to_owned()),
+            (
+                "combat.reason_hash",
+                df_observe::operation_hash(reason.as_bytes()).to_string(),
+            ),
+            (
+                "combat.action_detail_hash",
+                df_observe::operation_hash(detail.as_bytes()).to_string(),
+            ),
         ],
     );
     span.finish_unmeasured("recorded");
@@ -1224,7 +1480,10 @@ fn enemy_turn_line(
     detail: &str,
 ) -> String {
     format!(
-        "COMBAT turn actor={actor:?} operation={operation} run={run} revision={revision} policy={policy_revision:?} action={action} reason={reason:?} detail={detail:?}"
+        "COMBAT turn actor_hash={} operation={operation} run={run} revision={revision} policy={policy_revision:?} action={action} reason_hash={} detail_hash={}",
+        df_observe::seat_hash(actor.as_bytes()),
+        df_observe::operation_hash(reason.as_bytes()),
+        df_observe::operation_hash(detail.as_bytes()),
     )
 }
 
@@ -1297,8 +1556,8 @@ fn record_session_state_diagnostic(
         .unwrap_or_default();
     let room_hash = (!session_bytes.is_empty()).then(|| diagnostic_hash("room", session_bytes));
     let run_hash = (!run_bytes.is_empty()).then(|| diagnostic_hash("run", run_bytes));
-    let operation_hash =
-        (!operation_bytes.is_empty()).then(|| diagnostic_hash("operation", operation_bytes));
+    let operation_hash = (!operation_bytes.is_empty())
+        .then(|| crate::client_diagnostics::operation_hash(operation_bytes).to_string());
 
     let mut resource_hasher = Sha256::new();
     resource_hasher.update(b"df-session-transition-resource-v1\0");
@@ -1529,11 +1788,24 @@ fn after_grant_reconnect<T>(
     dispatch()
 }
 // The same fence transition is used by native handlers and controlled owner tests.
+#[track_caller]
 pub(super) fn fence_checkpoint(
     fenced: &mut bool,
     recovery_wakeup: &watch::Sender<Checkpoint>,
     checkpoint: &Checkpoint,
 ) {
+    let revision = checkpoint.basis().revision;
+    let site = std::panic::Location::caller();
+    record_audit_line(
+        "gameplay.session_fence",
+        format!(
+            "SESSION fence site={}:{} cause=checkpoint-recovery rev={}:{} commit_ms=unmeasured",
+            site.file(),
+            site.line(),
+            revision.epoch().get(),
+            revision.sequence()
+        ),
+    );
     *fenced = true;
     recovery_wakeup.send_replace(checkpoint.clone());
 }
@@ -1553,6 +1825,48 @@ pub(super) fn require_readable(fenced: bool) -> Result<(), tonic::Status> {
         return Err(tonic::Status::unavailable(
             "gameplay owner requires recovery",
         ));
+    }
+    Ok(())
+}
+
+pub(super) fn materialize_observation(
+    table: &super::table_log::TableLog,
+    notebook: &notebook::NotebookLedger,
+    published: &mut std::collections::BTreeSet<String>,
+    member: df_types::MemberId,
+    record: &super::journey::living_scene::ObservationFinding,
+) -> Result<(), notebook::NotebookError> {
+    // The checkpoint is already durable. A notebook outage cannot withhold the table result.
+    if !published.contains(&record.id) {
+        table.push(
+            "Narrator",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            &record.text,
+        );
+        if published.len() >= 256 {
+            published.pop_first();
+        }
+        published.insert(record.id.clone());
+    }
+    materialize_observation_note(notebook, member, record)
+}
+
+pub(super) fn materialize_observation_note(
+    notebook: &notebook::NotebookLedger,
+    member: df_types::MemberId,
+    record: &super::journey::living_scene::ObservationFinding,
+) -> Result<(), notebook::NotebookError> {
+    let scene_name = notebook::scene_name(record.scene)?;
+    notebook.add_clue(member, &record.hero, &record.id, &record.text, &scene_name)?;
+    // A previous add may have succeeded before sharing failed; retry the exact existing row.
+    if let Some(entry) = notebook
+        .visible_to(member)
+        .iter()
+        .find(|entry| entry.title == record.id && entry.owner.is_some())
+    {
+        notebook.share(member, entry.order)?;
     }
     Ok(())
 }
@@ -1677,6 +1991,15 @@ impl Actor {
                     return Err(tonic::Status::aborted("fight preparation conflict"));
                 }
                 SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                    record_audit_line(
+                        "gameplay.session_fence",
+                        format!(
+                            "SESSION fence site={}:{} cause=owner-candidate-uncertain commit_ms={}",
+                            file!(),
+                            line!(),
+                            self.session.commit_millis
+                        ),
+                    );
                     self.fenced = true;
                     return Err(tonic::Status::unavailable(
                         "fight preparation requires recovery",
@@ -1739,6 +2062,7 @@ impl Actor {
         if self.fenced || self.session_lost() {
             return;
         }
+        refusal_detail::begin_action();
         let now = Instant::now();
         let read = tactical::pending_reaction(self.owner.checkpoint())
             .and_then(|pending| tactical::unix_now_ms().map(|now_unix_ms| (pending, now_unix_ms)));
@@ -1761,9 +2085,9 @@ impl Actor {
         };
         let expiry_line = |answer: &str| {
             format!(
-                "REACTION expired hero={:?} provoker={:?} deadline_ms={deadline} late_ms={} answer={answer}",
-                pending.reactor_name,
-                pending.provoker_name,
+                "REACTION expired reactor_hash={} provoker_hash={} deadline_ms={deadline} late_ms={} answer={answer}",
+                df_observe::seat_hash(pending.reactor_name.as_bytes()),
+                df_observe::seat_hash(pending.provoker_name.as_bytes()),
                 now_unix_ms.saturating_sub(deadline)
             )
         };
@@ -1798,7 +2122,6 @@ impl Actor {
             );
             return;
         }
-        refusal_detail::begin_action();
         self.session.reaction.expiring = Some(pending.clone());
         let result = self.submit(credential, request);
         self.session.reaction.expiring = None;
@@ -1807,8 +2130,25 @@ impl Actor {
         } else {
             self.session.reaction.retry_later(pending.reaction, now);
             match &result {
-                Ok(response) => format!("refused outcome={:?}", response.outcome),
-                Err(status) => format!("unavailable status={:?}", status.message()),
+                Ok(response) => match response.outcome.as_ref() {
+                    Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {
+                        match receipt.outcome.as_ref() {
+                            Some(rpc::decision_receipt::Outcome::Rejected(rejection)) => format!(
+                                "refused code={} replayed={}",
+                                rejection.code, receipt.replayed
+                            ),
+                            Some(rpc::decision_receipt::Outcome::Accepted(_)) => {
+                                format!("retained replayed={}", receipt.replayed)
+                            }
+                            None => "refused code=missing-receipt-outcome".to_owned(),
+                        }
+                    }
+                    Some(rpc::submit_action_response::Outcome::OperationObservation(
+                        observation,
+                    )) => format!("refused code={}", observation.code),
+                    None => "refused code=missing-outcome".to_owned(),
+                },
+                Err(status) => format!("unavailable code={:?}", status.code()),
             }
         };
         record_audit_line("gameplay.reaction_expired", expiry_line(&answer));
@@ -1946,7 +2286,15 @@ impl Actor {
                 self.recovery_wakeup
                     .send_replace(self.owner.checkpoint().clone());
             }
-            super::session_recovery::Resolution::Retry(_) => {}
+            super::session_recovery::Resolution::Retry(error) => {
+                if let Some(fence) = &self.session.fence {
+                    self.session_event(&format!(
+                        "SESSION recovery_attempt n={} outcome=retry cause={error:?} next_in_ms={} down_ms={}",
+                        fence.attempts(), fence.next_attempt().map_or(0, |next| next.saturating_duration_since(now).as_millis()),
+                        fence.down_for(now).as_millis(),
+                    ), "session.recovery_attempt");
+                }
+            }
         }
     }
 
@@ -1995,14 +2343,7 @@ impl Actor {
 
     /// One `SESSION` line on stdout and the same fact on the shared observability path.
     fn session_event(&self, line: &str, event: &'static str) {
-        println!("{line}");
-        let context = OperationContext {
-            trace_parent: String::new(),
-            build: crate::BUILD_ID.to_owned(),
-        };
-        let mut span = df_observe::begin(&context, "gameplay.session");
-        span.event(event, &[("session.detail", line.to_owned())]);
-        span.finish_unmeasured(event);
+        record_audit_line(event, line.to_owned());
     }
     /// Called on startup and at input boundaries by this same serialization owner.
     /// Notification loss cannot erase the backlog: work comes from a validated
@@ -2049,6 +2390,10 @@ impl Actor {
         };
         let mut span = df_observe::begin(&context, "gameplay.courier_intents");
         let result = self.complete_courier(&context);
+        let attempt = self
+            .completion_retry
+            .as_ref()
+            .map_or(0, |retry| retry.attempts);
         let outcome = match (result, pending) {
             (Err(error), Some(_)) => {
                 let now = Instant::now();
@@ -2063,6 +2408,22 @@ impl Actor {
                 "durable_work_checked"
             }
         };
+        if let Some(intent) = pending {
+            record_audit_line(
+                "gameplay.intent_completion",
+                format!(
+                    "INTENT completion intent={} attempt={attempt} outcome={outcome} cause={:?} next_in_ms={}",
+                    df_observe::operation_hash(intent.as_bytes()),
+                    result.as_ref().err(),
+                    self.completion_retry
+                        .as_ref()
+                        .and_then(|retry| retry.next)
+                        .map_or(0, |next| next
+                            .saturating_duration_since(Instant::now())
+                            .as_millis()),
+                ),
+            );
+        }
         #[cfg(test)]
         if let Some(observer) = &self.completion_observer
             && observer.try_send((result, self.calls_remaining)).is_err()
@@ -2156,7 +2517,7 @@ impl Actor {
             .try_recv()
             .map_err(|_| RepositoryError::Unavailable)?;
         if !self.owner.is_current() {
-            self.fence();
+            self.fence_at("owner-commit", "cache-not-current");
         }
         match outcome {
             SubmissionOutcome::Confirmed(_) if self.owner.is_current() => {
@@ -2181,12 +2542,29 @@ impl Actor {
             SubmissionOutcome::OperationConflict => Err(RepositoryError::InputBinding),
         }
     }
+    #[track_caller]
     pub(super) fn fence(&mut self) {
-        fence_checkpoint(
-            &mut self.fenced,
-            &self.recovery_wakeup,
-            self.owner.checkpoint(),
+        let caller = std::panic::Location::caller();
+        self.fence_at(
+            &format!("{}:{}", caller.file(), caller.line()),
+            "commit-uncertain",
         );
+    }
+    fn fence_at(&mut self, site: &str, cause: &str) {
+        let revision = self.owner.checkpoint().basis().revision;
+        record_audit_line(
+            "gameplay.session_fence",
+            format!(
+                "SESSION fence site={site} cause={cause} rev={}:{} commit_ms={} ms={}",
+                revision.epoch().get(),
+                revision.sequence(),
+                self.session.commit_millis,
+                self.session.commit_millis,
+            ),
+        );
+        self.fenced = true;
+        self.recovery_wakeup
+            .send_replace(self.owner.checkpoint().clone());
     }
     /// A seated player's change to the room's table settings: validated, stored, then carried in
     /// every view. It moves no game revision and touches no rule.
@@ -2222,6 +2600,13 @@ impl Actor {
             .store_table_settings(settings.stored())
             .map_err(unavailable)?;
         self.table_settings = settings;
+        record_audit_line(
+            "gameplay.setting",
+            format!(
+                "SETTING changed name=choice_hints_hidden value={}",
+                self.table_settings.choice_hints_hidden
+            ),
+        );
         self.table_log.settings_changed();
         Ok(wire::committed(wire::receipt(
             current,
@@ -2600,6 +2985,15 @@ impl Actor {
                     return Err(tonic::Status::aborted("merchant quote conflict"));
                 }
                 SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                    record_audit_line(
+                        "gameplay.session_fence",
+                        format!(
+                            "SESSION fence site={}:{} cause=owner-candidate-uncertain commit_ms={}",
+                            file!(),
+                            line!(),
+                            self.session.commit_millis
+                        ),
+                    );
                     self.fenced = true;
                     record_npc_event_status(
                         &proposal,
@@ -3022,10 +3416,39 @@ impl Actor {
             self.owner
                 .commit_owner_candidate(&scope, &built.candidate, &context)
         };
+        let after_revision = self.owner.checkpoint().basis().revision;
+        record_audit_line(
+            "gameplay.dev_commit",
+            format!(
+                "DEV_CONTROL job={} outcome={} rev={}:{}->{}:{} op={} cause={}",
+                match &order.job {
+                    commands::DevJob::Restore { .. } => "restore",
+                    commands::DevJob::HitPoints { .. } => "hit-points",
+                    commands::DevJob::Budget { .. } => "budget",
+                    commands::DevJob::NpcTurn { .. } => "npc-turn",
+                },
+                match &committed {
+                    SubmissionOutcome::Confirmed(_) => "committed",
+                    SubmissionOutcome::Refused(_) => "refused",
+                    SubmissionOutcome::OperationConflict => "conflict",
+                    SubmissionOutcome::ExpiredOrIndeterminate => "expired",
+                    SubmissionOutcome::LookupRequired => "uncertain",
+                },
+                current.basis().revision.epoch().get(),
+                current.basis().revision.sequence(),
+                after_revision.epoch().get(),
+                after_revision.sequence(),
+                crate::client_diagnostics::operation_hash(operation.as_bytes()),
+                match &committed {
+                    SubmissionOutcome::Refused(error) => format!("{error:?}"),
+                    _ => "none".to_owned(),
+                },
+            ),
+        );
         match committed {
             SubmissionOutcome::Confirmed(receipt) => {
                 if !self.owner.is_current() {
-                    self.fence();
+                    self.fence_at("owner-commit", "cache-not-current");
                 }
                 // A rewind restores the actor-side state the checkpoint does
                 // not carry on the same owner critical section, right after
@@ -3036,12 +3459,12 @@ impl Actor {
                 if let Some(moment) = restore_moment {
                     self.table_log.rewind_to(moment.table_floor);
                     if let Err(error) = self.social.restore_snapshot(&moment.social) {
-                        self.fence();
+                        self.fence_at("social-rewind", "restore-failed");
                         record_unavailable("authority", &format!("social rewind: {error}"));
                         return Err(authority_unavailable());
                     }
                     if let Err(error) = self.notebook.restore_snapshot(&moment.notebook) {
-                        self.fence();
+                        self.fence_at("notebook-rewind", "restore-failed");
                         record_unavailable("authority", &format!("notebook rewind: {error}"));
                         return Err(authority_unavailable());
                     }
@@ -3175,6 +3598,403 @@ impl Actor {
         Ok(())
     }
 
+    fn commit_picture_features(
+        &mut self,
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        source_hash: &str,
+        record: super::journey::living_scene::PictureFeatures,
+    ) -> Result<df_types::SessionRevision, tonic::Status> {
+        use super::journey::living_scene;
+        require_readable(self.fenced)?;
+        let member = self.dialogue_member(&credential)?;
+        let before = self.owner.checkpoint().clone();
+        let scene = super::beat_script_runtime::scene(before.state()).map_err(unavailable)?;
+        let snapshot = living_scene::snapshot(before.state(), &scene)
+            .map_err(unavailable)?
+            .ok_or_else(|| tonic::Status::failed_precondition("picture scene unavailable"))?;
+        if living_scene::picture_source_hash(&snapshot.model).map_err(unavailable)? != source_hash {
+            return Err(tonic::Status::failed_precondition("picture source changed"));
+        }
+        let bytes = serde_json::to_vec(&record)
+            .map_err(|_| tonic::Status::internal("picture evidence encoding"))?;
+        let fingerprint: [u8; 32] = Sha256::digest(&bytes).into();
+        let operation_hash = Sha256::digest(
+            format!(
+                "picture-features:{}:{}:{}",
+                record.place,
+                record.plate_key,
+                super::journey::hex(before.basis().run.as_bytes())
+            )
+            .as_bytes(),
+        );
+        let operation = df_types::OperationId::from_bytes(&operation_hash[..16])
+            .map_err(|_| tonic::Status::internal("picture operation invalid"))?;
+        let candidate = living_scene::commit_picture_features(
+            &before,
+            expected_basis,
+            operation,
+            record.clone(),
+        )
+        .map_err(|_| {
+            tonic::Status::failed_precondition("picture source changed; evidence discarded")
+        })?;
+        if candidate.basis() == before.basis() {
+            return Ok(before.basis().revision);
+        }
+        let input = GameInput::Game(CommandInput {
+            basis: before.basis(),
+            observed_revision: before.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker: super::journey::player_entity(member, &before).map_err(unavailable)?,
+                text: super::journey::hex(&fingerprint),
+                conversation: None,
+            },
+        });
+        let scope = self
+            .issuer
+            .issue(
+                &credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        match self
+            .owner
+            .commit_owner_candidate(&scope, &candidate, &context)
+        {
+            SubmissionOutcome::Confirmed(_) => {}
+            SubmissionOutcome::Refused(error) => return Err(unavailable(error)),
+            SubmissionOutcome::OperationConflict => {
+                return Err(tonic::Status::aborted("picture evidence conflict"));
+            }
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                self.fenced = true;
+                return Err(tonic::Status::unavailable(
+                    "picture evidence requires recovery",
+                ));
+            }
+        }
+        record_audit_line(
+            "gameplay.picture_features",
+            format!(
+                "PICTURE_FEATURES place={} plate={} outcome=committed read_count={}",
+                record.place,
+                record.plate_key,
+                record.seen_in_picture.len()
+            ),
+        );
+        Ok(candidate.basis().revision)
+    }
+
+    fn commit_observation_finding(
+        &mut self,
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        record: super::journey::living_scene::ObservationFinding,
+        detail: Option<super::journey::living_scene::EstablishedDetail>,
+    ) -> Result<super::journey::living_scene::ObservationFinding, tonic::Status> {
+        require_readable(self.fenced)?;
+        let member = self.dialogue_member(&credential)?;
+        let operation = df_types::OperationId::from_bytes(
+            &super::journey::unhex(&record.operation).map_err(unavailable)?,
+        )
+        .map_err(|_| tonic::Status::invalid_argument("observation operation invalid"))?;
+        let before = self.owner.checkpoint().clone();
+        let who = super::journey::player_entity(member, &before).map_err(unavailable)?;
+        if record.actor != super::journey::hex(who.as_bytes()) {
+            return Err(tonic::Status::permission_denied(
+                "observation actor mismatch",
+            ));
+        }
+        if let Some(stored) =
+            super::journey::living_scene::observation_for(before.state(), operation)
+                .map_err(unavailable)?
+        {
+            materialize_observation(
+                &self.table_log,
+                &self.notebook,
+                &mut self.session.observation_lines,
+                member,
+                &stored,
+            )
+            .map_err(|_| tonic::Status::unavailable("observation notebook recovery failed"))?;
+            return Ok(stored);
+        }
+        let candidate = super::journey::living_scene::commit_observation_with_detail(
+            &before,
+            expected_basis,
+            record.clone(),
+            detail.clone(),
+        )
+        .map_err(|_| {
+            tonic::Status::failed_precondition("observation source changed; result discarded")
+        })?;
+        let completion = candidate
+            .state()
+            .decisions
+            .last()
+            .ok_or_else(|| tonic::Status::internal("observation journal absent"))?
+            .operation;
+        let fingerprint: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(&record, &detail))
+                .map_err(|_| tonic::Status::internal("observation record encoding"))?,
+        )
+        .into();
+        let input = GameInput::Game(CommandInput {
+            basis: before.basis(),
+            observed_revision: before.basis().revision,
+            operation: completion,
+            member,
+            command: GameCommand::Speak {
+                speaker: who,
+                text: super::journey::hex(&fingerprint),
+                conversation: None,
+            },
+        });
+        let scope = self
+            .issuer
+            .issue(
+                &credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        match self
+            .owner
+            .commit_owner_candidate(&scope, &candidate, &context)
+        {
+            SubmissionOutcome::Confirmed(_) => {}
+            SubmissionOutcome::Refused(error) => return Err(unavailable(error)),
+            SubmissionOutcome::OperationConflict => {
+                return Err(tonic::Status::aborted("observation completion conflict"));
+            }
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                self.fenced = true;
+                return Err(tonic::Status::unavailable(
+                    "observation completion requires recovery",
+                ));
+            }
+        }
+        record_audit_line(
+            "gameplay.observation_finding",
+            format!(
+                "OBSERVATION_FINDING id={} operation={} actor={} audience={} target={} source_revision={} sources={} unavailable={}",
+                record.id,
+                record.operation,
+                record.actor,
+                record.audience,
+                record.target,
+                record.source_revision,
+                record.selected_source_ids.join(","),
+                record.unavailable
+            ),
+        );
+        materialize_observation(
+            &self.table_log,
+            &self.notebook,
+            &mut self.session.observation_lines,
+            member,
+            &record,
+        )
+        .map_err(|_| tonic::Status::unavailable("observation notebook write failed"))?;
+        Ok(record)
+    }
+
+    fn opening_help(
+        &mut self,
+        credential: &[u8; 32],
+        request: rpc::RawDialogueRequest,
+        expected_basis: df_model::checkpoint::Basis,
+        beneficiary: df_types::MemberId,
+        skill: super::beat_script_runtime::OpeningSkill,
+    ) -> Result<Checkpoint, tonic::Status> {
+        use super::journey;
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        if self.issuer.authenticate(credential).map_err(unavailable)? != LocalDemoRole::Player {
+            return Err(tonic::Status::permission_denied(
+                "Help declaration needs a seated player",
+            ));
+        }
+        let member = self.dialogue_member(credential)?;
+        let current = self.owner.checkpoint().clone();
+        let staged = stage_opening_help_request(
+            &current,
+            member,
+            &request,
+            expected_basis,
+            beneficiary,
+            skill,
+        )?;
+        let operation = df_api::operation_id(request.input_id.as_ref())
+            .map_err(|_| tonic::Status::invalid_argument("Help operation required"))?;
+        let speaker = journey::player_entity(member, &current).map_err(unavailable)?;
+        let input = GameInput::Game(CommandInput {
+            basis: current.basis(),
+            observed_revision: current.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker,
+                text: request.text.clone(),
+                conversation: None,
+            },
+        });
+        let fingerprint: [u8; 32] = Sha256::digest(prost::Message::encode_to_vec(&request)).into();
+        let scope = self
+            .issuer
+            .issue(
+                credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        match self.owner.commit_owner_candidate(&scope, &staged, &context) {
+            SubmissionOutcome::Confirmed(_) => {
+                if !self.owner.is_current() {
+                    self.fence();
+                }
+                if let Err(error) = journey::living_scene::publish(self.owner.checkpoint()) {
+                    record_unavailable("opening-help-publication", &format!("{error:?}"));
+                }
+                record_audit_line(
+                    "gameplay.opening_help.committed",
+                    format!(
+                        "OPENING_HELP committed operation={} helper={} beneficiary={} skill={}",
+                        journey::hex(operation.as_bytes()),
+                        journey::hex(member.as_bytes()),
+                        journey::hex(beneficiary.as_bytes()),
+                        skill.name()
+                    ),
+                );
+                self.refresh_dev_moment();
+                Ok(staged)
+            }
+            SubmissionOutcome::OperationConflict => {
+                Err(tonic::Status::aborted("Help operation conflict"))
+            }
+            SubmissionOutcome::Refused(error) => Err(unavailable(error)),
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                self.fence();
+                Err(tonic::Status::unavailable(
+                    "Help outcome unavailable; retain the original operation for lookup",
+                ))
+            }
+        }
+    }
+
+    fn opening_social(
+        &mut self,
+        credential: &[u8; 32],
+        proposal: super::dialogue::OpeningSocialProposal,
+    ) -> Result<super::beat_script_runtime::OpeningSocialOutcome, tonic::Status> {
+        use super::journey;
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        if self.issuer.authenticate(credential).map_err(unavailable)? != LocalDemoRole::Player {
+            return Err(tonic::Status::permission_denied(
+                "social resolution needs a seated player",
+            ));
+        }
+        let member = self.dialogue_member(credential)?;
+        let current = self.owner.checkpoint().clone();
+        let staged = stage_opening_social_proposal(
+            &current,
+            member,
+            &self.social,
+            &proposal,
+            &mut super::dice::draw,
+        )?;
+        let operation = df_api::operation_id(proposal.request.input_id.as_ref())
+            .map_err(|_| tonic::Status::invalid_argument("social operation required"))?;
+        let speaker = journey::player_entity(member, &current).map_err(unavailable)?;
+        let input = GameInput::Game(CommandInput {
+            basis: current.basis(),
+            observed_revision: current.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker,
+                text: proposal.request.text.clone(),
+                conversation: None,
+            },
+        });
+        let fingerprint: [u8; 32] =
+            Sha256::digest(prost::Message::encode_to_vec(&proposal.request)).into();
+        let scope = self
+            .issuer
+            .issue(
+                credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        match self
+            .owner
+            .commit_owner_candidate(&scope, &staged.checkpoint, &context)
+        {
+            SubmissionOutcome::Confirmed(_) => {
+                if !self.owner.is_current() {
+                    self.fence();
+                }
+                if let Err(error) = journey::living_scene::publish(self.owner.checkpoint()) {
+                    record_unavailable("opening-social-publication", &format!("{error:?}"));
+                }
+                record_audit_line(
+                    "gameplay.opening_social.committed",
+                    format!(
+                        "OPENING_SOCIAL committed operation={} {}",
+                        journey::hex(operation.as_bytes()),
+                        staged.result.explanation()
+                    ),
+                );
+                self.refresh_dev_moment();
+                Ok(staged)
+            }
+            SubmissionOutcome::OperationConflict => {
+                Err(tonic::Status::aborted("social operation conflict"))
+            }
+            SubmissionOutcome::Refused(error) => Err(unavailable(error)),
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                self.fence();
+                Err(tonic::Status::unavailable(
+                    "social outcome unavailable; retain the original operation for lookup",
+                ))
+            }
+        }
+    }
+
     pub(super) fn submit(
         &mut self,
         credential: [u8; 32],
@@ -3190,7 +4010,7 @@ impl Actor {
     ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
         refusal_detail::begin_action();
         let action_kind = request.action_kind;
-        let result = self.submit_appearance_inner(credential, request, portrait);
+        let result = self.submit_appearance_inner(credential, request, portrait, None);
         record_action_result(action_kind, &result);
         result
     }
@@ -3199,6 +4019,7 @@ impl Actor {
         credential: [u8; 32],
         request: rpc::SubmitActionRequest,
         portrait: Option<super::creator_portraits::Attachment>,
+        observation_intention: Option<&str>,
     ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
         if self.session_lost() {
             refusal_detail::cause("action-session", "SessionLost".to_owned());
@@ -3299,18 +4120,7 @@ impl Actor {
                     let mut fresh =
                         super::hero_library::identity_choices(request.character.as_ref())?;
                     if let Some(portrait) = portrait {
-                        for (field, value) in [
-                            ("key", portrait.key),
-                            ("digest", super::journey::hex(&portrait.digest)),
-                            ("bytes", portrait.bytes.to_string()),
-                            ("revision", portrait.revision.to_string()),
-                        ] {
-                            fresh.push((
-                                super::model::label(&format!("identity-portrait:{field}"))
-                                    .map_err(unavailable)?,
-                                super::model::label(&value).map_err(unavailable)?,
-                            ));
-                        }
+                        fresh.extend(portrait.choices().map_err(unavailable)?);
                     }
                     choices.extend(super::creator_portraits::frozen_metadata(
                         uncertain, committed, fresh,
@@ -3517,7 +4327,7 @@ impl Actor {
             .try_recv()
             .map_err(|_| tonic::Status::internal("actor did not produce its outcome"))?;
         if !self.owner.is_current() {
-            self.fence();
+            self.fence_at("owner-commit", "cache-not-current");
         }
         match outcome {
             SubmissionOutcome::Confirmed(committed) => {
@@ -3532,6 +4342,25 @@ impl Actor {
                     authority_unavailable()
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
+                let after = self.owner.checkpoint();
+                let revision = after.basis().revision;
+                record_audit_line(
+                    "gameplay.action_committed",
+                    format!(
+                        "ACTION committed kind={} op={} seat={} rev={}:{}->{}:{} phase={:?}->{:?} replayed={replayed} commit_ms={} ms={}",
+                        request.action_kind,
+                        crate::client_diagnostics::operation_hash(operation.as_bytes()),
+                        df_observe::seat_hash(&credential),
+                        prior_revision.epoch().get(),
+                        prior_revision.sequence(),
+                        revision.epoch().get(),
+                        revision.sequence(),
+                        super::journey::phase(&before).ok(),
+                        super::journey::phase(after).ok(),
+                        self.session.commit_millis,
+                        self.session.commit_millis,
+                    ),
+                );
                 if !replayed {
                     if super::journey::scene_fight::open(before.state())
                         && !super::journey::scene_fight::open(self.owner.checkpoint().state())
@@ -3546,7 +4375,14 @@ impl Actor {
                     {
                         record_unavailable("scene-publication", &format!("{error:?}"));
                     }
-                    self.record_table_action(member, &request, &accepted, &before, reservation);
+                    self.record_table_action(
+                        member,
+                        &request,
+                        &accepted,
+                        &before,
+                        reservation,
+                        observation_intention,
+                    );
                     // The recorded moment keeps the commit's own lines: the
                     // publication hook runs before table lines are pushed.
                     self.refresh_dev_moment();
@@ -3577,12 +4413,12 @@ impl Actor {
             }
             SubmissionOutcome::ExpiredOrIndeterminate => {
                 refusal_detail::cause("action-lookup", "ExpiredOrIndeterminate".to_owned());
-                self.fence();
+                self.fence_at("action-lookup", "expired-or-indeterminate");
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
             SubmissionOutcome::LookupRequired => {
                 refusal_detail::cause("action-lookup", "LookupRequired".to_owned());
-                self.fence();
+                self.fence_at("action-lookup", "lookup-required");
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
             // The owner stayed current, so no uncertain commit was recorded: the command was
@@ -3602,7 +4438,7 @@ impl Actor {
             }
             SubmissionOutcome::Refused(error) => {
                 if error == RepositoryError::UnresolvedCommit {
-                    self.fence();
+                    self.fence_at("action-repository", "unresolved-commit");
                 }
                 if error == RepositoryError::Unauthorized {
                     return Err(unavailable(error));
@@ -3794,6 +4630,7 @@ impl Actor {
         accepted: &rpc::AcceptedAction,
         before: &Checkpoint,
         reservation: super::table_log::TableLogReservation,
+        observation_intention: Option<&str>,
     ) {
         self.record_kill_shots(before, &accepted.combat);
         self.record_accepted_audit(member, request, accepted, before);
@@ -3836,7 +4673,10 @@ impl Actor {
                     .push_scene_outcome(reservation, index, check, &line);
                 record_audit_line(
                     "gameplay.scene_interaction",
-                    format!("SCENE actor={hero:?} result={line:?}"),
+                    format!(
+                        "SCENE hero_index={index} result_chars={}",
+                        line.chars().count()
+                    ),
                 );
                 return;
             }
@@ -3852,7 +4692,9 @@ impl Actor {
             let observation = super::investigation::observation(&scene, check);
             let Some(table_line) = observation
                 .as_ref()
-                .map(|observation| observation.roll_line(&hero, check))
+                .map(|observation| {
+                    observation.roll_line_with_intention(&hero, check, observation_intention)
+                })
                 .or_else(|| observation_table_line(&hero, &scene, check, &request.action_choices))
             else {
                 record_unavailable("search-audit", "check result cannot be displayed");
@@ -3863,74 +4705,37 @@ impl Actor {
                 index,
                 super::table_log::ability_check_row(table_line, &hero, check),
             );
-            if let Some(finding) = super::beat_script_runtime::observation_finding(&scene, check) {
-                let Ok(scene_name) = notebook::scene_name(scene.key) else {
-                    record_unavailable("notebook-save", "finding scene invalid");
-                    return;
-                };
-                let text = format!("{} (found by {hero})", finding.sentence);
-                match self
-                    .notebook
-                    .add_clue(member, &hero, &finding.id, &text, &scene_name)
-                {
-                    Ok(Some(order)) if finding.private => {
-                        self.log_notebook_entry(&notebook::EntryView {
+            // Preserve the existing authored member-private knowledge grant. Its canonical
+            // text stays in the actor's notebook and never enters shared model prompts or TV.
+            if check.succeeded
+                && let Some(finding) =
+                    super::investigation::private_observation_finding(&scene, check)
+            {
+                match notebook::scene_name(scene.key) {
+                    Ok(scene_name) => match self.notebook.add_clue(
+                        member,
+                        &hero,
+                        &finding.id,
+                        &finding.sentence,
+                        &scene_name,
+                    ) {
+                        Ok(Some(order)) => self.log_notebook_entry(&notebook::EntryView {
                             kind: notebook::Kind::Clue,
                             title: finding.id.clone(),
-                            text,
+                            text: finding.sentence.clone(),
                             scene: scene_name,
                             order,
                             owner: Some(hero.clone()),
                             author: Some(hero.clone()),
-                        });
-                    }
-                    Ok(Some(order)) => match self.notebook.share(member, order) {
-                        Ok(Some(entry)) => self.log_notebook_entry(&entry),
-                        Ok(None) => {
-                            record_unavailable("notebook-share", "new clue was not shareable")
-                        }
-                        Err(error) => record_unavailable("notebook-share", &error.to_string()),
+                        }),
+                        Ok(None) => {}
+                        Err(error) => record_unavailable("notebook-save", &error.to_string()),
                     },
-                    Ok(None) => {}
                     Err(error) => record_unavailable("notebook-save", &error.to_string()),
                 }
-                if !finding.private {
-                    self.table_log.push(
-                        "Narrator",
-                        rpc::TableRole::Narrator,
-                        0,
-                        rpc::TableKind::Action,
-                        &finding.sentence,
-                    );
-                }
-            } else if let Some(observation) = observation {
-                self.table_log.push(
-                    "Narrator",
-                    rpc::TableRole::Narrator,
-                    0,
-                    rpc::TableKind::Action,
-                    &observation.public_view().fallback(),
-                );
-            } else if check.succeeded {
-                self.table_log.push(
-                    "Narrator",
-                    rpc::TableRole::Narrator,
-                    0,
-                    rpc::TableKind::Action,
-                    &format!(
-                        "You see {}: {} Nothing is out of place.",
-                        scene.title, scene.narration
-                    ),
-                );
-            } else {
-                self.table_log.push(
-                    "Narrator",
-                    rpc::TableRole::Narrator,
-                    0,
-                    rpc::TableKind::Action,
-                    "You find nothing unusual.",
-                );
             }
+            // The committed check is displayed now. Its one judged finding is published only
+            // after the observation completion has been stored by this same owner.
             return;
         }
         let task_status = match kind {
@@ -4110,6 +4915,73 @@ impl Actor {
         let after_phase = super::journey::phase(after).ok();
         let before_combat = audit_combat_view(before, member);
         let after_combat = audit_combat_view(after, member);
+        if kind == rpc::GameplayActionKind::CreateCharacter
+            && let Some(character) = after
+                .state()
+                .characters
+                .iter()
+                .find(|character| character.owner == member)
+        {
+            let selected = |group: &str| {
+                character
+                    .choices
+                    .iter()
+                    .find(|choice| choice.offer.as_str() == group)
+                    .map_or("unspecified", |choice| choice.selected.as_str())
+            };
+            let level = match selected("test-fighter-level") {
+                "fighter-5" => "5",
+                "unspecified" => "1",
+                _ => "unmeasured",
+            };
+            let portrait = after
+                .state()
+                .continuity
+                .canonical_packs
+                .iter()
+                .flat_map(|pack| &pack.identities)
+                .find(|identity| identity.entity == character.entity)
+                .is_some_and(|identity| !identity.appearances.is_empty());
+            record_audit_line(
+                "gameplay.character_created",
+                format!(
+                    "CHARACTER created class={} species={} background={} level={level} portrait={}",
+                    selected("class"),
+                    selected("species"),
+                    selected("background"),
+                    if portrait { "attached" } else { "none" },
+                ),
+            );
+        }
+        if matches!(
+            (
+                super::beat_script_runtime::ended(before.state()),
+                super::beat_script_runtime::ended(after.state())
+            ),
+            (Ok(false), Ok(true))
+        ) {
+            let victory = super::journey::combat_victory(after.state()).ok();
+            record_audit_line(
+                "gameplay.adventure_ended",
+                format!(
+                    "ADVENTURE ended outcome={} reward={} rounds={}",
+                    if victory == Some(true) {
+                        "victory"
+                    } else if super::journey::phase(after).ok() == Some(rpc::JourneyPhase::Complete)
+                    {
+                        "defeat"
+                    } else {
+                        "lost"
+                    },
+                    if super::journey::rewards::paid(after.state()) {
+                        "paid"
+                    } else {
+                        "none"
+                    },
+                    audit_combat_view(before, member).map_or(0, |combat| combat.round),
+                ),
+            );
+        }
         let hero = audit_hero(after, member);
         if let Some(actor) = hero.as_deref() {
             if kind == rpc::GameplayActionKind::ExamineHarborSeal
@@ -4125,6 +4997,25 @@ impl Actor {
                     return;
                 };
                 let finding = super::beat_script_runtime::observation_finding(&scene, check);
+                let target = super::investigation::check_target(&scene, check);
+                let action = match target.as_ref() {
+                    Some(target) if target.person => "watch_person",
+                    Some(target) if target.id == "room" => "look_around",
+                    Some(_) => "inspect_item",
+                    None => "observe",
+                };
+                let recorded = if check.succeeded && !parts[3].starts_with("repeat-") {
+                    target.as_ref().and_then(|target| {
+                        super::investigation::recorded_finding(&scene, target, parts[2])
+                    })
+                } else {
+                    None
+                };
+                let finding = finding.or(recorded.as_ref());
+                let target_id = target
+                    .as_ref()
+                    .filter(|target| !target.id.starts_with("absent-"))
+                    .map_or("none", |target| target.id.as_str());
                 let skill = parts[2];
                 let Ok(proficiency) = i32::try_from(check.proficiency_bonus) else {
                     record_unavailable("search-audit", "proficiency overflow");
@@ -4133,7 +5024,13 @@ impl Actor {
                 record_audit_line(
                     "gameplay.search_check",
                     format!(
-                        "CHECK actor={actor:?} skill={skill} die={} modifier={} total={} dc={} outcome={} finding={}",
+                        "CHECK action={action} target={target_id} hero_index={} skill={skill} die={} modifier={} total={} dc={} outcome={} finding={}",
+                        after
+                            .state()
+                            .characters
+                            .iter()
+                            .position(|character| character.owner == member)
+                            .map_or_else(|| "none".to_owned(), |index| index.to_string()),
                         check.die,
                         check.ability_modifier + proficiency,
                         check.total,
@@ -4149,7 +5046,7 @@ impl Actor {
                 if let Some(finding) = finding {
                     record_audit_line(
                         "gameplay.finding_revealed",
-                        format!("FINDING actor={actor:?} id={}", finding.id),
+                        format!("FINDING id={}", finding.id),
                     );
                 }
             }
@@ -4183,7 +5080,7 @@ impl Actor {
             match kind {
                 rpc::GameplayActionKind::ActionSurge => record_audit_line(
                     "gameplay.action_surge",
-                    format!("COMBAT action-surge actor={actor:?} additional_actions=1"),
+                    "COMBAT action-surge additional_actions=1".to_owned(),
                 ),
                 rpc::GameplayActionKind::SecondWind => {
                     if let Some(entity) = after
@@ -4298,6 +5195,12 @@ impl Actor {
 
         if before_phase != Some(rpc::JourneyPhase::Combat)
             && after_phase == Some(rpc::JourneyPhase::Combat)
+            && super::journey::initiative_rolls(after).is_err()
+        {
+            record_unavailable("combat-start-audit", "initiative-unreadable");
+        }
+        if before_phase != Some(rpc::JourneyPhase::Combat)
+            && after_phase == Some(rpc::JourneyPhase::Combat)
             && let Ok(rolls) = super::journey::initiative_rolls(after)
         {
             let policy = if super::journey::tactical::present(after.state()) {
@@ -4321,6 +5224,17 @@ impl Actor {
             record_audit_line(event, line);
         }
 
+        if super::journey::scene_fight::open(before.state())
+            && !super::journey::scene_fight::open(after.state())
+        {
+            record_audit_line(
+                "gameplay.fight_end",
+                format!(
+                    "FIGHT ended outcome=closed rounds={} scene_fight=true",
+                    before_combat.as_ref().map_or(0, |combat| combat.round)
+                ),
+            );
+        }
         if before_phase == Some(rpc::JourneyPhase::Combat)
             && after_phase == Some(rpc::JourneyPhase::Complete)
         {
@@ -4380,6 +5294,7 @@ impl Actor {
         if let Some(snapshot) =
             super::journey::living_scene::snapshot(current.state(), &scene).map_err(unavailable)?
         {
+            self.social.ensure_projected_room(&scene);
             self.social
                 .sync_room(&format!("{:?}", scene.key), snapshot)
                 .map_err(|error| {
@@ -4525,11 +5440,174 @@ impl Actor {
     }
 }
 
+fn audit_reply<T>(
+    reply: oneshot::Sender<Result<T, tonic::Status>>,
+    call: &str,
+    started: Instant,
+    result: Result<T, tonic::Status>,
+) -> Result<(), Result<T, tonic::Status>> {
+    if !matches!(call, "Submit" | "SubmitAppearance")
+        && let Err(status) = &result
+    {
+        let step = refusal_detail::step_or_unknown();
+        let diagnostic = df_session::submission::take_refusal_diagnostic();
+        record_audit_line(
+            "gameplay.call",
+            format!(
+                "CALL refused call={call} code={:?} step={step} cause={} ms={}",
+                status.code(),
+                diagnostic
+                    .as_ref()
+                    .map_or("unclassified", |detail| detail.cause.as_str()),
+                started.elapsed().as_millis(),
+            ),
+        );
+    }
+    let delivered = reply.send(result);
+    if delivered.is_err() {
+        record_audit_line(
+            "gameplay.call",
+            format!(
+                "CALL caller_gone call={call} ms={}",
+                started.elapsed().as_millis(),
+            ),
+        );
+    }
+    delivered
+}
+
 impl Reducer<Call> for Actor {
     fn reduce(&mut self, _: AdmissionSequence, call: Call) {
         // One command's refusal detail must never be printed for another: every call
         // this owner reduces starts from a cleared slot (see `refusal_detail`).
         refusal_detail::begin_action();
+        let call_started = Instant::now();
+        let call_name = match &call {
+            Call::PictureFeatures { .. } => "PictureFeatures",
+            Call::ObservationFinding { .. } => "ObservationFinding",
+            Call::LibraryHero { .. } => "LibraryHero",
+            Call::PublicSceneAsset { .. } => "PublicSceneAsset",
+            Call::AwaySeats { .. } => "AwaySeats",
+            Call::Reclaim { .. } => "Reclaim",
+            Call::QualificationInputs { .. } => "QualificationInputs",
+            Call::Join { .. } => "Join",
+            Call::ObservationSubmit { .. } => "ObservationSubmit",
+            Call::Submit { .. } => "Submit",
+            Call::SubmitAppearance { .. } => "SubmitAppearance",
+            Call::FightAftermath { .. } => "FightAftermath",
+            Call::NpcEvent { .. } => "NpcEvent",
+            Call::OpeningHelp { .. } => "OpeningHelp",
+            Call::OpeningSocial { .. } => "OpeningSocial",
+            Call::PlaceMove { .. } => "PlaceMove",
+            Call::Dialogue { .. } => "Dialogue",
+            Call::TelemetryIdentity { .. } => "TelemetryIdentity",
+            Call::View { .. } => "View",
+            Call::Presence { .. } => "Presence",
+            Call::Presented { .. } => "Presented",
+            Call::SpeechMember { .. } => "SpeechMember",
+            Call::Dev { .. } => "Dev",
+            Call::DevDirect { .. } => "DevDirect",
+        };
+        let operation = match &call {
+            Call::OpeningHelp { request, .. } => request
+                .input_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .map(crate::client_diagnostics::operation_hash),
+            Call::OpeningSocial { proposal, .. } => proposal
+                .request
+                .input_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .map(crate::client_diagnostics::operation_hash),
+            Call::ObservationFinding { record, .. } => super::journey::unhex(&record.operation)
+                .ok()
+                .map(|bytes| crate::client_diagnostics::operation_hash(&bytes)),
+            Call::ObservationSubmit { request, .. }
+            | Call::Submit { request, .. }
+            | Call::SubmitAppearance { request, .. } => request
+                .operation_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .map(crate::client_diagnostics::operation_hash),
+            Call::Join { request, .. } => request
+                .operation_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .map(crate::client_diagnostics::operation_hash),
+            Call::Reclaim { request, .. } => Some(crate::client_diagnostics::operation_hash(
+                request.operation.as_bytes(),
+            )),
+            _ => None,
+        };
+        let seat = match &call {
+            Call::LibraryHero { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::ObservationSubmit { credential, .. } | Call::Submit { credential, .. } => {
+                Some(df_observe::seat_hash(credential))
+            }
+            Call::SubmitAppearance { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::FightAftermath { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::NpcEvent { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::OpeningHelp { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::OpeningSocial { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::PlaceMove { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::PictureFeatures { credential, .. }
+            | Call::ObservationFinding { credential, .. } => {
+                Some(df_observe::seat_hash(credential))
+            }
+            Call::Dialogue { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::TelemetryIdentity { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::View { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::Presence { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::Presented { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::SpeechMember { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::Dev { credential, .. } => Some(df_observe::seat_hash(credential)),
+            Call::DevDirect { credential, .. } => Some(df_observe::seat_hash(credential)),
+            _ => None,
+        };
+        let basis = self.owner.checkpoint().basis();
+        let _audit_scope = df_observe::audit_scope(df_observe::AuditContext {
+            operation,
+            seat,
+            room: Some(crate::client_diagnostics::operation_hash(
+                basis.session.as_bytes(),
+            )),
+            revision: Some(format!(
+                "{}:{}",
+                basis.revision.epoch().get(),
+                basis.revision.sequence()
+            )),
+        });
+        df_observe::install_audit_sink(record_audit_line);
+
+        let call = match call {
+            Call::PictureFeatures {
+                credential,
+                expected_basis,
+                source_hash,
+                record,
+                reply,
+            } => {
+                let result =
+                    self.commit_picture_features(credential, expected_basis, &source_hash, record);
+                let _delivered = audit_reply(reply, call_name, call_started, result);
+                return;
+            }
+            Call::ObservationFinding {
+                credential,
+                expected_basis,
+                record,
+                detail,
+                reply,
+            } => {
+                let result =
+                    self.commit_observation_finding(credential, expected_basis, record, detail);
+                let _delivered = audit_reply(reply, call_name, call_started, result);
+                return;
+            }
+            call => call,
+        };
+
         // The unauthenticated player shell may learn only the public scene picture name.
         // Reading it is cheap presentation work and must not consume the game call budget.
         let call = match call {
@@ -4553,11 +5631,12 @@ impl Reducer<Call> for Actor {
                         watch_scope_identity(checkpoint.basis(), role, principal, &request)?;
                     super::hero_library::snapshot(checkpoint, member)
                 })();
-                let _delivered = reply.send(result);
+                let _delivered = audit_reply(reply, call_name, call_started, result);
                 return;
             }
             Call::PublicSceneAsset { reply } => {
-                let _delivered = reply.send(self.public_scene_asset());
+                let _delivered =
+                    audit_reply(reply, call_name, call_started, self.public_scene_asset());
                 return;
             }
             other => other,
@@ -4570,7 +5649,12 @@ impl Reducer<Call> for Actor {
                 request,
                 reply,
             } => {
-                let _delivered = reply.send(self.telemetry_identity(credential, request));
+                let _delivered = audit_reply(
+                    reply,
+                    call_name,
+                    call_started,
+                    self.telemetry_identity(credential, request),
+                );
                 return;
             }
             Call::Presence {
@@ -4578,7 +5662,12 @@ impl Reducer<Call> for Actor {
                 kind,
                 reply,
             } => {
-                let _delivered = reply.send(self.presence(&credential, kind));
+                let _delivered = audit_reply(
+                    reply,
+                    call_name,
+                    call_started,
+                    self.presence(&credential, kind),
+                );
                 return;
             }
             Call::Presented {
@@ -4587,8 +5676,12 @@ impl Reducer<Call> for Actor {
                 display_instance,
                 reply,
             } => {
-                let _delivered =
-                    reply.send(self.presented(&credential, sequence, display_instance));
+                let _delivered = audit_reply(
+                    reply,
+                    call_name,
+                    call_started,
+                    self.presented(&credential, sequence, display_instance),
+                );
                 return;
             }
             other => other,
@@ -4601,78 +5694,166 @@ impl Reducer<Call> for Actor {
             self.run_committed_intents();
         }
         if !self.calls_unbounded && self.calls_remaining == 0 {
+            record_audit_line(
+                "gameplay.budget",
+                format!("BUDGET exhausted call={call_name} remaining=0"),
+            );
             match call {
+                Call::PictureFeatures { .. } | Call::ObservationFinding { .. } => {
+                    unreachable!("observation completion handled above")
+                }
                 Call::PublicSceneAsset { reply } => {
-                    let _ = reply.send(self.public_scene_asset());
+                    let _ = audit_reply(reply, call_name, call_started, self.public_scene_asset());
                 }
                 Call::QualificationInputs { reply } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "qualification budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "qualification budget exhausted",
+                        )),
+                    );
                 }
                 Call::AwaySeats { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite room budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite room budget exhausted",
+                        )),
+                    );
                 }
                 Call::Reclaim { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite room budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite room budget exhausted",
+                        )),
+                    );
                 }
                 Call::Join { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite room budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite room budget exhausted",
+                        )),
+                    );
                 }
-                Call::Submit { request, reply, .. }
+                Call::ObservationSubmit { request, reply, .. }
+                | Call::Submit { request, reply, .. }
                 | Call::SubmitAppearance { request, reply, .. } => {
                     refusal_detail::cause("action-budget", "FiniteCallBudgetExhausted".to_owned());
                     let result = Err(tonic::Status::resource_exhausted(
                         "finite demonstration call budget exhausted",
                     ));
                     record_action_result(request.action_kind, &result);
-                    let _ = reply.send(result);
+                    let _ = audit_reply(reply, call_name, call_started, result);
                 }
                 Call::FightAftermath { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite fight work budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite fight work budget exhausted",
+                        )),
+                    );
                 }
                 Call::NpcEvent { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
+                }
+                Call::OpeningHelp { reply, .. } => {
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite social work budget exhausted",
+                        )),
+                    );
+                }
+                Call::OpeningSocial { reply, .. } => {
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite social work budget exhausted",
+                        )),
+                    );
                 }
                 Call::PlaceMove { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
                 }
                 Call::Dialogue { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite dialogue budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite dialogue budget exhausted",
+                        )),
+                    );
                 }
                 Call::View { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
                 }
                 Call::SpeechMember { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
                 }
                 Call::Dev { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
                 }
                 Call::DevDirect { reply, .. } => {
-                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
-                        "finite demonstration call budget exhausted",
-                    )));
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite demonstration call budget exhausted",
+                        )),
+                    );
                 }
                 Call::LibraryHero { .. }
                 | Call::Presence { .. }
@@ -4696,49 +5877,68 @@ impl Reducer<Call> for Actor {
             _ => self.issuer.reconnect_if_closed(),
         };
         let delivered = match call {
+            Call::PictureFeatures { .. } | Call::ObservationFinding { .. } => {
+                unreachable!("observation completion handled above")
+            }
             Call::FightAftermath {
                 credential,
                 expected_basis,
                 preparation,
                 voice,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || {
                     self.fight_aftermath(credential, expected_basis, preparation, voice)
-                }))
-                .is_ok(),
-            Call::PublicSceneAsset { reply } => reply.send(self.public_scene_asset()).is_ok(),
-            Call::QualificationInputs { reply } => reply
-                .send(
-                    self.qualification_inputs
-                        .clone()
-                        .map(|actions| QualificationSnapshot {
-                            actions,
-                            joins: self.qualification_joins.clone().unwrap_or_default(),
-                            checkpoint: self.owner.checkpoint().clone(),
-                            codec: self.codec,
-                            calls_remaining: self.calls_remaining,
-                            #[cfg(test)]
-                            fenced: self.fenced,
-                            #[cfg(test)]
-                            uncertain: self.owner.has_uncertain_operation(),
-                        })
-                        .ok_or_else(|| tonic::Status::permission_denied("qualification disabled")),
-                )
-                .is_ok(),
-            Call::AwaySeats { room_code, reply } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.away_seats(&room_code)
-                }))
-                .is_ok(),
-            Call::Reclaim { request, reply } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.reclaim_seat(request)
-                }))
-                .is_ok(),
-            Call::Join { request, reply } => reply
-                .send(after_grant_reconnect(reconnected, || self.join(request)))
-                .is_ok(),
+                }),
+            )
+            .is_ok(),
+            Call::PublicSceneAsset { reply } => {
+                audit_reply(reply, call_name, call_started, self.public_scene_asset()).is_ok()
+            }
+            Call::QualificationInputs { reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                self.qualification_inputs
+                    .clone()
+                    .map(|actions| QualificationSnapshot {
+                        actions,
+                        joins: self.qualification_joins.clone().unwrap_or_default(),
+                        checkpoint: self.owner.checkpoint().clone(),
+                        codec: self.codec,
+                        calls_remaining: self.calls_remaining,
+                        #[cfg(test)]
+                        fenced: self.fenced,
+                        #[cfg(test)]
+                        uncertain: self.owner.has_uncertain_operation(),
+                    })
+                    .ok_or_else(|| tonic::Status::permission_denied("qualification disabled")),
+            )
+            .is_ok(),
+            Call::AwaySeats { room_code, reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.away_seats(&room_code)),
+            )
+            .is_ok(),
+            Call::Reclaim { request, reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.reclaim_seat(request)),
+            )
+            .is_ok(),
+            Call::Join { request, reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.join(request)),
+            )
+            .is_ok(),
             Call::Dialogue {
                 credential,
                 request,
@@ -4754,6 +5954,7 @@ impl Reducer<Call> for Actor {
                     | super::dialogue::DialogueRequest::PendingMerchantQuote
                     | super::dialogue::DialogueRequest::PartyHeroes
                     | super::dialogue::DialogueRequest::CloseMerchantQuote { .. }
+                    | super::dialogue::DialogueRequest::MerchantExchange { .. }
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };
                 let result = after_grant_reconnect(reconnected, || {
@@ -4766,7 +5967,7 @@ impl Reducer<Call> for Actor {
                 {
                     self.record_say_audit(&credential, request);
                 }
-                reply.send(result).is_ok()
+                audit_reply(reply, call_name, call_started, result).is_ok()
             }
             Call::SubmitAppearance {
                 credential,
@@ -4780,7 +5981,27 @@ impl Reducer<Call> for Actor {
                 });
                 record_action_result(asked.action_kind, &result);
                 self.begin_test_fight(credential, &asked, &result);
-                reply.send(result).is_ok()
+                audit_reply(reply, call_name, call_started, result).is_ok()
+            }
+            Call::ObservationSubmit {
+                credential,
+                request,
+                intention,
+                reply,
+            } => {
+                let result = after_grant_reconnect(reconnected, || {
+                    if request.action_kind != rpc::GameplayActionKind::ExamineHarborSeal as i32
+                        || intention.trim().is_empty()
+                        || intention.chars().count() > 96
+                        || intention.chars().any(char::is_control)
+                    {
+                        return Err(tonic::Status::invalid_argument(
+                            "observation intention invalid",
+                        ));
+                    }
+                    self.submit_appearance_inner(credential, request, None, Some(&intention))
+                });
+                audit_reply(reply, call_name, call_started, result).is_ok()
             }
             Call::Submit {
                 credential,
@@ -4792,58 +6013,100 @@ impl Reducer<Call> for Actor {
                     after_grant_reconnect(reconnected, || self.submit(credential, request));
                 record_action_result(asked.action_kind, &result);
                 self.begin_test_fight(credential, &asked, &result);
-                reply.send(result).is_ok()
+                audit_reply(reply, call_name, call_started, result).is_ok()
             }
             Call::NpcEvent {
                 credential,
                 proposal,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.npc_event(&credential, proposal)
-                }))
-                .is_ok(),
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.npc_event(&credential, proposal)),
+            )
+            .is_ok(),
+            Call::OpeningHelp {
+                credential,
+                request,
+                expected_basis,
+                beneficiary,
+                skill,
+                reply,
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || {
+                    self.opening_help(&credential, request, expected_basis, beneficiary, skill)
+                }),
+            )
+            .is_ok(),
+            Call::OpeningSocial {
+                credential,
+                proposal,
+                reply,
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.opening_social(&credential, proposal)),
+            )
+            .is_ok(),
             Call::PlaceMove {
                 credential,
                 proposal,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.place_move(&credential, proposal)
-                }))
-                .is_ok(),
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.place_move(&credential, proposal)),
+            )
+            .is_ok(),
             Call::View {
                 credential,
                 request,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.view(credential, request)
-                }))
-                .is_ok(),
-            Call::SpeechMember { credential, reply } => reply
-                .send(after_grant_reconnect(reconnected, || {
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.view(credential, request)),
+            )
+            .is_ok(),
+            Call::SpeechMember { credential, reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || {
                     let member = self.dialogue_member(&credential)?;
                     self.seat_activity(&credential)?;
                     Ok(member)
-                }))
-                .is_ok(),
+                }),
+            )
+            .is_ok(),
             Call::Dev {
                 credential,
                 order,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.dev(&credential, *order)
-                }))
-                .is_ok(),
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.dev(&credential, *order)),
+            )
+            .is_ok(),
             Call::DevDirect {
                 credential,
                 request,
                 order,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
+            } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || {
                     let history = self.dev_history.clone().ok_or_else(|| {
                         tonic::Status::permission_denied("development control is off")
                     })?;
@@ -4852,8 +6115,9 @@ impl Reducer<Call> for Actor {
                         tonic::Status::unavailable("development direction store unavailable")
                     })?;
                     super::dev_control::direct::admit(&mut history, &view, order)
-                }))
-                .is_ok(),
+                }),
+            )
+            .is_ok(),
             Call::LibraryHero { .. }
             | Call::Presence { .. }
             | Call::Presented { .. }
@@ -5011,7 +6275,7 @@ mod qualification_tests {
             });
         record_action_result(rpc::GameplayActionKind::CreateCharacter as i32, &result);
         let lines = audit_lines_containing(
-            "REFUSAL action=CreateCharacter reason=Unavailable status=lookup-required step=authority cause=Unavailable",
+            "REFUSAL action=CreateCharacter reason=Unavailable status=lookup-required step=authority outer=authority cause=Unavailable",
         );
         assert_eq!(lines.len(), 1);
     }
@@ -5047,7 +6311,7 @@ mod qualification_tests {
         record_action_result(request.action_kind, &result);
         record_action_result(request.action_kind, &result);
         let lines = audit_lines_containing(
-            "step=wire-creation-validation cause=character choices exceed bound",
+            "step=wire-creation-validation outer=wire-creation-validation cause=character choices exceed bound",
         );
         assert_eq!(lines.len(), 1);
         refusal_detail::begin_action();
@@ -5059,8 +6323,9 @@ mod qualification_tests {
         )));
         record_action_result(request.action_kind, &result);
         record_action_result(request.action_kind, &result);
-        let lines =
-            audit_lines_containing("step=action-creation-validation cause=MissingCharacter");
+        let lines = audit_lines_containing(
+            "step=action-creation-validation outer=action-creation-validation cause=MissingCharacter",
+        );
         assert_eq!(lines.len(), 1);
     }
 
@@ -5345,13 +6610,17 @@ mod enemy_turn_audit_tests {
             "no attack target is currently reachable",
             "Dodge",
         );
-        assert!(
-            line.starts_with(
-                "COMBAT turn actor=\"Bandit 1\" operation=010203 run=aabbcc revision=42"
-            )
-        );
+        assert!(line.starts_with(&format!(
+            "COMBAT turn actor_hash={} operation=010203 run=aabbcc revision=42",
+            df_observe::seat_hash(b"Bandit 1")
+        )));
         assert!(line.contains("policy=\"SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2\""));
-        assert!(line.contains("action=dodge reason=\"no attack target is currently reachable\""));
+        assert!(line.contains(&format!(
+            "action=dodge reason_hash={}",
+            df_observe::operation_hash(b"no attack target is currently reachable")
+        )));
+        assert!(!line.contains("Bandit 1"));
+        assert!(!line.contains("no attack target is currently reachable"));
     }
 }
 
@@ -5563,3 +6832,154 @@ mod reaction_timer_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod call_audit_tests {
+    use super::*;
+    #[tokio::test]
+    async fn refused_call_preserves_status_and_logs_safe_stage_without_player_text() {
+        refusal_detail::begin_action();
+        refusal_detail::cause("synthetic-view-stage", "Unavailable".to_owned());
+        let (reply, wait) = oneshot::channel::<Result<(), tonic::Status>>();
+        assert!(
+            audit_reply(
+                reply,
+                "View",
+                Instant::now(),
+                Err(tonic::Status::unavailable("private player words"))
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            wait.await.unwrap().unwrap_err().code(),
+            tonic::Code::Unavailable
+        );
+        let lines = audit_lines_containing(
+            "CALL refused call=View code=Unavailable step=synthetic-view-stage",
+        );
+        assert!(!lines.is_empty());
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("private player words"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod hs28_opening_social_tests {
+    use super::*;
+    use crate::gameplay::{
+        beat_script_runtime as runtime,
+        dialogue::{OpeningSocialProposal, opening_social_standing},
+        social::SocialLedger,
+    };
+
+    #[test]
+    fn hs28_actor_opening_social_validates_basis_and_retry_before_drawing() {
+        let loaded = crate::gameplay::pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+        )
+        .unwrap();
+        crate::gameplay::pack::with_test_pack(loaded, || {
+            for count in [1, 4, 6] {
+                let current = runtime::opening_social_tests::opening(count);
+                let member = current.state().characters[0].owner;
+                let social = SocialLedger::none();
+                let (attitude, emotional) =
+                    opening_social_standing(&current, &social, member).unwrap();
+                let basis = current.basis();
+                let mut proposal = OpeningSocialProposal {
+                    request: rpc::RawDialogueRequest {
+                        session_id: Some(rpc::SessionId {
+                            value: Some(basis.session.as_bytes().to_vec()),
+                        }),
+                        run_id: Some(rpc::RunId {
+                            value: Some(basis.run.as_bytes().to_vec()),
+                        }),
+                        observed_revision: Some(wire::revision(basis.revision)),
+                        input_id: Some(rpc::OperationId {
+                            value: Some(vec![90; 16]),
+                        }),
+                        finality: rpc::DialogueFinality::Final as i32,
+                        text: "Dain, allow Finn to pass for our introduction.".into(),
+                        ..Default::default()
+                    },
+                    expected_basis: basis,
+                    skill: runtime::OpeningSkill::Persuasion,
+                    attitude,
+                    emotional,
+                    willingness: df_rules::influence::Willingness::Hesitant,
+                    roleplay_softened: false,
+                    approved_party_easing: None,
+                    changed_after: None,
+                };
+                proposal.request.observed_revision =
+                    Some(wire::revision(basis.revision.next_sequence().unwrap()));
+                assert!(
+                    stage_opening_social_proposal(
+                        &current,
+                        member,
+                        &social,
+                        &proposal,
+                        &mut |_| panic!("stale input cannot draw")
+                    )
+                    .is_err()
+                );
+                proposal.request.observed_revision = Some(wire::revision(basis.revision));
+                let mut draws = 0;
+                let failed = stage_opening_social_proposal(
+                    &current,
+                    member,
+                    &social,
+                    &proposal,
+                    &mut |_| {
+                        draws += 1;
+                        Ok(1)
+                    },
+                )
+                .unwrap();
+                assert_eq!(draws, 2);
+                assert!(!runtime::opening_threat_resolved(failed.checkpoint.state()).unwrap());
+                proposal.request.observed_revision =
+                    Some(wire::revision(failed.checkpoint.basis().revision));
+                proposal.expected_basis = failed.checkpoint.basis();
+                proposal.request.input_id = Some(rpc::OperationId {
+                    value: Some(vec![91; 16]),
+                });
+                assert!(
+                    stage_opening_social_proposal(
+                        &failed.checkpoint,
+                        member,
+                        &social,
+                        &proposal,
+                        &mut |_| panic!("unchanged request cannot draw")
+                    )
+                    .is_err()
+                );
+                proposal.changed_after =
+                    Some(df_types::OperationId::from_bytes(&[90; 16]).unwrap());
+                proposal.request.text = "A materially different, Jev-judged offer.".into();
+                let settled = stage_opening_social_proposal(
+                    &failed.checkpoint,
+                    member,
+                    &social,
+                    &proposal,
+                    &mut |_| Ok(20),
+                )
+                .unwrap();
+                assert!(runtime::opening_threat_resolved(settled.checkpoint.state()).unwrap());
+                assert!(settled.checkpoint.state().encounters.is_empty());
+                assert_eq!(
+                    settled.checkpoint.state().characters,
+                    current.state().characters
+                );
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "actor_media_latency_tests.rs"]
+mod media_latency_tests;

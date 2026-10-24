@@ -50,6 +50,8 @@ pub struct CombatantSpec {
     pub kind: CreatureKind,
     #[serde(default)]
     pub species: Option<HeroSpecies>,
+    #[serde(default)]
+    pub species_options: crate::species::SpeciesOptions,
     pub abilities: [u8; 6],
     pub armor_class: u16,
     pub hit_points: u16,
@@ -196,7 +198,13 @@ impl CombatantSpec {
         (1..=5)
             .filter_map(|level| crate::local_journey::FighterProgression::new(level).ok())
             .find(|progression| {
-                progression.hit_points(self.abilities[2], species) == self.hit_points
+                progression.hit_points(self.abilities[2], species)
+                    + if self.species_options.tough {
+                        2 * u16::from(progression.level())
+                    } else {
+                        0
+                    }
+                    == self.hit_points
             })
     }
     /// Upgrade an admitted level-one profile, retaining equipment and species.
@@ -226,11 +234,15 @@ impl CombatantSpec {
             self.species.ok_or(RuleError::InvalidBuild)?,
         );
         self.second_wind_uses = progression.second_wind_maximum();
+        if self.species_options.tough {
+            self.hit_points += 2 * u16::from(level);
+        }
         validate_source_profile(&self)?;
         Ok(self)
     }
     pub fn species_traits(&self) -> Option<SpeciesCombatTraits> {
-        self.species.map(HeroSpecies::combat_traits)
+        self.species
+            .map(|species| self.species_options.combat_traits(species))
     }
 
     pub fn darkvision_ft(&self) -> Option<u16> {
@@ -301,7 +313,9 @@ impl CombatantSpec {
             .find(|(key, _)| key == "species")
             .and_then(|(_, value)| HeroSpecies::from_choice(value))
             .ok_or(RuleError::InvalidBuild)?;
-        let traits = species.combat_traits();
+        let species_options = crate::species::SpeciesOptions::from_choices(species, &choices)
+            .map_err(|_| RuleError::InvalidBuild)?;
+        let traits = species_options.combat_traits(species);
         Ok(Self {
             id,
             side: Side::Heroes,
@@ -312,6 +326,7 @@ impl CombatantSpec {
             },
             kind: CreatureKind::Hero,
             species: Some(species),
+            species_options,
             abilities: checked.abilities,
             armor_class: 17,
             hit_points: u16::try_from(checked.hit_points).map_err(|_| RuleError::InvalidBuild)?,
@@ -484,6 +499,7 @@ impl CombatantSpec {
             size,
             kind,
             species: None,
+            species_options: Default::default(),
             abilities: source.rules.abilities,
             armor_class: u16::from(source.rules.armor_class),
             hit_points: u16::from(source.rules.hit_points),
@@ -553,6 +569,12 @@ pub struct Combatant {
     pub(crate) budget: Budget,
     pub(crate) turn_count: u32,
     pub(crate) slow: Vec<Effect>,
+    #[serde(default)]
+    pub(crate) frost_chill: Vec<Effect>,
+    #[serde(default)]
+    pub(crate) species_uses_spent: u8,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) regeneration_inhibited: bool,
     pub(crate) sap: Vec<Effect>,
     pub(crate) vex: Vec<(u32, u32)>,
     pub(crate) light_first: Option<Weapon>,
@@ -582,6 +604,20 @@ fn is_zero_u16(value: &u16) -> bool {
     *value == 0
 }
 impl Combatant {
+    /// Dragonborn Breath Weapon / Goliath ancestry: PB uses per Long Rest (SRD pp.84-86).
+    pub fn species_uses_remaining(&self) -> u8 {
+        if matches!(
+            self.spec.species,
+            Some(HeroSpecies::Dragonborn | HeroSpecies::Goliath)
+        ) {
+            self.spec
+                .fighter_level()
+                .map_or(0, |level| level.proficiency_bonus())
+                .saturating_sub(self.species_uses_spent)
+        } else {
+            0
+        }
+    }
     pub fn action_surge_available(&self) -> bool {
         self.spec
             .fighter_level()
@@ -658,6 +694,7 @@ impl Combatant {
         self.spec
             .speed_ft
             .saturating_sub(if self.slow.is_empty() { 0 } else { 10 })
+            .saturating_sub(if self.frost_chill.is_empty() { 0 } else { 10 })
     }
     pub fn movement_remaining_ft(&self) -> u16 {
         (self.speed_ft() * (1 + u16::from(self.budget.dash) + u16::from(self.additional_dash)))
@@ -701,6 +738,7 @@ pub struct Battle {
     pub(crate) active: usize,
     pub(crate) round: u32,
     pub(crate) pending: Option<PendingMove>,
+    pub(crate) species_damage: Vec<super::species::SpeciesDamage>,
     pub(crate) helped_attacks: Vec<HelpEffect>,
     pub(crate) needs_death_save: bool,
 }
@@ -742,6 +780,24 @@ impl Battle {
         Ok(self)
     }
     /// Carry a Fighter's once-per-rest Action Surge across encounters.
+    pub fn with_hero_species_uses(mut self, id: u32, remaining: u8) -> Result<Self, RuleError> {
+        let actor = self.actor_mut(id)?;
+        if !matches!(
+            actor.spec.species,
+            Some(HeroSpecies::Dragonborn | HeroSpecies::Goliath)
+        ) {
+            return Err(RuleError::InvalidBuild);
+        }
+        let maximum = actor
+            .spec
+            .fighter_level()
+            .ok_or(RuleError::InvalidBuild)?
+            .proficiency_bonus();
+        actor.species_uses_spent = maximum
+            .checked_sub(remaining)
+            .ok_or(RuleError::InvalidCombatant)?;
+        Ok(self)
+    }
     pub fn with_hero_action_surge(mut self, id: u32, available: bool) -> Result<Self, RuleError> {
         let actor = self.actor_mut(id)?;
         if actor
@@ -979,6 +1035,10 @@ impl Battle {
                 if other.side() != actor.side()
                     && !other.health.incapacitated()
                     && size_difference < 2
+                    // SRD p.86 Halfling Nimbleness: pass through any larger creature,
+                    // while validate_path still forbids ending in its space.
+                    && !(actor.spec.species == Some(HeroSpecies::Halfling)
+                        && size_rank(other.spec.size) > size_rank(actor.spec.size))
                 {
                     return Err(RuleError::Occupied);
                 }
@@ -1269,6 +1329,9 @@ pub(super) fn begin_faces(
             spec,
             turn_count: 0,
             slow: vec![],
+            frost_chill: vec![],
+            species_uses_spent: 0,
+            regeneration_inhibited: false,
             sap: vec![],
             vex: vec![],
             light_first: None,
@@ -1293,6 +1356,7 @@ pub(super) fn begin_faces(
         active: 0,
         round: 1,
         pending: None,
+        species_damage: vec![],
         helped_attacks: Vec::new(),
         needs_death_save: false,
     };
@@ -1372,17 +1436,14 @@ pub fn begin(
         helps: vec![],
         stabilizations: vec![],
         rerolls,
+        saving_throws: vec![],
     })
 }
 
 pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleError> {
     if spec.kind == CreatureKind::Hero {
         let species = spec.species.ok_or(RuleError::InvalidBuild)?;
-        let species_traits = species.combat_traits();
-        let supported_species = matches!(
-            species,
-            HeroSpecies::Dwarf | HeroSpecies::Halfling | HeroSpecies::Orc
-        );
+        let species_traits = spec.species_options.combat_traits(species);
         let expected_size = match species_traits.size {
             SpeciesSize::Small => Size::Small,
             SpeciesSize::Medium => Size::Medium,
@@ -1405,7 +1466,12 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
                 return Err(RuleError::InvalidBuild);
             }
         }
-        let expected_hit_points = i32::from(progression.hit_points(spec.abilities[2], species));
+        let expected_hit_points = i32::from(progression.hit_points(spec.abilities[2], species))
+            + if spec.species_options.tough {
+                2 * i32::from(progression.level())
+            } else {
+                0
+            };
         let standard_melee = matches!(
             base_abilities,
             [17, 13, 15, 10, 12, 8] | [17, 14, 14, 8, 10, 12]
@@ -1426,7 +1492,7 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             && spec.weapons == [Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword]
             && base_masteries == spec.weapons;
         if spec.side != Side::Heroes
-            || !supported_species
+            || !spec.species_options.valid_for(species)
             || spec.size != expected_size
             || (!standard_melee && !standard_archer)
             || i32::from(spec.hit_points) != expected_hit_points
@@ -1442,7 +1508,8 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             return Err(RuleError::InvalidBuild);
         }
     } else {
-        if spec.species.is_some()
+        if spec.species_options != Default::default()
+            || spec.species.is_some()
             || spec.healers_kit_uses != 0
             || spec.relentless_endurance_available
         {

@@ -5,6 +5,7 @@ mod development;
 mod map;
 mod resolve;
 mod snapshot;
+mod species;
 mod state;
 mod weapons;
 
@@ -21,8 +22,10 @@ pub use map::{
 pub use resolve::{
     Action, AttackReason, AttackSpend, AttackSummary, AttackUse, D20Reroll, D20Test,
     DeathSaveResult, DeathSaveSummary, DrawBinding, HelpPurpose, HelpSummary, MoveSummary,
-    RecoverySummary, Resolution, StabilizationOutcome, StabilizationSummary, resolve,
+    RecoverySummary, Resolution, SpeciesAction, StabilizationOutcome, StabilizationSummary,
+    resolve, resolve_species,
 };
+pub use species::{BreathDirection, BreathShape, SavingThrowSummary, SpeciesReaction};
 pub use state::{
     Battle, Budget, Combatant, CombatantSpec, CreatureExperience, CreatureKind,
     EncounterExperience, Health, Side, Size, begin,
@@ -41,6 +44,7 @@ pub const DEPARTURES: &[&str] = &[
     "tactical.cover-representative-height",
     "tactical.initiative-ties-input-order",
     "tactical.dead-space-passable",
+    "tactical.area-cell-centres-eight-directions",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

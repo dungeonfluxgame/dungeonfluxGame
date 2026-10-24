@@ -241,7 +241,11 @@ fn jev_reply(lines: &[JevLine], body: &Value) -> (u16, Value) {
             .find(|line| line.words == words)
             .or_else(|| lines.first())
     };
-    let wanted = if asks("flirting") {
+    let wanted = if asks("recorded") && asks("backfill") {
+        Some("recorded")
+    } else if asks("approve") && state.get("recorded_facts").is_some() {
+        Some("approve")
+    } else if asks("flirting") {
         line_of(&state["player_words"]).map(|line| line.approach)
     } else if asks("small_talk") {
         line_of(&state["whole_line"]).map(|line| {
@@ -559,6 +563,8 @@ async fn a_recorded_wrong_reaches_only_the_hero_who_did_it_in_the_reply_facts() 
         reply("Good morning to you.", "question"),
     ]);
     let (voice, cache) = voice(&endpoint, "wrong-recall");
+    let fact_jev = super::npc_reply::tests::ref069_existing_facts(vec![]);
+    let voice = voice.with_approach_model(model(&fact_jev));
     let log = TableLog::new();
 
     let wronged = context(&adventure, &ledger, SceneKey::Opening, question);
@@ -1204,6 +1210,8 @@ async fn an_injected_instruction_is_only_speech(tag: &str) {
         reply("As an AI I have no secrets.", "other"),
     ]);
     let (voice, cache) = voice(&endpoint, &format!("dossier-inject-{tag}"));
+    let fact_jev = super::npc_reply::tests::ref069_existing_facts(vec![]);
+    let voice = voice.with_approach_model(model(&fact_jev));
     let log = TableLog::new();
     let answer = voice.converse(injected, &log).await.unwrap();
     assert!(!answer.to_lowercase().contains("ignore all"));
@@ -1335,6 +1343,8 @@ async fn a_ten_line_conversation_shows_the_model_only_the_last_six_lines() {
         .collect();
     let endpoint = FakeEndpoint::start(replies);
     let (voice, cache) = voice(&endpoint, "dossier-window");
+    let fact_jev = super::npc_reply::tests::ref069_existing_facts(vec![]);
+    let voice = voice.with_approach_model(model(&fact_jev));
     let log = TableLog::new();
 
     for n in 0..5 {
@@ -3418,7 +3428,7 @@ async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_spe
     let bandit = pack
         .speakers
         .iter()
-        .find(|speaker| speaker.name == "Bandit")
+        .find(|speaker| speaker.name == "Dain Rusk")
         .unwrap();
     assert_eq!(
         bandit.withheld_subjects,
@@ -3473,7 +3483,8 @@ async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_spe
         };
         assert!(player.journey.unwrap().reply_speaker.is_empty());
     }
-    // With Jev silent the reading is neutral: nothing is withheld, and the prepared answer speaks.
+    // With every judge off there is no selected authoritative answer. REF-069 keeps the
+    // unknown question unavailable instead of substituting an unselected personal anecdote.
     let ledger = SocialLedger::open(adventure.dossiers.clone(), "bounded-off", None).unwrap();
     let ask = context(
         &adventure,
@@ -3485,12 +3496,12 @@ async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_spe
         .converse_in_character(ask, &TableLog::new())
         .await
         .unwrap();
-    assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
+    assert_eq!(exchange.outcome, ExchangeOutcome::Unavailable);
     assert_eq!(
         exchange.fallback,
         Some(super::npc_reply::FallbackReason::ModelOff)
     );
-    assert!(!exchange.text.is_empty());
+    assert!(exchange.text.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3835,41 +3846,60 @@ fn lying_hero(face: u8) -> InfluenceCheckInput {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_local_question_without_canon_establishes_one_fact_and_the_same_question_gets_it_from_canon()
- {
+async fn a_local_question_backfills_before_speech_and_the_same_question_gets_it_from_canon() {
     let (adventure, ledger) = confiding_patron(Attitude::Friendly);
-    let decision = FakeEndpoint::start(jev_answers("o1", "o1"));
+    let decision =
+        super::npc_reply::tests::ref069_jev("backfill", "harmless_missing_detail", false);
     let established = "The Lantern Inn stands two streets east of the square.";
     let replies = FakeEndpoint::start(vec![
-        Reply::Output(json!({
-            "reply": established,
-            "approach": "question",
-            "local_fact": "place|The Lantern Inn|The Lantern Inn stands two streets east of the square.",
-        })),
-        reply("Head past the well and look for the red sign.", "question"),
+        Reply::Output(
+            json!({"fact":json!({"name":"Nearest inn", "content":established}).to_string()}),
+        ),
+        reply(established, "question"),
+        reply(
+            "The Lantern Inn, two streets east. You can't miss it.",
+            "question",
+        ),
     ]);
     let (voice, cache) = voice(&replies, "local-canon");
-    let voice = voice.with_approach_model(model(&decision));
+    let lore = Arc::new(super::npc_reply::local_lore::LocalLore::in_memory());
+    let voice = voice
+        .with_approach_model(model(&decision))
+        .with_local_lore(lore.clone());
     let log = TableLog::new();
     let question = "Where is the nearest inn?";
 
     let first = context(&adventure, &ledger, SceneKey::Opening, question);
     let exchange = voice.converse_in_character(first, &log).await.unwrap();
     assert!(exchange.from_model, "{:?}", exchange.fallback);
-    let first_facts = request_facts(&replies, 0);
+    let first_facts = request_facts(&replies, 1);
     assert!(
-        first_facts.contains("\"may_establish_local_fact\":true"),
+        first_facts.contains("\"may_establish_local_fact\":false"),
         "{first_facts}"
     );
-    assert!(first_facts.contains("\"facts\":[]"), "{first_facts}");
+    assert!(
+        first_facts.contains(established),
+        "accepted canon precedes even the first spoken answer"
+    );
     assert!(first_facts.contains("Quoted world data"), "{first_facts}");
+    assert_eq!(lore.development_decisions().len(), 1);
 
     let second = context(&adventure, &ledger, SceneKey::Opening, question);
     let exchange = voice.converse_in_character(second, &log).await.unwrap();
     assert!(exchange.from_model, "{:?}", exchange.fallback);
-    let second_facts = request_facts(&replies, 1);
+    let second_facts = request_facts(&replies, 2);
     assert!(second_facts.contains("The Lantern Inn"), "{second_facts}");
     assert!(second_facts.contains(established), "{second_facts}");
+    assert_eq!(
+        lore.development_decisions().len(),
+        1,
+        "the fact is generated once"
+    );
+    assert_eq!(
+        replies.connections(),
+        3,
+        "one fact generation and two spoken answers"
+    );
     std::fs::remove_dir_all(cache).unwrap();
 }
 

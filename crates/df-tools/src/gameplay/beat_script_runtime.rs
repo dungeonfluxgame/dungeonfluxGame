@@ -8,6 +8,614 @@ use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
 use df_types::MemberId;
 
+/// A social outcome belongs to the beat journal, independently of combat victory.
+const OPENING_SOCIAL_POLICY: &str = "opening-social-1";
+const OPENING_SOCIAL_EVENT: &str = "opening-social-outcome";
+const OPENING_SOCIAL_PREFIX: &str = "opening-social-1:";
+
+#[path = "opening_help.rs"]
+pub(super) mod opening_help;
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpeningPartyChange {
+    before: String,
+    after: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpeningModeSource {
+    advantage: bool,
+    label: String,
+    helper_operation: [u8; 16],
+    helper_session: [u8; 16],
+    helper_run: [u8; 16],
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum OpeningSkill {
+    Persuasion,
+    Deception,
+    Intimidation,
+}
+impl OpeningSkill {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Persuasion => "persuasion",
+            Self::Deception => "deception",
+            Self::Intimidation => "intimidation",
+        }
+    }
+    fn rules(self) -> df_rules::influence::InfluenceSkill {
+        match self {
+            Self::Persuasion => df_rules::influence::InfluenceSkill::Persuasion,
+            Self::Deception => df_rules::influence::InfluenceSkill::Deception,
+            Self::Intimidation => df_rules::influence::InfluenceSkill::Intimidation,
+        }
+    }
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpeningSocialRecord {
+    member: [u8; 16],
+    beat: String,
+    skill: OpeningSkill,
+    attitude: String,
+    willingness: String,
+    faces: Vec<u8>,
+    succeeded: bool,
+    changed_after: Option<[u8; 16]>,
+    /// The owner retains the judged words for a changed-offer comparison after recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    party_change: Option<OpeningPartyChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extra_sources: Vec<OpeningModeSource>,
+}
+
+fn opening_social_result(
+    state: &GameState,
+    record: &OpeningSocialRecord,
+) -> Result<df_rules::influence::InfluenceResult, RepositoryError> {
+    use df_rules::influence::{Attitude, InfluenceInput, Willingness, WordQuality, WordTilt};
+    let member = MemberId::from_bytes(&record.member).map_err(|_| refusal("SocialMember"))?;
+    let hero = state
+        .members
+        .iter()
+        .find(|link| link.member == member)
+        .and_then(|link| link.character)
+        .ok_or_else(|| refusal("SocialHero"))?;
+    let (ability_modifier, proficiency_bonus) =
+        skill_check_modifiers(state, hero, record.skill.name())?;
+    let attitude = match record.attitude.as_str() {
+        "friendly" => Attitude::Friendly,
+        "indifferent" => Attitude::Indifferent,
+        "hostile" => Attitude::Hostile,
+        _ => return invalid("SocialAttitude"),
+    };
+    let willingness = match record.willingness.as_str() {
+        "willing" => Willingness::Willing,
+        "hesitant" => Willingness::Hesitant,
+        "unwilling" => Willingness::Unwilling,
+        _ => return invalid("SocialWillingness"),
+    };
+    df_rules::influence::resolve(InfluenceInput {
+        ability_modifier,
+        proficiency_bonus,
+        skill: record.skill.rules(),
+        attitude,
+        monster_intelligence: pack::bandit().abilities[3],
+        willingness,
+        words: WordQuality {
+            tilt: WordTilt::Neutral,
+            reason: "standard Influence",
+        },
+        extra_sources: &record
+            .extra_sources
+            .iter()
+            .map(|source| df_rules::influence::ModeSource {
+                advantage: source.advantage,
+                label: source.label.clone(),
+            })
+            .collect::<Vec<_>>(),
+        faces: &record.faces,
+    })
+    .map_err(|_| refusal("SocialCheck"))
+}
+fn social_succeeded(result: &df_rules::influence::InfluenceResult) -> bool {
+    matches!(
+        result.outcome,
+        df_rules::influence::InfluenceOutcome::Success
+            | df_rules::influence::InfluenceOutcome::NoRoll(
+                df_rules::influence::NoRollCause::Willing
+            )
+    )
+}
+
+/// Replays the accepted social receipt and its actual dice; loose outcome facts confer nothing.
+pub(super) fn opening_threat_resolved(state: &GameState) -> Result<bool, RepositoryError> {
+    let mut resolved = false;
+    let mut prior_attempt = None;
+    let mut party_eased = false;
+    opening_help::validate_history(state)?;
+    for decision in &state.decisions {
+        if decision.source_policy.as_str() != OPENING_SOCIAL_POLICY {
+            continue;
+        }
+        let text = decision
+            .semantic_output
+            .as_deref()
+            .and_then(|text| text.strip_prefix(OPENING_SOCIAL_PREFIX))
+            .ok_or_else(|| refusal("SocialReceipt"))?;
+        let record: OpeningSocialRecord =
+            serde_json::from_str(text).map_err(|_| refusal("SocialReceiptJson"))?;
+        if resolved
+            || !matches!(
+                record.beat.as_str(),
+                "opening" | "courier-answer-seal" | "courier-answer-escort"
+            )
+            || !decision.effects.is_empty()
+            || record
+                .source_line
+                .as_ref()
+                .is_some_and(|line| line.trim().is_empty() || line.len() > 4096)
+        {
+            return invalid("SocialHistory");
+        }
+        if record.changed_after != prior_attempt {
+            return invalid("SocialRetryBasis");
+        }
+        let mut prior_beat = None;
+        for prior in state.decisions.iter().filter(|prior| {
+            prior.revision < decision.revision
+                && prior.source_policy.as_str() == journey::THREAD_POLICY
+        }) {
+            // Disclosure replacement must not erase the native courier answer's historical beat.
+            if state.intents.iter().any(|intent| {
+                intent.operation == prior.operation
+                    && intent.basis.revision == prior.revision
+                    && intent.definition.entry.as_str() == super::courier_ai::DEFINITION
+                    && prior.effects.contains(&intent.id)
+            }) {
+                prior_beat = Some("courier-answer-seal");
+            }
+            if let Some(fact) = state
+                .facts
+                .iter()
+                .find(|fact| prior.facts.last() == Some(&fact.id))
+                && let FactValue::ContentEvent { definition, .. } = &fact.value
+            {
+                match definition.entry.as_str() {
+                    "begin-story" => prior_beat = Some("opening"),
+                    "private-courier-note" => prior_beat = Some("courier-answer-seal"),
+                    "escort-courier" => prior_beat = Some("courier-answer-escort"),
+                    "defend-courier" => return invalid("SocialAfterViolence"),
+                    _ => {}
+                }
+            }
+        }
+        if prior_beat != Some(record.beat.as_str()) {
+            return invalid("SocialBeatBasis");
+        }
+        if let Some(change) = &record.party_change {
+            if party_eased
+                || change.before != "hostile"
+                || change.after != "indifferent"
+                || change.reason != "Jev judged a concrete offer against Dain's wants"
+                || record.willingness != "hesitant"
+            {
+                return invalid("SocialPartyChange");
+            }
+            party_eased = true;
+        }
+        if record.extra_sources.len() > 1 {
+            return invalid("SocialHelpCount");
+        }
+        for source in &record.extra_sources {
+            opening_help::validate_consumption(state, decision, &record, source)?;
+        }
+        let result = opening_social_result(state, &record)?;
+        if record.succeeded != social_succeeded(&result) || record.faces != result.faces {
+            return invalid("SocialOutcome");
+        }
+        let draws: Vec<_> = state
+            .draws
+            .iter()
+            .filter(|draw| draw.operation == decision.operation)
+            .collect();
+        if draws.len() != record.faces.len()
+            || decision.draws.len() != draws.len()
+            || decision.facts.len() != draws.len() + 1
+        {
+            return invalid("SocialDrawCount");
+        }
+        for (index, (draw, face)) in draws.iter().zip(&record.faces).enumerate() {
+            if draw.ordinal != index as u32
+                || decision.draws[index] != index as u32
+                || draw.sides != 20
+                || draw.value != u32::from(*face)
+                || draw.source != journey::rule()?
+                || draw.resolution.as_bytes() != decision.operation.as_bytes()
+                || draw.window.as_bytes() != decision.operation.as_bytes()
+            {
+                return invalid("SocialDrawBinding");
+            }
+        }
+        for (index, id) in decision.facts.iter().enumerate() {
+            let fact = state
+                .facts
+                .iter()
+                .find(|fact| fact.id == *id)
+                .ok_or_else(|| refusal("SocialFactMissing"))?;
+            if fact.operation != decision.operation
+                || fact.revision != decision.revision
+                || fact.ordinal != index as u32
+                || fact.audience != AudienceScope::Shared
+            {
+                return invalid("SocialFactBinding");
+            }
+            let position = state
+                .facts
+                .iter()
+                .position(|entry| entry.id == fact.id)
+                .ok_or_else(|| refusal("SocialFactPosition"))?;
+            if fact.cause
+                != position
+                    .checked_sub(1)
+                    .and_then(|prior| state.facts.get(prior))
+                    .map(|prior| prior.id)
+            {
+                return invalid("SocialFactCause");
+            }
+            let correct = if index < draws.len() {
+                matches!(fact.value, FactValue::DrawAccepted { operation, ordinal }
+                    if operation == decision.operation && ordinal == index as u32)
+            } else {
+                matches!(&fact.value, FactValue::ContentEvent { definition, subjects }
+                    if *definition == model::content(OPENING_SOCIAL_EVENT)? && subjects.is_empty())
+            };
+            if !correct {
+                return invalid("SocialFactValue");
+            }
+        }
+        resolved = record.succeeded;
+        prior_attempt = Some(*decision.operation.as_bytes());
+    }
+    Ok(resolved)
+}
+
+pub(super) struct OpeningSocialOutcome {
+    pub(super) checkpoint: Checkpoint,
+    pub(super) result: df_rules::influence::InfluenceResult,
+    pub(super) line: String,
+}
+/// Bind the semantic receipt to the actual judged request before the owner commits it.
+/// This leaves the staging contract usable by rule-only callers without inventing player words.
+pub(super) fn bind_opening_social_source(
+    outcome: &mut OpeningSocialOutcome,
+    words: &str,
+) -> Result<(), RepositoryError> {
+    if words.trim().is_empty() || words.len() > 4096 {
+        return invalid("SocialSourceBounds");
+    }
+    let mut state = outcome.checkpoint.state().clone();
+    let decision = state
+        .decisions
+        .last_mut()
+        .ok_or_else(|| refusal("SocialSource"))?;
+    let encoded = decision
+        .semantic_output
+        .as_deref()
+        .and_then(|text| text.strip_prefix(OPENING_SOCIAL_PREFIX))
+        .ok_or_else(|| refusal("SocialSource"))?;
+    let mut record: OpeningSocialRecord =
+        serde_json::from_str(encoded).map_err(|_| refusal("SocialSource"))?;
+    record.source_line = Some(words.to_owned());
+    decision.semantic_output = Some(format!(
+        "{OPENING_SOCIAL_PREFIX}{}",
+        serde_json::to_string(&record).map_err(|_| refusal("SocialSource"))?
+    ));
+    outcome.checkpoint = model::checkpoint(outcome.checkpoint.basis(), state)?;
+    Ok(())
+}
+
+pub(super) fn previous_opening_social(
+    current: &Checkpoint,
+) -> Result<Option<(df_types::OperationId, Option<String>)>, RepositoryError> {
+    let Some(decision) = current
+        .state()
+        .decisions
+        .iter()
+        .rev()
+        .find(|decision| decision.source_policy.as_str() == OPENING_SOCIAL_POLICY)
+    else {
+        return Ok(None);
+    };
+    let encoded = decision
+        .semantic_output
+        .as_deref()
+        .and_then(|text| text.strip_prefix(OPENING_SOCIAL_PREFIX))
+        .ok_or_else(|| refusal("SocialSource"))?;
+    let record: OpeningSocialRecord =
+        serde_json::from_str(encoded).map_err(|_| refusal("SocialSource"))?;
+    Ok(Some((decision.operation, record.source_line)))
+}
+
+/// A durable party change does not disappear when another hero speaks or an attempt fails.
+pub(super) fn opening_party_attitude(
+    state: &GameState,
+) -> Result<Option<(df_rules::influence::Attitude, Option<String>)>, RepositoryError> {
+    opening_threat_resolved(state)?;
+    let mut standing = None;
+    for decision in &state.decisions {
+        if decision.source_policy.as_str() != OPENING_SOCIAL_POLICY {
+            continue;
+        }
+        let encoded = decision
+            .semantic_output
+            .as_deref()
+            .and_then(|text| text.strip_prefix(OPENING_SOCIAL_PREFIX))
+            .ok_or_else(|| refusal("SocialReceipt"))?;
+        let record: OpeningSocialRecord =
+            serde_json::from_str(encoded).map_err(|_| refusal("SocialReceiptJson"))?;
+        if record.party_change.is_some() {
+            standing = Some((
+                df_rules::influence::Attitude::Indifferent,
+                record.source_line,
+            ));
+        }
+    }
+    Ok(standing)
+}
+
+/// Jev compares against every failed urging, so alternating heroes or offers cannot erase it.
+pub(super) fn opening_social_history(state: &GameState) -> Result<Vec<String>, RepositoryError> {
+    let mut history = Vec::new();
+    for decision in &state.decisions {
+        if decision.source_policy.as_str() != OPENING_SOCIAL_POLICY {
+            continue;
+        }
+        let encoded = decision
+            .semantic_output
+            .as_deref()
+            .and_then(|text| text.strip_prefix(OPENING_SOCIAL_PREFIX))
+            .ok_or_else(|| refusal("SocialReceipt"))?;
+        let record: OpeningSocialRecord =
+            serde_json::from_str(encoded).map_err(|_| refusal("SocialReceiptJson"))?;
+        if !record.succeeded {
+            history.push(
+                record
+                    .source_line
+                    .unwrap_or_else(|| "previous words unavailable".to_owned()),
+            );
+        }
+    }
+    Ok(history)
+}
+
+/// The session owner calls this only for Jev's explicit request to end this obstruction.
+/// SRD p184: DC max(15, Intelligence); attitude changes roll mode. Failed attempts never attack.
+pub(super) struct OpeningSocialAttempt<'a> {
+    pub(super) member: MemberId,
+    pub(super) skill: OpeningSkill,
+    pub(super) attitude: df_rules::influence::Attitude,
+    pub(super) willingness: df_rules::influence::Willingness,
+    pub(super) faces: &'a [u8],
+    /// Jev must explicitly judge a different offer or approach before another roll is admitted.
+    pub(super) changed_after: Option<df_types::OperationId>,
+}
+pub(super) fn stage_opening_social(
+    current: &Checkpoint,
+    operation: df_types::OperationId,
+    attempt: OpeningSocialAttempt<'_>,
+) -> Result<OpeningSocialOutcome, RepositoryError> {
+    stage_opening_social_with_sources(current, operation, attempt, &[])
+}
+
+/// The owner supplies the currently available typed Help source before drawing the check.
+pub(super) fn stage_opening_social_with_sources(
+    current: &Checkpoint,
+    operation: df_types::OperationId,
+    attempt: OpeningSocialAttempt<'_>,
+    extra_sources: &[df_rules::influence::ModeSource],
+) -> Result<OpeningSocialOutcome, RepositoryError> {
+    stage_opening_social_appraised(current, operation, attempt, extra_sources, None)
+}
+
+/// Separate party appraisal keeps a personal exception from deciding the group's relationship.
+/// `Some(before)` is only supplied after Jev approves a useful offer against that party baseline.
+pub(super) fn stage_opening_social_appraised(
+    current: &Checkpoint,
+    operation: df_types::OperationId,
+    attempt: OpeningSocialAttempt<'_>,
+    extra_sources: &[df_rules::influence::ModeSource],
+    approved_party_easing: Option<df_rules::influence::Attitude>,
+) -> Result<OpeningSocialOutcome, RepositoryError> {
+    let OpeningSocialAttempt {
+        member,
+        skill,
+        attitude,
+        willingness,
+        faces,
+        changed_after,
+    } = attempt;
+    use df_rules::influence::Willingness;
+    journey::player_entity(member, current)?;
+    journey::phase(current)?;
+    let state = current.state();
+    let beat = beat_script::with_script(|script| script.current(state).cloned())?;
+    if !matches!(
+        beat.state.durable.as_str(),
+        "opening" | "courier-answer-seal" | "courier-answer-escort"
+    ) || !state.encounters.is_empty()
+        || opening_threat_resolved(state)?
+        || state
+            .decisions
+            .iter()
+            .any(|decision| decision.operation == operation)
+        || !beat_script::with_script(|script| script.is_canonical())
+    {
+        return invalid("SocialOpeningUnavailable");
+    }
+    let previous = state
+        .decisions
+        .iter()
+        .rev()
+        .find(|decision| decision.source_policy.as_str() == OPENING_SOCIAL_POLICY)
+        .map(|decision| decision.operation);
+    if previous != changed_after {
+        return invalid("SocialChangedApproachRequired");
+    }
+    let helper = if willingness == Willingness::Hesitant {
+        opening_help::source_for(current, member, skill)?
+    } else {
+        None
+    };
+    let stored_sources = match (extra_sources, helper) {
+        ([], None) => Vec::new(),
+        ([source], Some((helper_operation, expected))) if *source == expected => {
+            vec![OpeningModeSource {
+                advantage: source.advantage,
+                label: source.label.clone(),
+                helper_operation: *helper_operation.as_bytes(),
+                helper_session: *current.basis().session.as_bytes(),
+                helper_run: *current.basis().run.as_bytes(),
+            }]
+        }
+        _ => return invalid("SocialHelpSource"),
+    };
+    let enforcer = super::dialogue::opening_social_enforcer(current)?;
+    let hero = journey::name(state, journey::player_entity(member, current)?)?;
+    let base = opening_party_attitude(state)?
+        .map(|(attitude, _)| attitude)
+        .unwrap_or_else(|| super::dialogue::opening_scene_attitude(enforcer.attitude));
+    if approved_party_easing.is_some_and(|before| before != base)
+        || approved_party_easing
+            .is_some_and(|before| before != df_rules::influence::Attitude::Hostile)
+        || (approved_party_easing.is_some() && willingness != Willingness::Hesitant)
+    {
+        return invalid("SocialPartyAppraisal");
+    }
+    // Existing actor calls prove a useful offer by changing a non-exception hero's stance.
+    // A separate explicit appraisal lets an exception hero improve the party without erasing
+    // their own stance or letting a weak personal-Indifferent attempt improve the group.
+    let inferred_easing = base == df_rules::influence::Attitude::Hostile
+        && attitude == df_rules::influence::Attitude::Indifferent
+        && willingness == Willingness::Hesitant
+        && !enforcer.attitudes.contains_key(&hero);
+    let party_change =
+        (inferred_easing || approved_party_easing.is_some()).then(|| OpeningPartyChange {
+            before: "hostile".to_owned(),
+            after: "indifferent".to_owned(),
+            reason: "Jev judged a concrete offer against Dain's wants".to_owned(),
+        });
+    let mut record = OpeningSocialRecord {
+        member: *member.as_bytes(),
+        beat: beat.state.durable,
+        skill,
+        attitude: attitude.word().to_owned(),
+        willingness: match willingness {
+            Willingness::Willing => "willing",
+            Willingness::Hesitant => "hesitant",
+            Willingness::Unwilling => "unwilling",
+        }
+        .to_owned(),
+        faces: faces.to_vec(),
+        succeeded: false,
+        changed_after: changed_after.map(|operation| *operation.as_bytes()),
+        source_line: None,
+        party_change,
+        extra_sources: if willingness == Willingness::Hesitant {
+            stored_sources
+        } else {
+            Vec::new()
+        },
+    };
+    let result = opening_social_result(state, &record)?;
+    record.succeeded = social_succeeded(&result);
+    record.faces = result.faces.clone();
+    let mut state = state.clone();
+    let mut basis = current.basis();
+    basis.revision = basis
+        .revision
+        .next_sequence()
+        .map_err(|_| refusal("SocialRevision"))?;
+    let mut facts = Vec::new();
+    for index in 0..=record.faces.len() {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(
+            [
+                b"opening-social-1:".as_slice(),
+                operation.as_bytes(),
+                &(index as u32).to_le_bytes(),
+            ]
+            .concat(),
+        );
+        let id = FactId::from_bytes(&digest[..16]).map_err(|_| refusal("SocialFactId"))?;
+        let value = if let Some(face) = record.faces.get(index) {
+            state.draws.push(ActualDraw {
+                operation,
+                ordinal: index as u32,
+                resolution: ResolutionId::from_bytes(operation.as_bytes())
+                    .map_err(|_| refusal("SocialResolution"))?,
+                window: WindowId::from_bytes(operation.as_bytes())
+                    .map_err(|_| refusal("SocialWindow"))?,
+                sides: 20,
+                value: u32::from(*face),
+                source: journey::rule()?,
+            });
+            FactValue::DrawAccepted {
+                operation,
+                ordinal: index as u32,
+            }
+        } else {
+            FactValue::ContentEvent {
+                definition: model::content(OPENING_SOCIAL_EVENT)?,
+                subjects: vec![],
+            }
+        };
+        state.facts.push(GameFact {
+            id,
+            revision: basis.revision,
+            operation,
+            ordinal: index as u32,
+            cause: state.facts.last().map(|fact| fact.id),
+            audience: AudienceScope::Shared,
+            value,
+        });
+        facts.push(id);
+    }
+    state.decisions.push(AcceptedDecision {
+        operation,
+        revision: basis.revision,
+        facts,
+        draws: (0..record.faces.len() as u32).collect(),
+        effects: vec![],
+        source_policy: model::label(OPENING_SOCIAL_POLICY)?,
+        semantic_output: Some(format!(
+            "{OPENING_SOCIAL_PREFIX}{}",
+            serde_json::to_string(&record).map_err(|_| refusal("SocialEncode"))?
+        )),
+    });
+    let checkpoint = model::checkpoint(basis, state)?;
+    opening_threat_resolved(checkpoint.state())?;
+    let line = if record.succeeded {
+        "Dain steps aside; Finn keeps the packet, and the road to the market opens."
+    } else {
+        ""
+    }
+    .to_owned();
+    Ok(OpeningSocialOutcome {
+        checkpoint,
+        result,
+        line,
+    })
+}
+
 pub(super) const STEP: &str = "beat-script-step";
 /// The submitted action entry of an authored investigation (`observe`) choice.
 pub(super) const CHOICE_ACTION: &str = "script-choice";
@@ -186,7 +794,10 @@ pub(super) fn skill_check_modifiers(
     let background_proficiency = character.build.entry.as_str() == "dwarf-fighter-soldier"
         && matches!(skill, "athletics" | "intimidation");
     let chosen_proficiency = character.choices.iter().any(|choice| {
-        matches!(choice.offer.as_str(), "skill-1" | "skill-2") && choice.selected.as_str() == skill
+        matches!(
+            choice.offer.as_str(),
+            "skill-1" | "skill-2" | "human-skill" | "keen-senses"
+        ) && choice.selected.as_str() == skill
     });
     let proficiency = if background_proficiency || chosen_proficiency {
         pack::with_creation(|creation| creation.proficiency_bonus)
@@ -262,12 +873,86 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         {
             scene.asset = asset;
         }
+        if script.is_canonical()
+            && opening_threat_resolved(state)?
+            && matches!(
+                beat.state.durable.as_str(),
+                "opening" | "courier-answer-seal" | "courier-answer-escort"
+            )
+        {
+            // The committed social exchange tells this outcome after its roll. Re-projecting
+            // the same beat must not speak it a second time (or race ahead of the roll).
+            scene.narration.clear();
+            scene.dialogue.clear();
+        }
         // Where the party has gone from the beat's own place (see `place`).
         let mut scene = super::place::overlay(state, &beat.id, scene)?;
         if let Some(snapshot) = journey::living_scene::snapshot(state, &scene)?
             && let Some(setting) = scene.setting.as_mut()
         {
             setting.model = Some(snapshot.model);
+        }
+        // Inspection facts follow their authored people within the same place, including
+        // the enforcer after his entrance; a scene key change cannot erase their source rows.
+        if let Some(setting) = scene.setting.as_ref()
+            && let Some(model) = setting.model.as_ref()
+        {
+            let fact_ids = model
+                .people
+                .iter()
+                .flat_map(|person| &person.knowledge)
+                .map(|knowledge| knowledge.fact_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let inherited = pack::with_content(|content| {
+                content
+                    .scenes
+                    .iter()
+                    .filter(|source| {
+                        source
+                            .setting
+                            .as_ref()
+                            .is_some_and(|source| source.place_id == setting.place_id)
+                    })
+                    .flat_map(|source| &source.findings)
+                    .filter(|finding| fact_ids.contains(finding.id.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            for finding in inherited {
+                if !scene
+                    .findings
+                    .iter()
+                    .any(|existing| existing.id == finding.id)
+                {
+                    scene.findings.push(finding);
+                }
+            }
+        }
+        let observation_operation = state
+            .decisions
+            .last()
+            .map(|decision| {
+                journey::living_scene::observation_record(decision).map(|record| {
+                    record.map_or_else(
+                        || journey::hex(decision.operation.as_bytes()),
+                        |record| record.operation,
+                    )
+                })
+            })
+            .transpose()?;
+        for record in journey::living_scene::observation_journal(state)? {
+            if record.scene == scene.key
+                && observation_operation.as_deref() == Some(record.operation.as_str())
+            {
+                scene.findings.push(pack::Finding {
+                    id: record.id,
+                    sentence: record.text,
+                    skill: pack::FindingSkill::Perception,
+                    dc: 0,
+                    private: false,
+                    consequence: Some(format!("observation-check:{}", record.check)),
+                });
+            }
         }
         // People who fled a fight are gone from the scene, and people it left down neither answer
         // nor can be spoken to: only those still standing are on stage. The narration says where
@@ -413,7 +1098,11 @@ pub(super) const ENDING_ENTRIES: &[&str] = &[STEP, RESOLVE_ACTION, "epilogue", "
 pub(super) fn contents() -> Vec<String> {
     beat_script::with_script(|script| {
         if script.is_canonical() {
-            let mut entries = vec![CHOICE_ACTION.into()];
+            let mut entries = vec![
+                CHOICE_ACTION.into(),
+                OPENING_SOCIAL_EVENT.into(),
+                opening_help::EVENT.into(),
+            ];
             for offer in script.beats.iter().flat_map(|beat| &beat.offers) {
                 if offer.effect == BeatEffect::Observe {
                     let entry = format!("{OFFER_PREFIX}{}", offer.id);
@@ -733,7 +1422,7 @@ pub(super) fn validate(
     {
         return invalid("NarrativeHistoryMismatch");
     }
-    if started && (journey::participants(current).len() != 2 || state.characters.len() != 2) {
+    if started && !journey::party_ready(current) {
         return invalid("PartyCreationCountMismatch");
     }
     if script.mode != beat_script::ScriptMode::Freeplay {
@@ -768,6 +1457,16 @@ pub(super) fn observation_finding<'a>(
     scene: &'a pack::Scene,
     check: &rpc::AbilityCheckResult,
 ) -> Option<&'a pack::Finding> {
+    use prost::Message;
+    let binding = format!("observation-check:{}", journey::hex(&check.encode_to_vec()));
+    if let Some(stored) = scene
+        .findings
+        .iter()
+        .rev()
+        .find(|finding| finding.consequence.as_deref() == Some(binding.as_str()))
+    {
+        return Some(stored);
+    }
     if !check.succeeded {
         return None;
     }
@@ -786,7 +1485,8 @@ pub(super) fn observation_finding<'a>(
         return scene.findings.iter().find(|finding| finding.id == id);
     }
     if detail.starts_with("watch-") {
-        return None;
+        let target = super::investigation::check_target(scene, check)?;
+        return super::investigation::finding_on(scene, &target, skill);
     }
     let skill = match *skill {
         "perception" => Some(pack::FindingSkill::Perception),
@@ -966,6 +1666,10 @@ pub(super) fn select(
     action: rpc::GameplayActionKind,
     choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
 ) -> Result<BeatOffer, RepositoryError> {
+    if action == rpc::GameplayActionKind::DefendCourier && opening_threat_resolved(current.state())?
+    {
+        return invalid("OpeningThreatAlreadyResolved");
+    }
     beat_script::with_script(|script| {
         let beat = script.current(current.state())?;
         // A freeplay scene fight has no fight beat to select from: its steps are the engine's own
@@ -1075,6 +1779,18 @@ pub(super) fn view_offers(
                             script.label(offer)?,
                             journey::offer_id(current, offer.effect.action()),
                         ));
+                    }
+                }
+            }
+            if opening_threat_resolved(current.state())? {
+                result.retain(|(kind, _, _)| *kind != rpc::GameplayActionKind::DefendCourier);
+            }
+            if script.is_canonical() {
+                for (kind, label, _) in &mut result {
+                    if *kind == rpc::GameplayActionKind::DefendCourier
+                        && label == "Stand between the courier and the bandit"
+                    {
+                        *label = "Draw weapons and fight the enforcer".to_owned();
                     }
                 }
             }
@@ -1235,6 +1951,11 @@ pub(super) fn action_label(
     }
     beat_script::with_script(|script| {
         if script.is_canonical() {
+            if kind == rpc::GameplayActionKind::DefendCourier
+                && pack::offer_label(kind) == "Stand between the courier and the bandit"
+            {
+                return Ok("Draw weapons and fight the enforcer".to_owned());
+            }
             if kind == rpc::GameplayActionKind::ResolveErrand {
                 let offer = resolve_offer_id(id)
                     .and_then(|offer_id| {
@@ -1502,5 +2223,280 @@ mod diagnostic_tests {
         let detail = df_session::submission::take_refusal_diagnostic().unwrap();
         assert_eq!(detail.step, "beat-script-state");
         assert_eq!(detail.cause, "DecisionRevisionOrder");
+    }
+}
+
+#[cfg(test)]
+pub(super) mod opening_social_tests {
+    use super::*;
+    use df_rules::influence::{Attitude, Willingness};
+    use df_types::OperationId;
+
+    pub(in crate::gameplay) fn opening(count: usize) -> Checkpoint {
+        use crate::gameplay::beat_script_tests::{build, input};
+        let mut current = journey::initial().unwrap();
+        for index in 0..count {
+            current = journey::stage_join(
+                &current,
+                &input(
+                    &current,
+                    journey::bootstrap_member().unwrap(),
+                    index as u8 + 1,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .unwrap();
+        }
+        let members: Vec<_> = journey::participants(&current)
+            .iter()
+            .map(|link| link.member)
+            .collect();
+        for (index, member) in members.iter().enumerate() {
+            current = journey::stage_with_supplier(
+                &current,
+                &input(
+                    &current,
+                    *member,
+                    index as u8 + 20,
+                    "create-character",
+                    build(["Brynn", "Vale", "Orla", "Pip", "Vesper", "Thorin"][index]),
+                ),
+                &mut |_| panic!("creation draws no dice"),
+            )
+            .unwrap();
+        }
+        journey::stage_with_supplier(
+            &current,
+            &input(&current, members[0], 40, "begin-story", vec![]),
+            &mut |_| panic!("opening draws no dice"),
+        )
+        .unwrap()
+    }
+    fn operation(value: u8) -> OperationId {
+        OperationId::from_bytes(&[value; 16]).unwrap()
+    }
+    fn with_harbor(run: impl FnOnce()) {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, run);
+    }
+    #[test]
+    fn beat_script_runtime_talk_down_resolves_without_fight_for_one_four_and_six_heroes() {
+        with_harbor(|| {
+            for count in [1, 4, 6] {
+                let opening = opening(count);
+                let member = journey::participants(&opening)[0].member;
+                assert!(
+                    super::super::place_move::travel_blocker(&opening)
+                        .unwrap()
+                        .is_some()
+                );
+                let settled = stage_opening_social(
+                    &opening,
+                    operation(80),
+                    OpeningSocialAttempt {
+                        member,
+                        skill: OpeningSkill::Persuasion,
+                        attitude: Attitude::Hostile,
+                        willingness: Willingness::Hesitant,
+                        faces: &[20, 20],
+                        changed_after: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(settled.result.difficulty_class, 15);
+                assert!(social_succeeded(&settled.result));
+                assert!(opening_threat_resolved(settled.checkpoint.state()).unwrap());
+                assert!(settled.checkpoint.state().encounters.is_empty());
+                assert_eq!(
+                    journey::phase(&settled.checkpoint).unwrap(),
+                    rpc::JourneyPhase::Opening
+                );
+                let projected = scene(settled.checkpoint.state()).unwrap();
+                assert!(projected.dialogue.is_empty());
+                assert!(projected.narration.is_empty());
+                assert_eq!(settled.line.matches("steps aside").count(), 1);
+                assert!(
+                    super::super::place_move::travel_blocker(&settled.checkpoint)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    !super::super::place_move::travel_options(&settled.checkpoint)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(
+                    select(
+                        &settled.checkpoint,
+                        rpc::GameplayActionKind::DefendCourier,
+                        &[]
+                    )
+                    .is_err()
+                );
+                let recovered =
+                    super::super::beat_script_variety_tests::persisted(&settled.checkpoint);
+                assert!(opening_threat_resolved(recovered.state()).unwrap());
+                let asked = super::super::beat_script_variety_tests::act(
+                    &opening,
+                    member,
+                    41,
+                    "ask-courier",
+                );
+                assert_eq!(journey::phase(&asked).unwrap(), rpc::JourneyPhase::Dialogue);
+                let talked = stage_opening_social(
+                    &asked,
+                    operation(84),
+                    OpeningSocialAttempt {
+                        member,
+                        skill: OpeningSkill::Persuasion,
+                        attitude: Attitude::Hostile,
+                        willingness: Willingness::Hesitant,
+                        faces: &[20, 20],
+                        changed_after: None,
+                    },
+                )
+                .unwrap()
+                .checkpoint;
+                assert!(opening_threat_resolved(talked.state()).unwrap());
+                assert!(talked.state().encounters.is_empty());
+                assert!(
+                    super::super::place_move::travel_blocker(&talked)
+                        .unwrap()
+                        .is_none()
+                );
+                let mut stale = super::super::beat_script_tests::input(
+                    &talked,
+                    member,
+                    85,
+                    "defend-courier",
+                    vec![],
+                );
+                assert!(
+                    journey::stage_with_supplier(&talked, &stale, &mut |_| panic!(
+                        "settled threat cannot draw initiative"
+                    ))
+                    .is_err()
+                );
+                // A stale request is rejected without erasing the native private clue source.
+                let GameInput::Game(command) = &mut stale else {
+                    panic!("native game input")
+                };
+                command.basis = asked.basis();
+                assert!(
+                    journey::stage_with_supplier(&talked, &stale, &mut |_| panic!(
+                        "stale request cannot draw initiative"
+                    ))
+                    .is_err()
+                );
+                super::super::beat_script_variety_tests::persisted(&talked);
+            }
+        });
+    }
+    #[test]
+    fn beat_script_runtime_failed_talk_keeps_talking_and_requires_a_changed_request() {
+        with_harbor(|| {
+            let opening = opening(1);
+            let member = journey::participants(&opening)[0].member;
+            let failed = stage_opening_social(
+                &opening,
+                operation(81),
+                OpeningSocialAttempt {
+                    member,
+                    skill: OpeningSkill::Intimidation,
+                    attitude: Attitude::Hostile,
+                    willingness: Willingness::Hesitant,
+                    faces: &[1, 1],
+                    changed_after: None,
+                },
+            )
+            .unwrap();
+            assert!(!opening_threat_resolved(failed.checkpoint.state()).unwrap());
+            assert_eq!(failed.line, "");
+            assert!(failed.checkpoint.state().encounters.is_empty());
+            assert!(
+                stage_opening_social(
+                    &failed.checkpoint,
+                    operation(82),
+                    OpeningSocialAttempt {
+                        member,
+                        skill: OpeningSkill::Persuasion,
+                        attitude: Attitude::Hostile,
+                        willingness: Willingness::Hesitant,
+                        faces: &[20, 20],
+                        changed_after: None
+                    }
+                )
+                .is_err()
+            );
+            let changed = stage_opening_social(
+                &failed.checkpoint,
+                operation(82),
+                OpeningSocialAttempt {
+                    member,
+                    skill: OpeningSkill::Persuasion,
+                    attitude: Attitude::Hostile,
+                    willingness: Willingness::Hesitant,
+                    faces: &[20, 20],
+                    changed_after: Some(operation(81)),
+                },
+            )
+            .unwrap();
+            assert!(opening_threat_resolved(changed.checkpoint.state()).unwrap());
+        });
+    }
+    #[test]
+    fn beat_script_runtime_social_receipt_rejects_tampered_dice_outcome_and_beat() {
+        with_harbor(|| {
+            let opening = opening(1);
+            let member = journey::participants(&opening)[0].member;
+            let settled = stage_opening_social(
+                &opening,
+                operation(83),
+                OpeningSocialAttempt {
+                    member,
+                    skill: OpeningSkill::Deception,
+                    attitude: Attitude::Hostile,
+                    willingness: Willingness::Hesitant,
+                    faces: &[20, 20],
+                    changed_after: None,
+                },
+            )
+            .unwrap()
+            .checkpoint;
+            for tamper in 0..4 {
+                let mut state = settled.state().clone();
+                match tamper {
+                    0 => state.draws.last_mut().unwrap().value = 1,
+                    1 => state.facts.last_mut().unwrap().cause = None,
+                    2 => {
+                        let text = state
+                            .decisions
+                            .last_mut()
+                            .unwrap()
+                            .semantic_output
+                            .as_mut()
+                            .unwrap();
+                        *text = text.replace("\"succeeded\":true", "\"succeeded\":false");
+                    }
+                    _ => {
+                        let text = state
+                            .decisions
+                            .last_mut()
+                            .unwrap()
+                            .semantic_output
+                            .as_mut()
+                            .unwrap();
+                        *text = text
+                            .replace("\"beat\":\"opening\"", "\"beat\":\"courier-answer-escort\"");
+                    }
+                }
+                assert!(opening_threat_resolved(&state).is_err(), "tamper {tamper}");
+            }
+        });
     }
 }

@@ -855,9 +855,11 @@ pub(super) fn admits_not_knowing(line: &str) -> bool {
 }
 
 /// The outcome of recording one exchange.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Recorded {
     pub(super) shift: Option<Shift>,
+    /// This exchange's own judgement, retained across asynchronous reply saving.
+    pub(super) exchange: ExchangeRecord,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1547,6 +1549,17 @@ impl SocialLedger {
         Some((dossier.emotional_profile(), states))
     }
 
+    /// Detached development inspection. Does not begin a scene or reset counters.
+    pub(super) fn development_relationship(
+        &self,
+        member: MemberId,
+        npc: &str,
+    ) -> Option<serde_json::Value> {
+        self.lock()
+            .get(&(member, npc.to_owned()))
+            .and_then(|relationship| serde_json::to_value(relationship).ok())
+    }
+
     /// The last lines between this hero and this NPC, oldest first, as `(is_hero, text)`.
     pub(super) fn recent(&self, member: MemberId, npc_id: &str) -> Vec<(bool, String)> {
         self.lock()
@@ -1666,8 +1679,11 @@ impl SocialLedger {
         let reaction = relationship.emotional.last_reaction;
         let emotional_state = relationship.emotional.clone();
         drop(relationships);
-        let sequence = self.exchanges.borrow().saturating_add(1);
-        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(ExchangeRecord {
+        let mut latest = self.latest.lock().unwrap_or_else(PoisonError::into_inner);
+        let sequence = latest
+            .as_ref()
+            .map_or(1, |record| record.sequence.saturating_add(1));
+        let exchange = ExchangeRecord {
             sequence,
             npc_id: dossier.npc_id.clone(),
             approach,
@@ -1676,9 +1692,17 @@ impl SocialLedger {
             opposes: dossier.role.opposes_party(),
             reaction,
             emotional_state,
+        };
+        *latest = Some(exchange.clone());
+        drop(latest);
+        self.exchanges.send_if_modified(|current| {
+            if *current >= sequence {
+                return false;
+            }
+            *current = sequence;
+            true
         });
-        self.exchanges.send_replace(sequence);
-        Recorded { shift }
+        Recorded { shift, exchange }
     }
 
     /// Applies a deterministic threat before generating the NPC's answer. The caller saves after

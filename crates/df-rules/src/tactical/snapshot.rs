@@ -23,6 +23,8 @@ struct Snapshot {
     active: usize,
     round: u32,
     pending: Option<PendingMove>,
+    #[serde(default)]
+    species_damage: Vec<super::species::SpeciesDamage>,
     helped_attacks: Vec<HelpEffect>,
     needs_death_save: bool,
 }
@@ -51,6 +53,7 @@ impl Battle {
             active: self.active,
             round: self.round,
             pending: self.pending.clone(),
+            species_damage: self.species_damage.clone(),
             helped_attacks: self.helped_attacks.clone(),
             needs_death_save: self.needs_death_save,
         })
@@ -156,6 +159,18 @@ impl Battle {
                     && (actor.health.hit_points != 1
                         || !actor.health.unconscious
                         || actor.health.dead))
+                || (actor.regeneration_inhibited && actor.spec.kind != super::CreatureKind::Troll)
+                || actor.frost_chill.len() > 64
+                || actor.species_uses_spent
+                    > actor
+                        .spec
+                        .fighter_level()
+                        .map_or(0, |level| level.proficiency_bonus())
+                || (actor.species_uses_spent > 0
+                    && !matches!(
+                        actor.spec.species,
+                        Some(super::HeroSpecies::Dragonborn | super::HeroSpecies::Goliath)
+                    ))
                 || actor.slow.len() > 64
                 || actor.sap.len() > 64
                 || actor.vex.len() > 64
@@ -269,6 +284,7 @@ impl Battle {
                 .slow
                 .iter()
                 .chain(&actor.sap)
+                .chain(&actor.frost_chill)
                 .any(|effect| !ids.contains(&effect.origin) || effect.expires_turn == 0)
                 || actor
                     .vex
@@ -283,7 +299,7 @@ impl Battle {
                 || pending.path.is_empty()
                 || pending.path.len() > 1024
                 || pending.next >= pending.path.len()
-                || pending.eligible.is_empty()
+                || (pending.eligible.is_empty() && state.species_damage.is_empty())
                 || pending.eligible.len() > 64
                 || pending
                     .eligible
@@ -308,9 +324,20 @@ impl Battle {
             active: state.active,
             round: state.round,
             pending: state.pending,
+            species_damage: state.species_damage,
             helped_attacks: state.helped_attacks,
             needs_death_save: state.needs_death_save,
         };
+        if battle.species_damage.len() > 64
+            || battle.species_damage.iter().any(|event| {
+                event.source == event.target
+                    || battle.actor(event.source).is_err()
+                    || battle.actor(event.target).is_err()
+            })
+            || (!battle.species_damage.is_empty() && battle.species_reaction_offer().is_none())
+        {
+            return Err(RuleError::SnapshotData);
+        }
         if let Some(pending) = &battle.pending {
             let mover = battle.actor(pending.actor)?;
             let destination = pending.path[pending.next];

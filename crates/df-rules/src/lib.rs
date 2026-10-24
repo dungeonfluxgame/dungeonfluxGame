@@ -13,6 +13,7 @@ pub mod influence;
 pub mod preconditions;
 
 pub mod local_journey;
+pub mod species;
 
 mod srd_creatures;
 pub use srd_creatures::{

@@ -1490,7 +1490,7 @@ fn a_present_merchants_stock_is_listed_as_portable_things_and_an_absent_merchant
 
 #[test]
 fn a_dungeoneers_pack_kit_row_holds_its_waterskin_and_stacks_are_named_with_their_count() {
-    let row = pack::EquipmentRow {
+    let row = CarriedItem {
         item: "dungeoneer-pack".to_owned(),
         quantity: 1,
     };
@@ -1525,7 +1525,7 @@ fn a_dungeoneers_pack_kit_row_holds_its_waterskin_and_stacks_are_named_with_thei
         1
     );
     // A row that is not a catalog pack gives only the item itself.
-    let plain = kit_things(&pack::EquipmentRow {
+    let plain = kit_things(&CarriedItem {
         item: "chain-mail".to_owned(),
         quantity: 1,
     })
@@ -1640,4 +1640,283 @@ async fn jev_target_choices_describe_people_by_role_and_the_hero_by_reflection()
         "{target_criteria}"
     );
     assert!(bodies[0].to_string().contains("hero_appearance"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs41_freeform_action_six_saved_build_inventories_resolve_my_sword_by_model_choice() {
+    use crate::gameplay::beat_script_tests::{build, input};
+    let mut tuning: Value = serde_json::from_slice(include_bytes!(
+        "../../../../content/harbor-journey/tuning.json"
+    ))
+    .unwrap();
+    tuning["tactical"] = json!({"enemies":[{"srd_id":"bandit","count":3,"ammunition":20}]});
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        &serde_json::to_vec(&tuning).unwrap(),
+    )
+    .unwrap();
+    let names = ["Thorin", "Kazrak", "Orla", "Pip", "Vesper", "Sylvara"];
+    let packages = [
+        "melee-stalwart",
+        "melee-stalwart",
+        "melee-stalwart",
+        "melee-vanguard",
+        "melee-vanguard",
+        "archer",
+    ];
+    let situations = pack::with_test_pack(loaded, || {
+        let mut current = journey::initial().unwrap();
+        for op in 1..=6 {
+            current = journey::stage_join(
+                &current,
+                &input(
+                    &current,
+                    journey::bootstrap_member().unwrap(),
+                    op,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .unwrap();
+        }
+        let members = current
+            .state()
+            .members
+            .iter()
+            .filter(|member| member.member != journey::bootstrap_member().unwrap())
+            .map(|member| member.member)
+            .collect::<Vec<_>>();
+        for (index, (name, package)) in names.iter().zip(packages).enumerate() {
+            let mut choices = build(name);
+            choices.retain(|(key, _)| {
+                !["array", "equipment", "style-masteries"].contains(&key.as_str())
+            });
+            choices.push((
+                super::super::model::label("build-package").unwrap(),
+                super::super::model::label(package).unwrap(),
+            ));
+            current = journey::stage_with_supplier(
+                &current,
+                &input(
+                    &current,
+                    members[index],
+                    10 + index as u8,
+                    "create-character",
+                    choices,
+                ),
+                &mut |_| panic!("creation is certain"),
+            )
+            .unwrap();
+        }
+        current = journey::stage_with_supplier(
+            &current,
+            &input(&current, members[0], 30, "begin-story", vec![]),
+            &mut |_| panic!("opening is certain"),
+        )
+        .unwrap();
+        let scene = beat_script_runtime::scene(current.state()).unwrap();
+        members
+            .iter()
+            .map(|member| {
+                let hero = journey::player_entity(*member, &current).unwrap();
+                Situation::read(
+                    current.state(),
+                    hero,
+                    &scene,
+                    &super::super::wire::scene_cast(&scene),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    });
+    let draw = ACT_KINDS
+        .iter()
+        .position(|(act, _, _)| *act == ActKind::Draw)
+        .unwrap()
+        + 1;
+    for (index, mut situation) in situations.into_iter().enumerate() {
+        let weapon = if packages[index] == "archer" {
+            "shortsword"
+        } else {
+            "greatsword"
+        };
+        let choices = situation
+            .options()
+            .into_iter()
+            .filter(|target| {
+                situation
+                    .thing(&target.id)
+                    .is_some_and(|thing| thing.held_by_hero && weapon_name(&thing.name))
+            })
+            .collect::<Vec<_>>();
+        let selected = choices
+            .iter()
+            .position(|target| target.name == weapon)
+            .unwrap()
+            + 1;
+        situation.hero.pronouns = market_street().hero.pronouns;
+        let endpoint = FakeEndpoint::start(vec![
+            answer(&format!("o{draw}")),
+            answer(&format!("o{selected}")),
+            answer("o1"),
+            answer("o1"),
+        ]);
+        let model = crate::gameplay::approach_model::tests::model(&endpoint);
+        let judged = super::plan(&model, "I draw my sword.", &situation)
+            .await
+            .unwrap();
+        assert_eq!(
+            judged.target.as_ref().unwrap().name,
+            weapon,
+            "{} actual inventory",
+            names[index]
+        );
+        let resolved = adjudicate(&situation, &judged, 1, |_, _, _| {
+            panic!("drawing requires no check")
+        });
+        assert!(matches!(
+            resolved.verdict,
+            Verdict::Performed(Performance {
+                succeeded: true,
+                check: None,
+                ..
+            })
+        ));
+        assert!(fallback_line(&resolved).contains(&format!("draws her {weapon}")));
+        assert_eq!(narration_facts(&resolved, "")["main_weapon_instead"], false);
+    }
+}
+
+#[test]
+fn hs41_freeform_action_a_refused_weapon_names_actual_carried_weapons() {
+    let mut situation = shop();
+    situation.things.retain(|thing| thing.name != "greatsword");
+    let resolution = run(
+        &situation,
+        &plan(ActKind::Draw, None, Difficulty::None),
+        "I draw my sword.",
+        1,
+    );
+    assert_eq!(resolution.verdict, Verdict::Refused(Refusal::MissingTarget));
+    assert_eq!(
+        fallback_line(&resolution),
+        "Marek has no such weapon; the carried weapons are javelin."
+    );
+}
+
+#[test]
+fn hs41_freeform_action_large_current_inventory_stacks_do_not_hide_carried_weapons() {
+    let current = crate::gameplay::beat_script_tests::prepared_story();
+    let member = MemberId::from_bytes(&[0x61; 16]).unwrap();
+    let hero = journey::player_entity(member, &current).unwrap();
+    let mut saved = current.state().clone();
+    let gold = saved
+        .inventory
+        .iter_mut()
+        .find(|item| item.owner == hero && item.origin.entry.as_str() == "gold-piece")
+        .unwrap();
+    gold.quantity = 300;
+    let javelins = saved
+        .inventory
+        .iter_mut()
+        .find(|item| item.owner == hero && item.origin.entry.as_str() == "javelin")
+        .unwrap();
+    javelins.quantity = 500;
+    let scene = beat_script_runtime::scene(&saved).unwrap();
+    let situation = Situation::read(
+        &saved,
+        hero,
+        &scene,
+        &super::super::wire::scene_cast(&scene),
+    )
+    .unwrap();
+    assert_eq!(situation.coin_gp, 300);
+    assert!(
+        situation
+            .things
+            .iter()
+            .any(|thing| thing.held_by_hero && thing.name == "greatsword")
+    );
+    assert!(
+        situation
+            .things
+            .iter()
+            .any(|thing| thing.held_by_hero && thing.name == "javelin")
+    );
+}
+
+#[test]
+fn hs41_freeform_action_source_weapon_display_case_does_not_prevent_drawing() {
+    let mut situation = shop();
+    situation
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == "pack-greatsword")
+        .unwrap()
+        .name = "Greatsword".into();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Draw,
+            Some(target(&situation, "pack-greatsword")),
+            Difficulty::Hard,
+        ),
+        "I draw my sword.",
+        1,
+    );
+    assert!(matches!(
+        resolution.verdict,
+        Verdict::Performed(Performance {
+            succeeded: true,
+            check: None,
+            ..
+        })
+    ));
+    assert!(fallback_line(&resolution).contains("draws Marek's Greatsword"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs41_freeform_action_model_can_ready_a_main_weapon_only_when_fairly_judged() {
+    let mut situation = shop();
+    situation.hero.name = "Sylvara".into();
+    situation.hero.pronouns = market_street().hero.pronouns;
+    situation.things = vec![thing_fact(
+        "pack-longbow",
+        "longbow",
+        "Her only carried weapon is a longbow.",
+        true,
+        true,
+    )];
+    let draw = ACT_KINDS
+        .iter()
+        .position(|(act, _, _)| *act == ActKind::Draw)
+        .unwrap()
+        + 1;
+    let endpoint = FakeEndpoint::start(vec![
+        answer(&format!("o{draw}")),
+        answer("o1"),
+        answer("o2"),
+        answer("o1"),
+    ]);
+    let model = crate::gameplay::approach_model::tests::model(&endpoint);
+    let judged = super::plan(&model, "I draw my sword.", &situation)
+        .await
+        .unwrap();
+    assert_eq!(
+        judged.target.as_ref().unwrap().kind,
+        TargetKind::MainWeaponInstead
+    );
+    let resolution = adjudicate(&situation, &judged, 1, |_, _, _| {
+        panic!("readying never rolls")
+    });
+    assert!(
+        fallback_line(&resolution)
+            .contains("Sylvara has no such weapon; Sylvara readies her longbow instead.")
+    );
+    let bodies = endpoint.bodies();
+    assert!(bodies[2].to_string().contains("carried_weapons"));
+    assert_eq!(
+        narration_facts(&resolution, "")["main_weapon_instead"],
+        true
+    );
 }
