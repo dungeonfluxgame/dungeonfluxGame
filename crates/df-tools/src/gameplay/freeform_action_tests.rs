@@ -3,6 +3,472 @@ use crate::gameplay::startup_configuration::ApproachSettings;
 use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 use std::time::Duration;
 
+const HS67_BREAD_FACT: &str =
+    "Nella's bread has a brown crust, pale open crumb and warm yeasty smell, baked this morning.";
+const HS67_IMPRESSION: &str =
+    "The bread has a brown crust, pale open crumb and a warm yeasty smell.";
+
+fn hs67_bread() -> (
+    Situation,
+    FreeformPlan,
+    super::super::npc_reply::NpcReplyContext,
+) {
+    let mut situation = shop();
+    situation.hero.name = "Pip Thistledown".into();
+    situation.things.push(ThingFact {
+        owner_id: Some("nella".into()),
+        ..thing_fact(
+            "bread",
+            "loaf of bread",
+            "A loaf of bread on the stall.",
+            true,
+            false,
+        )
+    });
+    let plan = FreeformPlan {
+        sense: Some(Sense::Smell),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "bread")),
+            Difficulty::None,
+        )
+    };
+    let view = rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Player(
+            rpc::PlayerGameplayView {
+                narration: "Basket Court has a bread stall.".into(),
+                scene: Some(rpc::GameplayScene {
+                    title: "Basket Court".into(),
+                    ..Default::default()
+                }),
+                journey: Some(rpc::JourneyView {
+                    speaker: "Nella".into(),
+                    dialogue: "I baked these this morning.".into(),
+                    own_character: Some(rpc::CharacterSheet {
+                        name: "Pip Thistledown".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let story = pack::with_content(super::super::npc_reply::StoryFacts::from_pack);
+    let mut context = super::super::npc_reply::NpcReplyContext::from_view(
+        &view,
+        MemberId::from_bytes(&[0x67; 16]).unwrap(),
+        "I inspect the bread.",
+        &story,
+    )
+    .unwrap();
+    context.npc_id = "scene-person:nella".into();
+    context.actor_id = "nella".into();
+    context.facts["listener_knowledge"] = json!({"claim":"I baked these this morning.", "known_truth":"Nella baked this bread this morning and is honestly describing it."});
+    (situation, plan, context)
+}
+
+fn hs67_voice(
+    endpoint: &FakeEndpoint,
+    jev: &FakeEndpoint,
+    name: &str,
+) -> (
+    super::super::npc_reply::NpcVoice,
+    std::sync::Arc<super::super::npc_reply::local_lore::LocalLore>,
+) {
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS67")
+        .join(format!("{name}-{}", std::process::id()));
+    let lore = std::sync::Arc::new(
+        super::super::npc_reply::local_lore::LocalLore::open(name, None).unwrap(),
+    );
+    let voice = super::super::npc_reply::NpcVoice::new(std::sync::Arc::new(teller(
+        endpoint.address,
+        20_000,
+        Duration::from_secs(5),
+        &cache,
+    )))
+    .with_approach_model(crate::gameplay::approach_model::tests::model(jev))
+    .with_local_lore(lore.clone());
+    (voice, lore)
+}
+
+fn hs67_backfill_replies() -> Vec<Reply> {
+    vec![
+        Reply::Output(
+            json!({"questions":json!(["What are the crust, crumb, smell and freshness of Nella's bread?"]).to_string()}),
+        ),
+        Reply::Output(
+            json!({"fact":json!({"name":"Bread senses", "content":HS67_BREAD_FACT,
+            "answer":"My bread has a brown crust, pale open crumb and warm yeasty smell, baked this morning."}).to_string()}),
+        ),
+    ]
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_requested_bread_check_corrects_skill_rolls_both_and_reuses_canon() {
+    let (situation, plan, mut context) = hs67_bread();
+    let mut replies = hs67_backfill_replies();
+    replies.push(Reply::Output(json!({"impression":HS67_IMPRESSION,"quality":"The loaf is fresh from this morning's baking."})));
+    replies.push(Reply::Output(json!({"impression":HS67_IMPRESSION})));
+    let endpoint = FakeEndpoint::start(replies);
+    let jev = FakeEndpoint::start(vec![
+        answer("o7"), // Both checks, sensory skill corrected.
+        answer("o2"),
+        answer("o1"),
+        answer("o1"), // REF-069 backfill, harmless, approve.
+        answer("o1"),
+        answer("o1"), // Honest Easy reading, approve impression.
+        answer("o1"),
+        answer("o1"), // Later plain smell: no check, approve reused impression.
+    ]);
+    let (voice, lore) = hs67_voice(&endpoint, &jev, "bread-compound");
+    let words = "I study the bread closely, its crust and crumb, and breathe in its smell. I make an Insight roll to judge how fresh it really is and whether Nella's being straight with me.";
+    let mut resolution = run(&situation, &plan, words, 16);
+    let additional = refine_sense(
+        &voice,
+        Some(&mut context),
+        &mut resolution,
+        words,
+        16,
+        fair(3),
+        || Ok(12),
+    )
+    .await;
+    let primary = performance(&resolution).check.as_ref().unwrap();
+    assert_eq!(primary.label, "Wisdom (Perception)");
+    assert_eq!(primary.die, 16);
+    assert_eq!(additional.len(), 1);
+    assert_eq!(additional[0].label, "Wisdom (Insight)");
+    assert_eq!(additional[0].die, 12);
+    assert!(additional[0].success);
+    assert!(primary.row().roll.is_some());
+    assert!(additional[0].row().roll.is_some());
+    let line = narrate(voice.hero_identity_models().0, &resolution, words).await;
+    let log = TableLog::new();
+    publish_hero_line(&log, &resolution.hero, 0, words);
+    publish_compound_outcome(&log, 0, Some(primary.row()), &additional, &line);
+    let lines = log.lines();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0].speaker, "Pip Thistledown");
+    assert_eq!(lines[1].roll.as_ref().unwrap().faces, vec![16]);
+    assert_eq!(lines[2].roll.as_ref().unwrap().faces, vec![12]);
+    assert!(lines[1].roll.as_ref().unwrap().succeeded);
+    assert!(lines[2].roll.as_ref().unwrap().succeeded);
+    assert_eq!(lines[3].speaker, "Narrator");
+    assert!(
+        lines
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
+    assert!(
+        line.contains("Wisdom (Perception) for senses and Wisdom (Insight) for honesty."),
+        "{line}"
+    );
+    assert!(
+        line.contains("brown crust") && line.contains("warm yeasty smell"),
+        "{line}"
+    );
+    assert!(
+        line.contains("fresh from this morning") && line.contains("Nella's claim reads as honest"),
+        "{line}"
+    );
+    assert_eq!(lore.development_decisions().len(), 1);
+    println!(
+        "HS67 compound: {line}\n{}\n{}",
+        primary.line(),
+        additional[0].line()
+    );
+    let mut plain = run(&situation, &plan, "I smell the bread.", 1);
+    let (_, _, mut later_context) = hs67_bread();
+    let extra = refine_sense(
+        &voice,
+        Some(&mut later_context),
+        &mut plain,
+        "I breathe in the loaf's scent.",
+        1,
+        |_, _, _| panic!("plain smell never rolls"),
+        || panic!("plain smell never draws"),
+    )
+    .await;
+    assert!(extra.is_empty());
+    assert!(performance(&plain).check.is_none());
+    assert!(fallback_line(&plain).contains(HS67_IMPRESSION));
+    assert!(!fallback_line(&plain).contains("fresh from"));
+    assert_eq!(
+        lore.development_decisions().len(),
+        1,
+        "one backfill across paraphrased senses"
+    );
+    let bodies = jev.bodies();
+    assert!(bodies[4].to_string().contains("honestly describing it"));
+    assert_eq!(
+        endpoint.bodies().len(),
+        4,
+        "second question reuses accepted REF-069 fact"
+    );
+    println!("HS67 plain: {}", fallback_line(&plain));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_failed_bread_checks_keep_impression_without_quality_or_false_suspicion()
+ {
+    let (situation, plan, mut context) = hs67_bread();
+    let mut replies = hs67_backfill_replies();
+    replies.push(Reply::Output(json!({"impression":HS67_IMPRESSION})));
+    let endpoint = FakeEndpoint::start(replies);
+    let jev = FakeEndpoint::start(vec![
+        answer("o7"),
+        answer("o2"),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+    ]);
+    let (voice, _) = hs67_voice(&endpoint, &jev, "bread-failure");
+    let mut resolution = run(
+        &situation,
+        &plan,
+        "I roll Insight to judge the loaf and Nella's honesty.",
+        1,
+    );
+    let additional = refine_sense(
+        &voice,
+        Some(&mut context),
+        &mut resolution,
+        "I roll Insight to judge the loaf and Nella's honesty.",
+        1,
+        fair(0),
+        || Ok(2),
+    )
+    .await;
+    let line = fallback_line(&resolution);
+    assert!(!performance(&resolution).succeeded);
+    assert_eq!(narration_facts(&resolution, "")["outcome"], "failed");
+    assert!(!additional[0].success);
+    assert!(line.contains(HS67_IMPRESSION), "{line}");
+    assert!(
+        line.contains("cannot tell whether Nella's claim is honest"),
+        "{line}"
+    );
+    assert!(
+        !line.contains("morning") && !line.contains("nothing new") && !line.contains("evasion"),
+        "{line}"
+    );
+    let sent = endpoint.bodies();
+    assert!(
+        !sent
+            .last()
+            .unwrap()
+            .to_string()
+            .contains("\"quality\":{\"type\"")
+    );
+    println!("HS67 failed: {line}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_person_honesty_uses_only_insight_and_never_sensory_backfill() {
+    let (mut situation, _, mut context) = hs67_bread();
+    situation.people.push(PersonFact {
+        id: "nella".into(),
+        name: "Nella".into(),
+        role: rpc::SceneRole::Contact,
+        passive_perception: 10,
+    });
+    let plan = FreeformPlan {
+        sense: Some(Sense::Sight),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "nella")),
+            Difficulty::Easy,
+        )
+    };
+    let endpoint = FakeEndpoint::start(vec![]);
+    let jev = FakeEndpoint::start(vec![answer("o3"), answer("o1")]);
+    let (voice, lore) = hs67_voice(&endpoint, &jev, "person-insight");
+    let mut resolution = run(&situation, &plan, "I roll Insight on Nella's claim.", 18);
+    let additional = refine_sense(
+        &voice,
+        Some(&mut context),
+        &mut resolution,
+        "I roll Insight on Nella's claim.",
+        18,
+        fair(0),
+        || panic!("one part draws one die"),
+    )
+    .await;
+    assert!(additional.is_empty());
+    assert_eq!(
+        performance(&resolution).check.as_ref().unwrap().label,
+        "Wisdom (Insight)"
+    );
+    assert!(performance(&resolution).succeeded);
+    assert!(fallback_line(&resolution).contains("Nella's claim reads as honest"));
+    assert!(lore.development_decisions().is_empty());
+    assert!(endpoint.bodies().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_rejected_failure_description_cannot_leak_recorded_freshness() {
+    let (mut situation, _, _) = hs67_bread();
+    situation
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == "bread")
+        .unwrap()
+        .detail = HS67_BREAD_FACT.into();
+    let plan = FreeformPlan {
+        sense: Some(Sense::Smell),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "bread")),
+            Difficulty::Easy,
+        )
+    };
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(
+        json!({"impression":"The bread was baked this morning."}),
+    )]);
+    let jev = FakeEndpoint::start(vec![answer("o2"), answer("o2")]);
+    let (voice, _) = hs67_voice(&endpoint, &jev, "rejected-impression");
+    let mut resolution = run(
+        &situation,
+        &plan,
+        "I roll Perception to smell the bread.",
+        1,
+    );
+    let additional = refine_sense(
+        &voice,
+        None,
+        &mut resolution,
+        "I roll Perception to smell the bread.",
+        1,
+        fair(0),
+        || panic!("only one requested part"),
+    )
+    .await;
+    assert!(additional.is_empty());
+    let line = fallback_line(&resolution);
+    assert!(
+        !line.contains("morning") && !line.contains("nothing new"),
+        "{line}"
+    );
+    assert!(line.contains("plainly visible"));
+    assert!(
+        !narration_facts(&resolution, "")
+            .to_string()
+            .contains("morning")
+    );
+}
+
+#[test]
+fn hs67_freeform_action_both_wisdom_checks_use_the_authoritative_hero_sheet() {
+    let current = crate::gameplay::beat_script_tests::prepared_story();
+    let state = current.state();
+    let hero = state.characters.first().unwrap().entity;
+    // Stalwart's Wisdom 12 is +1; the fixture trained Perception (+2), but not Insight.
+    assert_eq!(journey::value(state, hero, "wisdom").unwrap(), 12);
+    for (skill, modifier) in [("perception", 3), ("insight", 1)] {
+        let result = skill_roll(state, hero, skill, 16, 10).unwrap();
+        assert_eq!(result.total, 16 + modifier);
+        assert_eq!(result.modifier, modifier);
+        assert!(result.succeeded);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_maximum_sensory_slots_preserve_honesty_in_the_published_line() {
+    let (situation, plan, mut context) = hs67_bread();
+    let mut replies = hs67_backfill_replies();
+    replies.push(Reply::Compute(std::sync::Arc::new(|prompt| {
+        let slots: Vec<Value> = serde_json::from_str(
+            prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("SLOTS: "))
+                .unwrap(),
+        )
+        .unwrap();
+        let mut response = json!({});
+        for slot in slots {
+            let maximum = slot["max_characters"].as_u64().unwrap() as usize;
+            // Synthetic long sentences exercise the full accepted publication budget.
+            response[slot["name"].as_str().unwrap()] =
+                json!(format!("{}.", "a".repeat(maximum - 1)));
+        }
+        response
+    })));
+    let endpoint = FakeEndpoint::start(replies);
+    let jev = FakeEndpoint::start(vec![
+        answer("o7"),
+        answer("o2"),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+    ]);
+    let (voice, _) = hs67_voice(&endpoint, &jev, "maximum-publication");
+    let words = "I roll Insight to judge the bread's freshness and Nella's honesty.";
+    let mut resolution = run(&situation, &plan, words, 16);
+    let additional = refine_sense(
+        &voice,
+        Some(&mut context),
+        &mut resolution,
+        words,
+        16,
+        fair(3),
+        || Ok(12),
+    )
+    .await;
+    let line = narrate(voice.hero_identity_models().0, &resolution, words).await;
+    assert!(line.chars().count() <= NARRATION_CHARACTERS);
+    assert!(line.ends_with("Nella's claim reads as honest."), "{line}");
+    let log = TableLog::new();
+    publish_compound_outcome(
+        &log,
+        0,
+        performance(&resolution)
+            .check
+            .as_ref()
+            .map(CheckRecord::row),
+        &additional,
+        &line,
+    );
+    let lines = log.lines();
+    assert_eq!(lines.last().unwrap().text, line);
+    assert!(
+        lines
+            .last()
+            .unwrap()
+            .text
+            .ends_with("Nella's claim reads as honest.")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs67_freeform_action_unavailable_check_judge_preserves_the_visible_thing() {
+    let (situation, plan, _) = hs67_bread();
+    let mut resolution = run(&situation, &plan, "I smell the bread.", 12);
+    let additional = refine_sense(
+        &crate::gameplay::npc_reply::NpcVoice::silent(),
+        None,
+        &mut resolution,
+        "I smell the bread.",
+        12,
+        |_, _, _| panic!("an unavailable judge cannot choose a check"),
+        || panic!("an unavailable judge cannot draw a check die"),
+    )
+    .await;
+    assert!(additional.is_empty());
+    assert!(performance(&resolution).check.is_none());
+    let line = narrate(&Storyteller::disabled(), &resolution, "I smell the bread.").await;
+    assert!(
+        line.contains("loaf of bread") && line.contains("remains in view"),
+        "{line}"
+    );
+    assert!(line.contains("check ruling is unavailable"), "{line}");
+    assert!(!line.contains("nothing new"));
+}
+
 fn thing_fact(id: &str, name: &str, detail: &str, portable: bool, held: bool) -> ThingFact {
     ThingFact {
         id: id.to_owned(),
@@ -1489,49 +1955,38 @@ fn a_present_merchants_stock_is_listed_as_portable_things_and_an_absent_merchant
 }
 
 #[test]
-fn a_dungeoneers_pack_kit_row_holds_its_waterskin_and_stacks_are_named_with_their_count() {
-    let row = CarriedItem {
-        item: "dungeoneer-pack".to_owned(),
-        quantity: 1,
-    };
-    let things = kit_things(&row).expect("the catalog is readable");
-    let pack_thing = things
+fn hs56_situation_uses_canonical_stacks_without_virtual_pack_children_or_private_peer_gear() {
+    let current = crate::gameplay::beat_script_tests::prepared_story();
+    let state = current.state();
+    let hero = state.characters[0].entity;
+    let scene = beat_script_runtime::scene(state).unwrap();
+    let situation = Situation::read(state, hero, &scene, &[]).unwrap();
+    let custody = journey::living_scene::source_custody(state).unwrap();
+    let own = journey::name(state, hero).unwrap();
+    for thing in custody
         .iter()
-        .find(|thing| thing.id == "pack-dungeoneer-pack")
-        .expect("the pack stays as the backpack");
-    assert!(pack_thing.held_by_hero);
-    let waterskin = things
-        .iter()
-        .find(|thing| thing.name == "waterskin")
-        .expect("the hero holds the pack's waterskin");
-    assert!(waterskin.portable);
-    assert!(waterskin.held_by_hero);
-    assert!(waterskin.holder_name.is_none());
-    assert!(waterskin.owner_id.is_none());
-    let torches = things
-        .iter()
-        .find(|thing| thing.name == "10 torches")
-        .expect("ten torches are one held stack");
-    assert!(torches.held_by_hero);
-    assert!(things.iter().any(|thing| thing.name == "10 rations"));
-    assert!(things.iter().any(|thing| thing.name == "rope"));
-    // The pack is the backpack, so its own Backpack entry is not a second thing.
-    assert!(!things.iter().any(|thing| thing.name == "backpack"));
-    assert_eq!(
-        things
+        .filter(|thing| thing.holder_id.as_deref() == Some(own.as_str()))
+    {
+        let projected = situation
+            .things
             .iter()
-            .filter(|thing| thing.name == "10 torches")
-            .count(),
-        1
+            .find(|target| target.id == thing.id)
+            .unwrap();
+        assert!(projected.held_by_hero);
+        assert_eq!(projected.detail, thing.detail);
+    }
+    assert!(
+        situation
+            .things
+            .iter()
+            .all(|thing| !thing.id.starts_with("pack-") && !thing.id.starts_with("kit-"))
     );
-    // A row that is not a catalog pack gives only the item itself.
-    let plain = kit_things(&CarriedItem {
-        item: "chain-mail".to_owned(),
-        quantity: 1,
-    })
-    .expect("the catalog is readable");
-    assert_eq!(plain.len(), 1);
-    assert_eq!(plain[0].id, "pack-chain-mail");
+    for thing in custody
+        .iter()
+        .filter(|thing| thing.holder_id.as_deref() != Some(own.as_str()) && !thing.publicly_visible)
+    {
+        assert!(!situation.things.iter().any(|target| target.id == thing.id));
+    }
 }
 
 #[test]

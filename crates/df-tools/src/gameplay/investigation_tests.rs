@@ -1,6 +1,208 @@
 use super::*;
 
 #[tokio::test]
+async fn hs71_item_connection_is_jev_decided_and_authored_clues_need_no_model() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::FakeEndpoint,
+    };
+    let (current, _) = opening();
+    let mut scene = merchant_shop_room();
+    let mut thing = scene
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .things[0]
+        .clone();
+    thing.finding_id = None;
+    thing.clue_fact_id = None;
+    let judge = FakeEndpoint::start(vec![answer("o1")]);
+    let ordinary = decide_item_story(
+        &Storyteller::disabled(),
+        &model(&judge),
+        current.state(),
+        &scene,
+        &thing,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ordinary.connection, ItemConnection::Ordinary);
+    assert!(ordinary.hidden.is_none() && ordinary.surface.is_none());
+    thing.clue_fact_id = Some("authored-secret.id".into());
+    let authored = decide_item_story(
+        &Storyteller::disabled(),
+        &model(&judge),
+        current.state(),
+        &scene,
+        &thing,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(authored.connection, ItemConnection::Clue);
+    assert_eq!(
+        authored.authored_finding.as_deref(),
+        Some("authored-secret.id")
+    );
+    assert_eq!(
+        authored.authored_source.as_ref().unwrap().sentence,
+        thing.closer_look
+    );
+    let private = pack::Finding {
+        id: "member-private-mark".into(),
+        sentence: "A protected personal inscription.".into(),
+        skill: pack::FindingSkill::Investigation,
+        dc: 13,
+        private: true,
+        consequence: Some("retained-authored-source".into()),
+    };
+    scene.findings.push(private.clone());
+    thing.finding_id = Some(private.id.clone());
+    let private_decision = decide_item_story(
+        &Storyteller::disabled(),
+        &model(&judge),
+        current.state(),
+        &scene,
+        &thing,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        private_decision.authored_source,
+        Some(private),
+        "private audience, DC and authored consequence survive exactly"
+    );
+    assert_eq!(
+        judge.connections(),
+        1,
+        "authored identity never gets reclassified"
+    );
+}
+
+#[tokio::test]
+async fn hs71_generated_clue_has_a_public_surface_and_separate_srd_hidden_check() {
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    let (current, _) = opening();
+    assert!(!current.state().narrative.open_threads.is_empty());
+    let scene = merchant_shop_room();
+    let mut thing = scene
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .things[0]
+        .clone();
+    thing.finding_id = None;
+    thing.clue_fact_id = None;
+    let surface = "A patch of old blue wax clings to the rim.";
+    let hidden = "A maker's gull mark is scratched beneath the base.";
+    let story = FakeEndpoint::start(vec![Reply::Output(json!({"detail":json!({
+        "surface":surface,"hidden":{"detail":hidden,"skill":"investigation","dc":15}
+    }).to_string()}))]);
+    let judge = FakeEndpoint::start(vec![answer("o3"), answer("o1")]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS71/clue-decision")
+        .join(std::process::id().to_string());
+    let decision = decide_item_story(
+        &teller(story.address, 0, Duration::from_secs(5), &cache),
+        &model(&judge),
+        current.state(),
+        &scene,
+        &thing,
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert!(decision.valid());
+    assert_eq!(decision.connection, ItemConnection::Clue);
+    assert_eq!(decision.surface.as_deref(), Some(surface));
+    assert_eq!(decision.hidden.as_ref().unwrap().detail, hidden);
+    assert_eq!(decision.hidden.as_ref().unwrap().dc, 15);
+    assert!(judge.bodies()[0].to_string().contains("open_threads"));
+    assert!(judge.bodies()[1].to_string().contains(hidden));
+}
+
+#[tokio::test]
+async fn hs71_failed_second_look_has_no_hidden_source_and_success_reveals_exactly_the_bound_fact() {
+    use crate::gameplay::{approach_model::tests::model, storyteller::tests::FakeEndpoint};
+    let mut scene = merchant_shop_room();
+    let thing = &mut scene
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .things[0];
+    thing.finding_id = Some("hs71-secret-mark".into());
+    thing.clue_fact_id = None;
+    let item = thing.id.clone();
+    let hidden = "A maker's gull mark is scratched beneath the base.";
+    scene.findings.push(pack::Finding {
+        id: "hs71-secret-mark".into(),
+        sentence: hidden.into(),
+        skill: pack::FindingSkill::Investigation,
+        dc: 15,
+        private: false,
+        consequence: None,
+    });
+    let judge = FakeEndpoint::start(vec![]);
+    let mut check = rpc::AbilityCheckResult {
+        succeeded: false,
+        total: 8,
+        source_revision: format!("srd521-p6:room:investigation:target-thing-{item}"),
+        ..Default::default()
+    };
+    assert!(observation_sources(&scene, &check).is_empty());
+    let failed = complete_finding_for_question(
+        &Storyteller::disabled(),
+        &model(&judge),
+        &scene,
+        &check,
+        "Brynn",
+        "I search beneath it.",
+        None,
+    )
+    .await;
+    assert!(failed.selected_source_ids.is_empty());
+    assert!(!failed.text.contains(hidden));
+    check.succeeded = true;
+    check.total = 19;
+    let success = complete_finding_for_question(
+        &Storyteller::disabled(),
+        &model(&judge),
+        &scene,
+        &check,
+        "Brynn",
+        "I search beneath it.",
+        None,
+    )
+    .await;
+    assert_eq!(success.selected_source_ids, vec!["hs71-secret-mark"]);
+    assert!(success.text.contains(hidden));
+    scene.findings.last_mut().unwrap().private = true;
+    assert!(
+        checked_item_finding(&scene, &check).is_none(),
+        "member-private facts never reach shared narration"
+    );
+    assert_eq!(
+        judge.connections(),
+        0,
+        "rules success/failure cannot be overridden by expression choice"
+    );
+}
+
+#[tokio::test]
 async fn perception_title_names_the_attempt_in_the_actual_open_street() {
     use crate::gameplay::{
         approach_model::tests::{answer, model},
@@ -1970,5 +2172,47 @@ fn private_observation_grants_ignore_shared_projection_rows_with_identical_check
         !serde_json::to_string(&observation_sources(&scene, &check))
             .unwrap()
             .contains("MEMBER-PRIVATE-FACT")
+    );
+}
+
+#[test]
+fn hs56_investigation_keeps_public_surfaces_and_ways_before_stacks_and_omits_private_custody() {
+    let mut scene = merchant_shop_room();
+    let model = scene.setting.as_mut().unwrap().model.as_mut().unwrap();
+    let mut template = model.things[0].clone();
+    template.portable = true;
+    template.finding_id = None;
+    template.clue_fact_id = None;
+    for index in 0..80 {
+        let mut thing = template.clone();
+        thing.id = format!("equipment-private-stack-{index}");
+        thing.name = format!("private stack {index}");
+        thing.publicly_visible = false;
+        thing.holder_id = Some("Other Hero".into());
+        model.things.push(thing);
+    }
+    for index in 0..80 {
+        let mut thing = template.clone();
+        thing.id = format!("public-stack-{index}");
+        thing.name = format!("public stack {index}");
+        thing.publicly_visible = true;
+        model.things.push(thing);
+    }
+    let way = model.ways_out[0].id.clone();
+    let targets = targets(&scene, &[]);
+    assert_eq!(targets.len(), 64);
+    assert!(
+        targets
+            .iter()
+            .all(|target| !target.id.contains("equipment-private-stack-"))
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == format!("way-{way}"))
+    );
+    assert!(
+        targets.iter().any(|target| target.id == "surface-counter"
+            || target.name.to_lowercase().contains("counter"))
     );
 }

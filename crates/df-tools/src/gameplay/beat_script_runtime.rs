@@ -136,8 +136,28 @@ fn social_succeeded(result: &df_rules::influence::InfluenceResult) -> bool {
     )
 }
 
+thread_local! {
+    static OPENING_THREAT: std::cell::RefCell<Option<(GameState, pack::CacheIdentity, bool)>> =
+        const { std::cell::RefCell::new(None) };
+}
 /// Replays the accepted social receipt and its actual dice; loose outcome facts confer nothing.
 pub(super) fn opening_threat_resolved(state: &GameState) -> Result<bool, RepositoryError> {
+    let pack = pack::cache_identity();
+    let remembered = OPENING_THREAT.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|(input, source, _)| *source == pack && input == state)
+            .map(|(_, _, result)| *result)
+    });
+    if let Some(result) = remembered {
+        return Ok(result);
+    }
+    let result = derived_opening_threat_resolved(state)?;
+    OPENING_THREAT.with(|cache| *cache.borrow_mut() = Some((state.clone(), pack, result)));
+    Ok(result)
+}
+fn derived_opening_threat_resolved(state: &GameState) -> Result<bool, RepositoryError> {
     let mut resolved = false;
     let mut prior_attempt = None;
     let mut party_eased = false;
@@ -694,9 +714,30 @@ pub(super) fn choice<'a>(
     }
     Ok(chosen)
 }
+thread_local! {
+    static LAST_CHOICE: std::cell::RefCell<Option<(GameState, pack::CacheIdentity, Option<String>)>> =
+        const { std::cell::RefCell::new(None) };
+}
 pub(super) fn last_choice(state: &GameState) -> Result<Option<String>, RepositoryError> {
+    let pack = pack::cache_identity();
+    let remembered = LAST_CHOICE.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|(input, source, _)| *source == pack && input == state)
+            .map(|(_, _, result)| result.clone())
+    });
+    if let Some(result) = remembered {
+        return Ok(result);
+    }
+    let result = derived_last_choice(state)?;
+    LAST_CHOICE.with(|cache| *cache.borrow_mut() = Some((state.clone(), pack, result.clone())));
+    Ok(result)
+}
+fn derived_last_choice(state: &GameState) -> Result<Option<String>, RepositoryError> {
     let mut latest = None;
     let mut revision = None;
+    let mut admitted = 0usize;
     for decision in &state.decisions {
         if revision.is_some_and(|previous| decision.revision <= previous) {
             return invalid("DecisionRevisionOrder");
@@ -704,17 +745,11 @@ pub(super) fn last_choice(state: &GameState) -> Result<Option<String>, Repositor
         revision = Some(decision.revision);
         if let Some((_, offer, _)) = choice(state, decision)? {
             latest = Some(offer.to_owned());
+            admitted += 1;
         }
     }
     // A marker without its accepted decision is not an authored choice.
     let actual=state.facts.iter().filter(|fact|matches!(&fact.value,FactValue::ContentEvent{definition,..} if definition.entry.as_str().starts_with(OFFER_PREFIX))).count();
-    let admitted = state
-        .decisions
-        .iter()
-        .map(|decision| choice(state, decision).map(|c| usize::from(c.is_some())))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .sum::<usize>();
     if actual != admitted {
         return invalid("UnassociatedChoiceFact");
     }
@@ -841,7 +876,39 @@ pub(super) fn resolve_skill_check(
     })
 }
 
+struct SceneMemo {
+    state: GameState,
+    pack: pack::CacheIdentity,
+    scene: pack::Scene,
+}
+thread_local! {
+    static SCENE: std::cell::RefCell<Option<SceneMemo>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
+    let source = pack::cache_identity();
+    let remembered = SCENE.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|memo| memo.pack == source && memo.state == *state)
+            .map(|memo| memo.scene.clone())
+    });
+    if let Some(scene) = remembered {
+        return Ok(scene);
+    }
+    let scene = derived_scene(state)?;
+    SCENE.with(|cache| {
+        *cache.borrow_mut() = Some(SceneMemo {
+            state: state.clone(),
+            pack: source,
+            scene: scene.clone(),
+        })
+    });
+    Ok(scene)
+}
+
+fn derived_scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(state)?;
         let variant = shown_variant(script, beat, state)?;
@@ -892,6 +959,7 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         {
             setting.model = Some(snapshot.model);
         }
+
         // Inspection facts follow their authored people within the same place, including
         // the enforcer after his entrance; a scene key change cannot erase their source rows.
         if let Some(setting) = scene.setting.as_ref()
@@ -1194,6 +1262,7 @@ pub(super) fn validate(
     let mut started = false;
     let mut native_durable = "room";
     let mut creations = 0usize;
+    let mut creation_base = None;
     let mut restart_seen = false;
     let mut observation_draws = 0usize;
     // Freeplay scene fights: whether one is open in the replay so far, and what they drew.
@@ -1258,16 +1327,7 @@ pub(super) fn validate(
         let Some((choice_fact, id, member)) = choice(state, decision)? else {
             // A fight changes a hero's combat resources (and a fight in progress adds weapon
             // rows to the sheet), so a fought scene reads each sheet as creation left it.
-            let mut creation_state = if journey::scene_fight::fought(state) {
-                let mut recreated = journey::recreated_heroes(state)?;
-                recreated.encounters.clear();
-                recreated
-            } else {
-                state.clone()
-            };
-            creation_state
-                .decisions
-                .retain(|record| record.revision <= decision.revision);
+            let creation_state = creation_base.get_or_insert_with(|| state.clone());
             let character = state
                 .characters
                 .get(creations)
@@ -1277,7 +1337,7 @@ pub(super) fn validate(
                 || receipt.phase != rpc::JourneyPhase::Room as i32
                 || receipt.character
                     != Some(journey::receipt_character_sheet(
-                        &creation_state,
+                        creation_state,
                         character.entity,
                     )?)
                 || receipt.check.is_some()
@@ -1320,6 +1380,11 @@ pub(super) fn validate(
                 .clone()
                 .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase());
             if let Some(check) = receipt.check.as_ref() {
+                // A check made in a created place replays against that place as it stood then,
+                // with the item story findings the narrative engine committed there.
+                let mut source_scene =
+                    super::place::scene_at(state, &beat.id, source_scene, decision.revision)?;
+                super::investigation::project_item_story_findings(state, &mut source_scene)?;
                 validate_observation_check(
                     state,
                     decision,
@@ -1748,10 +1813,57 @@ pub(super) fn matches_id(
             .any(|offer| offer.effect.action() == action && id_for(current, offer) == id))
     })
 }
+type ViewOffer = (rpc::GameplayActionKind, String, String);
+struct OfferMemo {
+    current: Checkpoint,
+    pack: pack::CacheIdentity,
+    members: Vec<(MemberId, Vec<ViewOffer>)>,
+}
+thread_local! {
+    static VIEW_OFFERS: std::cell::RefCell<Option<OfferMemo>> = const { std::cell::RefCell::new(None) };
+}
 pub(super) fn view_offers(
     current: &Checkpoint,
     member: MemberId,
-) -> Result<Vec<(rpc::GameplayActionKind, String, String)>, RepositoryError> {
+) -> Result<Vec<ViewOffer>, RepositoryError> {
+    let source = pack::cache_identity();
+    let remembered = VIEW_OFFERS.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|memo| memo.pack == source && memo.current == *current)
+            .and_then(|memo| memo.members.iter().find(|(who, _)| *who == member))
+            .map(|(_, offers)| offers.clone())
+    });
+    if let Some(offers) = remembered {
+        return Ok(offers);
+    }
+    let offers = derived_view_offers(current, member)?;
+    VIEW_OFFERS.with(|cache| {
+        let mut slot = cache.borrow_mut();
+        if slot
+            .as_ref()
+            .is_none_or(|memo| memo.pack != source || memo.current != *current)
+        {
+            *slot = Some(OfferMemo {
+                current: current.clone(),
+                pack: source,
+                members: Vec::new(),
+            });
+        }
+        if let Some(memo) = slot.as_mut() {
+            if memo.members.len() == 16 {
+                memo.members.remove(0);
+            }
+            memo.members.push((member, offers.clone()));
+        }
+    });
+    Ok(offers)
+}
+fn derived_view_offers(
+    current: &Checkpoint,
+    member: MemberId,
+) -> Result<Vec<ViewOffer>, RepositoryError> {
     let available = journey::offered(current, member)?;
     if ended(current.state())? {
         return Ok(available
@@ -2118,6 +2230,14 @@ pub(super) fn validate_encounter_choices(
                 .scene_variant
                 .clone()
                 .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase());
+            // The check replays against the place the party stood in at that revision.
+            let mut source_scene = super::place::scene_at(
+                current.state(),
+                &beat.id,
+                source_scene,
+                decision.revision,
+            )?;
+            super::investigation::project_item_story_findings(current.state(), &mut source_scene)?;
             validate_observation_check(
                 current.state(),
                 decision,

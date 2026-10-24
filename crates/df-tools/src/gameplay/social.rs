@@ -874,9 +874,39 @@ struct SavedRelationship {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SavedFile {
+    #[serde(default)]
+    acquaintances: Vec<SavedAcquaintance>,
     schema: String,
     adventure_seed: String,
     relationships: Vec<SavedRelationship>,
+}
+
+/// Name knowledge is independent of attitude, including people without dossiers.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AcquaintanceState {
+    #[default]
+    Unknown,
+    Introduced,
+    Overheard,
+    Known,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Acquaintance {
+    pub(super) state: AcquaintanceState,
+    pub(super) speaker: String,
+    pub(super) place: String,
+    pub(super) line: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SavedAcquaintance {
+    hero: String,
+    npc: String,
+    knowledge: Acquaintance,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -931,6 +961,7 @@ pub(super) struct ExchangeRecord {
 /// no revision history of its own.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SocialSnapshot {
+    acquaintances: BTreeMap<(String, String), Acquaintance>,
     relationships: BTreeMap<(MemberId, String), Relationship>,
 }
 
@@ -970,12 +1001,25 @@ impl SocialSnapshot {
                 bytes = bytes.checked_add(record.retained_heap_bytes()?)?;
             }
         }
+        for ((hero, npc), knowledge) in &self.acquaintances {
+            bytes = bytes.checked_add(size_of::<((String, String), Acquaintance)>())?;
+            for capacity in [
+                hero.capacity(),
+                npc.capacity(),
+                knowledge.speaker.capacity(),
+                knowledge.place.capacity(),
+                knowledge.line.capacity(),
+            ] {
+                bytes = bytes.checked_add(capacity)?;
+            }
+        }
         Some(bytes)
     }
 }
 
 /// The standings and conversations of one run, and the dossiers that start them.
 pub(super) struct SocialLedger {
+    acquaintances: Mutex<BTreeMap<(String, String), Acquaintance>>,
     rooms: Mutex<scene_state::Rooms>,
     dossiers: Vec<Dossier>,
     adventure_seed: String,
@@ -990,10 +1034,11 @@ pub(super) struct SocialLedger {
 }
 
 impl SocialLedger {
-    /// A ledger for a pack with no dossiers (the shipped harbor pack, or adventures saved before
-    /// dossiers existed): nothing is addressable and nothing is saved.
+    /// A transient ledger for fixtures and runs without a durable directory. Name knowledge
+    /// may be kept in memory; production saved runs, including empty dossiers, use `open`.
     pub(super) fn none() -> Arc<Self> {
         Arc::new(Self {
+            acquaintances: Mutex::default(),
             rooms: Mutex::default(),
             dossiers: Vec::new(),
             adventure_seed: String::new(),
@@ -1014,12 +1059,26 @@ impl SocialLedger {
     ) -> Result<Arc<Self>, SocialError> {
         let file = directory.map(|directory| directory.join(FILE_NAME));
         let mut relationships = BTreeMap::new();
+        let mut acquaintances = BTreeMap::new();
         let rooms = scene_state::Rooms::default();
         if let Some(file) = &file {
             match read_saved(file) {
                 Ok(saved) => {
                     if saved.schema != SCHEMA || saved.adventure_seed != adventure_seed {
                         return Err(SocialError::Invalid("a different adventure's state"));
+                    }
+                    for entry in saved.acquaintances {
+                        if entry.hero.is_empty()
+                            || entry.hero.chars().count() > 240
+                            || entry.npc.is_empty()
+                            || entry.npc.chars().count() > 240
+                            || entry.knowledge.line.chars().count() > 2_000
+                            || entry.knowledge.place.chars().count() > 512
+                            || entry.knowledge.speaker.chars().count() > 240
+                        {
+                            return Err(SocialError::Invalid("name knowledge bounds"));
+                        }
+                        acquaintances.insert((entry.hero, entry.npc), entry.knowledge);
                     }
                     for entry in saved.relationships {
                         let member = member_from_hex(&entry.member)
@@ -1076,6 +1135,7 @@ impl SocialLedger {
             }
         }
         let ledger = Arc::new(Self {
+            acquaintances: Mutex::new(acquaintances),
             rooms: Mutex::new(rooms),
             dossiers,
             adventure_seed: adventure_seed.to_owned(),
@@ -1091,6 +1151,36 @@ impl SocialLedger {
 
     pub(super) fn is_active(&self) -> bool {
         !self.dossiers.is_empty()
+    }
+
+    /// Name knowledge comes only from a retained disclosure or an explicit authored prior.
+    /// A friendly attitude, profession or cast role alone never grants a name.
+    pub(super) fn acquaintance(&self, hero: &str, npc: &str) -> Acquaintance {
+        self.acquaintances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(hero.to_owned(), npc.to_owned()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Records a source-backed authored prior or Jev's accepted public disclosure. The caller
+    /// persists before allowing a subsequent reply to use the name.
+    pub(super) fn learn_name(&self, hero: &str, listeners: &[String], knowledge: &Acquaintance) {
+        let mut names = self
+            .acquaintances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for npc in listeners {
+            let entry = names.entry((hero.to_owned(), npc.clone())).or_default();
+            if entry.state == AcquaintanceState::Unknown
+                || knowledge.state == AcquaintanceState::Known
+                || entry.state == AcquaintanceState::Overheard
+                    && knowledge.state == AcquaintanceState::Introduced
+            {
+                *entry = knowledge.clone();
+            }
+        }
     }
 
     /// The dossier of a character on stage, by the pack's cast role and archetype id.
@@ -1119,6 +1209,11 @@ impl SocialLedger {
     /// forward ring carries the saved moment's copy and restores all of it.
     pub(super) fn snapshot(&self) -> SocialSnapshot {
         SocialSnapshot {
+            acquaintances: self
+                .acquaintances
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
             relationships: self.lock().clone(),
         }
     }
@@ -1129,6 +1224,10 @@ impl SocialLedger {
     /// (the session owner thread already blocks on durable commits there).
     pub(super) fn restore_snapshot(&self, snapshot: &SocialSnapshot) -> Result<(), SocialError> {
         *self.lock() = snapshot.relationships.clone();
+        *self
+            .acquaintances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = snapshot.acquaintances.clone();
         {
             let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
             rooms.projections.clear();
@@ -1874,7 +1973,19 @@ impl SocialLedger {
                 relationship: relationship.clone(),
             })
             .collect();
+        let acquaintances = self
+            .acquaintances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|((hero, npc), knowledge)| SavedAcquaintance {
+                hero: hero.clone(),
+                npc: npc.clone(),
+                knowledge: knowledge.clone(),
+            })
+            .collect();
         let bytes = serde_json::to_vec_pretty(&SavedFile {
+            acquaintances,
             schema: SCHEMA.to_owned(),
             adventure_seed: self.adventure_seed.clone(),
             relationships,
@@ -2251,3 +2362,70 @@ fn write_atomically(file: &PathBuf, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 #[path = "social_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod acquaintance_tests {
+    use super::*;
+
+    #[test]
+    fn hs68_store_authored_patron_knows_party_but_friendly_strangers_do_not() {
+        let adventure = crate::gameplay::npc_dossier_tests::adventure(1);
+        let patron = adventure
+            .dossiers
+            .iter()
+            .find(|dossier| dossier.role == super::super::adventure::dossier::NpcRole::Patron)
+            .unwrap()
+            .npc_id
+            .clone();
+        let ledger = SocialLedger::open(adventure.dossiers, "hs68-patron", None).unwrap();
+        assert_eq!(
+            ledger.acquaintance("Orla Stonehide", &patron).state,
+            AcquaintanceState::Unknown
+        );
+        let prior = Acquaintance {
+            state: AcquaintanceState::Known,
+            speaker: "author".into(),
+            place: "campaign background".into(),
+            line: "The patron has known the party by name for years.".into(),
+        };
+        for hero in ["Orla Stonehide", "Merrin"] {
+            ledger.learn_name(hero, std::slice::from_ref(&patron), &prior);
+            assert_eq!(
+                ledger.acquaintance(hero, &patron).state,
+                AcquaintanceState::Known
+            );
+        }
+        assert_eq!(
+            ledger.acquaintance("Orla Stonehide", "person:vendor").state,
+            AcquaintanceState::Unknown
+        );
+    }
+
+    #[test]
+    fn hs68_store_name_knowledge_rewinds_and_upgrades_overheard_without_losing_provenance() {
+        let ledger = SocialLedger::none();
+        let before = ledger.snapshot();
+        let listeners = vec!["person:tovin".to_owned()];
+        let heard = Acquaintance {
+            state: AcquaintanceState::Overheard,
+            speaker: "Merrin".into(),
+            place: "Basket Court".into(),
+            line: "This is Orla.".into(),
+        };
+        ledger.learn_name("Orla", &listeners, &heard);
+        let introduced = Acquaintance {
+            state: AcquaintanceState::Introduced,
+            speaker: "Orla".into(),
+            line: "I'm Orla.".into(),
+            ..heard.clone()
+        };
+        ledger.learn_name("Orla", &listeners, &introduced);
+        ledger.learn_name("Orla", &listeners, &heard);
+        assert_eq!(ledger.acquaintance("Orla", "person:tovin"), introduced);
+        ledger.restore_snapshot(&before).unwrap();
+        assert_eq!(
+            ledger.acquaintance("Orla", "person:tovin").state,
+            AcquaintanceState::Unknown
+        );
+    }
+}

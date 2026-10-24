@@ -155,6 +155,7 @@ impl Table {
         });
         Self {
             service: Service {
+                look_ahead: Default::default(),
                 portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
                 display_credential: [0x82; 32],
                 layout: crate::gameplay::dev_control::layout::LayoutState::new(),
@@ -331,7 +332,7 @@ fn opening_social_authenticated_helper_reaches_actor_and_advantage_is_consumed_o
         )
         .unwrap()
         .checkpoint;
-        let endpoint = FakeEndpoint::start(vec![
+        let endpoint = crate::gameplay::npc_reply::tests::ref069_existing_facts(vec![
             answer("o1"),
             answer("o6"),
             answer("o2"),
@@ -423,7 +424,7 @@ fn opening_social_authenticated_helper_reaches_actor_and_advantage_is_consumed_o
 #[test]
 fn opening_social_invitation_reaches_influence_before_travel_and_departure_stays_blocked() {
     with_harbor(|loaded| {
-        let endpoint = FakeEndpoint::start(vec![
+        let endpoint = crate::gameplay::npc_reply::tests::ref069_existing_facts(vec![
             answer("o15"),
             answer("o2"),
             answer("o2"),
