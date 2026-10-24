@@ -18,12 +18,15 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
+#[cfg(test)]
+mod dialogue_tests;
 mod dice;
 mod display_effects;
 mod freeform_action;
-#[cfg(test)]
-mod dialogue_tests;
 // DEVCTL-001: development-only agent control surface (off by default).
+mod creator_catalog;
+mod creator_classification;
+mod creator_portraits;
 mod dev_control;
 mod fight_foresight;
 mod fight_lines;
@@ -44,6 +47,7 @@ mod join_link;
 mod journey;
 mod line_cleanup;
 mod living_scenes;
+mod media_policy;
 mod memory;
 mod model;
 mod music_assets;
@@ -68,13 +72,13 @@ mod npc_talk_rules;
 mod npc_target;
 mod pack;
 mod pack_contents;
-mod plate_segments;
+#[cfg(test)]
+mod pack_tests;
 mod place;
 mod place_creation;
 mod place_move;
 mod place_music;
-#[cfg(test)]
-mod pack_tests;
+mod plate_segments;
 #[path = "gameplay_browser/presentation_ingress.rs"]
 mod presentation_ingress;
 mod public_assets;
@@ -149,6 +153,7 @@ struct Service {
     /// Follows the story's mood with generated scene art; presentation only.
     living: living_scenes::LivingScenes,
     layout: dev_control::layout::LayoutState,
+    portraits: creator_portraits::Portraits,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -247,6 +252,20 @@ impl rpc::action_service_server::ActionService for Service {
         {
             return Err(Status::invalid_argument("bounded action fields required"));
         }
+        if let Some(identity) = request
+            .character
+            .as_ref()
+            .and_then(|character| character.identity.as_ref())
+        {
+            if let Some(appearance) = &identity.appearance {
+                hero_identity::validate_public_description(&appearance.public_description)
+                    .map_err(|_| {
+                        Status::invalid_argument(
+                            "Public appearance must fit 2000 characters and 4096 bytes",
+                        )
+                    })?;
+            }
+        }
         // A scene assault starts a fight through the one entry point every route shares.
         if request.action_kind == rpc::GameplayActionKind::SceneAssault as i32 {
             return self
@@ -254,9 +273,29 @@ impl rpc::action_service_server::ActionService for Service {
                 .await
                 .map(Response::new);
         }
+        let committed = df_api::operation_id(request.operation_id.as_ref())
+            .ok()
+            .is_some_and(|operation| {
+                self.updates
+                    .borrow()
+                    .state()
+                    .decisions
+                    .iter()
+                    .any(|decision| decision.operation == operation)
+            });
+        let portrait = if !committed
+            && request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32
+        {
+            self.portraits
+                .accepted(credential, request.character.as_ref())
+                .await?
+        } else {
+            None
+        };
         let (reply, wait) = oneshot::channel();
         self.actor
-            .try_submit(actor::Call::Submit {
+            .try_submit(actor::Call::SubmitAppearance {
+                portrait,
                 credential,
                 request,
                 reply,
@@ -271,6 +310,23 @@ impl rpc::action_service_server::ActionService for Service {
 
     /// Reads a typed description of a hero's looks and story into a proposed identity. Worker C01
     /// builds the reader (`gameplay/hero_identity.rs`); until it is connected the call says so.
+    async fn request_hero_portrait(
+        &self,
+        request: Request<rpc::HeroPortraitRequest>,
+    ) -> Result<Response<rpc::HeroPortraitResponse>, Status> {
+        creator_portraits::handle(self, request, true)
+            .await
+            .map(Response::new)
+    }
+    async fn get_hero_portrait(
+        &self,
+        request: Request<rpc::HeroPortraitRequest>,
+    ) -> Result<Response<rpc::HeroPortraitResponse>, Status> {
+        creator_portraits::handle(self, request, false)
+            .await
+            .map(Response::new)
+    }
+
     async fn preview_hero_identity(
         &self,
         request: Request<rpc::PreviewHeroIdentityRequest>,
@@ -1010,6 +1066,15 @@ async fn serve_run(
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        // Publish only the sanitized basename inside this launcher's own stop directory.
+        // The launcher never guesses a marker belonging to another run.
+        let marker = path
+            .file_name()
+            .ok_or_else(|| io::Error::other("stop marker absent"))?;
+        std::fs::write(
+            path.with_file_name("target.receipt"),
+            marker.as_encoded_bytes(),
+        )?;
         println!("STOP_REQUEST file={}", path.display());
     }
     // The join code encodes the room code the pack above has fixed, before anything is started.
@@ -1740,12 +1805,11 @@ async fn serve_run(
     // demand as a resource of the generation hub (the one the imagery owns). Generation needs
     // ELEVENLABS_API_KEY and ffmpeg; without them places keep the shared score and their beds.
     let (music_line, music_routes) = if interactive {
-        let jev = approach_model::ApproachModel::configured(
-            startup_configuration::approach_settings(
+        let jev =
+            approach_model::ApproachModel::configured(startup_configuration::approach_settings(
                 std::env::var("DF_JEV_API_KEY"),
                 std::env::var("DF_JEV_BASE_URL"),
-            )?,
-        );
+            )?);
         let adapter = place_music::HubMusic::start(
             place_music::MusicInputs::from_environment(),
             &std::env::current_dir()?,
@@ -1759,9 +1823,8 @@ async fn serve_run(
         });
         let routes = adapter.router();
         let hub: Arc<dyn place_music::MusicHub> = adapter.clone();
-        let music = place_music::PlaceMusic::new(jev, Some(hub), runtime, move || {
-            wake.signal_art()
-        });
+        let music =
+            place_music::PlaceMusic::new(jev, Some(hub), runtime, move || wake.signal_art());
         let line = format!("{}\n{}", adapter.startup_line(), music.startup_line());
         place_music::install(music);
         (Some(line), routes)
@@ -1901,6 +1964,8 @@ async fn serve_run(
         }
         return Err(io::Error::other("actor startup handoff refused").into());
     }
+    let portraits =
+        creator_portraits::Portraits::start(imagery.hub().clone(), &std::env::current_dir()?)?;
     let mut restart_updates = receiver.clone();
     let service = Service {
         actor: sender.clone(),
@@ -1918,6 +1983,7 @@ async fn serve_run(
         social: social.clone(),
         living,
         layout: dev_control::layout::LayoutState::new(),
+        portraits,
     };
     fight_foresight::bind_service(service.clone());
     // DEVCTL-001: the agent control surface. Off by default: with the setting
@@ -2016,6 +2082,7 @@ async fn serve_run(
         .merge(splat_world::router())
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
+        .merge(creator_portraits::router(service.clone()))
         .merge(music_routes)
         .merge(home_video::router())
         .merge(speech_input::router(
@@ -2436,28 +2503,7 @@ async fn join_grant_driver(
 /// The local demonstration database. `DF_GAMEPLAY_DATABASE_PORT` (1024 to 65535) selects another
 /// PostgreSQL instance than the launcher's, so tests and harness runs use their own.
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    let launcher =
-        startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
-    let port = match std::env::var("DF_GAMEPLAY_DATABASE_PORT") {
-        Ok(port) => port
-            .trim()
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port >= 1024)
-            .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused"))?,
-        Err(std::env::VarError::NotPresent) => return Ok(launcher),
-        Err(_) => return Err(io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused")),
-    };
-    // A configuration's port list only grows, so the instance's own is built afresh.
-    let mut configuration = tokio_postgres::Config::new();
-    configuration.host("127.0.0.1").port(port);
-    if let Some(user) = launcher.get_user() {
-        configuration.user(user);
-    }
-    if let Some(name) = launcher.get_dbname() {
-        configuration.dbname(name);
-    }
-    Ok(configuration)
+    startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))
 }
 #[cfg(test)]
 mod battle_scene_page_tests {

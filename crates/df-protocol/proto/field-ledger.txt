@@ -924,3 +924,36 @@ enum-value dungeonflux.public.v1.RollKind 3 ROLL_KIND_ATTACK
 enum-value dungeonflux.public.v1.RollKind 4 ROLL_KIND_DEATH_SAVE
 enum-value dungeonflux.public.v1.RollKind 5 ROLL_KIND_STABILIZE
 enum-value dungeonflux.public.v1.RollKind 6 ROLL_KIND_INITIATIVE
+field dungeonflux.public.v1.HeroAppearance 11 public_description type=9 label=1 presence=false target=- oneof=-
+
+message dungeonflux.public.v1.HeroPortraitRequest
+message dungeonflux.public.v1.HeroPortraitResponse
+method dungeonflux.public.v1.ActionService RequestHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.ActionService GetHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
+field dungeonflux.public.v1.HeroPortraitRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 3 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 4 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 5 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 6 draft_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 8 species type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 1 draft_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 2 state type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 3 image_uri type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 4 message type=9 label=1 presence=false target=- oneof=-
+
+field dungeonflux.public.v1.CharacterSheet 9 portrait_uri type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterSheet 10 portrait_draft_revision type=4 label=1 presence=false target=- oneof=-
+
+message dungeonflux.public.v1.SupportedCharacterDesign
+field dungeonflux.public.v1.SupportedCharacterDesign 1 species_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SupportedCharacterDesign 2 class_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SupportedCharacterDesign 3 background_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 6 supported_designs type=11 label=3 presence=false target=.dungeonflux.public.v1.SupportedCharacterDesign oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 9 character_class type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 10 background type=9 label=1 presence=false target=- oneof=-
+
+field dungeonflux.public.v1.HeroPortraitRequest 11 scenery type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterSelection 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 7 portrait_scenery_options type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyOption oneof=-

@@ -72,6 +72,7 @@ mod browser {
             offer_id: "synthetic-current-character-offer".into(),
             action_kind: 3,
             character: Some(wire::CharacterSelection {
+                portrait_scenery: String::new(),
                 name,
                 choices: Vec::new(),
             }),

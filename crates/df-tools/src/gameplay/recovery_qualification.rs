@@ -228,6 +228,7 @@ impl RunningActor {
             return Err(io::Error::other("qualification actor handoff failed").into());
         }
         let service = Service {
+            portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             display_credential: [0x82; 32],
             layout: super::dev_control::layout::LayoutState::new(),
             actor: sender.clone(),
@@ -310,6 +311,7 @@ fn create(checkpoint: &Checkpoint, operation: u8) -> rpc::SubmitActionRequest {
         rpc::GameplayActionKind::CreateCharacter,
     );
     body.character = Some(rpc::CharacterSelection {
+        portrait_scenery: String::new(),
         identity: None,
         name: "Recovery-Fighter".to_owned(),
         choices: [

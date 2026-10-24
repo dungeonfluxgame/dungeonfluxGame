@@ -1,11 +1,10 @@
 //! Image prompts, assembled only from a closed vocabulary the server owns and vetted facts.
 //!
-//! Nothing a player typed or said, and nothing a model wrote, ever reaches a prompt: mood,
-//! shot, lighting, expression and tier are enums that render to fixed phrases, and the
-//! only free text is a [`VettedFact`] from the adventure record (a place name) or an
-//! [`ArtifactSubject`] that came from the scene's own facts or passed the strict filter below.
-//! This is about injection and consistency, not censorship: the phrases themselves depend on
-//! the server's content rating.
+//! Mood, shot, lighting, expression and tier are server-owned enums. Authored facts are
+//! vetted; the creator also accepts bounded public custom appearance as quoted reference
+//! data. Creator classification runs before an image call. Private story, player names and
+//! camera images are excluded. No reference text grants instructions or game mechanics.
+//! The fixed photographic direction also follows the server's content rating.
 //!
 //! Limits that hold under both ratings: every person is an adult (the types have no younger
 //! variant and a young character is described as a "young adult"), no real person's likeness
@@ -439,8 +438,8 @@ impl HeroVisualIdentity<'_> {
     }
 }
 
-/// A new hero image is authored from closed appearance menus and canonical held gear. Player
-/// names, backstory and free-form descriptions are deliberately not accepted by this API.
+/// A new hero image uses validated public appearance and canonical held gear. Player
+/// names and private backstory never enter this prompt. Public custom appearance is quoted data.
 #[allow(
     dead_code,
     reason = "T02 stage rendering must consume the checked hero portrait prompt"
@@ -459,6 +458,30 @@ pub(in crate::gameplay) fn hero_portrait(
     ];
     parts.extend(rating_tail(rating));
     Ok(AssembledPrompt::from_parts(parts))
+}
+
+/// The creator stores an opaque JPEG, so its photographic backdrop must remain visible.
+pub(in crate::gameplay) fn creator_portrait(
+    rating: ContentRating,
+    hero: HeroVisualIdentity<'_>,
+    binding: &str,
+    design: &str,
+) -> Result<AssembledPrompt, IdentityError> {
+    let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
+        Part::Fixed(
+            "Photograph exactly one fictional fantasy character alone, full body from head to boots, face and appearance clearly visible, in a natural three-quarter stance in the selected public portrait setting. Keep that continuous real setting visible in the opaque photograph, with the character clearly readable against it. Natural skin and fabric texture, soft cinematic lighting appropriate to that setting. No transparency, checkerboard, grid, panels or extra figures.",
+        ),
+        Part::Fixed(HERO_SELECTED_IDENTITY),
+        Part::Fact(hero.description()?),
+    ];
+    parts.push(Part::Fixed("Realize the selected ancestry's actual anatomy in this live-action photograph. Nonhuman faces and bodies use convincing practical creature heads, articulated prosthetic jaws, sculpted ears, tusks, horns, layered scales and fitted creature costumes as appropriate, photographed with the same physical light and material detail. Natural surface texture follows the selected anatomy: scales, horns and tusks retain their physical structure. Keep the user's custom appearance and selected colors, build, adult age, gender presentation and clothing."));
+    parts.push(Part::Fact(design.to_owned()));
+    if rating == ContentRating::Restrained {
+        parts.push(Part::Fixed("A clothed, nonsexual documentary character reference. Preserve the exact described body proportions naturally under the selected clothing. Body-size and anatomy details describe physical identity, without erotic posing or sexual framing."));
+    }
+    parts.extend(rating_tail(rating));
+    Ok(AssembledPrompt::from_parts(parts).with_canonical_binding(binding))
 }
 
 /// A party-sheet figure is redrawn as its selected hero identity, rather than treated as the

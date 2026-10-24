@@ -566,3 +566,51 @@ fn archer_creation_sheet_states_the_longbow_attack_and_its_ammunition() {
         assert_eq!(arrows, 20);
     });
 }
+
+#[test]
+fn creator_catalog_unsupported_design_is_rejected_at_the_live_wire_boundary() {
+    live_pack(|| {
+        let current = joined_room();
+        let before = current.clone();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        for (species, class, background) in [
+            ("aasimar", "wizard-1", "sage"),
+            ("elf", "rogue-1", "criminal"),
+            ("dragonborn", "ranger-1", "guide"),
+            ("dwarf", "fighter-1", "noble"),
+        ] {
+            let mut choices = PHONE_SHARED.to_vec();
+            for (group, value) in &mut choices {
+                *value = match *group {
+                    "species" => species,
+                    "class" => class,
+                    "background" => background,
+                    _ => *value,
+                };
+            }
+            choices.push(("build-package", "melee-stalwart"));
+            choices.push(("portrait", "portrait-hero-1"));
+            let request = phone_create(&current, 31, "Maren", &choices);
+            let error = wire::journey_input(&request, member, &current).unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert!(
+                error
+                    .message()
+                    .contains("Gameplay rules for this combination are not ready")
+            );
+            assert_eq!(current, before);
+            assert!(current.state().characters.is_empty());
+        }
+        let mut valid = PHONE_SHARED.to_vec();
+        valid.push(("build-package", "melee-stalwart"));
+        valid.push(("portrait", "portrait-hero-1"));
+        assert!(
+            wire::journey_input(
+                &phone_create(&current, 32, "Maren", &valid),
+                member,
+                &current
+            )
+            .is_ok()
+        );
+    });
+}

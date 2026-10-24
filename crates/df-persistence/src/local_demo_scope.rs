@@ -153,6 +153,16 @@ struct LocalInputBinding {
     input: GameInput,
     pins: CheckpointPins,
 }
+mod input_bounds;
+
+/// Only the already-validated creation command needs room for versioned cosmetic chunks.
+/// Authentication, source admission and every other command's 8 KiB bound are unchanged.
+pub fn input_retained_bytes_max(input: &GameInput) -> usize {
+    input_bounds::maximum(
+        matches!(input, GameInput::Game(command) if matches!(&command.command,
+        df_model::checkpoint::GameCommand::ProposeAction { action, .. } if action.entry.as_str() == "create-character")),
+    )
+}
 impl LocalDemoScopeIssuer {
     /// Extends this owner's session lease and every active access grant of the session by the
     /// lease length. It succeeds whether or not the lease has already lapsed, because the owner
@@ -549,7 +559,10 @@ impl LocalDemoScopeIssuer {
         } = binding;
         if self.authenticate(credential)? != LocalDemoRole::Player
             || self.principal(credential)? != principal
-            || input.retained_bytes().is_none_or(|bytes| bytes > 8192)
+            || !input_bounds::admits(
+                input_retained_bytes_max(&input) == input_bounds::CREATION_BYTES,
+                input.retained_bytes(),
+            )
         {
             return Err(RepositoryError::InputBinding);
         }

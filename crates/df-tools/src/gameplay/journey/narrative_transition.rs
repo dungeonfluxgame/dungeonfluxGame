@@ -161,7 +161,7 @@ fn select_for(
             .collect::<Vec<_>>();
         for link in party {
             let who = link.character.ok_or(RepositoryError::InvalidCandidate)?;
-            let sheet = super::character_sheet(current.state(), who)?;
+            let sheet = super::receipt_character_sheet(current.state(), who)?;
             let index = remaining
                 .iter()
                 .position(|candidate| *candidate == Some(&sheet))

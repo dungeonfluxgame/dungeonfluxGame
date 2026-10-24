@@ -221,6 +221,22 @@ pub(super) fn journey_input(
                 "character choices exceed bound",
             ));
         }
+        let offer =
+            creation_offer().map_err(|_| tonic::Status::unavailable("Hero options unavailable"))?;
+        // Only a complete design the rules cannot play yet gets this answer; anything else is
+        // refused by the ordinary creation validation below.
+        if super::creator_catalog::names_one_design(&character.choices)
+            && !super::creator_catalog::selection_supported(
+                &character.choices,
+                &offer.supported_designs,
+            )
+        {
+            return Err(tonic::Status::failed_precondition(
+                "Gameplay rules for this combination are not ready. Your character design is kept.",
+            ));
+        }
+        super::creator_catalog::checked_scenery(&character.portrait_scenery)
+            .map_err(|_| tonic::Status::invalid_argument("Review your public portrait scenery"))?;
         let (identity, visual_dossier) = match character.identity.clone() {
             Some(identity) => (super::hero_identity::Identity::from_rpc(identity), None),
             None => {
@@ -250,6 +266,12 @@ pub(super) fn journey_input(
                 model::label(selected).map_err(|_| invalid())?,
             ));
         }
+        for (field, selected) in identity.canonical_public_choices() {
+            choices.push((
+                model::label(&field).map_err(|_| invalid())?,
+                model::label(&selected).map_err(|_| invalid())?,
+            ));
+        }
         if let Some(dossier) = visual_dossier {
             choices.push((
                 model::label("identity-appearance:accepted-profile").map_err(|_| invalid())?,
@@ -266,7 +288,10 @@ pub(super) fn journey_input(
             model::label(&encoded_name).map_err(|_| invalid())?,
         ));
         for selection in &character.choices {
-            if selection.group_id.starts_with("identity-appearance:") {
+            if selection.group_id.starts_with("identity-portrait:")
+                || selection.group_id.starts_with("identity-appearance:")
+                || selection.group_id.starts_with("identity-public-look:v1:")
+            {
                 return Err(invalid());
             }
             if selection.group_id.len() > 64 || selection.option_id.len() > 64 {
@@ -470,7 +495,11 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                 })
                 .collect(),
         });
+        let supported_designs = super::creator_catalog::supported_designs(&groups);
+        super::creator_catalog::expand_groups(&mut groups);
         Ok(rpc::CharacterCreationOffer {
+            supported_designs,
+            portrait_scenery_options: super::creator_catalog::scenery_options(),
             description: content.creation.description.clone(),
             groups,
             source_revision: model::source_revision(),

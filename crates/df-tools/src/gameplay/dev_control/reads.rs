@@ -362,6 +362,13 @@ fn item_card_json(item: &rpc::SceneItemCard) -> Value {
 
 fn character_sheet_json(sheet: &rpc::CharacterSheet) -> Value {
     let mut projection = super::sheet_json(sheet);
+    projection["identity"] = sheet
+        .identity
+        .as_ref()
+        .map(identity_json)
+        .unwrap_or(Value::Null);
+    projection["portrait_uri"] = json!(sheet.portrait_uri);
+    projection["portrait_draft_revision"] = json!(sheet.portrait_draft_revision);
     projection["owned_items"] = json!(
         sheet
             .owned_items
@@ -710,6 +717,7 @@ pub(super) fn identity_json(identity: &rpc::HeroIdentity) -> Value {
         "presentation":appearance.presentation, "pronouns":appearance.pronouns, "age":appearance.age,
         "build":appearance.build, "skin":appearance.skin, "hair":appearance.hair, "hair_color":appearance.hair_color,
         "eyes":appearance.eyes, "mark":appearance.mark, "attire":appearance.attire,
+        "public_description":appearance.public_description,
     })), "origin":identity.origin, "occupation":identity.occupation, "motivation":identity.motivation,
         "backstory":identity.backstory, "facts":identity.facts})
 }

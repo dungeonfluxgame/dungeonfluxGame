@@ -641,7 +641,6 @@ pub(super) fn combat_creature(state: &GameState, who: EntityId) -> df_rules::Srd
         }
     }
 }
-
 pub(super) fn combat_weapon_item(state: &GameState, who: EntityId) -> String {
     if combat_creature(state, who).id == "commoner" {
         "club".to_owned()
@@ -712,6 +711,16 @@ fn weapon_display_name(item: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+/// The sheet a creation receipt stores. Public appearance remains in the durable canonical
+/// identity and the owner's view; its bounded text is not duplicated in the immutable receipt.
+pub(super) fn receipt_character_sheet(
+    state: &GameState,
+    who: EntityId,
+) -> Result<rpc::CharacterSheet, RepositoryError> {
+    let mut sheet = character_sheet(state, who)?;
+    sheet.identity = None;
+    Ok(sheet)
 }
 pub(super) fn character_sheet(
     state: &GameState,
@@ -1098,6 +1107,42 @@ pub(super) fn character_sheet(
     }
     Ok(rpc::CharacterSheet {
         name: name(state, who)?,
+        identity: if character
+            .choices
+            .iter()
+            .any(|choice| choice.offer.as_str().starts_with("identity-appearance:"))
+        {
+            Some(
+                super::hero_identity::ValidatedIdentity::from_canonical_appearance_choices(
+                    &character
+                        .choices
+                        .iter()
+                        .map(|choice| {
+                            (
+                                choice.offer.as_str().to_owned(),
+                                choice.selected.as_str().to_owned(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(bad)?
+                .to_rpc(),
+            )
+        } else {
+            None
+        },
+        portrait_uri: character
+            .choices
+            .iter()
+            .find(|choice| choice.offer.as_str() == "identity-portrait:key")
+            .map(|choice| format!("/gameplay/creator-portrait/{}", choice.selected.as_str()))
+            .unwrap_or_default(),
+        portrait_draft_revision: character
+            .choices
+            .iter()
+            .find(|choice| choice.offer.as_str() == "identity-portrait:revision")
+            .and_then(|choice| choice.selected.as_str().parse().ok())
+            .unwrap_or(0),
         facts,
         hit_points: value(state, who, "hit-points")?,
         maximum_hit_points: maximum_hit_points(state, who)?,
@@ -1891,9 +1936,17 @@ pub(super) fn stage_join(
             assets: &[],
         },
         df_model::commands::CommandLimits {
-            maximum_records: 32,
+            maximum_records: if df_persistence::local_demo_scope::input_retained_bytes_max(input)
+                > 8192
+            {
+                256
+            } else {
+                32
+            },
             maximum_text_bytes: 128,
-            maximum_retained_bytes: 8192,
+            maximum_retained_bytes: df_persistence::local_demo_scope::input_retained_bytes_max(
+                input,
+            ),
         },
     )
     .map_err(bad)?;
@@ -3565,6 +3618,66 @@ fn accept_character_at_level(
         owner: member,
         choices: selected.clone(),
     });
+    if choices
+        .iter()
+        .any(|(group, _)| group.as_str().starts_with("identity-appearance:"))
+    {
+        let identity = super::hero_identity::ValidatedIdentity::from_canonical_appearance_choices(
+            &choices
+                .iter()
+                .map(|(group, value)| (group.as_str().to_owned(), value.as_str().to_owned()))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(bad)?;
+        let species = build
+            .choices
+            .iter()
+            .find(|(group, _)| group == "species")
+            .map(|(_, value)| value.as_str())
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        let mut pack = identity.canonical_visual_pack(who, species).map_err(bad)?;
+        if let Some((_, key)) = choices
+            .iter()
+            .find(|(field, _)| field.as_str() == "identity-portrait:key")
+        {
+            let field = |name: &str| {
+                choices
+                    .iter()
+                    .find(|(field, _)| field.as_str() == name)
+                    .map(|(_, value)| value.as_str())
+                    .ok_or(RepositoryError::InvalidCandidate)
+            };
+            let digest: [u8; 32] = unhex(field("identity-portrait:digest")?)?
+                .try_into()
+                .map_err(bad)?;
+            let bytes = field("identity-portrait:bytes")?
+                .parse::<u64>()
+                .map_err(bad)?;
+            pack.identities[0]
+                .appearances
+                .push(df_model::checkpoint::AssetReference {
+                    key: key.clone(),
+                    digest: df_model::checkpoint::ContentDigest(digest),
+                    byte_length: bytes,
+                    kind: df_model::checkpoint::AssetKind::Image,
+                });
+            use sha2::{Digest, Sha256};
+            let mut hash = Sha256::new();
+            hash.update(pack.digest.0);
+            hash.update(digest);
+            hash.update(key.as_str().as_bytes());
+            let bound: [u8; 32] = hash.finalize().into();
+            let revision = model::label(&format!("approved-look-{}", hex(&bound[..12])))?;
+            pack.digest = df_model::checkpoint::ContentDigest(bound);
+            pack.revision = revision.clone();
+            pack.bible.revision = revision.clone();
+            pack.identities[0].revision = revision.clone();
+            if let Some(appearance) = &mut pack.identities[0].character_appearance {
+                appearance.outfit_revision = revision;
+            }
+        }
+        state.continuity.canonical_packs.push(pack);
+    }
     state.continuity.creation.push(CharacterDraft {
         entity: who,
         member,
@@ -3936,9 +4049,17 @@ fn stage_using(
             assets: &[],
         },
         df_model::commands::CommandLimits {
-            maximum_records: 32,
+            maximum_records: if df_persistence::local_demo_scope::input_retained_bytes_max(input)
+                > 8192
+            {
+                256
+            } else {
+                32
+            },
             maximum_text_bytes: 128,
-            maximum_retained_bytes: 8192,
+            maximum_retained_bytes: df_persistence::local_demo_scope::input_retained_bytes_max(
+                input,
+            ),
         },
     )
     .map_err(|error| {
@@ -4348,7 +4469,7 @@ fn stage_using(
             None
         },
         character: if kind == rpc::GameplayActionKind::CreateCharacter {
-            Some(character_sheet(&state, *who)?)
+            Some(receipt_character_sheet(&state, *who)?)
         } else {
             None
         },
@@ -4725,9 +4846,17 @@ pub(super) fn stage_with_supplier(
             },
             limits: df_engine::command_entry::CommandEntryLimits {
                 command: df_model::commands::CommandLimits {
-                    maximum_records: 32,
+                    maximum_records: if df_persistence::local_demo_scope::input_retained_bytes_max(
+                        input,
+                    ) > 8192
+                    {
+                        256
+                    } else {
+                        32
+                    },
                     maximum_text_bytes: 128,
-                    maximum_retained_bytes: 8192,
+                    maximum_retained_bytes:
+                        df_persistence::local_demo_scope::input_retained_bytes_max(input),
                 },
                 maximum_staged_bytes: 1024 * 1024,
             },

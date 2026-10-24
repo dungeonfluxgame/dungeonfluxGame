@@ -100,6 +100,7 @@ impl Table {
         let (updates_in, updates) = watch::channel(current.clone());
         let (sender, inbox) = bounded_inbox();
         let service = Service {
+            portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             display_credential: [0x82; 32],
             layout: crate::gameplay::dev_control::layout::LayoutState::new(),
             actor: sender,

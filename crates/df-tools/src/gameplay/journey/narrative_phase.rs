@@ -307,10 +307,11 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         .map_err(|_| RepositoryError::InvalidCandidate)?;
     let state = current.state();
     let phase = classify(state)?;
-    if state.facts.len() > 512
-        || state.decisions.len() > 512
-        || state.narrative.definition != model::content("room")?
-    {
+    // The same scan bound as the other journey reads: an oversized state is a capacity limit.
+    if state.facts.len() > 512 || state.decisions.len() > 512 {
+        return Err(RepositoryError::Capacity);
+    }
+    if state.narrative.definition != model::content("room")? {
         return invalid();
     }
     if phase == rpc::JourneyPhase::Room {

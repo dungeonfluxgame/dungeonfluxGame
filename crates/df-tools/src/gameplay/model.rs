@@ -40,6 +40,7 @@ pub(super) fn content(entry: &str) -> Result<ContentReference, RepositoryError> 
 }
 pub(super) fn contents() -> Result<Vec<ContentReference>, RepositoryError> {
     let mut contents = [
+        "public-appearance-v1",
         "narrative-intervention-policy",
         "harbor",
         "mara-preconfigured",
@@ -367,7 +368,9 @@ pub(super) fn limits() -> CheckpointLimits {
         maximum_records: if super::journey::tactical::enabled() {
             4096
         } else {
-            512
+            // Two accepted heroes retain bounded public-look chunks in both character
+            // and creation records, in addition to their source-bound build choices.
+            1024
         },
         maximum_text_bytes: MAXIMUM_RECEIPT_TEXT_BYTES,
         maximum_total_text_bytes: if super::journey::tactical::enabled() {

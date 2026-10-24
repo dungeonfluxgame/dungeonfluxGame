@@ -564,7 +564,7 @@ fn final_candidate_capacity_failure_does_not_escape_completed_status_or_response
     let (mut current, first, _) = pending();
     // Fill only existing canonical history records. Every prior fixture snapshot
     // passes the real constructor; the next response must cross the same bound.
-    for ordinal in 0_u64..512 {
+    for ordinal in 0..u64::try_from(model::limits().maximum_records).unwrap() {
         let mut state = current.state().clone();
         let mut bytes = [0x90; 16];
         bytes[8..].copy_from_slice(&ordinal.to_be_bytes());

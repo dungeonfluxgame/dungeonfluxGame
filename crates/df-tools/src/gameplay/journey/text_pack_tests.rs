@@ -303,7 +303,15 @@ fn edited_text_options_equipment_and_room_drive_complete_journey() {
     pack::with_test_pack(loaded, || {
         let offer = wire::creation_offer().unwrap();
         assert_eq!(offer.description, "Create a harbor guardian.");
-        assert_eq!(offer.groups[0].options[0].description, "A trusted dwarf.");
+        assert_eq!(
+            offer.groups[0]
+                .options
+                .iter()
+                .find(|option| option.option_id == "dwarf")
+                .unwrap()
+                .description,
+            "A trusted dwarf."
+        );
         assert_eq!(
             offer
                 .groups

@@ -203,6 +203,7 @@ fn request(
         },
         character: if kind == rpc::GameplayActionKind::CreateCharacter {
             Some(rpc::CharacterSelection {
+                portrait_scenery: String::new(),
                 identity: None,
                 name: if member == first() { "Brynn" } else { "Vale" }.into(),
                 choices: build(if member == first() { "Brynn" } else { "Vale" })

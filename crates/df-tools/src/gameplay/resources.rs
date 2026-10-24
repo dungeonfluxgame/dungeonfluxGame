@@ -73,6 +73,7 @@ use sha2::{Digest, Sha256};
 pub(in crate::gameplay) enum ResourceKind {
     /// A person, creature, place, ground or prop picture (the art contract's depictions).
     Depiction,
+    CreatorPortrait,
     ScenePlate,
     PlateEdit,
     ItemCloseUp,
@@ -98,6 +99,7 @@ impl ResourceKind {
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
             Self::Depiction => "depiction",
+            Self::CreatorPortrait => "creator_portrait",
             Self::ScenePlate => "scene_plate",
             Self::PlateEdit => "plate_edit",
             Self::ItemCloseUp => "item_close_up",
@@ -232,6 +234,7 @@ impl Limits {
     pub(in crate::gameplay) const fn for_kind(kind: ResourceKind) -> Self {
         let seconds = match kind {
             ResourceKind::Depiction
+            | ResourceKind::CreatorPortrait
             | ResourceKind::ScenePlate
             | ResourceKind::PlateEdit
             | ResourceKind::ItemCloseUp => 180,
@@ -274,6 +277,8 @@ pub(in crate::gameplay) enum Unit {
     VoiceCharacter,
     SttSecond,
     TextToken,
+    /// One creator Jev classification attempt; supplier currency cost is unreported.
+    CreatorClassificationCall,
     MusicCall,
     /// One input token of a text-embedding call (the story memory).
     EmbeddingToken,
@@ -291,6 +296,7 @@ impl Unit {
             Self::VoiceCharacter => "voice_character",
             Self::SttSecond => "stt_second",
             Self::TextToken => "text_token",
+            Self::CreatorClassificationCall => "creator_classification_call",
             Self::MusicCall => "music_call",
             Self::EmbeddingToken => "embedding_token",
             Self::SegmentCall => "segment_call",
@@ -568,6 +574,12 @@ macro_rules! image_spec {
     };
 }
 
+image_spec!(
+    /// Explicit creator portrait, isolated from automatic scene image policy.
+    CreatorPortraitSpec,
+    ResourceKind::CreatorPortrait,
+    1
+);
 image_spec!(
     /// A person, creature or place picture, including its expression, health and refresh variants.
     DepictionSpec,

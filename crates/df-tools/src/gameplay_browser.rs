@@ -191,7 +191,7 @@ mod saved_player {
             .collect()
     }
 
-    fn parse(text: &str) -> Option<SavedPlayer> {
+    pub(super) fn parse(text: &str) -> Option<SavedPlayer> {
         let mut parts = text.split('.');
         let (version, credential, session, run, binding, run_identity) = (
             parts.next()?,
@@ -1599,6 +1599,10 @@ fn creation(
                     backstory_text,
                     current,
                 ),
+                hero_creator::CreationEvent::Portrait {
+                    draft_version,
+                    current,
+                } => portrait_creation(&client, draft_version, current),
                 hero_creator::CreationEvent::Confirm(draft) => {
                     cancel_creation_preview(&mut client.borrow_mut());
                     let prepared = (|| {
@@ -1632,6 +1636,127 @@ fn creation(
     )?;
     client.borrow_mut().creation = Some(created);
     Ok(())
+}
+
+fn portrait_creation(
+    client: &Rc<RefCell<Client>>,
+    draft_version: u64,
+    current: hero_creator::HeroDraft,
+) {
+    let prepared = (|| -> Result<_, String> {
+        let state = client.borrow();
+        let species = current
+            .choices
+            .iter()
+            .find(|choice| choice.group_id == "species")
+            .map(|choice| choice.option_id.clone())
+            .unwrap_or_default();
+        let body = rpc::HeroPortraitRequest {
+            session_id: state.session.clone(),
+            run_id: state.run.clone(),
+            client_binding_id: state.binding.clone(),
+            observed_revision: state.revision,
+            operation_id: Some(operation()?),
+            draft_revision: draft_version,
+            identity: Some(
+                current
+                    .identity
+                    .to_rpc()
+                    .map_err(|_| "Choose your appearance details")?,
+            ),
+            species,
+            scenery: current.portrait_scenery.clone(),
+            character_class: current
+                .choices
+                .iter()
+                .find(|choice| choice.group_id == "class")
+                .map(|choice| choice.option_id.clone())
+                .unwrap_or_default(),
+            background: current
+                .choices
+                .iter()
+                .find(|choice| choice.group_id == "background")
+                .map(|choice| choice.option_id.clone())
+                .unwrap_or_default(),
+        };
+        Ok((
+            state
+                .action
+                .clone()
+                .ok_or("Reconnect before generating a portrait")?,
+            body,
+            state.credential.clone(),
+            state.generation,
+        ))
+    })();
+    let (mut action, body, credential, generation) = match prepared {
+        Ok(value) => value,
+        Err(error) => {
+            if let Some(creator) = client.borrow().creation.as_ref() {
+                creator.apply_portrait(draft_version, "failed", "", &error);
+            }
+            return;
+        }
+    };
+    let weak = Rc::downgrade(client);
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut first = true;
+        for _ in 0..240 {
+            let Some(client) = weak.upgrade() else {
+                return;
+            };
+            if client.borrow().generation != generation || client.borrow().creation.is_none() {
+                return;
+            }
+            let result = match request(body.clone(), &credential) {
+                Ok(mut request) => {
+                    request.set_timeout(std::time::Duration::from_secs(10));
+                    if first {
+                        action.request_hero_portrait(request).await
+                    } else {
+                        action.get_hero_portrait(request).await
+                    }
+                }
+                Err(_) => return,
+            };
+            first = false;
+            let pending = match result {
+                Ok(response) => {
+                    let response = response.into_inner();
+                    if let Some(creator) = client.borrow().creation.as_ref() {
+                        creator.apply_portrait(
+                            response.draft_revision,
+                            &response.state,
+                            &response.image_uri,
+                            &response.message,
+                        );
+                    }
+                    response.state == "pending"
+                }
+                Err(error) => {
+                    if let Some(creator) = client.borrow().creation.as_ref() {
+                        creator.apply_portrait(draft_version, "unknown", "", error.message());
+                    }
+                    false
+                }
+            };
+            if !pending {
+                return;
+            }
+            drop(client);
+            gloo_timers::future::TimeoutFuture::new(1000).await;
+        }
+        if let Some(client) = weak.upgrade() {
+            if let Some(creator) = client.borrow().creation.as_ref() {
+                creator.apply_portrait(
+                    draft_version,
+                    "unknown",
+                    "",
+                    "The result is unknown. No automatic retry was sent.",
+                );
+            }
+        }
+    });
 }
 
 fn preview_creation(
@@ -2861,6 +2986,29 @@ fn new_client(
 
 /// Resumes a credential saved on this device through the ordinary reconnect path.
 fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    // Only the authenticated development ticket page supplies this one-use bootstrap.
+    // It contains an existing owner-issued seat scope, never a new credential.
+    let bootstrap = client.borrow().root.get_attribute("data-dev-player");
+    client.borrow().root.remove_attribute("data-dev-player")?;
+    if let Some(bootstrap) = bootstrap {
+        let saved = saved_player::parse(&bootstrap)
+            .ok_or_else(|| JsValue::from_str("development player scope invalid"))?;
+        if client.borrow().served_run.as_deref() != Some(saved.run_identity.as_str()) {
+            return Err(JsValue::from_str("development player run changed"));
+        }
+        saved_player::save(
+            &client.borrow().room_code,
+            &saved.credential,
+            &saved.session,
+            &saved.run,
+            &saved.binding,
+            &saved.run_identity,
+        )?;
+        web_sys::window()
+            .ok_or_else(|| JsValue::from_str("window absent"))?
+            .history()?
+            .replace_state_with_url(&JsValue::NULL, "", Some("/gameplay/player"))?;
+    }
     let saved = saved_player::load(&client.borrow().room_code);
     let stale = match (&saved, client.borrow().served_run.as_deref()) {
         (Ok(Some(saved)), Some(served)) => !saved_player::is_from_run(saved, served),

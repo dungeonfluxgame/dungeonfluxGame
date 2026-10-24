@@ -187,6 +187,7 @@ fn create(checkpoint: &Checkpoint, operation: u8) -> rpc::SubmitActionRequest {
         rpc::GameplayActionKind::CreateCharacter,
     );
     body.character = Some(rpc::CharacterSelection {
+        portrait_scenery: String::new(),
         identity: None,
         name: "Restart-Fighter".to_owned(),
         choices: [

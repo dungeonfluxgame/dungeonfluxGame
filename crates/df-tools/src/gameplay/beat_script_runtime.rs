@@ -581,7 +581,10 @@ pub(super) fn validate(
             if started
                 || receipt.phase != rpc::JourneyPhase::Room as i32
                 || receipt.character
-                    != Some(journey::character_sheet(&creation_state, character.entity)?)
+                    != Some(journey::receipt_character_sheet(
+                        &creation_state,
+                        character.entity,
+                    )?)
                 || receipt.check.is_some()
                 || receipt.scene.is_some()
                 || !receipt.combat.is_empty()

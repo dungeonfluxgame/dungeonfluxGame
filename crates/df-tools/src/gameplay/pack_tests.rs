@@ -1374,13 +1374,22 @@ fn shipped_creation_content_equals_the_wire_creation_offer() {
             .find(|candidate| candidate.group_id == group.id)
             .unwrap_or_else(|| panic!("wire offer has no group {}", group.id));
         assert_eq!(wire_group.label, group.label, "{}", group.id);
-        assert_eq!(
-            wire_group.options.len(),
-            group.options.len(),
-            "{}",
-            group.id
-        );
-        for (wire_option, option) in wire_group.options.iter().zip(&group.options) {
+        // Species, class and background are expanded with the design catalog (REF-042); every
+        // other group is exactly the pack's. Each authored option keeps its own wording.
+        if !["species", "class", "background"].contains(&group.id.as_str()) {
+            assert_eq!(
+                wire_group.options.len(),
+                group.options.len(),
+                "{}",
+                group.id
+            );
+        }
+        for option in &group.options {
+            let wire_option = wire_group
+                .options
+                .iter()
+                .find(|candidate| candidate.option_id == option.id)
+                .unwrap_or_else(|| panic!("wire group {} has no option {}", group.id, option.id));
             let expected_description = match (&group.description_template, &option.description) {
                 (Some(template), _) => {
                     let array = loaded

@@ -344,6 +344,12 @@ fn selected_creation_choices(
                 .ok_or_else(|| {
                     bad_request("choice is not currently offered or its dependency is unmet")
                 })?
+        } else if let Some(supported) = supported_design_default(&offer, &group.group_id)
+            && let Some(option) = available
+                .iter()
+                .find(|option| option.option_id == supported)
+        {
+            option
         } else {
             let index = default_creation_option_index(&group.group_id, seat, available.len());
             available
@@ -361,6 +367,21 @@ fn selected_creation_choices(
         });
     }
     Ok(choices)
+}
+
+/// The default catalog choice: the offer's first design the rules can play, so a CLI hero
+/// without overrides is never an unplayable combination.
+fn supported_design_default<'a>(
+    offer: &'a rpc::CharacterCreationOffer,
+    group: &str,
+) -> Option<&'a str> {
+    let design = offer.supported_designs.first()?;
+    match group {
+        "species" => Some(design.species_id.as_str()),
+        "class" => Some(design.class_id.as_str()),
+        "background" => Some(design.background_id.as_str()),
+        _ => None,
+    }
 }
 
 fn creation_dependencies_met(option: &rpc::JourneyOption, selected: &[rpc::JourneyChoice]) -> bool {
@@ -490,6 +511,7 @@ pub(super) async fn create_hero(
             name: name.to_owned(),
             choices: selected_creation_choices(&body, index + 1)?,
             identity: selected_identity(&body)?,
+            portrait_scenery: String::new(),
         }),
         ..Default::default()
     };

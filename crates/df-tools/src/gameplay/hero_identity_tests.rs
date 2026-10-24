@@ -1,5 +1,46 @@
 use super::*;
 
+#[test]
+fn custom_public_appearance_survives_canonical_chunks_and_prompt_projection_exactly() {
+    let text = "Asymmetric horns; one violet eye and one amber eye.\r\n  Facial pattern: 星. Bronze hearing aid.\t";
+    let mut draft = menus().identity().clone();
+    draft.appearance.public_description = text.to_owned();
+    let approved = draft.validate().unwrap();
+    let mut choices = approved
+        .canonical_appearance_choices()
+        .into_iter()
+        .map(|(key, value)| (format!("identity-appearance:{key}"), value.to_owned()))
+        .collect::<Vec<_>>();
+    choices.extend(approved.canonical_public_choices());
+    let restored = ValidatedIdentity::from_canonical_appearance_choices(&choices).unwrap();
+    assert_eq!(restored.identity().appearance.public_description, text);
+    let visual: Value =
+        serde_json::from_str(&restored.appearance_description("dwarf").unwrap()).unwrap();
+    assert_eq!(visual["public_visual_details"], text);
+    assert!(!visual.to_string().contains(&approved.identity().motivation));
+    let entity = df_model::checkpoint::EntityId::from_bytes(&[3; 16]).unwrap();
+    let canonical = approved.canonical_visual_pack(entity, "dwarf").unwrap();
+    assert_eq!(
+        canonical.identities[0]
+            .character_appearance
+            .as_ref()
+            .unwrap()
+            .features,
+        text
+    );
+    assert!(!canonical.identities[0].revision.as_str().is_empty());
+}
+
+#[test]
+fn oversized_public_appearance_is_refused_without_rewriting_the_callers_text() {
+    for text in ["x".repeat(2001), "界".repeat(1500), "a\0b".to_owned()] {
+        let mut draft = menus().identity().clone();
+        draft.appearance.public_description = text.clone();
+        assert!(draft.clone().validate().is_err());
+        assert_eq!(draft.appearance.public_description, text);
+    }
+}
+
 fn menus() -> ValidatedIdentity {
     Identity::from_menus(&[
         ("presentation", "feminine"),

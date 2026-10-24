@@ -566,7 +566,18 @@ pub(super) fn mount_head(
         previous.remove();
     }
     let head = node(&document, host, "div", "live-hero-head", "")?;
-    portrait(client, &head, token, &sheet.name)?;
+    if sheet
+        .portrait_uri
+        .starts_with("/gameplay/creator-portrait/")
+        && sheet.portrait_uri.len() <= 128
+    {
+        let image = node(&document, &head, "img", "live-portrait", "")?;
+        image.set_attribute("src", &sheet.portrait_uri)?;
+        image.set_attribute("alt", &format!("{} portrait", sheet.name))?;
+        image.set_attribute("style", "object-fit:cover;object-position:center top")?;
+    } else {
+        portrait(client, &head, token, &sheet.name)?;
+    }
     let meta = node(&document, &head, "div", "live-hero-meta", "")?;
     node(
         &document,
@@ -649,7 +660,18 @@ pub(in crate::gameplay_browser) fn mount_inline(
     section.set_id("hero-sheet");
     section.set_attribute("aria-label", "Character sheet")?;
     let head = node(&document, &section, "div", "live-sheet-head", "")?;
-    portrait(client, &head, token, &sheet.name)?;
+    if sheet
+        .portrait_uri
+        .starts_with("/gameplay/creator-portrait/")
+        && sheet.portrait_uri.len() <= 128
+    {
+        let image = node(&document, &head, "img", "live-portrait", "")?;
+        image.set_attribute("src", &sheet.portrait_uri)?;
+        image.set_attribute("alt", &format!("{} portrait", sheet.name))?;
+        image.set_attribute("style", "object-fit:cover;object-position:center top")?;
+    } else {
+        portrait(client, &head, token, &sheet.name)?;
+    }
     let meta = node(&document, &head, "div", "live-hero-meta", "")?;
     node(
         &document,

@@ -229,6 +229,12 @@ pub(super) enum Call {
         request: rpc::SubmitActionRequest,
         reply: oneshot::Sender<Result<rpc::SubmitActionResponse, tonic::Status>>,
     },
+    SubmitAppearance {
+        credential: [u8; 32],
+        request: rpc::SubmitActionRequest,
+        portrait: Option<super::creator_portraits::Attachment>,
+        reply: oneshot::Sender<Result<rpc::SubmitActionResponse, tonic::Status>>,
+    },
     /// Save source-bound equipment before combat, or resume the close's durable witness work.
     FightAftermath {
         credential: [u8; 32],
@@ -427,9 +433,9 @@ impl ActorInput for Call {
                         .map_or(0, |id| bytes(&id.value)),
                 ),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
-            Self::Submit { request, .. } => {
+            Self::Submit { request, .. } | Self::SubmitAppearance { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
-                    character.choices.iter().try_fold(
+                    let choice_bytes = character.choices.iter().try_fold(
                         character.name.capacity().checked_add(
                             character
                                 .choices
@@ -441,7 +447,25 @@ impl ActorInput for Call {
                                 .checked_add(choice.group_id.capacity())?
                                 .checked_add(choice.option_id.capacity())
                         },
-                    )?
+                    )?;
+                    let identity_bytes = character
+                        .identity
+                        .as_ref()
+                        .map_or(0, |identity| identity.encoded_len());
+                    // Include both incoming identity and the bounded canonical chunk expansion.
+                    let expansion = if character
+                        .identity
+                        .as_ref()
+                        .and_then(|identity| identity.appearance.as_ref())
+                        .is_some_and(|appearance| !appearance.public_description.is_empty())
+                    {
+                        32 * 1024
+                    } else {
+                        0
+                    };
+                    choice_bytes
+                        .checked_add(identity_bytes)?
+                        .checked_add(expansion)?
                 } else {
                     0
                 };
@@ -456,7 +480,20 @@ impl ActorInput for Call {
                             .as_ref()
                             .map_or(0, |id| bytes(&id.value)),
                     )?
-                    .checked_add(character_bytes)
+                    .checked_add(character_bytes)?
+                    .checked_add(
+                        if matches!(
+                            self,
+                            Self::SubmitAppearance {
+                                portrait: Some(_),
+                                ..
+                            }
+                        ) {
+                            256
+                        } else {
+                            0
+                        },
+                    )
             }
             Self::View { request, .. } | Self::TelemetryIdentity { request, .. } => request
                 .session_id
@@ -3026,6 +3063,14 @@ impl Actor {
         credential: [u8; 32],
         request: rpc::SubmitActionRequest,
     ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
+        self.submit_appearance(credential, request, None)
+    }
+    fn submit_appearance(
+        &mut self,
+        credential: [u8; 32],
+        request: rpc::SubmitActionRequest,
+        portrait: Option<super::creator_portraits::Attachment>,
+    ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
         if self.session_lost() {
             return Err(session_lost_status());
         }
@@ -3056,8 +3101,8 @@ impl Actor {
         }
         // A request refused for its shape never reaches the game, so it is logged here: without
         // this line a phone's "Outcome unknown" has no trace on the server.
-        let input = wire::journey_input(&request, member, self.owner.checkpoint()).inspect_err(
-            |status| {
+        let mut input = wire::journey_input(&request, member, self.owner.checkpoint())
+            .inspect_err(|status| {
                 record_audit_line(
                     "gameplay.request_invalid",
                     format!(
@@ -3067,8 +3112,79 @@ impl Actor {
                         status.message()
                     ),
                 );
-            },
-        )?;
+            })?;
+        if request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32 {
+            if let GameInput::Game(command) = &mut input {
+                if let GameCommand::ProposeAction { choices, .. } = &mut command.command {
+                    let uncertain = if self.owner.has_uncertain_operation() {
+                        match self.session.attempt.as_ref() {
+                            Some(Attempt::Input {
+                                credential: original,
+                                input: original_input,
+                                ..
+                            }) if original == &credential => match original_input.as_ref() {
+                                GameInput::Game(original)
+                                    if original.operation == command.operation
+                                        && original.member == member =>
+                                {
+                                    match &original.command {
+                                        GameCommand::ProposeAction { choices, .. } => Some(
+                                            choices
+                                                .iter()
+                                                .filter(|(field, _)| {
+                                                    field.as_str().starts_with("identity-portrait:")
+                                                })
+                                                .cloned()
+                                                .collect::<Vec<_>>(),
+                                        ),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let committed = self
+                        .owner
+                        .checkpoint()
+                        .state()
+                        .characters
+                        .iter()
+                        .find(|character| character.owner == member)
+                        .map(|character| {
+                            character
+                                .choices
+                                .iter()
+                                .filter(|choice| {
+                                    choice.offer.as_str().starts_with("identity-portrait:")
+                                })
+                                .map(|choice| (choice.offer.clone(), choice.selected.clone()))
+                                .collect::<Vec<_>>()
+                        });
+                    let mut fresh = Vec::new();
+                    if let Some(portrait) = portrait {
+                        for (field, value) in [
+                            ("key", portrait.key),
+                            ("digest", super::journey::hex(&portrait.digest)),
+                            ("bytes", portrait.bytes.to_string()),
+                            ("revision", portrait.revision.to_string()),
+                        ] {
+                            fresh.push((
+                                super::model::label(&format!("identity-portrait:{field}"))
+                                    .map_err(unavailable)?,
+                                super::model::label(&value).map_err(unavailable)?,
+                            ));
+                        }
+                    }
+                    choices.extend(super::creator_portraits::frozen_metadata(
+                        uncertain, committed, fresh,
+                    ));
+                }
+            }
+        }
         let GameInput::Game(command) = &input else {
             return Err(tonic::Status::internal("canonical command unavailable"));
         };
@@ -4341,7 +4457,7 @@ impl Reducer<Call> for Actor {
                         "finite room budget exhausted",
                     )));
                 }
-                Call::Submit { reply, .. } => {
+                Call::Submit { reply, .. } | Call::SubmitAppearance { reply, .. } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "finite demonstration call budget exhausted",
                     )));
@@ -4476,6 +4592,19 @@ impl Reducer<Call> for Actor {
                 {
                     self.record_say_audit(&credential, request);
                 }
+                reply.send(result).is_ok()
+            }
+            Call::SubmitAppearance {
+                credential,
+                request,
+                portrait,
+                reply,
+            } => {
+                let asked = request.clone();
+                let result = after_grant_reconnect(reconnected, || {
+                    self.submit_appearance(credential, request, portrait)
+                });
+                self.begin_test_fight(credential, &asked, &result);
                 reply.send(result).is_ok()
             }
             Call::Submit {

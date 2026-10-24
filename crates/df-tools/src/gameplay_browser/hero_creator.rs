@@ -1,14 +1,21 @@
 //! C01 compact creation surface. The mounting owner supplies server offers and identity defaults.
 //! The surface owns its listeners, so the gameplay renderer's clear_callbacks cannot kill them.
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use df_protocol::common as rpc;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlButtonElement, HtmlSelectElement, HtmlTextAreaElement};
 
+#[path = "hero_portrait_state.rs"]
+mod portrait_state;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IdentityDraft {
+    pub(super) public_description: String,
     pub(super) appearance: Vec<rpc::JourneyChoice>,
     pub(super) origin: String,
     pub(super) occupation: String,
@@ -20,6 +27,7 @@ pub(super) struct IdentityDraft {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HeroDraft {
     pub(super) name: String,
+    pub(super) portrait_scenery: String,
     pub(super) choices: Vec<rpc::JourneyChoice>,
     pub(super) identity: IdentityDraft,
 }
@@ -31,6 +39,7 @@ impl IdentityDraft {
             .as_ref()
             .ok_or_else(|| JsValue::from_str("Hero details are incomplete."))?;
         Ok(Self {
+            public_description: look.public_description.clone(),
             appearance: [
                 ("presentation", &look.presentation),
                 ("pronouns", &look.pronouns),
@@ -73,6 +82,7 @@ impl IdentityDraft {
         };
         Ok(rpc::HeroIdentity {
             appearance: Some(rpc::HeroAppearance {
+                public_description: self.public_description.clone(),
                 presentation: field("presentation")?,
                 pronouns: field("pronouns")?,
                 age: field("age")?,
@@ -97,6 +107,7 @@ impl HeroDraft {
     pub(super) fn selection(&self) -> Result<rpc::CharacterSelection, JsValue> {
         Ok(rpc::CharacterSelection {
             name: self.name.clone(),
+            portrait_scenery: self.portrait_scenery.clone(),
             choices: self.choices.clone(),
             identity: Some(self.identity.to_rpc()?),
         })
@@ -108,6 +119,10 @@ pub(super) enum CreationEvent {
         draft_version: u64,
         appearance_text: String,
         backstory_text: String,
+        current: HeroDraft,
+    },
+    Portrait {
+        draft_version: u64,
         current: HeroDraft,
     },
     Confirm(HeroDraft),
@@ -138,6 +153,11 @@ struct StoryControls {
 #[derive(Clone)]
 struct Controls {
     name: HtmlTextAreaElement,
+    scenery: HtmlSelectElement,
+    scenery_options: Vec<rpc::JourneyOption>,
+    scenery_custom: HtmlTextAreaElement,
+    supported_designs: Vec<rpc::SupportedCharacterDesign>,
+    design_status: Element,
     choices: Vec<(rpc::JourneyGroup, HtmlSelectElement)>,
     appearance: Vec<(rpc::JourneyGroup, HtmlSelectElement)>,
     story: StoryControls,
@@ -148,7 +168,21 @@ struct Controls {
     appearance_text: HtmlTextAreaElement,
     backstory_text: HtmlTextAreaElement,
     missing: Element,
+    missing_summary: Element,
     chips: Element,
+    stage_name: Element,
+    step_buttons: Vec<Element>,
+    progress: Element,
+    stage_preview: Rc<RefCell<Element>>,
+    incoming_preview: Rc<RefCell<Option<Element>>>,
+    portrait_shadow: Element,
+    portrait_status: Element,
+    portrait_button: HtmlButtonElement,
+    portrait_version: Rc<Cell<Option<u64>>>,
+    portrait_pending: Rc<Cell<bool>>,
+    look_signature: Rc<RefCell<String>>,
+    look_version: Rc<Cell<u64>>,
+    custom_summary: Element,
     confirm: HtmlButtonElement,
     version: Rc<Cell<u64>>,
     pending: Rc<Cell<bool>>,
@@ -204,11 +238,70 @@ fn missing_choices(
 }
 
 impl Controls {
+    fn scenery_text(&self) -> String {
+        let selected = self.scenery.value();
+        if selected == "custom" {
+            self.scenery_custom.value()
+        } else {
+            self.scenery_options
+                .iter()
+                .find(|option| option.option_id == selected)
+                .map(|option| option.description.clone())
+                .unwrap_or_default()
+        }
+    }
+    fn scenery_complete(&self) -> bool {
+        let value = self.scenery_text();
+        self.scenery_options
+            .iter()
+            .any(|option| option.option_id == self.scenery.value())
+            && (self.scenery.value() != "custom" || !value.trim().is_empty())
+            && value.len() <= 768
+            && value.chars().count() <= 360
+    }
+    fn design_complete(&self) -> bool {
+        ["species", "class", "background"].iter().all(|id| {
+            self.choices
+                .iter()
+                .find(|(group, _)| group.group_id == *id)
+                .is_some_and(|(group, input)| {
+                    let selected = input.value();
+                    group
+                        .options
+                        .iter()
+                        .any(|option| option.option_id == selected)
+                })
+        })
+    }
+
+    fn set_portrait_pending(&self, pending: bool) {
+        self.portrait_pending.set(pending);
+        self.portrait_button
+            .set_disabled(pending || !self.design_complete() || !self.scenery_complete());
+        let shown = portrait_state::visibility(pending, self.portrait_version.get().is_some());
+        if shown.animate {
+            let _ = self.portrait_shadow.set_attribute("data-pending", "true");
+        } else {
+            let _ = self.portrait_shadow.remove_attribute("data-pending");
+        }
+        if shown.shadow {
+            let _ = self.portrait_shadow.remove_attribute("hidden");
+        } else {
+            let _ = self.portrait_shadow.set_attribute("hidden", "");
+        }
+        if shown.image {
+            let _ = self.stage_preview.borrow().remove_attribute("hidden");
+        } else {
+            let _ = self.stage_preview.borrow().set_attribute("hidden", "");
+        }
+    }
     fn draft(&self) -> HeroDraft {
         HeroDraft {
             name: self.name.value(),
+            portrait_scenery: self.scenery_text(),
             choices: choices(&self.choices),
             identity: IdentityDraft {
+                public_description: self.appearance_text.value(),
                 appearance: choices(&self.appearance),
                 origin: self.story.origin.value(),
                 occupation: self.story.occupation.value(),
@@ -226,9 +319,58 @@ impl Controls {
 
     fn update_missing(&self) -> bool {
         let draft = self.draft();
+        if let Some(label) = self.scenery_custom.parent_element() {
+            if self.scenery.value() == "custom" {
+                let _ = label.remove_attribute("hidden");
+            } else {
+                let _ = label.set_attribute("hidden", "");
+            }
+        }
+        let selected = |group: &str| {
+            draft
+                .choices
+                .iter()
+                .find(|choice| choice.group_id == group)
+                .map(|choice| choice.option_id.as_str())
+                .unwrap_or("")
+        };
+        let supported = self.supported_designs.iter().any(|design| {
+            design.species_id == selected("species")
+                && design.class_id == selected("class")
+                && design.background_id == selected("background")
+        });
+        self.design_status.set_text_content(Some(if supported {
+            "This combination is available for this adventure. Starting equipment and rules choices are shown below."
+        } else {
+            "You can design and generate this character. Gameplay rules for this combination are not ready."
+        }));
+        for (group, input) in &self.choices {
+            if let Some(label) = input.parent_element() {
+                if !matches!(group.group_id.as_str(), "species" | "class" | "background") {
+                    if supported {
+                        let _ = label.remove_attribute("hidden");
+                    } else {
+                        let _ = label.set_attribute("hidden", "");
+                    }
+                }
+                if let Ok(Some(description)) = label.query_selector(".hero-choice-description") {
+                    let value = input.value();
+                    description.set_text_content(
+                        group
+                            .options
+                            .iter()
+                            .find(|option| option.option_id == value)
+                            .map(|option| option.description.as_str()),
+                    );
+                }
+            }
+        }
         let groups: Vec<_> = self
             .choices
             .iter()
+            .filter(|(group, _)| {
+                supported || matches!(group.group_id.as_str(), "species" | "class" | "background")
+            })
             .map(|(group, _)| group.clone())
             .collect();
         let mut missing = missing_choices(&draft.name, &groups, &draft.choices);
@@ -257,6 +399,37 @@ impl Controls {
         if draft.identity.facts.len() < 3 {
             missing.push("Add the three story facts".to_owned());
         }
+        let stages = [
+            missing_choices(&draft.name, &groups, &draft.identity.appearance).is_empty()
+                && (self.text_reviewed.get() || self.appearance_text.value().trim().is_empty()),
+            !draft.identity.origin.trim().is_empty()
+                && !draft.identity.occupation.trim().is_empty()
+                && !draft.identity.motivation.trim().is_empty()
+                && !draft.identity.backstory.trim().is_empty()
+                && draft.identity.facts.len() >= 3
+                && (self.text_reviewed.get() || self.backstory_text.value().trim().is_empty()),
+            supported
+                && missing_choices(
+                    "hero",
+                    &self
+                        .choices
+                        .iter()
+                        .map(|(group, _)| group.clone())
+                        .collect::<Vec<_>>(),
+                    &draft.choices,
+                )
+                .is_empty(),
+        ];
+        for (button, complete) in self.step_buttons.iter().zip(stages) {
+            let _ = button.set_attribute("data-complete", if complete { "true" } else { "false" });
+        }
+        self.progress.set_text_content(Some(&format!(
+            "{} of 3 sections ready",
+            stages.iter().filter(|ready| **ready).count()
+        )));
+        if !supported {
+            missing.push("Gameplay rules for this combination are not ready".to_owned());
+        }
         let ready = missing.is_empty();
         let chips = self
             .appearance
@@ -272,6 +445,74 @@ impl Controls {
             .collect::<Vec<_>>()
             .join(" · ");
         self.chips.set_text_content(Some(&chips));
+        for (_, select) in &self.appearance {
+            if let Some(label) = select.parent_element() {
+                if let Ok(buttons) = label.query_selector_all(".hero-swatch") {
+                    for index in 0..buttons.length() {
+                        if let Some(button) = buttons
+                            .item(index)
+                            .and_then(|node| node.dyn_into::<Element>().ok())
+                        {
+                            let selected = button.get_attribute("data-option-value").as_deref()
+                                == Some(select.value().as_str());
+                            let _ = button.set_attribute(
+                                "aria-pressed",
+                                if selected { "true" } else { "false" },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let signature = format!(
+            "{:?}|{}|{:?}|{}",
+            draft.identity.appearance,
+            self.appearance_text.value(),
+            draft
+                .choices
+                .iter()
+                .filter(|choice| matches!(
+                    choice.group_id.as_str(),
+                    "species" | "class" | "background"
+                ))
+                .map(|choice| (&choice.group_id, &choice.option_id))
+                .collect::<Vec<_>>(),
+            draft.portrait_scenery
+        );
+        if *self.look_signature.borrow() != signature {
+            *self.look_signature.borrow_mut() = signature;
+            self.look_version
+                .set(self.look_version.get().saturating_add(1));
+            if let Some(incoming) = self.incoming_preview.borrow_mut().take() {
+                incoming.remove();
+            }
+            let was_pending = self.portrait_pending.get();
+            self.set_portrait_pending(false);
+            if self.portrait_version.get().is_some() || was_pending {
+                self.portrait_status.set_text_content(Some(
+                    "Your appearance has changed. Regenerate when you are ready.",
+                ));
+            }
+        }
+        self.custom_summary
+            .set_text_content(Some(&self.appearance_text.value()));
+        self.stage_name
+            .set_text_content(Some(if draft.name.trim().is_empty() {
+                "Your adventurer"
+            } else {
+                &draft.name
+            }));
+        self.missing_summary
+            .set_text_content(Some(if self.pending.get() {
+                "Confirming your hero…"
+            } else if ready {
+                "Ready for the adventure"
+            } else {
+                missing
+                    .first()
+                    .map_or("Review your choices", String::as_str)
+            }));
         self.missing.set_text_content(Some(if self.pending.get() {
             "Confirming your hero…"
         } else if ready {
@@ -283,8 +524,32 @@ impl Controls {
             self.missing
                 .set_text_content(Some(&format!("Still needed: {}.", missing.join("; "))));
         }
-        self.confirm.set_disabled(!ready || self.pending.get());
-        ready && !self.pending.get()
+        self.portrait_button.set_disabled(
+            self.portrait_pending.get() || !self.design_complete() || !self.scenery_complete(),
+        );
+        if !self.design_complete() {
+            self.portrait_status.set_text_content(Some(
+                "Choose your ancestry, class and background before generating a portrait.",
+            ));
+        } else if self.portrait_status.text_content().as_deref()
+            == Some("Choose your ancestry, class and background before generating a portrait.")
+        {
+            self.portrait_status
+                .set_text_content(Some("Choose your appearance, then generate a portrait."));
+        }
+        if !self.scenery_complete() {
+            self.portrait_status.set_text_content(Some("Choose portrait scenery or describe a setting in up to 360 characters / 768 bytes."));
+        } else if self.portrait_status.text_content().as_deref()
+            == Some(
+                "Choose portrait scenery or describe a setting in up to 360 characters / 768 bytes.",
+            )
+        {
+            self.portrait_status
+                .set_text_content(Some("Choose your appearance, then generate a portrait."));
+        }
+        self.confirm
+            .set_disabled(!ready || self.pending.get() || !self.scenery_complete());
+        ready && !self.pending.get() && self.scenery_complete()
     }
 
     fn edited(&self) {
@@ -297,6 +562,8 @@ pub(super) struct HeroCreator {
     root: Element,
     controls: Controls,
     listeners: Vec<Listener>,
+    portrait_listeners: RefCell<Vec<Listener>>,
+    placeholder_url: String,
     feedback: Element,
 }
 
@@ -339,6 +606,7 @@ fn select(
 ) -> Result<HtmlSelectElement, JsValue> {
     let label = node(document, parent, "label", "hero-field", &group.label)?;
     let select = node(document, &label, "select", "", "")?.dyn_into::<HtmlSelectElement>()?;
+    select.set_attribute("aria-label", &group.label)?;
     let placeholder = node(document, &select, "option", "", "Choose…")?;
     placeholder.set_attribute("value", "")?;
     for option in &group.options {
@@ -381,23 +649,143 @@ impl HeroCreator {
             "",
             include_str!("hero_creator.css"),
         )?;
-        node(document, &root, "h1", "", "Make your hero")?;
+        let masthead = node(document, &root, "header", "hero-masthead", "")?;
+        node(document, &masthead, "span", "hero-brand", "DungeonFlux")?;
         node(
             document,
-            &root,
+            &masthead,
+            "span",
+            "hero-session",
+            "Adventurer’s workshop",
+        )?;
+        let layout = node(document, &root, "div", "hero-layout", "")?;
+        let stage = node(document, &layout, "aside", "hero-stage", "")?;
+        stage.set_attribute("aria-label", "Character portrait")?;
+        let frame = node(document, &stage, "div", "hero-ritual-frame", "")?;
+        frame.set_attribute("aria-hidden", "true")?;
+        let stage_preview = node(document, &stage, "img", "hero-figure", "")?;
+        stage_preview.set_attribute("alt", "Your generated character portrait")?;
+        stage_preview.set_attribute("hidden", "")?;
+        let portrait_shadow = node(document, &stage, "div", "hero-portrait-shadow", "")?;
+        portrait_shadow.set_attribute("aria-hidden", "true")?;
+        let placeholder_bytes = js_sys::Uint8Array::from(
+            include_bytes!("../../../../assets/ui/generated/creator-shadow-placeholder.png")
+                .as_slice(),
+        );
+        let parts = js_sys::Array::new();
+        parts.push(&placeholder_bytes.buffer());
+        let options = web_sys::BlobPropertyBag::new();
+        options.set_type("image/png");
+        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)?;
+        let placeholder_url = web_sys::Url::create_object_url_with_blob(&blob)?;
+        let placeholder = node(document, &portrait_shadow, "img", "hero-shadow-art", "")?;
+        placeholder.set_attribute("src", &placeholder_url)?;
+        placeholder.set_attribute("alt", "")?;
+        node(document, &portrait_shadow, "div", "hero-portrait-orbit", "")?;
+        let caption = node(document, &stage, "div", "hero-stage-caption", "")?;
+        let stage_name = node(document, &caption, "h2", "", "Your adventurer")?;
+        node(
+            document,
+            &caption,
+            "p",
+            "hero-art-label",
+            "Your character portrait",
+        )?;
+        let portrait_status = node(
+            document,
+            &caption,
+            "p",
+            "hero-art-note",
+            "Choose your appearance, then generate a portrait.",
+        )?;
+        portrait_status.set_attribute("aria-live", "polite")?;
+        let portrait_button = node(
+            document,
+            &caption,
+            "button",
+            "hero-portrait-button",
+            "Generate portrait",
+        )?
+        .dyn_into::<HtmlButtonElement>()?;
+        portrait_button.set_type("button");
+        let editor = node(document, &layout, "div", "hero-editor", "")?;
+        node(document, &editor, "h1", "", "Bring your hero to life")?;
+        node(
+            document,
+            &editor,
             "p",
             "hero-intro",
-            "Choose your look and past, or describe them in your own words. Review the details before confirming.",
+            "Give them a face. A past. A reason to step into the unknown.",
         )?;
-        let name = text_input(document, &root, "Name your hero", "", 24)?;
-        let basics = node(document, &root, "div", "hero-basics", "")?;
-        let advanced = node(document, &root, "details", "hero-details", "")?;
+        let name = text_input(document, &editor, "Name your hero", "", 24)?;
+        name.set_placeholder("Your hero’s name");
+        node(
+            document,
+            &editor,
+            "p",
+            "hero-name-help",
+            "Up to 24 letters; hyphens and underscores are welcome.",
+        )?;
+        let basics = node(document, &editor, "div", "hero-basics", "")?;
+        let design_status = node(document, &editor, "p", "hero-design-status", "")?;
+        design_status.set_attribute("aria-live", "polite")?;
+        let tablist = node(document, &editor, "div", "hero-tabs", "")?;
+        tablist.set_attribute("role", "group")?;
+        tablist.set_attribute("aria-label", "Character details")?;
+        let mut tabs = Vec::new();
+        for (step, (id, label)) in [
+            ("appearance", "Look"),
+            ("story", "Story"),
+            ("build", "Abilities"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let button = node(document, &tablist, "button", "hero-tab", "")?;
+            node(
+                document,
+                &button,
+                "span",
+                "hero-step-number",
+                &(step + 1).to_string(),
+            )?;
+            node(document, &button, "span", "hero-step-label", label)?;
+            button.set_attribute("type", "button")?;
+            button.set_attribute(
+                "aria-pressed",
+                if id == "appearance" { "true" } else { "false" },
+            )?;
+            let panel = node(document, &editor, "section", "hero-panel", "")?;
+            panel.set_attribute("aria-label", label)?;
+            if id != "appearance" {
+                panel.set_attribute("hidden", "")?;
+            }
+            tabs.push((button, panel));
+        }
+        let progress = node(
+            document,
+            &editor,
+            "p",
+            "hero-progress",
+            "0 of 3 sections ready",
+        )?;
+        progress.set_attribute("aria-live", "polite")?;
+        let look = tabs[0].1.clone();
+        let past = tabs[1].1.clone();
+        let advanced = tabs[2].1.clone();
         node(
             document,
             &advanced,
-            "summary",
-            "",
-            "Skills, languages and equipment",
+            "h2",
+            "hero-section-title",
+            "Your starting equipment",
+        )?;
+        node(
+            document,
+            &advanced,
+            "p",
+            "hero-help",
+            "These choices come from this adventure’s rules and starting path.",
         )?;
         let mut build = Vec::new();
         for group in &offer.groups {
@@ -409,22 +797,30 @@ impl HeroCreator {
             } else {
                 &advanced
             };
-            let input = select(document, parent, group, None)?;
+            let supported = offer.supported_designs.first();
+            let default = supported.and_then(|design| match group.group_id.as_str() {
+                "species" => Some(design.species_id.as_str()),
+                "class" => Some(design.class_id.as_str()),
+                "background" => Some(design.background_id.as_str()),
+                _ => None,
+            });
+            let input = select(document, parent, group, default)?;
             build.push((group.clone(), input));
         }
-        let chips = node(document, &root, "p", "hero-chips", "")?;
-        let look = node(document, &root, "details", "hero-details", "")?;
         node(
             document,
             &look,
-            "summary",
-            "",
-            "Your look · correct the details",
+            "h2",
+            "hero-section-title",
+            "A look of your own",
         )?;
-        let appearance_text =
-            text_input(document, &look, "Describe your look (optional)", "", 1000)?;
-        appearance_text
-            .set_placeholder("A wiry grey-haired dwarf woman with a burn scar and a blue cloak");
+        node(
+            document,
+            &look,
+            "p",
+            "hero-help",
+            "Choose the details below, or add a description in your own words.",
+        )?;
         let grid = node(document, &look, "div", "hero-look-grid", "")?;
         let mut appearance = Vec::new();
         for group in identity_groups.iter().filter(|group| {
@@ -440,13 +836,84 @@ impl HeroCreator {
                 .map(|choice| choice.option_id.as_str());
             appearance.push((group.clone(), select(document, &grid, group, selected)?));
         }
-        let past = node(document, &root, "details", "hero-details", "")?;
+        let scenery_options = if offer.portrait_scenery_options.is_empty() {
+            vec![rpc::JourneyOption {
+                option_id: "studio".to_owned(),
+                label: "Studio backdrop".to_owned(),
+                ..Default::default()
+            }]
+        } else {
+            offer.portrait_scenery_options.clone()
+        };
+        let scenery_group = rpc::JourneyGroup {
+            group_id: "portrait-scenery".to_owned(),
+            label: "Portrait scenery".to_owned(),
+            options: scenery_options.clone(),
+        };
+        let scenery = select(document, &look, &scenery_group, Some("studio"))?;
+        let scenery_custom =
+            text_input(document, &look, "Custom portrait scenery (public)", "", 768)?;
+        scenery_custom.set_rows(2);
+        scenery_custom
+            .set_placeholder("Mossy ruins beside a waterfall, with mist and warm morning light");
+        if let Some(label) = scenery_custom.parent_element() {
+            label.set_attribute("hidden", "")?;
+        }
+        node(
+            document,
+            &look,
+            "p",
+            "hero-help",
+            "Choose the setting behind your portrait. Custom scenery is public visual direction; it does not change the adventure or your D&D background.",
+        )?;
+        let description = node(document, &look, "details", "hero-details", "")?;
+        node(
+            document,
+            &description,
+            "summary",
+            "",
+            "Describe in your own words",
+        )?;
+        let appearance_text = text_input(
+            document,
+            &description,
+            "Public appearance details (optional)",
+            &initial.public_description,
+            4096,
+        )?;
+        appearance_text.set_rows(3);
+        appearance_text
+            .set_placeholder("A wiry grey-haired dwarf woman with a burn scar and a blue cloak");
+        node(
+            document,
+            &description,
+            "p",
+            "hero-help",
+            "Describe body features, facial patterns or accessibility aids. These visual details are public and saved exactly; keep private backstory elsewhere. Up to 2,000 characters / 4 KiB. Read my description can suggest menu choices without replacing your text.",
+        )?;
+        let custom_summary = node(document, &look, "p", "hero-custom-summary", "")?;
+        custom_summary.set_attribute("aria-label", "Exact public appearance description")?;
+        let summary = node(
+            document,
+            &look,
+            "details",
+            "hero-details hero-look-summary",
+            "",
+        )?;
+        node(
+            document,
+            &summary,
+            "summary",
+            "",
+            "Your appearance at a glance",
+        )?;
+        let chips = node(document, &summary, "p", "hero-chips", "")?;
         node(
             document,
             &past,
-            "summary",
-            "",
-            "Your past · three facts and your story",
+            "h2",
+            "hero-section-title",
+            "Someone with a story",
         )?;
         node(
             document,
@@ -526,15 +993,15 @@ impl HeroCreator {
         }
         let read = node(
             document,
-            &root,
+            &editor,
             "button",
             "hero-read",
             "Read my description",
         )?;
         read.set_attribute("type", "button")?;
-        let feedback = node(document, &root, "p", "hero-feedback", "")?;
+        let feedback = node(document, &editor, "p", "hero-feedback", "")?;
         feedback.set_attribute("role", "status")?;
-        let footer = node(document, &root, "div", "hero-confirm", "")?;
+        let footer = node(document, &editor, "div", "hero-confirm", "")?;
         node(
             document,
             &footer,
@@ -542,13 +1009,21 @@ impl HeroCreator {
             "hero-help",
             "Your look and story will be shared at the table.",
         )?;
-        let missing = node(document, &footer, "p", "hero-missing", "")?;
+        let validation = node(document, &footer, "details", "hero-validation", "")?;
+        let missing_summary = node(document, &validation, "summary", "", "Review your choices")?;
+        missing_summary.set_attribute("aria-live", "polite")?;
+        let missing = node(document, &validation, "p", "hero-missing", "")?;
         missing.set_attribute("aria-live", "polite")?;
         let confirm = node(document, &footer, "button", "", "Confirm your hero")?
             .dyn_into::<HtmlButtonElement>()?;
         confirm.set_type("button");
         let controls = Controls {
             name,
+            scenery,
+            scenery_custom,
+            scenery_options,
+            supported_designs: offer.supported_designs.clone(),
+            design_status,
             choices: build,
             appearance,
             story,
@@ -559,7 +1034,21 @@ impl HeroCreator {
             appearance_text,
             backstory_text,
             missing,
+            missing_summary,
             chips,
+            stage_name,
+            step_buttons: tabs.iter().map(|(button, _)| button.clone()).collect(),
+            progress,
+            stage_preview: Rc::new(RefCell::new(stage_preview)),
+            incoming_preview: Rc::new(RefCell::new(None)),
+            portrait_shadow,
+            portrait_status,
+            portrait_button,
+            portrait_version: Rc::new(Cell::new(None)),
+            portrait_pending: Rc::new(Cell::new(false)),
+            look_signature: Rc::new(RefCell::new(String::new())),
+            look_version: Rc::new(Cell::new(0)),
+            custom_summary,
             confirm,
             version: Rc::new(Cell::new(0)),
             pending: Rc::new(Cell::new(false)),
@@ -570,28 +1059,62 @@ impl HeroCreator {
             root,
             controls,
             listeners: Vec::new(),
+            portrait_listeners: RefCell::new(Vec::new()),
+            placeholder_url,
             feedback,
         };
-        // Cards expose only the server's offered species/background choices, including their
-        // descriptions. The underlying select carries the same submitted option id.
-        for (group, select) in surface.controls.choices.clone() {
-            if !matches!(group.group_id.as_str(), "species" | "background") {
+        for (active, (button, _)) in tabs.iter().enumerate() {
+            let sections = tabs.clone();
+            surface.listen(button.clone(), "click", move |_| {
+                for (index, (button, panel)) in sections.iter().enumerate() {
+                    let selected = index == active;
+                    let _ = button
+                        .set_attribute("aria-pressed", if selected { "true" } else { "false" });
+                    if selected {
+                        let _ = panel.remove_attribute("hidden");
+                    } else {
+                        let _ = panel.set_attribute("hidden", "");
+                    }
+                }
+            })?;
+        }
+        // Swatches supplement the actual selects, so keyboard/native-picker behavior remains.
+        for (group, select) in surface.controls.appearance.clone() {
+            if !matches!(group.group_id.as_str(), "skin" | "hair-color") {
                 continue;
             }
             let Some(label) = select.parent_element() else {
                 continue;
             };
-            label.set_class_name("hero-field");
-            if let Some(fixed_label) = label.query_selector(":scope > span")? {
-                fixed_label.remove();
-            }
-            select.set_attribute("hidden", "")?;
-            let cards = node(document, &label, "div", "hero-cards", "")?;
+            let swatches = node(document, &label, "div", "hero-swatches", "")?;
+            swatches.set_attribute("role", "group")?;
+            swatches.set_attribute("aria-label", &format!("{} quick choices", group.label))?;
             for option in &group.options {
-                let card = node(document, &cards, "button", "hero-card", "")?;
-                card.set_attribute("type", "button")?;
-                card.set_attribute("data-option-id", &option.option_id)?;
-                card.set_attribute(
+                let color = match (group.group_id.as_str(), option.option_id.as_str()) {
+                    (_, "pale") => "#e6c5a6",
+                    (_, "tan") => "#ba8762",
+                    (_, "olive") => "#9d8058",
+                    ("skin", "brown") => "#82553d",
+                    (_, "dark" | "deep-brown") => "#493129",
+                    (_, "grey") => "#9ca4aa",
+                    (_, "green") => "#79865b",
+                    (_, "blue") => "#607e98",
+                    (_, "black") => "#25252a",
+                    (_, "brown") => "#694932",
+                    (_, "red") => "#a05a3e",
+                    (_, "blond") => "#d4b97c",
+                    (_, "auburn") => "#793d2c",
+                    (_, "white") => "#e9e5dc",
+                    _ => "#a79a84",
+                };
+                let button = node(document, &swatches, "button", "hero-swatch", "")?;
+                button.set_attribute("type", "button")?;
+                button
+                    .set_attribute("aria-label", &format!("{}: {}", group.label, option.label))?;
+                button.set_attribute("title", &option.label)?;
+                button.set_attribute("data-option-value", &option.option_id)?;
+                button.set_attribute("style", &format!("--swatch:{color}"))?;
+                button.set_attribute(
                     "aria-pressed",
                     if select.value() == option.option_id {
                         "true"
@@ -599,29 +1122,34 @@ impl HeroCreator {
                         "false"
                     },
                 )?;
-                node(document, &card, "strong", "", &option.label)?;
-                node(document, &card, "span", "", &option.description)?;
-                let selected = select.clone();
-                let id = option.option_id.clone();
-                let siblings = cards.clone();
+                let control = select.clone();
+                let choice = option.option_id.clone();
                 let controls = surface.controls.clone();
-                surface.listen(card, "click", move |_| {
-                    selected.set_value(&id);
-                    controls.edited();
+                let siblings = swatches.clone();
+                surface.listen(button.clone(), "click", move |_| {
+                    control.set_value(&choice);
                     if let Ok(buttons) = siblings.query_selector_all("button") {
                         for index in 0..buttons.length() {
-                            if let Some(button) = buttons.item(index) {
-                                let button = button.unchecked_into::<Element>();
-                                let pressed =
-                                    button.get_attribute("data-option-id").as_deref() == Some(&id);
-                                let _ = button.set_attribute(
-                                    "aria-pressed",
-                                    if pressed { "true" } else { "false" },
-                                );
+                            if let Some(item) = buttons
+                                .item(index)
+                                .and_then(|node| node.dyn_into::<Element>().ok())
+                            {
+                                let _ = item.set_attribute("aria-pressed", "false");
                             }
                         }
                     }
+                    let _ = button.set_attribute("aria-pressed", "true");
+                    controls.edited();
                 })?;
+            }
+        }
+        // Native controls keep phone pickers and keyboard navigation. Descriptions follow
+        // the current server catalog selection rather than a wall of ancestry cards.
+        for (group, input) in &surface.controls.choices {
+            if matches!(group.group_id.as_str(), "species" | "class" | "background") {
+                if let Some(label) = input.parent_element() {
+                    node(document, &label, "span", "hero-choice-description", "")?;
+                }
             }
         }
         let inputs = surface.root.query_selector_all("textarea, select")?;
@@ -631,7 +1159,9 @@ impl HeroCreator {
             };
             let element = input.dyn_into::<Element>()?;
             let controls = surface.controls.clone();
-            surface.listen(element, "input", move |_| controls.edited())?;
+            surface.listen(element.clone(), "input", move |_| controls.edited())?;
+            let controls = surface.controls.clone();
+            surface.listen(element, "change", move |_| controls.edited())?;
         }
         for input in [
             surface.controls.appearance_text.clone(),
@@ -678,6 +1208,32 @@ impl HeroCreator {
                 controls.edited();
             })?;
         }
+        let controls = surface.controls.clone();
+        let event = Rc::clone(&on_event);
+        surface.listen(
+            controls.portrait_button.clone().unchecked_into(),
+            "click",
+            move |_| {
+                if controls.portrait_pending.get()
+                    || !controls.design_complete()
+                    || !controls.scenery_complete()
+                {
+                    controls.update_missing();
+                    return;
+                }
+                if let Some(image) = controls.incoming_preview.borrow_mut().take() {
+                    image.remove();
+                }
+                controls.set_portrait_pending(true);
+                controls
+                    .portrait_status
+                    .set_text_content(Some("Creating your portrait… You can keep editing."));
+                event(CreationEvent::Portrait {
+                    draft_version: controls.look_version.get(),
+                    current: controls.draft(),
+                });
+            },
+        )?;
         let controls = surface.controls.clone();
         let event = Rc::clone(&on_event);
         surface.listen(read, "click", move |_| {
@@ -808,6 +1364,90 @@ impl HeroCreator {
         true
     }
 
+    pub(super) fn apply_portrait(&self, version: u64, state: &str, uri: &str, message: &str) {
+        let controls = &self.controls;
+        if controls.look_version.get() != version {
+            return;
+        }
+        if state == "ready" && uri.starts_with("/gameplay/creator-portrait/") && uri.len() <= 128 {
+            if self.load_portrait(version, uri).is_err() {
+                controls.set_portrait_pending(false);
+                controls.portrait_status.set_text_content(Some("The portrait image could not load. Your previous portrait is kept. Choose Regenerate to try again."));
+            }
+            return;
+        }
+        controls.set_portrait_pending(state == "pending");
+        controls.portrait_status.set_text_content(Some(if state == "failed" && message.trim().is_empty() {
+            "Generation failed. Your draft and previous portrait are kept. Edit your appearance or choose Regenerate to send a new request."
+        } else {message}));
+    }
+
+    fn load_portrait(&self, version: u64, uri: &str) -> Result<(), JsValue> {
+        self.portrait_listeners.borrow_mut().clear();
+        if let Some(previous) = self.controls.incoming_preview.borrow_mut().take() {
+            previous.remove();
+        }
+        let document = self
+            .root
+            .owner_document()
+            .ok_or_else(|| JsValue::from_str("creation document unavailable"))?;
+        let parent = self
+            .controls
+            .stage_preview
+            .borrow()
+            .parent_element()
+            .ok_or_else(|| JsValue::from_str("portrait stage unavailable"))?;
+        let image = node(&document, &parent, "img", "hero-figure", "")?;
+        parent.insert_before(&image, Some(&self.controls.portrait_shadow))?;
+        image.set_attribute("alt", "Your generated character portrait")?;
+        image.set_attribute("hidden", "")?;
+        self.controls.incoming_preview.replace(Some(image.clone()));
+        self.controls.set_portrait_pending(true);
+        self.controls
+            .portrait_status
+            .set_text_content(Some("Your portrait is ready. Loading image…"));
+        for event in ["load", "error"] {
+            let controls = self.controls.clone();
+            let current = image.clone();
+            let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
+                let matches = controls
+                    .incoming_preview
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|incoming| incoming.is_same_node(Some(&current)));
+                if !matches || controls.look_version.get() != version {
+                    return;
+                }
+                controls.incoming_preview.borrow_mut().take();
+                if event == "load" {
+                    controls.stage_preview.borrow().remove();
+                    controls.stage_preview.replace(current.clone());
+                    controls.portrait_version.set(Some(version));
+                    let _ = current.set_attribute("data-loaded", "true");
+                    controls.set_portrait_pending(false);
+                    controls
+                        .portrait_button
+                        .set_text_content(Some("Regenerate portrait"));
+                    controls
+                        .portrait_status
+                        .set_text_content(Some("Your portrait is ready."));
+                } else {
+                    current.remove();
+                    controls.set_portrait_pending(false);
+                    controls.portrait_status.set_text_content(Some("The portrait image could not load. Your previous portrait is kept. Choose Regenerate to try again."));
+                }
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            image.add_event_listener_with_callback(event, callback.as_ref().unchecked_ref())?;
+            self.portrait_listeners.borrow_mut().push(Listener {
+                element: image.clone(),
+                event,
+                callback,
+            });
+        }
+        image.set_attribute("src", uri)?;
+        Ok(())
+    }
+
     pub(super) fn show_error(&self, message: &str) {
         self.feedback.set_text_content(Some(message));
     }
@@ -821,6 +1461,7 @@ mod tests {
     fn corrected_identity_is_included_in_the_confirmed_character_selection() {
         let identity = rpc::HeroIdentity {
             appearance: Some(rpc::HeroAppearance {
+                public_description: String::new(),
                 presentation: "feminine".to_owned(),
                 pronouns: "she-her".to_owned(),
                 age: "elder".to_owned(),
@@ -846,6 +1487,7 @@ mod tests {
         assert_eq!(draft.to_rpc().unwrap(), identity);
         let hero = HeroDraft {
             name: "Maren".to_owned(),
+            portrait_scenery: String::new(),
             choices: vec![],
             identity: draft.clone(),
         };
@@ -914,6 +1556,7 @@ mod tests {
             ..Default::default()
         };
         let initial = IdentityDraft {
+            public_description: String::new(),
             appearance: vec![],
             origin: "From the highlands".to_owned(),
             occupation: "A guard".to_owned(),
@@ -944,6 +1587,12 @@ mod tests {
                     assert!(!appearance_text.is_empty() || !backstory_text.is_empty());
                     let _ = (draft_version, current);
                 }
+                CreationEvent::Portrait {
+                    draft_version,
+                    current,
+                } => {
+                    let _ = (draft_version, current);
+                }
                 CreationEvent::Confirm(draft) => assert!(!draft.name.is_empty()),
             },
         )
@@ -957,6 +1606,25 @@ mod tests {
             3
         );
         assert!(surface.controls.confirm.disabled());
+        surface.controls.set_portrait_pending(true);
+        assert_eq!(
+            surface
+                .controls
+                .portrait_shadow
+                .get_attribute("data-pending")
+                .as_deref(),
+            Some("true")
+        );
+        assert!(!surface.controls.portrait_shadow.has_attribute("hidden"));
+        assert!(surface.controls.portrait_button.disabled());
+        surface.controls.set_portrait_pending(false);
+        assert!(
+            !surface
+                .controls
+                .portrait_shadow
+                .has_attribute("data-pending")
+        );
+        assert!(!surface.controls.portrait_button.disabled());
         surface.controls.name.set_value("Maren");
         surface
             .controls
@@ -1012,5 +1680,11 @@ mod tests {
         let root = surface.root().clone();
         surface.dispose().unwrap();
         assert!(root.parent_element().is_none());
+    }
+}
+
+impl Drop for HeroCreator {
+    fn drop(&mut self) {
+        let _ = web_sys::Url::revoke_object_url(&self.placeholder_url);
     }
 }

@@ -329,6 +329,7 @@ fn malformed_original_correlation_and_hidden_spare_capacity_are_bounded() {
     ));
     let mut value = request();
     value.character = Some(wire::CharacterSelection {
+        portrait_scenery: String::new(),
         name: "Mira".into(),
         choices: Vec::with_capacity(1000),
         identity: None,
