@@ -654,3 +654,61 @@ with a fal key present. Explicit `flux` remains an override requiring `FAL_KEY`.
 Existing imagery admission still requires a usable OpenAI credential; a fal-only
 environment is not newly supported by this routing change. See
 [Character creation research](../planning/character-creation-refinement-research.md).
+
+### Desktop launcher
+
+`dungeonflux.exe` (`crates/df-launcher`) starts, resumes and stops games without a terminal,
+opens the table display in its own window, and edits every setting. Decisions and what was
+verified: [Game refinement, desktop launcher](../planning/game-refinement.md) (REF-050–055).
+
+```sh
+cargo build --manifest-path crates/df-launcher/Cargo.toml --target-dir artifacts/build/launcher
+artifacts/build/launcher/debug/dungeonflux.exe            # the launcher window
+artifacts/build/launcher/debug/dungeonflux.exe --help     # commands and options
+```
+
+`development/install-launcher-shortcut.ps1` adds a **DungeonFlux** desktop shortcut to it.
+The launcher uses an existing game build (it does not build the game) and the same
+PostgreSQL cluster and data folder as `run-gameplay.sh`.
+
+Settings and provider keys live in `config/dungeonflux.toml`, which Git ignores; the clean
+copy with every option and its default is `config/dungeonflux.example.toml`. Regenerate the
+clean copy after changing a setting with
+`cargo test --manifest-path crates/df-launcher/Cargo.toml -- --ignored regenerate_clean_copy`.
+
+Agents skip the window: `dungeonflux start harbor --to creation` starts a game, prints
+`READY` with the display and player links and `DEV_CONTROL` with the token file, and drives
+the game to character creation; `dungeonflux stop` saves and stops it. Developer options:
+`--data-dir` and `--config` keep a test run apart from real saves and settings,
+`--ui-preview 127.0.0.1:<port>` serves the launcher pages to a browser with no window,
+`--connect <url>` attaches the window to a server started elsewhere, and `--show-display`
+opens the running game's display window.
+
+Agents read and change the configuration and the open windows the same way:
+
+```sh
+dungeonflux config                          # every setting: SETTING name=section.name value=...
+dungeonflux config set scene_video on       # checked like the Settings page
+echo "$KEY" | dungeonflux config set keys.fal -   # a key from standard input, never printed
+dungeonflux config reset scene_video
+dungeonflux window                          # WINDOW name=control.size value=1040x740, display.*, monitor.N
+dungeonflux window set display.screenshot C:/tmp/table.jpg
+dungeonflux window set control.page /settings
+```
+
+Keys show only as set or unset. `window` talks to the open launcher through a loopback port
+and a random token in `<data>/launcher-control.toml`, so web pages cannot drive it. Every
+launcher action, page request, setting change and window change is logged (names, never
+values) to `<data>/logs/launcher.log`; `dungeonflux logs --lines 200` prints the end of it.
+
+The launcher hands the game server only the provider keys its enabled features need, with an
+explicit `on`/`off` for every capability. In the server, `media_policy::Gates` reads every
+switch once at startup (the `GATES ...` startup line) and each generation site asks it:
+`DF_GAMEPLAY_STORYTELLER`, `MEMORY`, `VOICE`, `MUSIC`, `STT`, `IMAGERY`, `PLATES`,
+`CREATOR_PORTRAITS`, `HOME_VIDEO`, `SCENE_VIDEO`, `CHARACTER_VIDEO`, `JEV` and `SPLAT_WORLDS`.
+Video, creator portraits and (in the launcher) 3D places are off unless turned on.
+`df-transport-fixture dev gates` (`GET /dev/gates`) lists them for a running game.
+
+Moving between Play and Settings plays a short view transition. Settings, Table display,
+Launcher animations picks Lively (the default, whatever Windows says), Gentle (short fades) or
+Follow Windows (gentle when Windows' Animation effects are off).

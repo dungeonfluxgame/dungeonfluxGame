@@ -225,6 +225,8 @@ the default; anything else refuses startup without echoing the value.
 
 The desktop launcher (`dungeonflux.exe`) always writes every switch, keeps 3D places off
 unless turned on in Settings, and hands the server only the keys its enabled features need.
+`df-transport-fixture dev gates` (`GET /dev/gates`) lists each capability, its switch and
+whether the running game allows it.
 
 ### Explicit creator portraits
 
