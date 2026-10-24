@@ -911,7 +911,12 @@ async fn serve_run(
     });
     let approach_model =
         approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
-    println!("{}", approach_model.startup_line());
+    if interactive && !media_policy::gates().allows(media_policy::Capability::Jev) {
+        // The model's own line would blame a missing key; the switch turned it off.
+        println!("APPROACH off (DF_GAMEPLAY_JEV=off): neutral reads only");
+    } else {
+        println!("{}", approach_model.startup_line());
+    }
     if interactive {
         let settings = adventure_settings
             .as_ref()

@@ -217,6 +217,7 @@ fn print_help() {
          timeline [--last <n>] [--type <resource>] [--component <kind>] [--summary]  bounded resource and presentation lifecycles\n\
          merchant-quotes [--last <n>]  exact source-bound quote status and closed outcomes\n\
          ledger                       canonical coin, item custody, merchant purses and stock for every hero\n\
+         gates                        which paid capabilities this run may use, and the switch for each\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          lore [--scene <key|current>] the run's local canon, oldest fact first (read)\n\
          lore add <scene> <kind> <name> <content>  add one fact through the reply validator; marks edited\n\
@@ -474,6 +475,7 @@ async fn dispatch(
             .await
         }
         "ledger" => get(client, "/dev/ledger").await,
+        "gates" => get(client, "/dev/gates").await,
         "lore" => lore(client, positional, options).await,
         "social" => social(client, positional, options).await,
         "fight" => fight(client, positional, options).await,

@@ -992,6 +992,19 @@ fn merchant_quote_json(
     })
 }
 
+/// `GET /dev/gates`: which paid capabilities this run may use, each with the switch that set
+/// it. Read-only: the gates are fixed at startup, and the launcher's `dungeonflux config` (or
+/// the switches themselves) change them for the next run.
+pub(super) async fn gates(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let capabilities: Vec<Value> = crate::gameplay::media_policy::gates()
+        .report()
+        .into_iter()
+        .map(|(name, switch, allowed)| json!({"name": name, "switch": switch, "allowed": allowed}))
+        .collect();
+    Ok((StatusCode::OK, Json(json!({"capabilities": capabilities}))))
+}
+
 /// `GET /dev/ledger`: the canonical economy of the current checkpoint for every hero and every
 /// NPC merchant of the current place. No seat or hero credential is involved.
 pub(super) async fn ledger(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {

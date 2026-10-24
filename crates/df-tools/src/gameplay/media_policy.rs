@@ -149,6 +149,20 @@ impl Gates {
         Ok(if self.allows(capability) { "on" } else { "off" }.to_owned())
     }
 
+    /// Every capability as `(name, switch, allowed)`, for `GET /dev/gates`.
+    pub(super) fn report(self) -> Vec<(&'static str, &'static str, bool)> {
+        Capability::ALL
+            .into_iter()
+            .map(|capability| {
+                (
+                    capability.label(),
+                    capability.switch_name(),
+                    self.allows(capability),
+                )
+            })
+            .collect()
+    }
+
     /// `GATES storyteller=on ... splat_worlds=off`: the run's whole generation allowance.
     pub(super) fn startup_line(self) -> String {
         let mut line = "GATES".to_owned();
@@ -296,6 +310,23 @@ mod tests {
                 assert_eq!(gates.allows(capability), capability != target);
             }
         }
+    }
+
+    #[test]
+    fn the_report_names_every_capability_with_its_switch() {
+        let gates = Gates::from_lookup(|name| {
+            Ok(if name == "DF_GAMEPLAY_JEV" {
+                "off"
+            } else {
+                "on"
+            }
+            .to_owned())
+        })
+        .unwrap();
+        let report = gates.report();
+        assert_eq!(report.len(), Capability::ALL.len());
+        assert!(report.contains(&("jev", "DF_GAMEPLAY_JEV", false)));
+        assert!(report.contains(&("storyteller", "DF_GAMEPLAY_STORYTELLER", true)));
     }
 
     #[test]
