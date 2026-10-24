@@ -54,7 +54,7 @@ pub(super) async fn issue(
     authorized(&headers, &state.token)?;
     let seat = body["seat"]
         .as_str()
-        .ok_or_else(|| bad_request("seat must be 1 or 2"))?;
+        .ok_or_else(|| bad_request("seat must be 1 to 6"))?;
     let index = super::seat_index(seat).map_err(bad_request)?;
     let seats = state.seats.lock().await;
     let credential = super::seat_credential(&seats, index)?;

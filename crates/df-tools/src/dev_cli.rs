@@ -15,6 +15,8 @@ mod layout;
 mod place;
 #[path = "dev_cli/play.rs"]
 mod play;
+#[path = "dev_cli/roleplay.rs"]
+mod roleplay;
 
 use serde_json::{Value, json};
 use tokio::{
@@ -190,6 +192,7 @@ async fn run_inner(arguments: &[OsString]) -> CommandResult {
 }
 
 fn print_help() {
+    roleplay::help();
     stdout_line(
         "dev: control a development game server (DF_GAMEPLAY_DEV_CONTROL=on)\n\
          \n\
@@ -198,27 +201,29 @@ fn print_help() {
          camera [home|shot|reset|save]  live TV/home pose; home --pitch N --yaw N --distance N --fov N; shot <name>\n\
          health                       server liveness and current revision\n\
          photo-check <path>           --kind canonical_room|scene_plate|character; re-judge a saved image\n\
-         join <seat>                  join the room as seat 1 or 2; a refusal says why\n\
+         join|seat <seat>             join the room as seat 1 to 6; a refusal says why\n\
          reclaim <seat>               take back the away hero of a seat, including one a phone joined (silent 30 s)\n\
          create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
          preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id> --knockout yes|no\n\
                                       help-attack: --ally <hero> --target <foe> (SRD 2024 Help, Attack)\n\
                                       scene-assault: --target <scene person> starts a fight in a freeplay scene\n\
-         say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
+         say <hero> <text>            speak one line; [--context question|social|plan|meta|joke|clarify]\n\
          direct plate <text>          re-render the current scene picture; [--keep] [--wait]\n\
          direct clear                 clear held directions and return to the ordinary plate\n\
          state                        room, phase, seats, fight, offers, revision\n\
-         view --as tv|<hero>          exactly the view that screen is being sent\n\
+         view --as tv|<hero>          TV uses a pure checkpoint/cache read; hero uses its bound view\n\
          notes <hero>                 print the notebook as that hero sees it\n\
          note <hero> <text>           add a shared party note\n\
          scene <hero>                current contents and item card\n\
+         free-roam                    city, current place, known places, and prepared neighbours\n\
          feelings <npc>               current development-only NPC diagnostic\n\
          timeline [--last <n>] [--type <resource>] [--component <kind>] [--summary]  bounded resource and presentation lifecycles\n\
          merchant-quotes [--last <n>]  exact source-bound quote status and closed outcomes\n\
          ledger                       canonical coin, item custody, merchant purses and stock for every hero\n\
          gates                        which paid capabilities this run may use, and the switch for each\n\
-         play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
+         play --to <phase> [--heroes <1-6>] [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
+         facts [<npc>]               recorded NPC facts and blank decisions (read)\n\
          lore [--scene <key|current>] the run's local canon, oldest fact first (read)\n\
          lore add <scene> <kind> <name> <content>  add one fact through the reply validator; marks edited\n\
          lore edit|delete ...         unsupported here: answers unavailable with the reason\n\
@@ -243,7 +248,7 @@ fn print_help() {
          fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
          place [list|go <exit|place>]  where the party stands, its exits and the places the run knows; go moves the whole party (an exit to a new place creates it)\n\
          dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
-         music                        the current music plan; music regenerate|clear <place> unsupported\n\
+         music                        place spec and cache status; explicit regenerate|clear|request|override\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
          memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
          memory entity <id> [refresh] [--audience <a>] [--superseded true]  every event naming it, and its dossier\n\
@@ -346,6 +351,9 @@ async fn dispatch(
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
     };
+    if roleplay::handles(positional) {
+        return roleplay::run(client, positional, options).await;
+    }
     match positional.first().map(String::as_str).unwrap_or("") {
         "camera" => match camera_body(positional, options) {
             Ok(None) => get(client, "/dev/camera").await,
@@ -357,7 +365,7 @@ async fn dispatch(
             Ok(path) => get(client, &path).await,
             Err(message) => client.print_error(message),
         },
-        "join" => {
+        "join" | "seat" => {
             let seat = positional.get(1).cloned().unwrap_or_default();
             post(client, "/dev/join", &json!({"seat": seat})).await
         }
@@ -433,7 +441,15 @@ async fn dispatch(
             let text = positional.get(2..).unwrap_or(&[]).join(" ");
             post(client, "/dev/note", &json!({"hero": hero, "text": text})).await
         }
+        "facts" => match round_trip(client, "GET", "/dev/state", None).await {
+            Ok((status, document)) if (200..300).contains(&status) => {
+                client.print(&fact_decisions_document(&document, positional.get(1).map(String::as_str)), false)
+            }
+            Ok((_, document)) => client.print(&document, true),
+            Err(message) => CommandResult::Transport(message),
+        },
         "state" => get(client, "/dev/state").await,
+        "free-roam" => get(client, "/dev/place").await,
         command @ ("scene" | "feelings") => match positional.get(1) {
             Some(name) => get(client, &format!("/dev/{command}?name={}", url_escape(name))).await,
             None => client.print_error("scene/feelings needs a name"),
@@ -462,6 +478,9 @@ async fn dispatch(
             }
             if flag("--summary").as_deref() == Some("true") {
                 path.push_str("&summary=true");
+            }
+            for name in ["since", "npc"] {
+                if let Some(value) = flag(&format!("--{name}")) { path.push_str(&format!("&{name}={}",url_escape(&value))); }
             }
             get(client, &path).await
         }
@@ -493,7 +512,10 @@ async fn dispatch(
         "fx" => fx(client, positional).await,
         "dice" => dice::run(client, positional, options).await,
         "place" => place::run(client, positional, options).await,
-        "music" => music(client, positional).await,
+        "tempo" => {
+            let last = flag("--last").unwrap_or_else(|| "50".into());
+            get(client, &format!("/dev/tempo?last={}", url_escape(&last))).await
+        }
         "memory" => memory(client, positional, options).await,
         "scene-changes" => {
             let last = flag("--last")
@@ -514,6 +536,9 @@ async fn dispatch(
                 path.push_str("&kind=");
                 path.push_str(&url_escape(&kind));
             }
+            for name in ["since", "npc"] {
+                if let Some(value) = flag(&format!("--{name}")) { path.push_str(&format!("&{name}={}",url_escape(&value))); }
+            }
             get(client, &path).await
         }
         "audit" => {
@@ -524,6 +549,9 @@ async fn dispatch(
             if let Some(line_type) = flag("--type") {
                 path.push_str("&type=");
                 path.push_str(&url_escape(&line_type));
+            }
+            for name in ["since", "npc"] {
+                if let Some(value) = flag(&format!("--{name}")) { path.push_str(&format!("&{name}={}",url_escape(&value))); }
             }
             get(client, &path).await
         }
@@ -977,7 +1005,7 @@ async fn npc(
             Err(message) => client.print_error(message),
         },
         _ => client.print_error(
-            "npc takes say <npc> <text>, act <npc> <action> [...], or hold <npc> on|off",
+            "npc takes show|last <npc>, say <npc> <text>, act <npc> <action> [...], or hold <npc> on|off",
         ),
     }
 }
@@ -1157,13 +1185,13 @@ fn economy_body(positional: &[String], options: &[(String, String)]) -> Result<V
                 .ok_or_else(|| format!("economy {what} needs <name> --cp <n>"))?;
             let text = option_value(options, "--cp")
                 .ok_or_else(|| format!("economy {what} needs --cp <n>"))?;
-            let cp: u64 = text
+            let cp: u32 = text
                 .parse()
                 .map_err(|_| "--cp must be a whole number of copper".to_owned())?;
-            Ok(json!({"what": what, "name": name, "cp": cp}))
+            Ok(json!({"op": what, "target": name, "cp": cp}))
         }
         Some("offer") => match (positional.get(2), positional.get(3)) {
-            (Some(op), Some(offer)) => Ok(json!({"what": "offer", "op": op, "name": offer})),
+            (Some(op), Some(offer)) if matches!(op.as_str(), "add"|"remove"|"restock") => Ok(json!({"op": format!("offer-{op}"), "target": offer})),
             _ => Err("economy offer needs add|remove|restock <offer>".to_owned()),
         },
         _ => Err(
@@ -1279,22 +1307,22 @@ mod clips_command_tests {
     }
 }
 
-async fn music(client: &Client, positional: &[String]) -> CommandResult {
-    match positional.get(1).map(String::as_str) {
-        None => get(client, "/dev/music").await,
-        Some(op @ ("regenerate" | "clear")) => match positional.get(2) {
-            Some(place) => {
-                post(
-                    client,
-                    "/dev/music/edit",
-                    &json!({"op": op, "place": place}),
-                )
-                .await
-            }
-            None => client.print_error(format!("music {op} needs <place>")),
-        },
-        Some(_) => client.print_error("music takes no word to read, or regenerate|clear <place>"),
-    }
+fn fact_decisions_document(state: &Value, npc: Option<&str>) -> Value {
+    let decisions: Vec<&Value> = state["npc_facts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|record| {
+            npc.is_none_or(|npc| {
+                ["npc_id", "speaker"].into_iter().any(|key| {
+                    record[key]
+                        .as_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(npc))
+                })
+            })
+        })
+        .collect();
+    json!({"npc":npc, "count":decisions.len(), "decisions":decisions})
 }
 
 async fn get(client: &Client, path: &str) -> CommandResult {
@@ -1358,6 +1386,14 @@ async fn round_trip(
 }
 
 async fn wait(client: &Client, options: &[(String, String)]) -> CommandResult {
+    match roleplay::wait_seconds(options) {
+        Ok(Some(seconds)) => {
+            tokio::time::sleep(Duration::from_secs(seconds)).await;
+            return client.print(&json!({"status":"waited","seconds":seconds}), false);
+        }
+        Err(error) => return client.print_error(error),
+        Ok(None) => {}
+    }
     let until: Vec<String> = options
         .iter()
         .filter(|(key, _)| key == "--until")
@@ -1723,7 +1759,7 @@ mod dev_write_request_tests {
 
         let options = [("--cp".to_owned(), "200".to_owned())];
         let purse = economy_body(&words("economy purse merchant"), &options).unwrap();
-        assert_eq!(purse["what"], "purse");
+        assert_eq!(purse["op"], "purse");
         assert_eq!(purse["cp"], 200);
         assert!(economy_body(&words("economy purse merchant"), &[]).is_err());
         assert!(
@@ -1735,8 +1771,8 @@ mod dev_write_request_tests {
         );
         let offer =
             economy_body(&words("economy offer restock item-clothes-travelers"), &[]).unwrap();
-        assert_eq!(offer["what"], "offer");
-        assert_eq!(offer["op"], "restock");
+        assert_eq!(offer["target"], "item-clothes-travelers");
+        assert_eq!(offer["op"], "offer-restock");
         assert!(economy_body(&words("economy"), &[]).is_err());
     }
 
@@ -1946,5 +1982,26 @@ mod camera_command_tests {
         assert!(camera_body(&words(&["camera", "shot"]), &[]).is_err());
         let invalid = [("--pitch".to_owned(), "NaN".to_owned())];
         assert!(camera_body(&words(&["camera", "home"]), &invalid).is_err());
+    }
+}
+
+#[cfg(test)]
+mod fact_decision_tests {
+    use super::*;
+
+    #[test]
+    fn hs50_ref069_dev_facts_lists_both_dispositions_and_filters_exact_npc() {
+        let state = json!({"npc_facts":[
+            {"npc_id":"bram","speaker":"Bram Weller","decision":"backfill","reason":"harmless_missing_detail","fact":{"content":"The Last Stitch"}},
+            {"npc_id":"courier","speaker":"Finn","decision":"leave_blank","reason":"secret","fact":null}
+        ]});
+        let all = fact_decisions_document(&state, None);
+        assert_eq!(all["count"], 2);
+        assert_eq!(all["decisions"][1]["decision"], "leave_blank");
+        let bram = fact_decisions_document(&state, Some("Bram Weller"));
+        assert_eq!(bram["count"], 1);
+        assert_eq!(bram["decisions"][0]["npc_id"], "bram");
+        assert_eq!(fact_decisions_document(&state, Some("Bram"))["count"], 1);
+        assert_eq!(fact_decisions_document(&state, Some("Br"))["count"], 0);
     }
 }

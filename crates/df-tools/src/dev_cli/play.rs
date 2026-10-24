@@ -39,8 +39,17 @@ pub(super) async fn run(client: &Client, flags: &[(String, String)]) -> CommandR
         Ok(count) if (1..=512).contains(&count) => count,
         _ => return client.print_error("--max-steps must be 1 to 512"),
     };
+    let heroes = match flag("--heroes").unwrap_or("2").parse::<usize>() {
+        Ok(count) if (1..=df_rules::local_journey::MAXIMUM_PARTY).contains(&count) => count,
+        _ => return client.print_error("--heroes must be 1 to 6"),
+    };
     let mut steps = Vec::new();
-    match tokio::time::timeout(client.timeout, drive(client, target, maximum, &mut steps)).await {
+    match tokio::time::timeout(
+        client.timeout,
+        drive(client, target, maximum, heroes, &mut steps),
+    )
+    .await
+    {
         Ok(Ok(state)) => client.print(
             &json!({"status":"reached", "target":target, "state":state,"steps":steps}),
             false,
@@ -60,6 +69,7 @@ async fn drive(
     client: &Client,
     target: &str,
     maximum: usize,
+    heroes: usize,
     steps: &mut Vec<Value>,
 ) -> Result<Value, String> {
     loop {
@@ -79,8 +89,8 @@ async fn drive(
             return Err("play exhausted --max-steps".to_owned());
         }
         let seats = state["seats"].as_array().ok_or("state has no seats")?;
-        if seats.len() < 2 {
-            let seat = (1..=2)
+        if seats.len() < heroes {
+            let seat = (1..=heroes)
                 .find(|seat| !seats.iter().any(|present| present["seat"] == *seat))
                 .ok_or("seat projection invalid")?;
             let command = json!({"seat":seat.to_string()});
@@ -115,7 +125,11 @@ async fn drive(
             if let Some((path, mut command)) = next_command(view, &hero, target) {
                 if path == "/dev/create" {
                     command["seat"] = json!(seat_id.to_string());
-                    command["name"] = json!(if seat_id == 1 { "Brakka" } else { "Sigrun" });
+                    command["name"] = json!(
+                        ["Brakka", "Sigrun", "Brynn", "Corin", "Elara", "Vix"]
+                            .get(seat_id.saturating_sub(1) as usize)
+                            .ok_or("seat number exceeds table")?
+                    );
                     command["choices"] = default_creation_choices(view, seat_id as usize)?;
                 }
                 chosen = Some((path, command));
@@ -546,7 +560,7 @@ mod tests {
         };
         let mut steps = Vec::new();
 
-        let result = drive(&client, "dialogue", 1, &mut steps).await;
+        let result = drive(&client, "dialogue", 1, 2, &mut steps).await;
 
         assert_eq!(result.unwrap_err(), "play exhausted --max-steps");
         assert_eq!(steps.len(), 1);
@@ -592,7 +606,7 @@ mod tests {
         };
         let mut steps = Vec::new();
 
-        let state = drive(&client, "dialogue", 1, &mut steps).await.unwrap();
+        let state = drive(&client, "dialogue", 1, 2, &mut steps).await.unwrap();
 
         assert_eq!(state["phase"], "dialogue");
         assert!(steps.is_empty());

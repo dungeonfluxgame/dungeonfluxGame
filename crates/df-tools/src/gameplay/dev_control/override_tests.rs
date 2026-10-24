@@ -183,7 +183,7 @@ impl Fixture {
         let seats = Seats {
             session_id: Some(current.basis().session.as_bytes().to_vec()),
             run_id: Some(current.basis().run.as_bytes().to_vec()),
-            seats: [
+            seats: vec![
                 Seat {
                     reclaim: None,
                     credential: Some(PLAYER),
@@ -716,7 +716,7 @@ fn development_fight_start_and_end_keep_state_fight_and_display_reads_responsive
                     assert!(display_stream.next().await.unwrap().is_ok());
                     // Fix initiative at a hero turn so ending the development fight does not
                     // depend on a randomly opened ordinary opportunity-reaction window.
-                    crate::gameplay::dice::enqueue(20, &[20, 20, 1]).unwrap();
+                    crate::gameplay::dice::enqueue(20, &[20, 20, 1, 1, 1, 1]).unwrap();
                     fixture
                         .battle(json!({"op":"start","foe":"skeleton","count":4,"level":5,"scene":"scan-village"}))
                         .await;
@@ -775,4 +775,278 @@ fn development_fight_start_and_end_keep_state_fight_and_display_reads_responsive
     wait.recv_timeout(std::time::Duration::from_secs(15))
         .expect("development fight/read worker exceeded deadline");
     worker.join().unwrap();
+}
+
+#[test]
+fn roleplay_routes_inspect_without_committing_or_registering_voice() {
+    use tonic::codegen::Service;
+    let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+    let (loaded, record) = record::reload(&generated.documents(true).unwrap()).unwrap();
+    pack::with_test_pack(loaded.clone(), || {
+        let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+        let mut fixture = Fixture::new(opening, loaded);
+        let social =
+            crate::gameplay::social::SocialLedger::open(record.dossiers, &record.seed, None)
+                .unwrap();
+        let state = Arc::get_mut(&mut fixture.state).unwrap();
+        state.social = social.clone();
+        state.service.social = social;
+        fixture.state.table.push(
+            "Brynn",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Hello.",
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut router = roleplay::routes()
+                .route("/dev/timeline", axum::routing::get(reads::timeline))
+                .route("/dev/audit", axum::routing::get(audit_log::audit))
+                .route("/dev/decisions", axum::routing::get(audit_log::decisions))
+                .route(
+                    "/dev/screens/ticket",
+                    axum::routing::post(screen_preview::issue),
+                )
+                .route("/dev/place/go", axum::routing::post(place::go))
+                .route("/dev/music", axum::routing::get(music::read))
+                .route("/dev/music/edit", axum::routing::post(music::edit))
+                .route("/dev/presentation", axum::routing::get(roleplay::present))
+                .with_state(fixture.state.clone());
+            for (path, key) in [
+                ("/dev/transcript", "array"),
+                ("/dev/timeline?since=0", "next_since"),
+                ("/dev/audit?since=0&npc=merchant", "next_since"),
+                ("/dev/decisions?since=0&npc=merchant", "next_since"),
+                ("/dev/trade-terms?hero=Brynn", "array"),
+                ("/dev/npc/show?name=merchant", "dossier"),
+                ("/dev/npc/last?name=merchant", "npc_id"),
+                ("/dev/narrative", "budget"),
+                ("/dev/voice", "array"),
+                ("/dev/mood", "faces"),
+                ("/dev/presentation", "presentation"),
+            ] {
+                let request = axum::http::Request::builder()
+                    .uri(path)
+                    .header("authorization", "Bearer override-test-token")
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let response = router.clone().as_service().call(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let document: Value = serde_json::from_slice(&bytes).unwrap();
+                if key == "array" {
+                    assert!(document.is_array(), "{path}: {document}");
+                } else {
+                    assert!(document.get(key).is_some(), "{path}: {document}");
+                }
+            }
+            for path in [
+                "/dev/npc/show?name=unknown",
+                "/dev/trade-terms?hero=unknown",
+                "/dev/transcript?since=bad",
+            ] {
+                let request = axum::http::Request::builder()
+                    .uri(path)
+                    .header("authorization", "Bearer override-test-token")
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                assert_eq!(
+                    router
+                        .clone()
+                        .as_service()
+                        .call(request)
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::BAD_REQUEST,
+                    "{path}"
+                );
+            }
+            for (path, body) in [
+                ("/dev/screens/ticket", json!({"seat":"7"})),
+                ("/dev/place/go", json!({"target":""})),
+                ("/dev/place/go", json!({"target":"landmark:unknown"})),
+                ("/dev/music/edit", json!({"op":"invalid","place":"shop"})),
+            ] {
+                let request = axum::http::Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("authorization", "Bearer override-test-token")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap();
+                assert_eq!(
+                    router
+                        .clone()
+                        .as_service()
+                        .call(request)
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::BAD_REQUEST
+                );
+            }
+            {
+                let mut seats = fixture.state.seats.lock().await;
+                seats.seats.get_mut(1).unwrap().hero = Some("Brynn".into());
+            }
+            let request = axum::http::Request::builder()
+                .uri("/dev/trade-terms?hero=Brynn")
+                .header("authorization", "Bearer override-test-token")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = router.clone().as_service().call(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let refusal: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(refusal["error"].as_str().unwrap().contains("ambiguous"));
+            let response = router
+                .as_service()
+                .call(
+                    axum::http::Request::builder()
+                        .uri("/dev/transcript")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(fixture.commits.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.state.service.voice.development_report(), json!([]));
+        });
+    });
+}
+
+#[test]
+fn authenticated_write_commands_have_one_boundary_audit_without_body_or_token() {
+    const NAME: &str = "gameplay::dev_control::override_tests::authenticated_write_commands_have_one_boundary_audit_without_body_or_token";
+    if std::env::var("DF_HS17_AUDIT_CHILD").as_deref() != Ok("on") {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture"])
+            .env("DF_HS17_AUDIT_CHILD", "on")
+            .env("DF_GAMEPLAY_DEV_CONTROL", "on")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    use tonic::codegen::Service;
+    let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+    let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+    pack::with_test_pack(loaded.clone(), || {
+        let fixture = Fixture::new(native::prepared(), loaded);
+        fixture.state.layout.enable();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let router = Router::new()
+                    .route("/dev/presentation", axum::routing::post(presentation_edit))
+                    .layer(axum::middleware::from_fn_with_state(
+                        fixture.state.clone(),
+                        audit_command,
+                    ))
+                    .with_state(fixture.state.clone());
+                let request = axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/dev/presentation")
+                    .header("authorization", "Bearer override-test-token")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"op":"pause"}"#))
+                    .unwrap();
+                assert_eq!(
+                    router
+                        .clone()
+                        .as_service()
+                        .call(request)
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::OK
+                );
+                let audit = timeline::audit(100, Some("DEV_CONTROL"));
+                assert_eq!(audit["returned"], 1);
+                let line = audit["events"][0]["line"].as_str().unwrap();
+                assert!(line.contains(
+                    "route=/dev/presentation method=POST status=200 outcome=answered ms="
+                ));
+                assert!(!line.contains("override-test-token"));
+                assert!(!line.contains("pause"));
+                let before = timeline::audit(100, Some("DEV_CONTROL"))["matched"].clone();
+                let commits_before_read = fixture.commits.load(Ordering::SeqCst);
+                let (_, Json(view)) = reads::view_as(
+                    State(fixture.state.clone()),
+                    headers(),
+                    Query(std::collections::HashMap::from([(
+                        "as".into(),
+                        "tv".into(),
+                    )])),
+                )
+                .await
+                .unwrap();
+                assert_eq!(view["projection"], "live_display");
+                assert_eq!(fixture.commits.load(Ordering::SeqCst), commits_before_read);
+                assert_eq!(timeline::audit(100, Some("DEV_CONTROL"))["matched"], before);
+                // The live display projection registers cue metadata even with voice off.
+                // Off entries have no synthesis job, selected voice, or playback duration.
+                let voices = fixture.state.service.voice.development_report();
+                assert!(voices.as_array().unwrap().iter().all(|speaker| {
+                    speaker["voice_id"].is_null()
+                        && speaker["lines"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|line| line["state"] == "off" && line["ms"].is_null())
+                }));
+                let request = axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/dev/presentation")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"op":"pause"}"#))
+                    .unwrap();
+                assert_eq!(
+                    router
+                        .clone()
+                        .as_service()
+                        .call(request)
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::UNAUTHORIZED
+                );
+                let audit = timeline::audit(100, Some("DEV_CONTROL"));
+                assert_eq!(audit["returned"], 3);
+                let lines = audit["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|event| event["line"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter(|line| line.starts_with("DEV_CONTROL route="))
+                        .count(),
+                    2
+                );
+                let refusals = lines
+                    .iter()
+                    .filter(|line| line.starts_with("DEV_CONTROL refused reason=token"))
+                    .collect::<Vec<_>>();
+                assert_eq!(refusals.len(), 1);
+                let refusal_line = refusals[0];
+                assert!(refusal_line.contains("route=/dev/presentation"));
+                assert!(!refusal_line.contains("override-test-token"));
+                assert!(!refusal_line.contains("pause"));
+            });
+    });
 }

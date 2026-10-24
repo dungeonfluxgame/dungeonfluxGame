@@ -1,4 +1,4 @@
-//! Authenticated, audited local hero library inspection and tombstoning.
+//! Authenticated, audited local hero library inspection and removal.
 use super::{Outcome, Shared, authorized, failed};
 use axum::{
     Json,
@@ -13,11 +13,27 @@ fn audit(action: &str, id: Option<i64>, status: &str) {
         format!("DEV heroes action={action} hero={id:?} status={status}"),
     );
 }
+fn authorize_command(
+    headers: &HeaderMap,
+    token: &str,
+    action: &str,
+    id: Option<i64>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if let Err(error) = authorized(headers, token) {
+        audit(action, id, "unauthorized");
+        return Err(error);
+    }
+    if id.is_some_and(|id| id <= 0) {
+        audit(action, id, "invalid_id");
+        return Err(super::bad_request("Hero id must be positive"));
+    }
+    Ok(())
+}
 fn metadata(row: &df_persistence::hero_library::HeroRevision) -> Value {
-    json!({"id":row.reference.hero_id,"revision":row.reference.revision,"name":row.record.name,"species":row.record.species,"class":row.record.character_class,"portrait_bytes":row.record.portrait.len(),"portrait_media_type":row.record.portrait_media_type})
+    json!({"id":row.reference.hero_id,"revision":row.reference.revision,"name":row.record.name,"species":row.record.species,"class":row.record.character_class,"design":{"species":row.record.species,"class":row.record.character_class},"portrait_bytes":row.record.portrait.len(),"portrait_media_type":row.record.portrait_media_type})
 }
 pub(super) async fn list(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
-    authorized(&headers, &state.token)?;
+    authorize_command(&headers, &state.token, "list", None)?;
     let result = async {
         super::super::hero_library::open()
             .await?
@@ -38,10 +54,12 @@ pub(super) async fn list(State(state): State<Arc<Shared>>, headers: HeaderMap) -
     ))
 }
 async fn read(state: Arc<Shared>, headers: HeaderMap, id: i64, history: bool) -> Outcome {
-    authorized(&headers, &state.token)?;
-    if id <= 0 {
-        return Err(super::bad_request("Hero id must be positive"));
-    }
+    authorize_command(
+        &headers,
+        &state.token,
+        if history { "revisions" } else { "show" },
+        Some(id),
+    )?;
     let result = async {
         super::super::hero_library::open()
             .await?
@@ -109,25 +127,49 @@ pub(super) async fn delete(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Outcome {
-    authorized(&headers, &state.token)?;
-    if id <= 0 {
-        return Err(super::bad_request("Hero id must be positive"));
+    authorize_command(&headers, &state.token, "delete", Some(id))?;
+    let result = super::super::hero_library::delete_saved_hero(None, id).await;
+    match &result {
+        Ok(removed) => super::super::actor::record_audit_line(
+            "dev.heroes",
+            format!(
+                "DEV_CONTROL DeleteHero hero_id={id} removed={removed} outcome={}",
+                if *removed { "answered" } else { "not_found" },
+            ),
+        ),
+        Err(_) => audit("delete", Some(id), "unavailable"),
     }
-    let result = async {
-        super::super::hero_library::open()
-            .await?
-            .delete(id)
-            .await
-            .map_err(|_| tonic::Status::unavailable("Library unavailable"))
-    }
-    .await;
-    audit(
-        "delete",
-        Some(id),
-        if result.is_ok() { "ok" } else { "unavailable" },
-    );
     Ok((
         StatusCode::OK,
         Json(json!({"deleted":result.map_err(|_|failed("Hero library unavailable"))?,"id":id})),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn heroes_commands_require_the_dev_token_and_a_positive_id() {
+        let mut headers = HeaderMap::new();
+        for action in ["list", "show", "delete"] {
+            assert_eq!(
+                authorize_command(&headers, "synthetic-token", action, Some(42))
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer synthetic-token".parse().unwrap(),
+        );
+        assert!(authorize_command(&headers, "synthetic-token", "list", None).is_ok());
+        assert!(authorize_command(&headers, "synthetic-token", "show", Some(42)).is_ok());
+        assert_eq!(
+            authorize_command(&headers, "synthetic-token", "delete", Some(0))
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
 }

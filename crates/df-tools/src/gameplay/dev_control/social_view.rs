@@ -47,6 +47,8 @@ fn emotional_json(emotional: &EmotionalState) -> Value {
         "resentful": emotional.resentful.label(),
         "wary": emotional.wary.label(),
         "never_forgives": emotional.never_forgives,
+        "patience": emotional.patience,
+        "last_reaction": emotional.last_reaction,
     })
 }
 
@@ -85,6 +87,7 @@ pub(super) fn social_document(
             .map(|(_, _, emotional)| emotional);
         relationships.push(json!({
             "hero": name,
+            "details": social.development_relationship(member, &id),
             "attitude": standing.attitude.label(),
             "trust": standing.trust,
             "emotion": emotional.map(emotional_json),
@@ -95,6 +98,7 @@ pub(super) fn social_document(
         "npc": requested,
         "npc_id": id,
         "profile": profile,
+        "dossier": dossier,
         "count": relationships.len(),
         "relationships": relationships,
     }))
@@ -112,6 +116,17 @@ pub(super) async fn read(
         .get("name")
         .ok_or_else(|| bad_request("social needs ?name=<npc>"))?;
     let checkpoint = state.service.updates.borrow().clone();
+    if let Some(document) = state
+        .social
+        .development_opening_social(
+            &checkpoint,
+            requested,
+            params.get("hero").map(String::as_str),
+        )
+        .map_err(|_| failed("opening social standing unavailable"))?
+    {
+        return Ok((StatusCode::OK, Json(document)));
+    }
     let scene = beat_script_runtime::scene(checkpoint.state())
         .map_err(|_| failed("current scene unavailable"))?;
     let document = social_document(
@@ -278,6 +293,158 @@ mod tests {
         social::SocialLedger,
         startup_configuration::ContentRating,
     };
+
+    #[test]
+    fn opening_social_dev_read_dispatches_authored_dain_party_and_caused_exceptions() {
+        use super::super::{Seats, history, layout, screen_preview};
+        use crate::gameplay::{Service, model, npc_reply::NpcVoice};
+        use df_rules::influence::{Attitude as RulesAttitude, Willingness};
+        use tokio::sync::{Mutex, Semaphore, watch};
+        let mut loaded = pack::load_from_bytes(
+            include_bytes!("../../../../../content/harbor-journey/pack.json"),
+            include_bytes!("../fixtures/harbor-journey-tuning-baseline.json"),
+        )
+        .unwrap();
+        loaded
+            .pack
+            .scenes
+            .iter_mut()
+            .find(|scene| scene.key == pack::SceneKey::Opening)
+            .unwrap()
+            .setting
+            .as_mut()
+            .unwrap()
+            .model
+            .as_mut()
+            .unwrap()
+            .people
+            .iter_mut()
+            .find(|person| person.id == "bandit")
+            .unwrap()
+            .attitudes
+            .insert(
+                "Orla".to_owned(),
+                crate::gameplay::adventure::scene_model::StartingAttitude::Hostile,
+            );
+        pack::with_test_pack(loaded, || {
+            let opening = beat_script_runtime::opening_social_tests::opening(3);
+            let member = opening.state().characters[0].owner;
+            let mut eased = beat_script_runtime::stage_opening_social_appraised(
+                &opening,
+                df_types::OperationId::from_bytes(&[178; 16]).unwrap(),
+                beat_script_runtime::OpeningSocialAttempt {
+                    member,
+                    skill: beat_script_runtime::OpeningSkill::Persuasion,
+                    attitude: RulesAttitude::Indifferent,
+                    willingness: Willingness::Hesitant,
+                    faces: &[1],
+                    changed_after: None,
+                },
+                &[],
+                Some(RulesAttitude::Hostile),
+            )
+            .unwrap();
+            beat_script_runtime::bind_opening_social_source(
+                &mut eased,
+                "I will regrind your chipped scimitar if Finn can pass.",
+            )
+            .unwrap();
+            let current = eased.checkpoint;
+            let before = current.basis();
+            let (_, updates) = watch::channel(current.clone());
+            let (actor, _inbox) = df_session::inbox::bounded_inbox();
+            let social = SocialLedger::none();
+            let table = crate::gameplay::table_log::TableLog::new();
+            let layout = layout::LayoutState::new();
+            let (shutdown, _) = watch::channel(false);
+            let service = Service {
+                portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
+                actor,
+                display_credential: [0x82; 32],
+                updates,
+                streams: Arc::new(Semaphore::new(2)),
+                voice: crate::gameplay::voice::Voice::disabled(
+                    crate::gameplay::startup_configuration::VoiceOff::Qualification,
+                ),
+                npc_voice: Arc::new(NpcVoice::silent()),
+                table_log: table.clone(),
+                social: social.clone(),
+                living: crate::gameplay::living_scenes::LivingScenes::disabled(),
+                layout: layout.clone(),
+            };
+            let state = Arc::new(Shared {
+                service,
+                display_credential: [0x82; 32],
+                token: Arc::from("hs47-read-test"),
+                screen_tickets: Arc::new(Mutex::new(screen_preview::Tickets::default())),
+                seat_file: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../artifacts/tmp/lanes/HS47/unused-test-seats"),
+                shutdown,
+                seats: Arc::new(Mutex::new(Seats {
+                    session_id: None,
+                    run_id: None,
+                    seats: Vec::new(),
+                })),
+                overrides: Arc::new(Mutex::new(Vec::new())),
+                layout,
+                recovery: df_persistence::NativeRecoverySource {
+                    rules: vec![model::rule().unwrap(), journey::rule().unwrap()],
+                    content: model::contents().unwrap(),
+                    resources: journey::resources_for(current.state()).unwrap(),
+                    resource_resolver: None,
+                    asset_resolver: None,
+                    assets: Vec::new(),
+                    limits: model::limits(),
+                },
+                history: Arc::new(std::sync::Mutex::new(history::History::new())),
+                table,
+                social,
+                notebook: crate::gameplay::notebook::NotebookLedger::none(),
+                lore: Arc::new(crate::gameplay::npc_reply::local_lore::LocalLore::in_memory()),
+            });
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                "Bearer hs47-read-test".parse().unwrap(),
+            );
+            let params = HashMap::from([("name".to_owned(), "Dain Rusk".to_owned())]);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let (status, Json(document)) = runtime
+                .block_on(read(
+                    State(state.clone()),
+                    headers.clone(),
+                    Query(params.clone()),
+                ))
+                .unwrap();
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(document["party_attitude"], "indifferent");
+            assert!(
+                document["party_cause"]
+                    .as_str()
+                    .unwrap()
+                    .contains("regrind")
+            );
+            assert_eq!(document["count"], 3);
+            assert!(
+                document["relationships"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["hero"] == "Orla"
+                        && row["exception"] == true
+                        && row["attitude"] == "hostile"
+                        && row["cause"].as_str().unwrap().contains("Authored"))
+            );
+            let (_, Json(again)) = runtime
+                .block_on(read(State(state.clone()), headers, Query(params)))
+                .unwrap();
+            assert_eq!(again, document);
+            assert_eq!(state.service.updates.borrow().basis(), before);
+        });
+    }
 
     #[test]
     fn social_read_reports_each_hero_standing_with_the_npc_and_no_grievance_until_one_is_made() {

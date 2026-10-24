@@ -7,11 +7,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
-use df_model::checkpoint::Checkpoint;
+use df_model::checkpoint::{Checkpoint, GameState};
 use df_persistence::local_demo_scope::LocalDemoRole;
 use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
 use super::{Outcome, Shared, authorized, bad_request, display_view, revision_json, seat_view};
@@ -84,7 +84,7 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
     let current = state.service.updates.borrow().clone();
     let journey = display_journey_with(&display, Some(&current));
     let mut seats = Vec::new();
-    for index in 0..2 {
+    for index in 0..df_rules::local_journey::MAXIMUM_PARTY {
         if let Some(seat) = seat_json(state, index).await? {
             seats.push(seat);
         }
@@ -105,6 +105,7 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
         "combat": journey.get("combat"),
         "table_choices": journey.get("table_choices"),
         "budget": checkpoint.state().narrative.remaining_budget,
+        "npc_facts": state.lore.development_decisions(),
         "edited": !overrides.is_empty(),
         "override_count": overrides.len(),
         "redo_depth": history.redo_len(),
@@ -119,10 +120,10 @@ async fn seat_json(
 ) -> Result<Option<Value>, (axum::http::StatusCode, Json<Value>)> {
     let (hero, member) = {
         let seats = state.seats.lock().await;
-        (
-            seats.seats[index].hero.clone(),
-            seats.seats[index].member.clone(),
-        )
+        let Some(seat) = seats.seats.get(index) else {
+            return Ok(None);
+        };
+        (seat.hero.clone(), seat.member.clone())
     };
     if member.is_none() {
         return Ok(None);
@@ -274,7 +275,7 @@ pub(super) fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::Jour
     } else {
         "social-restrained"
     };
-    let plan = json!({
+    json!({
         "bpm": crate::music_score::BPM,
         "beat_seconds": crate::music_score::BEAT_SECONDS,
         "phase": tempo.phase.name(),
@@ -289,65 +290,7 @@ pub(super) fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::Jour
         "ambient_gain": mix.ambient,
         "filter_hertz": mix.filter_hertz,
         "transition_seconds": crate::music_score::TRANSITION_SECONDS,
-    });
-    let mut fields = Map::new();
-    fields.insert(
-        "resource_type".to_owned(),
-        Value::String("music".to_owned()),
-    );
-    fields.insert(
-        "resource_id".to_owned(),
-        Value::String(format!("tempo:{}", tempo.cue.unwrap_or(tempo.sequence))),
-    );
-    fields.insert(
-        "phase".to_owned(),
-        Value::String(tempo.phase.name().to_owned()),
-    );
-    fields.insert(
-        "intensity_permille".to_owned(),
-        Value::from(tempo.intensity),
-    );
-    fields.insert("suite".to_owned(), Value::String(suite.name().to_owned()));
-    fields.insert(
-        "bed".to_owned(),
-        Value::String(facts.bed.track().to_owned()),
-    );
-    fields.insert(
-        "scene_colour".to_owned(),
-        Value::String(colour.name.to_owned()),
-    );
-    fields.insert(
-        "scene_profile".to_owned(),
-        Value::String(scene_profile.to_owned()),
-    );
-    fields.insert(
-        "tempo_source".to_owned(),
-        Value::String(
-            if tempo.cue.is_some() {
-                "server_cue"
-            } else {
-                "view_fallback"
-            }
-            .to_owned(),
-        ),
-    );
-    fields.insert("in_combat".to_owned(), Value::from(facts.in_combat));
-    fields.insert("layer_gains".to_owned(), json!(layers));
-    fields.insert("status".to_owned(), Value::String("projected".to_owned()));
-    super::timeline::record_structured(
-        "gameplay.music.plan",
-        &format!(
-            "MUSIC plan phase={} intensity={} suite={} bed={} colour={} profile={}",
-            tempo.phase.name(),
-            tempo.intensity,
-            suite.name(),
-            facts.bed.track(),
-            colour.name,
-            scene_profile
-        ),
-        fields,
-    );
-    plan
+    })
 }
 
 fn item_card_json(item: &rpc::SceneItemCard) -> Value {
@@ -388,19 +331,30 @@ fn character_sheet_json(sheet: &rpc::CharacterSheet) -> Value {
 }
 
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
-    let narrative_focus = serde_json::from_str::<Value>(&scene.scene_contents_json)
-        .ok()
-        .and_then(|contents| contents.get("narrative_focus").cloned());
+    let (contents, contents_error) = if scene.scene_contents_json.is_empty() {
+        (Value::Null, None)
+    } else {
+        match serde_json::from_str::<Value>(&scene.scene_contents_json) {
+            Ok(contents) => (contents, None),
+            Err(error) => (
+                Value::Null,
+                Some(format!("invalid scene contents JSON: {error}")),
+            ),
+        }
+    };
+    let narrative_focus = contents.get("narrative_focus").cloned();
     json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note,
         "location_id":scene.location_id, "scene_asset":scene.scene_asset, "live_backdrop":scene.live_backdrop,
         "live_plate":scene.live_plate, "plate_state":scene.plate_state,
         "plate_update_pending":scene.plate_update_pending,
+        "plate_figure_masks": scene.plate_layout.as_ref().map(|layout| layout.figure_masks.iter().map(|mask| json!({"hero_index":match &mask.person {Some(rpc::plate_figure_mask::Person::HeroIndex(index)) => Some(*index), _ => None}, "actor_id":match &mask.person {Some(rpc::plate_figure_mask::Person::ActorId(id)) => Some(id), _ => None}, "source_width":mask.source_width,"source_height":mask.source_height,"bounds":[mask.left,mask.top,mask.right,mask.bottom],"head_top_permille":[mask.head_top_x_permille,mask.head_top_y_permille],"free_side":mask.free_side,"inferred":mask.inferred,"mask_index":mask.mask_index})).collect::<Vec<_>>()).unwrap_or_default(),
         "plate_actor_heads": scene.plate_layout.as_ref().map(|layout| layout.actors.iter().map(|head| json!({"actor_id":head.actor_id,"image_path":scene.live_plate,"bubble_side":head.bubble_side,"head_x_permille":head.head_x_permille,"head_y_permille":head.head_y_permille,"head_width_permille":head.head_width_permille,"head_height_permille":head.head_height_permille})).collect::<Vec<_>>()).unwrap_or_default(),
-        "plate_anchor_fallbacks": scene.cast.iter().filter(|actor| !scene.plate_layout.as_ref().is_some_and(|layout| layout.actors.iter().any(|head| head.actor_id == actor.id))).map(|actor| json!({"actor_id":actor.id,"reason":"missing-actor-head","surface":"named-lane"})).collect::<Vec<_>>(),
+        "plate_anchor_fallbacks": scene.cast.iter().filter(|actor| !scene.plate_layout.as_ref().is_some_and(|layout| layout.actors.iter().any(|head| head.actor_id == actor.id) || layout.figure_masks.iter().any(|mask| matches!(&mask.person, Some(rpc::plate_figure_mask::Person::ActorId(id)) if id == &actor.id)))).map(|actor| json!({"actor_id":actor.id,"reason":"missing-actor-head","surface":"named-lane"})).collect::<Vec<_>>(),
         "visual_assets":visual_asset_summary(scene),
         "scene_video_state":scene.scene_video_state, "scene_video_path":scene.scene_video_path,
         "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
-        "contents": scene.scene_contents_json,
+        "contents": contents,
+        "contents_error": contents_error,
         "narrative_focus": narrative_focus,
         "item": scene.item.as_ref().map(item_card_json),
         "hand_items": scene.hand_items.iter().map(item_card_json).collect::<Vec<_>>(),
@@ -416,14 +370,33 @@ pub(super) async fn scene_for(
     let hero = params
         .get("name")
         .ok_or_else(|| bad_request("scene needs a hero name"))?;
-    let (_, view, projection) = named_hero_view(&state, hero).await?;
+    let (_, mut view, projection) = named_hero_view(&state, hero).await?;
+    let checkpoint = state.service.updates.borrow().clone();
+    state.service.living.observe_checkpoint(&checkpoint);
+    state.service.living.apply(&mut view);
     let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
         return Err(super::failed("player view required"));
     };
+    let current = state.service.updates.borrow().clone();
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())
+        .map_err(|_| super::failed("scene unavailable"))?;
+    let pictures = match scene.setting.as_ref() {
+        Some(setting) => living_scene::picture_features(current.state(), &setting.place_id)
+            .map_err(|_| super::failed("picture evidence unavailable"))?,
+        None => Vec::new(),
+    };
+    let mut seen_in_picture = Vec::new();
+    for picture in pictures {
+        for feature in picture.seen_in_picture {
+            seen_in_picture.push(json!({"name": feature.name, "look": feature.look,
+                "region": feature.region, "provenance": picture.plate_key}));
+        }
+    }
     Ok((
         axum::http::StatusCode::OK,
         Json(json!({
             "hero": hero, "projection": projection, "scene": player.scene.as_ref().map(scene_json),
+            "seen_in_picture": seen_in_picture,
         })),
     ))
 }
@@ -645,7 +618,7 @@ pub(super) async fn view_as(
         return Ok((
             axum::http::StatusCode::OK,
             Json(
-                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
+                json!({"as": "tv", "projection":"live_display", "scope":"current display view delivered by the view owner; inspection does not initiate media jobs", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
             ),
         ));
     }
@@ -896,12 +869,17 @@ pub(super) async fn timeline(
         .unwrap_or(false);
     Ok((
         axum::http::StatusCode::OK,
-        Json(super::timeline::snapshot(
-            last,
-            resource_type,
-            component,
-            summary_only,
-        )),
+        Json(
+            super::timeline::query(
+                &params,
+                "timeline",
+                last,
+                resource_type,
+                component,
+                summary_only,
+            )
+            .map_err(bad_request)?,
+        ),
     ))
 }
 
@@ -1056,8 +1034,12 @@ fn ledger_json(current: &Checkpoint) -> Result<Value, RepositoryError> {
             let (items, market) = scene_ledger(current, place_id, &snapshot.model, &hero_names)?;
             (items, market, "shown")
         }
-        (Some(_), None) => (Vec::new(), Market::default(), "no_authored_market"),
-        (None, _) => (Vec::new(), Market::default(), "no_place"),
+        (Some(_), None) => (
+            source_ledger(state)?,
+            Market::default(),
+            "no_authored_market",
+        ),
+        (None, _) => (source_ledger(state)?, Market::default(), "no_place"),
     };
     let party = heroes
         .iter()
@@ -1114,6 +1096,46 @@ fn ledger_json(current: &Checkpoint) -> Result<Value, RepositoryError> {
     }))
 }
 
+fn source_ledger(state: &GameState) -> Result<Vec<LedgerItem>, RepositoryError> {
+    let mut actors = HashMap::new();
+    for hero in &state.characters {
+        actors.insert(
+            journey::name(state, hero.entity)?,
+            journey::canonical_actor_ref(state, hero.entity)?,
+        );
+    }
+    let mut rows = Vec::new();
+    for thing in living_scene::source_custody(state)? {
+        let owner = thing
+            .owner_id
+            .as_ref()
+            .and_then(|owner| actors.get(owner))
+            .cloned();
+        let holder = thing
+            .holder_id
+            .as_ref()
+            .and_then(|holder| actors.get(holder))
+            .cloned();
+        if owner.is_none() && holder.is_none() {
+            continue;
+        }
+        rows.push(LedgerItem {
+            owner_ref: owner.clone(),
+            holder_ref: holder.clone(),
+            json: json!({
+                "item_id": thing.id, "source_id": thing.provenance.source_id,
+                "name": thing.name, "provenance_kind": "source_starting_equipment",
+                "owner_id": owner, "owner": thing.owner_id,
+                "holder_id": holder, "holder": thing.holder_id,
+                "location": {"kind": "scene", "position": thing.position},
+                "carriage": thing.position, "available": false, "cost_cp": thing.value_cp,
+                "stock_revision": null,
+            }),
+        });
+    }
+    Ok(rows)
+}
+
 /// Scene inventory rows and the trading NPCs' purses for one place. Owner and holder carry the
 /// canonical actor reference and the authored id, so a merchant or hero can be matched either way.
 fn scene_ledger(
@@ -1140,6 +1162,7 @@ fn scene_ledger(
             "holder_id": entry.holder_id,
             "holder": local.holder_id,
             "location": location_json(&entry.location),
+            "carriage": model.things.iter().find(|thing| thing.id == entry.item_id).map(|thing| thing.position.as_str()),
             "available": entry.available,
             "cost_cp": entry.cost_cp,
             "stock_revision": stock_revisions.get(&entry.item_id).copied(),
@@ -1483,6 +1506,8 @@ fn describe_json() -> Value {
         .filter_map(|value| rpc::GameplayActionKind::try_from(value).ok())
         .map(|kind| json!({"wire_kind":kind.as_str_name(),"action":action_name(kind as i32)}))
         .collect::<Vec<_>>();
+    let mut commands = describe_commands();
+    commands.extend(super::roleplay::commands());
     json!({
         "auth": "every request carries Authorization: Bearer <token from the run's dev-control-token file>",
         "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; a revoked local seat binding is HTTP 409 rejoin_required; server failures are HTTP 502/500 JSON {error}",
@@ -1491,7 +1516,7 @@ fn describe_json() -> Value {
         "views": ["tv", "each joined seat or hero name; a hero whose phone is not on a CLI seat is read from the checkpoint, read-only; a revoked local binding returns an explicit rejoin_required result and never falls back to another audience"],
         "actions": actions,
         "selection": "act <hero> <offer label or id>, or act <hero> choose --option <offer label or id>; --choice group=id repeatable / --choices JSON sets every input group; uses live server offers",
-        "commands": describe_commands(),
+        "commands": commands,
     })
 }
 
@@ -1503,9 +1528,10 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"}),
         json!({"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"{hero, projection: seat|checkpoint, scene}: current scene contents, item card and media states; a hero whose phone is not on a CLI seat is read from the canonical checkpoint, read-only, never reclaiming the phone"}),
         json!({"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"}),
-        json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
+        json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|music|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
         json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection,close_reason}],count,returned}; durable exact-quote outcomes and closure reasons, no source speech text or private facts"}),
         json!({"command":"ledger", "method":"GET", "path":"/dev/ledger", "args":{}, "output":"{revision{epoch,sequence}, place_id, party[{id, name, coin_cp, coin_breakdown{gp,sp,cp}, items[item+custody]}], market_status: shown|no_authored_market|no_place, merchants[{id, name, place_id, purse_cp, purse_revision, offers[{offer_id, item_id, name, cost_cp, available, stock_revision}], offers_available}], services[{id, provider_id, provider, name, price_cp}], npc_purses[{id, name, purse_cp, purse_revision, merchant}] (every person in the place), scene_items[item], open_quotes_count, quote_count, quotes[last 5 merchant quote records as in merchant-quotes]}; item = {item_id, source_id, name, provenance_kind, owner_id, owner, holder_id, holder, location{kind: stock|scene|held, position|holder_id}, available, cost_cp, stock_revision}; owner_id and holder_id are canonical actor refs, owner and holder the authored ids; custody is permanent when the hero owns the item, observation_only when the hero only holds it; stock_revision and purse_revision are null when the server's trade terms do not expose them; reads the canonical checkpoint for every hero, no seat, token-gated, no credentials"}),
+        json!({"command":"facts", "method":"GET", "path":"/dev/state", "args":{"npc":"optional NPC id or exact name"}, "output":"{npc,decisions[{scene,place,npc_id,speaker,question_hash,decision:backfill|leave_blank,reason,fact}]}; durable REF-069 facts and blank decisions, filtered by CLI; authenticated read only"}),
         json!({"command":"lore", "method":"GET", "path":"/dev/lore?scene=<key|current>", "args":{"scene":"optional scene key, or current"}, "output":"{scene_filter, scene_count, scenes[{scene, count, facts[{kind, name, content, established_by}]}]}; the run's local canon, oldest fact first; read-only"}),
         json!({"command":"lore add", "method":"POST", "path":"/dev/lore", "args":{"scene":"current, or a scene that already holds canon","kind":"place|person|rumour|custom|service|history","name":"short name","content":"one sentence"}, "output":"{status: added|refused, scene, fact|reason, edited}; the same validator a reply's fact meets (kind|name|content); a refusal names its reason and changes nothing; an added fact is saved and marks the run edited"}),
         json!({"command":"lore edit|delete", "method":"POST", "path":"/dev/lore/edit|/dev/lore/delete", "args":{}, "output":"{status: unavailable, reason, edited: false}; not supported: changing or removing canon needs a canon-ledger mutator this surface does not add"}),
@@ -1537,8 +1563,6 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"art regenerate|clear", "method":"POST", "path":"/dev/art/edit", "args":"character:<id>|place:<id>", "output":"{status: requested|cleared|not_in_cast, subject, entries?}: clear forgets the depiction so the next need makes it again; regenerate asks for a character now, and a place on its next view"}),
         json!({"command":"clips", "method":"GET", "path":"/dev/clips?name=<name>", "args":{"name":"fighter name or canonical identity"}, "output":"{identity, name, waiting_for_depiction, resources[{key, state, error, kind, cost, timings, directory, clip, guard_frame, alpha_frame}]}"}),
         json!({"command":"clips request", "method":"POST", "path":"/dev/clips/request", "args":{"name":"fighter name or canonical identity", "kind":"optional idle|attack|last-hit; absent requests all three"}, "output":"{status: requested, identity, name, kind, fallback}; explicit generation request, shared guard reused"}),
-        json!({"command":"music", "method":"GET", "path":"/dev/music", "args":{}, "output":"{plan: the music plan of the scene on screen, or null, track_status: not_built, scope}; read-only"}),
-        json!({"command":"music regenerate|clear", "method":"POST", "path":"/dev/music/edit", "args":"<place>", "output":"{status: unavailable, reason, edited: false}; no place music spec or track cache exists in this build"}),
         json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{},"output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
         json!({"command":"layout transform <id>", "method":"POST", "path":"/dev/layout/transform", "args":"--translate-x <n> --translate-y <n> --unit px|percent [--scale <n>|--scale-x <n> --scale-y <n>] [--rotate <degrees>]", "output":"{status:pending,id,revision}; changes only the named registered visual"}),
         json!({"command":"layout move <id>", "method":"POST", "path":"/dev/layout/move", "args":"[--x <n>] [--y <n>] --unit px|percent; translation offsets compose with scale and rotation", "output":"{status:pending,id,revision}; changes bounded translation offsets"}),
@@ -1546,15 +1570,15 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"layout hide <id>", "method":"POST", "path":"/dev/layout/visibility", "args":"stable registered visual ID", "output":"{status:pending,id,visibility:hidden,revision}; hides the named component and removes pointer/accessibility exposure while preserving transforms"}),
         json!({"command":"layout show <id>", "method":"POST", "path":"/dev/layout/visibility", "args":"stable registered visual ID", "output":"{status:pending,id,visibility:visible,revision}; restores the component and its prior transform"}),
         json!({"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"}),
-        json!({"command": "join", "method": "POST", "path": "/dev/join", "args": {"seat": "1 or 2"}, "output": "{status: joined|refused, seat, receipt?, code?, reason?}; a refusal states its reason, and a seat a phone holds says to reclaim it once away 30 s"}),
-        json!({"command": "reclaim", "method": "POST", "path": "/dev/reclaim", "args": {"seat": "1 or 2"}, "output": "{status: joined|refused, seat?, receipt?, reason?}; explicit rejoin request that succeeds only after 30 seconds away and never displaces an active phone; a seat a phone joined is taken back by its away hero"}),
-        json!({"command": "create", "method": "POST", "path": "/dev/create", "args": {"seat": "1 or 2", "name": "hero name, 1-48 chars", "choices":"group-id to option-id object (or --choice group=id)","identity":"optional validated identity JSON","identity_choices":"optional identity menu group-id to option-id object"}, "output": "{status: accepted|refused|unavailable, ...}; mechanical choices use server validation; a supplied identity requires canonical storage support"}),
+        json!({"command": "join", "method": "POST", "path": "/dev/join", "args": {"seat": "1 to 6"}, "output": "{status: joined|refused, seat, receipt?, code?, reason?}; a refusal states its reason, and a seat a phone holds says to reclaim it once away 30 s"}),
+        json!({"command": "reclaim", "method": "POST", "path": "/dev/reclaim", "args": {"seat": "1 to 6"}, "output": "{status: joined|refused, seat?, receipt?, reason?}; explicit rejoin request that succeeds only after 30 seconds away and never displaces an active phone; a seat a phone joined is taken back by its away hero"}),
+        json!({"command": "create", "method": "POST", "path": "/dev/create", "args": {"seat": "1 to 6", "name": "hero name, 1-48 chars", "choices":"group-id to option-id object (or --choice group=id)","identity":"optional validated identity JSON","identity_choices":"optional identity menu group-id to option-id object"}, "output": "{status: accepted|refused|unavailable, ...}; mechanical choices use server validation; a supplied identity requires canonical storage support"}),
         json!({"command": "act", "method": "POST", "path": "/dev/act", "args": {"hero": "seat or hero name", "action": "begin|ask|escort|defend|move|attack|second-wind|end-turn|dash|dodge|disengage|stand|pick-up|short-rest|inn|resolve", "cell": "c5r6 for move", "target": "foe or hero name for attack", "weapon": "optional weapon name", "knockout": "--knockout yes|no for attack; omitted uses the server default", "option": "explicit option id or label"}, "output": "{status: accepted|refused|unavailable|ambiguous|observation, revision, ...}; illegal selections are submitted so the server's refusal is reported"}),
         json!({"command": "say", "method": "POST", "path": "/dev/say", "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "unspecified (default; classifier/execution)|question|social|plan|meta|joke|clarify"}, "output": "{status: said, disposition, npc_reply, confirmation_required, revision}"}),
         json!({"command": "direct plate <text> [--keep] [--wait]", "method": "POST", "path": "/dev/direct", "args": {"kind": "plate|clear", "text": "1-1000 characters", "keep": "false by default"}, "output": "{kind:plate, scene, key, state:pending|ready|failed, reason?:closed image failure}; --wait uses --timeout (60 seconds default, max 600)"}),
         json!({"command": "direct clear", "method": "POST", "path": "/dev/direct", "args": {"kind": "clear"}, "output": "{status:cleared}"}),
         json!({"command": "state", "method": "GET", "path": "/dev/state", "args": {}, "output": "{revision, room, phase, scene, seats[{seat, hero, binding_status, offers, sheet, standings, told[{npc, voiced}]}], party, combat{round, active_actor, participants, reachable_cells, legal_targets}, edited}; a revoked local binding is listed as rejoin_required without private fields, while the public state remains readable"}),
-        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, projection: seat|checkpoint, revision, view}: exactly the view that screen is being sent; a hero whose phone is not on a CLI seat gets the checkpoint player projection (no notebook or social attachments), read-only; a revoked local binding returns rejoin_required with an explicit dev reclaim command and no substitute audience"}),
+        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, projection: live_display|seat|checkpoint, scope?, revision, view, timings?}; TV reads the current display view delivered by the view owner without initiating media work. Hero seats retain their live phone view; an unbound hero gets the checkpoint player projection (no notebook or social attachments); a revoked local binding returns rejoin_required with dev reclaim and no substitute audience"}),
         json!({"command": "notes", "method": "GET", "path": "/dev/notes?hero=<name>", "args": {"hero": "seat or hero name"}, "output": "{hero, entries[{kind, title, text, scene, order, owner, author}]}: private clues are filtered to that hero"}),
         json!({"command": "note", "method": "POST", "path": "/dev/note", "args": {"hero": "seat or hero name", "text": "1-4096 UTF-8 bytes"}, "output": "{status: added, hero, scene, order}: adds one shared party note"}),
         json!({"command": "log", "method": "GET", "path": "/dev/log?since=<sequence>", "args": {"since": "optional table sequence number"}, "output": "{revision, lines[{sequence, speaker, role, kind, text}], overrides}"}),
@@ -1617,7 +1641,7 @@ mod reclaim_tests {
             .unwrap();
         assert_eq!(reclaim["method"], "POST");
         assert_eq!(reclaim["path"], "/dev/reclaim");
-        assert_eq!(reclaim["args"]["seat"], "1 or 2");
+        assert_eq!(reclaim["args"]["seat"], "1 to 6");
         assert!(
             reclaim["output"]
                 .as_str()
@@ -1958,6 +1982,97 @@ mod ledger_tests {
     }
 
     #[test]
+    fn hs45_ledger_shows_starting_gear_before_story_and_exact_weapon_sale_change() {
+        use journey::merchant_bargaining::{
+            ExchangeChoice, ExchangeItem, ExchangeJudgement, ExchangeOffer, MerchantStance,
+        };
+        let generated = shop::generate(45, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (mut loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+        for scene in loaded.pack.scenes.iter_mut().chain(
+            loaded
+                .pack
+                .beat_script
+                .iter_mut()
+                .flat_map(|script| script.scenes.values_mut()),
+        ) {
+            if let Some(model) = scene
+                .setting
+                .as_mut()
+                .and_then(|setting| setting.model.as_mut())
+            {
+                for person in &mut model.people {
+                    person.coin_cp = 50_000;
+                }
+            }
+        }
+        pack::with_test_pack(loaded, || {
+            let prepared = native::prepared();
+            let before_story = ledger_json(&prepared).unwrap();
+            assert!(
+                row(&before_story["party"], "name", "Brynn")["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["source_id"] == "greatsword")
+            );
+            let current = native::act(&prepared, native::first(), 5, "begin-story");
+            let before = ledger_json(&current).unwrap();
+            let hero = row(&before["party"], "name", "Brynn");
+            let weapon = row(&hero["items"], "source_id", "flail");
+            let id = weapon["item_id"].as_str().unwrap();
+            let merchant = before["merchants"][0]["id"].as_str().unwrap();
+            let sold = living_scene::stage_exchange(
+                &current,
+                current.basis(),
+                df_types::OperationId::from_bytes(&[84; 16]).unwrap(),
+                "Brynn",
+                "hs45-ledger-fake",
+                ExchangeJudgement {
+                    merchant_id: merchant.into(),
+                    offer: ExchangeOffer {
+                        hero_items: vec![ExchangeItem {
+                            item_id: id.into(),
+                            catalog_id: "flail".into(),
+                        }],
+                        merchant_items: vec![],
+                        hero_cp: 0,
+                        merchant_cp: 500,
+                    },
+                    counter: None,
+                    hero_commits_now: true,
+                    choice: ExchangeChoice::Accept,
+                    stance: MerchantStance::Fair,
+                },
+            )
+            .unwrap();
+            journey::validate_script_characters(sold.state()).unwrap();
+            let after = ledger_json(&sold).unwrap();
+            let hero_after = row(&after["party"], "name", "Brynn");
+            assert_eq!(
+                hero_after["coin_cp"].as_u64().unwrap(),
+                hero["coin_cp"].as_u64().unwrap() + 500
+            );
+            assert!(
+                hero_after["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|item| item["item_id"] != id)
+            );
+            assert_eq!(row(&after["scene_items"], "item_id", id)["owner"], merchant);
+            assert_eq!(
+                row(&after["merchants"], "id", merchant)["purse_cp"]
+                    .as_u64()
+                    .unwrap()
+                    + 500,
+                row(&before["merchants"], "id", merchant)["purse_cp"]
+                    .as_u64()
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
     fn ledger_reports_each_heroes_coin_custody_and_the_merchant_purse_and_stock() {
         let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
         let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
@@ -1978,7 +2093,22 @@ mod ledger_tests {
                     + split["cp"].as_u64().unwrap(),
                 coin_before
             );
-            assert!(brynn["items"].as_array().unwrap().is_empty());
+            let starting = brynn["items"].as_array().unwrap();
+            assert!(
+                starting
+                    .iter()
+                    .any(|item| item["source_id"] == "greatsword")
+            );
+            assert!(
+                starting
+                    .iter()
+                    .any(|item| item["source_id"] == "chain-mail" && item["carriage"] == "worn")
+            );
+            assert!(
+                starting
+                    .iter()
+                    .all(|item| item["item_id"].as_str().unwrap().starts_with("equipment-"))
+            );
             let purse_before = row(&before["merchants"], "id", "merchant")["purse_cp"]
                 .as_u64()
                 .unwrap();
@@ -2088,5 +2218,241 @@ mod ledger_tests {
             assert!(!before_story["merchants"].as_array().unwrap().is_empty());
             assert!(!before_story["npc_purses"].as_array().unwrap().is_empty());
         });
+    }
+}
+
+#[cfg(test)]
+mod roleplay_read_contract_tests {
+    use super::*;
+    #[test]
+    fn scene_contents_are_json_and_malformed_contents_are_explained() {
+        let mut scene = rpc::GameplayScene {
+            scene_contents_json: r#"{"narrative_focus":"merchant","things":[]}"#.into(),
+            ..Default::default()
+        };
+        let shown = scene_json(&scene);
+        assert!(shown["contents"].is_object());
+        assert_eq!(shown["narrative_focus"], "merchant");
+        assert!(shown["contents_error"].is_null());
+        scene.scene_contents_json = "invalid".into();
+        assert!(
+            scene_json(&scene)["contents_error"]
+                .as_str()
+                .unwrap()
+                .contains("invalid scene contents JSON")
+        );
+    }
+    #[test]
+    fn describe_lists_each_added_roleplay_command_and_its_json_output() {
+        let description = describe_json();
+        for name in [
+            "transcript",
+            "trade-terms",
+            "npc show",
+            "npc last",
+            "music",
+            "voice",
+            "mood",
+            "narrative",
+            "present read",
+            "screen",
+            "place travel",
+            "wait --for",
+            "timeline|audit|decisions cursor",
+        ] {
+            let command = description["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|command| command["command"] == name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            assert!(
+                command["output"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty())
+            );
+        }
+    }
+}
+
+/// Join observed display facts by authenticated run, public table sequence and one page clock.
+/// The ring is bounded diagnostic evidence; absent/evicted observations stay null.
+pub(super) fn transcript_timings(mut lines: Vec<Value>, run: &[u8]) -> Vec<Value> {
+    let snapshot = super::timeline::snapshot(4096, None, None, false);
+    join_transcript_timings(&mut lines, &snapshot, run);
+    lines
+}
+
+fn join_transcript_timings(lines: &mut [Value], snapshot: &Value, run: &[u8]) {
+    let run_hash = super::super::presentation_ingress::scope_hash("run", run);
+    let Some(events) = snapshot["events"].as_array() else {
+        return;
+    };
+    let mut hero_lines = HashMap::new();
+    for line in lines {
+        let sequence = line["seq"].as_u64();
+        let committed_ms = line["unix_ms"].as_i64();
+        let matching: Vec<_> = events
+            .iter()
+            // Rewind can reuse a public sequence. Earlier accepted reports cannot time the new row.
+            .filter(|event| {
+                committed_ms.is_none_or(|committed| {
+                    event["unix_ms"]
+                        .as_i64()
+                        .is_some_and(|received| received >= committed)
+                })
+            })
+            .map(|event| &event["fields"])
+            .filter(|fields| {
+                fields["run_id_hash"].as_str() == Some(&run_hash)
+                    && fields["audience"].as_str() == Some("display")
+                    && sequence.is_some()
+                    && fields["table_sequence"].as_u64() == sequence
+            })
+            .collect();
+        // A reconnect/new display owns a different clock. Never join its end to another start.
+        if let Some(producer) = matching
+            .last()
+            .and_then(|fields| fields["page_producer_hash"].as_str())
+        {
+            let mut shown = None;
+            let mut hidden = None;
+            let mut start = None;
+            let mut end = None;
+            for fields in matching
+                .iter()
+                .filter(|fields| fields["page_producer_hash"].as_str() == Some(producer))
+            {
+                let minimum =
+                    |previous: Option<u64>, observed: Option<u64>| match (previous, observed) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    };
+                let maximum =
+                    |previous: Option<u64>, observed: Option<u64>| match (previous, observed) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        (a, b) => a.or(b),
+                    };
+                start = minimum(start, fields["voice_start_ms"].as_u64());
+                end = maximum(end, fields["voice_end_ms"].as_u64());
+                if matches!(
+                    fields["component_type"].as_str(),
+                    Some("subtitle" | "speech_bubble" | "dice")
+                ) {
+                    if fields["visibility"].as_str() == Some("visible")
+                        && matches!(
+                            fields["component_phase"].as_str(),
+                            Some("opened" | "readable")
+                        )
+                    {
+                        shown = minimum(shown, fields["at_ms"].as_u64());
+                    }
+                    if fields["component_phase"].as_str() == Some("hidden") {
+                        hidden = maximum(
+                            hidden,
+                            fields["closed_ms"]
+                                .as_u64()
+                                .or_else(|| fields["at_ms"].as_u64()),
+                        );
+                    }
+                }
+            }
+            let producer = producer.to_owned();
+            line["subtitle"] = json!({"shown":shown,"hidden":hidden});
+            line["voice"] = json!({"start":start,"end":end});
+            line["timing_clock"] = json!({"producer":producer,"units":"page_ms"});
+        }
+        let hero = line["hero_index"].as_u64();
+        let place = line["place"].as_str().map(str::to_owned);
+        let unix_ms = line["unix_ms"].as_i64();
+        match line["role"].as_str() {
+            Some("TABLE_ROLE_HERO") if line["kind"].as_str() == Some("TABLE_KIND_SPEECH") => {
+                if let (Some(hero), Some(at)) = (hero, unix_ms) {
+                    hero_lines.insert((hero, place), at);
+                }
+            }
+            Some("TABLE_ROLE_NPC") if line["kind"].as_str() == Some("TABLE_KIND_SPEECH") => {
+                if let (Some(hero), Some(at)) = (hero, unix_ms)
+                    && let Some(sent) = hero_lines.remove(&(hero, place))
+                {
+                    // Server append latency for this hero's next NPC answer in the same place.
+                    line["reply_ms"] = json!(at.checked_sub(sent).filter(|delay| *delay >= 0));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod transcript_timing_tests {
+    use super::*;
+    use df_observe::presentation::{
+        ComponentPhase, EffectiveVisibility, PresentationComponent, TimingEvent,
+    };
+
+    #[test]
+    fn hs48_client_buffer_upload_and_transcript_join_preserve_actual_line_times() {
+        let event = |phase, at, visibility| {
+            let mut event = TimingEvent::component_lifecycle(
+                9,
+                7,
+                at,
+                PresentationComponent::Subtitle,
+                phase,
+                visibility,
+                "ready",
+            );
+            event.table_sequence = Some(42);
+            event.opened_ms = Some(1000);
+            event.closed_ms = (phase == ComponentPhase::Hidden).then_some(at);
+            event
+        };
+        let mut voice = TimingEvent::lifecycle("voice-end", "ended", 9, 7, 3200);
+        voice.table_sequence = Some(42);
+        voice.voice_start_ms = Some(950);
+        voice.voice_end_ms = Some(3200);
+        let snapshot = super::super::super::presentation_ingress::fake_display_upload(
+            vec![
+                event(ComponentPhase::Opened, 1000, EffectiveVisibility::Visible),
+                voice,
+                event(ComponentPhase::Hidden, 4500, EffectiveVisibility::Hidden),
+            ],
+            b"run-48",
+        );
+        let mut lines = vec![
+            json!({"seq":41,"role":"TABLE_ROLE_HERO","kind":"TABLE_KIND_SPEECH","hero_index":2,"place":"inn","unix_ms":10000}),
+            json!({"seq":42,"role":"TABLE_ROLE_NPC","kind":"TABLE_KIND_SPEECH","hero_index":2,"place":"inn","unix_ms":12400}),
+        ];
+        join_transcript_timings(&mut lines, &snapshot, b"run-48");
+        assert_eq!(lines[1]["subtitle"], json!({"shown":1000,"hidden":4500}));
+        assert_eq!(lines[1]["voice"], json!({"start":950,"end":3200}));
+        assert_eq!(lines[1]["reply_ms"], 2400);
+        let mut other_run = vec![json!({"seq":42,"subtitle":{"shown":null,"hidden":null}})];
+        join_transcript_timings(&mut other_run, &snapshot, b"another-run");
+        assert!(other_run[0]["subtitle"]["shown"].is_null());
+        let mut after_rewind =
+            vec![json!({"seq":42,"unix_ms":200000,"subtitle":{"shown":null,"hidden":null}})];
+        join_transcript_timings(&mut after_rewind, &snapshot, b"run-48");
+        assert!(after_rewind[0]["subtitle"]["shown"].is_null());
+
+        let mut second_page = snapshot.clone();
+        for event in second_page["events"].as_array_mut().unwrap() {
+            event["fields"]["page_producer_hash"] = json!("second-page");
+            event["fields"]["voice_start_ms"] = Value::Null;
+            event["fields"]["voice_end_ms"] = Value::Null;
+        }
+        let mut both_pages = snapshot.clone();
+        both_pages["events"]
+            .as_array_mut()
+            .unwrap()
+            .extend(second_page["events"].as_array().unwrap().iter().cloned());
+        let mut observed_on_second_page = vec![json!({"seq":42})];
+        join_transcript_timings(&mut observed_on_second_page, &both_pages, b"run-48");
+        assert_eq!(
+            observed_on_second_page[0]["timing_clock"]["producer"],
+            "second-page"
+        );
+        assert!(observed_on_second_page[0]["voice"]["start"].is_null());
     }
 }

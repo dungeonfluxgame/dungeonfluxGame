@@ -230,16 +230,20 @@ fn apply_hit_points(
     value: i64,
 ) -> Result<(String, String), String> {
     let entity = hero_entity(state, member)?;
+    let maximum = i64::from(
+        super::super::journey::maximum_hit_points(state, entity)
+            .map_err(|_| "hero maximum hit points unavailable")?,
+    );
     let hit_points = super::super::model::label("hit-points").map_err(|_| "label unavailable")?;
     let resource = state
         .resources
         .iter_mut()
         .find(|resource| resource.owner == entity && resource.resource == hit_points)
         .ok_or_else(|| "hero has no hit-point resource".to_owned())?;
-    if value < resource.minimum || value > resource.maximum {
+    if value < resource.minimum || value > maximum {
         return Err(format!(
             "hit points must be {}..={} (maximum {})",
-            resource.minimum, resource.maximum, resource.maximum
+            resource.minimum, maximum, maximum
         ));
     }
     let before = format!("{} HP", resource.value);

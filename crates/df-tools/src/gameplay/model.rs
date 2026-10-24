@@ -18,12 +18,18 @@ use std::sync::OnceLock;
 pub(super) const SOURCE: &[u8] = b"SRD5.2.1 page6 D20 Tests Ability Checks; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; Wizards of the Coast LLC; CC BY 4.0; normal single-d20 check only";
 const CONTENT: &[u8] = b"DungeonFlux authored local journey profile6: Share the Lantern room. Two independently joined members create source-selected Dwarf Fighter/Soldier heroes; their selections and starting equipment persist. Begin at Lantern Wharf only after both builds. The physically present unnamed courier is canonical lantern-wharf-courier, with cautious-courier personality, deliver-dispatch motivation, and directional unfamiliar relationships to each hero. Asking reveals a member-private delivery clue; it grants no courier knowledge or witness. Accepted escort creates a shared courier-escort-contact fact with the acting hero as subject and an actual same-scene courier witness/known fact. The terminal escort-courier event remains shared with empty subjects for current phase admission. On a subsequent Defend command, source-bound courier-escort-reaction-policy may change only that witnessed hero's relationship to escort-supported through df-interaction::react on the prior committed contact. The change is categorical story policy, without a D&D bonus, action success, resource grant, or packet delivery. Defending begins the normal adjacent nonlethal Bandit encounter with actual initiative, player-selected attacks/SecondWind/endturn, source-qualified damage, unconscious one-HP knockout and no wall-time rest completion. Source knockout starts persist due schedules. After combat a joined member may propose an uninterrupted campaign Short Rest: one hour, no Hit Point Dice or HP healing, Fighter one-use SecondWind recharge capped2. Knockout waking retains Prone and dropped held gear and preserves the battle outcome. Versioned local-journey-rpc-3-threads-1-rest-1-inn-1-npc-1 maps begin-story/private-courier-note/escort-courier events to continued sealed-packet-delivery-thread; defend-courier/greatsword-attack/second-wind/end-turn events continue dockside-threat-thread, resolving only on the current operation accepted bandit unconscious transition. A conscious joined hero may select Harbor Inn from the current source-bound victory offer, before or after Short Rest. The admitted harbor-inn ContentEvent continues the unresolved packet thread and retains party, knowledge, resource, encounter and schedule records at unchanged logical time; this is scene continuation, not timed physical travel or delivery. Current phase admission requires exact accepted source receipts, prerequisite beats and historical native encounter outcome. Native Bandit tactics enumerate at most two source-legal authored adjacent targets in joined party order, select the first legal target without utility weights and preserve attack/draw authority. Delivery remains unresolved after combat; unmapped events consume no narrative source. Preconfigured Investigation/next-scene draft remains an earlier source lineage, not the active browser room.";
 
-fn invalid<T>(_: T) -> RepositoryError {
-    super::refusal_detail::note("model-value");
+fn invalid<T: std::fmt::Debug>(error: T) -> RepositoryError {
+    super::refusal_detail::cause(
+        "model-value",
+        format!("{}::{error:?}", std::any::type_name::<T>()),
+    );
     RepositoryError::InvalidCandidate
 }
 pub(super) fn label(value: &str) -> Result<RevisionLabel, RepositoryError> {
-    RevisionLabel::new(Some(value)).map_err(invalid)
+    RevisionLabel::new(Some(value)).map_err(|error| {
+        super::refusal_detail::cause("model-revision-label", format!("RevisionLabel::{error:?}"));
+        RepositoryError::InvalidCandidate
+    })
 }
 pub(super) fn rule() -> Result<RuleReference, RepositoryError> {
     Ok(RuleReference {
@@ -101,6 +107,8 @@ fn source_digests() -> &'static SourceDigests {
         let mut handler = Sha256::new();
         for source in [
             include_bytes!("../../../df-rules/src/ability_check.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/influence.rs").as_slice(),
+            include_bytes!("opening_help.rs").as_slice(),
             include_bytes!("../../../df-rules/src/local_journey.rs").as_slice(),
             include_bytes!("journey.rs").as_slice(),
             include_bytes!("journey/tactical.rs").as_slice(),
@@ -353,37 +361,31 @@ pub(super) fn member() -> Result<MemberId, RepositoryError> {
 /// The largest single text a checkpoint may hold is one decision's recorded
 /// receipt (`AcceptedDecision::semantic_output`: the hex of an
 /// `AcceptedAction`). Sized from the fight's own caps, not from observed
-/// traffic: at most 6 combatants (2 heroes, 4 enemies) act in one decision
+/// traffic: at most 10 combatants (6 heroes, 4 enemies) act in one decision
 /// (`enemy_turns` stops at the first able hero, and a battle finishes when a
 /// side is wholly incapacitated), each turn records at most 12 outcomes
 /// (move segments, its attack, opportunity attacks it provokes, a death
-/// save), and one outcome encodes in at most 2,048 bytes (names of at most
-/// 48 bytes, at most 4 fight lines, a move path, ids, and the source
+/// save), and one outcome encodes in at most 5,120 bytes (32-character UTF-8
+/// names of at most 128 bytes, at most 4 UTF-8 fight lines, a move path, ids, and the source
 /// revision). Hex doubles the bytes. The per-outcome and per-decision
 /// budgets are proven by
 /// `journey::tactical::tests::a_worst_case_receipt_fits_the_checkpoint_text_limit`
 /// and the every-creature sweep.
-const MAXIMUM_RECEIPT_TEXT_BYTES: usize = 6 * 12 * 2048 * 2;
+const MAXIMUM_RECEIPT_TEXT_BYTES: usize =
+    (df_rules::local_journey::MAXIMUM_PARTY + 4) * 12 * 5120 * 2;
 pub(super) fn limits() -> CheckpointLimits {
     CheckpointLimits {
         maximum_records: if super::journey::tactical::enabled() {
-            4096
+            8192
         } else {
-            // Two accepted heroes retain bounded public-look chunks in both character
+            // Six accepted heroes retain bounded public-look chunks in both character
             // and creation records, in addition to their source-bound build choices.
-            1024
+            3072
         },
         maximum_text_bytes: MAXIMUM_RECEIPT_TEXT_BYTES,
-        maximum_total_text_bytes: if super::journey::tactical::enabled() {
-            1024 * 1024
-        } else {
-            65536
-        },
-        maximum_retained_bytes: if super::journey::tactical::enabled() {
-            2 * 1024 * 1024
-        } else {
-            1024 * 1024
-        },
+        // Generated places, their people and recorded facts accumulate over a session.
+        maximum_total_text_bytes: 4 * 1024 * 1024,
+        maximum_retained_bytes: 8 * 1024 * 1024,
     }
 }
 pub(super) fn recovery() -> Result<NativeRecoverySource, RepositoryError> {
@@ -733,6 +735,7 @@ impl RulesCommandHandler for HarborHandler {
         current: &Checkpoint,
     ) -> Result<Checkpoint, RepositoryError> {
         let GameInput::Game(command) = input.command else {
+            super::refusal_detail::cause("harbor-stage", "ExpectedGameInput".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         };
         let GameCommand::ProposeAction {
@@ -742,6 +745,7 @@ impl RulesCommandHandler for HarborHandler {
             choices,
         } = &command.command
         else {
+            super::refusal_detail::cause("harbor-stage", "ExpectedProposeAction".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         };
         if *who != actor()?
@@ -751,12 +755,15 @@ impl RulesCommandHandler for HarborHandler {
             || !choices.is_empty()
             || !current.state().decisions.is_empty()
         {
+            super::refusal_detail::cause("harbor-stage", "ActorOfferBinding".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
         let [draw] = input.supplied_draws else {
+            super::refusal_detail::cause("harbor-stage", "SuppliedDrawCount".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         };
         if draw.sides != 20 || draw.source != rule()? {
+            super::refusal_detail::cause("harbor-stage", "SuppliedDrawBinding".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
         let result = resolve(AbilityCheckInput {
@@ -820,6 +827,7 @@ pub(super) fn stage_registered_journey(
     input: &GameInput,
 ) -> Result<Checkpoint, RepositoryError> {
     let GameInput::Game(command) = input else {
+        super::refusal_detail::cause("harbor-stage", "ExpectedGameInput".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     let staged = super::journey::stage(current, input)?;
@@ -856,6 +864,7 @@ impl HarborScene {
 
 pub(super) fn scene(current: &Checkpoint) -> Result<HarborScene, RepositoryError> {
     let [active] = current.state().narrative.active_beats.as_slice() else {
+        super::refusal_detail::cause("harbor-stage", "ActiveBeatCount".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     HarborScene::from_entry(active.entry.as_str())
@@ -898,6 +907,7 @@ pub(super) fn destinations(current: &Checkpoint) -> Result<Vec<HarborScene>, Rep
 
 fn stage_scene(current: &Checkpoint, input: &GameInput) -> Result<Checkpoint, RepositoryError> {
     let GameInput::Game(command) = input else {
+        super::refusal_detail::cause("harbor-stage", "ExpectedGameInput".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     let GameCommand::ProposeAction {
@@ -907,9 +917,11 @@ fn stage_scene(current: &Checkpoint, input: &GameInput) -> Result<Checkpoint, Re
         choices,
     } = &command.command
     else {
+        super::refusal_detail::cause("harbor-stage", "ExpectedProposeAction".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     let [(input_id, selected)] = choices.as_slice() else {
+        super::refusal_detail::cause("harbor-stage", "DestinationSelection".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     };
     let destination = HarborScene::from_entry(selected.as_str())?;
@@ -921,6 +933,7 @@ fn stage_scene(current: &Checkpoint, input: &GameInput) -> Result<Checkpoint, Re
         || current.state().decisions.len() != 1
         || !destinations(current)?.contains(&destination)
     {
+        super::refusal_detail::cause("harbor-stage", "DestinationOfferBinding".to_owned());
         return Err(RepositoryError::InvalidCandidate);
     }
     validate_client_command(
@@ -1004,9 +1017,11 @@ impl HarborEngine {
         }
         // Lookup runs in DurableOwner first, so a retry never reaches this draw owner.
         if !current.state().decisions.is_empty() {
+            super::refusal_detail::cause("harbor-stage", "PriorDecision".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         }
         let GameInput::Game(command) = input else {
+            super::refusal_detail::cause("harbor-stage", "ExpectedGameInput".to_owned());
             return Err(RepositoryError::InvalidCandidate);
         };
         let source = rule()?;
@@ -1092,6 +1107,7 @@ impl SessionEngine<NativeScope<LocalDemoAuthority>> for HarborEngine {
         use df_model::transition::TransitionResult;
         use df_session::submission::OperationScope;
         if let Err(error) = scope.validate_input(input) {
+            super::refusal_detail::cause("engine-input-validation", format!("{error:?}"));
             return TransitionResult::Rejected(error);
         }
         match self.decide_admitted(current, input, scope.operation()) {
@@ -1183,7 +1199,9 @@ mod tests {
         assert!(
             super::super::actor::audit_lines_containing("REFUSAL action=CreateCharacter")
                 .iter()
-                .any(|line| line.contains("step=checkpoint-validation cause=InvalidTime"))
+                .any(|line| line.contains(
+                    "step=checkpoint-validation outer=checkpoint-validation cause=InvalidTime"
+                ))
         );
     }
 
@@ -1378,7 +1396,11 @@ mod creator_portrait_recovery_tests {
     use df_protocol::common as rpc;
     use df_types::OperationId;
 
-    fn with_hero(run: impl FnOnce(Checkpoint, AssetReference, MemberId)) {
+    fn with_heroes(
+        count: usize,
+        full_identity: bool,
+        run: impl FnOnce(Checkpoint, Vec<(AssetReference, MemberId)>),
+    ) {
         let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
             "fixtures/harbor-journey-tuning-baseline.json"
         ))
@@ -1391,106 +1413,263 @@ mod creator_portrait_recovery_tests {
         )
         .unwrap();
         pack::with_test_pack(loaded, || {
-            let current = journey::initial().unwrap();
-            let joined = journey::stage_join(
-                &current,
-                &beat_script_tests::input(
+            let mut current = journey::initial().unwrap();
+            let mut members = Vec::new();
+            for index in 0..count {
+                current = journey::stage_join(
                     &current,
-                    journey::bootstrap_member().unwrap(),
-                    1,
-                    "join-room",
-                    vec![],
-                ),
-            )
-            .unwrap();
-            let member = MemberId::from_bytes(&[0x61; 16]).unwrap();
-            let mut identity = crate::gameplay::hero_identity::Identity::from_menus(&[])
-                .unwrap()
-                .to_rpc();
-            identity.appearance.as_mut().unwrap().public_description =
-                "Silver horns, emerald skin and a violet coat.".to_owned();
-            let selection = rpc::CharacterSelection {
-                name: "Neris".into(),
-                choices: [
-                    ("species", "dwarf"),
-                    ("class", "fighter-1"),
-                    ("background", "soldier"),
-                    ("language-1", "dwarvish"),
-                    ("language-2", "elvish"),
-                    ("skill-1", "acrobatics"),
-                    ("skill-2", "survival"),
-                    ("gaming-set", "playing-cards"),
-                    ("allied-ties", "join-order"),
-                    ("alignment", "chaotic-good"),
-                    ("build-package", "melee-stalwart"),
-                ]
-                .into_iter()
-                .map(|(group, option)| rpc::JourneyChoice {
-                    group_id: group.into(),
-                    option_id: option.into(),
-                })
-                .collect(),
-                identity: Some(identity),
-                ..Default::default()
-            };
-            let request = rpc::SubmitActionRequest {
-                session_id: Some(rpc::SessionId {
-                    value: Some(joined.basis().session.as_bytes().to_vec()),
-                }),
-                run_id: Some(rpc::RunId {
-                    value: Some(joined.basis().run.as_bytes().to_vec()),
-                }),
-                operation_id: Some(rpc::OperationId {
-                    value: Some(vec![2; 16]),
-                }),
-                observed_revision: Some(wire::revision(joined.basis().revision)),
-                offer_id: journey::offer_id(&joined, rpc::GameplayActionKind::CreateCharacter),
-                action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
-                character: Some(selection),
-                ..Default::default()
-            };
-            let mut input = wire::journey_input(&request, member, &joined).unwrap();
-            let GameInput::Game(command) = &mut input else {
-                panic!("game command")
-            };
-            let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
-                panic!("creation")
-            };
-            choices.extend(hero_library::identity_choices(request.character.as_ref()).unwrap());
-            // The actor's trusted approved-attachment hook, after wire rejects client metadata.
-            let image = AssetReference {
-                key: label(&"a".repeat(64)).unwrap(),
-                digest: ContentDigest(
-                    Sha256::digest(b"approved synthetic creator portrait").into(),
-                ),
-                byte_length: b"approved synthetic creator portrait".len() as u64,
-                kind: AssetKind::Image,
-            };
-            for (field, value) in [
-                ("key", image.key.as_str().to_owned()),
-                ("digest", journey::hex(&image.digest.0)),
-                ("bytes", image.byte_length.to_string()),
-                ("revision", "7".to_owned()),
-            ] {
-                choices.push((
-                    label(&format!("identity-portrait:{field}")).unwrap(),
-                    label(&value).unwrap(),
-                ));
+                    &beat_script_tests::input(
+                        &current,
+                        journey::bootstrap_member().unwrap(),
+                        index as u8 + 1,
+                        "join-room",
+                        vec![],
+                    ),
+                )
+                .unwrap();
+                members.push(current.state().members.last().unwrap().member);
             }
-            let accepted = HarborEngine
-                .decide_admitted(&joined, &input, OperationId::from_bytes(&[2; 16]).unwrap())
-                .expect("approved portrait must not prevent accepting the hero");
+            let mut portraits = Vec::new();
+            for (index, member) in members.into_iter().enumerate() {
+                let joined = current;
+                let mut identity = crate::gameplay::hero_identity::Identity::from_menus(&[])
+                    .unwrap()
+                    .to_rpc();
+                identity.appearance.as_mut().unwrap().public_description =
+                    "Silver horns, emerald skin and a violet coat.".to_owned();
+                if full_identity {
+                    identity.appearance.as_mut().unwrap().public_description =
+                        format!("{}\u{96ea}{}", "\u{1f409}".repeat(698), "a".repeat(1301));
+                    identity.origin = "\u{1f409}".repeat(160);
+                    identity.occupation = "\u{1f409}".repeat(160);
+                    identity.motivation = "\u{1f409}".repeat(160);
+                    identity.backstory = "\u{1f409}".repeat(480);
+                    identity.facts = (0..6)
+                        .map(|fact| format!("{fact}{}", "\u{1f409}".repeat(159)))
+                        .collect();
+                }
+                let selection = rpc::CharacterSelection {
+                    name: ["Neris", "Sigrun", "Brynn", "Corin", "Elara", "Vix"][index].into(),
+                    choices: [
+                        ("species", "dwarf"),
+                        ("class", "fighter-1"),
+                        ("background", "soldier"),
+                        ("language-1", "dwarvish"),
+                        ("language-2", "elvish"),
+                        ("skill-1", "acrobatics"),
+                        ("skill-2", "survival"),
+                        ("gaming-set", "playing-cards"),
+                        ("allied-ties", "join-order"),
+                        ("alignment", "chaotic-good"),
+                        ("build-package", "melee-stalwart"),
+                    ]
+                    .into_iter()
+                    .map(|(group, option)| rpc::JourneyChoice {
+                        group_id: group.into(),
+                        option_id: option.into(),
+                    })
+                    .collect(),
+                    identity: Some(identity),
+                    portrait_scenery: if full_identity {
+                        format!("{}{}", "\u{1f409}".repeat(136), "a".repeat(224))
+                    } else {
+                        String::new()
+                    },
+                    ..Default::default()
+                };
+                let request = rpc::SubmitActionRequest {
+                    session_id: Some(rpc::SessionId {
+                        value: Some(joined.basis().session.as_bytes().to_vec()),
+                    }),
+                    run_id: Some(rpc::RunId {
+                        value: Some(joined.basis().run.as_bytes().to_vec()),
+                    }),
+                    operation_id: Some(rpc::OperationId {
+                        value: Some(vec![index as u8 + 10; 16]),
+                    }),
+                    observed_revision: Some(wire::revision(joined.basis().revision)),
+                    offer_id: journey::offer_id(&joined, rpc::GameplayActionKind::CreateCharacter),
+                    action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+                    character: Some(selection),
+                    ..Default::default()
+                };
+                let mut input = wire::journey_input(&request, member, &joined).unwrap();
+                let GameInput::Game(command) = &mut input else {
+                    panic!("game command")
+                };
+                let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+                    panic!("creation")
+                };
+                choices.extend(hero_library::identity_choices(request.character.as_ref()).unwrap());
+                // The actor's trusted approved-attachment hook, after wire rejects client metadata.
+                let image = AssetReference {
+                    key: label(&if count == 1 {
+                        "a".repeat(64)
+                    } else {
+                        format!("{index:064x}")
+                    })
+                    .unwrap(),
+                    digest: ContentDigest(
+                        Sha256::digest(b"approved synthetic creator portrait").into(),
+                    ),
+                    // Media bytes live in AssetStore, independently of checkpoint budgets.
+                    byte_length: if full_identity {
+                        2 * 1024 * 1024
+                    } else {
+                        b"approved synthetic creator portrait".len() as u64
+                    },
+                    kind: AssetKind::Image,
+                };
+                for (field, value) in [
+                    ("key", image.key.as_str().to_owned()),
+                    ("digest", journey::hex(&image.digest.0)),
+                    ("bytes", image.byte_length.to_string()),
+                    ("revision", "7".to_owned()),
+                ] {
+                    choices.push((
+                        label(&format!("identity-portrait:{field}")).unwrap(),
+                        label(&value).unwrap(),
+                    ));
+                }
+                choices.shrink_to_fit();
+                let accepted = HarborEngine
+                    .decide_admitted(
+                        &joined,
+                        &input,
+                        OperationId::from_bytes(&[index as u8 + 10; 16]).unwrap(),
+                    )
+                    .expect("approved portrait must not prevent accepting the hero");
+                portraits.push((image, member));
+                current = accepted;
+            }
+            run(current, portraits);
+        });
+    }
+
+    fn with_hero(run: impl FnOnce(Checkpoint, AssetReference, MemberId)) {
+        with_heroes(1, false, |accepted, mut portraits| {
+            let (image, member) = portraits.pop().unwrap();
             run(accepted, image, member);
         });
     }
 
     fn codec_limits() -> df_persistence::NativeCodecLimits {
-        df_persistence::NativeCodecLimits {
-            maximum_document_bytes: 2 * 1024 * 1024,
-            maximum_allocated_bytes: 4 * 1024 * 1024,
-            maximum_collection_items: 8192,
-            maximum_text_bytes: 4096,
-        }
+        crate::gameplay::live_codec_limits()
+    }
+
+    #[test]
+    fn obsolete_four_kib_codec_text_limit_refuses_the_creation_receipt_with_exact_budget() {
+        with_hero(|accepted, _, _| {
+            let largest_receipt = accepted
+                .state()
+                .decisions
+                .iter()
+                .filter_map(|decision| decision.semantic_output.as_ref())
+                .map(String::len)
+                .max()
+                .unwrap();
+            println!("CREATOR_RECEIPT largest_text_bytes={largest_receipt}");
+            super::super::refusal_detail::begin_action();
+            let obsolete = df_persistence::NativeCodecLimits {
+                maximum_document_bytes: 2 * 1024 * 1024,
+                maximum_allocated_bytes: 4 * 1024 * 1024,
+                maximum_collection_items: 8192,
+                maximum_text_bytes: 4096,
+            };
+            assert_eq!(
+                recovery()
+                    .unwrap()
+                    .encode_candidate(&accepted, accepted.pins(), obsolete),
+                Err(RepositoryError::InvalidCandidate)
+            );
+            let diagnostic = df_session::submission::take_refusal_diagnostic().unwrap();
+            assert_eq!(diagnostic.step, "checkpoint-codec-budget");
+            assert_eq!(
+                diagnostic.cause,
+                format!("Capacity budget=text_bytes actual={largest_receipt} limit=4096")
+            );
+        });
+    }
+
+    #[test]
+    fn six_creator_portraits_and_full_library_identities_leave_checkpoint_session_capacity() {
+        with_heroes(
+            df_rules::local_journey::MAXIMUM_PARTY,
+            true,
+            |accepted, portraits| {
+                assert_eq!(accepted.state().characters.len(), 6);
+                assert_eq!(creator_portrait_assets(accepted.state()).unwrap().len(), 6);
+                let source = recovery().unwrap();
+                let live = codec_limits();
+                // Keep half the document/allocation budgets and a quarter of collection items
+                // free even after this workload; no production bound is changed.
+                let headroom = df_persistence::NativeCodecLimits {
+                    maximum_document_bytes: live.maximum_document_bytes / 2,
+                    maximum_allocated_bytes: live.maximum_allocated_bytes / 2,
+                    maximum_collection_items: live.maximum_collection_items * 3 / 4,
+                    maximum_text_bytes: 8192,
+                };
+                let encode = |checkpoint: &Checkpoint| {
+                    super::super::refusal_detail::begin_action();
+                    source
+                        .encode_candidate(checkpoint, checkpoint.pins(), headroom)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{error:?}; {:?}",
+                                df_session::submission::take_refusal_diagnostic()
+                            )
+                        })
+                };
+                let initial = encode(&accepted);
+                let mut state = accepted.state().clone();
+                let mut basis = accepted.basis();
+                // A bounded storage workload: 2,048 distinct accepted decisions with 512-byte
+                // semantic outputs. This measures checkpoint headroom, not arbitrary game turns.
+                for index in 1u128..=2048 {
+                    basis.revision = basis.revision.next_sequence().unwrap();
+                    state.decisions.push(AcceptedDecision {
+                        operation: OperationId::from_bytes(&index.to_be_bytes()).unwrap(),
+                        revision: basis.revision,
+                        facts: vec![],
+                        draws: vec![],
+                        effects: vec![],
+                        source_policy: rule().unwrap().catalog,
+                        semantic_output: Some("s".repeat(512)),
+                    });
+                }
+                let long_session = checkpoint(basis, state).unwrap();
+                let encoded = encode(&long_session);
+                let restored = source
+                    .decode_checkpoint(
+                        &encoded,
+                        long_session.basis(),
+                        long_session.pins(),
+                        headroom,
+                    )
+                    .unwrap();
+                assert_eq!(restored, long_session);
+                for (image, member) in portraits {
+                    let saved = hero_library::snapshot(&restored, member).unwrap();
+                    let hero = saved.hero.unwrap();
+                    let identity = hero.identity.unwrap();
+                    assert_eq!(identity.appearance.unwrap().public_description.len(), 4096);
+                    assert_eq!(identity.backstory.chars().count(), 480);
+                    assert_eq!(identity.facts.len(), 6);
+                    assert_eq!(hero.portrait_scenery.chars().count(), 360);
+                    let portrait = saved.portrait.unwrap();
+                    assert_eq!(portrait.key, image.key.as_str());
+                    assert_eq!(portrait.digest, image.digest.0);
+                    assert_eq!(portrait.bytes, 2 * 1024 * 1024);
+                    assert_eq!(portrait.revision, 7);
+                }
+                println!(
+                    "SIX_PORTRAIT_CAPACITY initial_bytes={} long_session_bytes={} added_decisions=2048 decision_text_bytes=512 retained_bytes={:?}",
+                    initial.len(),
+                    encoded.len(),
+                    restored.retained_bytes()
+                );
+            },
+        );
     }
 
     #[test]
@@ -1503,7 +1682,12 @@ mod creator_portrait_recovery_tests {
             let source = recovery().unwrap();
             let encoded = source
                 .encode_candidate(&accepted, accepted.pins(), codec_limits())
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{error:?}; {:?}",
+                        df_session::submission::take_refusal_diagnostic()
+                    )
+                });
             let restored = source
                 .decode_checkpoint(&encoded, accepted.basis(), accepted.pins(), codec_limits())
                 .unwrap();

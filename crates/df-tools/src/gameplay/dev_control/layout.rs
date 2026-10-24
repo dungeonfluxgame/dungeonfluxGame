@@ -101,6 +101,11 @@ impl LayoutState {
         }
         Ok(())
     }
+    pub(super) async fn presentation_read(&self) -> Result<Value, String> {
+        serde_json::to_value(&self.state.lock().await.presentation)
+            .map_err(|_| "presentation serialization failed".to_owned())
+    }
+
     pub(super) async fn presentation(&self, body: &Value) -> Result<Value, String> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err("development controls are disabled".to_owned());

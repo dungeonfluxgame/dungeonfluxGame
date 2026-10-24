@@ -57,8 +57,10 @@ mod parse;
 mod place;
 mod presentation;
 mod reads;
+mod roleplay;
 mod screen_preview;
 mod social_view;
+mod tempo;
 pub(super) mod timeline;
 
 /// The development history bundle, wired only when the surface is on: the
@@ -101,12 +103,13 @@ struct Shared {
     lore: Arc<super::npc_reply::local_lore::LocalLore>,
 }
 
-/// The two joinable seats and the session scope learned from the first join.
+/// The joinable seats and the session scope learned from the first join.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Seats {
     session_id: Option<Vec<u8>>,
     run_id: Option<Vec<u8>>,
-    seats: [Seat; 2],
+    #[serde(deserialize_with = "deserialize_seats")]
+    seats: Vec<Seat>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -205,6 +208,7 @@ pub(super) fn setup(
     };
     let state = Arc::new(shared);
     let mut router = Router::new()
+        .merge(roleplay::routes())
         .route("/dev/health", get(health))
         .route("/dev/heroes", get(heroes::list))
         .route("/dev/heroes/{id}", get(heroes::show))
@@ -230,6 +234,7 @@ pub(super) fn setup(
         .route("/dev/gates", get(reads::gates))
         .route("/dev/photo-check", get(reads::photo_check))
         .route("/dev/ledger/edit", post(economy::unsupported_edit))
+        .route("/dev/economy/edit", post(economy::unsupported_edit))
         .route("/dev/scene-changes", get(economy::scene_changes))
         .route("/dev/lore", get(lore::read).post(lore::add))
         .route("/dev/lore/edit", post(lore::unsupported_edit))
@@ -244,7 +249,10 @@ pub(super) fn setup(
         .route("/dev/fight/log", get(fight::log))
         .route("/dev/fight/offers", get(fight::offers))
         .route("/dev/fight/initiative", get(fight::initiative))
-        .route("/dev/presentation", post(presentation_edit))
+        .route(
+            "/dev/presentation",
+            get(roleplay::present).post(presentation_edit),
+        )
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
         .route("/dev/camera", get(camera::read).post(camera::edit))
@@ -260,8 +268,9 @@ pub(super) fn setup(
         .route("/dev/art/edit", post(art::edit))
         .route("/dev/clips", get(clips::list))
         .route("/dev/clips/request", post(clips::request))
+        .route("/dev/tempo", get(tempo::read))
         .route("/dev/music", get(music::read))
-        .route("/dev/music/edit", post(music::unsupported_edit))
+        .route("/dev/music/edit", post(music::edit))
         .route("/dev/memory", get(memory::status))
         .route("/dev/memory/search", get(memory::search))
         .route("/dev/memory/entity", get(memory::entity))
@@ -303,7 +312,9 @@ pub(super) fn setup(
             .route("/dev/screens/ticket", post(screen_preview::issue))
             .route("/gameplay/dev/screens/{ticket}", get(screen_preview::consume));
     }
-    let router = router.with_state(state);
+    let router = router
+        .layer(axum::middleware::from_fn(audit_command))
+        .with_state(state);
     Ok(Control {
         router: Some(router),
         shutdown: shutdown_receive,
@@ -312,6 +323,41 @@ pub(super) fn setup(
             token_file.display(),
         )),
     })
+}
+
+/// Audit command boundaries without logging credentials, ticket URLs or private request bodies.
+async fn audit_command(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or("unmatched", axum::extract::MatchedPath::as_str)
+        .to_owned();
+    let method = request.method().clone();
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        actor::record_audit_line(
+            "gameplay.dev_control_request",
+            format!("DEV_CONTROL refused reason=token route={route}"),
+        );
+    }
+    actor::record_audit_line(
+        "gameplay.dev_control_request",
+        format!(
+            "DEV_CONTROL route={route} method={method} status={} outcome={} ms={}",
+            response.status().as_u16(),
+            if response.status().is_success() {
+                "answered"
+            } else {
+                "refused"
+            },
+            started.elapsed().as_millis(),
+        ),
+    );
+    response
 }
 
 /// Development presentation controls are display-only state. The browser's existing view path
@@ -364,7 +410,9 @@ fn load_seats(path: &std::path::Path) -> Result<Seats, io::Error> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Seats {
             session_id: None,
             run_id: None,
-            seats: [Seat::empty(), Seat::empty()],
+            seats: (0..df_rules::local_journey::MAXIMUM_PARTY)
+                .map(|_| Seat::empty())
+                .collect(),
         }),
         Err(error) => Err(error),
     }
@@ -376,13 +424,30 @@ fn persist_seats(state: &Shared, seats: &Seats) -> Result<(), io::Error> {
     std::fs::write(&state.seat_file, bytes)
 }
 
-/// Parses `1`, `2`, `seat1` or `seat2` into a seat index.
+/// Parses the six numeric seats and their `seat` / `hero` aliases.
 fn seat_index(text: &str) -> Result<usize, String> {
-    match text.trim().to_ascii_lowercase().as_str() {
-        "1" | "seat1" | "hero1" => Ok(0),
-        "2" | "seat2" | "hero2" => Ok(1),
-        _ => Err(format!("seat {text:?} must be 1 or 2")),
+    let normalized = text.trim().to_ascii_lowercase();
+    let number = normalized
+        .strip_prefix("seat")
+        .or_else(|| normalized.strip_prefix("hero"))
+        .unwrap_or(&normalized);
+    match number.parse::<usize>() {
+        Ok(seat) if (1..=df_rules::local_journey::MAXIMUM_PARTY).contains(&seat) => Ok(seat - 1),
+        _ => Err(format!("seat {text:?} must be 1 to 6")),
     }
+}
+
+fn deserialize_seats<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Seat>, D::Error> {
+    let mut seats = <Vec<Seat> as serde::Deserialize>::deserialize(deserializer)?;
+    if !(2..=df_rules::local_journey::MAXIMUM_PARTY).contains(&seats.len()) {
+        return Err(serde::de::Error::custom(
+            "seat state needs two to six slots",
+        ));
+    }
+    seats.resize_with(df_rules::local_journey::MAXIMUM_PARTY, Seat::empty);
+    Ok(seats)
 }
 
 /// Resolves a hero reference (seat label or hero name, case-insensitive) to a
@@ -500,7 +565,7 @@ fn revision_json(revision: Option<&rpc::SessionRevision>) -> Value {
     }
 }
 
-/// Calls the owner for the exact display view the TV is being sent.
+/// Calls the owner for the live display view used by existing state/action controls.
 async fn display_view(
     state: &Shared,
 ) -> Result<(rpc::SessionRevision, rpc::ViewMessage), (StatusCode, Json<Value>)> {
@@ -609,11 +674,20 @@ async fn clear_rejected_seat_credential(
         Some(_) => {}
     }
     seats.seats[seat].credential = None;
-    if persist_seats(state, &seats).is_ok() {
+    let outcome = if persist_seats(state, &seats).is_ok() {
         SeatCredentialClear::Cleared
     } else {
         SeatCredentialClear::ClearedInMemory
-    }
+    };
+    actor::record_audit_line(
+        "gameplay.dev_control_seat",
+        format!(
+            "DEV_CONTROL seat_credential seat={} result={}",
+            df_observe::seat_hash(&rejected),
+            outcome.as_str(),
+        ),
+    );
+    outcome
 }
 
 fn stale_seat_binding(
@@ -653,6 +727,13 @@ pub(super) fn is_stale_seat_binding(error: &(StatusCode, Json<Value>)) -> bool {
 
 fn seat_credential(seats: &Seats, seat: usize) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
     if let Some(credential) = seats.seats[seat].credential {
+        actor::record_audit_line(
+            "gameplay.dev_control_seat",
+            format!(
+                "DEV_CONTROL seat_credential seat={} result=ready",
+                df_observe::seat_hash(&credential),
+            ),
+        );
         return Ok(credential);
     }
     if seats.seats[seat].member.is_some() {
@@ -930,7 +1011,7 @@ mod display_scope_tests {
         let seats = Seats {
             session_id: Some(vec![1; 16]),
             run_id: Some(vec![2; 16]),
-            seats: [
+            seats: vec![
                 Seat {
                     reclaim: Some(PendingReclaim {
                         operation: [5; 16],
@@ -961,11 +1042,39 @@ mod display_scope_tests {
     }
 
     #[test]
+    fn old_two_seat_files_expand_without_changing_credentials_and_all_six_aliases_resolve() {
+        let document = json!({"session_id":[1], "run_id":[2], "seats":[
+            {"credential":vec![3; 32], "member":[4], "hero":"Brakka"},
+            {"credential":null, "member":null, "hero":null}
+        ]});
+        let restored: Seats = serde_json::from_value(document).unwrap();
+        assert_eq!(restored.seats.len(), df_rules::local_journey::MAXIMUM_PARTY);
+        assert_eq!(restored.seats[0].credential, Some([3; 32]));
+        assert_eq!(restored.seats[0].hero.as_deref(), Some("Brakka"));
+        assert!(
+            restored.seats[2..]
+                .iter()
+                .all(|seat| seat.credential.is_none())
+        );
+        for seat in 1..=df_rules::local_journey::MAXIMUM_PARTY {
+            for label in [
+                seat.to_string(),
+                format!("seat{seat}"),
+                format!("hero{seat}"),
+            ] {
+                assert_eq!(seat_index(&label), Ok(seat - 1));
+            }
+        }
+        assert!(seat_index("0").is_err());
+        assert!(seat_index("7").is_err());
+    }
+
+    #[test]
     fn revoked_local_binding_returns_explicit_reclaim_without_player_data() {
         let seats = Seats {
             session_id: Some(vec![1; 16]),
             run_id: Some(vec![2; 16]),
-            seats: [
+            seats: vec![
                 Seat {
                     reclaim: None,
                     credential: None,
@@ -988,5 +1097,97 @@ mod display_scope_tests {
         assert!(document.get("sheet").is_none());
         assert!(document.get("member").is_none());
         assert!(document.get("token").is_none());
+    }
+}
+
+#[cfg(test)]
+mod request_audit_tests {
+    use super::*;
+    use tonic::codegen::Service;
+
+    #[tokio::test]
+    async fn request_audit_uses_templates_and_records_token_refusals_without_payloads() {
+        let mut router = Router::new()
+            .route(
+                "/dev/heroes/{id}",
+                post(|headers: HeaderMap| async move {
+                    authorized(&headers, "synthetic-audit-token")?;
+                    Ok::<_, (StatusCode, Json<Value>)>(StatusCode::OK)
+                }),
+            )
+            .layer(axum::middleware::from_fn(audit_command));
+        for authenticated in [false, true] {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/dev/heroes/private-route-id?token=secret-query");
+            if authenticated {
+                request = request.header("authorization", "Bearer synthetic-audit-token");
+            }
+            let response = router
+                .call(request.body(axum::body::Body::from("secret-body")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if authenticated {
+                    StatusCode::OK
+                } else {
+                    StatusCode::UNAUTHORIZED
+                }
+            );
+        }
+        let lines = actor::audit_lines_containing("DEV_CONTROL route=/dev/heroes/{id}");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("method=POST status=200 outcome=answered ms="))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("method=POST status=401 outcome=refused ms="))
+        );
+        assert!(
+            !actor::audit_lines_containing(
+                "DEV_CONTROL refused reason=token route=/dev/heroes/{id}"
+            )
+            .is_empty()
+        );
+        assert!(lines.iter().all(|line| {
+            ![
+                "private-route-id",
+                "secret-query",
+                "synthetic-audit-token",
+                "secret-body",
+            ]
+            .iter()
+            .any(|secret| line.contains(secret))
+        }));
+    }
+
+    #[test]
+    fn seat_credential_audit_hashes_the_binding() {
+        let credential = [0x49; 32];
+        let seats = Seats {
+            session_id: None,
+            run_id: None,
+            seats: vec![Seat {
+                reclaim: None,
+                credential: Some(credential),
+                member: Some(vec![1; 16]),
+                hero: Some("secret-hero".to_owned()),
+            }],
+        };
+        assert_eq!(seat_credential(&seats, 0).unwrap(), credential);
+        let lines = actor::audit_lines_containing(&format!(
+            "DEV_CONTROL seat_credential seat={} result=ready",
+            df_observe::seat_hash(&credential)
+        ));
+        assert!(!lines.is_empty());
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("secret-hero") && !line.contains(&"49".repeat(32)))
+        );
     }
 }

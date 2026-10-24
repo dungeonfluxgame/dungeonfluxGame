@@ -200,7 +200,7 @@ async fn away_heroes(
 /// The reclaim token for one control seat. A seat this control joined names its own
 /// hero; when that hero is not away the token stays zero and the owner refuses it. A seat
 /// it did not join is held by a phone, so the candidate is the one away hero that the
-/// other control seat does not hold. Zero or several candidates are refused, not guessed.
+/// other control seats do not hold. Zero or several candidates are refused, not guessed.
 fn reclaim_token(
     index: usize,
     seats: &Seats,
@@ -212,10 +212,13 @@ fn reclaim_token(
             .find(|hero| hero.member.as_slice() == member)
             .map_or([0; 32], |hero| hero.token));
     }
-    let other = seats.seats[1 - index].member.as_deref();
     let candidates: Vec<_> = away
         .iter()
-        .filter(|hero| Some(hero.member.as_slice()) != other)
+        .filter(|hero| {
+            !seats.seats.iter().enumerate().any(|(other_index, seat)| {
+                other_index != index && seat.member.as_deref() == Some(hero.member.as_slice())
+            })
+        })
         .collect();
     match candidates.as_slice() {
         [hero] => Ok(hero.token),
@@ -335,6 +338,15 @@ fn selected_creation_choices(
                 !duplicates_creation_choice(&group.group_id, &option.option_id, &choices)
             })
             .collect::<Vec<_>>();
+        if available.is_empty()
+            && requested.is_none()
+            && group
+                .options
+                .iter()
+                .all(|option| !option.requires_group.is_empty())
+        {
+            continue;
+        }
         let selected = if let Some(requested) = requested {
             group
                 .options
@@ -400,14 +412,17 @@ fn creation_dependencies_met(option: &rpc::JourneyOption, selected: &[rpc::Journ
 fn duplicates_creation_choice(group: &str, option: &str, selected: &[rpc::JourneyChoice]) -> bool {
     let category = match group {
         "language-1" | "language-2" => "language",
-        "skill-1" | "skill-2" => "skill",
+        "skill-1" | "skill-2" | "human-skill" | "keen-senses" => "skill",
         _ => return false,
     };
     selected.iter().any(|choice| {
         choice.option_id == option
             && match category {
                 "language" => matches!(choice.group_id.as_str(), "language-1" | "language-2"),
-                "skill" => matches!(choice.group_id.as_str(), "skill-1" | "skill-2"),
+                "skill" => matches!(
+                    choice.group_id.as_str(),
+                    "skill-1" | "skill-2" | "human-skill" | "keen-senses"
+                ),
                 _ => false,
             }
     })
@@ -1832,7 +1847,12 @@ mod creation_selection_tests {
             super::super::super::wire::creation_offer()
                 .unwrap()
                 .groups
-                .len()
+                .iter()
+                .filter(|group| group
+                    .options
+                    .iter()
+                    .any(|option| creation_dependencies_met(option, &choices)))
+                .count()
         );
         assert!(choice_values(Some(&json!({"alignment":5}))).is_err());
     }
@@ -1842,8 +1862,19 @@ mod creation_selection_tests {
         let offer = super::super::super::wire::creation_offer().unwrap();
         let first = selected_creation_choices(&json!({}), 1).unwrap();
         let second = selected_creation_choices(&json!({}), 2).unwrap();
-        assert_eq!(first.len(), offer.groups.len());
-        assert_eq!(second.len(), offer.groups.len());
+        for choices in [&first, &second] {
+            assert_eq!(
+                choices.len(),
+                offer
+                    .groups
+                    .iter()
+                    .filter(|group| group
+                        .options
+                        .iter()
+                        .any(|option| creation_dependencies_met(option, choices)))
+                    .count()
+            );
+        }
         assert_eq!(
             first
                 .iter()
@@ -1852,6 +1883,10 @@ mod creation_selection_tests {
             offer
                 .groups
                 .iter()
+                .filter(|group| group
+                    .options
+                    .iter()
+                    .any(|option| creation_dependencies_met(option, &first)))
                 .map(|group| group.group_id.as_str())
                 .collect::<Vec<_>>()
         );
@@ -1986,7 +2021,7 @@ mod phone_seat_tests {
         Seats {
             session_id: None,
             run_id: None,
-            seats: [first, Seat::empty()],
+            seats: vec![first, Seat::empty()],
         }
     }
 
@@ -2043,6 +2078,27 @@ mod phone_seat_tests {
     }
 
     #[test]
+    fn reclaim_of_the_sixth_seat_excludes_every_other_control_hero() {
+        let seats = Seats {
+            session_id: None,
+            run_id: None,
+            seats: (1..=6)
+                .map(|member| {
+                    if member == 6 {
+                        Seat::empty()
+                    } else {
+                        bound_seat(member)
+                    }
+                })
+                .collect(),
+        };
+        let away = (1..=6)
+            .map(|member| away(member, member + 10))
+            .collect::<Vec<_>>();
+        assert_eq!(reclaim_token(5, &seats, &away).unwrap(), [16; 32]);
+    }
+
+    #[test]
     fn reclaim_of_a_phone_held_seat_is_refused_while_the_phone_is_active() {
         // The owner reports no away hero while the phone has been active in the last 30 s.
         let seats = seats_with_first(bound_seat(1));
@@ -2071,7 +2127,7 @@ mod phone_seat_tests {
         let seats = Seats {
             session_id: None,
             run_id: None,
-            seats: [Seat::empty(), bound_seat(2)],
+            seats: vec![Seat::empty(), bound_seat(2)],
         };
         let away = [away(3, 0xc3), away(2, 0xb2)];
 

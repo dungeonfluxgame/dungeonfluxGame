@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::{Outcome, Shared, authorized, bad_request, failed};
 use crate::gameplay::{
     model,
-    place_move::{DevTarget, MoveError, resolve_target},
+    place_move::{DevTarget, MoveError, MoveTarget, resolve_target},
 };
 
 fn report(state: &Shared) -> Result<Value, (StatusCode, Json<Value>)> {
@@ -51,6 +51,8 @@ pub(super) async fn list(State(state): State<Arc<Shared>>, headers: HeaderMap) -
 #[serde(deny_unknown_fields)]
 pub(super) struct GoBody {
     target: String,
+    #[serde(default)]
+    travel: bool,
 }
 
 /// `POST /dev/place/go {"target"}`: an exit of the current place (id, name or alias), else a place
@@ -62,13 +64,13 @@ pub(super) async fn go(
 ) -> Outcome {
     authorized(&headers, &state.token)?;
     let target = body.target.trim();
-    if target.is_empty() || target.chars().count() > 96 || target.chars().any(char::is_control) {
+    if target.is_empty() || target.chars().count() > 512 || target.chars().any(char::is_control) {
         return Err(bad_request(
-            "place go needs an exit or a place, 1 to 96 characters",
+            "place go/travel needs a destination, 1 to 512 characters",
         ));
     }
     let current = state.service.updates.borrow().clone();
-    let resolved = resolve_target(&current, target).map_err(bad_request)?;
+    let resolved = resolve_move(&current, target, body.travel).map_err(bad_request)?;
     let credential = {
         let seats = state.seats.lock().await;
         super::jumps::table_credential(&seats)?
@@ -80,20 +82,10 @@ pub(super) async fn go(
         }
     };
     let pre = super::jumps::pre_jump_moment(&state);
-    let result = match &resolved {
-        DevTarget::Exit(exit) => {
-            state
-                .service
-                .move_party_through(credential, operation, exit)
-                .await
-        }
-        DevTarget::Known(place) => {
-            state
-                .service
-                .move_party_to_known(credential, operation, place)
-                .await
-        }
-    };
+    let result = state
+        .service
+        .move_party_toward(credential, operation, resolved, target)
+        .await;
     let moved = match result {
         Ok(moved) => moved,
         Err(MoveError::Refused(reason)) => {
@@ -143,4 +135,31 @@ pub(super) async fn go(
             "edited": true,
         })),
     ))
+}
+
+fn resolve_move(
+    current: &df_model::checkpoint::Checkpoint,
+    target: &str,
+    travel: bool,
+) -> Result<MoveTarget, String> {
+    if travel {
+        return Ok(MoveTarget::New);
+    }
+    if let Some(name) = target.strip_prefix("landmark:") {
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state())
+            .map_err(|_| "current scene unavailable")?;
+        let here = crate::gameplay::place::whereabouts(current.state(), &scene)
+            .map_err(|_| "current place unavailable")?
+            .here;
+        return crate::gameplay::place::landmarks_here(current.state(), &here)
+            .map_err(|_| "landmarks unavailable".to_owned())?
+            .into_iter()
+            .find(|landmark| landmark.name.eq_ignore_ascii_case(name.trim()))
+            .map(MoveTarget::Landmark)
+            .ok_or_else(|| format!("no current landmark matches {name:?}"));
+    }
+    match resolve_target(current, target)? {
+        DevTarget::Exit(exit) => Ok(MoveTarget::Exit(exit)),
+        DevTarget::Known(place) => Ok(MoveTarget::Known(place)),
+    }
 }

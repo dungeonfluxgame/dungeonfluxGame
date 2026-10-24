@@ -31,7 +31,6 @@ mod dev_control;
 mod fight_foresight;
 mod fight_lines;
 mod health_faces;
-#[cfg(test)]
 mod hero_catalog;
 mod hero_identity;
 mod hero_library;
@@ -187,6 +186,7 @@ impl Service {
         credential: [u8; 32],
         proposal: npc_event_classifier::Proposal,
     ) -> Result<actor::NpcEventOutcome, Status> {
+        let audit = service_audit_context(self, Some(&credential));
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::NpcEvent {
@@ -194,11 +194,35 @@ impl Service {
                 proposal,
                 reply,
             })
-            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.npc_event_refused",
+                    "NPC_EVENT commit_refused",
+                    "actor-boundary",
+                    Status::resource_exhausted("gameplay actor queue full"),
+                )
+            })?;
         tokio::time::timeout(timing::active().reply, wait)
             .await
-            .map_err(|_| Status::deadline_exceeded("NPC event commit timed out"))?
-            .map_err(|_| Status::unavailable("NPC event actor response dropped"))?
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.npc_event_refused",
+                    "NPC_EVENT commit_refused",
+                    "actor-boundary",
+                    Status::deadline_exceeded("NPC event commit timed out"),
+                )
+            })?
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.npc_event_refused",
+                    "NPC_EVENT commit_refused",
+                    "actor-boundary",
+                    Status::unavailable("NPC event actor response dropped"),
+                )
+            })?
     }
 
     async fn view(
@@ -208,10 +232,13 @@ impl Service {
     ) -> Result<(LocalDemoRole, rpc::ViewMessage), Status> {
         // A full queue is waited out within the reply deadline, so a burst of watchers (a new
         // adventure starting) does not close every stream with ResourceExhausted (DEV-09).
-        let viewed = room::actor_view(&self.actor, credential, request).await;
+        let viewed = room::actor_view(&self.actor, credential, request.clone()).await;
         // Every view leaves the server through here, so this is where spoken lines are
         // registered; only the display audience is voiced.
         if let Ok((_, message)) = &viewed {
+            self.voice
+                .register_people(self.updates.borrow().state())
+                .map_err(actor::unavailable)?;
             self.voice.register_view(message);
         }
         // Living scenes watch the display's view and then add their published art to it; the
@@ -223,6 +250,18 @@ impl Service {
         self.living.observe_checkpoint(&checkpoint);
         self.living.observe(&message);
         self.living.apply(&mut message);
+        if self
+            .admit_picture_features(credential, role, &checkpoint, &mut message)
+            .await
+        {
+            // Evidence admission advances the revision. Rebuild offers with that same basis.
+            let (_, refreshed) = room::actor_view(&self.actor, credential, request).await?;
+            message = refreshed;
+            let checkpoint = self.updates.borrow().clone();
+            self.living.observe_checkpoint(&checkpoint);
+            self.living.observe(&message);
+            self.living.apply(&mut message);
+        }
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
         home_video::apply(&mut message);
         place_music::apply(&mut message);
@@ -234,6 +273,47 @@ impl Service {
         Ok((role, message))
     }
 }
+fn service_audit_context(
+    service: &Service,
+    credential: Option<&[u8; 32]>,
+) -> df_observe::AuditContext {
+    let basis = service.updates.borrow().basis();
+    df_observe::AuditContext {
+        operation: None,
+        seat: credential.map(|credential| df_observe::seat_hash(credential)),
+        room: Some(crate::client_diagnostics::operation_hash(
+            basis.session.as_bytes(),
+        )),
+        revision: Some(format!(
+            "{}:{}",
+            basis.revision.epoch().get(),
+            basis.revision.sequence()
+        )),
+    }
+}
+
+fn submit_audit_context(
+    request: &rpc::SubmitActionRequest,
+    basis: df_model::checkpoint::Basis,
+) -> df_observe::AuditContext {
+    df_observe::AuditContext {
+        operation: request
+            .operation_id
+            .as_ref()
+            .and_then(|id| id.value.as_deref())
+            .map(crate::client_diagnostics::operation_hash),
+        seat: None,
+        room: Some(crate::client_diagnostics::operation_hash(
+            basis.session.as_bytes(),
+        )),
+        revision: Some(format!(
+            "{}:{}",
+            basis.revision.epoch().get(),
+            basis.revision.sequence()
+        )),
+    }
+}
+
 fn validate_submit_shape(request: &rpc::SubmitActionRequest) -> Result<(), Status> {
     let fail = |field: &'static str, actual: usize, limit: usize| {
         actor::record_ingress_refusal(
@@ -294,7 +374,19 @@ mod submit_diagnostic_tests {
     use super::*;
     #[test]
     fn oversize_creator_ingress_is_logged_before_actor_admission_without_player_text() {
+        let basis = model::initial().unwrap().basis();
+        let operation = vec![0x37; 16];
         let request = rpc::SubmitActionRequest {
+            operation_id: Some(rpc::OperationId {
+                value: Some(operation.clone()),
+            }),
+            session_id: Some(rpc::SessionId {
+                value: Some(basis.session.as_bytes().to_vec()),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(basis.run.as_bytes().to_vec()),
+            }),
+            observed_revision: Some(wire::revision(basis.revision)),
             action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
             character: Some(rpc::CharacterSelection {
                 name: "secret-player-name".repeat(4),
@@ -302,14 +394,32 @@ mod submit_diagnostic_tests {
             }),
             ..Default::default()
         };
+        let mut audit = submit_audit_context(&request, basis);
+        let seat = df_observe::seat_hash(&[0x38; 32]);
+        audit.seat = Some(seat);
+        let _scope = df_observe::audit_scope(audit);
         assert_eq!(
             validate_submit_shape(&request).unwrap_err().code(),
             tonic::Code::InvalidArgument
         );
         let lines = actor::audit_lines_containing(
-            "step=submit-shape cause=Capacity field=character_name_bytes actual=72 limit=48",
+            "step=submit-shape outer=ingress cause=Capacity field=character_name_bytes actual=72 limit=48",
         );
         assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains(&format!(
+            "op={}",
+            crate::client_diagnostics::operation_hash(&operation)
+        )));
+        assert!(lines[0].contains(&format!("seat={seat}")));
+        assert!(lines[0].contains(&format!(
+            "room={}",
+            crate::client_diagnostics::operation_hash(basis.session.as_bytes())
+        )));
+        assert!(lines[0].contains(&format!(
+            "rev={}:{}",
+            basis.revision.epoch().get(),
+            basis.revision.sequence()
+        )));
         assert!(
             lines
                 .iter()
@@ -324,22 +434,43 @@ impl rpc::action_service_server::ActionService for Service {
         &self,
         request: Request<rpc::SubmitActionRequest>,
     ) -> Result<Response<rpc::SubmitActionResponse>, Status> {
+        let mut audit = submit_audit_context(request.get_ref(), self.updates.borrow().basis());
         let action_kind = request.get_ref().action_kind;
         let credential = credential(&request).inspect_err(|status| {
-            actor::record_ingress_refusal(
+            actor::record_ingress_refusal_scoped(
+                &audit,
                 action_kind,
                 "submit-credential",
                 "CredentialInvalid",
                 status.code(),
             );
         })?;
+        audit.seat = Some(df_observe::seat_hash(&credential));
         let request = request.into_inner();
-        validate_submit_shape(&request)?;
+        {
+            let _scope = df_observe::audit_scope(audit.clone());
+            validate_submit_shape(&request)?;
+        }
+        if request.action_kind == rpc::GameplayActionKind::Travel as i32 {
+            return self
+                .travel_submit(credential, request)
+                .await
+                .map(Response::new);
+        }
         // A scene assault starts a fight through the one entry point every route shares.
         if request.action_kind == rpc::GameplayActionKind::SceneAssault as i32 {
             return self
                 .scene_assault_submit(credential, request)
                 .await
+                .inspect_err(|status| {
+                    actor::record_ingress_refusal_scoped(
+                        &audit,
+                        action_kind,
+                        "scene-assault-submit",
+                        "SceneAssaultRefused",
+                        status.code(),
+                    )
+                })
                 .map(Response::new);
         }
         let committed = df_api::operation_id(request.operation_id.as_ref())
@@ -357,11 +488,21 @@ impl rpc::action_service_server::ActionService for Service {
         {
             self.portraits
                 .accepted(credential, request.character.as_ref())
-                .await?
+                .await
+                .inspect_err(|status| {
+                    actor::record_ingress_refusal_scoped(
+                        &audit,
+                        action_kind,
+                        "portrait-attachment",
+                        "PortraitAttachmentRefused",
+                        status.code(),
+                    )
+                })?
                 .or_else(|| hero_library::loaded_portrait(credential, request.character.as_ref()))
         } else {
             None
         };
+        let observation_request = request.clone();
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::SubmitAppearance {
@@ -371,7 +512,8 @@ impl rpc::action_service_server::ActionService for Service {
                 reply,
             })
             .map_err(|_| {
-                actor::record_ingress_refusal(
+                actor::record_ingress_refusal_scoped(
+                    &audit,
                     action_kind,
                     "submit-actor-admission",
                     "QueueFull",
@@ -382,7 +524,8 @@ impl rpc::action_service_server::ActionService for Service {
         let outcome = tokio::time::timeout(timing::active().reply, wait)
             .await
             .map_err(|_| {
-                actor::record_ingress_refusal(
+                actor::record_ingress_refusal_scoped(
+                    &audit,
                     action_kind,
                     "submit-actor-reply",
                     "ReplyDeadlineOutcomeUnknown",
@@ -391,7 +534,8 @@ impl rpc::action_service_server::ActionService for Service {
                 Status::deadline_exceeded("retain your gameplay operation for lookup")
             })?
             .map_err(|_| {
-                actor::record_ingress_refusal(
+                actor::record_ingress_refusal_scoped(
+                    &audit,
                     action_kind,
                     "submit-actor-reply",
                     "ActorStoppedOutcomeUnknown",
@@ -399,6 +543,8 @@ impl rpc::action_service_server::ActionService for Service {
                 );
                 Status::unavailable("gameplay actor stopped")
             })??;
+        self.complete_observation(credential, &observation_request, &outcome)
+            .await?;
         Ok(Response::new(outcome))
     }
 
@@ -428,6 +574,49 @@ impl rpc::action_service_server::ActionService for Service {
         hero_identity::preview(self, request).await
     }
 }
+fn ingress_failure(
+    audit: &df_observe::AuditContext,
+    event: &'static str,
+    key: &'static str,
+    step: &'static str,
+    status: Status,
+) -> Status {
+    let _scope = df_observe::audit_scope(audit.clone());
+    actor::record_audit_line(event, format!("{key} step={step} code={:?}", status.code()));
+    status
+}
+
+struct WatchAudit {
+    audit: df_observe::AuditContext,
+    role: &'static str,
+    seat: u64,
+    frames: u64,
+    started: std::time::Instant,
+    reason: &'static str,
+}
+impl WatchAudit {
+    fn end(&mut self, reason: &'static str) {
+        self.reason = reason;
+    }
+}
+impl Drop for WatchAudit {
+    fn drop(&mut self) {
+        let _scope = df_observe::audit_scope(self.audit.clone());
+        actor::record_audit_line(
+            "gameplay.watch_ended",
+            format!(
+                "WATCH ended reason={} role={} seat={} frames={} duration_ms={} ms={}",
+                self.reason,
+                self.role,
+                self.seat,
+                self.frames,
+                self.started.elapsed().as_millis(),
+                self.started.elapsed().as_millis(),
+            ),
+        );
+    }
+}
+
 type ViewStream = Pin<Box<dyn Stream<Item = Result<rpc::ViewMessage, Status>> + Send>>;
 #[tonic::async_trait]
 impl rpc::session_service_server::SessionService for Service {
@@ -436,13 +625,27 @@ impl rpc::session_service_server::SessionService for Service {
         &self,
         request: Request<rpc::WatchViewRequest>,
     ) -> Result<Response<ViewStream>, Status> {
-        let credential = credential(&request)?;
+        let mut audit = service_audit_context(self, None);
+        let credential = credential(&request).map_err(|status| {
+            ingress_failure(
+                &audit,
+                "gameplay.watch_refused",
+                "WATCH refused",
+                "credential",
+                status,
+            )
+        })?;
+        audit.seat = Some(df_observe::seat_hash(&credential));
         let request = request.into_inner();
-        let permit = self
-            .streams
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("gameplay watch limit"))?;
+        let permit = self.streams.clone().try_acquire_owned().map_err(|_| {
+            ingress_failure(
+                &audit,
+                "gameplay.watch_refused",
+                "WATCH refused",
+                "limit",
+                Status::resource_exhausted("gameplay watch limit"),
+            )
+        })?;
         let mut updates = self.updates.clone();
         updates.borrow_and_update();
         let mut table_lines = self.table_log.subscribe();
@@ -459,7 +662,51 @@ impl rpc::session_service_server::SessionService for Service {
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }
-        let (_, first) = self.view(credential, request.clone()).await?;
+        let (role, first) = self
+            .view(credential, request.clone())
+            .await
+            .map_err(|status| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.watch_refused",
+                    "WATCH refused",
+                    "first_view",
+                    status,
+                )
+            })?;
+        let role = if role == LocalDemoRole::Player {
+            "player"
+        } else {
+            "display"
+        };
+        let seat = df_observe::seat_hash(&credential);
+        let revision = self.updates.borrow().basis().revision;
+        audit.revision = Some(format!(
+            "{}:{}",
+            revision.epoch().get(),
+            revision.sequence()
+        ));
+        let open_scope = df_observe::audit_scope(audit.clone());
+        actor::record_audit_line(
+            "gameplay.watch_opened",
+            format!(
+                "WATCH opened role={role} seat={seat} rev={}:{}",
+                revision.epoch().get(),
+                revision.sequence()
+            ),
+        );
+        drop(open_scope);
+        let permit = (
+            permit,
+            WatchAudit {
+                audit: audit.clone(),
+                role,
+                seat,
+                frames: 0,
+                started: std::time::Instant::now(),
+                reason: "caller-gone",
+            },
+        );
         // The display shows the generated scene art and every screen shows the heroes' health
         // faces, so every stream wakes when published art changes.
         let service = self.clone();
@@ -484,7 +731,7 @@ impl rpc::session_service_server::SessionService for Service {
                 service,
                 request,
                 credential,
-                permit,
+                mut permit,
             )| async move {
                 let next = if let Some(first) = first {
                     Ok(first)
@@ -499,6 +746,7 @@ impl rpc::session_service_server::SessionService for Service {
                         () = tokio::time::sleep(Duration::from_secs(5)) => false,
                     };
                     if ended {
+                        permit.1.end("source-closed");
                         return None;
                     }
                     service
@@ -507,12 +755,19 @@ impl rpc::session_service_server::SessionService for Service {
                         .map(|(_, view)| view)
                 };
                 if let Err(status) = &next {
-                    println!(
-                        "WATCH failed code={:?} reason={}",
-                        status.code(),
-                        status.message()
+                    let _scope = df_observe::audit_scope(permit.1.audit.clone());
+                    actor::record_audit_line(
+                        "gameplay.watch_failed",
+                        format!(
+                            "WATCH failed code={:?} role={} seat={}",
+                            status.code(),
+                            permit.1.role,
+                            permit.1.seat
+                        ),
                     );
+                    permit.1.end("view-failed");
                 }
+                permit.1.frames = permit.1.frames.saturating_add(1);
                 let failed = next.is_err();
                 Some((
                     next,
@@ -545,18 +800,40 @@ impl rpc::session_service_server::SessionService for Service {
         &self,
         request: Request<rpc::PresentedRequest>,
     ) -> Result<Response<rpc::PresentedResponse>, Status> {
-        let credential = credential(&request)?;
+        let mut audit = service_audit_context(self, None);
+        let credential = credential(&request).map_err(|status| {
+            ingress_failure(
+                &audit,
+                "gameplay.display_refused",
+                "DISPLAY report_refused",
+                "credential",
+                status,
+            )
+        })?;
+        audit.seat = Some(df_observe::seat_hash(&credential));
         let request = request.into_inner();
         if !request.layout_readback_json.is_empty() {
             if credential != self.display_credential {
-                return Err(Status::permission_denied(
-                    "layout report requires display authorization",
+                return Err(ingress_failure(
+                    &audit,
+                    "gameplay.display_refused",
+                    "DISPLAY report_refused",
+                    "authorization",
+                    Status::permission_denied("layout report requires display authorization"),
                 ));
             }
             self.layout
                 .readback(request.display_instance, &request.layout_readback_json)
                 .await
-                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                .map_err(|error| {
+                    ingress_failure(
+                        &audit,
+                        "gameplay.display_refused",
+                        "DISPLAY report_refused",
+                        "layout-readback",
+                        Status::invalid_argument(error.to_string()),
+                    )
+                })?;
             // Metadata-only reports never enter the gameplay actor or release a combat beat.
             if request.sequence == 0 {
                 return Ok(Response::new(rpc::PresentedResponse {
@@ -572,11 +849,35 @@ impl rpc::session_service_server::SessionService for Service {
                 display_instance: request.display_instance,
                 reply,
             })
-            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.display_refused",
+                    "DISPLAY report_refused",
+                    "actor-boundary",
+                    Status::resource_exhausted("gameplay actor queue full"),
+                )
+            })?;
         let released_sequence = tokio::time::timeout(timing::active().reply, wait)
             .await
-            .map_err(|_| Status::deadline_exceeded("gameplay presented deadline"))?
-            .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.display_refused",
+                    "DISPLAY report_refused",
+                    "actor-boundary",
+                    Status::deadline_exceeded("gameplay presented deadline"),
+                )
+            })?
+            .map_err(|_| {
+                ingress_failure(
+                    &audit,
+                    "gameplay.display_refused",
+                    "DISPLAY report_refused",
+                    "actor-boundary",
+                    Status::unavailable("gameplay actor stopped"),
+                )
+            })??;
         Ok(Response::new(rpc::PresentedResponse { released_sequence }))
     }
 }
@@ -623,12 +924,24 @@ async fn socket(
                 .any(|allowed| allowed == origin)
         })
     {
+        actor::record_audit_line(
+            "gameplay.stream_refused",
+            "STREAM refused reason=origin".to_owned(),
+        );
         return axum::http::StatusCode::FORBIDDEN.into_response();
     }
     let Ok(permit) = state.connections.clone().try_acquire_owned() else {
+        actor::record_audit_line(
+            "gameplay.stream_refused",
+            "STREAM refused reason=connection_limit".to_owned(),
+        );
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Ok(admission) = state.incoming.try_reserve() else {
+        actor::record_audit_line(
+            "gameplay.stream_refused",
+            "STREAM refused reason=admission_full".to_owned(),
+        );
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     upgrade
@@ -639,7 +952,17 @@ async fn socket(
         .max_frame_size(MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
             let metrics = Arc::new(df_rpc_bridge::ConnectionMetrics::new(false));
+            let started = std::time::Instant::now();
             let result = admission.accept_websocket_measured(socket, metrics).await;
+            actor::record_audit_line(
+                "gameplay.stream_closed",
+                format!(
+                    "STREAM closed outcome={} duration_ms={} ms={}",
+                    if result.is_ok() { "closed" } else { "failed" },
+                    started.elapsed().as_millis(),
+                    started.elapsed().as_millis()
+                ),
+            );
             let context = OperationContext {
                 trace_parent: String::new(),
                 build: crate::BUILD_ID.to_owned(),
@@ -648,7 +971,10 @@ async fn socket(
             if let Err(error) = &result {
                 // One stream failure for one member: say which error ended the tunnel, so a phone
                 // that loses its connection leaves a diagnostic instead of a silent close.
-                println!("STREAM ended reason={} kind={:?}", error, error.kind());
+                actor::record_audit_line(
+                    "gameplay.stream_failed",
+                    format!("STREAM ended reason=transport kind={:?}", error.kind()),
+                );
                 span.event(
                     "gameplay.stream_failed",
                     &[("stream.reason", format!("{error}"))],
@@ -829,6 +1155,7 @@ async fn credits() -> Html<&'static str> {
 pub async fn serve(
     #[cfg(windows)] console_stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    df_observe::install_audit_sink(actor::record_audit_line);
     if let Some(command) = std::env::args_os().nth(1)
         && (command == "--campaign-run" || command == "--campaign-status")
     {
@@ -882,13 +1209,62 @@ fn live_codec_limits() -> NativeCodecLimits {
         maximum_text_bytes: model.maximum_text_bytes,
     }
 }
+struct AuditStage {
+    key: &'static str,
+    step: Option<&'static str>,
+    started: std::time::Instant,
+}
+impl AuditStage {
+    fn new(key: &'static str, step: &'static str) -> Self {
+        actor::record_audit_line(
+            "gameplay.lifecycle",
+            format!("{key} step={step} outcome=started"),
+        );
+        Self {
+            key,
+            step: Some(step),
+            started: std::time::Instant::now(),
+        }
+    }
+    fn step(&mut self, step: &'static str) {
+        self.finish("ready");
+        self.step = Some(step);
+        self.started = std::time::Instant::now();
+        actor::record_audit_line(
+            "gameplay.lifecycle",
+            format!("{} step={step} outcome=started", self.key),
+        );
+    }
+    fn finish(&mut self, outcome: &'static str) {
+        if let Some(step) = self.step.take() {
+            actor::record_audit_line(
+                "gameplay.lifecycle",
+                format!(
+                    "{} step={step} outcome={outcome} ms={}",
+                    self.key,
+                    self.started.elapsed().as_millis()
+                ),
+            );
+        }
+    }
+}
+impl Drop for AuditStage {
+    fn drop(&mut self) {
+        self.finish("failed");
+    }
+}
+
 async fn serve_run(
     #[cfg(windows)] mut console_stop: watch::Receiver<bool>,
     database: tokio_postgres::Config,
     first_run: bool,
     fresh_seed: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    hero_library::configure(database.clone());
+    df_observe::install_audit_sink(actor::record_audit_line);
+    let startup_started = std::time::Instant::now();
+    let mut startup = AuditStage::new("STARTUP", "hero-library");
+    hero_library::configure(database.clone()).await;
+    startup.step("configuration");
     let interactive = std::env::args().nth(4).is_none();
     // Every paid capability's switch, read once; generation sites ask `media_policy::gates()`.
     let gates = media_policy::Gates::from_environment()?;
@@ -914,6 +1290,7 @@ async fn serve_run(
     let asset_root = std::env::args()
         .nth(3)
         .ok_or("fixed gameplay asset directory required")?;
+    startup.step("assets");
     let startup_configuration::StartupAssets {
         glue: glue_bytes,
         wasm: wasm_bytes,
@@ -929,6 +1306,7 @@ async fn serve_run(
     if first_run {
         home_theme::install(std::path::Path::new(&asset_root))?;
     }
+    startup.step("scene-configuration");
     let splat_directory = startup_configuration::splat_directory(
         std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
         &std::path::Path::new(&asset_root).join("../splat"),
@@ -1000,6 +1378,7 @@ async fn serve_run(
         }
         println!("{}", rating.startup_line());
     }
+    startup.step("storyteller");
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
             startup_configuration::StorytellerInputs::from_environment(),
@@ -1017,6 +1396,7 @@ async fn serve_run(
     } else {
         storyteller::Storyteller::disabled()
     });
+    startup.step("approach-model");
     let approach_model =
         approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
     if interactive && !media_policy::gates().allows(media_policy::Capability::Jev) {
@@ -1025,6 +1405,7 @@ async fn serve_run(
     } else {
         println!("{}", approach_model.startup_line());
     }
+    startup.step("adventure");
     if interactive {
         let settings = adventure_settings
             .as_ref()
@@ -1041,7 +1422,9 @@ async fn serve_run(
             }
             startup_configuration::AdventureMode::Random
             | startup_configuration::AdventureMode::Campaign
-            | startup_configuration::AdventureMode::MerchantShop => {
+            | startup_configuration::AdventureMode::MerchantShop
+            | startup_configuration::AdventureMode::FreeRoam => {
+                let prepared_started = std::time::Instant::now();
                 let mut prepared = adventure::startup::prepare(
                     settings,
                     &database,
@@ -1049,6 +1432,14 @@ async fn serve_run(
                     &storyteller,
                 )
                 .await?;
+                actor::record_audit_line(
+                    "gameplay.adventure_prepared",
+                    format!(
+                        "ADVENTURE prepared fresh={} ms={} provider=storyteller attempts=unmeasured",
+                        prepared.fresh,
+                        prepared_started.elapsed().as_millis()
+                    ),
+                );
                 adventure::startup::substitute_missing_art(
                     &mut prepared.loaded,
                     &prepared.record,
@@ -1200,8 +1591,10 @@ async fn serve_run(
         println!("STOP_REQUEST file={}", path.display());
     }
     // The join code encodes the room code the pack above has fixed, before anything is started.
+    startup.step("join-code");
     let join_qr = join_link::JoinQr::for_room(&journey::room_code())
         .map_err(|_| io::Error::other("join QR code refused"))?;
+    startup.step("voice");
     let voice = voice::Voice::start(
         if interactive {
             startup_configuration::voice_settings(
@@ -1217,11 +1610,13 @@ async fn serve_run(
             .as_ref()
             .map_or("harbor", |prepared| prepared.record.seed.as_str()),
     )?;
+    startup.step("speech-input");
     let speech = speech_input::SpeechInput::start(if interactive {
         speech_input::speech_settings(speech_input::SpeechInputs::from_environment())?
     } else {
         speech_input::SpeechSettings::Off(speech_input::SpeechOff::Qualification)
     })?;
+    startup.step("qualification-settings");
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -1242,23 +1637,27 @@ async fn serve_run(
         .transpose()?;
     model::install_database_run(database.get_dbname().ok_or("run database missing")?)
         .map_err(|_| io::Error::other("run identity refused"))?;
+    startup.step("initial-checkpoint");
     let cold =
         journey::initial().map_err(|_| io::Error::other("gameplay baseline validation failed"))?;
     let plates_enabled = startup_configuration::plates_enabled(
         media_policy::gates().input(media_policy::Capability::Plates),
     )?;
     let codec = live_codec_limits();
+    startup.step("recovery-source");
     let recovery =
         model::recovery().map_err(|_| io::Error::other("source recovery inventory invalid"))?;
     // DEVCTL-001: admitted references for development candidate rebuilds. Used
     // only when the control surface is on; otherwise dropped unused.
     let dev_recovery = recovery.clone();
+    startup.step("startup-identities");
     let fence = model::random::<16>().map_err(|_| io::Error::other("native fence unavailable"))?;
     let player_credential =
         model::random::<32>().map_err(|_| io::Error::other("local grant unavailable"))?;
     let display_credential =
         model::random::<32>().map_err(|_| io::Error::other("local grant unavailable"))?;
 
+    startup.step("grant-connection");
     let (mut grant_client, grant_connection) = tokio::time::timeout(
         Duration::from_secs(2),
         database.connect(tokio_postgres::NoTls),
@@ -1295,6 +1694,7 @@ async fn serve_run(
             return Err(error.into());
         }
     }
+    startup.step("session-admission");
     let initialization = df_persistence::local_demo_scope::admit_startup_with_adventure(
         &mut grant_client,
         &cold,
@@ -1315,9 +1715,19 @@ async fn serve_run(
         },
     )
     .await;
+    startup.step("session-admission-result");
     let admitted = match initialization {
         Ok(admitted) => admitted,
         Err(error) => {
+            actor::record_audit_line(
+                "gameplay.startup_failed",
+                format!(
+                    "STARTUP failed step={} class={:?} ms={}",
+                    error.stage,
+                    error.class,
+                    startup_started.elapsed().as_millis()
+                ),
+            );
             let refusal_report = if restart_phase == Some(restart_qualification::Phase::Contender) {
                 restart_qualification::refusal(&error)
             } else if rest_phase == Some(rest_qualification::Phase::Contender) {
@@ -1335,6 +1745,19 @@ async fn serve_run(
             .into());
         }
     };
+    let revision = admitted.checkpoint.basis().revision;
+    actor::record_audit_line(
+        "gameplay.session_admitted",
+        format!(
+            "SESSION admitted restored={} rev={}:{} decisions={} participants={} ms={}",
+            admitted.restored,
+            revision.epoch().get(),
+            revision.sequence(),
+            admitted.checkpoint.state().decisions.len(),
+            journey::participants(&admitted.checkpoint).len(),
+            startup_started.elapsed().as_millis(),
+        ),
+    );
     if let Some(phase) = restart_phase {
         let expected = phase == restart_qualification::Phase::B;
         if admitted.restored != expected {
@@ -1408,9 +1831,13 @@ async fn serve_run(
         return Err(io::Error::other("inn phase admission kind refused").into());
     }
     let initial = admitted.checkpoint;
+    voice
+        .register_people(initial.state())
+        .map_err(|_| io::Error::other("saved voice identities invalid"))?;
     let player_credential = admitted.player_credential;
     let display_credential = admitted.display_credential;
     let runtime = tokio::runtime::Handle::current();
+    startup.step("repository-connection");
     let (client, connection) = match tokio::time::timeout(
         Duration::from_secs(2),
         database.connect(tokio_postgres::NoTls),
@@ -1448,6 +1875,7 @@ async fn serve_run(
         verifier: Some(df_persistence::local_demo_scope::verifier()),
         recovery: Some(recovery),
     };
+    startup.step("repository-setup");
     let repository_setup = PostgresRepository::<LocalDemoAuthority>::from_connected_no_tls(
         runtime.clone(),
         client,
@@ -1498,6 +1926,7 @@ async fn serve_run(
             return Err(error.into());
         }
     }
+    startup.step("http-listener");
     let listener = match tokio::net::TcpListener::bind(settings.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -1516,6 +1945,7 @@ async fn serve_run(
             return Err(error.into());
         }
     };
+    startup.step("grant-issuer");
     let mut issuer = match LocalDemoScopeIssuer::new(
         runtime.clone(),
         grant_client,
@@ -1544,6 +1974,7 @@ async fn serve_run(
         return Err(io::Error::other("issuer recovery configuration refused").into());
     }
     // The table's settings: a choice a player stored earlier wins over the startup default.
+    startup.step("table-settings");
     let table_settings = if interactive {
         match issuer.stored_table_settings().await {
             Ok(stored) => table_settings::TableSettings::startup(stored, choice_hints_hidden),
@@ -1571,6 +2002,7 @@ async fn serve_run(
     }
 
     let (updates, receiver) = watch::channel(initial.clone());
+    startup.step("campaign-worker");
     let (campaign_observer, campaign_worker) = if let Some(run) = generated_adventure
         .as_ref()
         .and_then(|prepared| prepared.campaign.clone())
@@ -1598,6 +2030,7 @@ async fn serve_run(
     };
     // A generated adventure's NPCs have backstories and feelings about each hero; the harbor
     // pack and adventures saved before dossiers existed have none and keep today's behaviour.
+    startup.step("social-state");
     let social = match &generated_adventure {
         Some(prepared) if !prepared.record.dossiers.is_empty() => {
             println!(
@@ -1621,9 +2054,36 @@ async fn serve_run(
                 }
             }
         }
-        _ => social::SocialLedger::none(),
+        _ => {
+            // The built-in pack authors its own scene models; install their rooms before the
+            // first view projects them.
+            let social = social::SocialLedger::none();
+            let scenes = pack::with_content(|content| {
+                content
+                    .scenes
+                    .iter()
+                    .chain(
+                        content
+                            .beat_script
+                            .iter()
+                            .flat_map(|script| script.scenes.values()),
+                    )
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            if let Err(error) = social.install_pack_rooms(&scenes) {
+                return startup_failure_after_admission(
+                    io::Error::other(error.to_string()),
+                    close_admitted_startup(&mut repository, &mut issuer, "social ledger"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+            social
+        }
     };
     // NPC local canon (places, people, rumours they establish) persists beside the social ledger.
+    startup.step("local-lore");
     let local_lore = match &generated_adventure {
         Some(prepared) => match npc_reply::local_lore::LocalLore::open(
             &prepared.record.seed,
@@ -1641,6 +2101,7 @@ async fn serve_run(
         },
         None => Arc::new(npc_reply::local_lore::LocalLore::in_memory()),
     };
+    startup.step("notebook");
     let notebook = match &generated_adventure {
         Some(prepared) => match notebook::NotebookLedger::open(
             &prepared.record.seed,
@@ -1687,6 +2148,7 @@ async fn serve_run(
     };
     // DEVCTL-001: back/forward ring shared with the development surface (and the
     // owner's publication hook). Empty and unwired unless the surface is on.
+    startup.step("development-history");
     let dev_history =
         std::sync::Arc::new(std::sync::Mutex::new(dev_control::history::History::new()));
     let (publication, intent_notifications) = actor::Publication::new(updates.clone());
@@ -1708,6 +2170,7 @@ async fn serve_run(
         publication = publication.with_history(dev_bundle.clone());
     }
     let courier_reductions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    startup.step("durable-owner");
     let owner = match DurableOwner::new(
         repository,
         actor::Engine(courier_phase.map(|_| courier_reductions.clone())),
@@ -1734,6 +2197,7 @@ async fn serve_run(
     // Living scenes: server-generated scene art that follows the story's mood, under the
     // server's one content rating.
     let rating = startup_configuration::content_rating();
+    startup.step("imagery-configuration");
     let image_fixture = dev_control::direct::image_fixture(dev_on)?;
     let mut imagery_inputs = startup_configuration::ImageryInputs::from_environment();
     if image_fixture.is_some() {
@@ -1750,6 +2214,7 @@ async fn serve_run(
         startup_configuration::ImagerySettings::On(configuration) => configuration.interval,
         startup_configuration::ImagerySettings::Off(_) => Duration::from_secs(30),
     };
+    startup.step("imagery");
     let imagery = dev_control::direct::start_imagery(
         imagery_settings,
         generated_adventure
@@ -1757,6 +2222,7 @@ async fn serve_run(
             .map(|prepared| prepared.directory.as_path()),
         image_fixture,
     )?;
+    startup.step("living-scenes");
     let living = living_scenes::LivingScenes::start(
         imagery.clone(),
         imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
@@ -1772,6 +2238,7 @@ async fn serve_run(
         &splat_cache,
         &std::env::current_dir()?.join("artifacts/tmp/worldlabs/out/m11"),
     )?;
+    startup.step("room-photograph");
     let room_photograph: splat_world::RoomPhotograph = {
         let living = living.clone();
         let imagery = imagery.clone();
@@ -1793,6 +2260,7 @@ async fn serve_run(
             })
         })
     };
+    startup.step("splat-worlds");
     let splat_worlds = match std::env::var("WORLDLABS_API_KEY") {
         Ok(key)
             if interactive
@@ -1857,18 +2325,22 @@ async fn serve_run(
             })
         })
     };
+    startup.step("character-clips");
     let _character_clip_worker = character_clips::start(
         imagery.hub().clone(),
         clip_source,
         std::env::current_dir()?.join("artifacts/cache/character-clips"),
         interactive,
+        living.subscribe(),
     )?;
+    startup.step("fight-foresight");
     let _fight_foresight_worker = fight_foresight::start(
         approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None }),
         table_log.clone(),
         receiver.clone(),
     );
     // PLAY-V10: the home screen's looping video, made from the still just in time.
+    startup.step("home-video");
     let home_video_line = home_video::install(
         home_video::home_video_settings(
             home_video::HomeVideoInputs::from_environment(),
@@ -1887,6 +2359,7 @@ async fn serve_run(
     home_video::attach_kit(&resource_kit)?;
     // The story memory: what the Dungeon Master remembers of this run, so the story stays
     // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
+    startup.step("memory");
     let memory_line = if interactive {
         // Keyed by the game's own database, which is unique per game and kept when it resumes;
         // the session basis carries a fixed placeholder run id, which every game would share.
@@ -1919,6 +2392,7 @@ async fn serve_run(
     // Place music: the server's per-place spec and plan, with each place's set generated on
     // demand as a resource of the generation hub (the one the imagery owns). Generation needs
     // ELEVENLABS_API_KEY and ffmpeg; without them places keep the shared score and their beds.
+    startup.step("music");
     let (music_line, music_routes) = if interactive {
         // Jev plans place music only when music may be generated.
         let jev = approach_model::ApproachModel::configured(
@@ -1949,6 +2423,7 @@ async fn serve_run(
     } else {
         (None, Router::new())
     };
+    startup.step("tempo");
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -1966,6 +2441,7 @@ async fn serve_run(
         );
         Some(tempo)
     };
+    startup.step("actor-construction");
     let actor = actor::Actor {
         tempo,
         owner,
@@ -2016,8 +2492,12 @@ async fn serve_run(
     let courier_database = database.clone();
     let courier_runtime = runtime.clone();
     let courier_thread_reductions = courier_reductions.clone();
+    startup.step("owner-thread");
     let thread_setup = std::thread::Builder::new()
         .name("df-real-gameplay-owner".to_owned())
+        // The owner projects whole views and replays receipts; give it the same headroom as the
+        // runtime workers (see run_restart.rs).
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut actor = startup_receive
                 .recv_timeout(Duration::from_secs(2))
@@ -2044,15 +2524,50 @@ async fn serve_run(
             } else {
                 Err(io::Error::other("courier requires drained inbox"))
             };
+            let release_started = std::time::Instant::now();
             let released = if drained.is_ok() {
                 actor.issuer.release_owner()
             } else {
                 Err(df_session::submission::RepositoryError::Unavailable)
             };
+            actor::record_audit_line(
+                "gameplay.shutdown",
+                format!(
+                    "SERVER shutdown step=fence_release outcome={} ms={}",
+                    if released.is_ok() {
+                        "released"
+                    } else {
+                        "failed"
+                    },
+                    release_started.elapsed().as_millis()
+                ),
+            );
             let remaining = actor.calls_remaining;
             let mut repository = actor.owner.into_repository();
+            let close_started = std::time::Instant::now();
             let closed = repository.close();
+            actor::record_audit_line(
+                "gameplay.shutdown",
+                format!(
+                    "SERVER shutdown step=repo_close outcome={} ms={}",
+                    if closed.is_ok() { "closed" } else { "failed" },
+                    close_started.elapsed().as_millis()
+                ),
+            );
+            let close_started = std::time::Instant::now();
             let grant_closed = actor.issuer.close();
+            actor::record_audit_line(
+                "gameplay.shutdown",
+                format!(
+                    "SERVER shutdown step=grant_close outcome={} ms={}",
+                    if grant_closed.is_ok() {
+                        "closed"
+                    } else {
+                        "failed"
+                    },
+                    close_started.elapsed().as_millis()
+                ),
+            );
             drop(actor.issuer);
             Ok::<_, io::Error>((
                 drained,
@@ -2082,6 +2597,7 @@ async fn serve_run(
         }
         return Err(io::Error::other("actor startup handoff refused").into());
     }
+    startup.step("creator-portraits");
     let portraits =
         creator_portraits::Portraits::start(imagery.hub().clone(), &std::env::current_dir()?)?;
     let mut restart_updates = receiver.clone();
@@ -2103,9 +2619,12 @@ async fn serve_run(
         layout: dev_control::layout::LayoutState::new(),
         portraits,
     };
+    startup.step("free-roam-neighbours");
+    service.prepare_free_roam_current().await?;
     fight_foresight::bind_service(service.clone());
     // DEVCTL-001: the agent control surface. Off by default: with the setting
     // off this returns no routes and touches nothing (no file, no behaviour).
+    startup.step("development-control");
     let dev_control = dev_control::setup(
         service.clone(),
         display_credential,
@@ -2116,6 +2635,7 @@ async fn serve_run(
         dev_bundle.clone(),
         service.layout.clone(),
     )?;
+    startup.step("rpc-bridge");
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
     let grpc = tonic::transport::Server::builder()
@@ -2174,6 +2694,7 @@ async fn serve_run(
         battle_grid,
     };
     let player_page_run_identity = state.run_identity.clone();
+    startup.step("http-router");
     let mut router = Router::new()
         .route("/gameplay", get(both))
         .route(
@@ -2344,10 +2865,20 @@ async fn serve_run(
     };
     #[cfg(not(windows))]
     let console_stopped = std::future::pending::<()>();
+    startup.finish("ready");
+    actor::record_audit_line(
+        "gameplay.ready",
+        format!(
+            "READY startup_ms={} ms={}",
+            startup_started.elapsed().as_millis(),
+            startup_started.elapsed().as_millis()
+        ),
+    );
     let mut new_adventure = false;
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
-            result=grpc=>result.map_err(Into::into),result=axum::serve(listener,router)=>result.map_err(Into::into),
+            result=grpc=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=grpc_error uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
+            result=axum::serve(listener,router)=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=http_error uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
             _=async {
                 loop {
                     if journey::new_adventure_requested(&restart_updates.borrow()) { break; }
@@ -2355,10 +2886,10 @@ async fn serve_run(
                 }
                 // Publish preparation and return the receipt before retiring transports.
                 tokio::time::sleep(Duration::from_millis(500)).await;
-            }=>{ new_adventure = true; Ok(()) },
-            result=tokio::signal::ctrl_c()=>result.map_err(Into::into),
-            _=console_stopped=>Ok(()),
-            _=termination=>Ok(()),
+            }=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=new_adventure uptime_s={}", startup_started.elapsed().as_secs())); new_adventure = true; Ok(()) },
+            result=tokio::signal::ctrl_c()=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=ctrl_c uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
+            _=console_stopped=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=console uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
+            _=termination=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=sigterm uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
             _=async {
                 loop {
                     stop_poll.tick().await;
@@ -2366,17 +2897,18 @@ async fn serve_run(
                         break;
                     }
                 }
-            }=>Ok(()),
-            _=async{match settings.session{Some(session)=>tokio::time::sleep(session).await,None=>std::future::pending().await}}=>Ok(()),
+            }=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=stop_file uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
+            _=async{match settings.session{Some(session)=>tokio::time::sleep(session).await,None=>std::future::pending().await}}=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=session_timer uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
             _=async move {
                 while !*dev_shutdown.borrow() {
                     if dev_shutdown.changed().await.is_err() {
                         std::future::pending::<()>().await;
                     }
                 }
-            }=>Ok(()),
+            }=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=dev_shutdown uptime_s={}", startup_started.elapsed().as_secs())); Ok(()) },
         }
     };
+    let mut shutdown = AuditStage::new("SERVER shutdown", "consumer");
     let qualification_outcome = if let Some((cancel, task)) = qualification {
         let _ = cancel.send(());
         match task.await {
@@ -2505,6 +3037,20 @@ async fn serve_run(
     } else {
         Ok(())
     };
+    shutdown.finish(
+        if qualification_outcome.is_ok()
+            && courier_outcome.is_ok()
+            && restart_outcome.is_ok()
+            && rest_outcome.is_ok()
+            && npc_outcome.is_ok()
+            && inn_outcome.is_ok()
+        {
+            "closed"
+        } else {
+            "failed"
+        },
+    );
+    shutdown.step("actor-join");
     sender
         .stop()
         .map_err(|_| io::Error::other("gameplay inbox stop failed"))?;
@@ -2515,6 +3061,7 @@ async fn serve_run(
     if let Some(worker) = campaign_worker {
         tokio::task::spawn_blocking(move || drop(worker)).await?;
     }
+    shutdown.step("actor-drain");
     drained.map_err(|_| io::Error::other("gameplay actor drain failed"))?;
     released.map_err(|_| io::Error::other("gameplay exact-fence release failed"))?;
     if interactive {
@@ -2522,6 +3069,7 @@ async fn serve_run(
     }
     closed.map_err(|_| io::Error::other("gameplay repository close failed"))?;
     grant_closed.map_err(|_| io::Error::other("gameplay grant close failed"))?;
+    shutdown.finish("closed");
     courier_committed?;
     courier_outcome?;
     qualification_outcome?;
@@ -2669,5 +3217,54 @@ mod battle_scene_page_tests {
         assert!(player.contains(
             "data-join-scene-asset=\"assets/ui/generated/opening?x=&quot;&amp;&lt;&gt;&#39;\""
         ));
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_audit_tests {
+    use super::*;
+    #[test]
+    fn failed_startup_phase_emits_one_terminal_line_when_owner_returns_early() {
+        {
+            let _phase = AuditStage::new("STARTUP", "synthetic-audit-failure");
+        }
+        let lines =
+            actor::audit_lines_containing("STARTUP step=synthetic-audit-failure outcome=failed");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("ms="));
+    }
+}
+
+#[cfg(test)]
+mod ingress_audit_tests {
+    use super::*;
+    #[test]
+    fn malformed_creation_keeps_the_phone_operation_and_known_scope_in_its_refusal() {
+        let basis = model::initial().unwrap().basis();
+        let operation = vec![9; 16];
+        let request = rpc::SubmitActionRequest {
+            operation_id: Some(rpc::OperationId {
+                value: Some(operation.clone()),
+            }),
+            action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+            character: Some(rpc::CharacterSelection {
+                name: "private-name".repeat(5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut audit = submit_audit_context(&request, basis);
+        audit.seat = Some(df_observe::seat_hash(&[8; 32]));
+        let _scope = df_observe::audit_scope(audit);
+        assert_eq!(
+            validate_submit_shape(&request).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let lines = actor::audit_lines_containing("Capacity field=character_name_bytes actual=60");
+        assert!(lines.iter().any(|line| line.contains(&format!(
+            "op={}",
+            crate::client_diagnostics::operation_hash(&operation)
+        ))));
+        assert!(lines.iter().all(|line| !line.contains("private-name")));
     }
 }

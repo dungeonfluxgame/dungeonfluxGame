@@ -1001,3 +1001,10 @@ field dungeonflux.public.v1.LoadHeroRequest 3 new_hero type=8 label=1 presence=f
 field dungeonflux.public.v1.ListMyHeroesRequest 2 after_hero_id type=3 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.ListMyHeroesResponse 2 next_cursor type=3 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LibraryHeroSummary 8 portrait_key type=9 label=1 presence=false target=- oneof=-
+enum-value dungeonflux.public.v1.GameplayActionKind 43 TRAVEL
+field dungeonflux.public.v1.DeleteHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeleteHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeleteHeroResponse 1 removed type=8 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.DeleteHeroRequest
+message dungeonflux.public.v1.DeleteHeroResponse
+method dungeonflux.public.v1.HeroLibraryService DeleteHero .dungeonflux.public.v1.DeleteHeroRequest .dungeonflux.public.v1.DeleteHeroResponse client-stream=false server-stream=false

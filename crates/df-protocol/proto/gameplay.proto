@@ -12,7 +12,7 @@ service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage
 // out. Zero is the legacy unknown instance.
 message PresentedRequest { uint64 sequence = 1; uint64 display_instance = 2; string layout_readback_json = 3; }
 message PresentedResponse { uint64 released_sequence = 1; }
-enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; START_NEW_ADVENTURE = 21; STABILISE_WITH_HEALERS_KIT = 22; STABILISE_MEDICINE = 23; HELP_ATTACK = 24; SET_TABLE_SETTING = 40; SCENE_ASSAULT = 41; ACTION_SURGE = 42; }
+enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; START_NEW_ADVENTURE = 21; STABILISE_WITH_HEALERS_KIT = 22; STABILISE_MEDICINE = 23; HELP_ATTACK = 24; SET_TABLE_SETTING = 40; SCENE_ASSAULT = 41; ACTION_SURGE = 42; TRAVEL = 43; }
 enum RejectionCode { REJECTION_CODE_UNSPECIFIED = 0; STALE_OFFER = 1; WRONG_TURN = 2; INVALID_SELECTION = 3; PAUSED = 4; RESOURCE_MISSING = 5; CAPABILITY_UNAVAILABLE = 6; RECOVERY_REQUIRED = 7; REVISION_CONFLICT = 8; OPERATION_CONFLICT = 9; OPERATION_EXPIRED = 10; }
 message Rejection { RejectionCode code = 1; }
 message AcceptedAction { AbilityCheckResult check = 1; GameplayScene scene = 2; CharacterSheet character = 3; repeated CombatOutcome combat = 4; JourneyPhase phase = 5; }
@@ -60,7 +60,22 @@ message DisplaySceneActor { string id = 1; string name = 2; string art = 3; stri
 enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; PLATE_STATE_UNAVAILABLE = 4; }
 enum PlateSide { PLATE_SIDE_UNSPECIFIED = 0; PLATE_SIDE_LEFT = 1; PLATE_SIDE_RIGHT = 2; }
 // Positions are permille of the plate (0 to 1000 across and down); the head box is centred on the head position.
-message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; repeated PlateActorHead actors = 7; }
+message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; repeated PlateActorHead actors = 7; repeated PlateFigureMask figure_masks = 8; }
+// Audience-safe SAM geometry in intrinsic source pixels; crown coordinates are source permille.
+message PlateFigureMask {
+  oneof person { uint32 hero_index = 1; string actor_id = 2; }
+  uint32 source_width = 3;
+  uint32 source_height = 4;
+  uint32 left = 5;
+  uint32 top = 6;
+  uint32 right = 7;
+  uint32 bottom = 8;
+  uint32 head_top_x_permille = 9;
+  uint32 head_top_y_permille = 10;
+  PlateSide free_side = 11;
+  bool inferred = 12;
+  uint32 mask_index = 13;
+}
 // actor_id is the exact current SceneActor.id; the permille head box belongs to GameplayScene.live_plate.
 message PlateActorHead { string actor_id = 1; PlateSide bubble_side = 2; uint32 head_x_permille = 3; uint32 head_y_permille = 4; uint32 head_width_permille = 5; uint32 head_height_permille = 6; }
 // Where one hero's head is in the plate (the party member at `hero_index`, counted from 0) and which side of it a speech bubble stands on, toward the middle of the frame. Only heroes the vision model found are listed.
@@ -86,6 +101,9 @@ message AwayHero { string name = 1; bytes seat_token = 2; }
 enum SeatReclaimRefusal { SEAT_RECLAIM_REFUSAL_UNSPECIFIED = 0; SEAT_NOT_AWAY = 1; SEAT_TOKEN_UNKNOWN = 2; SEAT_ROOM_CODE_WRONG = 3; SEAT_OPERATION_CONFLICT = 4; }
 message ReclaimRoomResponse { oneof outcome { JoinedRoom joined = 1; SeatReclaimRefusal refused = 2; } repeated AwayHero away_heroes = 3; }
 enum JourneyPhase { JOURNEY_PHASE_UNSPECIFIED = 0; ROOM = 1; CHARACTER_CREATION = 2; OPENING = 3; DIALOGUE = 4; COMBAT = 5; COMPLETE = 6; }
+// TRAVEL uses GameplayActionOffer.input_groups with group_id "travel" and canonical
+// exit:/known: option IDs. Submit exactly one matching JourneyChoice in action_choices.
+// The owner rechecks the observed basis and current options before moving.
 message JourneyChoice { string group_id = 1; string option_id = 2; }
 message CharacterSelection { string name = 1; repeated JourneyChoice choices = 2; HeroIdentity identity = 3; string portrait_scenery = 4; }
 message JourneyOption { string option_id = 1; string label = 2; string description = 3; string requires_group = 4; repeated string requires_options = 5; }
@@ -266,6 +284,7 @@ message HeroPortraitResponse {
 service HeroLibraryService {
  rpc ListMyHeroes(ListMyHeroesRequest) returns (ListMyHeroesResponse);
  rpc LoadHero(LoadHeroRequest) returns (LoadHeroResponse);
+ rpc DeleteHero(DeleteHeroRequest) returns (DeleteHeroResponse);
  rpc SaveMySeatHero(SaveMySeatHeroRequest) returns (SaveMySeatHeroResponse);
 }
 message ListMyHeroesRequest { bytes key = 1; int64 after_hero_id = 2; }
@@ -280,3 +299,7 @@ message LibraryHeroReference { int64 hero_id = 1; uint64 revision = 2; }
 // loaded_hero is only a hint: the server verifies phone-key ownership and revision existence.
 message SaveMySeatHeroRequest { bytes key = 1; WatchViewRequest scope = 2; LibraryHeroReference loaded_hero = 3; }
 message SaveMySeatHeroResponse { int64 hero_id = 1; uint64 revision = 2; }
+
+// Deletion is scoped to the authenticated phone key; absent and foreign ids both return false.
+message DeleteHeroRequest { bytes key = 1; int64 hero_id = 2; }
+message DeleteHeroResponse { bool removed = 1; }

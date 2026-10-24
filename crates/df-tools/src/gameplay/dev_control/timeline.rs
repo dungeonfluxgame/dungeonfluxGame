@@ -484,13 +484,150 @@ pub(super) fn audit(last: usize, line_kind: Option<&str>) -> Value {
         .audit(last, line_kind)
 }
 
-/// `dev decisions`: the newest Jev classifications from the shared ring, optionally of one kind.
-pub(super) fn decisions(last: usize, kind: Option<&str>) -> Value {
-    TIMELINE
+fn matches_npc(event: &Event, wanted: &str) -> bool {
+    let same = |value: &str| {
+        value.eq_ignore_ascii_case(wanted)
+            || value
+                .rsplit_once(':')
+                .is_some_and(|(_, id)| id.eq_ignore_ascii_case(wanted))
+    };
+    for key in ["npc", "npc_id", "actor_id", "scene.actor"] {
+        if event
+            .fields
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(same)
+        {
+            return true;
+        }
+        let token = format!("{key}=");
+        for (index, _) in event.line.match_indices(&token) {
+            if index > 0 && !event.line.as_bytes()[index - 1].is_ascii_whitespace() {
+                continue;
+            }
+            let value = &event.line[index + token.len()..];
+            let value = if value.starts_with('"') {
+                serde_json::Deserializer::from_str(value)
+                    .into_iter::<String>()
+                    .next()
+                    .and_then(Result::ok)
+            } else {
+                value.split_whitespace().next().map(str::to_owned)
+            };
+            if value.as_deref().is_some_and(same) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Cursor queries filter before paging. With a cursor, return the next page, never the tail.
+pub(super) fn query(
+    params: &std::collections::HashMap<String, String>,
+    mode: &str,
+    last: usize,
+    kind: Option<&str>,
+    component: Option<&str>,
+    summary: bool,
+) -> Result<Value, String> {
+    let since = params
+        .get("since")
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|_| "since must be an unsigned sequence".to_owned())?;
+    let timeline = TIMELINE
         .get_or_init(|| Mutex::new(Timeline::new()))
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .decisions(last, kind)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(timeline.query(
+        since,
+        params.get("npc").map(String::as_str),
+        mode,
+        last,
+        kind,
+        component,
+        summary,
+    ))
+}
+impl Timeline {
+    // The three read routes share independent cursor, classification and presentation filters.
+    #[allow(clippy::too_many_arguments)]
+    fn query(
+        &self,
+        since: Option<u64>,
+        npc: Option<&str>,
+        mode: &str,
+        last: usize,
+        kind: Option<&str>,
+        component: Option<&str>,
+        summary: bool,
+    ) -> Value {
+        let mut selected = Self {
+            start: self.start,
+            next: self.next,
+            events: self
+                .events
+                .iter()
+                .filter(|event| since.is_none_or(|since| event.sequence > since))
+                .filter(|event| npc.is_none_or(|npc| matches_npc(event, npc)))
+                .cloned()
+                .collect(),
+        };
+        selected.events.retain(|event| match mode {
+            "audit" => kind.is_none_or(|kind| same_kind(&line_kind(&event.line), kind)),
+            "decisions" => DECISION_KINDS.iter().any(|(decision, name)| {
+                *name == event.event && kind.is_none_or(|kind| kind == *decision)
+            }),
+            _ => {
+                kind.is_none_or(|kind| {
+                    event.fields.get("resource_type").and_then(Value::as_str) == Some(kind)
+                }) && component.is_none_or(|component| {
+                    event.fields.get("component_type").and_then(Value::as_str) == Some(component)
+                })
+            }
+        });
+        let matched = selected.events.len();
+        if since.is_some() {
+            selected.events.truncate(last);
+        }
+        let page_size = last;
+        let mut document = match mode {
+            "audit" => selected.audit(page_size, kind),
+            "decisions" => selected.decisions(page_size, kind),
+            _ => selected.snapshot(page_size, kind, component, false),
+        };
+        let key = if mode == "decisions" {
+            "decisions"
+        } else {
+            "events"
+        };
+        let mut next = since.unwrap_or(0);
+        if let Some(events) = document[key].as_array_mut() {
+            if since.is_some() {
+                events.truncate(last);
+            }
+            if let Some(sequence) = events.last().and_then(|event| event["sequence"].as_u64()) {
+                next = sequence;
+            }
+            if summary {
+                events.clear();
+            }
+            document["returned"] = json!(events.len());
+        }
+        document["matched"] = json!(matched);
+        document["next_since"] = json!(next);
+        document["oldest_available"] = json!(self.events.front().map(|event| event.sequence));
+        document["cursor_gap"] = json!(since.is_some_and(|since| {
+            self.events
+                .front()
+                .is_some_and(|event| since.saturating_add(1) < event.sequence)
+        }));
+        document["dropped"] = json!(self.next - 1 - self.events.len() as u64);
+        document["filter"]["since"] = json!(since);
+        document["filter"]["npc"] = json!(npc);
+        document
+    }
 }
 
 #[cfg(test)]
@@ -750,5 +887,91 @@ mod tests {
         let trades = timeline.decisions(10, Some("trade"));
         assert_eq!(trades["matched"], 1);
         assert_eq!(trades["decisions"][0]["kind"], "trade");
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    #[test]
+    fn cursor_pages_filter_before_limit_and_expose_gaps() {
+        let mut timeline = Timeline::new();
+        for sequence in 1..=12 {
+            timeline.push(
+                "gameplay.line_judgement",
+                &format!("LINE_JUDGEMENT source=jev step={sequence}"),
+                Map::from_iter([(
+                    "npc_id".into(),
+                    json!(if sequence % 2 == 0 {
+                        "merchant"
+                    } else {
+                        "guard"
+                    }),
+                )]),
+            );
+        }
+        let first = timeline.query(Some(0), Some("merchant"), "decisions", 2, None, None, false);
+        assert_eq!(first["decisions"][0]["sequence"], 2);
+        assert_eq!(first["decisions"][1]["sequence"], 4);
+        assert_eq!(first["next_since"], 4);
+        let second = timeline.query(Some(4), Some("merchant"), "audit", 2, None, None, false);
+        assert_eq!(second["events"][0]["sequence"], 6);
+        assert_eq!(second["events"][1]["sequence"], 8);
+        assert_eq!(second["dropped"], 0);
+        assert_eq!(second["cursor_gap"], false);
+        timeline.events.pop_front();
+        timeline.events.pop_front();
+        assert_eq!(
+            timeline.query(Some(0), None, "timeline", 2, None, None, false)["cursor_gap"],
+            true
+        );
+    }
+}
+
+#[cfg(test)]
+mod npc_filter_tests {
+    use super::*;
+    #[test]
+    fn npc_filter_accepts_canonical_ids_and_exact_quoted_audit_fields() {
+        let mut timeline = Timeline::new();
+        timeline.push(
+            "gameplay.line_judgement",
+            r#"LINE_JUDGEMENT npc="patron:merchant""#,
+            Map::new(),
+        );
+        timeline.push(
+            "gameplay.line_judgement",
+            r#"LINE_JUDGEMENT npc="Marek and Co""#,
+            Map::new(),
+        );
+        timeline.push(
+            "gameplay.line_judgement",
+            r#"LINE_JUDGEMENT npc="merchant-old""#,
+            Map::new(),
+        );
+        assert_eq!(
+            timeline.query(
+                Some(0),
+                Some("merchant"),
+                "decisions",
+                10,
+                None,
+                None,
+                false
+            )["returned"],
+            1
+        );
+        assert_eq!(
+            timeline.query(
+                Some(0),
+                Some("Marek and Co"),
+                "audit",
+                10,
+                None,
+                None,
+                false
+            )["returned"],
+            1
+        );
     }
 }

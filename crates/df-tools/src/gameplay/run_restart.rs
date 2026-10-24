@@ -33,8 +33,12 @@ pub(super) async fn serve(
             // Dropping this owned runtime joins/cancels every old socket, timer and provider
             // future, including tasks spawned by HTTP connection handlers. No old task can
             // observe the pack installed for the next run.
+            // Deep async chains (a free-roam move preparing places, plates and music ahead) hold
+            // large futures on the worker stack, and the 2 MiB default overflowed in a debug build
+            // on 2026-10-24 ("tokio-rt-worker has overflowed its stack" on travel).
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .thread_stack_size(16 * 1024 * 1024)
                 .build()?;
             let result = runtime
                 .block_on(super::serve_run(
@@ -62,7 +66,16 @@ pub(super) async fn serve(
             startup_configuration::SessionInputs::from_environment(),
         )?;
         let preparation = preparing(settings.listen, settings.allowed_origins.clone()).await?;
+        let started = std::time::Instant::now();
         let advanced = advance_database(database, &next).await;
+        actor::record_audit_line(
+            "gameplay.run_advance",
+            format!(
+                "RUN advance outcome={} ms={} step=database",
+                if advanced.is_ok() { "ready" } else { "failed" },
+                started.elapsed().as_millis()
+            ),
+        );
         preparation.abort();
         if let Err(error) = preparation.await
             && !error.is_cancelled()

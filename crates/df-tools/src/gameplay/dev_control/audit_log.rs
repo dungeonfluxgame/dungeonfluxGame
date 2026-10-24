@@ -28,7 +28,13 @@ pub(super) async fn audit(
         .map(|text| parse::parse_audit_type(text))
         .transpose()
         .map_err(bad_request)?;
-    Ok((StatusCode::OK, Json(timeline::audit(last, kind.as_deref()))))
+    Ok((
+        StatusCode::OK,
+        Json(
+            timeline::query(&params, "audit", last, kind.as_deref(), None, false)
+                .map_err(bad_request)?,
+        ),
+    ))
 }
 
 /// `GET /dev/decisions?kind=<kind>&last=<n>`: the newest Jev classifications and their neutral
@@ -46,7 +52,10 @@ pub(super) async fn decisions(
         .map(|text| parse::parse_decision_kind(text))
         .transpose()
         .map_err(bad_request)?;
-    Ok((StatusCode::OK, Json(timeline::decisions(last, kind))))
+    Ok((
+        StatusCode::OK,
+        Json(timeline::query(&params, "decisions", last, kind, None, false).map_err(bad_request)?),
+    ))
 }
 
 #[cfg(test)]

@@ -80,7 +80,7 @@ use super::{
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
 const PROMPT_VERSION: &str = "storyteller-4";
 const MAXIMUM_SLOTS: usize = 32;
-const MAXIMUM_SLOT_CHARACTERS: usize = 4000;
+const MAXIMUM_SLOT_CHARACTERS: usize = 8000;
 const MAXIMUM_MUST_MENTION: usize = 8;
 const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
 const MAXIMUM_WITHHELD: usize = 160;
