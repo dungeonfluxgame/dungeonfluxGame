@@ -1028,6 +1028,33 @@ struct PresentedPlate {
     since: Duration,
 }
 
+/// Remembers the layout of one plate. At capacity it forgets the first layout in key order that
+/// is neither the plate presented on screen nor the plate `shown` names: during a presentation
+/// hold the presented plate stays on screen after `shown` has moved on, and forgetting either
+/// layout would queue a paid measurement and move its figures. A layout already held is replaced
+/// in place.
+fn remember_layout(book: &mut Book, key: &str, placement: PlatePlacement) {
+    if !book.image_layouts.contains_key(key) && book.image_layouts.len() >= MAXIMUM_ENTRIES {
+        let kept = [
+            book.presented.as_ref().map(|shown| shown.key.clone()),
+            book.shown().map(|(shown, _)| shown),
+        ];
+        let forgotten = book
+            .image_layouts
+            .keys()
+            .find(|known| {
+                kept.iter()
+                    .flatten()
+                    .all(|shown| shown.as_str() != known.as_str())
+            })
+            .cloned();
+        if let Some(forgotten) = forgotten {
+            book.image_layouts.remove(&forgotten);
+        }
+    }
+    book.image_layouts.insert(key.to_owned(), placement);
+}
+
 fn refresh_decision(book: &mut Book, pipeline: &'static str, reason: &'static str) {
     let revision = book
         .current
@@ -3846,9 +3873,7 @@ impl Shared {
             return known;
         }
         if let Some(stored) = self.stored_placement(key, actors, actor_references).await {
-            locked(&self.book)
-                .image_layouts
-                .insert(key.as_str().to_owned(), stored.clone());
+            remember_layout(&mut locked(&self.book), key.as_str(), stored.clone());
             return stored;
         }
         let (focus_id, targets) = self.hero_locator_targets(spec, speaker, actors, focus_actor_id);
@@ -4093,12 +4118,7 @@ impl Shared {
         if measured_all_batches && let Ok(note) = serde_json::to_vec(&stored) {
             self.inner.imagery.write_note(key, note).await;
         }
-        let mut book = locked(&self.book);
-        if book.image_layouts.len() >= MAXIMUM_ENTRIES {
-            book.image_layouts.pop_first();
-        }
-        book.image_layouts
-            .insert(key.as_str().to_owned(), placement.clone());
+        remember_layout(&mut locked(&self.book), key.as_str(), placement.clone());
         placement
     }
 

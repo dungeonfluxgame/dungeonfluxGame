@@ -2594,7 +2594,8 @@ async fn settled_edits_use_admitted_jobs_and_a_thirty_second_presentation_clock(
         Duration::from_secs(15),
     );
     shared.poll_state_images_at(Duration::from_secs(18));
-    let Job::State(state_images::Job::Bake { pending: first, .. }) = drain(&mut queue).remove(0) else {
+    let Job::State(state_images::Job::Bake { pending: first, .. }) = drain(&mut queue).remove(0)
+    else {
         panic!("admitted first state render")
     };
     // A ready edit is held during a roll, then the roll ends.
@@ -2622,7 +2623,10 @@ async fn settled_edits_use_admitted_jobs_and_a_thirty_second_presentation_clock(
         Duration::from_secs(20),
     );
     shared.poll_state_images_at(Duration::from_secs(33));
-    let Job::State(state_images::Job::Bake { pending: second, .. }) = drain(&mut queue).remove(0) else {
+    let Job::State(state_images::Job::Bake {
+        pending: second, ..
+    }) = drain(&mut queue).remove(0)
+    else {
         panic!("admitted second state render")
     };
     shared.finish_state_image_at(
@@ -6235,4 +6239,70 @@ fn late_measurement_of_a_cadence_plate_projects_by_image_key_without_resetting_r
         locked(&shared.book).presented.as_ref().unwrap().since,
         Duration::from_secs(26)
     );
+}
+
+#[test]
+fn a_full_layout_cache_keeps_the_plate_on_screen_and_forgets_another_layout() {
+    // Arrange: a full cache whose first key in order is the plate on screen.
+    let numbered = |index: usize| ImageKey::parse(&format!("{index:064x}")).unwrap();
+    let placement = || PlatePlacement {
+        figure_masks: Vec::new(),
+        actors: Vec::new(),
+        speaker: layout(),
+        heroes: Vec::new(),
+    };
+    let mut book = Book::new();
+    book.direct.shown = Some((numbered(0), None));
+    for index in 0..MAXIMUM_ENTRIES {
+        remember_layout(&mut book, numbered(index).as_str(), placement());
+    }
+    assert_eq!(book.image_layouts.len(), MAXIMUM_ENTRIES);
+    // Act: a new plate arrives while the cache is full.
+    remember_layout(&mut book, numbered(100).as_str(), placement());
+    // Assert: the shown plate keeps its layout, the first other layout is the one forgotten.
+    assert_eq!(book.image_layouts.len(), MAXIMUM_ENTRIES);
+    assert!(book.image_layouts.contains_key(numbered(0).as_str()));
+    assert!(book.image_layouts.contains_key(numbered(100).as_str()));
+    assert!(!book.image_layouts.contains_key(numbered(1).as_str()));
+    // Act: a layout already held is replaced in place, forgetting nothing.
+    remember_layout(&mut book, numbered(5).as_str(), placement());
+    assert_eq!(book.image_layouts.len(), MAXIMUM_ENTRIES);
+    assert!(book.image_layouts.contains_key(numbered(2).as_str()));
+}
+
+#[test]
+fn a_held_plate_keeps_its_layout_when_the_shown_plate_has_moved_on() {
+    // Arrange: during a presentation hold the presented plate is key 0 while `shown` already
+    // names key 7. Both must survive a full cache; key 1 is the first other layout.
+    let numbered = |index: usize| ImageKey::parse(&format!("{index:064x}")).unwrap();
+    let placement = || PlatePlacement {
+        figure_masks: Vec::new(),
+        actors: Vec::new(),
+        speaker: layout(),
+        heroes: Vec::new(),
+    };
+    let mut book = Book::new();
+    book.presented = Some(PresentedPlate {
+        scene_key: "opening|Word Before Dawn|live-room-photo".to_owned(),
+        key: numbered(0),
+        placement: None,
+        revision: 1,
+        since: Duration::ZERO,
+    });
+    book.direct.shown = Some((numbered(7), None));
+    for index in 0..MAXIMUM_ENTRIES {
+        remember_layout(&mut book, numbered(index).as_str(), placement());
+    }
+    // Act: a new plate arrives while the cache is full.
+    remember_layout(&mut book, numbered(100).as_str(), placement());
+    // Assert: the held and the shown layouts survive, the first other layout is forgotten.
+    assert_eq!(book.image_layouts.len(), MAXIMUM_ENTRIES);
+    assert!(book.image_layouts.contains_key(numbered(0).as_str()));
+    assert!(book.image_layouts.contains_key(numbered(7).as_str()));
+    assert!(!book.image_layouts.contains_key(numbered(1).as_str()));
+    // Act: the hold ends and `shown` moves on; the presented layout is then the only one kept.
+    book.direct.shown = None;
+    remember_layout(&mut book, numbered(101).as_str(), placement());
+    assert!(book.image_layouts.contains_key(numbered(0).as_str()));
+    assert!(!book.image_layouts.contains_key(numbered(2).as_str()));
 }

@@ -58,6 +58,8 @@ struct FakeFrames {
     calls: AtomicUsize,
     refuse: bool,
     prompts: Mutex<Vec<String>>,
+    /// When set, every call waits here, so a test can require calls to be in flight together.
+    rendezvous: Option<Arc<tokio::sync::Barrier>>,
 }
 
 impl FrameProvider for FakeFrames {
@@ -70,6 +72,9 @@ impl FrameProvider for FakeFrames {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(!source.bytes.is_empty());
             locked(&self.prompts).push(prompt.to_owned());
+            if let Some(rendezvous) = &self.rendezvous {
+                rendezvous.wait().await;
+            }
             if self.refuse {
                 return Err(failure("fixture_image_refused"));
             }
@@ -135,10 +140,19 @@ fn setup(
     image_refuse: bool,
     video_refuse: bool,
 ) -> (Arc<CharacterClips>, Arc<FakeFrames>, Arc<FakeVideos>) {
+    setup_with_rendezvous(image_refuse, video_refuse, None)
+}
+
+fn setup_with_rendezvous(
+    image_refuse: bool,
+    video_refuse: bool,
+    rendezvous: Option<Arc<tokio::sync::Barrier>>,
+) -> (Arc<CharacterClips>, Arc<FakeFrames>, Arc<FakeVideos>) {
     let frames = Arc::new(FakeFrames {
         calls: AtomicUsize::new(0),
         refuse: image_refuse,
         prompts: Mutex::new(Vec::new()),
+        rendezvous,
     });
     let videos = Arc::new(FakeVideos {
         calls: AtomicUsize::new(0),
@@ -327,6 +341,40 @@ fn character_clips_measure_count_clock_size_contact_guard_return_and_fall_settle
         measure_clip(&attack, ClipKind::LastHit).is_err(),
         "a return to guard is not a fallen last hit"
     );
+}
+
+#[tokio::test]
+async fn guard_frames_of_different_fighters_are_drawn_at_the_same_time() {
+    // The barrier opens only when both guards are inside the provider together. A gate shared by
+    // every frame would hold the second fighter behind the first and time out here.
+    let (service, frames, _) =
+        setup_with_rendezvous(false, false, Some(Arc::new(tokio::sync::Barrier::new(2))));
+    let second = Fighter {
+        identity: "entity:second-fighter".to_owned(),
+        name: "Osric".to_owned(),
+        ..fighter()
+    };
+    let source = Arc::new(Depiction {
+        bytes: vec![1, 2, 3],
+        format: ImageFormat::Png,
+        revision: "canonical-v1".to_owned(),
+    });
+    let first_spec = CharacterClipSpec::new(fighter(), "canonical-v1".to_owned(), ClipKind::Idle);
+    let second_spec = CharacterClipSpec::new(second, "canonical-v1".to_owned(), ClipKind::Idle);
+    let (first, other) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            service
+                .generation
+                .frame(&first_spec, Arc::clone(&source), false, false),
+            service
+                .generation
+                .frame(&second_spec, Arc::clone(&source), false, false),
+        )
+    })
+    .await
+    .expect("guard frames of two fighters are drawn concurrently");
+    assert!(first.is_ok() && other.is_ok());
+    assert_eq!(frames.calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

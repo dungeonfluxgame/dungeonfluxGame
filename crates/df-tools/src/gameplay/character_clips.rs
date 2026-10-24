@@ -8,7 +8,7 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak},
     time::{Duration, Instant},
 };
 
@@ -313,12 +313,23 @@ struct Generation {
     frames: Option<Arc<dyn FrameProvider>>,
     videos: Option<Arc<dyn VideoProvider>>,
     directory: PathBuf,
-    // Hub::render requires provider-side coalescing. This owned gate serializes only shared
-    // intermediate creation; video generation remains concurrent in the living-scene JoinSet.
-    frame_gate: Arc<tokio::sync::Mutex<()>>,
+    // Hub::render does not coalesce concurrent calls for one key, so callers of the same frame
+    // key wait on its gate and the frame is drawn once. Other frames are drawn concurrently.
+    frame_gates: Arc<Mutex<BTreeMap<String, Weak<tokio::sync::Mutex<()>>>>>,
 }
 
 impl Generation {
+    fn frame_gate(&self, key: &ResourceKey) -> Arc<tokio::sync::Mutex<()>> {
+        let mut gates = locked(&self.frame_gates);
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = gates.get(key.as_str()).and_then(Weak::upgrade) {
+            return gate;
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        gates.insert(key.as_str().to_owned(), Arc::downgrade(&gate));
+        gate
+    }
+
     async fn frame(
         &self,
         spec: &CharacterClipSpec,
@@ -332,7 +343,8 @@ impl Generation {
         };
         let key = ResourceKey::of(&frame_spec);
         let directory = self.directory.join(key.as_str());
-        let _guard = self.frame_gate.lock().await;
+        let gate = self.frame_gate(&key);
+        let _guard = gate.lock().await;
         let service = self.clone();
         let fighter = spec.fighter.clone();
         let frame_source = spec.clone();
@@ -735,7 +747,7 @@ impl CharacterClips {
                 frames,
                 videos,
                 directory,
-                frame_gate: Arc::new(tokio::sync::Mutex::new(())),
+                frame_gates: Arc::new(Mutex::new(BTreeMap::new())),
             },
             source,
             wanted: Mutex::new(BTreeMap::new()),
