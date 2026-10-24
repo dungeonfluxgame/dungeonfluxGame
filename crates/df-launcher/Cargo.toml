@@ -1,0 +1,40 @@
+[package]
+name = "df-launcher"
+description = "DungeonFlux desktop launcher: start, resume and stop local games, show the table display and edit game settings."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "dungeonflux"
+path = "src/main.rs"
+
+# The launcher is a native desktop program; the WASM game client never builds it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+dirs = "=6.0.0"
+open = "=5.4.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+tao = "=0.36.0"
+toml = "=0.9.12"
+wry = "=0.56.1"
+
+[target.'cfg(windows)'.dependencies]
+# Same version wry uses, so the WebView2 interfaces match (table display screenshots).
+webview2-com = "=0.38.2"
+windows = { version = "=0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_UI_Shell",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Standalone until it joins the root workspace, so its lockfile stays its own.
+[workspace]

@@ -1,0 +1,95 @@
+# DungeonFlux configuration, read by the DungeonFlux launcher (dungeonflux.exe).
+# config/dungeonflux.example.toml is the clean copy kept in Git; the launcher creates
+# config/dungeonflux.toml from it and saves Settings there. That copy holds your keys
+# and is ignored by Git. Changes apply the next time a game starts or resumes.
+
+# Players and network.
+[network]
+# Let phones on this PC's network join (true) or keep the game on this PC only (false).
+phones_on_network = true
+# Port the table display and phones connect to, 1024-65535.
+game_port = 63309
+# Port of the game's own PostgreSQL database on this PC, 1024-65535.
+database_port = 55517
+
+# Table display.
+[display]
+# Where the table display opens when the game is ready: "window", "browser" or "manual".
+display = "window"
+# "second": a second screen (a TV) when connected; "main": the launcher's screen.
+display_screen = "second"
+# "on-second-screen", "always" or "never".
+full_screen = "on-second-screen"
+
+# Story and sound.
+[story]
+# "mature" or "restrained" (no gore or strong language).
+content_rating = "mature"
+# AI narration of the story. Needs an OpenAI key.
+storyteller = true
+# The storyteller remembers earlier scenes. Needs an OpenAI key.
+story_memory = true
+# Spoken narration and character voices. Needs an ElevenLabs key.
+narration_voice = true
+# Generated music for each place. Needs an ElevenLabs key.
+music = true
+# Players can talk to characters from their phones. Needs an ElevenLabs key.
+speech_input = true
+# Numbered choice chips on the table display.
+choice_hints = true
+
+# Pictures.
+[pictures]
+# Pictures of people and places as the story goes. Needs an OpenAI key.
+scene_pictures = true
+# A composed picture for every scene. Needs scene_pictures.
+scene_plates = true
+# "low", "medium" or "high".
+picture_quality = "medium"
+# "openai", or "flux" (developer option, needs a fal key).
+picture_provider = "openai"
+# Hero portraits during character creation. Needs OpenAI and Jev keys.
+creator_portraits = false
+# Send mature hero portraits to Black Forest Labs. Needs a BFL key.
+creator_alternate_route = false
+
+# Generated video costs much more than pictures; all off by default.
+[video]
+# A moving title screen. Needs a fal key.
+home_video = false
+# Clips for story moments and finishing blows. Needs a fal key.
+scene_video = false
+# Clips of heroes attacking and reacting. Needs a fal key.
+character_video = false
+
+# Provider keys. This file is ignored by Git; never commit it or paste keys elsewhere.
+[keys]
+# Also read keys missing below from the game folder's .env file.
+keys_from_env_file = true
+# OpenAI: Storyteller, story memory, scene pictures, character portraits.
+openai = ""
+# ElevenLabs: Narration voices, music, speaking to characters.
+elevenlabs = ""
+# fal: Generated video and the FLUX picture option.
+fal = ""
+# Jev (TypeSafe AI): Reading players' choices; sorting portrait requests.
+jev = ""
+# Black Forest Labs: Alternate portrait route for mature appearances.
+bfl = ""
+
+# For working on DungeonFlux; players can leave these alone.
+[developer]
+# "managed": the launcher runs its own server; "external": connect to one already running.
+server_mode = "managed"
+# Address of the external server, such as "http://127.0.0.1:63309".
+external_url = ""
+# Turn on the server's authenticated developer commands (df-transport-fixture dev).
+dev_control = false
+# Folder holding content/ and assets/. Empty: found automatically.
+game_folder = ""
+# Build holding debug/df-transport-fixture.exe and play-web/. Empty: found automatically.
+build_folder = ""
+# Folder holding pg_ctl.exe and initdb.exe. Empty: found automatically.
+postgres_folder = ""
+# Saved games' database, caches and logs. Empty: artifacts/tmp/play.
+play_folder = ""

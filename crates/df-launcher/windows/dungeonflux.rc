@@ -1,0 +1,3 @@
+// Keep the application icon first so Windows uses it as the executable's default.
+// Resource 1 is also loaded at run time as the window icon.
+1 ICON "dungeonflux.ico"

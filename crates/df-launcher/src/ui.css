@@ -1,0 +1,317 @@
+/* DungeonFlux launcher. The lantern-lit harbor hall from the game is the stage; the launcher's
+   controls sit on dark glass in front of it. Palette shared with the character workshop. */
+:root {
+  --ink: #09131d;
+  --deep: #0e1d26;
+  --glass: rgba(9, 19, 29, .66);
+  --glass-strong: rgba(9, 19, 29, .82);
+  --teal: #17313b;
+  --line: rgba(198, 163, 107, .2);
+  --line-quiet: rgba(169, 183, 183, .16);
+  --brass: #c6a36b;
+  --brass-bright: #e6c992;
+  --flame: #f2b25c;
+  --ivory: #f2e8d5;
+  --muted: #b3c0bf;
+  --ember: #e0905c;
+  --sage: #9cc4a6;
+  --serif: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --sans: "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ivory);
+  background: var(--ink);
+  font: 15px/1.55 var(--sans);
+}
+a { color: var(--brass-bright); }
+:focus-visible { outline: 3px solid var(--brass-bright); outline-offset: 3px; }
+h1, h2, h3 { font-family: var(--serif); font-weight: 400; margin: 0; }
+p { margin: 0; }
+img { display: block; max-width: 100%; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The stage: the harbor hall at night, darkest where the text sits. */
+/* The photograph is its own layer sized to the window, so the lanterns frame every window the
+   same way however long the page grows. Play keeps it fixed behind the page; Settings shows it
+   as a band above its header. */
+.home-page, .settings-page { position: relative; background: var(--ink); }
+.home-page::before, .settings-page::before { content: ""; z-index: -1; pointer-events: none; }
+.home-page::before {
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(9, 19, 29, .9) 0%, rgba(9, 19, 29, .55) 36%, rgba(9, 19, 29, 0) 60%),
+    linear-gradient(180deg, rgba(9, 19, 29, 0) 0%, rgba(9, 19, 29, 0) 55%, rgba(9, 19, 29, .9) 100%),
+    url("/art/harbor-hall.png") 64% 30% / cover no-repeat;
+}
+.settings-page::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 560px;
+  background:
+    linear-gradient(180deg, rgba(9, 19, 29, .1) 0, rgba(9, 19, 29, .55) 220px, rgba(9, 19, 29, .92) 400px, var(--ink) 560px),
+    url("/art/harbor-hall.png") 70% 20% / cover no-repeat;
+}
+
+/* Masthead */
+.masthead { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 40px 14px; }
+.brand { display: block; filter: drop-shadow(0 4px 18px rgba(0, 0, 0, .7)); }
+.brand img { width: 200px; height: auto; }
+.masthead nav { display: flex; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); backdrop-filter: blur(8px); }
+.masthead nav a { color: var(--muted); text-decoration: none; padding: 7px 18px; border-radius: 999px; font-weight: 500; }
+.masthead nav a:hover { color: var(--ivory); }
+.masthead nav a[aria-current="page"] { color: #17202a; background: linear-gradient(135deg, #dcc08b, #b08a52); }
+
+/* Play page */
+.home { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 1fr); gap: 44px; align-items: start; padding: 26px 40px 56px; max-width: 1240px; }
+.state { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 22px; align-items: start; }
+.state h1 { font-size: 46px; line-height: 1.08; letter-spacing: -.8px; overflow-wrap: anywhere; text-shadow: 0 2px 28px rgba(0, 0, 0, .75); }
+.lede { margin-top: 12px; color: #d7d9d2; font-size: 16px; max-width: 50ch; text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
+.lede strong { color: var(--ivory); font-weight: 600; overflow-wrap: anywhere; }
+
+/* The lantern, the launcher's one signature: dark until a game runs, its flame turning while
+   the game starts, glowing steadily while it runs. */
+.lantern { position: relative; width: 68px; height: 68px; margin-top: 4px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle at 50% 45%, #1f2f36, #0c171e 70%); border: 1px solid rgba(198, 163, 107, .35); box-shadow: inset 0 0 18px rgba(0, 0, 0, .7); }
+.lantern img { width: 30px; height: 30px; opacity: .55; filter: grayscale(.6); }
+.lantern[data-state="starting"]::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--flame); border-right-color: rgba(242, 178, 92, .35); animation: lantern-turn 1.6s linear infinite; }
+.lantern[data-state="starting"] img { opacity: .9; filter: none; }
+.lantern[data-state="lit"] { background: radial-gradient(circle at 50% 50%, rgba(242, 178, 92, .55), rgba(242, 178, 92, .12) 55%, #0c171e 75%); border-color: rgba(242, 178, 92, .7); box-shadow: 0 0 34px rgba(242, 178, 92, .45), 0 0 90px rgba(242, 178, 92, .18), inset 0 0 14px rgba(255, 220, 160, .3); animation: lantern-glow 3.2s ease-in-out infinite alternate; }
+.lantern[data-state="lit"] img { opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 210, 140, .9)); }
+.lantern[data-state="dimming"] { box-shadow: 0 0 22px rgba(242, 178, 92, .2); }
+.lantern[data-state="dimming"] img { opacity: .75; filter: none; }
+.lantern[data-state="failed"] { border-color: var(--ember); box-shadow: 0 0 26px rgba(224, 144, 92, .35); }
+.lantern[data-state="failed"] img { opacity: .8; filter: sepia(1) saturate(3) hue-rotate(-20deg); }
+@keyframes lantern-turn { to { transform: rotate(360deg); } }
+@keyframes lantern-glow { from { box-shadow: 0 0 26px rgba(242, 178, 92, .38), 0 0 70px rgba(242, 178, 92, .12), inset 0 0 12px rgba(255, 220, 160, .25); } to { box-shadow: 0 0 40px rgba(242, 178, 92, .55), 0 0 110px rgba(242, 178, 92, .22), inset 0 0 16px rgba(255, 220, 160, .35); } }
+
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 24px; }
+.inline { display: inline; margin: 0; }
+.hint { margin-top: 14px; color: var(--muted); font-size: 13px; max-width: 60ch; }
+.stop-row { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line); }
+
+/* Buttons */
+button { min-height: 44px; padding: 10px 20px; border-radius: 6px; font: 600 14px/1.3 var(--sans); cursor: pointer; transition: filter .15s, background-color .15s, border-color .15s; }
+button.primary { color: #17202a; background: linear-gradient(135deg, #e2c793, #b48d55); border: 1px solid #f0dcb5; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 8px 24px rgba(0, 0, 0, .45); }
+button.primary:hover { filter: brightness(1.08); }
+button.primary.start { min-height: 52px; padding: 12px 30px; font-size: 16px; letter-spacing: .2px; }
+button.secondary { color: var(--ivory); background: rgba(23, 49, 59, .85); border: 1px solid rgba(198, 163, 107, .45); }
+button.secondary:hover { border-color: var(--brass-bright); background: #1c3b46; }
+button.quiet { color: var(--brass-bright); background: transparent; border: 1px solid transparent; padding-left: 6px; padding-right: 6px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+button.danger { color: #f3b48b; background: rgba(60, 28, 18, .55); border: 1px solid rgba(224, 144, 92, .6); }
+button.danger:hover { background: rgba(90, 38, 22, .7); }
+.quiet-link { padding: 10px 6px; font-size: 14px; text-underline-offset: 3px; }
+
+/* New game: two adventures, each with its picture. */
+.new-game { margin: 36px 0 0 98px; }
+fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+legend { padding: 0; margin-bottom: 14px; font: 22px/1.3 var(--serif); color: var(--ivory); text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
+.adventures { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.adventure { position: relative; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--glass-strong); cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.adventure:hover { border-color: rgba(230, 201, 146, .6); }
+.adventure:has(input:checked) { border-color: var(--brass-bright); box-shadow: 0 0 0 1px var(--brass-bright), 0 14px 40px rgba(0, 0, 0, .5), 0 0 40px rgba(242, 178, 92, .15); }
+.adventure:has(input:focus-visible) { outline: 3px solid var(--brass-bright); outline-offset: 3px; }
+.adventure input { position: absolute; top: 12px; left: 12px; z-index: 1; }
+.adventure-art { display: block; height: 128px; overflow: hidden; background: radial-gradient(circle at 50% 55%, #23394a, #0b1620 72%); }
+.adventure-art img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9) brightness(.92); transition: transform .4s; }
+.adventure-art.die img { object-fit: contain; padding: 12px 0 6px; filter: drop-shadow(0 8px 18px rgba(0, 0, 0, .7)); }
+.adventure:has(input:checked) .adventure-art img { transform: scale(1.04); }
+.adventure-text { display: block; padding: 12px 14px 14px; }
+.adventure strong { display: block; font: 18px/1.25 var(--serif); }
+.adventure small { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+.new-game button { margin-top: 20px; }
+
+/* Generic choices (settings) */
+.option, .check { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line-quiet); border-radius: 8px; background: rgba(14, 29, 38, .7); cursor: pointer; }
+.option + .option, .check + .check { margin-top: 8px; }
+.option:has(input:checked) { border-color: rgba(230, 201, 146, .75); background: rgba(27, 52, 61, .85); }
+.check:has(input:checked) { border-color: rgba(198, 163, 107, .45); }
+.option strong, .check strong { display: block; font-weight: 600; }
+.option small, .check small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+input[type="radio"], input[type="checkbox"] { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--brass); }
+
+/* Startup steps: a real sequence, so it is numbered. */
+.steps { list-style: none; counter-reset: step; margin: 24px 0 0; padding: 18px 20px; max-width: 440px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass); backdrop-filter: blur(10px); }
+.steps li { counter-increment: step; position: relative; padding: 8px 0 8px 42px; color: var(--muted); }
+.steps li::before { content: counter(step); position: absolute; left: 0; top: 6px; width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(169, 183, 183, .4); display: grid; place-items: center; font: 14px/1 var(--serif); }
+.steps li[data-state="done"] { color: var(--ivory); }
+.steps li[data-state="done"]::before { content: "✓"; color: var(--ink); background: var(--sage); border-color: var(--sage); }
+.steps li[data-state="current"] { color: var(--ivory); font-weight: 600; }
+.steps li[data-state="current"]::before { color: var(--ink); background: var(--flame); border-color: var(--flame); box-shadow: 0 0 16px rgba(242, 178, 92, .6); }
+.steps small { display: block; margin-top: 2px; color: var(--brass-bright); font-size: 13px; font-weight: 400; }
+
+/* Notices */
+.notice, .alert { margin-top: 18px; padding: 12px 16px; border: 1px solid rgba(156, 196, 166, .35); border-left: 3px solid var(--sage); border-radius: 6px; background: rgba(18, 40, 38, .85); color: var(--ivory); max-width: 62ch; }
+.alert { border-color: rgba(224, 144, 92, .4); border-left-color: var(--ember); background: rgba(45, 26, 20, .88); }
+.field-error { margin: 6px 0 0; color: #f4b089; font-size: 13px; }
+.log { margin-top: 20px; }
+.log summary { cursor: pointer; color: var(--brass-bright); padding: 8px 0; }
+.log pre { margin: 6px 0 0; max-height: 240px; overflow: auto; padding: 12px; border: 1px solid var(--line-quiet); border-radius: 6px; background: rgba(3, 8, 12, .92); color: #cfd8d6; font: 12px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Saved games: a glass ledger over the hall. */
+.ledger { margin-top: 96px; padding: 22px 22px 8px; border: 1px solid rgba(230, 201, 146, .3); border-radius: 14px; background: linear-gradient(180deg, rgba(9, 19, 29, .46), rgba(9, 19, 29, .74)); backdrop-filter: blur(6px) saturate(120%); box-shadow: 0 24px 60px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 230, 190, .12); }
+.ledger h2 { font-size: 26px; text-align: center; }
+/* One full-width rule with the game's ornament at its centre, so the heading sits balanced. */
+.ledger h2::after { content: ""; display: block; height: 16px; margin: 10px 0 4px; background: url("/art/ornament.svg") center / 240px 16px no-repeat, linear-gradient(90deg, transparent, rgba(223, 185, 116, .55) 18%, rgba(223, 185, 116, .55) 82%, transparent) center / 100% 1px no-repeat; }
+.settings-body h1::after { content: ""; display: block; width: 240px; max-width: 100%; height: 16px; margin-top: 10px; background: url("/art/ornament.svg") left center / contain no-repeat; opacity: .85; }
+
+/* The most recent game: its last table picture, large, with one Continue button. */
+.continue { position: relative; margin: 14px 0 6px; overflow: hidden; border: 1px solid rgba(230, 201, 146, .35); border-radius: 10px; background: #050b10; }
+.continue .shot { display: block; aspect-ratio: 16 / 9; }
+.continue .shot img { width: 100%; height: 100%; object-fit: cover; }
+.continue .shot.art.die img { object-fit: contain; padding: 14px 0; }
+.continue-text { position: absolute; inset: auto 0 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label button" "name button" "meta button"; align-items: end; column-gap: 14px; padding: 46px 16px 14px; background: linear-gradient(transparent, rgba(5, 11, 16, .92) 55%); }
+.continue-label { grid-area: label; color: var(--brass-bright); font-size: 12px; }
+.continue h3 { grid-area: name; font-size: 22px; line-height: 1.2; overflow-wrap: anywhere; }
+.continue-text p:not(.continue-label) { grid-area: meta; color: #c9d1cf; font-size: 13px; }
+.continue .inline { grid-area: button; align-self: end; }
+
+.saves { list-style: none; margin: 10px 0 0; padding: 0; }
+.saves li { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line-quiet); }
+.saves .shot { display: block; width: 88px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; border: 1px solid var(--line); background: radial-gradient(circle at 50% 55%, #23394a, #0b1620 72%); }
+.saves .shot img { width: 100%; height: 100%; object-fit: cover; }
+.shot.art img { filter: saturate(.85) brightness(.85); }
+.saves .shot.art.die img { object-fit: contain; padding: 4px 0; }
+.save-text { min-width: 0; }
+.saves h3 { font-size: 18px; line-height: 1.25; color: var(--ivory); overflow-wrap: anywhere; }
+.saves p { margin-top: 1px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.empty { padding: 18px 4px 22px; color: var(--muted); text-align: center; }
+
+/* What the next game starts with. */
+.readiness { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass-strong); }
+.readiness h2 { font: 600 14px/1.4 var(--sans); color: var(--ivory); }
+.readiness ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.readiness li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 5px 0; font-size: 14px; }
+.readiness li::before { content: "✓"; color: var(--sage); font-weight: 700; text-align: center; }
+.readiness li[data-ready="false"]::before { content: "–"; color: var(--brass-bright); }
+.readiness li[data-ready="false"] span { color: var(--muted); }
+.readiness a { font-size: 13px; text-underline-offset: 3px; }
+.readiness .hint { margin-top: 8px; }
+code, .commands { font: 13px/1.5 Consolas, "Cascadia Mono", monospace; }
+code { padding: 1px 5px; border-radius: 4px; background: rgba(23, 49, 59, .8); color: var(--brass-bright); }
+.commands { margin: 8px 0 0; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--line-quiet); border-radius: 6px; background: rgba(3, 8, 12, .85); color: #d7e0dd; }
+.tag { flex-shrink: 0; padding: 3px 11px; border-radius: 999px; border: 1px solid rgba(169, 183, 183, .45); color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tag.ok { border-color: rgba(156, 196, 166, .6); color: var(--sage); }
+.tag.warn { border-color: rgba(224, 144, 92, .6); color: var(--ember); }
+.saves .tag { border-color: var(--flame); color: var(--flame); box-shadow: 0 0 14px rgba(242, 178, 92, .2); }
+
+/* Settings */
+.settings { display: grid; grid-template-columns: 200px minmax(0, 760px); gap: 40px; padding: 28px 40px 0; }
+.index { position: sticky; top: 20px; align-self: start; display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass); backdrop-filter: blur(10px); }
+.index a { display: flex; align-items: center; gap: 10px; color: var(--muted); text-decoration: none; padding: 8px 10px; border-radius: 6px; }
+.index a::before { content: ""; flex-shrink: 0; width: 18px; height: 18px; background: center / contain no-repeat; opacity: .8; }
+.index a:hover { color: var(--ivory); background: rgba(23, 49, 59, .7); }
+.index a[href="#network"]::before { background-image: url("/art/party.svg"); }
+.index a[href="#display"]::before { background-image: url("/art/portrait-frame.svg"); }
+.index a[href="#story"]::before { background-image: url("/art/spellbook.svg"); }
+.index a[href="#pictures"]::before { background-image: url("/art/compass.svg"); }
+.index a[href="#video"]::before { background-image: url("/art/lantern.svg"); }
+.index a[href="#keys"]::before { background-image: url("/art/shield.svg"); }
+.index a[href="#developer"]::before { background-image: url("/art/sword.svg"); }
+.settings-body h1 { font-size: 46px; letter-spacing: -.8px; text-shadow: 0 2px 24px rgba(0, 0, 0, .8); }
+.settings-body section { margin-top: 26px; padding: 24px 26px 26px; border: 1px solid var(--line); border-radius: 12px; background: rgba(9, 19, 29, .78); backdrop-filter: blur(10px); }
+.settings-body h2 { display: flex; align-items: center; gap: 12px; font-size: 25px; margin-bottom: 16px; }
+.settings-body section > h2::before { content: ""; flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: rgba(23, 49, 59, .7) center / 20px no-repeat; }
+#network > h2::before { background-image: url("/art/party.svg"); }
+#display > h2::before { background-image: url("/art/portrait-frame.svg"); }
+#story > h2::before { background-image: url("/art/spellbook.svg"); }
+#pictures > h2::before { background-image: url("/art/compass.svg"); }
+#video > h2::before { background-image: url("/art/lantern.svg"); }
+#keys-source > h2::before, #keys > h2::before { background-image: url("/art/shield.svg"); }
+#developer > h2::before { background-image: url("/art/sword.svg"); }
+#files > h2::before { background-image: url("/art/spellbook.svg"); }
+.index a[href="#files"]::before { background-image: url("/art/spellbook.svg"); }
+#files { margin-bottom: 60px; }
+.settings-body h3 { font-size: 18px; margin: 24px 0 6px; }
+.section-note { margin: -4px 0 14px; color: var(--muted); font-size: 13px; max-width: 64ch; }
+#video .section-note { color: #f0c9a6; }
+.choices { margin-top: 18px; }
+.choices legend { font: 600 14px/1.4 var(--sans); margin-bottom: 8px; text-shadow: none; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+.field { margin-top: 16px; }
+.text { display: block; }
+.text strong { display: block; font-weight: 600; }
+.text small { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+input[type="text"], input[type="url"], input[type="password"] { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ivory); background: rgba(14, 29, 38, .9); border: 1px solid rgba(120, 146, 150, .5); border-radius: 6px; font: 15px/1.4 var(--sans); }
+input:focus { border-color: var(--brass); }
+input[aria-invalid="true"] { border-color: var(--ember); }
+.save-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 16px; margin: 26px -2px 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(9, 19, 29, .92); backdrop-filter: blur(10px); box-shadow: 0 -10px 30px rgba(0, 0, 0, .4); }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0 0 8px; font-size: 13px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.keys { margin-bottom: 60px; }
+.keys ul { list-style: none; margin: 0; padding: 0; }
+.keys li { padding: 16px 0; border-top: 1px solid var(--line-quiet); }
+.key-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.keys li > p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.key-form { display: flex; gap: 10px; margin-top: 10px; }
+.key-form input { flex: 1; }
+
+.plain-page main { padding: 48px 40px; }
+.plain-page main p { margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .masthead { padding: 14px 22px 10px; }
+  .brand img { width: 160px; }
+  .home { grid-template-columns: 1fr; gap: 36px; padding: 20px 22px 40px; }
+  .home-page::before { background-position: 0 0, 0 0, 60% 20%; }
+  .ledger { margin-top: 0; }
+  .new-game { margin-left: 0; }
+  .settings { grid-template-columns: 1fr; gap: 0; padding: 0 22px; }
+  .index { position: sticky; top: 8px; z-index: 3; flex-direction: row; gap: 2px; padding: 6px; overflow-x: auto; }
+  .index a { flex-shrink: 0; padding: 6px 10px; }
+  .settings-body h1 { margin-top: 22px; }
+}
+@media (max-width: 560px) {
+  .state { grid-template-columns: 52px minmax(0, 1fr); gap: 14px; }
+  .lantern { width: 50px; height: 50px; }
+  .lantern img { width: 22px; height: 22px; }
+  .state h1, .settings-body h1 { font-size: 32px; }
+  .adventures { grid-template-columns: 1fr; }
+  .adventure-art { height: 110px; }
+  .pair { grid-template-columns: 1fr; }
+  .key-form { flex-direction: column; }
+  .saves li { flex-wrap: wrap; }
+  .settings-body section { padding: 20px 16px; }
+  .masthead nav a { padding: 6px 12px; }
+}
+/* Moving between Play and Settings: the brass pill slides to its new tab while the arriving
+   page is revealed by a widening circle of lantern light from that tab; the leaving page dims
+   and sinks away. Cross-document view transitions: no script. A refresh of the same page only
+   cross-fades, because its old and new snapshots pair up. */
+@view-transition { navigation: auto; }
+.brand { view-transition-name: brand; }
+.masthead nav { view-transition-name: nav; }
+.masthead nav a[aria-current="page"] { view-transition-name: nav-current; }
+.home-page main { view-transition-name: play-page; }
+.settings-page main { view-transition-name: settings-page; }
+::view-transition-group(nav-current) { animation-duration: .55s; animation-timing-function: cubic-bezier(.34, 1.45, .5, 1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .5s; }
+::view-transition-group(play-page), ::view-transition-group(settings-page) { animation-duration: .25s; }
+::view-transition-new(settings-page):only-child { animation: lantern-reveal-settings .75s cubic-bezier(.2, .7, .2, 1) both; }
+::view-transition-new(play-page):only-child { animation: lantern-reveal-play .75s cubic-bezier(.2, .7, .2, 1) both; }
+::view-transition-old(settings-page):only-child, ::view-transition-old(play-page):only-child { animation: page-sink .45s ease-in both; }
+@keyframes lantern-reveal-settings {
+  from { clip-path: circle(0 at calc(100% - 56px) -46px); filter: brightness(1.9) sepia(.7) saturate(1.4); }
+  55% { filter: brightness(1.2) sepia(.25); }
+  to { clip-path: circle(160% at calc(100% - 56px) -46px); filter: none; }
+}
+@keyframes lantern-reveal-play {
+  from { clip-path: circle(0 at calc(100% - 150px) -46px); filter: brightness(1.9) sepia(.7) saturate(1.4); }
+  55% { filter: brightness(1.2) sepia(.25); }
+  to { clip-path: circle(160% at calc(100% - 150px) -46px); filter: none; }
+}
+@keyframes page-sink { to { opacity: 0; transform: translateY(14px) scale(.97); filter: blur(3px) brightness(.55); } }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  html { scroll-behavior: auto; }
+  .lantern[data-state="starting"]::after { animation: none; border-color: var(--flame); border-left-color: rgba(242, 178, 92, .25); }
+  .lantern[data-state="lit"] { animation: none; }
+  .adventure, .adventure-art img, button { transition: none; }
+  .adventure:has(input:checked) .adventure-art img { transform: none; }
+}

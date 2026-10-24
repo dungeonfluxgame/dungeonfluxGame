@@ -25,6 +25,10 @@ $RECYCLE.BIN/
 *.swo
 *~
 
+# Central launcher configuration: the real copy holds API keys; the clean copy is committed
+/config/dungeonflux.toml
+/config/*.local.toml
+
 # Local environment files; keep reusable templates
 .env
 .env.*
