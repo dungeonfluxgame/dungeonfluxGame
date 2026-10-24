@@ -4,12 +4,13 @@ use super::*;
 use crate::gameplay::{
     adventure::scene_model::{SceneItemProvenance, SceneNow, SceneThing},
     imagery::{item_picture, state_edit},
-    narrative_focus::{self, Dialogue, NarrativeFocus, Presentation, Stage},
+    narrative_focus::{NarrativeFocus, Presentation, Stage},
 };
 use serde_json::Value;
 
 const SETTLE: Duration = Duration::from_secs(3);
 const BAKE_INTERVAL: Duration = Duration::from_secs(10);
+const SCENE_CADENCE: Duration = Duration::from_secs(30);
 /// After a failed fresh render for a capped edit chain, no new one is asked for this long.
 const CHAIN_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 
@@ -35,9 +36,77 @@ pub(super) struct Book {
     /// The plate id of a fresh render asked for to replace a capped edit chain's base.
     pub(super) refresh: Option<String>,
     refresh_failed_at: Option<Duration>,
+    cadence_deadline: Option<Duration>,
+    cadence_sequence: u64,
+    cadence_request: Option<(String, u64, Duration)>,
+    ready_at: Option<Duration>,
+    latest_story: Option<StoryBeat>,
+    projection_deadline: Option<(ImageKey, Duration)>,
+    cadence_missed: Option<Duration>,
+    pub(super) subject_selection: Option<subject::Selection>,
+    framed_subject: Option<subject::Frame>,
 }
 
 impl Book {
+    pub(super) fn note_effective_projection(&mut self, key: &ImageKey, now: Duration) {
+        if self
+            .projection_deadline
+            .as_ref()
+            .is_some_and(|(expected, _)| expected == key)
+            && let Some((_, due)) = self.projection_deadline.take()
+        {
+            record_cadence(
+                "projected",
+                self.baked_revision.unwrap_or(self.observed_graph),
+                due,
+                now,
+            );
+        }
+        let next = now.saturating_add(SCENE_CADENCE);
+        self.last_shown = Some(now);
+        self.cadence_deadline = Some(next);
+        if let Some(pending) = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.cadence_due.is_some())
+        {
+            pending.cadence_due = Some(next);
+        }
+        if let Some((_, revision, due)) = self.cadence_request.as_mut()
+            && *due != next
+        {
+            *due = next;
+            record_cadence("rescheduled_after_visible_projection", *revision, next, now);
+            if self.ready.is_some() {
+                self.ready_at = Some(next);
+            }
+        }
+    }
+
+    fn accepts_state(&self, state: &str) -> bool {
+        if state == self.observed {
+            return true;
+        }
+        match state.rsplit_once("|cadence_context=") {
+            Some((observed, context)) => {
+                observed == self.observed
+                    && context
+                        == self
+                            .latest_story
+                            .as_ref()
+                            .map_or("none", |story| story.sha256.as_str())
+            }
+            None => state == self.observed,
+        }
+    }
+
+    pub(super) fn note_initial_projection(&mut self, now: Duration) {
+        if self.last_shown.is_none() {
+            self.last_shown = Some(now);
+            self.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
+        }
+    }
+
     /// The first virtual time at which the current pending edit could pass its production
     /// settle and pacing gates. Tests use this instead of assuming that several expensive fake
     /// image operations fit inside a hard-coded wall-clock interval.
@@ -47,7 +116,10 @@ impl Book {
         face_last_started: Option<Duration>,
     ) -> Option<Duration> {
         let pending = self.pending.as_ref()?;
-        let interval = if pending.story.is_some() && pending.focus.is_none() {
+        let interval = if pending.story.is_some()
+            && pending.snapshot.is_none()
+            && pending.cadence_due.is_none()
+        {
             story_interval.max(BAKE_INTERVAL)
         } else {
             BAKE_INTERVAL
@@ -70,6 +142,8 @@ pub(super) struct Pending {
     changed_at: Duration,
     graph: Option<crate::gameplay::shot::scene_graph::SceneGraph>,
     pub(super) focus: Option<NarrativeFocus>,
+    pub(super) cadence_due: Option<Duration>,
+    framed_subject: Option<subject::Frame>,
 }
 
 fn record_focus(focus: &Presentation, failure: Option<&str>) {
@@ -121,7 +195,7 @@ fn focus_progress(
     now: Duration,
     failure: Option<&str>,
 ) {
-    if book.observed != state {
+    if !book.accepts_state(state) {
         return;
     }
     if let Some(focus) = book
@@ -250,7 +324,7 @@ pub(super) enum Job {
 }
 
 pub(super) struct IdentitySnapshot {
-    scene: PlateScene,
+    pub(super) scene: PlateScene,
     heroes: Vec<u8>,
 }
 
@@ -324,6 +398,34 @@ pub(super) fn finish_chain_refresh(
 
 pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
     let scene_changed = reset_scene(book, view);
+    let story_changed = book
+        .state_images
+        .latest_story
+        .as_ref()
+        .map(|story| &story.sha256)
+        != view.story.as_ref().map(|story| &story.sha256);
+    book.state_images.latest_story = view.story.clone();
+    if story_changed {
+        // A new line updates the queued moment without forcing an immediate redraw or moving
+        // its 30-second deadline. A flying older request is rejected by accepts_state.
+        if book
+            .state_images
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.cadence_due.is_some())
+        {
+            book.state_images.pending = None;
+        }
+        if let Some((_, revision, due)) = book.state_images.cadence_request.take() {
+            record_cadence("superseded", revision, due, now);
+            book.state_images.ready = None;
+            book.state_images.ready_at = None;
+        }
+    }
+    if scene_changed {
+        book.state_images.observed_graph = view.graph_revision;
+        book.state_images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
+    }
     let Some(snapshot) = &scene.snapshot else {
         observe_story(book, view, scene, now);
         return;
@@ -335,25 +437,26 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         );
         return;
     };
+    let selection = book
+        .state_images
+        .subject_selection
+        .as_ref()
+        .filter(|selection| selection.scene == view.scene_key);
+    let framed_subject =
+        selection.and_then(|selection| selection.resolve(&snapshot.model, &scene.cast));
     let focus = view.story.as_ref().and_then(|story| {
+        let selection = selection?;
         let actor = scene.identity_cast.iter().find(|actor| {
-            if story.actor_id.is_empty() {
-                crate::voice_line::speaker_names_match(&actor.name, &story.speaker)
-            } else {
-                actor.id.strip_prefix("npc:").unwrap_or(&actor.id)
-                    == story
-                        .actor_id
-                        .strip_prefix("npc:")
-                        .unwrap_or(&story.actor_id)
-            }
+            actor.id.strip_prefix("npc:").unwrap_or(&actor.id)
+                == story
+                    .actor_id
+                    .strip_prefix("npc:")
+                    .unwrap_or(&story.actor_id)
         })?;
-        narrative_focus::select(
+        selection.narrative(
             &snapshot.model,
-            Dialogue {
-                sequence: story.sequence,
-                actor_id: actor.id.strip_prefix("npc:").unwrap_or(&actor.id),
-                text: &story.text,
-            },
+            story.sequence,
+            actor.id.strip_prefix("npc:").unwrap_or(&actor.id),
         )
     });
     let images = &mut book.state_images;
@@ -364,12 +467,18 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     {
         images.focus = None;
     }
+    let frame_changed = images.framed_subject != framed_subject;
+    images.framed_subject = framed_subject.clone();
     let focus_changed = focus.as_ref().is_some_and(|focus| {
         images
             .focus
             .as_ref()
             .is_none_or(|known| known.focus.subject != focus.subject)
     });
+    let focus_changed = focus_changed || frame_changed;
+    if focus_changed && focus.is_none() {
+        images.focus = None;
+    }
     if focus_changed && let Some(focus) = focus {
         images.focus = Some(Presentation {
             focus,
@@ -394,12 +503,37 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         },
         None => state,
     };
+    let state = match serde_json::to_string(&framed_subject) {
+        Ok(subject) => format!("{state}|committed_subject={subject}"),
+        Err(_) => {
+            record("gameplay.living_scene.invalid_focus", &[]);
+            return;
+        }
+    };
+    let state = if scene.hero_activity.is_empty() && scene.scene_outcomes.is_empty() {
+        state
+    } else {
+        format!(
+            "{state}|hero_activity={}",
+            serde_json::json!({"heroes": scene.hero_activity, "outcomes": scene.scene_outcomes})
+        )
+    };
+    let state = format!(
+        "{state}|cast={:?}|speaker={:?}",
+        scene
+            .identity_cast
+            .iter()
+            .map(|actor| &actor.id)
+            .collect::<Vec<_>>(),
+        scene.speaker.as_ref().map(|speaker| &speaker.id)
+    );
     if scene_changed && !focus_changed {
         images.observed = state;
         images.observed_graph = view.graph_revision;
         return;
     }
-    // Who speaks and their expression change the graph, not the room's visible state.
+    // An arriving or newly speaking actor must be included even if the authored model lags
+    // the public cast. IDs come from the committed projection, never from player prose.
     if images.observed == state {
         return;
     }
@@ -419,6 +553,9 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     images.observed = state.clone();
     images.observed_graph = view.graph_revision;
     images.ready = None;
+    images.ready_at = None;
+    images.cadence_request = None;
+    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
     let reason = if focus_changed {
         "committed dialogue selects a canonical narrative subject".to_owned()
     } else {
@@ -442,6 +579,8 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         state,
         revision: view.graph_revision,
         changed_at: now,
+        cadence_due: None,
+        framed_subject: images.framed_subject.clone(),
         graph: None,
         focus: images.focus.as_ref().map(|focus| focus.focus.clone()),
     });
@@ -470,6 +609,9 @@ fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: D
     images.observed = story.sha256.clone();
     images.observed_graph = view.graph_revision;
     images.ready = None;
+    images.ready_at = None;
+    images.cadence_request = None;
+    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
     images.pending = Some(Pending {
         snapshot: None,
         story: Some(Box::new(story.clone())),
@@ -477,6 +619,8 @@ fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: D
         state: story.sha256.clone(),
         revision: view.graph_revision,
         changed_at: now,
+        cadence_due: None,
+        framed_subject: images.framed_subject.clone(),
         graph: None,
         focus: None,
     });
@@ -529,10 +673,15 @@ impl Shared {
                 },
             ));
         }
-        if pending.focus.is_some() {
+        if pending.focus.is_some() || pending.framed_subject.is_some() || pending.snapshot.is_some()
+        {
             statuses.extend(identity.scene.identity_cast.iter().map(|actor| {
-                self.inner
-                    .canonical_npc_status(actor.id.strip_prefix("npc:").unwrap_or(&actor.id))
+                let id = actor.id.strip_prefix("npc:").unwrap_or(&actor.id);
+                let mut status = self.inner.canonical_npc_status(id);
+                if status == ReferenceStatus::Missing && self.inner.request_cast_photograph(id) {
+                    status = ReferenceStatus::Pending;
+                }
+                status
             }));
             statuses.extend(
                 identity
@@ -754,6 +903,15 @@ impl Shared {
         let (Some(id), Some(scene)) = (current.id.clone(), current.scene.clone()) else {
             return false;
         };
+        // A speaker/reference update can already own the fresh base we need. Adopt that
+        // bounded render and its completion instead of queuing a duplicate refresh behind it.
+        if matches!(book.current_entry(), Some(super::Entry::Pending)) {
+            book.state_images.refresh = Some(id);
+            book.state_images.flying = true;
+            book.state_images.last_started = Some(now);
+            refresh_decision(book, pipeline, "awaiting_inflight_fresh_base");
+            return true;
+        }
         let Ok(spec) = scene.stage(&current.heroes) else {
             return false;
         };
@@ -783,6 +941,22 @@ impl Shared {
 
     pub(super) fn poll_state_images_at(&self, now: Duration) {
         let mut book = locked(&self.book);
+        if let Some((_, revision, due)) = book.state_images.cadence_request.as_ref()
+            && now > *due
+            && book.state_images.ready.is_none()
+            && book.state_images.cadence_missed != Some(*due)
+        {
+            record_cadence("deadline_missed", *revision, *due, now);
+            book.state_images.cadence_missed = Some(*due);
+        }
+        if book.presentation_held
+            && book
+                .presented
+                .as_ref()
+                .is_some_and(|shown| now.saturating_sub(shown.since) >= BAKE_INTERVAL)
+        {
+            self.wake();
+        }
         let Some(current) = &book.current else {
             return;
         };
@@ -800,6 +974,7 @@ impl Shared {
             return;
         }
         let scene = current.scene_key.clone();
+        let graph_revision = current.graph_revision;
         let identities = current.scene.clone().map(|scene| {
             Box::new(IdentitySnapshot {
                 scene,
@@ -811,6 +986,7 @@ impl Shared {
             .last_shown
             .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
         if can_show
+            && book.state_images.ready_at.is_none_or(|due| now >= due)
             && let Some((key, revision, story_actor, fresh)) = book.state_images.ready.take()
         {
             let layout = book.image_layouts.get(key.as_str()).cloned();
@@ -829,10 +1005,45 @@ impl Shared {
             book.state_images.carried_edit = !fresh;
             book.state_images.baked_revision = Some(revision);
             book.state_images.last_shown = Some(now);
+            book.state_images.ready_at = None;
+            cadence_published(&mut book.state_images, now);
+
             if let Some(actor) = story_actor {
                 book.state_images.last_story_actor = Some(actor);
             }
             self.wake();
+        }
+        if book.state_images.pending.is_none()
+            && book.state_images.ready.is_none()
+            && book.shown().is_some()
+            && let Some(deadline) = book.state_images.cadence_deadline
+            && let Some(identity) = identities.as_deref()
+        {
+            let images = &mut book.state_images;
+            images.observed_graph = graph_revision;
+            images.cadence_sequence = images.cadence_sequence.saturating_add(1);
+            let sequence = images.cadence_sequence;
+            images.pending = Some(Pending {
+                snapshot: identity.scene.snapshot.clone(),
+                story: images.latest_story.clone().map(Box::new),
+                reason: format!(
+                    "REF-068 current narrative moment {sequence}; a new camera angle on the recorded scene"
+                ),
+                state: format!(
+                    "{}|cadence_context={}",
+                    images.observed,
+                    images
+                        .latest_story
+                        .as_ref()
+                        .map_or("none", |story| story.sha256.as_str())
+                ),
+                revision: images.observed_graph,
+                changed_at: now.saturating_sub(SETTLE),
+                graph: None,
+                focus: images.focus.as_ref().map(|focus| focus.focus.clone()),
+                cadence_due: Some(deadline),
+                framed_subject: images.framed_subject.clone(),
+            });
         }
         let Some(pending) = &book.state_images.pending else {
             refresh_decision(&mut book, "state", "no_visible_change");
@@ -841,7 +1052,7 @@ impl Shared {
         let is_focus = pending.focus.is_some();
         // Only a story beat's edit leaves the scene's state out of its prompt; every other edit
         // carries the canonical current scene.
-        let lacks_scene_state = !is_focus && pending.story.is_some();
+        let lacks_scene_state = pending.snapshot.is_none();
         use super::super::canonical::ReferenceStatus;
         let status = identities
             .as_ref()
@@ -881,7 +1092,10 @@ impl Shared {
             }
             ReferenceStatus::Ready => {}
         }
-        let interval = if pending.story.is_some() && pending.focus.is_none() {
+        let interval = if pending.story.is_some()
+            && pending.snapshot.is_none()
+            && pending.cadence_due.is_none()
+        {
             self.inner.timing.interval.max(BAKE_INTERVAL)
         } else {
             BAKE_INTERVAL
@@ -938,6 +1152,9 @@ impl Shared {
             base.as_str(),
             book.state_images.carried_edit,
         );
+        let cadence_request = pending
+            .cadence_due
+            .map(|due| (pending.state.clone(), pending.revision, due));
         let focus_state = pending.state.clone();
         let focus_revision = pending.revision;
         let job = super::Job::State(Job::Bake {
@@ -946,11 +1163,18 @@ impl Shared {
             base,
             identities,
         });
+        let mut queued = false;
+        let mut wake_after = false;
         match self.jobs.try_send(job) {
             Ok(()) => {
+                queued = true;
                 crate::gameplay::actor::record_audit_line("gameplay.imagery.request", request_line);
                 book.state_images.flying = true;
                 book.state_images.last_started = Some(now);
+                book.state_images.cadence_request = cadence_request;
+                if let Some((_, revision, due)) = &book.state_images.cadence_request {
+                    record_cadence("requested", *revision, *due, now);
+                }
                 focus_progress(
                     &mut book.state_images,
                     &focus_state,
@@ -970,6 +1194,7 @@ impl Shared {
                 refresh_decision(&mut book, "state", "queue_full");
             }
             Err(_) => {
+                wake_after = true;
                 focus_progress(
                     &mut book.state_images,
                     &focus_state,
@@ -981,6 +1206,11 @@ impl Shared {
                 );
                 record("gameplay.living_scene.worker_closed", &[]);
             }
+        }
+        if queued || wake_after {
+            drop(book);
+            // The story-directed render has started (or failed to start): publish pending.
+            self.wake();
         }
     }
 
@@ -1020,7 +1250,9 @@ impl Shared {
                     .model,
                 focus,
             )?
-        } else if let Some(story) = &pending.story {
+        } else if let Some(story) = &pending.story
+            && pending.snapshot.is_none()
+        {
             let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
             let camera = story_camera(pending, identity).ok_or(ImageFailure::InvalidRequest)?;
             crate::gameplay::imagery::story_beat_edit(
@@ -1048,20 +1280,32 @@ impl Shared {
         };
         let mut references = vec![base];
         let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
-        match identity.scene.room_revision.as_deref() {
-            Some(revision) => references.push(
-                self.inner
-                    .canonical_room_reference_at(&identity.scene.place_id, revision)
-                    .await
-                    .ok_or(ImageFailure::Interrupted)?,
-            ),
-            None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
-            None => {}
+        if let Some(photo) = identity.scene.authored_place_photo()
+            && identity.scene.room_revision.is_some()
+        {
+            references.push(self.inner.load(photo.to_owned()).await?);
+        } else {
+            match identity.scene.generated_room_revision() {
+                Some(revision) => references.push(
+                    self.inner
+                        .canonical_room_reference_at(&identity.scene.place_id, revision)
+                        .await
+                        .ok_or(ImageFailure::Interrupted)?,
+                ),
+                None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
+                None => {}
+            }
         }
         let prompt = {
-            let (sheet, legend, _) = self
+            let super::PlateIdentities {
+                sheet,
+                legend,
+                people,
+                holder_ids,
+            } = self
                 .identity_sheet(&identity.scene, &identity.heroes)
                 .await?;
+            let staging = self.spatial_staging(&identity.scene, &identity.heroes)?;
             let sheet_number = references.len() + 1;
             references.push(sheet);
             let active_speaker = state_speaker(pending, identity)?;
@@ -1075,11 +1319,47 @@ impl Shared {
                         .ok_or(ImageFailure::Interrupted)?,
                 );
             }
-            let mut prompt = prompt;
+            let narrative = pending
+                .story
+                .as_ref()
+                .map_or(identity.scene.story_text.as_str(), |story| {
+                    story.text.as_str()
+                });
+            let narrative = format!("{narrative}\n{}", pending.reason);
+            let model = pending
+                .snapshot
+                .as_ref()
+                .or(identity.scene.snapshot.as_ref())
+                .map(|snapshot| &snapshot.model);
+            let mut prompt = prompt
+                .with_cast_hands(&people, &holder_ids, model)
+                .map_err(|_| ImageFailure::InvalidRequest)?
+                .with_scene_context(
+                    &narrative,
+                    pending
+                        .snapshot
+                        .as_ref()
+                        .or(identity.scene.snapshot.as_ref())
+                        .map(|snapshot| &snapshot.model),
+                )
+                .map_err(|_| ImageFailure::InvalidRequest)?;
+            if let Some(subject) = &pending.framed_subject {
+                let framing =
+                    serde_json::to_string(subject).map_err(|_| ImageFailure::InvalidRequest)?;
+                prompt = prompt
+                    .with_scene_context(&framing, model)
+                    .map_err(|_| ImageFailure::InvalidRequest)?;
+            }
+            prompt = identity.scene.with_activity(prompt)?;
             if pending.focus.is_none() && identity.scene.room_revision.is_some() {
                 prompt = prompt.with_canonical_room_reference(2);
             }
             prompt = prompt.with_cast_sheet(sheet_number, &legend);
+            let party = super::SceneParty::new(identity.heroes.len(), sheet_number)
+                .map_err(|_| ImageFailure::InvalidRequest)?;
+            prompt = prompt
+                .with_canonical_binding(&party.instruction())
+                .with_scene_party(party);
             if pending.focus.is_none()
                 && let (Some(number), Some(speaker)) = (speaker_number, active_speaker)
             {
@@ -1087,6 +1367,8 @@ impl Shared {
                     prompt.with_canonical_speaker_reference(number, &speaker.id, &speaker.name);
             }
             prompt
+                .with_staging_order(staging)
+                .map_err(|_| ImageFailure::InvalidRequest)?
         };
         if prompt.character_count() > df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS {
             return Err(ImageFailure::InvalidRequest);
@@ -1109,11 +1391,38 @@ impl Shared {
                 identities,
             } => {
                 // A FLUX story beat is composed afresh (see `story_fresh_request`), not edited.
-                let fresh = self.inner.imagery.flux_prompts()
-                    && pending.focus.is_none()
-                    && pending.story.is_some();
+                let cadence = pending.cadence_due.is_some() && pending.framed_subject.is_none();
+                let fresh = cadence
+                    || (self.inner.imagery.flux_prompts()
+                        && pending.focus.is_none()
+                        && pending.story.is_some()
+                        && pending.snapshot.is_none());
                 let result = async {
-                    let request = if fresh {
+                    let request = if cadence {
+                        let identity = identities.as_deref().ok_or(ImageFailure::InvalidRequest)?;
+                        let mut spec = identity.scene.stage(&identity.heroes)
+                            .map_err(|_| ImageFailure::InvalidRequest)?;
+                        spec.camera = crate::gameplay::shot::Camera::for_public_beat(
+                            spec.camera, identity.scene.key,
+                            pending.story.as_ref().map_or(shot::PublicBeat::Calm, |story| story.tempo),
+                            pending.cadence_due.map_or(0, |due| due.as_secs()),
+                            shot::PublicDialogue::SameSpeakerFollowup,
+                        );
+                        let face = identity.scene.speaker.as_ref()
+                            .and_then(|speaker| self.inner.plate_wanted_face(&speaker.id));
+                        let (mut request, _) = self.photographic_request(
+                            &identity.scene, &spec, &identity.heroes, None, face,
+                        ).await?;
+                        if let Some(graph) = &pending.graph {
+                            let public_moment = serde_json::to_string(graph).map_err(|_| ImageFailure::InvalidRequest)?;
+                            request.prompt = request.prompt.with_scene_context(&public_moment, None)
+                                .map_err(|_| ImageFailure::InvalidRequest)?;
+                        }
+                        request.prompt = request.prompt.with_scene_context(
+                            &pending.reason, identity.scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                        ).map_err(|_| ImageFailure::InvalidRequest)?;
+                        request
+                    } else if fresh {
                         self.story_fresh_request(&pending, identities.as_deref())
                             .await?
                     } else {
@@ -1129,6 +1438,12 @@ impl Shared {
                         )
                         .await?
                     };
+                    let mut request = request;
+                    if let Some(identity) = identities.as_deref() {
+                        let mut scene = identity.scene.clone();
+                        scene.snapshot = pending.snapshot.clone().or(scene.snapshot);
+                        request.prompt = super::photo_context(&scene, request.prompt)?;
+                    }
                     if let Some(focus) = pending.focus.as_ref() {
                         let key = self.inner.imagery.key_for(&request);
                         focus_progress(&mut locked(&self.book).state_images, &pending.state,
@@ -1149,6 +1464,9 @@ impl Shared {
                             ]),
                             &[("image.key", key.as_str().to_owned())],
                         );
+                    }
+                    if let Some(subject) = pending.framed_subject.as_ref() {
+                        subject.record_request(pending.revision, &self.inner.imagery.key_for(&request));
                     }
                     let subject = format!("plate:{}", identities.as_deref().map_or("", |identity| identity.scene.place_id.as_str()));
                     let key = self.inner.imagery.generate(&subject, request).await?;
@@ -1270,15 +1588,28 @@ impl Shared {
                     .is_some_and(|current| current.scene_key == scene)
                 {
                     book.state_images.flying = false;
-                    if book.state_images.observed == state
+                    if book.state_images.accepts_state(&state)
                         && book.state_images.observed_graph == revision
                     {
                         match result {
                             Ok(key) => {
-                                if book
-                                    .current
+                                let cadence_due = book
+                                    .state_images
+                                    .cadence_request
                                     .as_ref()
-                                    .is_some_and(|current| current.in_combat || current.in_roll)
+                                    .filter(|(requested_state, requested_revision, _)| {
+                                        *requested_state == state && *requested_revision == revision
+                                    })
+                                    .map(|(_, _, due)| *due);
+                                if let Some(due) = cadence_due {
+                                    record_cadence("ready", revision, due, now);
+                                }
+                                book.state_images.ready_at = cadence_due;
+                                if cadence_due.is_some_and(|due| now < due)
+                                    || book
+                                        .current
+                                        .as_ref()
+                                        .is_some_and(|current| current.in_combat || current.in_roll)
                                     || book.state_images.last_shown.is_some_and(|last| {
                                         now.saturating_sub(last) < BAKE_INTERVAL
                                     })
@@ -1301,12 +1632,19 @@ impl Shared {
                                     book.state_images.carried_edit = !fresh;
                                     book.state_images.baked_revision = Some(revision);
                                     book.state_images.last_shown = Some(now);
+                                    book.state_images.ready_at = None;
+                                    cadence_published(&mut book.state_images, now);
                                     if let Some(actor) = story_actor {
                                         book.state_images.last_story_actor = Some(actor);
                                     }
                                 }
                             }
                             Err(failure) => {
+                                if let Some((_, revision, due)) =
+                                    book.state_images.cadence_request.take()
+                                {
+                                    record_cadence("failed", revision, due, now);
+                                }
                                 focus_progress(
                                     &mut book.state_images,
                                     &state,
@@ -1352,6 +1690,45 @@ impl Shared {
     }
 }
 
+fn record_cadence(stage: &str, revision: u64, deadline: Duration, now: Duration) {
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.living_scene.plate_cadence",
+        format!(
+            "PLATE cadence stage={stage} revision={revision} deadline_ms={} at_ms={} in_time={}",
+            deadline.as_millis(),
+            now.as_millis(),
+            now <= deadline
+        ),
+        serde_json::Map::from_iter([
+            ("stage".into(), serde_json::json!(stage)),
+            ("graph_revision".into(), serde_json::json!(revision)),
+            (
+                "deadline_ms".into(),
+                serde_json::json!(deadline.as_millis()),
+            ),
+            ("at_ms".into(), serde_json::json!(now.as_millis())),
+            ("in_time".into(), serde_json::json!(now <= deadline)),
+            (
+                "lateness_ms".into(),
+                serde_json::json!(now.saturating_sub(deadline).as_millis()),
+            ),
+            (
+                "observation_boundary".into(),
+                serde_json::json!("server_plate_projection"),
+            ),
+        ]),
+        &[],
+    );
+}
+
+fn cadence_published(images: &mut Book, now: Duration) {
+    if let Some((_, revision, due)) = images.cadence_request.take() {
+        record_cadence("published", revision, due, now);
+        images.projection_deadline = images.shown.as_ref().map(|(key, _)| (key.clone(), due));
+    }
+    images.cadence_deadline = Some(now.saturating_add(SCENE_CADENCE));
+}
+
 fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(
@@ -1372,6 +1749,22 @@ fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
     let mut bytes = [0; 8];
     bytes.copy_from_slice(&digest[..8]);
     u64::from_be_bytes(bytes)
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use super::*;
+
+    #[test]
+    fn hs41_plates_player_text_cannot_be_mistaken_for_a_cadence_completion_marker() {
+        let book = Book {
+            observed: "canonical player text |cadence_context=ordinary words".into(),
+            ..Default::default()
+        };
+        assert!(book.accepts_state(&book.observed));
+        assert!(book.accepts_state(&format!("{}|cadence_context=none", book.observed)));
+        assert!(!book.accepts_state("other state|cadence_context=none"));
+    }
 }
 
 fn inventory_custody(scene_contents_json: &str, item_id: &str) -> (String, String) {

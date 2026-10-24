@@ -36,7 +36,11 @@ pub(in crate::gameplay) fn cast_sheet(
     if cast.windows(2).any(|pair| pair[0].id == pair[1].id) {
         return Err(SheetError::FigureCount);
     }
-    let columns = cast.len().min(4) as u32;
+    let columns = if cast.len() == 6 {
+        3
+    } else {
+        cast.len().min(4)
+    } as u32;
     let rows = (cast.len() as u32).div_ceil(columns);
     let mut sheet = RgbImage::from_pixel(
         columns * CELL_WIDTH,
@@ -109,6 +113,23 @@ mod tests {
             figure: ReferenceImage::new(ImageFormat::Png, Bytes::from(bytes.into_inner())),
         }
     }
+    #[test]
+    fn six_canonical_figures_share_one_sheet_in_two_rows_of_three() {
+        let cast = (1..=6)
+            .rev()
+            .map(|seat| identity(&format!("hero:{seat}"), seat * 30))
+            .collect();
+        let (sheet, legend) = cast_sheet(cast).unwrap();
+        let decoded = image::load_from_memory(&sheet.bytes).unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (3 * CELL_WIDTH, 2 * CELL_HEIGHT)
+        );
+        for seat in 1..=6 {
+            assert!(legend.contains(&format!("slot {seat} = hero:{seat}")));
+        }
+    }
+
     #[test]
     fn complete_cast_is_stable_ordered_and_source_changes_invalidate_it() {
         let (sheet, legend) = cast_sheet(vec![

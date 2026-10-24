@@ -25,6 +25,98 @@ fn key(byte: char) -> ImageKey {
 }
 
 #[test]
+fn personal_party_sheet_and_turn_images_prefer_creator_then_canonical_then_placeholder() {
+    let mut state = State::new(timing());
+    state.canonical.fixture_hero(1, "Vesna", key('a'));
+    state.canonical.fixture_hero(2, "Ondrej", key('b'));
+    state.hero_faces.insert(
+        "Vesna".to_owned(),
+        HeroFace {
+            stage: Some(key('c')),
+            battle: Some(key('d')),
+        },
+    );
+    let approved = format!("/gameplay/creator-portrait/{}", "e".repeat(64));
+    // Deliberately reverse seats: identity is carried by participant id, never array position.
+    let party = vec![
+        rpc::PartyMemberView {
+            name: "Ondrej".to_owned(),
+            participant_id: vec![2; 16],
+            character_ready: true,
+            ..Default::default()
+        },
+        rpc::PartyMemberView {
+            name: "Vesna".to_owned(),
+            participant_id: vec![1; 16],
+            character_ready: true,
+            portrait: approved.clone(),
+            ..Default::default()
+        },
+        rpc::PartyMemberView {
+            name: "Waiting".to_owned(),
+            participant_id: vec![3; 16],
+            character_ready: true,
+            portrait: "portrait-hero-3".to_owned(),
+            ..Default::default()
+        },
+    ];
+    for (name, expected) in [
+        ("Ondrej", key('b').path()),
+        ("Vesna", approved.clone()),
+        ("Waiting", String::new()),
+    ] {
+        let mut journey = rpc::JourneyView {
+            party: party.clone(),
+            own_character: Some(rpc::CharacterSheet {
+                name: name.to_owned(),
+                ..Default::default()
+            }),
+            combat: Some(rpc::CombatView {
+                participants: party
+                    .iter()
+                    .cloned()
+                    .map(|mut member| {
+                        member.side = 1;
+                        member
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        apply_hero_faces(&state, Some(&mut journey));
+        assert_eq!(
+            journey.own_character.as_ref().unwrap().portrait_uri,
+            expected
+        );
+        assert_eq!(journey.party[0].portrait, key('b').path());
+        assert_eq!(journey.party[1].portrait, approved);
+        assert!(journey.party[2].portrait.is_empty());
+        for (member, live) in journey.party.iter().zip(&journey.live_faces) {
+            assert_eq!(member.name, live.name);
+            assert_eq!(member.portrait, live.sprite);
+            assert_eq!(member.portrait, live.battle_sprite);
+            assert_eq!(
+                journey
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .participants
+                    .iter()
+                    .find(|turn| turn.participant_id == member.participant_id)
+                    .unwrap()
+                    .portrait,
+                member.portrait
+            );
+        }
+        // Re-applying an overlay in the same phase preserves portrait precedence.
+        let before = journey.clone();
+        apply_hero_faces(&state, Some(&mut journey));
+        assert_eq!(journey, before);
+    }
+}
+
+#[test]
 fn image_completion_reports_elapsed_milliseconds_for_ready_and_failed_images_without_prompts() {
     let ready = image_completion_line("scene_plate", Duration::from_millis(123), Ok(&key('a')));
     assert!(ready.starts_with("IMAGERY ready kind=scene_plate id="));
@@ -493,8 +585,8 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
     let (inner, _ledger) = director(&dossier);
     give_live_picture(&inner, "Rowan", 'a');
     inner.observe_at(hurt_stage(2, true, 4, 1), seconds(20));
-    // Only Bloodied is cached for both: the hero (Bloodied) shows it exactly, and the foe at
-    // Critical (one tier away, against three from the authored art) shows it too.
+    // The scene figure can use Bloodied art. Personal portraits keep the canonical image;
+    // the foe at Critical still uses the nearest cached variant.
     learn(&inner, HERO_ONE_ART, HealthTier::Bloodied, 'b');
     learn(&inner, "sprite-patron-merchant", HealthTier::Bloodied, 'c');
     let mut message = display_message(true);
@@ -506,9 +598,8 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         display.journey.as_ref().unwrap().live_faces,
         [rpc::LiveFace {
             name: "Rowan".to_owned(),
-            sprite: key('b').path(),
-            // Hero one wears the same art on the battlefield, so the same variant.
-            battle_sprite: key('b').path(),
+            sprite: key('a').path(),
+            battle_sprite: key('a').path(),
         }]
     );
     assert_eq!(
@@ -537,8 +628,7 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         panic!("player view");
     };
     assert_eq!(player.journey.as_ref().unwrap().live_faces.len(), 1);
-    // The hero heals above the Hurt line and has no live picture: the face stays published
-    // with empty fields, so the authored (stock) art returns on every screen.
+    // Healing does not change the canonical personal portrait.
     inner.observe_at(hurt_stage(3, true, 12, 1), seconds(30));
     let mut after = display_message(true);
     inner.apply(stage_of(&after).as_ref(), &mut after);
@@ -654,14 +744,14 @@ fn a_hurt_heros_variant_is_made_from_their_live_picture_not_the_stock_photo() {
         job_labels(&jobs),
         [format!("warm {} bloodied", key('a').path())]
     );
-    // Once that variant exists it serves the stage sprite and the battle face alike.
+    // The health variant is available to the scene graph; personal portraits stay canonical.
     learn(&inner, &key('a').path(), HealthTier::Bloodied, 'b');
     assert_eq!(
         published_face(&inner),
         rpc::LiveFace {
             name: "Rowan".to_owned(),
-            sprite: key('b').path(),
-            battle_sprite: key('b').path(),
+            sprite: key('a').path(),
+            battle_sprite: key('a').path(),
         }
     );
 }
@@ -970,8 +1060,8 @@ fn the_second_hero_gets_the_same_personal_health_variant_on_every_screen() {
         .iter()
         .find(|face| face.name == "Thrain")
         .unwrap();
-    assert_eq!(thrain.sprite, key('d').path());
-    assert_eq!(thrain.battle_sprite, key('d').path());
+    assert_eq!(thrain.sprite, key('b').path());
+    assert_eq!(thrain.battle_sprite, key('b').path());
 }
 
 #[test]

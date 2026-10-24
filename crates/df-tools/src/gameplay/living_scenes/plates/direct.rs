@@ -43,8 +43,8 @@ impl Book {
 }
 
 pub(super) struct Work {
-    generation: u64,
-    scene_key: String,
+    pub(super) generation: u64,
+    pub(super) scene_key: String,
     pub(super) scene: PlateScene,
     pub(super) spec: ShotSpec,
     pub(super) heroes: Vec<u8>,
@@ -98,6 +98,10 @@ impl Plates {
         book.direct.description = Some(text);
         book.direct.pending = true;
         book.edit = Edit::Idle;
+        drop(book);
+        // Publish the pending state at once: the display must show "Updating scene..."
+        // while the directed render runs, not only when it lands (REF-060 item 4).
+        self.shared.wake();
         Ok(receive)
     }
 

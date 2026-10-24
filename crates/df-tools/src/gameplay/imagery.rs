@@ -18,6 +18,8 @@
 mod artifact;
 mod canonical_prompt;
 mod cast_sheet;
+pub(in crate::gameplay) mod figure_masks;
+mod mural_prompt;
 pub(super) mod narrative_focus;
 mod party_sheet;
 mod photo_check;
@@ -73,8 +75,8 @@ pub(super) use artifact::{ArtifactSubject, SubjectRefusal, close_up_request};
 )]
 pub(super) use prompt::{
     AssembledPrompt, CharacterFacts, CharacterRole, FILM_LOOK, HeroVisualIdentity, LifeStage,
-    PlaceFacts, cast_expression, creator_portrait, hero_cutout, hero_expression, hero_portrait,
-    scene_refresh,
+    PlaceFacts, StagedPerson, cast_expression, creator_portrait, hero_cutout, hero_expression,
+    hero_portrait, scene_refresh,
 };
 #[allow(
     unused_imports,
@@ -83,14 +85,15 @@ pub(super) use prompt::{
 pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
 pub(super) use cast_sheet::{CastIdentity, cast_sheet};
+pub(super) use mural_prompt::party_mural;
 use party_sheet::SheetError;
 pub(super) use party_sheet::{fit_reference, party_sheet, vision_picture};
 pub(super) use photo_edit::harbor_photo_edit;
 #[cfg(test)]
-pub(super) use plate_prompt::FLUX_MAXIMUM_PROMPT_CHARACTERS;
+pub(super) use plate_prompt::{FLUX_MAXIMUM_PROMPT_CHARACTERS, flux_scene_plate};
 pub(super) use plate_prompt::{
-    FluxCast, FluxPerson, PlateReferences, flux_scene_plate, hero_locator_phrase, plate_moment,
-    scene_plate,
+    FluxCast, FluxPerson, PlateReferences, SceneParty, flux_scene_plate_for_party,
+    hero_locator_phrase, plate_moment, scene_plate,
 };
 #[allow(
     unused_imports,
@@ -390,6 +393,7 @@ struct Engine {
     /// PLAY-V09: finds the speaker's head in a finished plate; absent in tests and when the
     /// production provider could not be built.
     locator: std::sync::OnceLock<NativeHeadLocator>,
+    figure_masks: figure_masks::FigureMaskCache,
     /// ART-01: judges each new plate and empty room before it is stored; absent in tests and
     /// when the production judge could not be built.
     judge: std::sync::OnceLock<NativePlateJudge>,
@@ -413,6 +417,15 @@ struct Inner {
     mode: Mode,
     /// The resource generation hub: the one place a generated image is asked for and remembered.
     hub: super::resources::Hub,
+}
+
+/// Accepted photographic evidence, retained beside its immutable image key across restarts.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct PhotoEvidence {
+    pub(in crate::gameplay) place: String,
+    pub(in crate::gameplay) source_hash: String,
+    pub(in crate::gameplay) visible_features: Vec<super::journey::living_scene::VisibleFeature>,
 }
 
 /// Registry of renderable results plus, when enabled, the cached provider calls.
@@ -601,6 +614,7 @@ impl Imagery {
         .ok();
         let imagery = Self::new(configuration, provider, manifest_directory)?;
         if let Mode::On { engine, .. } = &imagery.inner.mode {
+            engine.figure_masks.configure();
             // Set once, here; a second call cannot happen.
             if let Some(locator) = locator {
                 let _first = engine.locator.set(locator);
@@ -675,6 +689,24 @@ impl Imagery {
             })
     }
 
+    pub(in crate::gameplay) async fn photo_evidence(
+        &self,
+        key: &ImageKey,
+    ) -> Result<Option<PhotoEvidence>, ImageFailure> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return Ok(None);
+        };
+        let path = engine
+            .cache_dir
+            .join(format!("{}.features.json", key.as_str()));
+        let bytes = tokio::task::spawn_blocking(move || read_cache_file(&path))
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?;
+        bytes
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| ImageFailure::BadOutput))
+            .transpose()
+    }
+
     /// PLAY-V09: a small note kept beside the cached image `key` (its measured layout), so a
     /// later server run does not ask again. `None` when there is none (or imagery is off).
     pub(super) async fn read_note(&self, key: &ImageKey) -> Option<Vec<u8>> {
@@ -688,6 +720,52 @@ impl Imagery {
             .await
             .ok()
             .flatten()
+    }
+
+    /// Only generated requests with an explicit spatial instruction have this per-image record.
+    pub(super) async fn plate_staging(&self, key: &ImageKey) -> Vec<StagedPerson> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return Vec::new();
+        };
+        let path = engine
+            .cache_dir
+            .join(format!("{}.staging-v1.json", key.as_str()));
+        let note = tokio::task::spawn_blocking(move || read_cache_file(&path)).await;
+        let Ok(Some(bytes)) = note else {
+            return Vec::new();
+        };
+        match serde_json::from_slice::<Vec<StagedPerson>>(&bytes) {
+            Ok(people) if !people.is_empty() && people.len() <= 24 => people,
+            _ => Vec::new(),
+        }
+    }
+
+    async fn keep_plate_staging(&self, key: &ImageKey, people: Vec<StagedPerson>) {
+        if people.is_empty() {
+            return;
+        }
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return;
+        };
+        let target = engine
+            .cache_dir
+            .join(format!("{}.staging-v1.json", key.as_str()));
+        let staging = engine.cache_dir.join(format!(
+            ".{}.staging.{}.tmp",
+            key.as_str(),
+            std::process::id()
+        ));
+        let Ok(note) = serde_json::to_vec(&people) else {
+            return;
+        };
+        let kept =
+            tokio::task::spawn_blocking(move || write_cache_file(&staging, &target, &note)).await;
+        if !matches!(kept, Ok(Ok(()))) {
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.imagery.staging_record_failed",
+                format!("PLATE staging key={} outcome=unavailable", key.as_str()),
+            );
+        }
     }
 
     /// Keeps a note beside the cached image `key`. A failed write only means it is asked again.
@@ -757,6 +835,7 @@ impl Imagery {
             permits: Arc::new(Semaphore::new(MAXIMUM_IN_FLIGHT)),
             in_flight: Mutex::new(HashMap::new()),
             locator: std::sync::OnceLock::new(),
+            figure_masks: figure_masks::FigureMaskCache::default(),
             judge: std::sync::OnceLock::new(),
         };
         let mut registry = Registry::default();
@@ -871,9 +950,10 @@ impl Imagery {
     ) -> Result<ImageKey, ImageFailure> {
         use super::resources::{DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec};
         use df_render::art_contract::Neutral;
+        let staging_order = request.prompt.staging_order().to_vec();
         let key = self.key_for(&request);
         let key = key.as_str();
-        match request.kind {
+        let result = match request.kind {
             ImageKind::ScenePlate => {
                 self.run(PlateSpec::new(subject, key, Neutral::Nothing), request)
                     .await
@@ -897,7 +977,63 @@ impl Imagery {
                 self.run(DepictionSpec::new(subject, key, Neutral::Nothing), request)
                     .await
             }
+        };
+        if let Ok(key) = &result {
+            self.keep_plate_staging(key, staging_order).await;
         }
+        result
+    }
+
+    /// Register reviewed local bytes for key-based consumers without invoking a provider.
+    /// The caller obtains the photograph through ReferenceStore's reviewed-asset boundary.
+    pub(super) async fn register_reviewed(
+        &self,
+        subject: &str,
+        reference: ReferenceImage,
+    ) -> Result<ImageKey, ImageFailure> {
+        use super::resources::{DepictionSpec, Generated, Generation, ResourceFailure};
+        let key = ImageKey(format!(
+            "{:x}",
+            Sha256::digest(format!("reviewed-photograph-v1|{}", reference.sha256).as_bytes())
+        ));
+        let spec = DepictionSpec::new(
+            subject,
+            key.as_str(),
+            df_render::art_contract::Neutral::Nothing,
+        );
+        let imagery = self.clone();
+        let registered_key = key.clone();
+        let generation: Generation = Box::pin(async move {
+            let Mode::On { engine, .. } = &imagery.inner.mode else {
+                return Err(ResourceFailure::Permanent(ImageFailure::Off.label()));
+            };
+            engine
+                .store(&registered_key, reference.format, reference.bytes)
+                .await
+                .map_err(|_| ResourceFailure::Transient(ImageFailure::Provider.label()))?;
+            locked(&imagery.inner.registry).register(
+                &registered_key,
+                Registered {
+                    format: reference.format,
+                },
+            );
+            Ok(Generated::new(registered_key.as_str()))
+        });
+        self.hub()
+            .render(&spec, generation)
+            .await
+            .map_err(|failure| match failure {
+                ResourceFailure::TimedOut => ImageFailure::DeadlineExceeded,
+                _ => ImageFailure::from_label(failure.label()).unwrap_or(ImageFailure::Interrupted),
+            })?;
+        // A hub cache hit must also re-register the key in this process's serving registry.
+        locked(&self.inner.registry).register(
+            &key,
+            Registered {
+                format: reference.format,
+            },
+        );
+        Ok(key)
     }
 
     async fn run<S: super::resources::ResourceSpec>(
@@ -1144,28 +1280,98 @@ impl Engine {
             ImageKind::CanonicalRoom => Some(photo_check::PhotoCheckKind::CanonicalRoom),
             _ => None,
         };
-        if let (Some(kind), Some(judge)) = (gate, self.judge.get())
-            && let Some(failure) =
-                photo_failure(judge, kind, &bytes, stored_format, request.prompt.as_str()).await
-        {
-            let corrected = format!("{} {}", failure.correction(), request.prompt.as_str());
-            let retry = ImageEdit {
-                prompt: &corrected,
-                ..edit
-            };
-            retry.validate().map_err(|_| ImageFailure::BadOutput)?;
-            let (retry_format, retry_bytes, retry_cost, _) = self.generate(&retry, format).await?;
-            micro_dollars = micro_dollars.saturating_add(retry_cost);
-            // Lettering is the one defect a retry may keep: a place with a little stray text on a
-            // sign beats a place with no picture at all, where the cast stands on black (P6-183).
-            match photo_failure(judge, kind, &retry_bytes, retry_format, &corrected).await {
-                None => {}
-                Some(photo_check::PhotoCheckFailure::VisibleText) => {
-                    record_photo_check(kind, "kept", "visible_text");
+        let scene_party = request
+            .prompt
+            .scene_party()
+            .map(|party| {
+                request
+                    .references
+                    .get(party.sheet_image() - 1)
+                    .map(|sheet| (party, sheet))
+                    .ok_or(ImageFailure::InvalidRequest)
+            })
+            .transpose()?;
+        let mut visible_features = Vec::new();
+        if let (Some(kind), Some(judge)) = (gate, self.judge.get()) {
+            let (failure, features) = photo_failure(
+                judge,
+                kind,
+                &bytes,
+                stored_format,
+                request.prompt.as_str(),
+                scene_party,
+                request.prompt.scene_hand_custody(),
+            )
+            .await;
+            visible_features = features;
+            if let Some(failure) = failure {
+                let corrected = format!("{} {}", failure.correction(), request.prompt.as_str());
+                let retry = ImageEdit {
+                    prompt: &corrected,
+                    ..edit
+                };
+                retry.validate().map_err(|_| ImageFailure::BadOutput)?;
+                let (retry_format, retry_bytes, retry_cost, _) =
+                    self.generate(&retry, format).await?;
+                micro_dollars = micro_dollars.saturating_add(retry_cost);
+                let (failure, features) = photo_failure(
+                    judge,
+                    kind,
+                    &retry_bytes,
+                    retry_format,
+                    &corrected,
+                    scene_party,
+                    request.prompt.scene_hand_custody(),
+                )
+                .await;
+                match failure {
+                    None => visible_features = features,
+                    Some(photo_check::PhotoCheckFailure::VisibleText) => {
+                        record_photo_check(kind, "kept", "visible_text", scene_party);
+                        visible_features.clear();
+                    }
+                    Some(failure) => {
+                        record_photo_check(kind, "fallback", failure.label(), scene_party);
+                        return Err(ImageFailure::BadOutput);
+                    }
                 }
-                Some(_) => return Err(ImageFailure::BadOutput),
+                (stored_format, bytes) = (retry_format, retry_bytes);
             }
-            (stored_format, bytes) = (retry_format, retry_bytes);
+        }
+        // Keep evidence with the exact admitted key, including corrected regenerations.
+        if !visible_features.is_empty() {
+            let context =
+                serde_json::from_str::<serde_json::Value>(request.prompt.scene_hand_custody()).ok();
+            if let Some(context) = context
+                && let (Some(place), Some(source_hash)) =
+                    (context["place"].as_str(), context["source_hash"].as_str())
+            {
+                let evidence = PhotoEvidence {
+                    place: place.into(),
+                    source_hash: source_hash.into(),
+                    visible_features,
+                };
+                let note = serde_json::to_vec(&evidence).map_err(|_| ImageFailure::BadOutput)?;
+                let target = self
+                    .cache_dir
+                    .join(format!("{}.features.json", key.as_str()));
+                let staging = self.cache_dir.join(format!(
+                    ".{}.features.{}.tmp",
+                    key.as_str(),
+                    std::process::id()
+                ));
+                tokio::task::spawn_blocking(move || write_cache_file(&staging, &target, &note))
+                    .await
+                    .map_err(|_| ImageFailure::Interrupted)?
+                    .map_err(|_| ImageFailure::Provider)?;
+            } else {
+                record_photo_check(
+                    photo_check::PhotoCheckKind::ScenePlate,
+                    "features_unbound",
+                    "source_unavailable",
+                    scene_party,
+                );
+            }
         }
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let stored = self.store(key, stored_format, bytes.clone()).await.is_ok();
@@ -1396,30 +1602,73 @@ async fn photo_failure(
     bytes: &[u8],
     format: ImageFormat,
     prompt: &str,
-) -> Option<photo_check::PhotoCheckFailure> {
-    let (result, reason, failure) =
-        match photo_check::check_photo(judge, kind, bytes, format, PHOTO_CHECK_DEADLINE).await {
-            Ok(photo_check::PhotoCheckOutcome::Pass) => ("pass", "none", None),
-            Ok(photo_check::PhotoCheckOutcome::Fail(failure)) => {
-                photo_check::retain_rejected_candidate(kind, bytes, format, failure, prompt).await;
-                return Some(failure);
-            }
-            Err(error) => ("unjudged", error.label(), None),
-        };
-    record_photo_check(kind, result, reason);
-    failure
+    scene_party: Option<(SceneParty, &ReferenceImage)>,
+    hand_custody: &str,
+) -> (
+    Option<photo_check::PhotoCheckFailure>,
+    Vec<super::journey::living_scene::VisibleFeature>,
+) {
+    let reading = match (kind, scene_party) {
+        (photo_check::PhotoCheckKind::ScenePlate, Some((party, sheet))) => {
+            photo_check::read_scene_photo(
+                judge,
+                bytes,
+                format,
+                party,
+                sheet,
+                hand_custody,
+                PHOTO_CHECK_DEADLINE,
+            )
+            .await
+        }
+        _ => photo_check::check_photo(judge, kind, bytes, format, PHOTO_CHECK_DEADLINE)
+            .await
+            .map(|outcome| photo_check::ScenePhotoReading {
+                outcome,
+                visible_features: Vec::new(),
+            }),
+    };
+    match reading {
+        Ok(photo_check::ScenePhotoReading {
+            outcome: photo_check::PhotoCheckOutcome::Pass,
+            visible_features,
+        }) => {
+            record_photo_check(kind, "pass", "none", scene_party);
+            (None, visible_features)
+        }
+        Ok(photo_check::ScenePhotoReading {
+            outcome: photo_check::PhotoCheckOutcome::Fail(failure),
+            ..
+        }) => {
+            photo_check::retain_rejected_candidate(kind, bytes, format, failure, prompt).await;
+            (Some(failure), Vec::new())
+        }
+        Err(error) => {
+            record_photo_check(kind, "unjudged", error.label(), scene_party);
+            (None, Vec::new())
+        }
+    }
 }
 
-fn record_photo_check(kind: photo_check::PhotoCheckKind, result: &str, reason: &str) {
-    let line = format!(
+fn record_photo_check(
+    kind: photo_check::PhotoCheckKind,
+    result: &str,
+    reason: &str,
+    scene_party: Option<(SceneParty, &ReferenceImage)>,
+) {
+    let mut line = format!(
         "PHOTO_CHECK kind={} result={result} reason={reason}",
         kind.label()
     );
-    let fields = serde_json::Map::from_iter([
+    let mut fields = serde_json::Map::from_iter([
         ("kind".to_owned(), serde_json::json!(kind.label())),
         ("result".to_owned(), serde_json::json!(result)),
         ("reason".to_owned(), serde_json::json!(reason)),
     ]);
+    if let Some((party, _)) = scene_party {
+        line.push_str(&format!(" heroes={}", party.heroes()));
+        fields.insert("heroes".to_owned(), serde_json::json!(party.heroes()));
+    }
     super::actor::record_audit_diagnostic("gameplay.imagery.photo_check", line, fields, &[]);
 }
 
@@ -1608,6 +1857,14 @@ fn request_key(request: &ImageRequest, model: &str, quality: &str, rating: &str)
         part(&reference.sha256);
     }
     part(request.prompt.as_str());
+    if matches!(
+        request.kind,
+        ImageKind::ScenePlate | ImageKind::ScenePlateEdit
+    ) {
+        // Evidence belongs to this public source snapshot, including cache hits and restarts.
+        part("scene-picture-evidence-1");
+        part(request.prompt.scene_hand_custody());
+    }
     ImageKey(
         hasher
             .finalize()

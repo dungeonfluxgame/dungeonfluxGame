@@ -15,11 +15,6 @@ const EDIT_PHOTOGRAPH: &str = "Edit image 1 as the actual photograph. Keep its c
     No restaging, dramatic relighting, blue/amber grade, rim light, polished texture or poster \
     poses. Other images identify performers and clothes only, never a new composition.";
 
-const TWO_TRAVELERS: &str = "Keep both foreground travelers from image 1: armored man at left \
-    is party performer 1; adult woman at right is party performer 2. Match her red hair, armor \
-    and blue cloak to the party sheet. Do not replace her with a man or porter, remove her, \
-    or move either traveler.";
-
 /// Uses the full-frame photograph as the edit base. The optional model remains the same
 /// canonical picture state used by narration; rule-based shot embellishments are omitted.
 pub(in crate::gameplay) fn harbor_photo_edit(
@@ -29,10 +24,15 @@ pub(in crate::gameplay) fn harbor_photo_edit(
     hero_names: &[String],
 ) -> Result<AssembledPrompt, ImageFailure> {
     let mut parts = vec![Part::Fixed(EDIT_PHOTOGRAPH), Part::Fixed(FILM_LOOK)];
-    if spec.heroes.iter().any(|hero| hero.art == 1) && spec.heroes.iter().any(|hero| hero.art == 2)
-    {
-        parts.push(Part::Fixed(TWO_TRAVELERS));
-    }
+    parts.push(Part::Fact(format!(
+        "The party has exactly {} heroes, each from their own accepted character sheet and supplied identity photograph. Replace every base-photo traveler with these heroes; never inherit a base-photo face, body, costume or weapon. Camera pulled about 5 feet (1.5 metres) further back for a wider shot.",
+        spec.heroes.len(),
+    )));
+    parts.push(Part::Fixed(if spec.heroes.len() >= 4 {
+        "All heroes stand in two loose groups facing each other in profile or three-quarter view. Keep every hero visible and leave the speaker unobscured between the groups."
+    } else {
+        "Party heroes face each other in profile or three-quarter view; a lone hero faces the speaker."
+    }));
     if let Some(model) = model {
         let state = model
             .picture_state()
@@ -48,7 +48,7 @@ pub(in crate::gameplay) fn harbor_photo_edit(
         parts.push(Part::Fact(format!(
             "The party has exactly {} travelers. Replace the foreground travelers with the \
              supplied party-sheet performers in sheet order; remove any surplus traveler. \
-             Keep their cropped over-the-shoulder scale rather than moving the camera back.",
+             Keep the wider framing and the heroes facing each other.",
             spec.heroes.len(),
         )));
         for (index, hero) in spec.heroes.iter().enumerate() {
@@ -129,11 +129,10 @@ mod tests {
         .unwrap();
         assert!(prompt.as_str().contains(&model.picture_state().unwrap()));
         assert!(prompt.as_str().contains("Brakka, Sigrun"));
-        assert!(
-            prompt
-                .as_str()
-                .contains("adult woman at right is party performer 2")
-        );
+        assert!(prompt.as_str().contains("exactly 2 heroes"));
+        assert!(prompt.as_str().contains("own accepted character sheet"));
+        assert!(prompt.as_str().contains("5 feet"));
+        assert!(!prompt.as_str().contains("adult woman at right"));
         assert!(
             prompt.as_str().chars().count() <= df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS
         );

@@ -333,6 +333,90 @@ fn a_party_plate_does_not_impose_the_stock_dwarf_appearances() {
 }
 
 #[test]
+fn a_two_hero_plate_is_wider_with_heroes_facing_each_other_and_a_lone_hero_is_unchanged() {
+    let two = spec_for("inn", SceneKey::DialogueSeal, SPEAKERS[2], &[1, 2], "T").unwrap();
+    let two_text = scene_plate(
+        ContentRating::Mature,
+        &two,
+        Some(&place()),
+        references_for(&two),
+    )
+    .unwrap()
+    .as_str()
+    .to_owned();
+    assert!(
+        two_text.contains("Camera pulled about 5 feet (1.5 metres) further back for a wider shot"),
+        "{two_text}"
+    );
+    assert!(
+        two_text.contains("facing each other as if talking to each other"),
+        "{two_text}"
+    );
+    assert!(
+        two_text.contains("not all turned toward the speaker"),
+        "{two_text}"
+    );
+    assert!(
+        !two_text.contains("three-quarter back, all turned"),
+        "{two_text}"
+    );
+
+    let one = spec_for("inn", SceneKey::DialogueSeal, SPEAKERS[2], &[2], "T").unwrap();
+    let one_text = scene_plate(
+        ContentRating::Mature,
+        &one,
+        Some(&place()),
+        references_for(&one),
+    )
+    .unwrap()
+    .as_str()
+    .to_owned();
+    assert!(
+        one_text.contains("Camera pulled about 5 feet (1.5 metres) further back for a wider shot"),
+        "{one_text}"
+    );
+    assert!(
+        one_text.contains("seen from behind or three-quarter back, turned toward"),
+        "{one_text}"
+    );
+    assert!(!one_text.contains("facing each other"), "{one_text}");
+
+    let flux = flux_scene_plate(
+        ContentRating::Mature,
+        Camera::DialogueMedium,
+        Some(&place()),
+        &FluxCast {
+            sheet: vec![
+                FluxPerson {
+                    name: "Brakka".into(),
+                    appearance: None,
+                },
+                FluxPerson {
+                    name: "Sigrun".into(),
+                    appearance: None,
+                },
+            ],
+            speaker: None,
+            portrait: false,
+        },
+        "{}",
+        None,
+    )
+    .unwrap();
+    assert!(
+        flux.as_str()
+            .contains("Camera pulled about 5 feet (1.5 m) further back for a wider shot"),
+        "{}",
+        flux.as_str()
+    );
+    assert!(
+        flux.as_str().contains("heroes face each other"),
+        "{}",
+        flux.as_str()
+    );
+}
+
+#[test]
 fn a_party_plate_stages_each_checked_identity_in_sheet_order_without_backstory() {
     let spec = spec_for("inn", SceneKey::Opening, None, &[1, 2], "T").unwrap();
     let first = hero_identity(
@@ -390,12 +474,12 @@ fn a_party_plate_stages_each_checked_identity_in_sheet_order_without_backstory()
         "feminine presentation",
         "olive skin",
         "red cloak",
-        "canonical held gear: a longbow",
+        "canonical equipment: a longbow",
         "masculine presentation",
         "deep brown skin",
         "shaved head",
         "plain woven robes",
-        "canonical held gear: a longsword",
+        "canonical equipment: a longsword",
         "at the left side of the frame",
         "at the right side of the frame",
     ] {
@@ -689,4 +773,382 @@ fn every_fixed_look_names_only_the_photograph_and_no_other_medium() {
             );
         }
     }
+}
+
+#[test]
+fn a_six_hero_plate_numbers_every_sheet_position_and_keeps_four_reference_roles() {
+    let spec = spec_for(
+        "inn",
+        SceneKey::DialogueSeal,
+        SPEAKERS[2],
+        &[1, 2, 3, 4, 5, 6],
+        "Six heroes",
+    )
+    .unwrap();
+    assert_eq!(spec.heroes.len(), 6);
+    let prompt = scene_plate(
+        ContentRating::Restrained,
+        &spec,
+        Some(&place()),
+        PlateReferences {
+            party_sheet: true,
+            speaker: true,
+            speaker_face: true,
+            place: true,
+        },
+    )
+    .unwrap();
+    let text = prompt.as_str();
+    for (index, position) in SHEET_POSITION.iter().enumerate() {
+        assert!(
+            text.contains(&format!("Hero {} {position}", index + 1)),
+            "{text}"
+        );
+    }
+    assert!(text.contains("two rows of three"));
+    assert!(text.contains("two loose groups facing each other"));
+    assert!(text.contains("5 feet"));
+    assert!(text.contains("Image 4 is the place reference"));
+    assert!(text.contains("Image 3 is a close portrait"));
+    assert!(prompt.character_count() <= MAXIMUM_PROMPT_CHARACTERS);
+}
+
+#[test]
+fn a_flux_six_hero_and_three_npc_sheet_keeps_every_identity_within_the_lean_budget() {
+    let mut sheet: Vec<FluxPerson> = (1..=6)
+        .map(|index| FluxPerson {
+            name: format!("Hero {index} ({})", "A".repeat(32)),
+            appearance: Some("A complete accepted appearance description, ".repeat(20)),
+        })
+        .collect();
+    sheet.extend((1..=3).map(|index| FluxPerson {
+        name: format!("Contact {index} {}", "N".repeat(22)),
+        appearance: None,
+    }));
+    let cast = FluxCast {
+        sheet,
+        speaker: Some(FluxPerson {
+            name: "Contact 1".into(),
+            appearance: None,
+        }),
+        portrait: true,
+    };
+    for tier in [HealthTier::Healthy, HealthTier::Critical, HealthTier::Down] {
+        let prompt = flux_scene_plate(
+            ContentRating::Mature,
+            Camera::WideEstablishing,
+            Some(&place()),
+            &cast,
+            &"facts ".repeat(100),
+            Some((FaceExpression::Neutral, tier)),
+        )
+        .unwrap();
+        for (index, person) in cast.sheet.iter().enumerate() {
+            assert!(prompt.as_str().contains(&format!(
+                "Photograph {}: {}",
+                index + 1,
+                person.name
+            )));
+            assert!(prompt.as_str().contains(&format!(
+                "Photograph {}: {}; both hands empty.",
+                index + 1,
+                person.name
+            )));
+        }
+        assert!(
+            prompt
+                .as_str()
+                .contains("two loose groups facing each other")
+        );
+        assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    }
+}
+
+#[test]
+fn four_and_five_long_named_heroes_also_fit_the_lean_prompt_without_losing_identity() {
+    for count in [4, 5] {
+        let cast = FluxCast {
+            sheet: (1..=count).map(|index| FluxPerson {
+                name: format!("Hero {index} ({})", "A".repeat(32)),
+                appearance: Some("An adult performer, in their exact accepted clothes and carrying their own gear, with distinctive facial features, ".repeat(8)),
+            }).collect(),
+            speaker: Some(FluxPerson {name: "A patient courier".into(), appearance: None}),
+            portrait: true,
+        };
+        let prompt = flux_scene_plate(
+            ContentRating::Mature,
+            Camera::WideEstablishing,
+            Some(&place()),
+            &cast,
+            "{}",
+            Some((FaceExpression::Neutral, HealthTier::Critical)),
+        )
+        .unwrap();
+        for (index, person) in cast.sheet.iter().enumerate() {
+            assert!(prompt.as_str().contains(&format!(
+                "Photograph {}: {}",
+                index + 1,
+                person.name
+            )));
+        }
+        assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    }
+}
+
+#[test]
+fn plate_prompt_names_exactly_the_seated_hero_count() {
+    for count in [1, 2, 4, 6] {
+        let heroes: Vec<u8> = (1..=count).collect();
+        let spec = spec_for("inn", SceneKey::DialogueSeal, SPEAKERS[2], &heroes, "Party").unwrap();
+        let prompt = scene_plate(
+            ContentRating::Restrained,
+            &spec,
+            Some(&place()),
+            references_for(&spec),
+        )
+        .unwrap();
+        assert!(prompt.as_str().contains(&format!(
+            "exactly {count} heroes, each the person on their reference sheet; no other figure dressed or posed as a hero"
+        )));
+        for ordinal in 1..=count {
+            assert!(prompt.as_str().contains(&format!("Hero {ordinal}")));
+        }
+        assert!(!prompt.as_str().contains(&format!("Hero {}", count + 1)));
+    }
+}
+
+#[test]
+fn scene_party_refuses_zero_or_more_than_six_heroes_and_invalid_sheet_numbers() {
+    for count in 1..=6 {
+        assert_eq!(SceneParty::new(count, 2).unwrap().heroes(), count as u8);
+    }
+    for count in [0, 7, usize::MAX] {
+        assert_eq!(
+            SceneParty::new(count, 2),
+            Err(PlatePromptRefusal::HeroIdentity)
+        );
+    }
+    for sheet_image in [0, 5, usize::MAX] {
+        assert_eq!(
+            SceneParty::new(2, sheet_image),
+            Err(PlatePromptRefusal::HeroIdentity)
+        );
+    }
+}
+
+#[test]
+fn counted_flux_prompt_keeps_the_exact_party_and_npc_identities_under_its_limit() {
+    for heroes in [1, 2, 4, 6] {
+        let mut sheet: Vec<FluxPerson> = (1..=heroes)
+            .map(|ordinal| FluxPerson {
+                name: format!("Hero {ordinal} ({})", "A".repeat(32)),
+                appearance: Some("Accepted public appearance. ".repeat(20)),
+            })
+            .collect();
+        sheet.extend((1..=3).map(|ordinal| FluxPerson {
+            name: format!("Contact {ordinal} {}", "N".repeat(22)),
+            appearance: None,
+        }));
+        let cast = FluxCast {
+            sheet,
+            speaker: Some(FluxPerson {
+                name: "Contact 1".into(),
+                appearance: None,
+            }),
+            portrait: true,
+        };
+        for tier in [HealthTier::Healthy, HealthTier::Critical, HealthTier::Down] {
+            let prompt = flux_scene_plate_for_party(
+                ContentRating::Mature,
+                Camera::WideEstablishing,
+                Some(&place()),
+                &cast,
+                &"facts ".repeat(500),
+                Some((FaceExpression::Neutral, tier)),
+                heroes,
+            )
+            .unwrap();
+            assert!(prompt.as_str().contains(&format!("exactly {heroes} heroes, each the person on their reference sheet; no other figure dressed or posed as a hero")));
+            for person in &cast.sheet {
+                assert!(prompt.as_str().contains(&person.name));
+            }
+            assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+            assert_eq!(
+                prompt.scene_party(),
+                Some(SceneParty::new(heroes, 2).unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn six_hero_hand_custody_is_reserved_inside_the_flux_cap() {
+    use crate::gameplay::adventure::scene_model::SceneModel;
+    let mut model: SceneModel = serde_json::from_slice(include_bytes!(
+        "../../../../../content/merchant-shop/scene-model.json"
+    ))
+    .unwrap();
+    let person = model.people[0].clone();
+    let item = model.things[0].clone();
+    model.people.clear();
+    model.things.clear();
+    let objects = ["cup", "packet", "lantern", "coin purse"];
+    for ordinal in 0..6 {
+        let mut hero = person.clone();
+        hero.id = format!("hero-{ordinal}");
+        hero.name = format!("Hero {ordinal}");
+        model.people.push(hero);
+        if let Some(name) = objects.get(ordinal) {
+            let mut held = item.clone();
+            held.id = format!("item-{ordinal}");
+            held.name = (*name).to_owned();
+            held.position = "left hand".into();
+            held.holder_id = Some(format!("hero-{ordinal}"));
+            // Ownership differs from physical custody on purpose.
+            held.owner_id = Some("merchant".into());
+            held.publicly_visible = true;
+            held.in_scene = true;
+            model.things.push(held);
+        }
+    }
+    for count in [1, 4, 6] {
+        let cast = FluxCast {
+            sheet: model
+                .people
+                .iter()
+                .take(count)
+                .map(|person| FluxPerson {
+                    name: person.name.clone(),
+                    appearance: Some("Accepted physical appearance. ".repeat(20)),
+                })
+                .collect(),
+            speaker: None,
+            portrait: false,
+        };
+        let hands = cast
+            .sheet
+            .iter()
+            .map(|person| person.fixture_hands(Some(&model)))
+            .collect::<Vec<_>>();
+        let prompt = cast
+            .plate_with_hands(
+                ContentRating::Restrained,
+                Camera::WideEstablishing,
+                Some(&place()),
+                "",
+                None,
+                (count, &hands),
+            )
+            .unwrap();
+        println!(
+            "HS37 heroes={count} prompt_characters={}\n{}",
+            prompt.character_count(),
+            prompt.as_str()
+        );
+        assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+        for (person, hands) in cast.sheet.iter().zip(&hands) {
+            assert!(prompt.as_str().contains(&person.name));
+            assert!(prompt.as_str().contains(hands));
+        }
+        assert!(
+            prompt
+                .as_str()
+                .contains("Weapons stay sheathed at hip or slung on back")
+        );
+        assert!(prompt.as_str().contains("bows unstrung on shoulder"));
+        assert!(prompt.as_str().contains("spare hands empty"));
+        assert!(prompt.scene_hand_custody().contains("Hero 0"));
+        assert!(prompt.scene_hand_custody().contains("cup (left hand)"));
+        let custody = prompt.scene_hand_custody().to_owned();
+        let contextual = prompt
+            .with_scene_context(&"Narrative without extra gear. ".repeat(400), Some(&model))
+            .unwrap();
+        assert_eq!(contextual.scene_hand_custody(), custody);
+        assert!(!custody.contains("Narrative"));
+    }
+    let mut hidden = model.things[0].clone();
+    hidden.name = "PRIVATE_HELD_ITEM".into();
+    hidden.publicly_visible = false;
+    model.things.push(hidden);
+    let hero = FluxPerson {
+        name: "Hero 0".into(),
+        appearance: None,
+    };
+    assert!(
+        !hero
+            .fixture_hands(Some(&model))
+            .contains("PRIVATE_HELD_ITEM")
+    );
+    model.things[0].name = "sword".into();
+    model.things[0].position = "sheathed".into();
+    assert_eq!(hero.fixture_hands(Some(&model)), "both hands empty");
+    model.things[0].position = "drawn".into();
+    assert!(hero.fixture_hands(Some(&model)).contains("sword (drawn)"));
+    model.things[0].position = "drawn in right hand".into();
+    let hands = hero.fixture_hands(Some(&model));
+    assert!(hands.contains("sword (drawn in right hand)"));
+    let cast = FluxCast {
+        sheet: vec![hero],
+        speaker: None,
+        portrait: false,
+    };
+    let prompt = cast
+        .plate_with_hands(
+            ContentRating::Restrained,
+            Camera::DialogueMedium,
+            None,
+            "",
+            None,
+            (1, &[hands]),
+        )
+        .unwrap();
+    assert!(prompt.as_str().contains("sword (drawn in right hand)"));
+    assert!(prompt.as_str().contains("drawn only where recorded"));
+}
+
+#[test]
+fn worn_and_stowed_gear_leave_hands_empty_and_never_displace_a_real_hand_prop() {
+    use crate::gameplay::adventure::scene_model::SceneModel;
+    let mut model: SceneModel = serde_json::from_slice(include_bytes!(
+        "../../../../../content/merchant-shop/scene-model.json"
+    ))
+    .unwrap();
+    let mut armor = model.things[0].clone();
+    armor.id = "hero-chainmail".into();
+    armor.name = "chainmail".into();
+    armor.position = "worn".into();
+    armor.holder_id = Some("Vesper".into());
+    armor.in_scene = true;
+    armor.publicly_visible = true;
+    model.things = vec![armor.clone()];
+    assert_eq!(
+        FluxPerson::hands_for_holder(Some(&model), "Vesper"),
+        "both hands empty"
+    );
+    let mut pack = armor.clone();
+    pack.id = "hero-pack".into();
+    pack.name = "bedroll".into();
+    pack.position = "stowed".into();
+    model.things.push(pack);
+    assert_eq!(
+        FluxPerson::hands_for_holder(Some(&model), "Vesper"),
+        "both hands empty"
+    );
+    let mut cup = armor;
+    cup.id = "hero-cup".into();
+    cup.name = "cup".into();
+    cup.position = "right hand".into();
+    model.things.push(cup);
+    assert_eq!(
+        FluxPerson::hands_for_holder(Some(&model), "Vesper"),
+        "hands: cup (right hand); spare hands empty"
+    );
+    let prompt = AssembledPrompt::from_parts(vec![Part::Fixed("Photographic TV drama.")])
+        .with_scene_context("A quiet conversation.", Some(&model))
+        .unwrap();
+    assert!(prompt.as_str().contains("chainmail"));
+    assert!(
+        prompt.as_str().contains("worn"),
+        "full physical positions are retained"
+    );
 }

@@ -10,10 +10,16 @@ use df_model::checkpoint::{Checkpoint, EntityId};
 use df_render::art_contract;
 use sha2::{Digest, Sha256};
 
+#[path = "mural.rs"]
+mod mural;
+#[path = "mural_view.rs"]
+mod mural_view;
+
 const ROOM_RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Target {
+    Mural,
     Hero(EntityId),
     Npc(String),
     Room { place: String, revision: String },
@@ -21,6 +27,7 @@ pub(super) enum Target {
 
 #[derive(Clone, Debug)]
 enum Source {
+    Mural(Vec<mural::MuralHero>),
     Hero {
         name: String,
         identity: Box<ValidatedIdentity>,
@@ -38,6 +45,9 @@ enum Source {
     Room {
         model: SceneModel,
         place: String,
+    },
+    ReviewedRoom {
+        asset: String,
     },
     /// A cast member with no authored description and no reviewed photograph (a creature, a
     /// patron or a foe the adventure names), made on demand by the art contract's rule.
@@ -71,10 +81,13 @@ struct Entry {
 
 #[derive(Default)]
 pub(super) struct References {
+    mural_enabled: bool,
+    mural_expected_count: usize,
     scope: String,
     entries: BTreeMap<Target, Entry>,
     seats: BTreeMap<u8, EntityId>,
     selected_rooms: BTreeMap<String, Target>,
+    authored_rooms: BTreeMap<Target, String>,
     current_room: Option<Target>,
     current_npcs: BTreeSet<String>,
     /// How many times each person's picture was cleared for regeneration; part of the binding, so
@@ -160,6 +173,7 @@ impl References {
     }
 
     pub(super) fn take_jobs_up_to(&mut self, available: usize) -> Vec<Job> {
+        self.refresh_mural();
         let mut wanted = self
             .entries
             .iter()
@@ -173,6 +187,7 @@ impl References {
                         Target::Npc(id) if self.current_npcs.contains(id) => 2,
                         Target::Room { .. } => 3,
                         Target::Npc(_) => 4,
+                        Target::Mural => 5,
                     }
                 };
                 (priority, target.clone())
@@ -346,7 +361,7 @@ mod tests {
     async fn custom_seats_use_full_public_design_and_only_their_approved_references() {
         use hero_identity_fixture::{LOOKS, checkpoint, portrait_asset, portrait_bytes};
         let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/lanes/HS5/canonical-custom-{}",
+            "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS5/canonical-custom-{}",
             std::process::id()
         ));
         let fixture = DirectionFixture::photographic(&cache);
@@ -417,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn legacy_quickstart_uses_only_its_written_look_without_a_stock_reference() {
         let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/lanes/HS5/canonical-legacy-{}",
+            "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS5/canonical-legacy-{}",
             std::process::id()
         ));
         let fixture = DirectionFixture::photographic(&cache);
@@ -501,7 +516,13 @@ mod tests {
         }
         apply_hero_faces(&locked(&inner.state), Some(&mut journey));
         for (index, member) in journey.party.iter().enumerate() {
-            let path = format!("/gameplay/imagery/{}", ["a", "b"][index].repeat(64));
+            // An approved creator portrait remains the hero's accepted depiction after
+            // a generated reference becomes ready. Other heroes use their ready reference.
+            let path = if index == 0 {
+                format!("/gameplay/creator-portrait/{}", "4".repeat(64))
+            } else {
+                format!("/gameplay/imagery/{}", ["a", "b"][index].repeat(64))
+            };
             assert_eq!(member.portrait, path);
             assert_eq!(journey.live_faces[index].sprite, path);
             assert_eq!(journey.live_faces[index].battle_sprite, path);
@@ -601,7 +622,7 @@ mod tests {
         }];
 
         let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/canonical-reference-tests/marek-{}",
+            "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/marek-{}",
             std::process::id()
         ));
         let fixture = DirectionFixture::photographic(&cache);
@@ -752,7 +773,7 @@ mod tests {
     #[tokio::test]
     async fn owned_completion_exposes_runtime_bytes_and_identical_recovery_uses_the_cache() {
         let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/canonical-reference-tests/runtime-{}",
+            "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/runtime-{}",
             std::process::id()
         ));
         let fixture = DirectionFixture::new(&cache);
@@ -788,8 +809,8 @@ mod tests {
         // The cache is written during the test, so it is a scratch copy of the committed art.
         let source =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gameplay/fixtures/creature-art");
-        let cache = std::env::temp_dir().join(format!(
-            "df-creature-art-{}-{}",
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../artifacts/tmp/lanes/HS37/fixture-cache/creature-art-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1023,10 +1044,14 @@ mod tests {
             .collect();
         assert_eq!(
             people,
-            ["market-street-hobb", "market-street-wenna"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
+            [
+                "market-street-hobb",
+                "market-street-wenna",
+                "market-street-yara"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
         );
         assert_eq!(canonical.current_npcs, people);
         // What the photograph is asked for is the street's own layout, never the shop's.
@@ -1079,6 +1104,123 @@ mod tests {
         assert_eq!(work.binding, binding);
     }
 
+    #[tokio::test]
+    async fn authored_place_admission_skips_room_generation_but_keeps_people_and_direct_references()
+    {
+        let mut scene = pack::scene(pack::SceneKey::Opening);
+        scene.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+        let model: SceneModel = serde_json::from_slice(include_bytes!(
+            "../../../../../content/merchant-shop/scene-model.json"
+        ))
+        .unwrap();
+        scene.setting = Some(crate::gameplay::adventure::setting::SceneSetting {
+            place_id: "HS37-authored-quay".into(),
+            name: "Working quay".into(),
+            short: "Weathered boards beside the water".into(),
+            kind: crate::gameplay::adventure::setting::SettingKind::Quay,
+            exterior: true,
+            art_key: scene.asset.clone(),
+            model: Some(model.clone()),
+        });
+        let place = scene.setting.as_ref().unwrap().place_id.clone();
+        let revision = room_revision(&model).unwrap();
+        let mut canonical = references("HS37-authored-admission");
+        canonical.observe_room(&scene);
+        // An ahead admission without another asset cannot resurrect room generation.
+        canonical.admit_room(&place, &model, &scene.cast, false);
+        let jobs = canonical.take_jobs_up_to(model.people.len() + 1);
+        assert_eq!(
+            jobs.len(),
+            model.people.len() + 1,
+            "NPC work plus one local photo load"
+        );
+        assert!(
+            !canonical
+                .entries
+                .values()
+                .any(|entry| matches!(entry.work.source, Source::Room { .. }))
+        );
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS37/authored-registration")
+            .join(std::process::id().to_string());
+        let fixture = DirectionFixture::photographic(&cache);
+        let inner = inner(fixture.imagery.clone(), canonical);
+        assert_eq!(
+            inner.canonical_room_status(&place),
+            ReferenceStatus::Pending
+        );
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical work")
+            };
+            if matches!(work.source, Source::ReviewedRoom { .. }) {
+                let key = inner.render_canonical(&work).await.unwrap();
+                inner.finish_canonical(work, Ok(key));
+            } else {
+                assert!(matches!(work.source, Source::Npc { .. }));
+            }
+        }
+        assert_eq!(
+            fixture.calls(),
+            0,
+            "authored room registration never invokes a provider"
+        );
+        let registered = inner.canonical_room_key(&place).unwrap();
+        assert!(matches!(
+            fixture.imagery.image(registered.as_str()).await,
+            Lookup::Image { .. }
+        ));
+        assert_eq!(inner.canonical_room_status(&place), ReferenceStatus::Ready);
+        assert_eq!(
+            inner.canonical_room_status_at(&place, &revision),
+            ReferenceStatus::Ready
+        );
+        let expected = inner.load(scene.asset).await.unwrap();
+        assert_eq!(
+            inner.canonical_room_reference(&place).await.unwrap().sha256,
+            expected.sha256
+        );
+        assert_eq!(
+            inner
+                .canonical_room_reference_at(&place, &revision)
+                .await
+                .unwrap()
+                .sha256,
+            expected.sha256
+        );
+    }
+
+    #[test]
+    fn authored_room_retires_a_queued_generation_and_generic_reference_still_generates() {
+        let mut canonical = references("HS37-authored-replacement");
+        canonical.admit_room_with_asset(
+            "place",
+            &model(),
+            &[],
+            true,
+            Some(art_contract::ROOM_PHOTO),
+        );
+        assert!(
+            canonical
+                .entries
+                .values()
+                .any(|entry| matches!(entry.work.source, Source::Room { .. }))
+        );
+        canonical.admit_room_with_asset(
+            "place",
+            &model(),
+            &[],
+            true,
+            Some(art_contract::HARBOR_PHOTO),
+        );
+        let jobs = canonical.take_jobs();
+        assert_eq!(jobs.len(), 1);
+        assert!(
+            matches!(&jobs[0], Job::Canonical(work) if matches!(work.source, Source::ReviewedRoom { .. }))
+        );
+        assert_eq!(canonical.authored_rooms.len(), 1);
+    }
+
     #[test]
     fn prepared_room_is_resolvable_without_changing_current_room_or_duplicating_work() {
         let mut canonical = references("prepared-room-run");
@@ -1114,6 +1256,7 @@ mod tests {
 /// The art contract's subject of a canonical target: what the `IMAGERY` audit lines name.
 fn subject(target: &Target) -> art_contract::Subject {
     match target {
+        Target::Mural => art_contract::Subject::place("party-mural"),
         Target::Hero(entity) => {
             art_contract::Subject::character(format!("hero:{}", digest(entity.as_bytes())))
         }
@@ -1124,15 +1267,22 @@ fn subject(target: &Target) -> art_contract::Subject {
 
 fn diagnostic(work: &Work, status: &str, key: Option<&ImageKey>, elapsed: Option<Duration>) {
     let target = match &work.target {
+        Target::Mural => "party-mural".to_owned(),
         Target::Hero(entity) => format!("hero:{}", digest(entity.as_bytes())),
         Target::Npc(id) => format!("npc:{id}"),
         Target::Room { place, revision } => format!("room:{place}:{revision}"),
     };
     let key = key.map_or("", ImageKey::as_str);
+    let source = if matches!(work.source, Source::ReviewedRoom { .. }) {
+        "reviewed"
+    } else {
+        "live"
+    };
     // The on-demand generation is observable in the same IMAGERY audit lines as every other
     // image: one line per state change of the subject, and a failure names the neutral fallback
     // the display keeps.
     let kind = match &work.target {
+        Target::Mural => "party_mural",
         Target::Room { .. } => ImageKind::CanonicalRoom.label(),
         Target::Hero(_) | Target::Npc(_) => ImageKind::CanonicalCharacter.label(),
     };
@@ -1151,14 +1301,14 @@ fn diagnostic(work: &Work, status: &str, key: Option<&ImageKey>, elapsed: Option
         match &work.target {
             Target::Hero(_) => art_contract::Role::HeroPortrait,
             Target::Npc(_) => art_contract::Role::CharacterToken,
-            Target::Room { .. } => art_contract::Role::StagePlace,
+            Target::Room { .. } | Target::Mural => art_contract::Role::StagePlace,
         },
     );
     if let Some(event) = event {
         super::super::actor::record_audit_line(
             "gameplay.art",
             format!(
-                "ART {event} subject={} role={role:?} source=live ms={} status={status} id={key}",
+                "ART {event} subject={} role={role:?} source={source} ms={} status={status} id={key}",
                 subject(&work.target).key(),
                 elapsed.map_or(0, |elapsed| elapsed.as_millis()),
             ),
@@ -1209,6 +1359,10 @@ impl Inner {
                 ..Default::default()
             };
         }
+        state.canonical.mural_expected_count = super::super::journey::participants(checkpoint)
+            .iter()
+            .filter(|member| member.character.is_some())
+            .count();
         state.canonical.seats.clear();
         let mut accepted = BTreeSet::new();
         for (index, member) in super::super::journey::participants(checkpoint)
@@ -1325,9 +1479,13 @@ impl Inner {
             .canonical
             .entries
             .retain(|target, _| !matches!(target, Target::Hero(_)) || accepted.contains(target));
+        state.canonical.refresh_mural();
     }
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
+        if let Source::Mural(heroes) = &work.source {
+            return self.render_mural(work, heroes).await;
+        }
         // Only real photographs are sent; with none the request is generated from text alone.
         let mut references = Vec::new();
         match &work.source {
@@ -1361,6 +1519,7 @@ impl Inner {
             return Err(ImageFailure::Interrupted);
         }
         let (kind, prompt, output) = match &work.source {
+            Source::Mural(_) => return Err(ImageFailure::InvalidRequest),
             Source::Hero {
                 identity,
                 species,
@@ -1399,6 +1558,13 @@ impl Inner {
                 )?,
                 OutputSpec::CUTOUT,
             ),
+            Source::ReviewedRoom { asset } => {
+                let reference = self.load(asset.clone()).await?;
+                return self
+                    .imagery
+                    .register_reviewed(&subject(&work.target).key(), reference)
+                    .await;
+            }
             Source::Room { model, place } => (
                 ImageKind::CanonicalRoom,
                 imagery::canonical_room(self.rating, model, place, &work.binding)?,
@@ -1499,10 +1665,11 @@ impl Inner {
         place: &str,
         model: &SceneModel,
         cast: &[pack::SceneCastMember],
+        asset: Option<&str>,
     ) {
         locked(&self.state)
             .canonical
-            .admit_room(place, model, cast, false);
+            .admit_room_with_asset(place, model, cast, false, asset);
     }
 
     pub(super) fn canonical_room_status_at(&self, place: &str, revision: &str) -> ReferenceStatus {
@@ -1600,9 +1767,17 @@ impl Inner {
     }
 
     pub(super) async fn canonical_room_reference(&self, place: &str) -> Option<ReferenceImage> {
-        let key = self.canonical_room_key(place)?;
-        let reference = self.runtime_reference(key.clone()).await?;
-        (self.canonical_room_key(place).as_ref() == Some(&key)).then_some(reference)
+        let target = locked(&self.state)
+            .canonical
+            .selected_rooms
+            .get(place)
+            .cloned()?;
+        let Target::Room { revision, .. } = &target else {
+            return None;
+        };
+        let reference = self.canonical_room_reference_at(place, revision).await?;
+        (locked(&self.state).canonical.selected_rooms.get(place) == Some(&target))
+            .then_some(reference)
     }
 
     pub(super) async fn canonical_hero_reference(
@@ -1637,6 +1812,12 @@ pub(super) fn room_revision(model: &SceneModel) -> Option<String> {
     ))
 }
 
+/// A reviewed scene photograph is an authored place, never a generic style carrier.
+pub(super) fn authored_place_photo(asset: &str) -> Option<&str> {
+    let stem = art_contract::stem_of(asset);
+    (stem.starts_with("scene-") && art_contract::REVIEWED_PHOTOS.contains(&stem)).then_some(asset)
+}
+
 fn documentary_photo_stem(asset: &str) -> Option<String> {
     let filename = asset.rsplit('/').next()?;
     let stem = filename
@@ -1654,15 +1835,33 @@ impl References {
         let Some(model) = setting.model.as_ref() else {
             return;
         };
-        self.admit_room(&setting.place_id, model, &scene.cast, true);
+        self.admit_room_with_asset(
+            &setting.place_id,
+            model,
+            &scene.cast,
+            true,
+            Some(&scene.asset),
+        );
     }
 
+    #[cfg(test)]
     fn admit_room(
         &mut self,
         place: &str,
         model: &SceneModel,
         cast: &[pack::SceneCastMember],
         select: bool,
+    ) {
+        self.admit_room_with_asset(place, model, cast, select, None);
+    }
+
+    fn admit_room_with_asset(
+        &mut self,
+        place: &str,
+        model: &SceneModel,
+        cast: &[pack::SceneCastMember],
+        select: bool,
+        asset: Option<&str>,
     ) {
         if self.scope.is_empty() {
             return;
@@ -1688,14 +1887,27 @@ impl References {
                 .map(|person| person.id.clone())
                 .collect();
         }
-        self.select(
-            target,
-            Source::Room {
-                model: model.clone(),
-                place: place.to_owned(),
-            },
-            &revision,
-        );
+        if let Some(asset) = asset.and_then(authored_place_photo) {
+            // The owned worker loads reviewed bytes locally. Existing key-based consumers
+            // receive the same photograph, and superseded generated completions are fenced.
+            self.authored_rooms.insert(target.clone(), asset.to_owned());
+            self.select(
+                target,
+                Source::ReviewedRoom {
+                    asset: asset.to_owned(),
+                },
+                &format!("reviewed|{asset}|{revision}"),
+            );
+        } else if !self.authored_rooms.contains_key(&target) {
+            self.select(
+                target,
+                Source::Room {
+                    model: model.clone(),
+                    place: place.to_owned(),
+                },
+                &revision,
+            );
+        }
         for person in &model.people {
             // Lookahead may prepare a new person but cannot redefine an identity already
             // selected by the current accepted room merely because that person is doing
@@ -1748,7 +1960,7 @@ impl LivingScenes {
     pub(in crate::gameplay) fn canonical_room_ready(&self, place: &str) -> bool {
         self.inner
             .as_ref()
-            .is_some_and(|inner| inner.canonical_room_key(place).is_some())
+            .is_some_and(|inner| inner.canonical_room_status(place) == ReferenceStatus::Ready)
     }
 
     /// Admit the speculative destination through the same canonical worker as a visited room.
@@ -1761,8 +1973,8 @@ impl LivingScenes {
             return Ok(());
         };
         let expanded = destination.expand()?;
-        inner.admit_canonical_room(&destination.place_id, &expanded.model, &expanded.cast);
-        if inner.canonical_room_key(&destination.place_id).is_some() {
+        inner.admit_canonical_room(&destination.place_id, &expanded.model, &expanded.cast, None);
+        if inner.canonical_room_status(&destination.place_id) == ReferenceStatus::Ready {
             super::super::fight_foresight::request_prepared_world(&destination.place_id);
         }
         inner.wake.send_modify(|count| *count += 1);

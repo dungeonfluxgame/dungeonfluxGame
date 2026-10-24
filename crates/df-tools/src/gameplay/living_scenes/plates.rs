@@ -34,8 +34,8 @@ use super::{
         beat_script::{self, Beat, BeatKind, BeatScript, BeatTransition, BeatTrigger},
         imagery::{
             CastIdentity, FluxCast, FluxPerson, ImageFailure, ImageKey, ImageKind, ImageRequest,
-            Lookup, OutputSpec, PlaceFacts, PlateReferences, ReferenceImage, cast_sheet,
-            flux_scene_plate, hero_locator_phrase, plate_moment, scene_plate,
+            Lookup, OutputSpec, PlaceFacts, PlateReferences, ReferenceImage, SceneParty,
+            cast_sheet, flux_scene_plate_for_party, hero_locator_phrase, plate_moment, scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
         place,
@@ -48,10 +48,13 @@ use super::{
     Inner, WorkerGuard, locked, record,
 };
 
+mod activity;
+pub(super) mod ahead;
 mod direct;
 #[cfg(test)]
 mod scenery_selection;
 mod state_images;
+mod subject;
 
 /// Plates kept in the book; the oldest not in use are forgotten first.
 const MAXIMUM_ENTRIES: usize = 32;
@@ -65,8 +68,50 @@ const MAXIMUM_SUCCESSORS: usize = 6;
 const AHEAD_DELAY: Duration = Duration::from_secs(2);
 /// How often the worker looks for a lasting face to edit into the current plate.
 const POLL: Duration = Duration::from_secs(1);
+/// Staging revision for REF-060: wider (pulled-back) framing and heroes facing each other.
+/// Bumping it makes new plate ids, so cached plates from the old staging are not reused.
+/// Canonical hero images are keyed separately and are not invalidated by this.
+pub(super) const PLATE_STAGING_REVISION: &str = "wide-5ft-scene-activity-spatial-v3";
 
 /// What the plate director needs to know about one scene, from the pack.
+fn photo_context(
+    scene: &PlateScene,
+    prompt: crate::gameplay::imagery::AssembledPrompt,
+) -> Result<crate::gameplay::imagery::AssembledPrompt, ImageFailure> {
+    let Some(snapshot) = &scene.snapshot else {
+        return Ok(prompt);
+    };
+    let model = &snapshot.model;
+    let source_hash = crate::gameplay::journey::living_scene::picture_source_hash(model)
+        .map_err(|_| ImageFailure::InvalidRequest)?;
+    let records = model
+        .people
+        .iter()
+        .filter(|person| person.role != "hero")
+        .map(|person| serde_json::json!({"id":person.id,"name":person.name,"role":person.role}))
+        .chain(
+            model
+                .things
+                .iter()
+                .filter(|thing| {
+                    thing.in_scene && thing.publicly_visible && thing.holder_id.is_none()
+                })
+                .map(|thing| serde_json::json!({"id":thing.id,"name":thing.name})),
+        )
+        .chain(
+            model
+                .offers
+                .iter()
+                .map(|offer| serde_json::json!({"id":offer.id,"name":offer.name})),
+        )
+        .collect::<Vec<_>>();
+    let custody =
+        serde_json::json!({"hands": prompt.scene_hand_custody(), "public_records":records,
+        "place":scene.place_id, "source_hash":source_hash})
+        .to_string();
+    Ok(prompt.with_scene_hand_custody(custody))
+}
+
 #[derive(Clone, Debug)]
 struct PlateScene {
     title: String,
@@ -85,6 +130,8 @@ struct PlateScene {
     identity_cast: Vec<IdentityReference>,
     snapshot: Option<crate::gameplay::adventure::scene_model::SceneNow>,
     hero_names: Vec<String>,
+    hero_activity: Vec<(String, String)>,
+    scene_outcomes: Vec<String>,
     authored_room: Option<crate::gameplay::adventure::scene_model::SceneModel>,
     room_revision: Option<String>,
 }
@@ -95,6 +142,14 @@ struct IdentityReference {
     name: String,
     sprite: String,
     portrait: String,
+}
+
+/// Custody IDs remain aligned with the canonical ID-sorted photographs, including equal names.
+struct PlateIdentities {
+    sheet: ReferenceImage,
+    legend: String,
+    people: Vec<FluxPerson>,
+    holder_ids: Vec<String>,
 }
 
 /// A hero on the identity sheet. The party's hero names are in the order of the party seats, the
@@ -123,6 +178,25 @@ fn flux_person(scene: &PlateScene, canonical_id: &str, name: &str) -> FluxPerson
     FluxPerson {
         name: name.to_owned(),
         appearance,
+    }
+}
+
+/// A close arrival retains the route back in the same frame. This changes photographic context
+/// only; admission, priority and HS32's look-ahead queue remain the existing path.
+fn arrival_plate_context(scene: &PlateScene) -> String {
+    let way_back = scene.snapshot.as_ref().and_then(|snapshot| {
+        snapshot
+            .model
+            .ways_out
+            .iter()
+            .find(|way| way.id == crate::gameplay::place::WAY_BACK)
+    });
+    match way_back {
+        Some(way) => format!(
+            "Arrival continuity: {} in front, recorded people and goods in place, the party arriving; {} behind via the way back {} where visible. {}",
+            scene.title, way.beyond, way.position, scene.story_text
+        ),
+        None => scene.story_text.clone(),
     }
 }
 
@@ -189,8 +263,18 @@ impl PlateScene {
             others,
             cast: scene.cast.clone(),
             identity_cast,
-            snapshot: crate::gameplay::adventure::scene_model::current_scene(scene),
+            // Forecasts carry a detached checkpoint snapshot; a registry entry may be older.
+            snapshot: setting
+                .model
+                .clone()
+                .map(|model| crate::gameplay::adventure::scene_model::SceneNow {
+                    model: model.for_scene(scene.key),
+                    changes: Vec::new(),
+                })
+                .or_else(|| crate::gameplay::adventure::scene_model::current_scene(scene)),
             hero_names: Vec::new(),
+            hero_activity: Vec::new(),
+            scene_outcomes: Vec::new(),
             authored_room: setting.model.clone(),
             room_revision: setting
                 .model
@@ -203,10 +287,91 @@ impl PlateScene {
     /// scenes start on their patron, but a later directed reply must promote that exact cast ID
     /// so the camera and locator can keep the addressed person readable.
     fn for_view(view: &View, scene: &pack::Scene) -> Option<Self> {
+        // The public projection is authoritative about who has entered. The authored scene
+        // used for lookup can still describe the courier before another actor arrives.
+        let mut scene = scene.clone();
+        for actor in &view.cast {
+            if scene.cast.iter().any(|known| known.id == actor.id) {
+                continue;
+            }
+            let source = pack::with_content(|content| {
+                content
+                    .scenes
+                    .iter()
+                    .flat_map(|scene| &scene.cast)
+                    .find(|known| known.id == actor.id)
+                    .cloned()
+                    .or_else(|| {
+                        content.beat_script.as_ref().and_then(|script| {
+                            script
+                                .scenes
+                                .values()
+                                .flat_map(|scene| &scene.cast)
+                                .find(|known| known.id == actor.id)
+                                .cloned()
+                        })
+                    })
+            });
+            if let Some(source) = source {
+                scene.cast.push(source);
+            } else {
+                let role = match rpc::SceneRole::try_from(actor.role).ok() {
+                    Some(rpc::SceneRole::Patron) => pack::CastRole::Patron,
+                    Some(rpc::SceneRole::Antagonist) => pack::CastRole::Antagonist,
+                    Some(rpc::SceneRole::Contact) => pack::CastRole::Contact,
+                    Some(rpc::SceneRole::Bystander) => pack::CastRole::Bystander,
+                    _ => {
+                        record(
+                            "gameplay.living_scene.cast_identity_missing",
+                            &[("actor_id", actor.id.clone())],
+                        );
+                        continue;
+                    }
+                };
+                // This local descriptor supplies photographic identity only. Rules, voices and
+                // combat profiles remain with the authoritative scene and are not reconstructed.
+                scene.cast.push(pack::SceneCastMember {
+                    id: actor.id.clone(),
+                    name: actor.name.clone(),
+                    role,
+                    sprite: actor.sprite.clone(),
+                    portrait: actor.portrait.clone(),
+                    voice: String::new(),
+                    gender: None,
+                    age: None,
+                    stat_block: None,
+                });
+            }
+        }
+        let scene = &scene;
         let mut plate = Self::of(scene)?;
+        plate.hero_names = view
+            .hero_names
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect();
+        plate.hero_activity = view
+            .hero_activity
+            .iter()
+            .filter_map(|activity| {
+                let (_, name) = view
+                    .hero_names
+                    .iter()
+                    .find(|(seat, _)| *seat == activity.seat)?;
+                Some((name.clone(), activity.text.clone()))
+            })
+            .collect();
+        plate.scene_outcomes = view
+            .scene_outcomes
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect();
+        // Published views use the session owner's current presentation snapshot.
+        plate.snapshot = crate::gameplay::adventure::scene_model::current_scene(scene);
         let Some(story) = view.story.as_ref() else {
             return Some(plate);
         };
+        plate.story_text = story.text.clone();
         let actor_id = story
             .actor_id
             .strip_prefix("npc:")
@@ -258,6 +423,19 @@ impl PlateScene {
         )
     }
 
+    /// Only a reviewed photograph authored for this scene replaces room generation. A generic
+    /// fallback/style carrier must never become the canonical geometry of a different place.
+    fn authored_place_photo(&self) -> Option<&str> {
+        super::canonical::authored_place_photo(&self.asset)
+    }
+
+    fn generated_room_revision(&self) -> Option<&str> {
+        if self.authored_place_photo().is_some() {
+            return None;
+        }
+        self.room_revision.as_deref()
+    }
+
     /// Scenes with an authored room model or an exact story variant require references bound to
     /// that authored source. Static archetype art is reserved for legacy scenes without either.
     fn requires_canonical_identity(&self) -> bool {
@@ -277,7 +455,7 @@ impl PlateScene {
             .as_deref()
             .map_or_else(|| "base".to_owned(), |id| format!("variant={id}"));
         format!(
-            "{}|{}|{:?}|{source_variant}|speaker={}|{party}|{hurt}|room={}",
+            "{}|{}|{:?}|{source_variant}|speaker={}|{party}|{hurt}|room={}|staging={PLATE_STAGING_REVISION}|weapon-state=carried-readiness-v1",
             self.title,
             self.place_id,
             self.key,
@@ -451,6 +629,15 @@ fn successors_in(
     scenes: &[pack::Scene],
     current: &pack::Scene,
 ) -> Vec<pack::Scene> {
+    successors_in_from(script, scenes, current, None)
+}
+
+fn successors_in_from(
+    script: &BeatScript,
+    scenes: &[pack::Scene],
+    current: &pack::Scene,
+    current_beat: Option<&str>,
+) -> Vec<pack::Scene> {
     {
         let scene_of = |beat: &Beat| match &beat.scene_variant {
             Some(variant) => script.scenes.get(variant).cloned().map(|mut scene| {
@@ -466,11 +653,16 @@ fn successors_in(
         let mut seen: Vec<&str> = Vec::new();
         let mut queue: VecDeque<(&Beat, usize)> = VecDeque::new();
         for beat in &script.beats {
-            let here = scene_of(beat).is_some_and(|scene| {
-                scene.title == current.title
-                    && scene.key == current.key
-                    && scene.source_variant_id == current.source_variant_id
-            });
+            let here = current_beat.map_or_else(
+                || {
+                    scene_of(beat).is_some_and(|scene| {
+                        scene.title == current.title
+                            && scene.key == current.key
+                            && scene.source_variant_id == current.source_variant_id
+                    })
+                },
+                |id| beat.id == id,
+            );
             if here {
                 queue.extend(
                     beat.transitions
@@ -497,7 +689,10 @@ fn successors_in(
             };
             if beat.kind != BeatKind::Fight
                 && let Some(next) = scene_of(beat)
-                && next.title != current.title
+                && (next.key != current.key
+                    || next.source_variant_id != current.source_variant_id
+                    || next.title != current.title
+                    || next.asset != current.asset)
                 && !found.iter().any(|known| {
                     known.key == next.key
                         && known.title == next.title
@@ -523,6 +718,7 @@ fn successors_in(
 }
 
 /// What one display view says about plates.
+#[derive(Clone)]
 struct View {
     /// Names the authored source scene as well as its title and painting.
     scene_key: String,
@@ -537,7 +733,11 @@ struct View {
     heroes: Vec<u8>,
     /// Their names, to find a hero's health variant.
     hero_names: Vec<(u8, String)>,
+    cast: Vec<rpc::SceneActor>,
     story: Option<StoryBeat>,
+    hero_activity: Vec<activity::HeroActivity>,
+    latest_sequence: u64,
+    scene_outcomes: Vec<(u64, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -670,7 +870,6 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
                 .party
                 .iter()
                 .enumerate()
-                .take(shot::MAXIMUM_HEROES)
                 .filter(|(_, member)| member.character_ready)
                 .filter_map(|(index, member)| {
                     Some((u8::try_from(index + 1).ok()?, member.name.clone()))
@@ -691,7 +890,13 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
         graph_revision,
         heroes,
         hero_names,
+        cast: scene.cast.clone(),
         story: journey.and_then(committed_story),
+        hero_activity: journey.map(activity::latest).unwrap_or_default(),
+        scene_outcomes: journey.map(activity::outcomes).unwrap_or_default(),
+        latest_sequence: journey
+            .and_then(|journey| journey.table_log.iter().map(|line| line.sequence).max())
+            .unwrap_or(0),
     })
 }
 
@@ -720,6 +925,7 @@ enum Edit {
 struct Current {
     scene_key: String,
     id: Option<String>,
+    reference_id: Option<String>,
     scene: Option<PlateScene>,
     heroes: Vec<u8>,
     /// The health variants of hurt heroes the scene's plate was named with.
@@ -770,6 +976,10 @@ impl FaceRefresh {
 }
 
 struct Book {
+    presented: Option<PresentedPlate>,
+    presentation_held: bool,
+    activity: activity::Book,
+    ahead: ahead::Queue,
     image_layouts: BTreeMap<String, PlatePlacement>,
     current: Option<Current>,
     entries: BTreeMap<String, Entry>,
@@ -780,6 +990,14 @@ struct Book {
     state_images: state_images::Book,
     face_refresh: FaceRefresh,
     refresh_decisions: BTreeMap<&'static str, (u64, &'static str)>,
+}
+
+struct PresentedPlate {
+    scene_key: String,
+    key: ImageKey,
+    placement: Option<PlatePlacement>,
+    revision: u64,
+    since: Duration,
 }
 
 fn refresh_decision(book: &mut Book, pipeline: &'static str, reason: &'static str) {
@@ -811,6 +1029,10 @@ fn refresh_decision(book: &mut Book, pipeline: &'static str, reason: &'static st
 impl Book {
     fn new() -> Self {
         Self {
+            presented: None,
+            presentation_held: false,
+            activity: activity::Book::default(),
+            ahead: ahead::Queue::default(),
             image_layouts: BTreeMap::new(),
             current: None,
             entries: BTreeMap::new(),
@@ -956,6 +1178,7 @@ struct Locate {
 }
 
 enum Done {
+    Cancelled,
     State(state_images::Done),
     Directed {
         generation: u64,
@@ -1000,14 +1223,17 @@ pub(super) struct Plates {
 
 impl Plates {
     /// Starts the director and its worker task. Must be called inside the runtime.
-    pub(super) fn start(inner: Arc<Inner>) -> Self {
+    pub(super) fn start(
+        inner: Arc<Inner>,
+        checkpoints: tokio::sync::watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) -> Self {
         let (jobs, queue) = mpsc::channel(QUEUE_CAPACITY);
         let shared = Arc::new(Shared {
             inner,
             book: Mutex::new(Book::new()),
             jobs,
         });
-        let worker = tokio::spawn(Arc::clone(&shared).run(queue));
+        let worker = tokio::spawn(Arc::clone(&shared).run(queue, checkpoints));
         Self {
             shared,
             _worker: Arc::new(WorkerGuard(worker)),
@@ -1040,6 +1266,9 @@ impl Plates {
                     self.shared.apply(&scene_key, scene).unwrap_or_default();
                 self.shared.project_scene_clip(&scene_key, scene);
                 self.shared.project_scene_contents(scene, None);
+                locked(&self.shared.inner.state)
+                    .canonical
+                    .project_mural(scene);
                 self.shared
                     .record_projection(&scene_key, scene, display.live_plate_graph_revision);
             }
@@ -1063,7 +1292,7 @@ impl Plates {
                     let _ = self.request_hand_item(item, false, &scene.scene_contents_json);
                 }
                 let (scene_key, _) = scene_identity("", scene);
-                let _revision = self.shared.apply(&scene_key, scene);
+                let _revision = self.shared.apply_for_player(&scene_key, scene);
                 scene.scene_video_state = rpc::HomeVideoState::None as i32;
                 scene.scene_video_path.clear();
                 let hero = player
@@ -1072,6 +1301,9 @@ impl Plates {
                     .and_then(|journey| journey.own_character.as_ref())
                     .map(|hero| hero.name.as_str());
                 self.shared.project_scene_contents(scene, hero);
+                locked(&self.shared.inner.state)
+                    .canonical
+                    .project_mural(scene);
                 if let Some(sheet) = player
                     .journey
                     .as_mut()
@@ -1316,7 +1548,7 @@ impl HeadDiagnostic<'_> {
                 "reference_sha256".into(),
                 serde_json::json!(self.reference_sha256),
             ),
-            ("locator_revision".into(), serde_json::json!(2)),
+            ("locator_revision".into(), serde_json::json!(3)),
             ("batch".into(), serde_json::json!(self.batch)),
             (
                 "target_ids".into(),
@@ -1474,6 +1706,39 @@ fn wire_side(side: shot::Side) -> i32 {
 fn wire_layout(placement: &PlatePlacement) -> rpc::PlateLayout {
     let speaker = &placement.speaker;
     rpc::PlateLayout {
+        figure_masks: placement
+            .figure_masks
+            .iter()
+            .filter_map(|figure| {
+                let person = if let Some(art) = figure.id.strip_prefix("hero-") {
+                    rpc::plate_figure_mask::Person::HeroIndex(
+                        art.parse::<u32>().ok()?.checked_sub(1)?,
+                    )
+                } else {
+                    rpc::plate_figure_mask::Person::ActorId(
+                        figure.id.strip_prefix("npc:")?.to_owned(),
+                    )
+                };
+                Some(rpc::PlateFigureMask {
+                    person: Some(person),
+                    source_width: figure.source_width,
+                    source_height: figure.source_height,
+                    left: figure.bounds[0],
+                    top: figure.bounds[1],
+                    right: figure.bounds[2],
+                    bottom: figure.bounds[3],
+                    head_top_x_permille: figure.head_top_permille[0],
+                    head_top_y_permille: figure.head_top_permille[1],
+                    free_side: if figure.free_left {
+                        rpc::PlateSide::Left
+                    } else {
+                        rpc::PlateSide::Right
+                    } as i32,
+                    inferred: figure.inferred,
+                    mask_index: figure.mask_index,
+                })
+            })
+            .collect(),
         bubble_side: wire_side(speaker.bubble_side),
         head_x_permille: u32::from(speaker.head_x_permille),
         head_y_permille: u32::from(speaker.head_y_permille),
@@ -1531,6 +1796,8 @@ struct StoredPlacement {
     locator_revision: u8,
     #[serde(default)]
     actor_reference_sha256: BTreeMap<String, String>,
+    #[serde(default)]
+    figure_masks: Vec<crate::gameplay::imagery::figure_masks::FigureGeometry>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -1574,8 +1841,9 @@ impl StoredHead {
 impl StoredPlacement {
     fn of(placement: &PlatePlacement) -> Self {
         Self {
+            figure_masks: placement.figure_masks.clone(),
             speaker: StoredHead::of(0, &placement.speaker),
-            locator_revision: 2,
+            locator_revision: 3,
             actor_reference_sha256: BTreeMap::new(),
             actor_ids: placement
                 .actors
@@ -1610,6 +1878,7 @@ impl StoredPlacement {
             })
             .collect();
         Some(PlatePlacement {
+            figure_masks: self.figure_masks.clone(),
             speaker: self.speaker.layout()?,
             actors: self
                 .actors
@@ -1742,28 +2011,102 @@ impl Shared {
     /// [`Self::observe`] with the pack's scene and its successors given, so tests need no pack.
     fn observe_with(&self, view: &View, located: Option<pack::Scene>, next: Vec<pack::Scene>) {
         let mut book = locked(&self.book);
+        let mut scoped = view.clone();
+        book.activity.scope(&mut scoped);
+        let view = &scoped;
+        if book
+            .current
+            .as_ref()
+            .is_none_or(|current| current.scene_key != view.scene_key)
+            && let Some(scene) = located
+                .as_ref()
+                .and_then(|scene| PlateScene::for_view(view, scene))
+        {
+            self.reject_stale_ahead(&mut book, &scene);
+        }
+        let story_pending_before = book
+            .state_images
+            .pending
+            .as_ref()
+            .map(|pending| (pending.state.clone(), pending.revision));
         if let Some(scene) = located
             .as_ref()
             .and_then(|scene| PlateScene::for_view(view, scene))
         {
+            // Public entrants can be absent from an authored model's original people list.
+            // Admit their photographic identity through the same canonical owner as ordinary
+            // cast requests, so the settled redraw can actually pass its reference gate.
+            let mut state = locked(&self.inner.state);
+            for member in scene.cast.iter().filter(|member| {
+                !located
+                    .as_ref()
+                    .is_some_and(|source| source.cast.iter().any(|known| known.id == member.id))
+            }) {
+                state.canonical.admit_cast(&super::Member {
+                    id: member.id.clone(),
+                    role: super::role_of(member.role),
+                    life_stage: crate::gameplay::imagery::LifeStage::from_age(member.age),
+                    name: member.name.clone(),
+                    sprite: member.sprite.clone(),
+                    dossier_id: None,
+                    opposes: false,
+                    starting_attitude: None,
+                });
+            }
+            drop(state);
             state_images::observe(&mut book, view, &scene, self.inner.now());
         } else {
             state_images::reset_scene(&mut book, view);
+        }
+        let story_plate_started = book.state_images.pending.as_ref().is_some_and(|pending| {
+            Some((pending.state.clone(), pending.revision)) != story_pending_before
+        });
+        if story_plate_started {
+            let reason = located
+                .as_ref()
+                .and_then(|scene| crate::gameplay::adventure::scene_model::current_scene(scene))
+                .and_then(|snapshot| snapshot.changes.last().cloned())
+                .unwrap_or_else(|| "visible scene state changed".into());
+            record(
+                "gameplay.living_scene.plate_redraw_scheduled",
+                &[
+                    ("scene.key", view.scene_key.clone()),
+                    ("scene.reason", reason),
+                    ("scene.debounce", "existing_visible_state_settle".into()),
+                ],
+            );
         }
         let canonical_changed = located
             .as_ref()
             .and_then(|scene| PlateScene::for_view(view, scene))
             .is_some_and(|scene| {
                 if let Some(model) = &scene.authored_room {
-                    self.inner
-                        .admit_canonical_room(&scene.place_id, model, &scene.cast);
+                    self.inner.admit_canonical_room(
+                        &scene.place_id,
+                        model,
+                        &scene.cast,
+                        scene.authored_place_photo(),
+                    );
                 }
                 let faces = self.inner.hero_face_keys(&view.hero_names);
                 let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
                 book.current
                     .as_ref()
-                    .and_then(|current| current.id.as_ref())
+                    .and_then(|current| current.reference_id.as_ref())
                     .is_some_and(|current| *current != id)
+                    && book
+                        .current
+                        .as_ref()
+                        .and_then(|current| current.scene.as_ref())
+                        .is_some_and(|current| {
+                            current.speaker.as_ref().map(|speaker| &speaker.id)
+                                == scene.speaker.as_ref().map(|speaker| &speaker.id)
+                                && current
+                                    .identity_cast
+                                    .iter()
+                                    .map(|actor| &actor.id)
+                                    .eq(scene.identity_cast.iter().map(|actor| &actor.id))
+                        })
             });
         let scene_changed = book
             .current
@@ -1777,6 +2120,23 @@ impl Shared {
             .current
             .as_ref()
             .is_some_and(|current| current.graph_revision != view.graph_revision);
+        let activity_changed = located
+            .as_ref()
+            .and_then(|scene| PlateScene::for_view(view, scene))
+            .is_some_and(|scene| {
+                book.current
+                    .as_ref()
+                    .and_then(|current| current.scene.as_ref())
+                    .is_some_and(|current| {
+                        current.hero_activity != scene.hero_activity
+                            || current.scene_outcomes != scene.scene_outcomes
+                            || !current
+                                .identity_cast
+                                .iter()
+                                .map(|actor| &actor.id)
+                                .eq(scene.identity_cast.iter().map(|actor| &actor.id))
+                    })
+            });
         let runtime_speaker = located
             .as_ref()
             .and_then(|scene| PlateScene::for_view(view, scene))
@@ -1802,7 +2162,7 @@ impl Shared {
         // background every line, with a new composition and the figures gone (the owner,
         // 2026-10-14: "changes background too often where all the characters disappear").
         // Visible changes to a modelled scene's state are settled edits (state_images).
-        if scene_changed || party_changed || speaker_changed || canonical_changed {
+        if scene_changed || party_changed || canonical_changed {
             let held = if scene_changed {
                 None
             } else {
@@ -1812,7 +2172,11 @@ impl Shared {
                     .map_or(0, |current| current.graph_revision);
                 book.shown()
                     .map(|(key, placement)| (key, placement, revision))
-                    .or_else(|| book.current.as_ref().and_then(|current| current.held.clone()))
+                    .or_else(|| {
+                        book.current
+                            .as_ref()
+                            .and_then(|current| current.held.clone())
+                    })
             };
             let mut scene = located
                 .as_ref()
@@ -1871,6 +2235,7 @@ impl Shared {
                 .and_then(|id| book.request_started.get(id).copied());
             book.current = Some(Current {
                 scene_key: view.scene_key.clone(),
+                reference_id: id.clone(),
                 id,
                 scene: scene.clone(),
                 heroes: view.heroes.clone(),
@@ -1884,7 +2249,10 @@ impl Shared {
                 last_projection: None,
                 held,
             });
-            // The lobby has no plate; the opening plate is requested when that scene becomes current.
+            if scene_changed || party_changed {
+                self.note_arrival(&mut book);
+            }
+            // Lobby warm-up is driven by the checkpoint watch, before the story is shown.
             if !view.in_combat {
                 if let Some(scene) = &scene {
                     self.ensure(
@@ -1897,29 +2265,16 @@ impl Shared {
                     );
                 }
                 if scene.is_some() && (scene_changed || party_changed) {
-                    for mut next in next
-                        .iter()
-                        .take(MAXIMUM_SUCCESSORS)
-                        .filter_map(|next| PlateScene::for_view(view, next))
-                    {
-                        next.hero_names = view
-                            .hero_names
-                            .iter()
-                            .map(|(_, name)| name.clone())
-                            .collect();
-                        self.ensure(
-                            &mut book,
-                            &next,
-                            &view.heroes,
-                            &faces,
-                            view.graph_revision,
-                            scene.is_some(),
-                        );
-                    }
+                    self.replace_beat_ahead(&mut book, view, &next);
                 }
             }
             woke = true;
-        } else if (combat_changed || roll_changed || graph_changed)
+        } else if (combat_changed
+            || roll_changed
+            || graph_changed
+            || activity_changed
+            || speaker_changed
+            || story_plate_started)
             && let Some(current) = book.current.as_mut()
         {
             current.in_combat = view.in_combat;
@@ -1934,6 +2289,12 @@ impl Shared {
                     .iter()
                     .map(|(_, name)| name.clone())
                     .collect();
+                current.reference_id = Some(self.canonical_plate_id(
+                    &scene,
+                    &current.heroes,
+                    &current.faces,
+                    view.graph_revision,
+                ));
                 current.scene = Some(scene);
             }
             woke = true;
@@ -1952,10 +2313,11 @@ impl Shared {
                 self.ensure(&mut book, &scene, &heroes, &faces, graph_revision, false);
             }
         }
+        self.poll_ahead_locked(&mut book);
         let covers = book.covers();
         drop(book);
         self.inner.set_plate_covers(covers);
-        if woke {
+        if woke || story_plate_started {
             self.wake();
         }
     }
@@ -1991,10 +2353,17 @@ impl Shared {
         ahead: bool,
     ) {
         if let Some(model) = &scene.authored_room {
-            self.inner
-                .admit_canonical_room(&scene.place_id, model, &scene.cast);
+            self.inner.admit_canonical_room(
+                &scene.place_id,
+                model,
+                &scene.cast,
+                scene.authored_place_photo(),
+            );
         }
         let id = self.canonical_plate_id(scene, heroes, faces, graph_revision);
+        if ahead {
+            book.ahead.bind(scene, &id);
+        }
         if book.entries.contains_key(&id) {
             return;
         }
@@ -2006,7 +2375,7 @@ impl Shared {
             self.inner
                 .canonical_npc_status(identity.id.strip_prefix("npc:").unwrap_or(&identity.id))
         }));
-        if let Some(revision) = &scene.room_revision {
+        if let Some(revision) = scene.generated_room_revision() {
             dependencies.push(
                 self.inner
                     .canonical_room_status_at(&scene.place_id, revision),
@@ -2181,7 +2550,56 @@ impl Shared {
     }
 
     fn apply(&self, scene_key: &str, scene: &mut rpc::GameplayScene) -> Option<u64> {
+        self.apply_at(scene_key, scene, self.inner.now())
+    }
+
+    fn apply_for_player(&self, scene_key: &str, scene: &mut rpc::GameplayScene) -> Option<u64> {
         let book = locked(&self.book);
+        let current = book.current.as_ref()?;
+        if current.scene_key != scene_key || current.in_combat {
+            return None;
+        }
+        scene.plate_update_pending = book.current_update_pending(scene_key);
+        let projected = book
+            .presented
+            .as_ref()
+            .filter(|shown| shown.scene_key == scene_key)
+            .map(|shown| (shown.key.clone(), shown.placement.clone(), shown.revision));
+        let selected = projected
+            .or_else(|| {
+                book.shown().map(|(key, placement)| {
+                    (
+                        key,
+                        placement,
+                        book.state_images
+                            .baked_revision
+                            .unwrap_or(current.graph_revision),
+                    )
+                })
+            })
+            .or_else(|| current.held.clone());
+        if let Some((key, placement, revision)) = selected {
+            scene.live_plate = key.path();
+            scene.plate_layout = placement.as_ref().map(wire_layout);
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            return Some(revision);
+        }
+        scene.plate_state = match book.current_entry() {
+            Some(Entry::Failed) => rpc::PlateState::Failed,
+            Some(Entry::NotPlanned) => rpc::PlateState::Unavailable,
+            _ if current.unplated => rpc::PlateState::Unavailable,
+            _ => rpc::PlateState::Pending,
+        } as i32;
+        None
+    }
+
+    fn apply_at(
+        &self,
+        scene_key: &str,
+        scene: &mut rpc::GameplayScene,
+        now: Duration,
+    ) -> Option<u64> {
+        let mut book = locked(&self.book);
         let Some(current) = &book.current else {
             return None;
         };
@@ -2189,18 +2607,62 @@ impl Shared {
             return None;
         }
         scene.plate_update_pending = book.current_update_pending(scene_key);
-        if book.direct.shown.is_some()
+        if (book.direct.shown.is_some()
+            || matches!(book.current_entry(), Some(Entry::Ready { .. })))
             && let Some((key, placement)) = book.shown()
         {
-            scene.live_plate = key.path();
-            scene.plate_layout = placement.as_ref().map(wire_layout);
-            scene.plate_state = rpc::PlateState::Ready as i32;
-            return Some(
-                book.state_images
-                    .baked_revision
-                    .unwrap_or(current.graph_revision),
-            );
+            let revision = book
+                .state_images
+                .baked_revision
+                .unwrap_or(current.graph_revision);
+            let held = book.presented.as_ref().is_some_and(|shown| {
+                shown.scene_key == scene_key
+                    && shown.key != key
+                    && now.saturating_sub(shown.since) < Duration::from_secs(10)
+            });
+            book.presentation_held = held;
+            // Geometry can arrive after the bitmap was presented. Refresh that same image's
+            // anchors without restarting its reading clock or waiting for another photograph.
+            if let Some(shown) = book.presented.as_mut()
+                && shown.scene_key == scene_key
+                && shown.key == key
+            {
+                shown.placement = placement.clone();
+            }
+            if !held
+                && book
+                    .presented
+                    .as_ref()
+                    .is_none_or(|shown| shown.scene_key != scene_key || shown.key != key)
+            {
+                let effective = key.clone();
+                book.presented = Some(PresentedPlate {
+                    scene_key: scene_key.to_owned(),
+                    key,
+                    placement,
+                    revision,
+                    since: now,
+                });
+                record(
+                    "gameplay.living_scene.plate_reading_clock",
+                    &[
+                        ("scene.key", scene_key.to_owned()),
+                        ("shown_at_ms", now.as_millis().to_string()),
+                        ("minimum_read_ms", "10000".into()),
+                    ],
+                );
+                book.state_images.note_effective_projection(&effective, now);
+            }
+            book.state_images.note_initial_projection(now);
+            if let Some(shown) = &book.presented {
+                scene.live_plate = shown.key.path();
+                scene.plate_layout = shown.placement.as_ref().map(wire_layout);
+                scene.plate_state = rpc::PlateState::Ready as i32;
+                scene.plate_update_pending |= held;
+                return Some(shown.revision);
+            }
         }
+        let current = book.current.as_ref()?;
         match book.current_entry() {
             Some(Entry::Ready { .. }) => {
                 if let Some((key, placement)) = book.shown() {
@@ -2360,13 +2822,28 @@ impl Shared {
 
     /// The worker: takes requests, owns every render task, and every tick looks for a lasting face
     /// to edit into the current plate.
-    async fn run(self: Arc<Self>, mut queue: mpsc::Receiver<Job>) {
+    async fn run(
+        self: Arc<Self>,
+        mut queue: mpsc::Receiver<Job>,
+        mut checkpoints: tokio::sync::watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) {
+        let checkpoint = checkpoints.borrow_and_update().clone();
+        self.plan_checkpoint(&checkpoint);
+        let mut checkpoints_open = true;
         let mut ticker = tokio::time::interval(POLL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut tasks: JoinSet<Done> = JoinSet::new();
         loop {
             tokio::select! {
-                Some(job) = queue.recv() => self.spawn(&mut tasks, job),
+                changed = checkpoints.changed(), if checkpoints_open => {
+                    if changed.is_ok() {
+                        let checkpoint = checkpoints.borrow_and_update().clone();
+                        self.plan_checkpoint(&checkpoint);
+                    } else {
+                        checkpoints_open = false;
+                    }
+                }
+                Some(job) = queue.recv(), if tasks.len() < QUEUE_CAPACITY => self.spawn(&mut tasks, job),
                 Some(done) = tasks.join_next(), if !tasks.is_empty() => {
                     // A render task that panicked or was cancelled has nothing to report.
                     if let Ok(done) = done {
@@ -2374,6 +2851,7 @@ impl Shared {
                     }
                 }
                 _ = ticker.tick() => {
+                    self.poll_ahead_locked(&mut locked(&self.book));
                     self.poll_state_images();
                     self.poll_face();
                 },
@@ -2400,13 +2878,38 @@ impl Shared {
                 ahead,
             } => {
                 tasks.spawn(async move {
-                    if ahead {
-                        tokio::time::sleep(AHEAD_DELAY).await;
-                    }
+                    let cancelled = if ahead {
+                        tokio::select! {
+                            () = tokio::time::sleep(AHEAD_DELAY) => false,
+                            () = shared.wait_until_unwanted(&id, &scene) => true,
+                        }
+                    } else {
+                        false
+                    };
                     let started = tokio::time::Instant::now();
-                    let result = shared
-                        .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, ahead)
-                        .await;
+                    if cancelled || (ahead && !shared.ahead_matches(&id, &scene)) {
+                        return Done::Cancelled;
+                    }
+                    let rendering = shared.render_fresh(
+                        &scene,
+                        &spec,
+                        &heroes,
+                        &faces,
+                        &id,
+                        graph_revision,
+                        ahead,
+                    );
+                    let result = if ahead {
+                        tokio::select! {
+                            result = rendering => result,
+                            () = shared.wait_until_unwanted(&id, &scene) => Err(ImageFailure::Interrupted),
+                        }
+                    } else {
+                        rendering.await
+                    };
+                    if ahead && !shared.ahead_matches(&id, &scene) {
+                        return Done::Cancelled;
+                    }
                     let result = result.map(|(key, placement, locate)| {
                         // The plate is shown with its predicted layout as soon as it lands; the
                         // measured one follows. A full queue keeps the prediction.
@@ -2486,13 +2989,7 @@ impl Shared {
         }
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
         let Some(name) = stem.strip_prefix("sprite-") else {
-            return (
-                self.inner
-                    .load(sprite.to_owned())
-                    .await
-                    .ok(),
-                None,
-            );
+            return (self.inner.load(sprite.to_owned()).await.ok(), None);
         };
         let mut figure = None;
         for candidate in [
@@ -2505,11 +3002,7 @@ impl Shared {
                 break;
             }
         }
-        let face = self
-            .inner
-            .load(format!("portrait-{name}"))
-            .await
-            .ok();
+        let face = self.inner.load(format!("portrait-{name}")).await.ok();
         (figure, face)
     }
 
@@ -2577,7 +3070,7 @@ impl Shared {
                     .await
                     .ok_or(ImageFailure::Interrupted)?;
                 let entity = format!("{:x}", sha2::Sha256::digest(entity.as_bytes()));
-                Ok(Some((format!("hero:{entity}"), figure)))
+                Ok(Some((format!("hero:{seat}:{entity}"), figure)))
             }
             super::canonical::ReferenceStatus::Pending => Err(ImageFailure::Interrupted),
             super::canonical::ReferenceStatus::Failed(failure) => Err(failure),
@@ -2592,11 +3085,11 @@ impl Shared {
         &self,
         scene: &PlateScene,
         heroes: &[u8],
-    ) -> Result<(ReferenceImage, String, Vec<FluxPerson>), ImageFailure> {
+    ) -> Result<PlateIdentities, ImageFailure> {
         let mut wanted = scene.identity_cast.clone();
         let mut cast = Vec::new();
         // Each cell's canonical ID with the person it shows; cells are laid out in ID order.
-        let mut cells: Vec<(String, FluxPerson)> = Vec::new();
+        let mut cells: Vec<(String, FluxPerson, String)> = Vec::new();
         for (index, art) in heroes.iter().enumerate() {
             if let Some((id, figure)) = self.canonical_hero_identity(scene, *art).await? {
                 let mut person = hero_person(scene, index);
@@ -2605,7 +3098,21 @@ impl Shared {
                     .canonical_hero_name(*art)
                     .ok_or(ImageFailure::InvalidRequest)?;
                 person.appearance = self.inner.canonical_hero_locator(*art);
-                cells.push((id.clone(), person));
+                let mut model_heroes = scene
+                    .snapshot
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|snapshot| &snapshot.model.people)
+                    .filter(|candidate| candidate.role == "hero" && candidate.name == person.name);
+                // Runtime party attachment uses the accepted name as the canonical holder ID.
+                // A detached fixture/import may carry another explicit ID; preserve that ID.
+                let holder_id = model_heroes
+                    .next()
+                    .map_or_else(|| person.name.clone(), |hero| hero.id.clone());
+                if model_heroes.next().is_some() {
+                    return Err(ImageFailure::InvalidRequest);
+                }
+                cells.push((id.clone(), person, holder_id));
                 cast.push(CastIdentity { id, figure });
             } else {
                 return Err(ImageFailure::InvalidRequest);
@@ -2645,12 +3152,19 @@ impl Shared {
                 );
                 return Err(ImageFailure::InvalidRequest);
             };
-            cells.push((id.clone(), flux_person(scene, canonical_id, &name)));
+            cells.push((
+                id.clone(),
+                flux_person(scene, canonical_id, &name),
+                canonical_id.to_owned(),
+            ));
             cast.push(CastIdentity { id, figure });
         }
         // The same ID order cast_sheet lays its cells out in.
         cells.sort_by(|left, right| left.0.cmp(&right.0));
-        let sheet_people: Vec<FluxPerson> = cells.into_iter().map(|(_, person)| person).collect();
+        let (sheet_people, holder_ids) = cells
+            .into_iter()
+            .map(|(_, person, holder)| (person, holder))
+            .unzip();
         let sources: Vec<serde_json::Value> = cast.iter().map(|identity| serde_json::json!({"cast_id": identity.id, "source_sha256": identity.figure.sha256})).collect();
         let result = tokio::task::spawn_blocking(move || cast_sheet(cast))
             .await
@@ -2676,7 +3190,52 @@ impl Shared {
                 ("reference.status", "complete_cast".to_owned()),
             ],
         );
-        Ok((result.0, result.1, sheet_people))
+        let mut sheet_heroes = heroes.to_vec();
+        sheet_heroes.sort_unstable();
+        let hero_positions = sheet_heroes
+            .iter()
+            .enumerate()
+            .map(|(index, art)| format!("Hero {art} = photograph {}", index + 1))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Ok(PlateIdentities {
+            sheet: result.0,
+            legend: format!("{}; {hero_positions}", result.1),
+            people: sheet_people,
+            holder_ids,
+        })
+    }
+
+    /// Choose an interleaved screen composition and state it in the image request itself.
+    /// Identity-sheet and locator-batch order are never evidence of screen position.
+    fn spatial_staging(
+        &self,
+        scene: &PlateScene,
+        heroes: &[u8],
+    ) -> Result<Vec<crate::gameplay::imagery::StagedPerson>, ImageFailure> {
+        let mut staged = Vec::new();
+        for index in 0..heroes.len().max(scene.identity_cast.len()) {
+            if let Some(art) = heroes.get(index) {
+                staged.push(crate::gameplay::imagery::StagedPerson {
+                    locator_id: format!("hero-{art}"),
+                    reference_id: format!("Hero {art}"),
+                    name: self
+                        .inner
+                        .canonical_hero_name(*art)
+                        .ok_or(ImageFailure::InvalidRequest)?,
+                    hero: true,
+                });
+            }
+            if let Some(actor) = scene.identity_cast.get(index) {
+                staged.push(crate::gameplay::imagery::StagedPerson {
+                    locator_id: format!("npc-{index}"),
+                    reference_id: actor.id.clone(),
+                    name: actor.name.clone(),
+                    hero: false,
+                });
+            }
+        }
+        Ok(staged)
     }
 
     /// A plate composed from the room photograph, the identity sheet and the speaker's portrait.
@@ -2690,29 +3249,25 @@ impl Shared {
         direction: Option<&str>,
         override_face: Option<Face>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
-        let (sheet, legend, people) = self.identity_sheet(scene, heroes).await?;
+        let PlateIdentities {
+            sheet,
+            legend,
+            people,
+            holder_ids,
+        } = self.identity_sheet(scene, heroes).await?;
+        let staging = self.spatial_staging(scene, heroes)?;
         let edit_harbor = scene.exterior
             && scene.place_id == "salt-quay"
             && scene.asset.contains(art_contract::HARBOR_PHOTO);
-        let base = if edit_harbor {
-            "scene-salt-quay-candid".to_owned()
+        let place = if let Some(photo) = scene.authored_place_photo() {
+            self.inner.load(photo.to_owned()).await
+        } else if let Some(revision) = scene.generated_room_revision() {
+            self.inner
+                .canonical_room_reference_at(&scene.place_id, revision)
+                .await
+                .ok_or(ImageFailure::Interrupted)
         } else {
-            scene.asset.clone()
-        };
-        let canonical = match scene.room_revision.as_deref() {
-            Some(revision) => {
-                self.inner
-                    .canonical_room_reference_at(&scene.place_id, revision)
-                    .await
-            }
-            None => None,
-        };
-        let place = match canonical {
-            Some(reference) => Ok(reference),
-            None if scene.room_revision.is_some() => {
-                return Err(ImageFailure::Interrupted);
-            }
-            None => self.inner.load(base).await,
+            self.inner.load(scene.asset.clone()).await
         };
         let (place, style_only) = match place {
             Ok(place) => (place, false),
@@ -2747,6 +3302,32 @@ impl Shared {
                     .map_or_else(|| speaker.id.clone(), |identity| identity.name.clone());
                 flux_person(scene, &speaker.id, &name)
             });
+            let hands = people
+                .iter()
+                .zip(&holder_ids)
+                .map(|(_, holder)| {
+                    FluxPerson::hands_for_holder(
+                        scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                        holder,
+                    )
+                })
+                .collect::<Vec<_>>();
+            // Sheet slots bind the compact base clauses; keep verbose canonical holder IDs in
+            // the judge context rather than spending the 1,800-character composition budget.
+            let custody = people
+                .iter()
+                .zip(&holder_ids)
+                .zip(&hands)
+                .map(|((person, holder), hands)| {
+                    format!("{}: {hands} [holder_id={holder}]", person.name)
+                })
+                .collect::<Vec<_>>();
+            let mut people = people;
+            let mut sheet_heroes = heroes.to_vec();
+            sheet_heroes.sort_unstable();
+            for (index, person) in people.iter_mut().take(heroes.len()).enumerate() {
+                person.name = format!("Hero {} ({})", sheet_heroes[index], person.name);
+            }
             let cast = FluxCast {
                 sheet: people,
                 speaker,
@@ -2759,15 +3340,39 @@ impl Shared {
                     .map_err(|_| ImageFailure::InvalidRequest)?,
                 None => String::new(),
             };
-            let prompt = flux_scene_plate(
-                self.inner.rating,
-                spec.camera,
-                scene.place.as_ref(),
-                &cast,
-                &facts,
-                override_face.map(|face| (face.expression, face.tier)),
-            )
-            .map_err(|_| ImageFailure::InvalidRequest)?;
+            let face = override_face.map(|face| (face.expression, face.tier));
+            let prompt = if scene.snapshot.is_some() {
+                cast.plate_with_hands(
+                    self.inner.rating,
+                    spec.camera,
+                    scene.place.as_ref(),
+                    &facts,
+                    face,
+                    (heroes.len(), &hands),
+                )
+            } else {
+                flux_scene_plate_for_party(
+                    self.inner.rating,
+                    spec.camera,
+                    scene.place.as_ref(),
+                    &cast,
+                    &facts,
+                    face,
+                    heroes.len(),
+                )
+            }
+            .map_err(|_| ImageFailure::InvalidRequest)?
+            .with_scene_hand_custody(serde_json::json!(custody).to_string());
+            let prompt = prompt
+                .with_scene_context(
+                    &arrival_plate_context(scene),
+                    scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                )
+                .map_err(|_| ImageFailure::InvalidRequest)?;
+            let prompt = photo_context(scene, scene.with_activity(prompt)?)?;
+            let prompt = prompt
+                .with_staging_order(staging)
+                .map_err(|_| ImageFailure::InvalidRequest)?;
             let prompt = match direction {
                 Some(direction) => prompt.with_development_direction(direction),
                 None => prompt,
@@ -2835,11 +3440,38 @@ impl Shared {
                 )
             })
             .collect::<Vec<_>>();
+        let hero_gaze = if heroes.len() >= 4 {
+            "All party heroes stand in two loose groups facing each other in profile or three-quarter view, leaving the speaker visible between them"
+        } else if heroes.len() >= 2 {
+            "Party heroes face each other in profile or three-quarter view as if talking to each other, not all turned toward the speaker"
+        } else {
+            "Party heroes are seen from behind, facing into the scene"
+        };
         let legend = format!(
-            "{legend}. Public hero locators (quoted data): {}. Party heroes are seen from behind, facing into the scene.",
+            "{legend}. Public hero locators (quoted data): {}. Camera pulled about 5 feet (1.5 metres) further back for a wider shot. {hero_gaze}.",
             serde_json::to_string(&public_heroes).map_err(|_| ImageFailure::InvalidRequest)?
         );
-        let prompt = prompt.with_cast_sheet(2, &legend);
+        let party = SceneParty::new(heroes.len(), 2).map_err(|_| ImageFailure::InvalidRequest)?;
+        let prompt = prompt
+            .with_cast_hands(
+                &people,
+                &holder_ids,
+                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+            )
+            .map_err(|_| ImageFailure::InvalidRequest)?
+            .with_cast_sheet(2, &legend)
+            .with_canonical_binding(&party.instruction())
+            .with_scene_party(party);
+        let prompt = prompt
+            .with_scene_context(
+                &arrival_plate_context(scene),
+                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+            )
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        let prompt = photo_context(scene, scene.with_activity(prompt)?)?;
+        let prompt = prompt
+            .with_staging_order(staging)
+            .map_err(|_| ImageFailure::InvalidRequest)?;
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(direction),
             None => prompt,
@@ -2913,6 +3545,7 @@ impl Shared {
             }
             let actors = scene.locator_actors();
             let predicted = PlatePlacement {
+                figure_masks: Vec::new(),
                 speaker: speaker.layout,
                 heroes: Vec::new(),
                 actors: Vec::new(),
@@ -2969,7 +3602,7 @@ impl Shared {
         let stored = serde_json::from_slice::<StoredPlacement>(&note).ok()?;
         if stored.actor_reference_sha256 != reference_hashes(references)
             || actors.iter().any(|(id, _)| !stored.actor_ids.contains(id))
-            || stored.locator_revision != 2
+            || stored.locator_revision != 3
         {
             return None;
         }
@@ -3020,6 +3653,9 @@ impl Shared {
             .record();
         }
         let known = locked(&self.book).image_layouts.get(key.as_str()).cloned();
+        // This map is populated only after head lookup and the current SAM attempt finish.
+        // Initial predictions live in Entry/Locate, never here. A failed optional mask lookup
+        // still counts as measured in this process and must not repeat all head calls.
         if let Some(known) = known {
             record_actor_heads(key, actors, &known, "in_process", 0, None);
             return known;
@@ -3136,6 +3772,75 @@ impl Shared {
                 ],
             );
         }
+        // All head batches have finished. SAM has its own bounded lifetime, outside their
+        // shared 25-second deadline, and still runs when every head lookup failed.
+        let staging = self.inner.imagery.plate_staging(key).await;
+        let target_ids = targets
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let staged_ids = staging
+            .iter()
+            .map(|person| person.locator_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let staging_order_known = !staging.is_empty()
+            && staging.len() == targets.len()
+            && staged_ids.len() == staging.len()
+            && staged_ids == target_ids
+            && staging
+                .iter()
+                .all(|person| person.hero == person.locator_id.starts_with("hero-"));
+        let ordered_ids: Vec<_> = if staging_order_known {
+            staging
+                .iter()
+                .map(|person| person.locator_id.as_str())
+                .collect()
+        } else {
+            targets.iter().map(|(id, _)| id.as_str()).collect()
+        };
+        let cast: Vec<_> = ordered_ids
+            .iter()
+            .map(|id| crate::gameplay::imagery::figure_masks::StagedFigure {
+                id,
+                hero: id.starts_with("hero-"),
+            })
+            .collect();
+        // Only the exact generation request's explicit screen order permits spatial inference.
+        // Reviewed photographs and older cached images keep the unordered named-head fallback.
+        let figures = tokio::time::timeout(
+            Duration::from_secs(25),
+            self.inner.imagery.figure_geometry(
+                key,
+                &located,
+                &cast,
+                spec.heroes.len(),
+                staging_order_known,
+            ),
+        )
+        .await
+        .unwrap_or(Err(ImageFailure::DeadlineExceeded));
+        let figure_masks = match figures {
+            Ok(figures) => figures
+                .into_iter()
+                .filter_map(|mut figure| {
+                    if let Some(index) = figure.id.strip_prefix("npc-") {
+                        let (actor_id, _) = actors.get(index.parse::<usize>().ok()?)?;
+                        figure.id = format!("npc:{actor_id}");
+                    }
+                    Some(figure)
+                })
+                .collect(),
+            Err(failure) => {
+                record(
+                    "gameplay.living_scene.figure_masks_unavailable",
+                    &[
+                        ("image_key", key.as_str().to_owned()),
+                        ("failure", failure.label().to_owned()),
+                    ],
+                );
+                Vec::new()
+            }
+        };
         let focus_head = located.iter().find(|head| head.id == focus_id);
         let heroes = spec
             .heroes
@@ -3173,6 +3878,7 @@ impl Shared {
             })
             .collect();
         let placement = PlatePlacement {
+            figure_masks,
             actors: actor_heads,
             speaker: focus_head.map_or(speaker.layout, |head| {
                 shot::measured_layout(
@@ -3195,7 +3901,7 @@ impl Shared {
         let mut stored = StoredPlacement::of(&placement);
         stored.actor_ids = actors.iter().map(|(id, _)| id.clone()).collect();
         stored.actor_reference_sha256 = reference_hashes(actor_references);
-        stored.locator_revision = 2;
+        stored.locator_revision = 3;
         if measured_all_batches && let Ok(note) = serde_json::to_vec(&stored) {
             self.inner.imagery.write_note(key, note).await;
         }
@@ -3345,11 +4051,42 @@ impl Shared {
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
         let prompt = {
-            let (sheet, legend, _) = self.identity_sheet(scene, heroes).await?;
+            let PlateIdentities {
+                sheet,
+                legend,
+                people,
+                holder_ids,
+            } = self.identity_sheet(scene, heroes).await?;
             references.push(sheet);
-            prompt.with_cast_sheet(references.len(), &legend)
+            let party = SceneParty::new(heroes.len(), references.len())
+                .map_err(|_| ImageFailure::InvalidRequest)?;
+            prompt
+                .with_cast_hands(
+                    &people,
+                    &holder_ids,
+                    scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                )
+                .map_err(|_| ImageFailure::InvalidRequest)?
+                .with_cast_sheet(references.len(), &legend)
+                .with_canonical_binding(&party.instruction())
+                .with_scene_party(party)
         };
         let direction = locked(&self.book).direct.keep.clone();
+        let prompt = prompt
+            .with_scene_context(
+                &arrival_plate_context(scene),
+                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+            )
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        let prompt = photo_context(scene, scene.with_activity(prompt)?)?;
+        let staging = self.inner.imagery.plate_staging(base).await;
+        let prompt = if staging.is_empty() {
+            prompt
+        } else {
+            prompt
+                .with_staging_order(staging)
+                .map_err(|_| ImageFailure::InvalidRequest)?
+        };
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(&direction),
             None => prompt,
@@ -3371,6 +4108,9 @@ impl Shared {
     /// Records a finished render. Every generation is logged with its time; the run manifest
     /// holds its cost.
     fn finish(&self, done: Done) {
+        if matches!(done, Done::Cancelled) {
+            return;
+        }
         if let Done::State(done) = done {
             self.finish_state_image(done);
             return;
@@ -3386,7 +4126,7 @@ impl Shared {
             return;
         }
         let (kind, elapsed, outcome) = match &done {
-            Done::State(_) => unreachable!("handled above"),
+            Done::Cancelled | Done::State(_) => unreachable!("handled above"),
             Done::Directed { .. } => unreachable!("handled above"),
             Done::Fresh {
                 elapsed, result, ..
@@ -3411,7 +4151,7 @@ impl Shared {
         );
         let mut book = locked(&self.book);
         match done {
-            Done::State(_) => unreachable!("handled above"),
+            Done::Cancelled | Done::State(_) => unreachable!("handled above"),
             Done::Directed { .. } => unreachable!("handled above"),
             Done::Located {
                 id, key, placement, ..
@@ -3436,6 +4176,7 @@ impl Shared {
                 if book.state_images.refresh.as_deref() == Some(id.as_str()) {
                     state_images::finish_chain_refresh(&mut book, &id, result, self.inner.now());
                 } else {
+                    self.finish_ahead(&mut book, &id, result.is_ok(), tokio::time::Instant::now());
                     let entry = match result {
                         Ok((key, placement)) => Entry::Ready { key, placement },
                         Err(_) => Entry::Failed,
@@ -3447,7 +4188,8 @@ impl Shared {
                     // Speech changes the graph revision while the room's plate is still loading.
                     // Only scene/party identity supersedes that plate, never a speaker's expression.
                     if (current_graph || ahead) && book.entries.contains_key(&id) {
-                        book.entries.insert(id, entry);
+                        book.entries.insert(id.clone(), entry);
+                        self.note_arrival_ready(&mut book, &id, tokio::time::Instant::now());
                         if current_graph {
                             book.state_images.baked_revision = Some(graph_revision);
                         }

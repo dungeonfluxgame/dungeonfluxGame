@@ -2,7 +2,7 @@
 //!
 //! The image edit takes at most four reference images, and a plate needs the heroes, the speaker
 //! and the place. So the heroes' standing figures (transparent art) are flattened onto plain grey
-//! and placed side by side in one image, left to right in the order given; the plate prompt names
+//! and placed in reading order in one image, wrapping wide parties into rows of three; the prompt names
 //! each hero by their position on the sheet. The composition is deterministic, so the same heroes
 //! always give the same bytes and the same cache key.
 
@@ -20,9 +20,9 @@ const GREY: u8 = 128;
 /// Neutral grey between the photographs: they read as separate photographs, not one group pose.
 const GAP: u32 = 24;
 const JPEG_QUALITY: u8 = 90;
-/// Each figure is scaled to this height; the sheet is as wide as the figures side by side.
+/// Each figure fits within this height; wide sheets wrap rather than dropping figures.
 const FIGURE_HEIGHT: u32 = 1024;
-const MAXIMUM_FIGURES: usize = 3;
+const MAXIMUM_FIGURES: usize = 6;
 const MAXIMUM_SHEET_WIDTH: u32 = 4096;
 
 /// Why a sheet could not be made.
@@ -59,14 +59,15 @@ fn flatten(image: &DynamicImage) -> RgbImage {
     flat
 }
 
-/// Composes `figures` left to right onto one grey sheet and encodes it as a JPEG reference.
+/// Composes figures in reading order; a wide party wraps into rows of at most three.
 pub(in crate::gameplay) fn party_sheet(
     figures: &[ReferenceImage],
 ) -> Result<ReferenceImage, SheetError> {
     if figures.is_empty() || figures.len() > MAXIMUM_FIGURES {
         return Err(SheetError::FigureCount);
     }
-    let mut scaled = Vec::with_capacity(figures.len());
+    let mut pictures = Vec::with_capacity(figures.len());
+    let mut row_width = 0_u64;
     for figure in figures {
         let decoded =
             image::load_from_memory_with_format(&figure.bytes, container_of(figure.format))
@@ -75,26 +76,44 @@ pub(in crate::gameplay) fn party_sheet(
         if flat.width() == 0 || flat.height() == 0 {
             return Err(SheetError::Decode);
         }
-        let width =
+        row_width +=
             (u64::from(flat.width()) * u64::from(FIGURE_HEIGHT) / u64::from(flat.height())).max(1);
-        let width = u32::try_from(width).map_err(|_| SheetError::Decode)?;
-        scaled.push(imageops::resize(
-            &flat,
-            width,
-            FIGURE_HEIGHT,
-            imageops::FilterType::Triangle,
-        ));
+        pictures.push(flat);
     }
-    let total: u32 = scaled.iter().map(RgbImage::width).sum::<u32>()
-        + GAP * u32::try_from(scaled.len().saturating_sub(1)).unwrap_or(0);
-    if total > MAXIMUM_SHEET_WIDTH {
-        return Err(SheetError::Encode);
-    }
-    let mut sheet = RgbImage::from_pixel(total, FIGURE_HEIGHT, Rgb([GREY; 3]));
-    let mut left = 0;
-    for figure in &scaled {
-        imageops::replace(&mut sheet, figure, i64::from(left), 0);
-        left += figure.width() + GAP;
+    row_width += u64::from(GAP) * (figures.len() as u64 - 1);
+    let columns = if row_width > u64::from(MAXIMUM_SHEET_WIDTH) {
+        figures.len().min(3)
+    } else {
+        figures.len()
+    };
+    let rows = figures.len().div_ceil(columns);
+    let maximum_width = (MAXIMUM_SHEET_WIDTH - GAP * (columns as u32 - 1)) / columns as u32;
+    let scaled: Vec<RgbImage> = pictures
+        .iter()
+        .map(|picture| {
+            let width = (u64::from(picture.width()) * u64::from(FIGURE_HEIGHT)
+                / u64::from(picture.height()))
+            .clamp(1, u64::from(maximum_width)) as u32;
+            let height = (u64::from(picture.height()) * u64::from(width)
+                / u64::from(picture.width()))
+            .clamp(1, u64::from(FIGURE_HEIGHT)) as u32;
+            imageops::resize(picture, width, height, imageops::FilterType::Triangle)
+        })
+        .collect();
+    let width = scaled
+        .chunks(columns)
+        .map(|row| row.iter().map(RgbImage::width).sum::<u32>() + GAP * (row.len() as u32 - 1))
+        .max()
+        .ok_or(SheetError::FigureCount)?;
+    let height = rows as u32 * FIGURE_HEIGHT + (rows as u32 - 1) * GAP;
+    let mut sheet = RgbImage::from_pixel(width, height, Rgb([GREY; 3]));
+    for (row, figures) in scaled.chunks(columns).enumerate() {
+        let mut left = 0;
+        for figure in figures {
+            let top = row as u32 * (FIGURE_HEIGHT + GAP) + (FIGURE_HEIGHT - figure.height()) / 2;
+            imageops::replace(&mut sheet, figure, i64::from(left), i64::from(top));
+            left += figure.width() + GAP;
+        }
     }
     let mut encoded = Vec::new();
     JpegEncoder::new_with_quality(&mut Cursor::new(&mut encoded), JPEG_QUALITY)
@@ -177,6 +196,50 @@ mod tests {
     }
 
     #[test]
+    fn six_figures_wrap_to_two_rows_of_three_without_exceeding_the_sheet_bound() {
+        let colors = [
+            [200, 0, 0],
+            [0, 200, 0],
+            [0, 0, 200],
+            [200, 200, 0],
+            [0, 200, 200],
+            [200, 0, 200],
+        ];
+        let figures = colors.map(|color| figure(32, 32, 255, color));
+        let sheet = party_sheet(&figures).unwrap();
+        let decoded = image::load_from_memory(&sheet.bytes).unwrap().to_rgb8();
+        assert_eq!(decoded.width(), 3 * FIGURE_HEIGHT + 2 * GAP);
+        assert_eq!(decoded.height(), 2 * FIGURE_HEIGHT + GAP);
+        assert!(decoded.width() <= MAXIMUM_SHEET_WIDTH);
+        for (index, expected) in colors.iter().enumerate() {
+            let x = index as u32 % 3 * (FIGURE_HEIGHT + GAP) + FIGURE_HEIGHT / 2;
+            let y = index as u32 / 3 * (FIGURE_HEIGHT + GAP) + FIGURE_HEIGHT / 2;
+            let pixel = decoded.get_pixel(x, y).0;
+            assert!(
+                pixel
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| actual.abs_diff(*expected) < 12),
+                "figure {index}: {pixel:?}"
+            );
+        }
+        let wide = vec![figure(100, 10, 255, [40, 80, 160]); 6];
+        let wide = party_sheet(&wide).unwrap();
+        let decoded = image::load_from_memory(&wide.bytes).unwrap();
+        assert!(decoded.width() <= MAXIMUM_SHEET_WIDTH);
+        assert_eq!(decoded.height(), 2 * FIGURE_HEIGHT + GAP);
+    }
+
+    #[test]
+    fn six_narrow_figures_keep_one_row_when_it_fits() {
+        let figures = vec![figure(10, 20, 255, [40, 80, 160]); 6];
+        let sheet = party_sheet(&figures).unwrap();
+        let decoded = image::load_from_memory(&sheet.bytes).unwrap();
+        assert_eq!(decoded.width(), 6 * 512 + 5 * GAP);
+        assert_eq!(decoded.height(), FIGURE_HEIGHT);
+    }
+
+    #[test]
     fn figures_stand_side_by_side_on_grey_in_the_order_given() {
         let sheet = party_sheet(&[
             figure(100, 200, 255, [200, 0, 0]),
@@ -234,7 +297,7 @@ mod tests {
         assert_eq!(party_sheet(&[]).unwrap_err(), SheetError::FigureCount);
         let one = figure(10, 20, 255, [1, 2, 3]);
         assert_eq!(
-            party_sheet(&[one.clone(), one.clone(), one.clone(), one.clone()]).unwrap_err(),
+            party_sheet(&vec![one; 7]).unwrap_err(),
             SheetError::FigureCount
         );
         let broken = ReferenceImage::new(ImageFormat::Png, Bytes::from_static(b"not an image"));

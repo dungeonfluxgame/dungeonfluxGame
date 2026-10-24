@@ -27,6 +27,7 @@ use crate::health_tier::{Vitals, tier_of};
 // PLAY-V09: scene plates (the whole scene as one composed picture), made just in time.
 mod canonical;
 mod plates;
+pub(super) use plates::ahead::Source as PlateAheadSource;
 
 use super::{
     adventure::{dossier::Attitude, setting::SettingKind},
@@ -403,7 +404,6 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
                 .party
                 .iter()
                 .enumerate()
-                .take(shot::MAXIMUM_HEROES)
                 .filter(|(_, member)| member.character_ready)
                 .map(|(index, member)| (format!("hero-{}", index + 1), member.name.clone()))
                 .collect()
@@ -503,7 +503,6 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
                     .party
                     .iter()
                     .enumerate()
-                    .take(2)
                     .filter(|(_, member)| member.character_ready && member.maximum_hit_points > 0)
                     .map(|(index, member)| StageHero {
                         index,
@@ -1056,9 +1055,8 @@ pub(super) struct LivingScenes {
     last_graph_revision: Arc<Mutex<Option<u64>>>,
 }
 
-/// The heroes' pictures, by name, on a view's journey. Every hero in `hero_faces` is
-/// published, hurt or not; an empty sprite or battle sprite means no live picture exists yet
-/// and that screen shows a name placeholder.
+/// Publish the accepted self-portrait, then the canonical image, to every personal surface.
+/// Scene-graph health figures remain separate from a hero's sheet/party/turn portrait.
 fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
     let Some(journey) = journey else {
         return;
@@ -1073,26 +1071,17 @@ fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
         } else {
             df_model::checkpoint::EntityId::from_bytes(&member.participant_id).ok()
         };
-        let personal = entity
-            .and_then(|entity| state.canonical.hero_path(entity))
-            .or_else(|| art_contract::player_hero_image(&member.portrait).map(str::to_owned));
-        // A changed identity cannot retain the old identity's cached health face while queued.
-        let face = entity
-            .filter(|entity| state.canonical.hero(*entity).is_some())
-            .and_then(|_| state.hero_faces.get(&member.name));
-        let stage = face
-            .and_then(|face| face.stage.as_ref())
-            .map(ImageKey::path)
-            .or_else(|| personal.clone());
-        let battle = face
-            .and_then(|face| face.battle.as_ref())
-            .map(ImageKey::path)
-            .or(personal);
-        member.portrait = stage.clone().unwrap_or_default();
+        let personal = art_contract::player_hero_image(&member.portrait)
+            .filter(|path| path.starts_with("/gameplay/creator-portrait/"))
+            .map(str::to_owned)
+            .or_else(|| entity.and_then(|entity| state.canonical.hero_path(entity)))
+            .or_else(|| art_contract::player_hero_image(&member.portrait).map(str::to_owned))
+            .unwrap_or_default();
+        member.portrait = personal.clone();
         journey.live_faces.push(rpc::LiveFace {
             name: member.name.clone(),
-            sprite: stage.unwrap_or_default(),
-            battle_sprite: battle.unwrap_or_default(),
+            sprite: personal.clone(),
+            battle_sprite: personal,
         });
     }
     if let Some(combat) = &mut journey.combat {
@@ -1116,7 +1105,11 @@ fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
             .iter()
             .find(|member| member.name == own.name)
             .map(|member| member.portrait.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                art_contract::player_hero_image(&own.portrait_uri)
+                    .unwrap_or("")
+                    .to_owned()
+            });
     }
 }
 
@@ -1300,6 +1293,17 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// One diagnostic event. Its fields are closed-vocabulary labels (a mood, a shot, an outcome)
 /// and never a prompt, a reference or an image.
 fn record(event: &'static str, fields: &[(&'static str, String)]) {
+    if event != "gameplay.living_scene.face_requested" {
+        super::dev_control::timeline::record_structured(
+            event,
+            event,
+            fields
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), serde_json::Value::String(value.clone())))
+                .collect(),
+        );
+    }
+
     let context = df_observe::OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -1307,6 +1311,140 @@ fn record(event: &'static str, fields: &[(&'static str, String)]) {
     let mut span = df_observe::begin(&context, "gameplay.living_scene");
     span.event(event, fields);
     span.finish_unmeasured("recorded");
+}
+
+impl super::Service {
+    /// The plate-publication boundary admits evidence through the actor before any audience uses it.
+    pub(super) async fn admit_picture_features(
+        &self,
+        credential: [u8; 32],
+        role: df_persistence::local_demo_scope::LocalDemoRole,
+        checkpoint: &df_model::checkpoint::Checkpoint,
+        message: &mut rpc::ViewMessage,
+    ) -> bool {
+        use super::{imagery::ImageKey, journey::living_scene};
+        let scene = match message.audience.as_mut() {
+            Some(rpc::view_message::Audience::Display(view)) => view.scene.as_mut(),
+            Some(rpc::view_message::Audience::Player(view)) => view.scene.as_mut(),
+            None => None,
+        };
+        let Some(scene) = scene else {
+            return false;
+        };
+        let Some(key) = scene
+            .live_plate
+            .strip_prefix("/gameplay/imagery/")
+            .and_then(ImageKey::parse)
+        else {
+            return false;
+        };
+        let Some(inner) = &self.living.inner else {
+            return false;
+        };
+        let evidence = match inner.imagery.photo_evidence(&key).await {
+            Ok(Some(evidence)) => evidence,
+            Ok(None) => return false,
+            Err(error) => {
+                actor::record_unavailable("picture-evidence-read", error.label());
+                scene.live_plate.clear();
+                scene.plate_state = rpc::PlateState::Pending as i32;
+                return false;
+            }
+        };
+        let admitted = living_scene::picture_features(checkpoint.state(), &evidence.place);
+        if admitted.as_ref().is_ok_and(|records| {
+            records
+                .iter()
+                .any(|record| record.plate_key == key.as_str())
+                || records
+                    .iter()
+                    .map(|record| record.seen_in_picture.len())
+                    .sum::<usize>()
+                    >= living_scene::MAXIMUM_PICTURE_FEATURES
+        }) {
+            return false;
+        }
+        let public_scene = super::beat_script_runtime::scene(checkpoint.state());
+        if let Ok(public_scene) = public_scene {
+            if let Ok(Some(snapshot)) = living_scene::snapshot(checkpoint.state(), &public_scene) {
+                let names = snapshot
+                    .model
+                    .people
+                    .iter()
+                    .map(|person| super::place::name_key(&person.name))
+                    .chain(
+                        snapshot
+                            .model
+                            .things
+                            .iter()
+                            .map(|thing| super::place::name_key(&thing.name)),
+                    )
+                    .chain(
+                        snapshot
+                            .model
+                            .offers
+                            .iter()
+                            .map(|offer| super::place::name_key(&offer.name)),
+                    )
+                    .chain(
+                        admitted
+                            .as_ref()
+                            .into_iter()
+                            .flat_map(|records| records.iter())
+                            .flat_map(|record| record.seen_in_picture.iter())
+                            .map(|feature| super::place::name_key(&feature.name)),
+                    )
+                    .collect::<BTreeSet<_>>();
+                let ids = snapshot
+                    .model
+                    .people
+                    .iter()
+                    .map(|person| person.id.as_str())
+                    .chain(snapshot.model.things.iter().map(|thing| thing.id.as_str()))
+                    .chain(snapshot.model.offers.iter().map(|offer| offer.id.as_str()))
+                    .chain(snapshot.model.ways_out.iter().map(|way| way.id.as_str()))
+                    .collect::<BTreeSet<_>>();
+                if evidence.visible_features.iter().all(|feature| {
+                    feature
+                        .recorded_id
+                        .as_deref()
+                        .is_some_and(|id| ids.contains(id))
+                        || names.contains(&super::place::name_key(&feature.name))
+                }) {
+                    return false;
+                }
+            }
+        }
+        let mut committed = false;
+        if role == df_persistence::local_demo_scope::LocalDemoRole::Player {
+            let (reply, wait) = tokio::sync::oneshot::channel();
+            let submitted = self.actor.try_submit(actor::Call::PictureFeatures {
+                credential,
+                expected_basis: checkpoint.basis(),
+                source_hash: evidence.source_hash,
+                record: living_scene::PictureFeatures {
+                    place: evidence.place,
+                    plate_key: key.as_str().into(),
+                    seen_in_picture: evidence.visible_features,
+                },
+                reply,
+            });
+            if submitted.is_ok() {
+                if let Ok(Ok(Ok(_revision))) =
+                    tokio::time::timeout(super::timing::active().reply, wait).await
+                {
+                    committed = true;
+                }
+            }
+        }
+        if !committed {
+            // A display credential cannot mutate game state. Its connected player stream admits
+            // the same cached evidence; the checkpoint wake then republishes this plate.
+            scene.live_plate.clear();
+            scene.plate_state = rpc::PlateState::Pending as i32;
+        }
+        committed
+    }
 }
 
 impl LivingScenes {
@@ -1431,8 +1569,9 @@ impl LivingScenes {
         });
         let checkpoint = checkpoints.borrow().clone();
         inner.observe_checkpoint(&checkpoint);
+        let plates =
+            plates_on.then(|| plates::Plates::start(Arc::clone(&inner), checkpoints.clone()));
         let worker = tokio::spawn(Arc::clone(&inner).run(checkpoints));
-        let plates = plates_on.then(|| plates::Plates::start(Arc::clone(&inner)));
         Self {
             inner: Some(inner),
             _worker: Some(Arc::new(WorkerGuard(worker))),
@@ -2347,6 +2486,22 @@ impl Inner {
                         ("scene.expression", face.expression.label().to_owned()),
                         ("scene.tier", face.tier.label().to_owned()),
                     ],
+                );
+                super::dev_control::timeline::record_structured(
+                    "gameplay.living_scene.face_requested",
+                    "FACE requested",
+                    serde_json::Map::from_iter([
+                        ("scene.actor".to_owned(), serde_json::json!(id)),
+                        (
+                            "scene.expression".to_owned(),
+                            serde_json::json!(face.expression.label()),
+                        ),
+                        (
+                            "scene.tier".to_owned(),
+                            serde_json::json!(face.tier.label()),
+                        ),
+                        ("status".to_owned(), serde_json::json!("requested")),
+                    ]),
                 );
                 jobs.push(Job::Expression {
                     member: member.clone(),

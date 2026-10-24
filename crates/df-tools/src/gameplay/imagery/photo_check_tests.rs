@@ -36,6 +36,257 @@ async fn fake_judge(answer: Value) -> (NativePlateJudge, tokio::sync::oneshot::R
     fake_judgments(vec![answer]).await
 }
 
+fn scene_answer(heroes: u64) -> Value {
+    let mut value = answer("single_photograph", "photograph", "none", "period", None);
+    value["hero_count"] = json!(heroes);
+    value["weapon_custody"] = json!("matches_custody");
+    value["visible_features"] = json!([]);
+    value
+}
+
+#[tokio::test]
+async fn photo_check_reads_visible_features_in_the_same_quality_judgement() {
+    let mut answer = scene_answer(6);
+    answer["visible_features"] = json!([{
+        "name": "fruit stand", "look": "A canvas stall with red apples in shallow baskets.",
+        "region": [650, 220, 920, 600], "recorded_id": null,
+    }]);
+    let (judge, request) = fake_judge(answer).await;
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let reading = super::super::Imagery::read_scene_photo(
+        &judge,
+        &image_jpeg(),
+        ImageFormat::Jpeg,
+        SceneParty::new(6, 2).unwrap(),
+        &sheet,
+        "hands empty",
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reading.outcome, PhotoCheckOutcome::Pass);
+    assert_eq!(reading.visible_features.len(), 1);
+    assert_eq!(reading.visible_features[0].name, "fruit stand");
+    assert_eq!(reading.visible_features[0].region, [650, 220, 920, 600]);
+    let request = request.await.unwrap();
+    let schema = &request["response_format"]["json_schema"]["schema"];
+    assert_eq!(schema["properties"]["visible_features"]["maxItems"], 8);
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("visible_features"))
+    );
+}
+
+#[tokio::test]
+async fn photo_check_rejects_invalid_regions_and_never_exports_rejected_picture_features() {
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    for (heroes, region, expected_error) in [
+        (6, json!([600, 200, 500, 400]), true),
+        (6, json!([0, 0, 1001, 1000]), true),
+        (5, json!([0, 0, 1000, 1000]), false),
+    ] {
+        let mut answer = scene_answer(heroes);
+        answer["visible_features"] = json!([{"name":"fruit stand", "look":"A distant canvas stall.",
+            "region":region, "recorded_id":null}]);
+        let (judge, _) = fake_judge(answer).await;
+        let result = super::super::Imagery::read_scene_photo(
+            &judge,
+            &image_jpeg(),
+            ImageFormat::Jpeg,
+            SceneParty::new(6, 2).unwrap(),
+            &sheet,
+            "",
+            Duration::from_secs(5),
+        )
+        .await;
+        if expected_error {
+            assert!(matches!(
+                result,
+                Err(PhotoCheckError::Judge(PlateJudgeError::Output))
+            ));
+        } else {
+            let reading = result.unwrap();
+            assert!(matches!(
+                reading.outcome,
+                PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount { .. })
+            ));
+            assert!(reading.visible_features.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn scene_photo_counts_against_the_sheet_and_requires_the_actual_count() {
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    for expected in [1, 2, 4, 6] {
+        for seen in [0, expected, expected + 1] {
+            let (judge, request) = fake_judge(scene_answer(seen as u64)).await;
+            let outcome = check_scene_photo(
+                &judge,
+                &image_jpeg(),
+                ImageFormat::Jpeg,
+                SceneParty::new(expected, 2).unwrap(),
+                &sheet,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                outcome,
+                if seen == expected {
+                    PhotoCheckOutcome::Pass
+                } else {
+                    PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
+                        expected: expected as u8,
+                        seen: seen as u64,
+                    })
+                }
+            );
+            let request = request.await.unwrap();
+            let content = request["messages"][0]["content"].as_array().unwrap();
+            let instruction = content[0]["text"].as_str().unwrap();
+            assert!(instruction.contains(&format!("exactly {expected} player heroes")));
+            assert!(instruction.contains("including partly hidden figures, duplicates"));
+            assert!(instruction.contains("later photographs identify NPCs"));
+            assert_eq!(content[1]["text"], "Picture candidate-1:");
+            assert_eq!(content[3]["text"], "Picture reference-sheet:");
+            assert_eq!(
+                content
+                    .iter()
+                    .filter(|part| part["type"] == "image_url")
+                    .count(),
+                2
+            );
+            let schema = &request["response_format"]["json_schema"]["schema"];
+            assert_eq!(schema["properties"]["hero_count"]["type"], "integer");
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("hero_count"))
+            );
+            assert_eq!(schema["additionalProperties"], false);
+        }
+    }
+}
+
+#[tokio::test]
+async fn scene_photo_does_not_allow_text_fallback_to_hide_a_count_failure() {
+    let mut missing_with_wrong_count = scene_answer(7);
+    missing_with_wrong_count
+        .as_object_mut()
+        .unwrap()
+        .remove("weapon_custody");
+    assert_eq!(
+        parse_scene_photo_answer(&missing_with_wrong_count, SceneParty::new(6, 2).unwrap()),
+        Ok(PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
+            expected: 6,
+            seen: 7
+        }))
+    );
+    let mut value = scene_answer(7);
+    value["text"] = json!("visible_text");
+    let (judge, _) = fake_judge(value).await;
+    assert_eq!(
+        check_scene_photo(
+            &judge,
+            &image_jpeg(),
+            ImageFormat::Jpeg,
+            SceneParty::new(6, 2).unwrap(),
+            &ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap(),
+        PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
+            expected: 6,
+            seen: 7
+        })
+    );
+}
+
+#[test]
+fn scene_photo_rejects_missing_or_invalid_counts_and_preserves_quality_failures() {
+    let party = SceneParty::new(2, 2).unwrap();
+    for invalid in [json!(null), json!(-1), json!("2"), json!(2.5)] {
+        let mut value = scene_answer(2);
+        value["hero_count"] = invalid;
+        assert_eq!(
+            parse_scene_photo_answer(&value, party),
+            Err(PlateJudgeError::Output)
+        );
+    }
+    let mut missing = scene_answer(2);
+    missing.as_object_mut().unwrap().remove("hero_count");
+    assert_eq!(
+        parse_scene_photo_answer(&missing, party),
+        Err(PlateJudgeError::Output)
+    );
+    for (field, value, failure) in [
+        ("frame", "grid_or_collage", PhotoCheckFailure::GridOrCollage),
+        (
+            "frame",
+            "cutout_composite",
+            PhotoCheckFailure::CutoutComposite,
+        ),
+        (
+            "medium",
+            "painting_or_illustration",
+            PhotoCheckFailure::NotPhotograph,
+        ),
+        ("medium", "cgi_or_render", PhotoCheckFailure::NotPhotograph),
+        ("text", "visible_text", PhotoCheckFailure::VisibleText),
+        (
+            "dress",
+            "modern_clothing",
+            PhotoCheckFailure::ModernClothing,
+        ),
+        ("setting", "modern", PhotoCheckFailure::ModernSetting),
+    ] {
+        let mut answer = scene_answer(2);
+        answer[field] = json!(value);
+        assert_eq!(
+            parse_scene_photo_answer(&answer, party),
+            Ok(PhotoCheckOutcome::Fail(failure))
+        );
+    }
+}
+
+#[test]
+fn hero_count_failure_retains_the_still_and_logs_only_numeric_counts() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/count-retention")
+        .join(std::process::id().to_string());
+    let failure = PhotoCheckFailure::HeroCount {
+        expected: 4,
+        seen: 5,
+    };
+    let bytes = image_jpeg();
+    let path = retain_candidate_at(
+        &root,
+        PhotoCheckKind::ScenePlate,
+        &bytes,
+        ImageFormat::Jpeg,
+        failure,
+        "private generation prompt",
+    )
+    .unwrap();
+    let line = record_retention(PhotoCheckKind::ScenePlate, failure, &Ok(path.clone()));
+    assert!(
+        line.contains(
+            "PHOTO_CHECK kind=scene_plate result=fail reason=hero_count expected=4 seen=5"
+        )
+    );
+    assert!(!line.contains("private generation prompt"));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let metadata: Value =
+        serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(metadata["expected"], 4);
+    assert_eq!(metadata["seen"], 5);
+}
+
 async fn fake_judgments(
     answers: Vec<Value>,
 ) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
@@ -317,7 +568,7 @@ fn photographic_correction_preserves_an_empty_rooms_people_count() {
 #[tokio::test]
 async fn saved_photo_check_calls_the_judge_once_with_the_files_picture_and_kind() {
     let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/J1/saved-photo-check")
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/saved-photo-check")
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
     let bytes = image_jpeg();
@@ -363,7 +614,7 @@ async fn saved_photo_check_calls_the_judge_once_with_the_files_picture_and_kind(
 #[tokio::test]
 async fn saved_photo_check_reports_the_closed_reason_and_refuses_bad_files_before_judging() {
     let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/J1/saved-photo-failure")
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/saved-photo-failure")
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("candidate.image");
@@ -413,7 +664,7 @@ async fn saved_photo_check_reports_the_closed_reason_and_refuses_bad_files_befor
 #[test]
 fn rejected_candidate_keeps_exact_bytes_reason_prompt_and_bounded_history() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/J1/reject-retention-test")
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/reject-retention-test")
         .join(std::process::id().to_string());
     let bytes = image_jpeg();
     let path = retain_candidate_at(
@@ -491,11 +742,154 @@ fn canonical_room_request() -> super::super::ImageRequest {
     }
 }
 
+fn scene_plate_request(heroes: usize, edit: bool) -> super::super::ImageRequest {
+    use crate::gameplay::{imagery, shot::Camera, startup_configuration::ContentRating};
+    let party = SceneParty::new(heroes, 2).unwrap();
+    let cast = imagery::FluxCast {
+        sheet: (1..=heroes)
+            .map(|ordinal| imagery::FluxPerson {
+                name: format!("Hero {ordinal}"),
+                appearance: None,
+            })
+            .collect(),
+        speaker: None,
+        portrait: false,
+    };
+    let prompt = imagery::flux_scene_plate_for_party(
+        ContentRating::Restrained,
+        Camera::WideEstablishing,
+        None,
+        &cast,
+        "{}",
+        None,
+        heroes,
+    )
+    .unwrap()
+    .with_development_direction("Keep the established action")
+    .with_cast_sheet(2, "Heroes in seat order")
+    .with_focus_actor("hero-1", "Hero 1");
+    assert_eq!(prompt.scene_party(), Some(party));
+    imagery::ImageRequest {
+        kind: if edit {
+            imagery::ImageKind::ScenePlateEdit
+        } else {
+            imagery::ImageKind::ScenePlate
+        },
+        references: vec![
+            ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
+            ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
+        ],
+        prompt,
+        output: imagery::OutputSpec::PLATE,
+    }
+}
+
+#[tokio::test]
+async fn wrong_scene_hero_count_retries_and_right_count_passes_for_each_party_size() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    for heroes in [1, 2, 4, 6] {
+        for edit in [false, true] {
+            for retry in [false, true] {
+                let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(
+                        "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/scene-retry-pass",
+                    )
+                    .join(format!("{}-{heroes}-{edit}-{retry}", std::process::id()));
+                let fixture = DirectionFixture::photographic(&root);
+                let mut answers = Vec::new();
+                if retry {
+                    answers.push(scene_answer(heroes as u64 + 1));
+                }
+                answers.push(scene_answer(heroes as u64));
+                let (judge, request_seen) = fake_judgments(answers).await;
+                let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+                    panic!("enabled fixture");
+                };
+                assert!(engine.judge.set(judge).is_ok());
+                let request = scene_plate_request(heroes, edit);
+                let original = request.prompt.as_str().to_owned();
+                let key = fixture
+                    .imagery
+                    .generate("plate:test-room", request)
+                    .await
+                    .unwrap();
+                assert_eq!(fixture.calls(), if retry { 2 } else { 1 });
+                assert!(fixture.prompt().contains(&original));
+                if retry {
+                    assert!(
+                        fixture.prompt().contains(
+                            PhotoCheckFailure::HeroCount {
+                                expected: heroes as u8,
+                                seen: heroes as u64 + 1
+                            }
+                            .correction()
+                        )
+                    );
+                }
+                assert!(matches!(
+                    fixture.imagery.image(key.as_str()).await,
+                    imagery::Lookup::Image { .. }
+                ));
+                let request_seen = request_seen.await.unwrap();
+                let instruction = request_seen["messages"][0]["content"][0]["text"]
+                    .as_str()
+                    .unwrap();
+                assert!(instruction.contains(&format!("exactly {heroes} player heroes")));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn persistent_scene_count_mismatch_keeps_the_fallback_and_never_publishes_rejected_bytes() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    for edit in [false, true] {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/scene-retry-bound")
+            .join(format!("{}-{edit}", std::process::id()));
+        let fixture = DirectionFixture::photographic(&root);
+        let mut wrong = scene_answer(7);
+        wrong["text"] = json!("visible_text");
+        let (judge, _) = fake_judgments(vec![wrong.clone(), wrong]).await;
+        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+            panic!("enabled fixture");
+        };
+        assert!(engine.judge.set(judge).is_ok());
+        let key = fixture.imagery.key_for(&scene_plate_request(6, edit));
+        for _ in 0..2 {
+            assert_eq!(
+                fixture
+                    .imagery
+                    .generate("plate:test-room", scene_plate_request(6, edit))
+                    .await,
+                Err(imagery::ImageFailure::BadOutput)
+            );
+        }
+        assert_eq!(
+            fixture.calls(),
+            2,
+            "one corrected regeneration per refused batch"
+        );
+        assert!(!matches!(
+            fixture.imagery.image(key.as_str()).await,
+            imagery::Lookup::Image { .. }
+        ));
+        assert!(
+            fixture
+                .imagery
+                .peek(&scene_plate_request(6, edit))
+                .await
+                .is_none()
+        );
+        assert!(!engine.cached_now(key.as_str()));
+    }
+}
+
 #[tokio::test]
 async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generation_prompt() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/J1/room-retry-pass")
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/room-retry-pass")
         .join(std::process::id().to_string());
     let fixture = DirectionFixture::photographic(&root);
     let (judge, _) = fake_judgments(vec![
@@ -531,7 +925,7 @@ async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generati
 async fn persistently_rejected_room_stops_at_two_generations_until_readmission() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/J1/room-retry-bound")
+        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/room-retry-bound")
         .join(std::process::id().to_string());
     let fixture = DirectionFixture::photographic(&root);
     let (judge, _) = fake_judgments(vec![
@@ -562,4 +956,348 @@ async fn persistently_rejected_room_stops_at_two_generations_until_readmission()
             .prompt()
             .contains(PhotoCheckFailure::ModernSetting.correction())
     );
+}
+
+#[tokio::test]
+async fn scene_photo_rejects_unrecorded_drawn_weapons_with_a_typed_reason() {
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    for recorded_draw in [false, true] {
+        let mut value = scene_answer(6);
+        value["weapon_custody"] = json!(if recorded_draw {
+            "matches_custody"
+        } else {
+            "unexpected_drawn_weapon"
+        });
+        let (judge, request) = fake_judge(value).await;
+        let prompt = if recorded_draw {
+            "Vesper: sword drawn in right hand, left hand empty. Other heroes: both hands empty."
+        } else {
+            "Vesper: both hands empty, sword sheathed at hip. Other heroes: both hands empty."
+        };
+        let outcome = check_scene_photo_with_custody(
+            &judge,
+            &image_jpeg(),
+            ImageFormat::Jpeg,
+            SceneParty::new(6, 2).unwrap(),
+            &sheet,
+            prompt,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            if recorded_draw {
+                PhotoCheckOutcome::Pass
+            } else {
+                PhotoCheckOutcome::Fail(PhotoCheckFailure::UnexpectedDrawnWeapon)
+            }
+        );
+        let request = request.await.unwrap();
+        let instruction = request["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(instruction.contains(prompt));
+        assert!(instruction.contains("bare sword pointed down still counts as drawn"));
+        assert_eq!(
+            request["response_format"]["json_schema"]["schema"]["properties"]["weapon_custody"]["enum"],
+            json!(["matches_custody", "unexpected_drawn_weapon"])
+        );
+    }
+}
+
+#[test]
+fn scene_photo_custody_is_required_and_count_failures_keep_priority_over_text() {
+    let party = SceneParty::new(6, 2).unwrap();
+    for invalid in [Value::Null, json!("unknown"), json!(false)] {
+        let mut value = scene_answer(6);
+        value["weapon_custody"] = invalid;
+        assert_eq!(
+            parse_scene_photo_answer(&value, party),
+            Err(PlateJudgeError::Output)
+        );
+    }
+    let mut value = scene_answer(6);
+    value.as_object_mut().unwrap().remove("weapon_custody");
+    assert_eq!(
+        parse_scene_photo_answer(&value, party),
+        Err(PlateJudgeError::Output)
+    );
+    let mut value = scene_answer(7);
+    value["text"] = json!("visible_text");
+    value["weapon_custody"] = json!("unexpected_drawn_weapon");
+    assert_eq!(
+        parse_scene_photo_answer(&value, party),
+        Ok(PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
+            expected: 6,
+            seen: 7
+        }))
+    );
+    value["hero_count"] = json!(6);
+    assert_eq!(
+        parse_scene_photo_answer(&value, party),
+        Ok(PhotoCheckOutcome::Fail(
+            PhotoCheckFailure::UnexpectedDrawnWeapon
+        ))
+    );
+}
+
+#[tokio::test]
+async fn unexpected_drawn_weapon_uses_the_existing_plate_regeneration_gate() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    for edit in [false, true] {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS37/weapon-retry")
+            .join(format!("{}-{edit}", std::process::id()));
+        let fixture = DirectionFixture::photographic(&root);
+        let mut wrong = scene_answer(6);
+        wrong["weapon_custody"] = json!("unexpected_drawn_weapon");
+        let (judge, _) = fake_judgments(vec![wrong, scene_answer(6)]).await;
+        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+            panic!("enabled fixture")
+        };
+        assert!(engine.judge.set(judge).is_ok());
+        let key = fixture
+            .imagery
+            .generate("plate:weapon-custody", scene_plate_request(6, edit))
+            .await
+            .unwrap();
+        assert_eq!(fixture.calls(), 2);
+        assert!(
+            fixture
+                .prompt()
+                .contains(PhotoCheckFailure::UnexpectedDrawnWeapon.correction())
+        );
+        assert!(matches!(
+            fixture.imagery.image(key.as_str()).await,
+            imagery::Lookup::Image { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn scene_photo_uses_compact_hand_facts_within_the_judge_instruction_limit() {
+    let custody = json!(
+        (1..=9)
+            .map(|ordinal| json!({
+                "name": format!("Person {ordinal} {}", "N".repeat(32)),
+                "hands": "left hand empty, right hand empty; sword sheathed at hip"
+            }))
+            .collect::<Vec<_>>()
+    )
+    .to_string();
+    let (judge, request) = fake_judge(scene_answer(6)).await;
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    assert_eq!(
+        check_scene_photo_with_custody(
+            &judge,
+            &image_jpeg(),
+            ImageFormat::Jpeg,
+            SceneParty::new(6, 2).unwrap(),
+            &sheet,
+            &custody,
+            Duration::from_secs(5)
+        )
+        .await
+        .unwrap(),
+        PhotoCheckOutcome::Pass
+    );
+    let request = request.await.unwrap();
+    let instruction = request["messages"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(instruction.chars().count() <= 6000);
+    assert!(instruction.contains("Person 9"));
+    assert!(instruction.contains("sword sheathed at hip"));
+}
+
+#[tokio::test]
+async fn production_scene_gate_receives_compact_custody_for_fresh_and_edited_plates() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    let custody =
+        "Vesper: sword drawn in right hand, left hand empty. Other heroes: both hands empty.";
+    for edit in [false, true] {
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/HS37/production-custody")
+            .join(format!("{}-{edit}", std::process::id()));
+        let fixture = DirectionFixture::photographic(&cache);
+        let (judge, seen) = fake_judge(scene_answer(6)).await;
+        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+            panic!("enabled")
+        };
+        assert!(engine.judge.set(judge).is_ok());
+        let mut request = scene_plate_request(6, edit);
+        request.prompt = request.prompt.with_scene_hand_custody(custody.into());
+        fixture
+            .imagery
+            .generate("plate:HS37-production-custody", request)
+            .await
+            .unwrap();
+        let seen = seen.await.unwrap();
+        let instruction = seen["messages"][0]["content"][0]["text"].as_str().unwrap();
+        assert!(instruction.contains(custody), "{instruction}");
+        assert!(instruction.chars().count() <= 6_000);
+        assert_eq!(fixture.calls(), 1);
+    }
+}
+#[tokio::test]
+async fn photo_publication_gate_preserves_features_and_public_record_ids_without_an_extra_judgement()
+ {
+    let mut answer = scene_answer(2);
+    answer["visible_features"] = json!([{
+        "name":"fruit stand", "look":"Baskets of red apples under canvas.",
+        "region":[600,200,900,700], "recorded_id":null
+    }]);
+    let (judge, sent) = fake_judge(answer).await;
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let (failure, features) = super::super::photo_failure(
+        &judge,
+        PhotoCheckKind::ScenePlate,
+        &image_jpeg(),
+        ImageFormat::Jpeg,
+        "Photographic market scene.",
+        Some((SceneParty::new(2, 2).unwrap(), &sheet)),
+        r#"{"hands":[],"public_records":[{"id":"market-wenna","name":"Wenna"}]}"#,
+    )
+    .await;
+    assert!(failure.is_none());
+    assert_eq!(features.len(), 1);
+    assert_eq!(features[0].name, "fruit stand");
+    assert!(sent.await.unwrap().to_string().contains("market-wenna"));
+}
+#[tokio::test]
+async fn photo_feature_public_catalog_keeps_quality_and_custody_within_the_instruction_limit() {
+    let records=(0..256).map(|index|json!({"id":format!("market-item-{index}"),"name":format!("recorded object {index}")})).collect::<Vec<_>>();
+    let custody =
+        json!({"hands":"Pip: both hands empty; sword sheathed.","public_records":records})
+            .to_string();
+    let mut answer = scene_answer(6);
+    answer["visible_features"] = json!([{"name":"recorded object 255","look":"An already recorded public object.",
+        "region":[100,200,300,400],"recorded_id":"market-item-255"}]);
+    let (judge, sent) = fake_judge(answer).await;
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let result = super::super::Imagery::read_scene_photo(
+        &judge,
+        &image_jpeg(),
+        ImageFormat::Jpeg,
+        SceneParty::new(6, 2).unwrap(),
+        &sheet,
+        &custody,
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.outcome, PhotoCheckOutcome::Pass);
+    let request = sent.await.unwrap();
+    let instruction = request["messages"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(instruction.chars().count() <= 6000);
+    assert!(instruction.contains("sword sheathed"));
+    assert_eq!(
+        result.visible_features[0].recorded_id.as_deref(),
+        Some("market-item-255")
+    );
+    assert!(request["response_format"]["json_schema"]["schema"]["properties"]["visible_features"]["items"]["properties"]["recorded_id"]["enum"]
+        .as_array().unwrap().contains(&json!("market-item-255")));
+    assert!(request["response_format"]["json_schema"]["schema"]["properties"]["visible_features"]["description"]
+        .as_str().unwrap().contains("market-item-255"));
+}
+
+#[tokio::test]
+async fn photo_check_keeps_only_the_accepted_retry_features_with_the_cached_image_key() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/photo-evidence-cache")
+        .join(std::process::id().to_string());
+    let fixture = DirectionFixture::photographic(&cache);
+    let mut accepted = scene_answer(6);
+    accepted["visible_features"] = json!([{"name":"fruit stand","look":"Apples under canvas.","region":[600,200,900,700],"recorded_id":null}]);
+    let mut rejected = accepted.clone();
+    rejected["hero_count"] = json!(5);
+    rejected["visible_features"][0]["name"] = json!("rejected fish cart");
+    let (judge, sent) = fake_judgments(vec![rejected, accepted]).await;
+    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+        panic!("enabled imagery")
+    };
+    assert!(engine.judge.set(judge).is_ok());
+    let mut request = scene_plate_request(6, false);
+    request.prompt = request.prompt.with_scene_hand_custody(
+        json!({"hands":"Hands empty; weapons sheathed.",
+        "place":"place-market-street","source_hash":"f".repeat(64),"public_records":[]})
+        .to_string(),
+    );
+    let mut other_source = request.clone();
+    other_source.prompt = other_source.prompt.with_scene_hand_custody(
+        json!({"hands":"Hands empty; weapons sheathed.",
+        "place":"place-market-street","source_hash":"e".repeat(64),"public_records":[]})
+        .to_string(),
+    );
+    assert_ne!(
+        fixture.imagery.key_for(&request),
+        fixture.imagery.key_for(&other_source)
+    );
+    let key = fixture
+        .imagery
+        .generate("plate:HS40-accepted-evidence", request.clone())
+        .await
+        .unwrap();
+    let evidence = fixture.imagery.photo_evidence(&key).await.unwrap().unwrap();
+    assert_eq!(evidence.place, "place-market-street");
+    assert_eq!(evidence.source_hash, "f".repeat(64));
+    assert_eq!(evidence.visible_features.len(), 1);
+    assert_eq!(evidence.visible_features[0].name, "fruit stand");
+    let cached = fixture
+        .imagery
+        .generate("plate:HS40-accepted-evidence", request)
+        .await
+        .unwrap();
+    assert_eq!(cached, key);
+    assert_eq!(engine.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        fixture
+            .imagery
+            .photo_evidence(&cached)
+            .await
+            .unwrap()
+            .unwrap()
+            .visible_features,
+        evidence.visible_features
+    );
+    sent.await.unwrap();
+}
+
+#[tokio::test]
+async fn photo_features_without_a_bound_place_do_not_break_legacy_plate_requests() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/photo-unbound-cache")
+        .join(std::process::id().to_string());
+    let fixture = DirectionFixture::photographic(&cache);
+    let mut accepted = scene_answer(6);
+    accepted["visible_features"] = json!([{"name":"fruit stand","look":"Apples under canvas.","region":[600,200,900,700],"recorded_id":null}]);
+    let (judge, sent) = fake_judge(accepted).await;
+    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+        panic!("enabled imagery")
+    };
+    assert!(engine.judge.set(judge).is_ok());
+    let mut request = scene_plate_request(6, false);
+    request.prompt = request
+        .prompt
+        .with_scene_hand_custody("Hands empty; weapons sheathed.".into());
+    let key = fixture
+        .imagery
+        .generate("plate:HS40-unbound-evidence", request)
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .imagery
+            .photo_evidence(&key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(engine.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    sent.await.unwrap();
 }
