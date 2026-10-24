@@ -10,6 +10,7 @@
 mod app;
 mod cli;
 mod config;
+mod control;
 mod credentials;
 mod desktop;
 mod files;

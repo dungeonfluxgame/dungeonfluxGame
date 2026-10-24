@@ -787,7 +787,7 @@ impl App {
         }
     }
 
-    fn display_url(&self) -> Option<String> {
+    pub fn display_url(&self) -> Option<String> {
         match &self.lock().phase {
             Phase::Running(run) => Some(run.display_url.clone()),
             Phase::Connected { origin } => Some(format!("{origin}/gameplay/display")),
@@ -1238,6 +1238,40 @@ impl App {
         inner.config = next;
         inner.settings_problem = None;
         Ok(())
+    }
+
+    /// Every setting and whether each key is set, from the file as it is now.
+    pub fn config_list(&self) -> Result<Vec<(String, String)>, String> {
+        let current = config::load(&self.config_path).map_err(|error| error.to_string())?;
+        config::list(&current)
+    }
+
+    /// Sets one setting or key by name (see `config::set`) and saves the file.
+    pub fn config_set(&self, name: &str, value: &str) -> Result<String, String> {
+        self.try_change_config(|config| config::set(config, name, value))
+            .inspect(|changed| log::event("CONFIG_SET", format!("name={changed}")))
+    }
+
+    /// Returns one setting to its default, or removes a key, and saves the file.
+    pub fn config_reset(&self, name: &str) -> Result<String, String> {
+        self.try_change_config(|config| config::reset(config, name))
+            .inspect(|changed| log::event("CONFIG_RESET", format!("name={changed}")))
+    }
+
+    /// `change_config` for a change that may be refused; nothing is saved then.
+    fn try_change_config(
+        &self,
+        change: impl FnOnce(&mut Config) -> Result<String, String>,
+    ) -> Result<String, String> {
+        let mut next = config::load(&self.config_path).map_err(|error| {
+            format!("{error} Fix or remove the file first; nothing was changed.")
+        })?;
+        let changed = change(&mut next)?;
+        config::save(&self.config_path, &next).map_err(|error| error.to_string())?;
+        let mut inner = self.lock();
+        inner.config = next;
+        inner.settings_problem = None;
+        Ok(changed)
     }
 
     pub fn save_settings(&self, form: &Form) -> Result<(), Vec<FieldError>> {

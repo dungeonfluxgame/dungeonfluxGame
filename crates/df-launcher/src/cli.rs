@@ -6,6 +6,7 @@ use std::{process::Command as Process, sync::Arc};
 
 use crate::{
     app::{App, Failure, Phase, RunRecord, StartOptions},
+    control,
     saves::Adventure,
     server,
 };
@@ -24,6 +25,24 @@ Commands (for agents and scripts; no window opens):
   status             Print RUNNING ... or IDLE.
   saves              List saved games, newest first.
   logs [--lines N]   Print the launcher's log (last 200 lines unless N is given).
+  config             Print every setting (SETTING name=section.name value=...) and whether
+                     each key is set (never its value).
+  config get <name>  Print one setting; <name> is section.name or just name.
+  config set <name> <value>
+                     Change one setting, checked like the Settings page. On/off settings take
+                     true or false. For keys.<openai|elevenlabs|fal|jev|bfl> give - as the
+                     value and the key is read from standard input, out of the command line.
+  config reset <name>
+                     Return a setting to its default, or remove a key.
+  window [get <name>]
+                     Print the open launcher window's properties (WINDOW name=... value=...):
+                     control.*, display.* and the screens (monitor.N).
+  window set <name> <value>
+                     Change one: control.visible|minimized|maximized|focused true/false,
+                     control.size WxH, control.position X,Y, control.page /settings,
+                     display.open|visible|minimized|maximized|focused|full_screen true/false,
+                     display.size, display.position, display.monitor N,
+                     display.screenshot <file.jpg>.
 
   --dev-control      Turn on the server's developer control for this game and print its
                      DEV_CONTROL url and token file (for df-transport-fixture dev).
@@ -46,12 +65,51 @@ const PHASES: [&str; 6] = [
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
-    Start { adventure: Adventure, flags: Flags },
-    Resume { wanted: String, flags: Flags },
-    Stop { force: bool },
+    Start {
+        adventure: Adventure,
+        flags: Flags,
+    },
+    Resume {
+        wanted: String,
+        flags: Flags,
+    },
+    Stop {
+        force: bool,
+    },
     Status,
     Saves,
-    Logs { lines: usize },
+    Logs {
+        lines: usize,
+    },
+    Config(ConfigAction),
+    Window {
+        request: control::Request,
+        only: Option<String>,
+    },
+}
+
+#[derive(Eq, PartialEq)]
+pub enum ConfigAction {
+    List,
+    Get(String),
+    /// A value of `-` for a key is read from standard input.
+    Set {
+        name: String,
+        value: String,
+    },
+    Reset(String),
+}
+
+/// Never shows a value: it may be a key.
+impl std::fmt::Debug for ConfigAction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List => write!(formatter, "List"),
+            Self::Get(name) => write!(formatter, "Get({name})"),
+            Self::Set { name, .. } => write!(formatter, "Set({name})"),
+            Self::Reset(name) => write!(formatter, "Reset({name})"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -63,6 +121,11 @@ pub struct Flags {
 
 /// Parses the words after the command name.
 pub fn parse(name: &str, rest: &[String]) -> Result<Command, String> {
+    match name {
+        "config" => return parse_config(rest).map(Command::Config),
+        "window" => return parse_window(rest),
+        _ => {}
+    }
     let mut words = rest.iter().map(String::as_str);
     let mut flags = Flags::default();
     let mut positional = Vec::new();
@@ -131,11 +194,103 @@ pub fn parse(name: &str, rest: &[String]) -> Result<Command, String> {
     }
 }
 
+/// `config`, `config get|reset <name>`, `config set <name> <value>`.
+fn parse_config(rest: &[String]) -> Result<ConfigAction, String> {
+    match rest {
+        [] => Ok(ConfigAction::List),
+        [verb, name] if verb == "get" => Ok(ConfigAction::Get(name.clone())),
+        [verb, name] if verb == "reset" => Ok(ConfigAction::Reset(name.clone())),
+        [verb, name, value @ ..] if verb == "set" && !value.is_empty() => Ok(ConfigAction::Set {
+            name: name.clone(),
+            value: value.join(" "),
+        }),
+        _ => Err("config takes nothing, get <name>, set <name> <value> or reset <name>".to_owned()),
+    }
+}
+
+/// `window`, `window get <name>`, `window set <name> <value>`.
+fn parse_window(rest: &[String]) -> Result<Command, String> {
+    let (request, only) = match rest {
+        [] => (control::Request::Read, None),
+        [verb, name] if verb == "get" => (control::Request::Read, Some(name.clone())),
+        [verb, name, value @ ..] if verb == "set" && !value.is_empty() => (
+            control::Request::Set {
+                name: name.clone(),
+                value: value.join(" "),
+            },
+            None,
+        ),
+        _ => return Err("window takes nothing, get <name> or set <name> <value>".to_owned()),
+    };
+    Ok(Command::Window { request, only })
+}
+
 pub fn is_command(word: &str) -> bool {
     matches!(
         word,
-        "start" | "resume" | "stop" | "status" | "saves" | "logs"
+        "start" | "resume" | "stop" | "status" | "saves" | "logs" | "config" | "window"
     )
+}
+
+fn print_settings(lines: &[(String, String)], only: Option<&str>) -> Result<(), String> {
+    let mut printed = false;
+    for (name, value) in lines {
+        let wanted = only.is_none_or(|only| name == only || name.rsplit('.').next() == Some(only));
+        if wanted {
+            println!("SETTING name={name} value={value}");
+            printed = true;
+        }
+    }
+    if printed {
+        Ok(())
+    } else {
+        Err(format!(
+            "No setting is called {:?}. List them with: dungeonflux config",
+            only.unwrap_or_default()
+        ))
+    }
+}
+
+/// A key typed or piped on standard input, so it stays out of command lines and shell history.
+fn key_from_input() -> Result<String, String> {
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| format!("The key could not be read from standard input: {error}"))?;
+    Ok(line.trim().to_owned())
+}
+
+fn run_config(app: &App, action: ConfigAction) -> Result<(), String> {
+    let changed = match action {
+        ConfigAction::List => return print_settings(&app.config_list()?, None),
+        ConfigAction::Get(name) => return print_settings(&app.config_list()?, Some(&name)),
+        ConfigAction::Set { name, value } => {
+            let value = if name.starts_with("keys.") && value == "-" {
+                key_from_input()?
+            } else {
+                value
+            };
+            app.config_set(&name, &value)?
+        }
+        ConfigAction::Reset(name) => app.config_reset(&name)?,
+    };
+    print_settings(&app.config_list()?, Some(&changed))
+}
+
+fn run_window(app: &App, request: &control::Request, only: Option<&str>) -> Result<(), String> {
+    let lines = control::send(app.data(), request)?;
+    let mut printed = false;
+    for line in &lines {
+        let wanted = only.is_none_or(|only| line.starts_with(&format!("WINDOW name={only} ")));
+        if wanted {
+            println!("{line}");
+            printed = true;
+        }
+    }
+    match only {
+        Some(only) if !printed => Err(format!("The window has no property {only:?}")),
+        _ => Ok(()),
+    }
 }
 
 pub fn run(app: &Arc<App>, command: Command) -> Result<(), String> {
@@ -148,6 +303,8 @@ pub fn run(app: &Arc<App>, command: Command) -> Result<(), String> {
             println!("{}", crate::log::tail(app.data(), lines));
             Ok(())
         }
+        Command::Config(action) => run_config(app, action),
+        Command::Window { request, only } => run_window(app, &request, only.as_deref()),
         Command::Start { adventure, flags } => {
             let game = app.new_game(adventure);
             started(app.start_blocking(&game, options(&flags)), &flags)
@@ -286,6 +443,28 @@ mod tests {
             Command::Stop { force: true }
         );
         assert_eq!(parse("status", &[]).unwrap(), Command::Status);
+        assert_eq!(
+            parse("config", &words("set build_folder D:/My Builds")).unwrap(),
+            Command::Config(ConfigAction::Set {
+                name: "build_folder".to_owned(),
+                value: "D:/My Builds".to_owned()
+            })
+        );
+        assert_eq!(
+            parse("window", &words("set control.size 900x700")).unwrap(),
+            Command::Window {
+                request: control::Request::Set {
+                    name: "control.size".to_owned(),
+                    value: "900x700".to_owned()
+                },
+                only: None
+            }
+        );
+        let secret = ConfigAction::Set {
+            name: "keys.openai".to_owned(),
+            value: "sk-synthetic".to_owned(),
+        };
+        assert!(!format!("{secret:?}").contains("sk-synthetic"));
         for refused in [
             ("start", "castle"),
             ("start", "--to moon"),
@@ -294,6 +473,11 @@ mod tests {
             ("saves", "extra"),
             ("stop", "--to creation"),
             ("start", "--fast"),
+            ("config", "set music"),
+            ("config", "get"),
+            ("config", "delete music"),
+            ("window", "set display.open"),
+            ("window", "close"),
         ] {
             assert!(parse(refused.0, &words(refused.1)).is_err(), "{refused:?}");
         }

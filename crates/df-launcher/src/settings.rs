@@ -161,6 +161,36 @@ pub struct FieldError {
 }
 
 impl Settings {
+    /// The rules the Settings page enforces, for values set any other way (the command line,
+    /// a hand edit). Enumerations are already checked by parsing.
+    pub fn check(&self) -> Result<(), String> {
+        for (name, port) in [
+            ("game_port", self.game_port),
+            ("database_port", self.database_port),
+        ] {
+            if port < 1024 {
+                return Err(format!("{name} must be a port from 1024 to 65535"));
+            }
+        }
+        if self.game_port == self.database_port {
+            return Err("game_port and database_port must differ".to_owned());
+        }
+        if self.server_mode == ServerMode::External || !self.external_url.is_empty() {
+            external_origin(&self.external_url)?;
+        }
+        for (name, folder) in [
+            ("game_folder", &self.game_folder),
+            ("build_folder", &self.build_folder),
+            ("postgres_folder", &self.postgres_folder),
+            ("play_folder", &self.play_folder),
+        ] {
+            if let Some(problem) = folder_problem(folder) {
+                return Err(format!("{name}: {problem}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Reads the whole settings form. Checkboxes absent from the form are off, so the page
     /// always submits every field. On error nothing is changed.
     pub fn with_form(&self, form: &Form) -> Result<Self, Vec<FieldError>> {

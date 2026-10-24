@@ -264,6 +264,111 @@ fn parse(text: &str) -> Result<Config, String> {
     Ok(Config { settings, keys })
 }
 
+/// `section.name` for a setting name, as the file and the command line show it.
+fn qualified(field: &str) -> Option<String> {
+    SECTIONS.iter().find_map(|(section, _, fields)| {
+        fields
+            .iter()
+            .any(|(name, _)| *name == field)
+            .then(|| format!("{section}.{field}"))
+    })
+}
+
+/// Every setting as `section.name = value`, then every key as set or unset (never its value).
+pub fn list(config: &Config) -> Result<Vec<(String, String)>, String> {
+    let values = toml::Table::try_from(&config.settings).map_err(|error| error.to_string())?;
+    let mut lines = Vec::new();
+    for (section, _, fields) in SECTIONS {
+        for (field, _) in *fields {
+            if let Some(value) = values.get(*field) {
+                lines.push((format!("{section}.{field}"), value.to_string()));
+            }
+        }
+    }
+    for credential in Credential::ALL {
+        let state = if config.keys.contains_key(&credential) {
+            "set"
+        } else {
+            "unset"
+        };
+        lines.push((format!("keys.{}", credential.id()), state.to_owned()));
+    }
+    Ok(lines)
+}
+
+/// An on/off value as the command line writes it.
+pub fn switch(value: &str) -> Option<bool> {
+    match value {
+        "true" | "on" | "yes" => Some(true),
+        "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Finds a setting by `name` or `section.name`; returns its plain name.
+fn setting_name(name: &str) -> Option<&'static str> {
+    let plain = name.rsplit('.').next().unwrap_or(name);
+    SECTIONS.iter().find_map(|(section, _, fields)| {
+        fields.iter().find_map(|(field, _)| {
+            (*field == plain && (name == plain || name == format!("{section}.{field}")))
+                .then_some(*field)
+        })
+    })
+}
+
+/// Sets one setting or key from text. Booleans take true/false/on/off; numbers and the listed
+/// choices are checked; the result must pass the Settings page's rules.
+pub fn set(config: &mut Config, name: &str, value: &str) -> Result<String, String> {
+    if let Some(id) = name.strip_prefix("keys.")
+        && let Some(credential) = Credential::from_id(id)
+    {
+        if !crate::credentials::valid_key(value) {
+            return Err(
+                "A key is one line of letters, digits and symbols, without spaces.".to_owned(),
+            );
+        }
+        config.keys.insert(credential, value.to_owned());
+        return Ok(format!("keys.{id}"));
+    }
+    let field = setting_name(name).ok_or_else(|| {
+        format!("No setting is called {name:?}. List them with: dungeonflux config")
+    })?;
+    let mut values = toml::Table::try_from(&config.settings).map_err(|error| error.to_string())?;
+    let parsed = match values.get(field) {
+        Some(toml::Value::Boolean(_)) => toml::Value::Boolean(
+            switch(value).ok_or_else(|| format!("{field} takes true or false"))?,
+        ),
+        Some(toml::Value::Integer(_)) => toml::Value::Integer(
+            value
+                .parse::<i64>()
+                .map_err(|_| format!("{field} takes a whole number"))?,
+        ),
+        _ => toml::Value::String(value.to_owned()),
+    };
+    values.insert(field.to_owned(), parsed);
+    let next: Settings = toml::Value::Table(values)
+        .try_into()
+        .map_err(|error: toml::de::Error| format!("{field}: {}", error.message()))?;
+    next.check()?;
+    config.settings = next;
+    Ok(qualified(field).unwrap_or_else(|| field.to_owned()))
+}
+
+/// Returns a setting to its default, or removes a key.
+pub fn reset(config: &mut Config, name: &str) -> Result<String, String> {
+    if let Some(id) = name.strip_prefix("keys.")
+        && let Some(credential) = Credential::from_id(id)
+    {
+        config.keys.remove(&credential);
+        return Ok(format!("keys.{id}"));
+    }
+    let field = setting_name(name).ok_or_else(|| format!("No setting is called {name:?}"))?;
+    let defaults = toml::Table::try_from(Settings::default()).map_err(|error| error.to_string())?;
+    let default = defaults.get(field).ok_or("no default")?.to_string();
+    let default = default.trim_matches('"').to_owned();
+    set(config, field, &default)
+}
+
 /// The whole file with its comments, from the current values.
 pub fn render(config: &Config) -> Result<String, io::Error> {
     let values = toml::Table::try_from(&config.settings).map_err(io::Error::other)?;
@@ -364,6 +469,53 @@ mod tests {
         std::fs::write(&path, "[network]\ngame_port = \"not a port\"\n").unwrap();
         assert!(load(&path).is_err());
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn the_command_line_reads_and_writes_every_setting_with_the_page_rules() {
+        let mut config = Config::default();
+        let listed = list(&config).unwrap();
+        let settings = toml::Table::try_from(Settings::default()).unwrap();
+        assert_eq!(listed.len(), settings.len() + Credential::ALL.len());
+        assert!(listed.contains(&("network.game_port".to_owned(), "63309".to_owned())));
+        assert!(listed.contains(&("keys.openai".to_owned(), "unset".to_owned())));
+        assert_eq!(set(&mut config, "music", "off").unwrap(), "story.music");
+        assert!(!config.settings.music);
+        set(&mut config, "display.display", "browser").unwrap();
+        assert_eq!(
+            config.settings.display,
+            crate::settings::DisplayTarget::Browser
+        );
+        set(&mut config, "network.game_port", "64000").unwrap();
+        assert_eq!(config.settings.game_port, 64000);
+        set(&mut config, "keys.fal", "fal-synthetic").unwrap();
+        assert!(
+            list(&config)
+                .unwrap()
+                .contains(&("keys.fal".to_owned(), "set".to_owned()))
+        );
+        assert!(!format!("{:?}", list(&config).unwrap()).contains("fal-synthetic"));
+        for (name, value) in [
+            ("game_port", "80"),
+            ("database_port", "64000"),
+            ("display", "projector"),
+            ("music", "maybe"),
+            ("story.game_port", "64001"),
+            ("nothing", "1"),
+            ("build_folder", "\\\\server\\share"),
+            ("keys.fal", "two words"),
+        ] {
+            assert!(set(&mut config, name, value).is_err(), "{name}={value}");
+        }
+        reset(&mut config, "game_port").unwrap();
+        assert_eq!(config.settings.game_port, 63309);
+        reset(&mut config, "display").unwrap();
+        assert_eq!(
+            config.settings.display,
+            crate::settings::DisplayTarget::Window
+        );
+        reset(&mut config, "keys.fal").unwrap();
+        assert!(config.keys.is_empty());
     }
 
     #[test]

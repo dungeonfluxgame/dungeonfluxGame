@@ -4,11 +4,11 @@
 use std::{
     borrow::Cow,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
 use tao::{
-    dpi::{LogicalSize, PhysicalPosition},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopWindowTarget},
     monitor::MonitorHandle,
@@ -21,6 +21,8 @@ use wry::{
 
 use crate::{
     app::{App, ShellEvent},
+    config::switch,
+    control::{self, Reply},
     log,
     platform::InstanceGuard,
     settings::{DisplayScreen, FullScreen},
@@ -34,6 +36,8 @@ enum UserEvent {
     /// The closing display window (this generation) may go: its last screenshot is saved, or
     /// the capture took too long.
     DropDisplay(u64),
+    /// `dungeonflux window` (see control.rs), answered on the channel.
+    Window(control::Request, mpsc::Sender<Reply>),
 }
 
 /// How long a closing display waits for its last screenshot before closing anyway.
@@ -130,8 +134,10 @@ pub fn run(
         .with_url("dungeonflux://localhost/")
         .with_background_color((9, 19, 29, 255))
         .with_navigation_handler(|url| {
-            let ours =
-                url.starts_with("dungeonflux:") || origin_of(&url) == origin_of(CONTROL_ORIGIN);
+            // A URL that does not parse never counts as ours, even when CONTROL_ORIGIN itself
+            // is not an http origin (the custom scheme off Windows).
+            let ours = url.starts_with("dungeonflux:")
+                || origin_of(&url).is_some_and(|origin| Some(origin) == origin_of(CONTROL_ORIGIN));
             if !ours {
                 open_external(&url, "control");
             }
@@ -158,6 +164,20 @@ pub fn run(
     let mut generation = 0u64;
     let mut control_visible = true;
     let drop_proxy = event_loop.create_proxy();
+
+    let window_proxy = Mutex::new(event_loop.create_proxy());
+    let listening = control::listen(&data, move |request, reply| {
+        window_proxy
+            .lock()
+            .is_ok_and(|proxy| proxy.send_event(UserEvent::Window(request, reply)).is_ok())
+    })
+    .inspect_err(|error| {
+        log::event(
+            "CONTROL_FAILED",
+            format!("error={}", log::value(error.to_string())),
+        );
+    })
+    .ok();
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -235,12 +255,53 @@ pub fn run(
                     .as_ref()
                     .is_some_and(|open| open.generation == closing)
                 {
-                    log::event("WINDOW_DISPLAY_CLOSED", "reason=closed_by_user");
+                    log::event("WINDOW_DISPLAY_CLOSED", "reason=closed");
                     display = None;
                     report_display(&app, None);
                     if !control_visible {
                         *control_flow = ControlFlow::Exit;
                     }
+                }
+            }
+            Event::UserEvent(UserEvent::Window(request, reply)) => {
+                let answer = match &request {
+                    control::Request::Read => Ok(()),
+                    control::Request::Set { name, value } => {
+                        let mut windows = Windows {
+                            control: &control,
+                            control_view: &control_view,
+                            control_visible: &mut control_visible,
+                            display: display.as_ref(),
+                        };
+                        let outcome = set_property(&app, target, &mut windows, name, value);
+                        if outcome.is_ok()
+                            && name == "display.open"
+                            && value_is_off(value)
+                            && let Some(open) = &display
+                        {
+                            close_display(&app, open, &drop_proxy, "agent");
+                        }
+                        log::event(
+                            "WINDOW_SET",
+                            format!("name={} ok={}", log::value(name), outcome.is_ok()),
+                        );
+                        outcome
+                    }
+                };
+                let answer = answer.map(|()| {
+                    properties(
+                        target,
+                        &control,
+                        &control_view,
+                        control_visible,
+                        display.as_ref(),
+                    )
+                });
+                let _ = reply.send(answer);
+            }
+            Event::LoopDestroyed => {
+                if let Some(listening) = &listening {
+                    listening.close();
                 }
             }
             Event::UserEvent(UserEvent::ShowControl) => {
@@ -270,35 +331,289 @@ pub fn run(
                     .as_ref()
                     .filter(|open| open.window.id() == window_id)
                 {
-                    // Keep a picture of the table for the saved-game card, then close: when the
-                    // capture is saved, or after CAPTURE_WAIT if WebView2 never answers.
-                    let closing = open.generation;
-                    match app.current_screenshot_path() {
-                        Some(path) => {
-                            log::event("SCREENSHOT_REQUESTED", "reason=display_closed");
-                            let proxy = drop_proxy.clone();
-                            capture(
-                                &open.view,
-                                path,
-                                Box::new(move || {
-                                    let _ = proxy.send_event(UserEvent::DropDisplay(closing));
-                                }),
-                            );
-                            let late = drop_proxy.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(CAPTURE_WAIT);
-                                let _ = late.send_event(UserEvent::DropDisplay(closing));
-                            });
-                        }
-                        None => {
-                            let _ = drop_proxy.send_event(UserEvent::DropDisplay(closing));
-                        }
-                    }
+                    close_display(&app, open, &drop_proxy, "user");
                 }
             }
             _ => {}
         }
     });
+}
+
+/// Keeps a picture of the table for the saved-game card, then closes the display: when the
+/// capture is saved, or after CAPTURE_WAIT if WebView2 never answers.
+fn close_display(
+    app: &App,
+    open: &Display,
+    drop_proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
+    by: &str,
+) {
+    log::event("WINDOW_DISPLAY_CLOSING", format!("by={by}"));
+    let closing = open.generation;
+    match app.current_screenshot_path() {
+        Some(path) => {
+            log::event(
+                "SCREENSHOT_REQUESTED",
+                format!("reason=display_closed by={by}"),
+            );
+            let proxy = drop_proxy.clone();
+            capture(
+                &open.view,
+                path,
+                Box::new(move || {
+                    let _ = proxy.send_event(UserEvent::DropDisplay(closing));
+                }),
+            );
+            let late = drop_proxy.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(CAPTURE_WAIT);
+                let _ = late.send_event(UserEvent::DropDisplay(closing));
+            });
+        }
+        None => {
+            let _ = drop_proxy.send_event(UserEvent::DropDisplay(closing));
+        }
+    }
+}
+
+/// What `dungeonflux window set` may change.
+struct Windows<'a> {
+    control: &'a Window,
+    control_view: &'a WebView,
+    control_visible: &'a mut bool,
+    display: Option<&'a Display>,
+}
+
+fn value_is_off(value: &str) -> bool {
+    switch(value) == Some(false)
+}
+
+fn on_off(name: &str, value: &str) -> Result<bool, String> {
+    switch(value).ok_or_else(|| format!("{name} takes true or false"))
+}
+
+/// `WxH` in logical pixels, each from 200 to 10000.
+fn size(name: &str, value: &str) -> Result<LogicalSize<f64>, String> {
+    let problem = || format!("{name} takes a size such as 1040x740");
+    let (width, height) = value.split_once('x').ok_or_else(problem)?;
+    let side = |text: &str| {
+        text.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|side| (200..=10_000).contains(side))
+            .ok_or_else(problem)
+    };
+    Ok(LogicalSize::new(
+        f64::from(side(width)?),
+        f64::from(side(height)?),
+    ))
+}
+
+/// `X,Y` in logical pixels on the virtual desktop.
+fn position(name: &str, value: &str) -> Result<LogicalPosition<f64>, String> {
+    let problem = || format!("{name} takes a position such as 100,80");
+    let (x, y) = value.split_once(',').ok_or_else(problem)?;
+    let coordinate = |text: &str| {
+        text.trim()
+            .parse::<i32>()
+            .ok()
+            .filter(|coordinate| coordinate.abs() <= 100_000)
+            .ok_or_else(problem)
+    };
+    Ok(LogicalPosition::new(
+        f64::from(coordinate(x)?),
+        f64::from(coordinate(y)?),
+    ))
+}
+
+/// Sets the properties both windows share.
+fn set_shared(window: &Window, name: &str, field: &str, value: &str) -> Result<bool, String> {
+    match field {
+        "minimized" => window.set_minimized(on_off(name, value)?),
+        "maximized" => window.set_maximized(on_off(name, value)?),
+        "focused" => {
+            if on_off(name, value)? {
+                window.set_minimized(false);
+                window.set_focus();
+            }
+        }
+        "size" => window.set_inner_size(size(name, value)?),
+        "position" => window.set_outer_position(position(name, value)?),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn set_property(
+    app: &App,
+    target: &EventLoopWindowTarget<UserEvent>,
+    windows: &mut Windows,
+    name: &str,
+    value: &str,
+) -> Result<(), String> {
+    let unknown = || format!("The window has no settable property {name:?}");
+    let (window, field) = name.split_once('.').ok_or_else(unknown)?;
+    match window {
+        "control" => {
+            if set_shared(windows.control, name, field, value)? {
+                return Ok(());
+            }
+            match field {
+                "visible" => {
+                    let visible = on_off(name, value)?;
+                    windows.control.set_visible(visible);
+                    *windows.control_visible = visible;
+                }
+                "page" => {
+                    // A launcher page only, never another site.
+                    if !value.starts_with('/') || value.starts_with("//") || value.contains('\\') {
+                        return Err("control.page takes a launcher path such as /settings".into());
+                    }
+                    windows
+                        .control_view
+                        .load_url(&format!("{CONTROL_ORIGIN}{value}"))
+                        .map_err(|error| error.to_string())?;
+                }
+                _ => return Err(unknown()),
+            }
+            Ok(())
+        }
+        "display" if field == "open" => {
+            if on_off(name, value)? {
+                if app.display_url().is_none() {
+                    return Err("No game is running, so there is no table display.".into());
+                }
+                app.open_display();
+            }
+            // Closing is done by the caller, which owns the display.
+            Ok(())
+        }
+        "display" => {
+            let open = windows
+                .display
+                .ok_or("The table display is not open (set display.open true first).")?;
+            if set_shared(&open.window, name, field, value)? {
+                return Ok(());
+            }
+            match field {
+                "visible" => open.window.set_visible(on_off(name, value)?),
+                "full_screen" => {
+                    app.set_display_full_screen(on_off(name, value)?);
+                }
+                "monitor" => {
+                    let monitor = value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| target.available_monitors().nth(index))
+                        .ok_or("display.monitor takes a screen number from monitor.N")?;
+                    let full = open.window.fullscreen().is_some();
+                    let corner = monitor.position();
+                    open.window.set_fullscreen(None);
+                    open.window
+                        .set_outer_position(PhysicalPosition::new(corner.x + 60, corner.y + 60));
+                    if full {
+                        open.window
+                            .set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
+                    }
+                }
+                "screenshot" => {
+                    let path = PathBuf::from(value);
+                    let fits = path.is_absolute()
+                        && path
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("jpg"))
+                        && path.parent().is_some_and(std::path::Path::is_dir);
+                    if !fits {
+                        return Err(
+                            "display.screenshot takes the full path of a .jpg file in an existing folder"
+                                .into(),
+                        );
+                    }
+                    log::event("SCREENSHOT_REQUESTED", "reason=agent");
+                    capture(&open.view, path, Box::new(|| {}));
+                }
+                _ => return Err(unknown()),
+            }
+            Ok(())
+        }
+        _ => Err(unknown()),
+    }
+}
+
+fn describe_window(window: &Window, prefix: &str, lines: &mut Vec<(String, String)>) {
+    let scale = window.scale_factor();
+    let inner = window.inner_size().to_logical::<f64>(scale);
+    let mut add = |field: &str, value: String| lines.push((format!("{prefix}.{field}"), value));
+    add("title", format!("{:?}", window.title()));
+    add("visible", window.is_visible().to_string());
+    add("minimized", window.is_minimized().to_string());
+    add("maximized", window.is_maximized().to_string());
+    add("focused", window.is_focused().to_string());
+    add("full_screen", window.fullscreen().is_some().to_string());
+    add(
+        "size",
+        format!("{}x{}", inner.width.round(), inner.height.round()),
+    );
+    if let Ok(outer) = window.outer_position() {
+        let outer = outer.to_logical::<f64>(scale);
+        add(
+            "position",
+            format!("{},{}", outer.x.round(), outer.y.round()),
+        );
+    }
+    add("scale", format!("{scale}"));
+    add(
+        "monitor",
+        format!(
+            "{:?}",
+            window
+                .current_monitor()
+                .and_then(|monitor| monitor.name())
+                .unwrap_or_default()
+        ),
+    );
+}
+
+/// Every property `dungeonflux window` shows.
+fn properties(
+    target: &EventLoopWindowTarget<UserEvent>,
+    control: &Window,
+    control_view: &WebView,
+    control_visible: bool,
+    display: Option<&Display>,
+) -> Vec<(String, String)> {
+    let mut lines = Vec::new();
+    describe_window(control, "control", &mut lines);
+    if let Some(entry) = lines.iter_mut().find(|(name, _)| name == "control.visible") {
+        entry.1 = control_visible.to_string();
+    }
+    let page = control_view.url().ok().and_then(|url| {
+        url.strip_prefix(CONTROL_ORIGIN)
+            .or_else(|| url.strip_prefix("dungeonflux://localhost"))
+            .map(str::to_owned)
+    });
+    lines.push(("control.page".into(), page.unwrap_or_default()));
+    lines.push(("display.open".into(), display.is_some().to_string()));
+    if let Some(open) = display {
+        describe_window(&open.window, "display", &mut lines);
+        lines.push(("display.url".into(), open.view.url().unwrap_or_default()));
+    }
+    for (index, monitor) in target.available_monitors().enumerate() {
+        let size = monitor.size();
+        let corner = monitor.position();
+        lines.push((
+            format!("monitor.{index}"),
+            format!(
+                "{:?} {}x{} at {},{} scale {}",
+                monitor.name().unwrap_or_default(),
+                size.width,
+                size.height,
+                corner.x,
+                corner.y,
+                monitor.scale_factor()
+            ),
+        ));
+    }
+    lines
 }
 
 /// Saves the display's picture; `done` runs once saved or once it is clear it cannot be.
