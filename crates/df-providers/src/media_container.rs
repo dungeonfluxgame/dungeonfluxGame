@@ -102,13 +102,35 @@ fn dimensions(width: u32, height: u32) -> Result<(), MediaContainerRefusal> {
     Ok(())
 }
 
+/// Byte-indexed remainders for the reflected CRC-32 polynomial used by PNG chunks.
+const CRC32_TABLE: [u32; 256] = crc32_table();
+
+const fn crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut index = 0;
+    while index < 256 {
+        let mut crc = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 1 == 1 {
+                0xedb8_8320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
+            bit += 1;
+        }
+        table[index] = crc;
+        index += 1;
+    }
+    table
+}
+
+/// Table-driven CRC-32: one lookup per byte keeps 16 MiB image inspection off the bitwise loop.
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = !0u32;
     for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
+        // The index is the low byte of `crc` XOR the input byte, so it is always below 256.
+        crc = CRC32_TABLE[usize::from((crc as u8) ^ *byte)] ^ (crc >> 8);
     }
     !crc
 }
@@ -749,6 +771,27 @@ fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerRefusal> {
         return Err(MediaContainerRefusal::Unsupported);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod crc_tests {
+    use super::crc32;
+
+    #[test]
+    fn crc32_matches_the_standard_check_value_and_the_png_iend_chunk() {
+        assert_eq!(crc32(b""), 0);
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+        // PNG stores the CRC of the chunk type and data; an empty IEND chunk is this constant.
+        assert_eq!(crc32(b"IEND"), 0xae42_6082);
+    }
+
+    #[test]
+    fn crc32_detects_a_single_flipped_bit_in_a_long_chunk() {
+        let mut chunk = vec![0x5au8; 65_536];
+        let original = crc32(&chunk);
+        chunk[40_000] ^= 0x01;
+        assert_ne!(crc32(&chunk), original);
+    }
 }
 
 #[cfg(test)]

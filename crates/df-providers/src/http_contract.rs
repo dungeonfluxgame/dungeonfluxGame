@@ -124,6 +124,12 @@ impl HttpRequest {
         &self.headers
     }
 
+    /// Moves the body into the transport without copying it; a sent request has no other use.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn into_body(self) -> Vec<u8> {
+        self.body
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn responses(endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
         Self {

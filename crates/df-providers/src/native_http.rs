@@ -282,14 +282,15 @@ impl NativeHttp {
             HttpMethod::Post => reqwest::Method::POST,
             HttpMethod::Put => reqwest::Method::PUT,
         };
-        let mut builder = self
-            .client
-            .request(method, request.url())
-            .body(request.body().to_vec());
+        let mut builder = self.client.request(method, request.url());
         for (name, value) in request.headers() {
             builder = builder.header(*name, value);
         }
-        let mut response = builder.send().await.map_err(classify_transport_error)?;
+        let mut response = builder
+            .body(request.into_body())
+            .send()
+            .await
+            .map_err(classify_transport_error)?;
         if matches!(profile, NativeResponseProfile::Json) {
             // Preserve the existing Responses transport's selected-header contract.
             if let Some(value) = response.headers().get("x-request-id") {
