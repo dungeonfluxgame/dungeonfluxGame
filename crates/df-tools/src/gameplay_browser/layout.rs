@@ -482,7 +482,7 @@ pub(super) fn apply(
     tick();
     Ok(())
 }
-fn stop() {
+pub(super) fn stop() {
     ACTIVE.with(|active| {
         active.borrow_mut().take();
     });

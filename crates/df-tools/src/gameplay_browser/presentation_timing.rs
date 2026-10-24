@@ -70,6 +70,7 @@ impl Drop for Capture {
 }
 
 thread_local! {
+    static VISIBILITY_REFRESH: RefCell<Option<gloo_timers::callback::Timeout>> = const { RefCell::new(None) };
     static CAPTURES: RefCell<Vec<Capture>> = const { RefCell::new(Vec::new()) };
     static PRECONNECT: RefCell<Vec<(web_sys::Element, crate::client_diagnostics::PreconnectBuffer)>> = const { RefCell::new(Vec::new()) };
     static PRECONNECT_DROPPED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -731,10 +732,31 @@ fn component_is_active(
 /// effective visibility changed, so a logically active speech bubble hidden behind a card shows
 /// up explicitly in the same timeline.
 pub(super) fn refresh_component_visibility() {
+    let mut active = false;
+    displays(|capture| active |= !capture.components.is_empty());
+    if !active {
+        return;
+    }
+    VISIBILITY_REFRESH.with(|slot| {
+        let mut pending = slot.borrow_mut();
+        if pending.is_none() {
+            *pending = Some(gloo_timers::callback::Timeout::new(0, || {
+                VISIBILITY_REFRESH.with(|slot| slot.borrow_mut().take());
+                refresh_component_visibility_now();
+            }));
+        }
+    });
+}
+
+fn refresh_component_visibility_now() {
     let Some(now) = now_ms() else {
         return;
     };
     displays(|capture| {
+        // No open component: nothing can change, so skip the ancestor style and layout probes.
+        if capture.components.is_empty() {
+            return;
+        }
         let mut changed = Vec::new();
         let mut closed = Vec::new();
         for ((component, id, scene), active) in &mut capture.components {

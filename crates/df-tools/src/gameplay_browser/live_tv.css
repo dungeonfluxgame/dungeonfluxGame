@@ -67,7 +67,7 @@ body:has(.tv-stage){overflow:hidden}
 /* The party strip matters in a fight, not in talk (owner 2026-10-24: the whole block, not only the
    HP text): a minute into a scene without a fight it sinks away, and it returns the moment a fight
    begins (the selector stops matching). */
-.tv-stage[data-tv-mode=scene][data-battle-state=absent] .tv-partybar{animation:df-party-quiet 1.4s cubic-bezier(.4,0,.2,1) 60s forwards}
+.tv-stage[data-tv-mode=scene][data-battle-state=absent] .tv-partybar{animation:df-party-quiet 1.4s cubic-bezier(.4,0,.2,1) var(--tune-party-fade-after,60s) forwards}
 @keyframes df-party-quiet{to{opacity:0;transform:translateY(40%);visibility:hidden}}
 .tv-dock{display:none}
 
@@ -295,8 +295,8 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
    movement so the animation restarts; keyboard focus always shows it. !important: the control's
    inline style sets its opacity. */
 .tv-voice-control:not([data-pointer]){opacity:0!important;visibility:hidden}
-.tv-voice-control[data-pointer=a]{animation:df-sound-awake-a 15.8s linear forwards}
-.tv-voice-control[data-pointer=b]{animation:df-sound-awake-b 15.8s linear forwards}
+.tv-voice-control[data-pointer=a]{animation:df-sound-awake-a var(--tune-sound-button-idle,15.8s) linear forwards}
+.tv-voice-control[data-pointer=b]{animation:df-sound-awake-b var(--tune-sound-button-idle,15.8s) linear forwards}
 @keyframes df-sound-awake-a{0%,94.9%{opacity:.92;visibility:visible}100%{opacity:0;visibility:hidden}}
 @keyframes df-sound-awake-b{0%,94.9%{opacity:.92;visibility:visible}100%{opacity:0;visibility:hidden}}
 .tv-voice-control:focus-visible{opacity:.92!important;visibility:visible!important;animation:none}
@@ -310,9 +310,9 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
    on the dark stage: a warm pool of light, a dark mat with a double gold rule, a slow settle on entry
    and the gentlest breathing while it waits; the plate's arrival cross-fades it away. */
 .tv-mural{position:absolute;inset:0;z-index:5;display:grid;place-items:start center;padding-top:calc(5vh + var(--u)*6);box-sizing:border-box;pointer-events:none;opacity:0;visibility:hidden;background:radial-gradient(ellipse 58% 52% at 50% 40%,#2b2215 0%,#121820 55%,#05080d 100%);transition:opacity .9s ease,visibility 0s .9s}
-.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural{opacity:1;visibility:visible;transition:opacity 1.4s ease,visibility 0s}
+.tv-stage[data-arrival-mural] .tv-mural{opacity:1;visibility:visible;transition:opacity 1.4s ease,visibility 0s}
 .tv-mural-art{display:block;height:min(58vh,calc(80vw*9/16));aspect-ratio:16/9;object-fit:cover;border:1px solid #e8cb94b3;outline:1px solid #e8cb9447;outline-offset:calc(var(--u)*.7);box-shadow:0 0 0 calc(var(--u)*1.5) #0d131b,0 0 0 calc(var(--u)*1.58) #c9a35f66,0 3vh 9vh #000d,0 0 14vh #e8cb941f;filter:saturate(.92) contrast(1.04)}
-.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural-art{animation:df-mural-settle 1.8s cubic-bezier(.2,.8,.2,1) both,df-mural-breathe 16s ease-in-out 1.8s infinite alternate}
+.tv-stage[data-arrival-mural] .tv-mural-art{animation:df-mural-settle 1.8s cubic-bezier(.2,.8,.2,1) both,df-mural-breathe 16s ease-in-out 1.8s infinite alternate}
 @keyframes df-mural-settle{from{opacity:0;transform:scale(1.035)}to{opacity:1;transform:none}}
 @keyframes df-mural-breathe{to{transform:scale(1.018)}}
-@media (prefers-reduced-motion:reduce){.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural-art{animation:df-mural-settle .01s both}}
+@media (prefers-reduced-motion:reduce){.tv-stage[data-arrival-mural] .tv-mural-art{animation:df-mural-settle .01s both}}

@@ -131,7 +131,25 @@ pub(crate) struct Placement {
 /// The gap between a bubble and the head box, as a fraction of the screen width.
 const GAP_FRACTION: f64 = 0.012;
 /// The screen's own margin the bubble keeps, as a fraction of the screen's short side.
-const MARGIN_FRACTION: f64 = 0.02;
+// Wide enough that a bubble never touches an edge or letterbox bar (owner 2026-10-24: no
+// panel spawns against the border).
+pub(crate) const MARGIN_FRACTION: f64 = 0.045;
+
+thread_local! {
+    /// The display's tuned margin (`--tune-panel-margin`), else [`MARGIN_FRACTION`].
+    static MARGIN: std::cell::Cell<f64> = const { std::cell::Cell::new(MARGIN_FRACTION) };
+}
+
+/// Adopt the display's tuned margin; out-of-range values keep the previous one.
+pub(crate) fn set_margin_fraction(value: f64) {
+    if value.is_finite() && (0.0..=0.2).contains(&value) {
+        MARGIN.with(|margin| margin.set(value));
+    }
+}
+
+pub(crate) fn margin_fraction() -> f64 {
+    MARGIN.with(std::cell::Cell::get)
+}
 /// How far the bubble may slide up or down looking for room, in steps of this fraction of the
 /// screen height, up to the limit.
 const STEP_FRACTION: f64 = 0.025;
@@ -159,7 +177,7 @@ pub(crate) fn place_bubble(
     if !(width > 0.0 && height > 0.0) {
         return None;
     }
-    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let margin = screen.width().min(screen.height()) * margin_fraction();
     let inside = Rect::new(
         screen.left + margin,
         screen.top + margin,
@@ -202,7 +220,7 @@ pub(crate) fn place_bubble_near_head(
     if !(width > 0.0 && height > 0.0) {
         return None;
     }
-    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let margin = screen.width().min(screen.height()) * margin_fraction();
     let inside = Rect::new(
         screen.left + margin,
         screen.top + margin,
@@ -291,7 +309,7 @@ impl Placement {
 
 /// A named rules panel has no head attribution. Choose a measured clear rectangle in the viewport.
 pub(crate) fn place_panel(screen: Rect, size: (f64, f64), avoid: &[Rect]) -> Option<Rect> {
-    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let margin = screen.width().min(screen.height()) * margin_fraction();
     let inside = Rect::new(
         screen.left + margin,
         screen.top + margin,
@@ -334,7 +352,7 @@ pub(crate) fn place_bubble_stacked(
     if !(width > 0.0 && height > 0.0) {
         return None;
     }
-    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let margin = screen.width().min(screen.height()) * margin_fraction();
     let inside = Rect::new(
         screen.left + margin,
         screen.top + margin,

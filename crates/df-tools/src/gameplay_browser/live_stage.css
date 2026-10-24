@@ -323,6 +323,13 @@
 .tv-hud-card .tv-intent::after{display:none}
 .tv-hud-card .tv-intent .tv-wave{height:calc(var(--u)*.9)}
 .tv-intent::after{display:none}
+/* An NPC thinking while the narrative engine writes their reply (owner 2026-10-24): their name in quiet italic and
+   slower, softer dots than a hero typing, so it reads as a pause before speech rather than input. */
+.tv-intent[data-intent=thinking]{background:#f6efdcd9;border-color:#c9a35fb3;animation:df-bubble-in .35s ease-out backwards,df-think-breathe 3.2s ease-in-out .35s infinite}
+.tv-intent[data-intent=thinking] .tv-intent-name{font-style:italic;opacity:.78}
+.tv-intent[data-intent=thinking] .tv-intent-dots i{background:#8a6a3c;animation-duration:var(--tune-thinking-dots,1.6s)}
+@keyframes df-think-breathe{0%,100%{opacity:1}50%{opacity:.82}}
+@media (prefers-reduced-motion:reduce){.tv-intent[data-intent=thinking]{animation:none}.tv-intent[data-intent=thinking] .tv-intent-dots i{animation:none;opacity:.7}}
 @media (prefers-reduced-motion:reduce){
   .tv-hud{transition:none}
   .tv-hud[data-party-hud=visible]{transition:none}

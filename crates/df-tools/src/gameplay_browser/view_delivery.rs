@@ -140,7 +140,28 @@ impl GameplayViews {
     }
 
     pub(super) fn reconnect(&mut self, generation: ConnectionGeneration) -> bool {
-        self.views.reconnect(generation)
+        if !self.views.reconnect(generation.clone()) {
+            return false;
+        }
+        // Layout revisions belong to one server connection, while the gameplay watermark
+        // survives reconnect. Clear only layout metadata before a retained-view redraw.
+        let clear = |view: &mut rpc::ViewMessage| {
+            if let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_mut() {
+                display.layout_revision = 0;
+                display.layout_json.clear();
+                true
+            } else {
+                false
+            }
+        };
+        if let Some(revision) = self.current_revision() {
+            self.views
+                .amend_presentation(&generation, self.scope.binding, revision, clear);
+        }
+        if let Some(talk) = self.table_talk.as_mut() {
+            clear(talk);
+        }
+        true
     }
 
     #[cfg(test)]
@@ -333,6 +354,55 @@ mod tests {
                 },
             )),
         }
+    }
+
+    #[test]
+    fn hs54_reconnect_accepts_restarted_layout_at_the_same_gameplay_revision() {
+        let connection = RpcConnection::new(());
+        let generation = connection.generation();
+        let scope = scope(ViewRole::Display);
+        let mut views = GameplayViews::new(scope, generation.clone());
+        let mut old = view(14, 0, rpc::PlateState::Pending);
+        if let Some(rpc::view_message::Audience::Display(display)) = old.audience.as_mut() {
+            let mut document = crate::layout_contract::LayoutDocument::default();
+            document.revision = 9;
+            display.layout_revision = 9;
+            display.layout_json = serde_json::to_string(&document).unwrap();
+        }
+        views.accept(&generation, scope, old.clone()).unwrap();
+        let new_connection = RpcConnection::new(());
+        let next = new_connection.generation();
+        assert!(views.reconnect(next.clone()));
+        let mut new = old;
+        if let Some(rpc::view_message::Audience::Display(display)) = new.audience.as_mut() {
+            let mut document = crate::layout_contract::LayoutDocument::default();
+            document.revision = 1;
+            display.layout_revision = 1;
+            display.layout_json = serde_json::to_string(&document).unwrap();
+        }
+        let (_, changed) = views
+            .accept_with_art(
+                &next,
+                scope,
+                new.clone(),
+                crate::layout_contract::merge_layout,
+            )
+            .unwrap();
+        assert!(changed);
+        assert_eq!(views.current_revision().unwrap().sequence(), 14);
+        let Some(rpc::view_message::Audience::Display(display)) =
+            &views.current().unwrap().audience
+        else {
+            panic!("display")
+        };
+        assert_eq!(display.layout_revision, 1);
+        assert_eq!(
+            display.narration,
+            match &new.audience {
+                Some(rpc::view_message::Audience::Display(display)) => display.narration.clone(),
+                _ => panic!("display"),
+            }
+        );
     }
 
     #[test]

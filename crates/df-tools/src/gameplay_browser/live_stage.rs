@@ -41,6 +41,9 @@ use web_sys::Event;
 
 const GENERATED: &str = live_tv::GENERATED;
 const HEROES: usize = 6;
+/// A hero panel is at least this share of the screen wide, so its text never stacks into a column
+/// (`--tune-hero-panel-min-width`); its margin is the shared panel margin (`--tune-panel-margin`).
+const HERO_PANEL_MIN_WIDTH: f64 = 0.24;
 const SLOTS: usize = HEROES + MAX_NPCS;
 /// Every hero has a HUD card, followed by the foe's.
 const HUD_CARDS: usize = HEROES + 1;
@@ -1629,6 +1632,10 @@ impl Figures {
     /// centre of the screen first), then narrower, until the bubble overlaps no other figure's
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
+        // The persisted display tuning may widen or narrow every panel's clear margin.
+        if let Some(margin) = super::live_tv::tuning_number(&self.root, "panel-margin") {
+            plate_layout::set_margin_fraction(margin);
+        }
         if speaker
             .bubbles
             .query_selector(".tv-check-result[data-check-managed]")
@@ -1710,21 +1717,32 @@ impl Figures {
             1.0
         };
         let bar = self.letterbox_bar_height(&window);
+        // Never scrolls and never touches an edge: at least a readable width, centred on the
+        // hero's column, clamped inside the margin; it grows upward to fit its text.
+        let margin = width.min(height) * plate_layout::margin_fraction();
+        let minimum_width = super::live_tv::tuning_number(&self.root, "hero-panel-min-width")
+            .filter(|share| share.is_finite() && (0.05..=0.9).contains(share))
+            .unwrap_or(HERO_PANEL_MIN_WIDTH);
         let column = width / HEROES as f64;
-        let panel_width = (column - 16.0).max(1.0);
+        let panel_width = (column - 16.0)
+            .max(width * minimum_width)
+            .min(width - 2.0 * margin)
+            .max(1.0);
+        let left = (column * (index as f64 + 0.5) - panel_width / 2.0)
+            .clamp(margin, (width - margin - panel_width).max(margin));
         let _measure = host.set_attribute(
             "style",
             &format!("left:0;top:0;right:auto;width:{}px", panel_width / scale_x),
         );
-        let top = (height - bar - 16.0 - host.get_bounding_client_rect().height()).max(bar + 16.0);
+        let top =
+            (height - bar - margin - host.get_bounding_client_rect().height()).max(bar + margin);
         let _placed = host.set_attribute(
             "style",
             &format!(
-                "left:{}px;top:{}px;right:auto;width:{}px;max-height:{}px;overflow:auto",
-                (column * index as f64 + 8.0 - portal.left()) / scale_x,
+                "left:{}px;top:{}px;right:auto;width:{}px",
+                (left - portal.left()) / scale_x,
                 (top - portal.top()) / scale_y,
                 panel_width / scale_x,
-                (height - 2.0 * bar - 32.0).max(1.0) / scale_y,
             ),
         );
     }
@@ -1750,7 +1768,15 @@ impl Figures {
         }
         let _shown = host.remove_attribute("hidden");
         let _tail = host.remove_attribute("data-tail");
-        let _reason = host.set_attribute("data-anchor-fallback", "named-check-panel");
+        let thinking = speaker.root.has_attribute("data-thinking");
+        let _reason = host.set_attribute(
+            "data-anchor-fallback",
+            if thinking {
+                "named-thinking-panel"
+            } else {
+                "named-check-panel"
+            },
+        );
         let portal = self.plate_bubbles.get_bounding_client_rect();
         let scale_x = if self.plate_bubbles.client_width() > 0 {
             portal.width() / f64::from(self.plate_bubbles.client_width())
@@ -1792,21 +1818,41 @@ impl Figures {
                 }
             }
         }
-        for (maximum_width, scroll) in [(600.0_f64, false), (960.0_f64, false), (960.0_f64, true)] {
-            let overflow = if scroll {
-                "max-height:25vh;overflow:auto;"
-            } else {
-                ""
-            };
+        if thinking {
+            for other in &self.figures {
+                if !other.root.is_same_node(Some(speaker.root.as_ref()))
+                    && other.bubbles.has_child_nodes()
+                    && !other.bubbles.has_attribute("hidden")
+                {
+                    let bounds = other.bubbles.get_bounding_client_rect();
+                    if bounds.width() > 0.0 && bounds.height() > 0.0 {
+                        avoid.push(Rect::new(
+                            bounds.left(),
+                            bounds.top(),
+                            bounds.right(),
+                            bounds.bottom(),
+                        ));
+                    }
+                }
+            }
+        }
+        // The letterbox band is the stage's own pseudo-element, unaffected by the panel's width.
+        let bar = self.letterbox_bar_height(&window);
+        // Wider before giving up; a panel never scrolls (owner 2026-10-24: no scroll bars).
+        let widths: &[f64] = if thinking {
+            &[280.0]
+        } else {
+            &[600.0, 960.0, 1400.0]
+        };
+        for &maximum_width in widths {
             let _measure = host.set_attribute(
                 "style",
                 &format!(
-                    "left:0;top:0;right:auto;pointer-events:auto;width:{}px;{overflow}",
+                    "left:0;top:0;right:auto;pointer-events:auto;width:{}px",
                     (width - 32.0).min(maximum_width) / scale_x
                 ),
             );
             let size = host.get_bounding_client_rect();
-            let bar = self.letterbox_bar_height(&window);
             if let Some(rect) = plate_layout::place_panel(
                 Rect::new(0.0, bar, width, height - bar),
                 (size.width(), size.height()),
@@ -1815,7 +1861,7 @@ impl Figures {
                 let _placed = host.set_attribute(
                     "style",
                     &format!(
-                        "left:{}px;top:{}px;right:auto;pointer-events:auto;width:{}px;{overflow}",
+                        "left:{}px;top:{}px;right:auto;pointer-events:auto;width:{}px",
                         (rect.left - portal.left()) / scale_x,
                         (rect.top - portal.top()) / scale_y,
                         rect.width() / scale_x
@@ -1868,6 +1914,10 @@ impl Figures {
     }
 
     fn place_bubble_at_actor(&self, speaker: &Figure) {
+        // Thinking has no readable line to pin; late plate geometry must move it to its person.
+        if speaker.root.has_attribute("data-thinking") {
+            let _removed = speaker.bubbles.remove_attribute("data-anchor-line");
+        }
         if let Some(id) = speaker.bubbles.get_attribute("data-anchor-line") {
             if speaker.bubbles.query_selector(&format!("[data-line-id=\"{id}\"]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")).ok().flatten().is_some() {
                 if self.retained_caption_bounds(&speaker.bubbles).is_none() {
@@ -1881,6 +1931,12 @@ impl Figures {
         let _shown = speaker.bubbles.remove_attribute("hidden");
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
+        if speaker.root.has_attribute("data-thinking")
+            && (geometry.is_none() || self.plate_size.get().is_none())
+        {
+            self.place_check_panel(speaker);
+            return;
+        }
         if geometry.is_none() && self.plate_size.get().is_some() {
             if let Some(index) = self
                 .figures
@@ -1956,7 +2012,11 @@ impl Figures {
                 fixed_avoid.push(rectangle(&panel));
             }
         }
-        for selector in BUBBLE_UI_OBSTACLES {
+        // The fixed headers were read above into `fixed_avoid`; read only the other panels here.
+        for selector in BUBBLE_UI_OBSTACLES
+            .into_iter()
+            .filter(|selector| !BUBBLE_FIXED_OBSTACLES.contains(selector))
+        {
             if let Ok(Some(panel)) = self.document.query_selector(selector) {
                 avoid.push(rectangle(&panel));
             }
@@ -1971,32 +2031,31 @@ impl Figures {
         } else {
             ["right", "left"]
         };
+        // Each candidate is measured once. Every write dirties layout, so each read forces a
+        // reflow; the fixed-only pass below reuses these four boxes instead of measuring again.
+        let mut candidates = Vec::with_capacity(4);
+        let inside = |placed: (f64, f64, f64, f64)| {
+            placed.0 >= screen.0
+                && placed.2 <= screen.2
+                && placed.1 >= screen.1
+                && placed.3 <= screen.3
+        };
         for narrow in [false, true] {
             for side in sides {
                 let _set = speaker.bubbles.set_attribute("data-side", side);
                 flag(&speaker.bubbles, "data-narrow", narrow).ok();
                 let placed = rectangle(&speaker.bubbles);
-                let inside = placed.0 >= screen.0
-                    && placed.2 <= screen.2
-                    && placed.1 >= screen.1
-                    && placed.3 <= screen.3;
-                if inside && !avoid.iter().any(|head| overlaps(placed, *head)) {
+                if inside(placed) && !avoid.iter().any(|head| overlaps(placed, *head)) {
                     return;
                 }
+                candidates.push((side, narrow, placed));
             }
         }
-        for narrow in [false, true] {
-            for side in sides {
+        for (side, narrow, placed) in candidates {
+            if inside(placed) && !fixed_avoid.iter().any(|head| overlaps(placed, *head)) {
                 let _set = speaker.bubbles.set_attribute("data-side", side);
                 flag(&speaker.bubbles, "data-narrow", narrow).ok();
-                let placed = rectangle(&speaker.bubbles);
-                let inside = placed.0 >= screen.0
-                    && placed.2 <= screen.2
-                    && placed.1 >= screen.1
-                    && placed.3 <= screen.3;
-                if inside && !fixed_avoid.iter().any(|head| overlaps(placed, *head)) {
-                    return;
-                }
+                return;
             }
         }
         let _hidden = speaker.bubbles.set_attribute("hidden", "");
@@ -2207,39 +2266,17 @@ impl Figures {
             .unwrap_or_default();
         let mask = geometry.figure_mask(hero_index, &actor_id);
         let (head, side, mut avoid, head_top) = if let Some(mask) = mask {
-            let head_width =
-                ((mask.bounds[2] - mask.bounds[0]) * 1000 / mask.source_width).clamp(30, 140);
-            let head_height = (head_width * mask.source_width / mask.source_height).clamp(40, 180);
-            let measured = geometry
-                .heroes
-                .iter()
-                .find(|hero| Some(hero.index) == hero_index)
-                .map(|hero| {
-                    frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height)
-                })
-                .or_else(|| {
-                    geometry
-                        .actors
-                        .iter()
-                        .find(|actor| hero_index.is_none() && actor.actor_id == actor_id)
-                        .map(|actor| {
-                            frame.head_box(
-                                actor.head_x,
-                                actor.head_y,
-                                actor.head_width,
-                                actor.head_height,
-                            )
-                        })
-                });
+            let speaker = hero_index.map_or(
+                crate::presentation::CaptionSpeaker::Npc(&actor_id),
+                crate::presentation::CaptionSpeaker::Hero,
+            );
+            let Some((x, y, width, height)) =
+                crate::stage_conductor::speaker_head(&geometry, speaker)
+            else {
+                return;
+            };
             (
-                measured.unwrap_or_else(|| {
-                    frame.head_box(
-                        mask.head_top[0],
-                        mask.head_top[1] + head_height / 2,
-                        head_width,
-                        head_height,
-                    )
-                }),
+                frame.head_box(x, y, width, height),
                 mask.free_side,
                 vec![speaker_head],
                 mask.head_top,
@@ -2271,6 +2308,10 @@ impl Figures {
                         .iter()
                         .find(|actor| actor.actor_id == id && !id.is_empty())
                     else {
+                        if bubble_owner.root.has_attribute("data-thinking") {
+                            self.place_check_panel(bubble_owner);
+                            return;
+                        }
                         let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
                         let _reason = bubble_owner
                             .bubbles
@@ -2343,11 +2384,11 @@ impl Figures {
             fallback_avoid.push(box_);
         }
         let mut interface = Vec::new();
-        let mut keep_clear = |element: &Element| {
+        // Each box is read once: a panel is a plate obstacle, and a fixed header is also a
+        // fallback obstacle.
+        let keep_clear = |element: &Element| -> Option<Rect> {
             let (left, top, right, bottom) = rectangle(element);
-            if right > left && bottom > top {
-                interface.push(Rect::new(left, top, right, bottom));
-            }
+            (right > left && bottom > top).then(|| Rect::new(left, top, right, bottom))
         };
         for card in &self.hud {
             if card.root.get_attribute("data-present").as_deref() == Some("true")
@@ -2358,27 +2399,24 @@ impl Figures {
                     .flatten()
                     .is_some()
             {
-                let bounds = card.root.get_bounding_client_rect();
-                fallback_avoid.push(Rect::new(
-                    bounds.left(),
-                    bounds.top(),
-                    bounds.right(),
-                    bounds.bottom(),
-                ));
-                keep_clear(&card.root);
+                let bounds = keep_clear(&card.root);
+                fallback_avoid.extend(bounds);
+                interface.extend(bounds);
             }
         }
-        for selector in BUBBLE_UI_OBSTACLES {
+        let thinking = bubble_owner.root.has_attribute("data-thinking");
+        for selector in BUBBLE_UI_OBSTACLES
+            .into_iter()
+            .chain([".tv-lower", ".tv-dm"].into_iter().filter(|_| thinking))
+        {
             if let Ok(Some(element)) = self.document.query_selector(selector) {
-                keep_clear(&element);
-            }
-        }
-        for selector in BUBBLE_FIXED_OBSTACLES {
-            if let Ok(Some(element)) = self.document.query_selector(selector) {
-                let (left, top, right, bottom) = rectangle(&element);
-                if right > left && bottom > top {
-                    fallback_avoid.push(Rect::new(left, top, right, bottom));
+                let bounds = keep_clear(&element);
+                if BUBBLE_FIXED_OBSTACLES.contains(&selector)
+                    || matches!(selector, ".tv-lower" | ".tv-dm")
+                {
+                    fallback_avoid.extend(bounds);
                 }
+                interface.extend(bounds);
             }
         }
         // The plate has its own bubble layer, so the regular figure-head obstacles do not cover
@@ -2735,6 +2773,9 @@ impl Figures {
         {
             stage.remove_attribute("data-typed-strip")?;
         }
+        if state == LineState::Opening && figure.root.has_attribute("data-thinking") {
+            self.set_thinking(None)?;
+        }
         let existing = figure
             .bubbles
             .query_selector(&format!("[data-line-id=\"{id}\"]"))?;
@@ -2971,16 +3012,48 @@ impl Figures {
     /// or at none. Showing it where it already is changes nothing, so its animation is not
     /// restarted by every view.
     pub(super) fn set_thinking(&self, slot: Option<ActorSlot>) -> Result<(), JsValue> {
-        let target = slot.and_then(|slot| self.figure(slot));
+        let target = slot
+            .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+            .filter(|_| self.root.get_attribute("data-arrange").as_deref() != Some("combat"))
+            .and_then(|slot| self.figure(slot))
+            .filter(|figure| Self::present(figure));
         for (position, figure) in self.figures.iter().enumerate() {
-            let wanted = target.is_some_and(|target| target.root.is_same_node(Some(&figure.root)));
+            let speaking = figure.bubbles.query_selector(
+                ".tv-bubble[data-line-id]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])",
+            )?.is_some();
+            let wanted = !speaking
+                && target.is_some_and(|target| target.root.is_same_node(Some(&figure.root)));
             let shown = figure.root.has_attribute("data-thinking");
             if wanted && !shown {
                 figure.root.set_attribute("data-thinking", "")?;
-                let dots = node(&self.document, &figure.bubbles, "div", "tv-thinking", "")?;
+                let dots = node(
+                    &self.document,
+                    &figure.bubbles,
+                    "div",
+                    "tv-bubble tv-intent tv-thinking",
+                    "",
+                )?;
+                dots.set_attribute("data-intent", "thinking")?;
+                dots.set_attribute("data-kind", "intent")?;
+                dots.set_attribute("data-line-state", "composing")?;
+                dots.set_attribute(
+                    "data-actor-id",
+                    &figure
+                        .root
+                        .get_attribute("data-actor-id")
+                        .unwrap_or_default(),
+                )?;
                 dots.set_attribute("aria-hidden", "true")?;
+                node(
+                    &self.document,
+                    &dots,
+                    "span",
+                    "tv-intent-name",
+                    &figure.name_text.borrow(),
+                )?;
+                let animation = node(&self.document, &dots, "span", "tv-intent-dots", "")?;
                 for _ in 0..3 {
-                    node(&self.document, &dots, "i", "", "")?;
+                    node(&self.document, &animation, "i", "", "")?;
                 }
                 self.place_bubble(figure);
                 let id = position as u64 + 1;
@@ -3016,6 +3089,8 @@ impl Figures {
                     0,
                     200,
                 );
+            } else if wanted {
+                self.place_bubble(figure);
             } else if !wanted && shown {
                 figure.root.remove_attribute("data-thinking")?;
                 if let Some(dots) = figure.bubbles.query_selector(".tv-thinking")? {
@@ -3039,6 +3114,9 @@ impl Figures {
 }
 
 fn flag(element: &Element, name: &str, on: bool) -> Result<(), JsValue> {
+    if element.has_attribute(name) == on {
+        return Ok(());
+    }
     if on {
         element.set_attribute(name, "")
     } else {
@@ -3742,6 +3820,190 @@ mod tests {
         let heroes = [Some("Aria".to_owned()), None];
 
         assert_eq!(typed_line_anchor("Bram", &heroes), None);
+    }
+
+    #[test]
+    fn pending_npc_loader_is_named_unique_and_retires_on_clear_or_opening_reply() {
+        use super::{ActorSlot, BubbleKind, Figures, HEROES, LineBubble};
+        use crate::{presentation::CaptionSpeaker, stage_machines::LineState};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        parent.set_attribute("class", "tv-stage").unwrap();
+        parent.set_attribute("data-shot", "plate").unwrap();
+        parent
+            .set_attribute("style", "position:fixed;inset:0;--u:10px")
+            .unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n{}",
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css")
+        )));
+        parent.append_child(&style).unwrap();
+        let caption = document.create_element("div").unwrap();
+        caption.set_attribute("class", "tv-lower").unwrap();
+        caption
+            .set_attribute("style", "position:absolute;inset:80% 0 0")
+            .unwrap();
+        caption.set_text_content(Some("The hero's question stays readable."));
+        parent.append_child(&caption).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let npc = &figures.figures[HEROES];
+        npc.root.set_attribute("data-present", "true").unwrap();
+        npc.root.set_attribute("data-actor-id", "courier").unwrap();
+        *npc.name_text.borrow_mut() = "Courier".to_owned();
+        figures.set_plate(None, Some((1920.0, 1080.0))).unwrap();
+        let pending = figures.slot_named("Courier");
+        assert_eq!(pending, Some(ActorSlot::Npc(0)));
+        figures.set_thinking(pending).unwrap();
+        figures.set_thinking(pending).unwrap();
+        let selector = ".tv-bubble.tv-intent[data-intent=thinking]";
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 1);
+        let loader = parent.query_selector(selector).unwrap().unwrap();
+        assert_eq!(
+            loader.get_attribute("data-actor-id").as_deref(),
+            Some("courier")
+        );
+        assert_eq!(
+            loader
+                .query_selector(".tv-intent-name")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("Courier")
+        );
+        assert_eq!(
+            loader
+                .query_selector_all(".tv-intent-dots i")
+                .unwrap()
+                .length(),
+            3
+        );
+        assert!(!npc.bubbles.has_attribute("hidden"));
+        assert!(!super::overlaps(
+            super::rectangle(&npc.bubbles),
+            super::rectangle(&caption)
+        ));
+        assert_eq!(
+            npc.bubbles.get_attribute("data-anchor-fallback").as_deref(),
+            Some("named-thinking-panel")
+        );
+
+        figures
+            .set_plate(
+                Some(crate::presentation::PlateGeometry {
+                    figure_masks: Vec::new(),
+                    actors: vec![crate::presentation::PlateActor {
+                        actor_id: "courier".into(),
+                        bubble_side: crate::plate_layout::Side::Right,
+                        head_x: 500,
+                        head_y: 400,
+                        head_width: 100,
+                        head_height: 100,
+                    }],
+                    bubble_side: crate::plate_layout::Side::Right,
+                    head_x: 500,
+                    head_y: 400,
+                    head_width: 100,
+                    head_height: 100,
+                    heroes: Vec::new(),
+                }),
+                Some((1920.0, 1080.0)),
+            )
+            .unwrap();
+        assert!(!npc.bubbles.has_attribute("hidden"));
+        assert_eq!(
+            npc.bubbles.get_attribute("data-anchor-source").as_deref(),
+            Some("named-head")
+        );
+        let mut geometry = figures.plate_geometry().unwrap().0;
+        geometry.actors.clear();
+        geometry
+            .figure_masks
+            .push(crate::presentation::PlateFigureMask {
+                person: crate::presentation::PlatePerson::Actor("courier".into()),
+                source_width: 1920,
+                source_height: 1080,
+                bounds: [500, 200, 800, 1000],
+                head_top: [340, 185],
+                free_side: crate::plate_layout::Side::Right,
+                inferred: true,
+                mask_index: 0,
+                mask_url: "/gameplay/imagery/plate/figure/0".into(),
+            });
+        figures
+            .latch_plate_geometry(Some(geometry.clone()), Some((1920.0, 1080.0)))
+            .unwrap();
+        assert_eq!(
+            npc.bubbles.get_attribute("data-anchor-source").as_deref(),
+            Some("sam31-mask")
+        );
+        assert!(!npc.bubbles.has_attribute("data-anchor-fallback"));
+        assert!(!npc.bubbles.has_attribute("hidden"));
+        let first_position = npc.bubbles.get_attribute("style");
+        geometry.figure_masks[0].bounds = [1100, 200, 1400, 1000];
+        geometry.figure_masks[0].head_top = [650, 185];
+        figures
+            .latch_plate_geometry(Some(geometry), Some((1920.0, 1080.0)))
+            .unwrap();
+        figures.set_thinking(pending).unwrap();
+        assert_ne!(npc.bubbles.get_attribute("style"), first_position);
+        assert!(
+            parent
+                .query_selector(selector)
+                .unwrap()
+                .unwrap()
+                .is_same_node(Some(&loader))
+        );
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 1);
+        let other = &figures.figures[HEROES + 1];
+        other.root.set_attribute("data-present", "true").unwrap();
+        other.root.set_attribute("data-actor-id", "bandit").unwrap();
+        *other.name_text.borrow_mut() = "Bandit".to_owned();
+        figures.set_thinking(figures.slot_named("Bandit")).unwrap();
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 1);
+        assert_eq!(
+            parent
+                .query_selector(selector)
+                .unwrap()
+                .unwrap()
+                .get_attribute("data-actor-id")
+                .as_deref(),
+            Some("bandit")
+        );
+        figures.set_thinking(None).unwrap();
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 0);
+        figures.set_thinking(pending).unwrap();
+        let reply = LineBubble {
+            kind: BubbleKind::Speech,
+            speaker_actor: CaptionSpeaker::Unknown,
+            speaker: "Courier",
+            text: "Keep your voice down.",
+            voiced: false,
+        };
+        figures
+            .set_line(HEROES, 45, LineState::Opening, &reply)
+            .unwrap();
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 0);
+        figures.set_thinking(pending).unwrap();
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 0);
+        figures
+            .set_line(HEROES, 45, LineState::Done, &reply)
+            .unwrap();
+        for speaker in ["narrator", "Unknown"] {
+            figures.set_thinking(figures.slot_named(speaker)).unwrap();
+            assert_eq!(parent.query_selector_all(selector).unwrap().length(), 0);
+        }
+        figures
+            .root
+            .set_attribute("data-arrange", "combat")
+            .unwrap();
+        figures.set_thinking(pending).unwrap();
+        assert_eq!(parent.query_selector_all(selector).unwrap().length(), 0);
+        figures.dispose();
+        parent.remove();
     }
 
     #[test]

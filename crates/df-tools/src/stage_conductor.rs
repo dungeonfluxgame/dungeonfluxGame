@@ -43,7 +43,7 @@ pub(crate) fn request_timeline_reset() {
 
 pub(crate) type LineId = u64;
 
-/// Focus a covered plate on a measured head. Origins inside the layer keep every edge
+/// Focus a covered plate on a named head or assigned mask. Origins keep every edge
 /// covered at scales >= 1, including while CSS interpolates between two speakers.
 pub(crate) fn plate_focus(
     geometry: &crate::presentation::PlateGeometry,
@@ -51,23 +51,11 @@ pub(crate) fn plate_focus(
     narrator: bool,
     frame: crate::plate_layout::PlateFrame,
 ) -> Option<(f64, f64)> {
-    use crate::presentation::CaptionSpeaker;
     let (head_x, head_y) = if narrator {
         (geometry.head_x, geometry.head_y)
     } else {
-        match speaker {
-            CaptionSpeaker::Hero(index) => geometry
-                .heroes
-                .iter()
-                .find(|hero| hero.index == index)
-                .map(|hero| (hero.head_x, hero.head_y))?,
-            CaptionSpeaker::Npc(id) => geometry
-                .actors
-                .iter()
-                .find(|actor| !id.is_empty() && actor.actor_id == id)
-                .map(|actor| (actor.head_x, actor.head_y))?,
-            CaptionSpeaker::Unknown => return None,
-        }
+        let (x, y, _, _) = speaker_head(geometry, speaker)?;
+        (x, y)
     };
     let width = frame.screen.width();
     let height = frame.screen.height();
@@ -79,6 +67,133 @@ pub(crate) fn plate_focus(
         ((x - frame.screen.left) / width * 100.0).clamp(0.0, 100.0),
         ((y - frame.screen.top) / height * 100.0).clamp(0.0, 100.0),
     ))
+}
+
+/// How a character's line frames them: a push-in sized to their head on screen, and a pan (in
+/// percent of the zoom layer) that brings the head toward the upper centre. The head stays the
+/// scale origin, so the pan's bounds keep every edge of the layer covered at that scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SpeakerShot {
+    pub(crate) scale: f64,
+    pub(crate) pan_x: f64,
+    pub(crate) pan_y: f64,
+}
+
+/// The close-up's framing. The display may tune each value (`--tune-speaker-*` in the
+/// persisted display tuning file); out-of-range values keep these defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SpeakerTuning {
+    /// The speaker's head fills this share of the screen's height in their medium close-up.
+    pub(crate) head_share: f64,
+    pub(crate) scale_min: f64,
+    pub(crate) scale_max: f64,
+    /// Where the speaker's head is brought to, in percent of the screen.
+    pub(crate) frame_x: f64,
+    pub(crate) frame_y: f64,
+}
+
+impl Default for SpeakerTuning {
+    fn default() -> Self {
+        Self {
+            head_share: 0.15,
+            scale_min: 1.2,
+            scale_max: 2.1,
+            frame_x: 50.0,
+            frame_y: 38.0,
+        }
+    }
+}
+
+impl SpeakerTuning {
+    /// Each value from `read` (by tuning name) when it is sane, else the default.
+    pub(crate) fn from_lookup(read: impl Fn(&str) -> Option<f64>) -> Self {
+        let base = Self::default();
+        let pick = |name: &str, default: f64, low: f64, high: f64| {
+            read(name)
+                .filter(|value| value.is_finite() && (low..=high).contains(value))
+                .unwrap_or(default)
+        };
+        let scale_min = pick("speaker-scale-min", base.scale_min, 1.0, 4.0);
+        Self {
+            head_share: pick("speaker-head-share", base.head_share, 0.02, 0.6),
+            scale_min,
+            scale_max: pick("speaker-scale-max", base.scale_max, 1.0, 4.0).max(scale_min),
+            frame_x: pick("speaker-frame-x", base.frame_x, 0.0, 100.0),
+            frame_y: pick("speaker-frame-y", base.frame_y, 0.0, 100.0),
+        }
+    }
+}
+
+/// A named locator head, or the crown and silhouette width of that same person's SAM mask.
+pub(crate) fn speaker_head(
+    geometry: &crate::presentation::PlateGeometry,
+    speaker: crate::presentation::CaptionSpeaker<'_>,
+) -> Option<(u32, u32, u32, u32)> {
+    use crate::presentation::CaptionSpeaker;
+    let (measured, mask) = match speaker {
+        CaptionSpeaker::Hero(index) => (
+            geometry
+                .heroes
+                .iter()
+                .find(|hero| hero.index == index)
+                .map(|hero| (hero.head_x, hero.head_y, hero.head_width, hero.head_height)),
+            geometry.figure_mask(Some(index), ""),
+        ),
+        CaptionSpeaker::Npc(id) => (
+            geometry
+                .actors
+                .iter()
+                .find(|actor| !id.is_empty() && actor.actor_id == id)
+                .map(|actor| {
+                    (
+                        actor.head_x,
+                        actor.head_y,
+                        actor.head_width,
+                        actor.head_height,
+                    )
+                }),
+            geometry.figure_mask(None, id),
+        ),
+        CaptionSpeaker::Unknown => return None,
+    };
+    measured.or_else(|| {
+        let mask = mask?;
+        let width = ((mask.bounds[2] - mask.bounds[0]) * 1000 / mask.source_width).clamp(30, 140);
+        let height = (width * mask.source_width / mask.source_height).clamp(40, 180);
+        Some((
+            mask.head_top[0],
+            mask.head_top[1] + height / 2,
+            width,
+            height,
+        ))
+    })
+}
+
+/// The close-up for a character's line; `None` without a named head or assigned figure mask.
+pub(crate) fn speaker_shot(
+    geometry: &crate::presentation::PlateGeometry,
+    speaker: crate::presentation::CaptionSpeaker<'_>,
+    frame: crate::plate_layout::PlateFrame,
+    tuning: &SpeakerTuning,
+) -> Option<SpeakerShot> {
+    let (x, y, width, height) = speaker_head(geometry, speaker)?;
+    let head = frame.head_box(x, y, width, height);
+    let screen_height = frame.screen.height();
+    if screen_height <= 0.0 || head.height() <= 0.0 {
+        return None;
+    }
+    let scale = (tuning.head_share * screen_height / head.height())
+        .clamp(tuning.scale_min, tuning.scale_max);
+    let (head_x, head_y) = plate_focus(geometry, speaker, false, frame)?;
+    // With origin h and scale s, a pan d keeps both edges covered while (100-h)(1-s) <= d <= h(s-1).
+    let pan = |head: f64, target: f64| {
+        (target - head).clamp((100.0 - head) * (1.0 - scale), head * (scale - 1.0))
+    };
+    Some(SpeakerShot {
+        scale,
+        pan_x: pan(head_x, tuning.frame_x),
+        pan_y: pan(head_y, tuning.frame_y),
+    })
 }
 
 const BEAT_CLIP_WAIT_MS: u64 = 1_500;
@@ -500,26 +615,10 @@ impl<D: Clone> Conductor<D> {
     }
 
     /// Whether anything still needs the clock: a transition, a waiting successor, a line
-    /// being shown or one that will be, or an actor walking. A final line lingering with
-    /// nothing behind it needs only an event.
+    /// being shown or one that will be, or an actor walking. A lingering line stays busy so its
+    /// own timer runs: a final line closes at FINAL_LINGER_CAP_MS even when no event arrives.
     pub(crate) fn is_busy(&self) -> bool {
-        let lines = self
-            .lines
-            .iter()
-            .enumerate()
-            .any(|(index, run)| match run.state {
-                LineState::Done => false,
-                LineState::Lingering => {
-                    run.line.timing != LineTiming::Ordinary
-                        || self.pending.is_some()
-                        || self
-                            .lines
-                            .iter()
-                            .skip(index + 1)
-                            .any(|later| later.state == LineState::Queued)
-                }
-                _ => true,
-            });
+        let lines = self.lines.iter().any(|run| run.state != LineState::Done);
         !self.director.is_idle()
             || matches!(self.scene, SceneState::Entering | SceneState::Exiting)
             || self.pending.is_some()
@@ -1787,6 +1886,125 @@ mod tests {
         BATTLE_ENTER_CAP_MS, BATTLE_FINISH_CAP_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
         LINE_CLOSE_MS, READ_MAXIMUM_MS,
     };
+
+    #[test]
+    fn mask_only_npc_gets_the_same_focus_and_close_up_as_a_named_head() {
+        use crate::{
+            plate_layout::{PlateFrame, Rect, Side},
+            presentation::{
+                CaptionSpeaker, PlateActor, PlateFigureMask, PlateGeometry, PlatePerson,
+            },
+        };
+        let mut geometry = PlateGeometry {
+            bubble_side: Side::Left,
+            head_x: 500,
+            head_y: 450,
+            head_width: 80,
+            head_height: 100,
+            heroes: Vec::new(),
+            actors: Vec::new(),
+            figure_masks: vec![PlateFigureMask {
+                person: PlatePerson::Actor("vendor".into()),
+                source_width: 1000,
+                source_height: 1000,
+                bounds: [600, 200, 700, 900],
+                head_top: [650, 200],
+                free_side: Side::Left,
+                inferred: true,
+                mask_index: 0,
+                mask_url: "/gameplay/imagery/plate/figure/0".into(),
+            }],
+        };
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, 0.0, 1000.0, 1000.0),
+            picture_width: 1000.0,
+            picture_height: 1000.0,
+        };
+        let speaker = CaptionSpeaker::Npc("vendor");
+        let tuning = SpeakerTuning::default();
+        let shot = speaker_shot(&geometry, speaker, frame, &tuning).unwrap();
+        assert_eq!(
+            plate_focus(&geometry, speaker, false, frame),
+            Some((65.0, 25.0))
+        );
+        assert!((shot.scale - 1.5).abs() < 0.001);
+        assert!(speaker_shot(&geometry, CaptionSpeaker::Npc("other"), frame, &tuning).is_none());
+        geometry.actors.push(PlateActor {
+            actor_id: "vendor".into(),
+            bubble_side: Side::Left,
+            head_x: 650,
+            head_y: 250,
+            head_width: 100,
+            head_height: 100,
+        });
+        assert_eq!(speaker_shot(&geometry, speaker, frame, &tuning), Some(shot));
+        geometry.actors[0].head_x = 700;
+        assert_eq!(
+            plate_focus(&geometry, speaker, false, frame),
+            Some((70.0, 25.0))
+        );
+    }
+
+    #[test]
+    fn a_speakers_close_up_scales_to_their_head_and_pans_without_uncovering_an_edge() {
+        use crate::{
+            plate_layout::{PlateFrame, Rect, Side},
+            presentation::{CaptionSpeaker, PlateActor, PlateGeometry, PlateHero},
+        };
+        let mut geometry = PlateGeometry {
+            figure_masks: Vec::new(),
+            bubble_side: Side::Left,
+            head_x: 500,
+            head_y: 400,
+            head_width: 80,
+            head_height: 90,
+            heroes: vec![PlateHero {
+                index: 2,
+                bubble_side: Side::Right,
+                head_x: 200,
+                head_y: 300,
+                head_width: 60,
+                head_height: 80,
+            }],
+            actors: vec![PlateActor {
+                actor_id: "dain".into(),
+                bubble_side: Side::Left,
+                head_x: 800,
+                head_y: 350,
+                head_width: 70,
+                head_height: 80,
+            }],
+        };
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            picture_width: 1920.0,
+            picture_height: 1080.0,
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let tuning = SpeakerTuning::default();
+        // A head 8% of the screen tall is pushed to 15%: 1.875x.
+        let dain = speaker_shot(&geometry, CaptionSpeaker::Npc("dain"), frame, &tuning).unwrap();
+        assert!(near(dain.scale, 1.875));
+        // At 80% across, the pan toward the centre stops where the right edge would show.
+        assert!(near(dain.pan_x, (100.0 - 80.0) * (1.0 - 1.875)));
+        assert!(near(dain.pan_y, 3.0));
+        let hero = speaker_shot(&geometry, CaptionSpeaker::Hero(2), frame, &tuning).unwrap();
+        assert!(near(hero.pan_x, 20.0 * (1.875 - 1.0)));
+        // A distant figure is capped; a missing or unknown speaker has no close-up.
+        geometry.actors[0].head_height = 20;
+        let far = speaker_shot(&geometry, CaptionSpeaker::Npc("dain"), frame, &tuning).unwrap();
+        assert!(near(far.scale, tuning.scale_max));
+        // A tuned file changes the framing; nonsense keeps the default.
+        let tuned = SpeakerTuning::from_lookup(|name| match name {
+            "speaker-scale-max" => Some(3.0),
+            "speaker-head-share" => Some(-1.0),
+            _ => None,
+        });
+        assert!(near(tuned.scale_max, 3.0));
+        assert!(near(tuned.head_share, 0.15));
+        assert!(speaker_shot(&geometry, CaptionSpeaker::Npc("missing"), frame, &tuning).is_none());
+        assert!(speaker_shot(&geometry, CaptionSpeaker::Unknown, frame, &tuning).is_none());
+    }
 
     #[test]
     fn hs48_controlled_clock_aims_each_speaking_line_at_its_own_measured_head() {
@@ -3543,8 +3761,13 @@ mod tests {
         )));
         assert!(!harness.conductor.lines_waiting());
         assert_eq!(harness.conductor.active_speaker(), Some(None));
+        assert!(
+            harness.conductor.is_busy(),
+            "the final caption owns its linger deadline"
+        );
         harness.run_to(60_000);
-        // The final line lingers with nothing behind it: only an event wakes the conductor.
+        assert_eq!(harness.conductor.active_speaker(), None);
+        // The final line closes at its linger cap (45 s), so the conductor is quiet again.
         assert!(!harness.conductor.is_busy());
         assert_eq!(harness.conductor.scene_state(), SceneState::AwaitingChoice);
     }

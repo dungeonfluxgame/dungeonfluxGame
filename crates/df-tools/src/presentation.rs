@@ -736,6 +736,7 @@ pub(crate) struct PlateFigureMask {
     pub(crate) free_side: crate::plate_layout::Side,
     pub(crate) inferred: bool,
     pub(crate) mask_index: u32,
+    pub(crate) mask_url: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -799,6 +800,7 @@ mod figure_mask_anchor_tests {
             free_side: rpc::PlateSide::Left as i32,
             inferred: true,
             mask_index: 7,
+            mask_url: format!("{}/figure/7", scene.live_plate),
         };
         let layout = scene.plate_layout.as_mut().unwrap();
         layout.figure_masks.push(mask.clone());
@@ -809,7 +811,9 @@ mod figure_mask_anchor_tests {
         layout
             .figure_masks
             .push(rpc::PlateFigureMask { right: 401, ..mask });
-        let geometry = plate_of(&scene).layout.unwrap();
+        use prost::Message;
+        let decoded = rpc::GameplayScene::decode(scene.encode_to_vec().as_slice()).unwrap();
+        let geometry = plate_of(&decoded).layout.unwrap();
         assert!(geometry.heroes.is_empty());
         assert_eq!(geometry.figure_masks.len(), 1);
         let assigned = geometry.figure_mask(Some(1), "").unwrap();
@@ -817,7 +821,15 @@ mod figure_mask_anchor_tests {
         assert_eq!(assigned.head_top, [213, 100]);
         assert_eq!(assigned.bounds, [40, 20, 140, 200]);
         assert!(assigned.inferred);
+        assert_eq!(assigned.mask_url, format!("{}/figure/7", scene.live_plate));
         assert!(geometry.figure_mask(Some(0), "").is_none());
+        scene.plate_layout.as_mut().unwrap().figure_masks[0].mask_url =
+            "/gameplay/imagery/another-plate/figure/7".into();
+        assert!(
+            plate_of(&scene).layout.unwrap().figure_masks[0]
+                .mask_url
+                .is_empty()
+        );
     }
 
     #[test]
@@ -909,6 +921,13 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
                         free_side: side_of(figure.free_side)?,
                         inferred: figure.inferred,
                         mask_index: figure.mask_index,
+                        mask_url: url
+                            .as_ref()
+                            .filter(|plate| {
+                                figure.mask_url == format!("{plate}/figure/{}", figure.mask_index)
+                            })
+                            .map(|_| figure.mask_url.clone())
+                            .unwrap_or_default(),
                     })
                 })
                 .collect(),

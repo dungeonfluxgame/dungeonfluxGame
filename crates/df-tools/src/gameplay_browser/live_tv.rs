@@ -193,6 +193,8 @@ struct LowerThird {
 pub(super) struct TvStage {
     root: Element,
     mural_art: Element,
+    /// The scene contents last read for the party mural, so an unchanged view parses nothing.
+    mural_source: RefCell<String>,
     art: Element,
     art_previous: Element,
     plate: PlateLayer,
@@ -265,7 +267,29 @@ pub(super) fn image_layers(stem: &str, fallback: &str) -> String {
     }
 }
 
+/// Writes an attribute only when its value differs: an equal write still queues a mutation record.
+pub(super) fn set_attribute_if_changed(
+    element: &Element,
+    name: &str,
+    value: &str,
+) -> Result<(), JsValue> {
+    if element.get_attribute(name).as_deref() == Some(value) {
+        return Ok(());
+    }
+    element.set_attribute(name, value)
+}
+
+/// Replaces text only when it differs, so an unchanged view leaves the node untouched.
+pub(super) fn set_text_if_changed(element: &Element, text: &str) {
+    if element.text_content().as_deref() != Some(text) {
+        element.set_text_content(Some(text));
+    }
+}
+
 fn set_hidden(element: &Element, hidden: bool) -> Result<(), JsValue> {
+    if element.has_attribute("hidden") == hidden {
+        return Ok(());
+    }
     if hidden {
         element.set_attribute("hidden", "")
     } else {
@@ -488,6 +512,11 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
         crate::presentation::Shot::Stage
     };
     stage.set_attribute("data-shot", shot.name())?;
+    if is_scene && stage.has_attribute("data-mural") && shot != crate::presentation::Shot::Plate {
+        stage.set_attribute("data-arrival-mural", "")?;
+    } else {
+        stage.remove_attribute("data-arrival-mural")?;
+    }
     if is_scene {
         record_visual_source(stage, shot, plate_state)?;
     }
@@ -531,6 +560,8 @@ fn record_visual_source(
     };
     let effective = if shot == crate::presentation::Shot::Plate {
         VisualSource::ScenePlate
+    } else if stage.has_attribute("data-arrival-mural") {
+        VisualSource::Other
     } else {
         art_source
     };
@@ -570,6 +601,10 @@ fn record_visual_source(
     };
     let effective_asset = if effective == VisualSource::ScenePlate {
         stage.get_attribute("data-plate-key")
+    } else if stage.has_attribute("data-arrival-mural") {
+        stage
+            .query_selector(".tv-mural-art")?
+            .and_then(|image| image.get_attribute("src"))
     } else {
         art_asset
     };
@@ -623,6 +658,7 @@ fn record_visual_source(
 
 /// Observe visibility after motion-only changes as well as media/view updates.
 pub(super) fn refresh_timing_visibility(stage: &Element) {
+    let _focus = refresh_speaker_focus_visibility(stage);
     super::presentation_timing::refresh_component_visibility();
     live_scene_stage::refresh_timing_visibility(stage);
     refresh_establish_component(stage);
@@ -1044,7 +1080,7 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
     for index in 0..2 {
         let frame = node(document, &zoom, "div", "tv-plate-frame", "")?;
         frame.set_attribute("data-i", &index.to_string())?;
-        let image = node(document, &frame, "img", "tv-plate-img", "")?;
+        let image = node(document, &frame, "img", "tv-plate-img tv-plate-drift", "")?;
         image.set_attribute("alt", "")?;
         image.set_attribute("decoding", "async")?;
         image.set_attribute("data-i", &index.to_string())?;
@@ -1053,6 +1089,16 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         frames.push(frame);
         images.push(image);
     }
+    let focus = node(
+        document,
+        &zoom,
+        "div",
+        "tv-speaker-focus tv-plate-drift",
+        "",
+    )?;
+    focus.set_attribute("hidden", "")?;
+    node(document, &focus, "div", "tv-focus-subject", "")?;
+    node(document, &focus, "div", "tv-focus-rim", "")?;
     let loading = node(
         document,
         stage,
@@ -1804,8 +1850,17 @@ fn image_dimensions(image: &Element) -> Option<(f64, f64)> {
         .then_some((width, height))
 }
 
+/// One persisted display tuning value: `--tune-<name>` from the display tuning file the server
+/// inlines into the page (`DF_GAMEPLAY_DISPLAY_TUNING`), as a number; `None` when unset.
+pub(super) fn tuning_number(element: &Element, name: &str) -> Option<f64> {
+    let style = web_sys::window()?.get_computed_style(element).ok()??;
+    let raw = style.get_property_value(&format!("--tune-{name}")).ok()?;
+    raw.trim().trim_end_matches('%').parse::<f64>().ok()
+}
+
 fn refresh_plate_focus(root: &Element, figures: &Figures) -> Result<(), JsValue> {
     use crate::presentation::CaptionSpeaker;
+    refresh_speaker_mask(root, figures)?;
     let Some(zoom) = root.query_selector(".tv-plate-zoom")? else {
         return Ok(());
     };
@@ -1832,7 +1887,113 @@ fn refresh_plate_focus(root: &Element, figures: &Figures) -> Result<(), JsValue>
         picture_height,
     };
     if let Some((x, y)) = crate::stage_conductor::plate_focus(&geometry, speaker, narrator, frame) {
-        zoom.set_attribute("style", &format!("--head-x:{x}%;--head-y:{y}%"))?;
+        // A character's line also carries its close-up; the narrator keeps the slow pull-back.
+        let shot = (!narrator)
+            .then(|| {
+                let tuning = crate::stage_conductor::SpeakerTuning::from_lookup(|name| {
+                    tuning_number(root, name)
+                });
+                crate::stage_conductor::speaker_shot(&geometry, speaker, frame, &tuning)
+            })
+            .flatten()
+            .map(|shot| {
+                format!(
+                    ";--speaker-scale:{:.3};--speaker-pan-x:{:.2}%;--speaker-pan-y:{:.2}%",
+                    shot.scale, shot.pan_x, shot.pan_y
+                )
+            })
+            .unwrap_or_default();
+        zoom.set_attribute("style", &format!("--head-x:{x}%;--head-y:{y}%{shot}"))?;
+    }
+    Ok(())
+}
+
+fn refresh_speaker_focus_visibility(stage: &Element) -> Result<(), JsValue> {
+    let focus = stage.query_selector(".tv-speaker-focus[data-mask-ready]")?;
+    let speaking = stage
+        .query_selector(".tv-bubble[data-line-state=speaking],.tv-lower[data-line-state=speaking]")?
+        .is_some();
+    let blocked = stage.get_attribute("data-tv-mode").as_deref() != Some("scene")
+        || stage.get_attribute("data-shot").as_deref() != Some("plate")
+        || stage
+            .get_attribute("data-battle-state")
+            .is_some_and(|state| state != "absent")
+        || stage.get_attribute("data-battlefield-live").as_deref() == Some("true")
+        || stage.has_attribute("data-check-active")
+        || stage
+            .query_selector(".tv-roll,.tv-dm[data-line-state=speaking]")?
+            .is_some();
+    if speaking && !blocked && focus.is_some() {
+        stage.set_attribute("data-speaker-focus", "on")?;
+    } else {
+        stage.remove_attribute("data-speaker-focus")?;
+    }
+    Ok(())
+}
+
+fn refresh_speaker_mask(root: &Element, figures: &Figures) -> Result<(), JsValue> {
+    let Some(stage) = root.parent_element() else {
+        return Ok(());
+    };
+    let Some(focus) = root.query_selector(".tv-speaker-focus")? else {
+        return Ok(());
+    };
+    let Some(zoom) = root.query_selector(".tv-plate-zoom")? else {
+        return Ok(());
+    };
+    let key = zoom.get_attribute("data-focus-key").unwrap_or_default();
+    let role = zoom.get_attribute("data-focus-role").unwrap_or_default();
+    let mask = figures.plate_geometry().and_then(|(geometry, _)| {
+        let mask = match role.as_str() {
+            "hero" => geometry.figure_mask(key.parse().ok(), ""),
+            "npc" => geometry.figure_mask(None, &key),
+            _ => None,
+        }?;
+        (!mask.mask_url.is_empty()).then(|| mask.mask_url.clone())
+    });
+    let active = root.get_attribute("data-active").unwrap_or_default();
+    let image = root.query_selector(&format!(".tv-plate-img[data-i='{active}']"))?;
+    let plate = image
+        .as_ref()
+        .and_then(|image| image.get_attribute("data-src"));
+    if let (Some(mask), Some(plate), Some(image)) = (mask, plate, image)
+        && mask.starts_with(&format!("{plate}/figure/"))
+        && let Some(frame) = image.parent_element()
+    {
+        // One overlay follows the active frame, inheriting its handheld motion. Both the
+        // photo and overlay use the same drift class, index and animation clock.
+        if focus.parent_element().as_ref() != Some(&frame) {
+            frame.append_child(&focus)?;
+        }
+        focus.set_attribute("data-i", &active)?;
+        set_attribute_if_changed(
+            &focus,
+            "style",
+            &format!("--focus-plate:url({plate});--focus-mask:url({mask})"),
+        )?;
+        focus.set_attribute("data-mask-ready", "")?;
+        focus.remove_attribute("hidden")?;
+        sync_focus_drift(&image, &focus)?;
+    } else {
+        focus.remove_attribute("data-mask-ready")?;
+        focus.remove_attribute("style")?;
+        focus.set_attribute("hidden", "")?;
+    }
+    refresh_speaker_focus_visibility(&stage)
+}
+
+fn sync_focus_drift(image: &Element, focus: &Element) -> Result<(), JsValue> {
+    // Web Animations is accessed through browser bindings without expanding web-sys features.
+    let animations = |element: &Element| -> Result<js_sys::Array, JsValue> {
+        let method = js_sys::Reflect::get(element, &JsValue::from_str("getAnimations"))?;
+        let method = method.dyn_into::<js_sys::Function>()?;
+        Ok(js_sys::Array::from(&method.call0(element)?))
+    };
+    let source = animations(image)?.get(0);
+    let target = animations(focus)?.get(0);
+    if !source.is_undefined() && !target.is_undefined() {
+        let time = js_sys::Reflect::get(&source, &JsValue::from_str("currentTime"))?;
+        js_sys::Reflect::set(&target, &JsValue::from_str("currentTime"), &time)?;
     }
     Ok(())
 }
@@ -2000,6 +2161,7 @@ impl TvStage {
         Ok(Self {
             root,
             mural_art,
+            mural_source: RefCell::new(String::new()),
             art,
             art_previous,
             plate,
@@ -2067,17 +2229,20 @@ impl TvStage {
     }
 
     pub(super) fn update_mural_wire(&self, contents: &str) -> Result<(), JsValue> {
+        if *self.mural_source.borrow() == contents {
+            return Ok(());
+        }
+        *self.mural_source.borrow_mut() = contents.to_owned();
         let mural = mural_view::MuralView::from_scene_contents(contents);
         if let Some(mural) = mural.filter(|mural| mural.state == mural_view::MuralState::Ready) {
             if self.mural_art.get_attribute("src").as_deref() != Some(&mural.url) {
                 self.mural_art.set_attribute("src", &mural.url)?;
             }
             self.root.set_attribute("data-mural", "ready")?;
-        } else {
-            self.root.remove_attribute("data-mural")?;
-            self.mural_art.remove_attribute("src")?;
         }
-        Ok(())
+        // The mural belongs to the session, not to this place's scene metadata. A pending,
+        // failed or omitted replacement must not discard the last validated party picture.
+        sync_shot(&self.root)
     }
 
     pub(super) fn update_scene_graph_wire(
@@ -2540,7 +2705,7 @@ impl TvStage {
         if speaker.is_empty() {
             self.root.remove_attribute("data-speaker")?;
         } else {
-            self.root.set_attribute("data-speaker", speaker)?;
+            set_attribute_if_changed(&self.root, "data-speaker", speaker)?;
         }
         self.plate_clock_at(js_sys::Date::now())
     }
@@ -2978,8 +3143,8 @@ impl TvStage {
         } else {
             &model.title
         };
-        self.title.set_text_content(Some(lobby_title));
-        self.place.set_text_content(Some(&model.place));
+        set_text_if_changed(&self.title, lobby_title);
+        set_text_if_changed(&self.place, &model.place);
         // A scene titled after its place does not repeat the place beneath the title.
         set_hidden(
             &self.place,
@@ -3086,7 +3251,7 @@ impl TvStage {
                 Some(member) if member.ready => "ready",
                 Some(_) => "creating",
             };
-            card.root.set_attribute("data-state", state)?;
+            set_attribute_if_changed(&card.root, "data-state", state)?;
             // The one-shot reveal belongs to the lobby, not to a card that moves to a new place.
             if moved || !lobby {
                 card.root.remove_attribute("data-reveal")?;
@@ -3111,7 +3276,6 @@ impl TvStage {
                     } else {
                         "?"
                     })));
-                    card.portrait.set_attribute("style", "")?;
                 }
                 None => {
                     card.root.set_attribute("data-empty", "")?;
@@ -3119,7 +3283,6 @@ impl TvStage {
                     card.name.set_text_content(Some("Open seat"));
                     card.status.set_text_content(Some("Waiting to join"));
                     card.glyph.set_text_content(Some("+"));
-                    card.portrait.set_attribute("style", "")?;
                 }
             }
         }
@@ -3285,9 +3448,10 @@ impl TvStage {
         self.root.remove_attribute("data-entry-title-cleared-ms")?;
         self.root.remove_attribute("data-entry-start-ms")?;
         self.root.remove_attribute("data-entry-picture-ms")?;
-        // A new scene must leave the previous plate before its own picture is ready.
-        // Otherwise sync_shot's same-scene latch can keep the old photograph on stage.
-        self.root.remove_attribute("data-shot")?;
+        // A new place releases the old shot; a spot move keeps its loaded people plate.
+        if !self.same_place.get() {
+            self.root.remove_attribute("data-shot")?;
+        }
         if self.drawn.get()
             && let Some(now) = web_sys::window()
                 .and_then(|window| window.performance())
@@ -3644,9 +3808,105 @@ impl TvStage {
         if self.root.get_attribute("data-entry-scene-key").as_deref() != Some(scene_key) {
             self.begin_entry(!narrated || !self.drawn.get())?;
         }
+        if !self.same_place.get() && self.plate.seen.borrow().as_str() != scene_key {
+            self.plate.root.remove_attribute("data-transition")?;
+            self.plate.root.remove_attribute("data-transition-at")?;
+            *self.plate.deferred.borrow_mut() = None;
+            self.clear_plate(scene_key)?;
+        }
         let shown = self.apply_plate(plate, scene_key);
         sync_shot(&self.root)?;
         shown
+    }
+
+    /// Retires the picture and media of a place before an arrival exposes its mural.
+    fn clear_plate(&self, scene_key: &str) -> Result<(), JsValue> {
+        let layer = &self.plate;
+        if let Some(active_frame) = layer
+            .root
+            .get_attribute("data-active")
+            .and_then(|active| active.parse::<usize>().ok())
+            .and_then(|active| layer.frames.get(active))
+            && let Some(image) = active_frame.query_selector(".tv-plate-img")?
+            && let Some(id) = image
+                .get_attribute("data-component-id")
+                .and_then(|id| id.parse::<u64>().ok())
+        {
+            let previous_scene = image
+                .get_attribute("data-component-scene")
+                .unwrap_or_else(|| layer.scene.borrow().clone());
+            super::presentation_timing::component(
+                Some(active_frame),
+                df_observe::presentation::PresentationComponent::PlateIncoming,
+                id,
+                &previous_scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "scene-change",
+                0,
+            );
+            super::presentation_timing::component(
+                Some(active_frame),
+                df_observe::presentation::PresentationComponent::PlateOutgoing,
+                id,
+                &previous_scene,
+                df_observe::presentation::ComponentPhase::Opened,
+                "ready",
+                0,
+            );
+            super::presentation_timing::component(
+                Some(active_frame),
+                df_observe::presentation::PresentationComponent::PlateOutgoing,
+                id,
+                &previous_scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "scene-change",
+                0,
+            );
+            super::presentation_timing::schedule_component_transition(
+                active_frame.clone(),
+                df_observe::presentation::PresentationComponent::PlateIncoming,
+                id,
+                previous_scene.clone(),
+                df_observe::presentation::ComponentPhase::Hidden,
+                "scene-change",
+                0,
+                0,
+            );
+            super::presentation_timing::schedule_component_transition(
+                active_frame.clone(),
+                df_observe::presentation::PresentationComponent::PlateOutgoing,
+                id,
+                previous_scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "scene-change",
+                0,
+                0,
+            );
+        }
+        self.root.remove_attribute("data-plate-key")?;
+        self.root.remove_attribute("data-plate-layout-key")?;
+        self.root.remove_attribute("data-plate-loaded")?;
+        layer.root.remove_attribute("data-loading")?;
+        layer.root.remove_attribute("data-active")?;
+        sync_plate_loading(&self.root, None, scene_key);
+        layer.root.remove_attribute("data-want")?;
+        layer.root.remove_attribute("data-push")?;
+        layer.root.remove_attribute("data-pull")?;
+        layer.root.remove_attribute("data-want-i")?;
+        layer.root.remove_attribute("data-request")?;
+        layer.root.remove_attribute("data-want-key")?;
+        for video_loop in layer.video_loops.borrow().iter() {
+            video_loop.release();
+        }
+        layer.video_paths.borrow_mut().fill(None);
+        for frame in &layer.frames {
+            let _removed = frame.remove_attribute("data-video-want");
+            let _removed = frame.remove_attribute("data-video-ready");
+        }
+        layer.scene.borrow_mut().clear();
+        *layer.pending_layout.borrow_mut() = None;
+        self.figures.set_plate(None, None)?;
+        Ok(())
     }
 
     fn apply_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
@@ -3659,6 +3919,15 @@ impl TvStage {
             Some(plate.state == PlateState::Pending && current_scene),
             scene_key,
         );
+        let pending_scene_change = plate.state == PlateState::Pending
+            && !self.same_place.get()
+            && layer.scene.borrow().as_str() != scene_key;
+        if pending_scene_change {
+            // A dissolve from the previous place must not defer clearing its picture.
+            layer.root.remove_attribute("data-transition")?;
+            layer.root.remove_attribute("data-transition-at")?;
+            *layer.deferred.borrow_mut() = None;
+        }
         if layer.root.has_attribute("data-transition") {
             *layer.deferred.borrow_mut() = Some((plate.clone(), scene_key.to_owned()));
             // The conductor clock retires a dissolve whose transitionend was lost, then applies
@@ -3667,8 +3936,7 @@ impl TvStage {
             return Ok(());
         }
         if layer.seen.borrow().as_str() != scene_key {
-            // A pending successor still retains the old picture, but never its in-flight
-            // completion: that decode belongs to the scene the conductor just left.
+            // An in-flight decode belongs to the scene the conductor just left.
             layer.root.remove_attribute("data-request")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-loading")?;
@@ -3685,7 +3953,7 @@ impl TvStage {
         };
         let Some(url) = usable else {
             if can_retain_plate_for_scene(
-                layer.scene.borrow().as_str() == scene_key,
+                layer.scene.borrow().as_str() == scene_key || self.same_place.get(),
                 layer.root.has_attribute("data-active"),
                 self.root.has_attribute("data-plate-loaded"),
             ) {
@@ -3703,92 +3971,9 @@ impl TvStage {
             {
                 sync_plate_loading(&self.root, Some(true), scene_key);
             }
-            if let Some(active_frame) = layer
-                .root
-                .get_attribute("data-active")
-                .and_then(|active| active.parse::<usize>().ok())
-                .and_then(|active| layer.frames.get(active))
-                && let Some(image) = active_frame.query_selector(".tv-plate-img")?
-                && let Some(id) = image
-                    .get_attribute("data-component-id")
-                    .and_then(|id| id.parse::<u64>().ok())
-            {
-                let previous_scene = image
-                    .get_attribute("data-component-scene")
-                    .unwrap_or_else(|| layer.scene.borrow().clone());
-                super::presentation_timing::component(
-                    Some(active_frame),
-                    df_observe::presentation::PresentationComponent::PlateIncoming,
-                    id,
-                    &previous_scene,
-                    df_observe::presentation::ComponentPhase::Closing,
-                    "scene-change",
-                    0,
-                );
-                super::presentation_timing::component(
-                    Some(active_frame),
-                    df_observe::presentation::PresentationComponent::PlateOutgoing,
-                    id,
-                    &previous_scene,
-                    df_observe::presentation::ComponentPhase::Opened,
-                    "ready",
-                    0,
-                );
-                super::presentation_timing::component(
-                    Some(active_frame),
-                    df_observe::presentation::PresentationComponent::PlateOutgoing,
-                    id,
-                    &previous_scene,
-                    df_observe::presentation::ComponentPhase::Closing,
-                    "scene-change",
-                    0,
-                );
-                super::presentation_timing::schedule_component_transition(
-                    active_frame.clone(),
-                    df_observe::presentation::PresentationComponent::PlateIncoming,
-                    id,
-                    previous_scene.clone(),
-                    df_observe::presentation::ComponentPhase::Hidden,
-                    "scene-change",
-                    0,
-                    0,
-                );
-                super::presentation_timing::schedule_component_transition(
-                    active_frame.clone(),
-                    df_observe::presentation::PresentationComponent::PlateOutgoing,
-                    id,
-                    previous_scene,
-                    df_observe::presentation::ComponentPhase::Hidden,
-                    "scene-change",
-                    0,
-                    0,
-                );
-            }
             self.root.set_attribute("data-plate-state", state.name())?;
-            self.root.remove_attribute("data-plate-key")?;
-            self.root.remove_attribute("data-plate-layout-key")?;
-            self.root.remove_attribute("data-plate-loaded")?;
-            layer.root.remove_attribute("data-loading")?;
-            layer.root.remove_attribute("data-active")?;
-            sync_plate_loading(&self.root, None, scene_key);
-            layer.root.remove_attribute("data-want")?;
-            layer.root.remove_attribute("data-push")?;
-            layer.root.remove_attribute("data-pull")?;
-            layer.root.remove_attribute("data-want-i")?;
-            layer.root.remove_attribute("data-request")?;
-            layer.root.remove_attribute("data-want-key")?;
-            for video_loop in layer.video_loops.borrow().iter() {
-                video_loop.release();
-            }
-            layer.video_paths.borrow_mut().fill(None);
-            for frame in &layer.frames {
-                let _removed = frame.remove_attribute("data-video-want");
-                let _removed = frame.remove_attribute("data-video-ready");
-            }
-            layer.scene.borrow_mut().clear();
+            self.clear_plate(scene_key)?;
             *layer.seen.borrow_mut() = scene_key.to_owned();
-            *layer.pending_layout.borrow_mut() = None;
-            self.figures.set_plate(None, None)?;
             return Ok(());
         };
         self.root.set_attribute("data-plate-state", "ready")?;
@@ -4089,6 +4274,151 @@ pub(super) fn same_revision_art_delivery_reaches_stage_without_waiting_for_the_d
     }
 }
 
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+#[cfg_attr(
+    feature = "public-scene-delivery-fixture",
+    wasm_bindgen::prelude::wasm_bindgen
+)]
+pub fn speaker_focus_dom_check() -> Result<String, JsValue> {
+    use crate::{
+        plate_layout::Side,
+        presentation::{CaptionSpeaker, PlateFigureMask, PlateGeometry, PlatePerson},
+    };
+    let document = web_sys::window()
+        .ok_or_else(|| JsValue::from_str("window"))?
+        .document()
+        .ok_or_else(|| JsValue::from_str("document"))?;
+    let parent = document.create_element("section")?;
+    document
+        .body()
+        .ok_or_else(|| JsValue::from_str("body"))?
+        .append_child(&parent)?;
+    let stage = TvStage::mount(&document, &parent)?;
+    let plate = format!("/gameplay/imagery/{}", "a".repeat(64));
+    let mask = format!("{plate}/figure/7");
+    stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+    stage.root.set_attribute("data-shot", "plate").unwrap();
+    stage.plate.root.set_attribute("data-active", "1").unwrap();
+    stage.plate.images[1]
+        .set_attribute("data-src", &plate)
+        .unwrap();
+    stage
+        .lower
+        .root
+        .set_attribute("data-line-state", "speaking")
+        .unwrap();
+    stage
+        .figures
+        .set_plate(
+            Some(PlateGeometry {
+                bubble_side: Side::Left,
+                head_x: 500,
+                head_y: 400,
+                head_width: 80,
+                head_height: 90,
+                heroes: Vec::new(),
+                actors: Vec::new(),
+                figure_masks: vec![PlateFigureMask {
+                    person: PlatePerson::Actor("dain".into()),
+                    source_width: 1000,
+                    source_height: 1000,
+                    bounds: [400, 100, 600, 900],
+                    head_top: [500, 100],
+                    free_side: Side::Left,
+                    inferred: false,
+                    mask_index: 7,
+                    mask_url: mask.clone(),
+                }],
+            }),
+            Some((1000.0, 1000.0)),
+        )
+        .unwrap();
+    stage
+        .focus_speaker(CaptionSpeaker::Npc("dain"), false)
+        .unwrap();
+    assert_eq!(
+        stage.root.get_attribute("data-speaker-focus").as_deref(),
+        Some("on")
+    );
+    let focus = stage
+        .root
+        .query_selector(".tv-speaker-focus")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        focus.get_attribute("style"),
+        Some(format!(
+            "--focus-plate:url({plate});--focus-mask:url({mask})"
+        ))
+    );
+    assert_eq!(focus.parent_element(), Some(stage.plate.frames[1].clone()));
+    assert!(
+        stage.plate.images[1]
+            .class_list()
+            .contains("tv-plate-drift")
+    );
+    assert!(focus.class_list().contains("tv-plate-drift"));
+    assert_eq!(focus.get_attribute("data-i").as_deref(), Some("1"));
+    assert_eq!(focus.query_selector_all(":scope>div").unwrap().length(), 2);
+    stage.plate.images[0]
+        .set_attribute("data-src", &plate)
+        .unwrap();
+    stage.plate.root.set_attribute("data-active", "0").unwrap();
+    refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
+    assert_eq!(focus.parent_element(), Some(stage.plate.frames[0].clone()));
+    assert_eq!(
+        stage
+            .root
+            .query_selector_all(".tv-speaker-focus")
+            .unwrap()
+            .length(),
+        1
+    );
+    let wrong_plate = format!("/gameplay/imagery/{}", "b".repeat(64));
+    stage.plate.images[0]
+        .set_attribute("data-src", &wrong_plate)
+        .unwrap();
+    refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
+    assert!(!stage.root.has_attribute("data-speaker-focus"));
+    stage.plate.images[0]
+        .set_attribute("data-src", &plate)
+        .unwrap();
+    for (speaker, narrator) in [
+        (CaptionSpeaker::Unknown, true),
+        (CaptionSpeaker::Npc("unmasked"), false),
+        (CaptionSpeaker::Unknown, false),
+    ] {
+        stage.focus_speaker(speaker, narrator).unwrap();
+        assert!(!stage.root.has_attribute("data-speaker-focus"));
+        assert!(!focus.has_attribute("style"));
+        assert!(focus.has_attribute("hidden"));
+    }
+    stage
+        .focus_speaker(CaptionSpeaker::Npc("dain"), false)
+        .unwrap();
+    for (attribute, value) in [("data-battle-state", "acting"), ("data-check-active", "")] {
+        stage.root.set_attribute(attribute, value).unwrap();
+        refresh_speaker_focus_visibility(&stage.root).unwrap();
+        assert!(!stage.root.has_attribute("data-speaker-focus"));
+        stage.root.remove_attribute(attribute).unwrap();
+    }
+    let roll = document.create_element("div").unwrap();
+    roll.set_class_name("tv-roll");
+    stage.root.append_child(&roll).unwrap();
+    refresh_speaker_focus_visibility(&stage.root).unwrap();
+    assert!(!stage.root.has_attribute("data-speaker-focus"));
+    roll.remove();
+    stage
+        .lower
+        .root
+        .set_attribute("data-line-state", "lingering")
+        .unwrap();
+    refresh_speaker_focus_visibility(&stage.root).unwrap();
+    assert!(!stage.root.has_attribute("data-speaker-focus"));
+    parent.remove();
+    Ok("masked NPC on; narrator, unknown, unmasked, battle, check, linger off".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::rpc;
@@ -4105,6 +4435,11 @@ mod tests {
         document.body().unwrap().append_child(&parent).unwrap();
         let stage = TvStage::mount(&document, &parent).unwrap();
         (parent, stage)
+    }
+
+    #[test]
+    fn hs62_speaker_focus_tracks_masked_npc_and_clears_narrator_unknown_and_unmasked() {
+        super::speaker_focus_dom_check().unwrap();
     }
 
     #[test]
@@ -4160,14 +4495,18 @@ mod tests {
             .unwrap();
         super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:20%;--head-y:30%")
         );
         stage
             .focus_speaker(CaptionSpeaker::Npc("dain"), false)
             .unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:80%;--head-y:35%")
         );
         geometry.actors[0].head_x = 700;
@@ -4177,7 +4516,9 @@ mod tests {
             .unwrap();
         super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:70%;--head-y:35%")
         );
         stage.focus_speaker(CaptionSpeaker::Unknown, false).unwrap();
@@ -4188,19 +4529,25 @@ mod tests {
             .unwrap();
         super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:70%;--head-y:35%")
         );
         stage
             .focus_speaker(CaptionSpeaker::Npc("missing"), false)
             .unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:70%;--head-y:35%")
         );
         stage.focus_speaker(CaptionSpeaker::Unknown, true).unwrap();
         assert_eq!(
-            zoom.get_attribute("style").as_deref(),
+            zoom.get_attribute("style")
+                .as_deref()
+                .and_then(|style| style.split(";--speaker").next()),
             Some("--head-x:50%;--head-y:40%")
         );
         finish_stage(parent, stage);
@@ -5240,9 +5587,10 @@ mod tests {
     }
 
     #[test]
-    fn narration_in_a_new_scene_does_not_hide_the_plate_awaiting_its_successor() {
+    fn narration_at_a_new_spot_keeps_the_same_places_plate_awaiting_its_successor() {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
+        stage.same_place.set(true);
         let plate = PlateView {
             state: PlateState::Ready,
             url: Some("/gameplay/imagery/next-plate".to_owned()),
@@ -5448,10 +5796,7 @@ mod tests {
             .unwrap();
         image.set_attribute("data-decoded", &request).unwrap();
         stage.set_speaker("").unwrap();
-        assert_eq!(
-            stage.plate.root.get_attribute("data-active").as_deref(),
-            Some("0")
-        );
+        assert!(!stage.plate.root.has_attribute("data-active"));
         assert!(!stage.plate.root.has_attribute("data-applied-request"));
         finish_stage(parent, stage);
     }
@@ -5504,9 +5849,10 @@ mod tests {
     }
 
     #[test]
-    fn new_scene_plate_keeps_the_current_plate_visible_until_replacement_is_ready() {
+    fn same_place_scene_plate_keeps_the_current_plate_visible_until_replacement_is_ready() {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
+        stage.same_place.set(true);
         let replacement = PlateView {
             state: PlateState::Ready,
             url: Some("/gameplay/imagery/new".to_owned()),
@@ -5530,9 +5876,16 @@ mod tests {
     }
 
     #[test]
-    fn pending_new_scene_keeps_the_current_plate_visible() {
+    fn pending_new_scene_clears_the_previous_plate_even_during_a_dissolve() {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
+        stage.root.set_attribute("data-plate-key", "old").unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition", "0")
+            .unwrap();
+        stage.root.set_attribute("data-mural", "ready").unwrap();
         stage
             .root
             .set_attribute("data-scene-key", "new-scene")
@@ -5547,14 +5900,13 @@ mod tests {
 
         stage.set_plate(&pending, "new-scene", true).unwrap();
 
-        assert_eq!(
-            stage.plate.root.get_attribute("data-active").as_deref(),
-            Some("0")
-        );
-        assert!(stage.root.has_attribute("data-plate-loaded"));
+        assert!(!stage.plate.root.has_attribute("data-active"));
+        assert!(!stage.root.has_attribute("data-plate-loaded"));
+        assert!(!stage.root.has_attribute("data-plate-key"));
+        assert!(!stage.plate.root.has_attribute("data-transition"));
         assert_eq!(
             stage.root.get_attribute("data-plate-state").as_deref(),
-            Some("ready")
+            Some("pending")
         );
         assert!(stage.root.has_attribute("data-plate-loading"));
         let ready = PlateView {
@@ -5563,7 +5915,7 @@ mod tests {
             ..Default::default()
         };
         stage.set_plate(&ready, "new-scene", true).unwrap();
-        assert!(!stage.root.has_attribute("data-plate-loading"));
+        assert!(stage.root.has_attribute("data-plate-loading"));
         finish_stage(parent, stage);
     }
 
@@ -6076,6 +6428,13 @@ pub fn party_mural_dom_check() -> Result<String, JsValue> {
         .append_child(&parent)?;
     let result = (|| {
         let stage = TvStage::mount(&document, &parent)?;
+        stage.root.set_attribute("data-tv-mode", "scene")?;
+        stage.update_mural_wire("{}")?;
+        if stage.root.has_attribute("data-arrival-mural") || stage.mural_art.has_attribute("src") {
+            return Err(JsValue::from_str(
+                "missing mural displaced the room photo fallback",
+            ));
+        }
         let url = format!("/gameplay/imagery/{}", "a".repeat(64));
         let contents = serde_json::json!({"party_mural":{"state":"ready","url":url}}).to_string();
         stage.update_mural_wire(&contents)?;
@@ -6101,8 +6460,12 @@ pub fn party_mural_dom_check() -> Result<String, JsValue> {
             "{}",
         ] {
             stage.update_mural_wire(contents)?;
-            if stage.root.has_attribute("data-mural") || stage.mural_art.has_attribute("src") {
-                return Err(JsValue::from_str("unready or invalid mural retained"));
+            if stage.root.get_attribute("data-mural").as_deref() != Some("ready")
+                || stage.mural_art.get_attribute("src").as_deref() != Some(&url)
+            {
+                return Err(JsValue::from_str(
+                    "cached session mural lost on scene metadata update",
+                ));
             }
         }
         stage.update_mural_wire(&contents)?;
@@ -6118,5 +6481,138 @@ mod mural_dom_tests {
     #[test]
     fn party_mural_sets_one_image_and_stage_attribute_from_validated_server_contents() {
         super::party_mural_dom_check().unwrap();
+    }
+}
+
+/// Provider-free browser check of the place-change boundary, including a lost dissolve event.
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+#[cfg_attr(
+    feature = "public-scene-delivery-fixture",
+    wasm_bindgen::prelude::wasm_bindgen
+)]
+pub fn free_roam_arrival_dom_check() -> Result<String, JsValue> {
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| JsValue::from_str("document absent"))?;
+    let parent = document.create_element("section")?;
+    document
+        .body()
+        .ok_or_else(|| JsValue::from_str("body absent"))?
+        .append_child(&parent)?;
+    let result = (|| {
+        let stage = TvStage::mount(&document, &parent)?;
+        stage.root.set_attribute("data-tv-mode", "scene")?;
+        stage.root.set_attribute("data-shot", "plate")?;
+        stage.root.set_attribute("data-scene-key", "gate")?;
+        stage.root.set_attribute("data-plate-state", "ready")?;
+        stage.root.set_attribute("data-plate-key", "gate-picture")?;
+        stage.root.set_attribute("data-plate-loaded", "")?;
+        stage.plate.root.set_attribute("data-active", "0")?;
+        *stage.plate.scene.borrow_mut() = "gate".to_owned();
+        *stage.plate.seen.borrow_mut() = "gate".to_owned();
+        let pending = PlateView {
+            state: PlateState::Pending,
+            ..Default::default()
+        };
+        stage.set_plate(&pending, "gate", true)?;
+        if !stage.root.has_attribute("data-plate-key")
+            || !stage.root.has_attribute("data-plate-loaded")
+        {
+            return Err(JsValue::from_str("same-place update lost its ready plate"));
+        }
+        stage.update_mural_wire(&serde_json::json!({"party_mural":{"state":"ready","url":format!("/gameplay/imagery/{}", "a".repeat(64))}}).to_string())?;
+        stage.same_place.set(true);
+        stage.root.set_attribute("data-scene-key", "gate-spot")?;
+        stage.set_plate(&pending, "gate-spot", true)?;
+        if !stage.root.has_attribute("data-plate-loaded")
+            || stage.root.has_attribute("data-arrival-mural")
+            || stage.root.get_attribute("data-shot").as_deref() != Some("plate")
+        {
+            return Err(JsValue::from_str("spot move replaced the current plate"));
+        }
+        stage.same_place.set(false);
+        stage.update_mural_wire("{}")?;
+        stage.plate.root.set_attribute("data-transition", "0")?;
+        stage.root.set_attribute("data-scene-key", "market")?;
+        stage.set_plate(&pending, "market", true)?;
+        if stage.root.has_attribute("data-plate-key")
+            || stage.root.has_attribute("data-plate-loaded")
+            || stage.plate.root.has_attribute("data-active")
+            || stage.plate.root.has_attribute("data-transition")
+            || !stage.root.has_attribute("data-plate-loading")
+            || !stage.root.has_attribute("data-arrival-mural")
+        {
+            return Err(JsValue::from_str(
+                "new-place pending plate retained stale art or hid mural fallback",
+            ));
+        }
+        let ready = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/market-picture".to_owned()),
+            ..Default::default()
+        };
+        stage.set_plate(&ready, "market", true)?;
+        if !stage.root.has_attribute("data-arrival-mural") {
+            return Err(JsValue::from_str("mural hidden before plate decode"));
+        }
+        let index = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| JsValue::from_str("plate frame absent"))?;
+        let image = stage
+            .plate
+            .images
+            .get(index)
+            .ok_or_else(|| JsValue::from_str("plate image absent"))?;
+        let request = stage
+            .plate
+            .root
+            .get_attribute("data-request")
+            .ok_or_else(|| JsValue::from_str("plate request absent"))?;
+        image.set_attribute("data-decoded", &request)?;
+        stage.narration_over()?;
+        activate_plate_request_at(
+            &stage.root,
+            &stage.plate.root,
+            image,
+            &Rc::downgrade(&stage.figures),
+            &stage.plate.pending_layout,
+            &stage.plate.picture_size,
+            20_000.0,
+        );
+        if !stage.root.has_attribute("data-plate-loaded")
+            || stage.root.has_attribute("data-arrival-mural")
+            || stage.root.get_attribute("data-shot").as_deref() != Some("plate")
+        {
+            return Err(JsValue::from_str("decoded plate did not replace mural"));
+        }
+        stage.root.set_attribute("data-scene-key", "inn")?;
+        let inn = PlateView {
+            url: Some("/gameplay/imagery/inn-picture".to_owned()),
+            ..ready
+        };
+        stage.set_plate(&inn, "inn", true)?;
+        if stage.root.has_attribute("data-plate-loaded")
+            || !stage.root.has_attribute("data-arrival-mural")
+            || stage.plate.root.has_attribute("data-active")
+        {
+            return Err(JsValue::from_str(
+                "arrival retained another place while decoding a ready plate",
+            ));
+        }
+        stage.dispose()?;
+        Ok("free-roam arrival WASM DOM: spot retention, cached mural, pending and decoding arrivals, plate handoff passed".to_owned())
+    })();
+    parent.remove();
+    result
+}
+
+#[cfg(test)]
+mod arrival_dom_tests {
+    #[test]
+    fn free_roam_arrival_clears_stale_plate_and_exposes_party_mural() {
+        super::free_roam_arrival_dom_check().unwrap();
     }
 }

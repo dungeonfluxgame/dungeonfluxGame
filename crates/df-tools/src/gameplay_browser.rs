@@ -1142,6 +1142,9 @@ fn connect(client: Rc<RefCell<Client>>) {
             let timing_channel = channel.clone();
             let connection = RpcConnection::from_browser(sessions.clone(), connection);
             let view_generation = connection.generation();
+            // A restarted server numbers its layout again from 1; the retained layout owner would
+            // otherwise refuse every layout until the old revision is passed.
+            layout::stop();
             {
                 let mut state = owned.borrow_mut();
                 if let Some(views) = state.views.as_mut() {
@@ -3092,14 +3095,11 @@ fn receive_view(
     view: rpc::ViewMessage,
 ) -> Result<(), JsValue> {
     let display_timeline_reset = if client.borrow().role == "display" {
-        let previous_view = client
-            .borrow()
+        let state = client.borrow();
+        let previous = state
             .views
             .as_ref()
             .and_then(GameplayViews::current)
-            .cloned();
-        let previous = previous_view
-            .as_ref()
             .and_then(|current| match current.audience.as_ref() {
                 Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
                 _ => None,
@@ -3143,7 +3143,9 @@ fn receive_view(
         for effect in crate::presentation::SCREEN_EFFECTS {
             let attribute = format!("data-fx-{effect}");
             if display.effects_off.iter().any(|off| off == effect) {
-                tv.root().set_attribute(&attribute, "off")?;
+                if tv.root().get_attribute(&attribute).as_deref() != Some("off") {
+                    tv.root().set_attribute(&attribute, "off")?;
+                }
             } else {
                 tv.root().remove_attribute(&attribute)?;
             }
@@ -3204,14 +3206,13 @@ fn receive_view(
         // New art (a ready plate) may be waiting on the presentation clock, which sleeps
         // once idle; wake it so the scene's entry can finish.
         live_motion::wake_plate_clock();
-        // A music variant (REF-066) can arrive at an unchanged revision too.
-        live_music::observe(client);
         live_health::phone_sync(client)?;
-        // A table-talk update may carry art too. Its lines still go to the director below.
+        // A table-talk update also reaches the Applied branch below. Observe music only once.
         if matches!(
             acceptance,
             ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
         ) {
+            live_music::observe(client);
             return Ok(());
         }
     }
@@ -3415,13 +3416,15 @@ impl ScrollPlace {
     }
 
     fn restore(&self, root: &Element) {
-        for (key, index, element) in scroll_keys(root) {
-            if let Some((_, _, top)) = self
-                .elements
-                .iter()
-                .find(|(saved, saved_index, _)| *saved == key && *saved_index == index)
-            {
-                element.set_scroll_top(*top);
+        if !self.elements.is_empty() {
+            for (key, index, element) in scroll_keys(root) {
+                if let Some((_, _, top)) = self
+                    .elements
+                    .iter()
+                    .find(|(saved, saved_index, _)| *saved == key && *saved_index == index)
+                {
+                    element.set_scroll_top(*top);
+                }
             }
         }
         if let Some(window) = web_sys::window() {

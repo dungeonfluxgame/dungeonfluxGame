@@ -27,8 +27,9 @@ use crate::music_score::{
     TRANSITION_SECONDS, Tempo, VOICE_LUFS, ambience_path_of, arrangement_for, arrangements_for,
     bubble_hold_ms, colour_for, duck_decibels, effective_phase, facts_after_presentation,
     facts_with_plan, gain_for_decibels, gap_hold_active, line_presenting, mix_for, mix_level_lufs,
-    next_pacing_beat, next_take, place_music_of, scene_layer_gains, shared_path, stinger_between,
-    stinger_track, suite_for, swap_boundary, tempo_of, unvoiced_hold_ms, wanted_layer_paths,
+    next_pacing_beat, next_take, place_music_of, scene_layer_gains, shared_path, stinger_track,
+    stinger_with_baseline, suite_for, swap_boundary, tempo_of, unvoiced_hold_ms,
+    wanted_layer_paths,
 };
 use crate::music_score::{
     AmbientChange, EntryMemory, PlaceAudioPlan, ambient_changes, entry_handoff, place_audio_of,
@@ -215,6 +216,7 @@ struct Director {
     connection: u64,
     /// Outcome facts held until the display acknowledges the last resolved combat beat.
     pending_outcome: Option<Outcome>,
+    outcome_baseline: Option<Outcome>,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
     /// Session seed for the arrangement choice and the alternate-take pick.
     seed: u64,
@@ -458,6 +460,8 @@ impl Director {
         audio: Option<PlaceAudioPlan>,
         lobby: bool,
     ) {
+        // The first view of a new watch connection is a state, not a story change: nothing to compare.
+        let fresh_connection = connection != self.connection;
         if connection != self.connection {
             self.entry_memory = EntryMemory::default();
             self.pending_entry = None;
@@ -473,6 +477,11 @@ impl Director {
         }
         self.audio_plan = audio;
         let outcome = facts.outcome;
+        if fresh_connection {
+            self.outcome_baseline = outcome;
+        } else if facts.in_combat && outcome.is_none() {
+            self.outcome_baseline = None;
+        }
         let facts = match presentation_sequences(&self.document) {
             Some((presented, latest)) => facts_after_presentation(facts, presented, latest),
             None => facts_after_presentation(facts, 0, 1),
@@ -496,7 +505,10 @@ impl Director {
         // A first view after a reconnect is a state, not a story change: no stinger for it.
         let stinger = previous
             .as_ref()
-            .and_then(|previous| stinger_between(&previous.facts, &facts))
+            .filter(|_| !fresh_connection)
+            .and_then(|previous| {
+                stinger_with_baseline(&previous.facts, &facts, self.outcome_baseline)
+            })
             .filter(|_| self.pending_entry.is_none());
         self.latest = Some(Latest {
             place,
@@ -504,6 +516,7 @@ impl Director {
             facts,
             release_since,
         });
+        self.release_unused_places();
         if let Some(stinger) = stinger
             && let Err(error) = self.play_stinger(stinger)
         {
@@ -511,12 +524,47 @@ impl Director {
         }
     }
 
+    /// Drops decoded place sets the mix can no longer reach. Each visited place holds roughly
+    /// 70 MB of layers at a 48 kHz context. A voice that still plays keeps its own buffer.
+    fn release_unused_places(&mut self) {
+        let mut keep: HashSet<String> = self.wanted_layer_tracks().into_iter().collect();
+        keep.extend(self.layer_tracks.iter().flatten().cloned());
+        keep.extend(
+            self.audio_plan
+                .iter()
+                .flat_map(|plan| plan.layers.iter().map(|layer| layer.path.clone())),
+        );
+        keep.extend(
+            self.latest
+                .as_ref()
+                .and_then(|latest| ambience_path_of(&latest.place))
+                .map(str::to_owned),
+        );
+        for graph in self.graph.iter() {
+            keep.extend(graph.ambient.iter().map(|ambient| ambient.track.clone()));
+            keep.extend(graph.ambient_layers.iter().map(|voice| voice.track.clone()));
+        }
+        let reachable =
+            |track: &String| !track.starts_with(GENERATED_MUSIC_ROUTE) || keep.contains(track);
+        self.buffers.retain(|track, _| reachable(track));
+        self.requested.retain(|track| reachable(track));
+    }
+
     /// One pass of housekeeping: shared sound state, tab visibility, the audio graph, the
     /// mix and the debug snapshot. Returns the tracks that now need fetching.
     fn step(&mut self) -> Result<Vec<String>, JsValue> {
         if let Some(sound) = live_voice::sound_state() {
-            self.enabled = sound.enabled;
+            if self.enabled != sound.enabled {
+                self.set_sound_output(sound.enabled)?;
+            }
             self.speaking = sound.speaking;
+        }
+        // Before any sound is on there is nothing to duck or mix: skip the DOM polling and the snapshot churn.
+        if !self.enabled && self.graph.is_none() {
+            if self.published.is_empty() {
+                self.publish();
+            }
+            return Ok(Vec::new());
         }
         self.volume = stored_volume();
         self.watch_sfx();
@@ -578,6 +626,7 @@ impl Director {
         self.apply_bed()?;
         self.retarget()?;
         self.apply_ambient_layers()?;
+        self.release_unused_places();
         self.publish();
         Ok(wanted)
     }
@@ -595,6 +644,8 @@ impl Director {
                 let master = graph.master.gain();
                 master.cancel_scheduled_values(now)?;
                 master.set_value_at_time(0.0, now)?;
+                // Muted: suspend the audio clock so the loops stop costing CPU. Resuming keeps the grid.
+                settle(graph.context.suspend()?);
             }
         }
         if !enabled && let Some(applied) = self.applied.as_mut() {
@@ -1458,7 +1509,7 @@ impl Director {
             };
             let previous = current.facts;
             current.facts.outcome = Some(outcome);
-            stinger_between(&previous, &current.facts)
+            stinger_with_baseline(&previous, &current.facts, self.outcome_baseline)
         };
         if let Some(stinger) = stinger
             && let Err(error) = self.play_stinger(stinger)
@@ -1644,44 +1695,45 @@ fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 /// Called once per newly applied view. Music is best effort: a failure is recorded in the
 /// debug snapshot and never affects rendering.
 pub(super) fn observe(client: &Rc<RefCell<Client>>) {
-    let (document, root, view, connection) = {
+    let (document, root, connection, tempo, facts, place, audio, lobby) = {
         let state = client.borrow();
         if state.role != "display" {
             return;
         }
-        let Some(view) = state
-            .views
-            .as_ref()
-            .and_then(|views| views.current().cloned())
-        else {
+        let Some(view) = state.views.as_ref().and_then(|views| views.current()) else {
             return;
         };
+        let sequence = view
+            .revision
+            .as_ref()
+            .and_then(|revision| revision.sequence)
+            .unwrap_or(0);
+        let Some(rpc::view_message::Audience::Display(display)) = &view.audience else {
+            return;
+        };
+        let Some(journey) = display.journey.as_ref() else {
+            return;
+        };
+        let empty = rpc::GameplayScene::default();
+        let scene = display.scene.as_ref().unwrap_or(&empty);
+        let tempo = tempo_of(scene, journey, sequence);
+        let facts = facts_with_plan(scene, journey, display.place_music.as_ref());
+        let place = place_music_of(display.place_music.as_ref());
+        let audio = place_audio_of(scene);
+        let lobby = journey.phase == rpc::JourneyPhase::Room as i32
+            || journey.phase == rpc::JourneyPhase::CharacterCreation as i32;
         (
             state.document.clone(),
             state.root.clone(),
-            view,
             state.generation,
+            tempo,
+            facts,
+            place,
+            audio,
+            lobby,
         )
     };
-    let sequence = view
-        .revision
-        .as_ref()
-        .and_then(|revision| revision.sequence)
-        .unwrap_or(0);
-    let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
-        return;
-    };
-    let Some(journey) = display.journey.as_ref() else {
-        return;
-    };
-    let scene = display.scene.clone().unwrap_or_default();
-    let tempo = tempo_of(&scene, journey, sequence);
     super::live_battlefield::set_tempo(tempo.intensity);
-    let facts = facts_with_plan(&scene, journey, display.place_music.as_ref());
-    let place = place_music_of(display.place_music.as_ref());
-    let audio = place_audio_of(&scene);
-    let lobby = journey.phase == rpc::JourneyPhase::Room as i32
-        || journey.phase == rpc::JourneyPhase::CharacterCreation as i32;
     match director(&document, &root) {
         Ok(shared) => {
             shared
@@ -1742,6 +1794,7 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         cues: CueMemory::default(),
         connection: 0,
         pending_outcome: None,
+        outcome_baseline: None,
         listeners: Vec::new(),
         seed,
         layer_alternate: seed % 2 == 1,
@@ -1809,7 +1862,7 @@ fn on_gesture(shared: &Shared) {
     let resumed = state
         .graph
         .as_ref()
-        .filter(|graph| graph.context.state() == AudioContextState::Suspended)
+        .filter(|graph| state.enabled && graph.context.state() == AudioContextState::Suspended)
         .map(|graph| graph.context.resume());
     match resumed {
         Some(Ok(promise)) => settle(promise),
@@ -1870,6 +1923,7 @@ async fn load(shared: Shared, track: String) {
         match outcome {
             Ok(buffer) => {
                 state.buffers.insert(track, buffer);
+                state.release_unused_places();
             }
             Err(_) => state.missing.push(track),
         }

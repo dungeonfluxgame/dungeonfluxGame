@@ -1217,13 +1217,20 @@ pub(crate) fn merge_place_music(shown: &mut rpc::ViewMessage, new: &rpc::ViewMes
     }) {
         return false;
     }
-    let audio = place_audio_of(new_scene);
+    let music_changed = shown.place_music != new.place_music;
+    // Equal contents carry equal tempo_audio: a duplicate view returns before any JSON parse.
+    let contents_changed = old_scene.scene_contents_json != new_scene.scene_contents_json;
+    if !music_changed && !contents_changed {
+        return false;
+    }
+    let audio = contents_changed
+        .then(|| place_audio_of(new_scene))
+        .flatten();
     let mut audio_contents = scene_object_for_audio(&old_scene.scene_contents_json);
     let audio_changed = audio_contents.is_some()
         && audio
             .as_ref()
             .is_some_and(|plan| Some(plan.clone()) != place_audio_of(old_scene));
-    let music_changed = shown.place_music != new.place_music;
     if !audio_changed && !music_changed {
         return false;
     }
@@ -1287,6 +1294,18 @@ pub(crate) fn swap_boundary(
 
 /// The stinger a change between two accepted views earns, if any. One stinger per change:
 /// an outcome outranks a battle start, which outranks an antagonist reveal.
+/// An outcome already present on reconnect may update the bed after presentation, but never
+/// replays its fanfare. The caller clears this baseline when a fresh fight starts.
+pub(crate) fn stinger_with_baseline(
+    previous: &Facts,
+    next: &Facts,
+    baseline: Option<Outcome>,
+) -> Option<Stinger> {
+    stinger_between(previous, next).filter(|stinger| {
+        !matches!(stinger, Stinger::Victory | Stinger::Defeat) || next.outcome != baseline
+    })
+}
+
 pub(crate) fn stinger_between(previous: &Facts, next: &Facts) -> Option<Stinger> {
     if next.outcome != previous.outcome {
         match next.outcome {
@@ -1306,6 +1325,25 @@ mod tests {
     use super::*;
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn hs54_reconnect_outcome_baseline_suppresses_deferred_fanfare() {
+        let before = Facts {
+            in_combat: false,
+            antagonist_speaking: false,
+            outcome: None,
+            bed: Bed::Night,
+        };
+        for outcome in [Outcome::Victory, Outcome::Defeat] {
+            let next = Facts {
+                outcome: Some(outcome),
+                ..before
+            };
+            assert!(stinger_between(&before, &next).is_some());
+            assert_eq!(stinger_with_baseline(&before, &next, Some(outcome)), None);
+            assert!(stinger_with_baseline(&before, &next, None).is_some());
+        }
+    }
+
     #[test]
     fn live_music_equal_revision_ambient_completion_reaches_the_actual_delivery_store() {
         use super::delivery_boundary::{GameplayViews, ViewRole, ViewScope};

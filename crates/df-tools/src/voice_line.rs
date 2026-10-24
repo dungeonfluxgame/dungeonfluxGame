@@ -202,7 +202,10 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
     }
     lines.extend(scene_outcomes(display));
     for line in conversation_replies(display) {
-        if !lines.iter().any(|known| known.key() == line.key()) {
+        if !lines
+            .iter()
+            .any(|known| known.role == line.role && known.text == line.text)
+        {
             lines.push(line);
         }
     }
@@ -378,7 +381,7 @@ fn conversation_replies(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
         };
         if !lines
             .iter()
-            .any(|known: &VoiceLine| known.key() == line.key())
+            .any(|known: &VoiceLine| known.role == line.role && known.text == line.text)
         {
             lines.push(line);
         }

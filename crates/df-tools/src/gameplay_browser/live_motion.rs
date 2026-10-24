@@ -52,6 +52,10 @@ const OFF_STAGE_SLOT: usize = usize::MAX;
 const NARRATOR_NAME: &str = "Dungeon Master";
 /// The fallback tick of a page whose animation frames are throttled.
 const TIMER_TICK_MS: i32 = 100;
+thread_local! {
+    /// `performance.now()` of the last animation frame, read by the fallback timer.
+    static LAST_FRAME_MS: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::NEG_INFINITY) };
+}
 
 /// What a cue carries; the director treats it as opaque.
 #[derive(Clone)]
@@ -993,6 +997,51 @@ fn script_line(
     })
 }
 
+/// Scene narration and its committed table row are two projections of the same cue.
+/// Prefer the sequenced row when both arrive together; a later projection adds no new turn.
+fn scene_lines_once<'a>(scene: &SceneScript<'a>) -> Vec<SceneScriptLine<'a>> {
+    let planned = scene.lines();
+    let mirrored = |line: &TableLine, text: &str| {
+        line.role == TableRole::Narrator
+            && line.kind == TableKind::Action
+            && line.speaker.trim() != "Roll"
+            && line.text.trim() == text.trim()
+    };
+    let mirrored_rows: Vec<u64> = planned
+        .iter()
+        .filter_map(|item| match item {
+            SceneScriptLine::Table(line) => Some(line.sequence),
+            _ => None,
+        })
+        .collect();
+    planned
+        .into_iter()
+        .filter(|item| match item {
+            SceneScriptLine::Narration(text) => !scene.lines.iter().any(|line| {
+                mirrored(line, text)
+                    && (mirrored_rows.contains(&line.sequence)
+                        || (!scene.restart
+                            && !scene.scene_changed
+                            && !scene
+                                .fresh
+                                .iter()
+                                .any(|fresh| fresh.sequence == line.sequence)))
+            }),
+            SceneScriptLine::Table(line) => {
+                scene.restart
+                    || scene.scene_changed
+                    || !mirrored(line, scene.previous_narration)
+                    // Only the first row mirrors the scene cue. A later sequenced repetition
+                    // remains its own line, even when the narrator deliberately repeats words.
+                    || scene.lines.iter().any(|known| {
+                        known.sequence < line.sequence && mirrored(known, scene.previous_narration)
+                    })
+            }
+            _ => true,
+        })
+        .collect()
+}
+
 /// Called for every newly accepted display view instead of an immediate redraw.
 pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     ensure_motion(client);
@@ -1080,7 +1129,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         // A hero's typed line and what a hero did outside a fight go to the stage in order;
         // they are table talk, so they never hold an outcome back.
         let in_fight = transitions.new_roll || snapshot.stage != CombatStage::Absent;
-        let script = SceneScript {
+        let script = scene_lines_once(&SceneScript {
             narration: &narration,
             previous_narration: &motion.narration,
             lines: &lines,
@@ -1090,8 +1139,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             awaiting_reply: thinking.is_some(),
             scene_changed,
             in_fight,
-        }
-        .lines()
+        })
         .into_iter()
         .filter_map(|line| match line {
             SceneScriptLine::Narration(text) => Some(narration_line(text, &voices, restart)),
@@ -1106,7 +1154,8 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .map(|check| check_voice_script_line(check, &voices, restart)),
         })
         .collect();
-        let healed = !transitions.new_roll
+        let healed = !restart
+            && !transitions.new_roll
             && motion.party_hit_points.len() == hit_points.len()
             && hit_points
                 .iter()
@@ -1384,26 +1433,37 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     applied.and(published)
 }
 
-fn thinking_slot(pending: Option<ActorSlot>, awaiting: Option<ActorSlot>) -> Option<ActorSlot> {
-    pending
-        .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
-        .or_else(|| awaiting.filter(|slot| matches!(slot, ActorSlot::Npc(_))))
+fn thinking_slot(
+    pending: Option<ActorSlot>,
+    active: Option<Option<usize>>,
+    waiting_lines: bool,
+    battle: BattleState,
+) -> Option<ActorSlot> {
+    let hero_open = matches!(active, Some(Some(position))
+        if matches!(super::live_stage::slot_of_index(position), ActorSlot::Hero(_)));
+    if (waiting_lines && !hero_open) || battle != BattleState::Absent || active == Some(None) {
+        return None;
+    }
+    pending.filter(|slot| {
+        matches!(slot, ActorSlot::Npc(_)) && active != Some(super::live_stage::slot_index(*slot))
+    })
 }
 
-/// Shows the thinking mark at the speaker the server says is writing a reply, once every line
-/// before the reply has been shown, if that speaker stands in this scene; removes it otherwise.
+/// Shows only a server-marked pending replier, once the hero's line has opened.
+/// A voice request alone cannot keep a failed or abandoned reply's loader alive.
 fn show_thinking(
     client: &Rc<RefCell<Client>>,
     speaker: Option<&str>,
-    awaiting: Option<usize>,
+    active: Option<Option<usize>>,
+    waiting_lines: bool,
+    battle: BattleState,
 ) -> Result<(), JsValue> {
     let state = client.borrow();
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
-    // The server's newly selected addressee outranks an older line awaiting voice.
     let pending = speaker.and_then(|name| stage.figures().slot_named(name));
-    let slot = thinking_slot(pending, awaiting.map(super::live_stage::slot_of_index));
+    let slot = thinking_slot(pending, active, waiting_lines, battle);
     stage.figures().set_thinking(slot)
 }
 
@@ -1559,7 +1619,6 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         thinking,
         speaker,
         battle,
-        awaiting,
         presented,
         latest,
         beat_log,
@@ -1591,7 +1650,6 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             motion.thinking_for.clone(),
             motion.conductor.active_speaker(),
             motion.conductor.battle_state(),
-            motion.conductor.awaiting_clip_slot(),
             presented,
             motion.latest_seq,
             beat_log,
@@ -1608,29 +1666,38 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         let state = client.borrow();
         if let Some(stage) = state.live.tv.as_ref() {
             let root = stage.root();
-            root.set_attribute("data-scene-state", scene.name())?;
+            let set = super::live_tv::set_attribute_if_changed;
+            super::live_tv::set_attribute_if_changed(root, "data-scene-state", scene.name())?;
             match line {
                 Some((id, line_state)) => {
-                    root.set_attribute("data-line-state", line_state.name())?;
-                    root.set_attribute("data-line-id", &id.to_string())?;
+                    set(root, "data-line-state", line_state.name())?;
+                    set(root, "data-line-id", &id.to_string())?;
                 }
                 None => {
-                    root.set_attribute("data-line-state", "idle")?;
+                    set(root, "data-line-state", "idle")?;
                     root.remove_attribute("data-line-id")?;
                 }
             }
-            root.set_attribute("data-stage-pending", if pending { "true" } else { "false" })?;
-            root.set_attribute("data-battle-state", battle.name())?;
+            set(
+                root,
+                "data-stage-pending",
+                if pending { "true" } else { "false" },
+            )?;
+            set(root, "data-battle-state", battle.name())?;
             // Combat beat cursors are independent of the table-talk line sequence.
             root.remove_attribute("data-presented-seq")?;
             root.remove_attribute("data-latest-seq")?;
-            root.set_attribute("data-presented-combat-seq", &presented.to_string())?;
-            root.set_attribute("data-display-instance", &display_instance().to_string())?;
-            root.set_attribute("data-latest-combat-seq", &latest.to_string())?;
-            root.set_attribute("data-beat-log", &beat_log)?;
-            root.set_attribute("data-battlefield-beat-log", &battlefield_beat_log)?;
-            root.set_attribute("data-card-log", &card_log)?;
-            root.set_attribute(
+            let presented = presented.to_string();
+            let latest = latest.to_string();
+            let display = display_instance().to_string();
+            set(root, "data-presented-combat-seq", &presented)?;
+            set(root, "data-display-instance", &display)?;
+            set(root, "data-latest-combat-seq", &latest)?;
+            set(root, "data-beat-log", &beat_log)?;
+            set(root, "data-battlefield-beat-log", &battlefield_beat_log)?;
+            set(root, "data-card-log", &card_log)?;
+            set(
+                root,
                 "data-battlefield-live",
                 if battlefield_live() { "true" } else { "false" },
             )?;
@@ -1643,11 +1710,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             })?;
         }
     }
-    show_thinking(
-        client,
-        thinking.as_deref().filter(|_| !waiting_lines),
-        awaiting,
-    )
+    show_thinking(client, thinking.as_deref(), speaker, waiting_lines, battle)
 }
 
 fn merge_battlefield_beat_log(conductor: &str, battlefield: &str) -> String {
@@ -2681,11 +2744,16 @@ fn arm_timer() {
 
 fn timer_tick() {
     let _cleared = with_motion(|motion| motion.timer_armed = false);
-    tick(now_ms());
+    let now = now_ms();
+    // A frame that ran within the fallback period has already advanced the clock.
+    if (now as f64) - LAST_FRAME_MS.with(std::cell::Cell::get) >= f64::from(TIMER_TICK_MS) {
+        tick(now);
+    }
     ensure_frame();
 }
 
 fn frame(timestamp: f64) {
+    LAST_FRAME_MS.with(|last| last.set(timestamp));
     let _cleared = with_motion(|motion| motion.frame_armed = false);
     tick(timestamp as u64);
     ensure_frame();
@@ -4207,17 +4275,38 @@ mod tests {
     }
 
     #[test]
-    fn pending_background_speaker_outranks_an_older_focus_voice_wait() {
-        use crate::presentation::ActorSlot;
+    fn thinking_requires_a_pending_npc_after_prior_speech_and_outside_combat() {
+        use crate::{presentation::ActorSlot, stage_machines::BattleState};
+        let pending = Some(ActorSlot::Npc(1));
+        let absent = BattleState::Absent;
+        assert_eq!(super::thinking_slot(pending, None, false, absent), pending);
+        assert_eq!(super::thinking_slot(None, None, false, absent), None);
+        assert_eq!(super::thinking_slot(pending, None, true, absent), None);
         assert_eq!(
-            super::thinking_slot(Some(ActorSlot::Npc(1)), Some(ActorSlot::Npc(0))),
-            Some(ActorSlot::Npc(1))
+            super::thinking_slot(pending, Some(Some(0)), true, absent),
+            pending
         );
         assert_eq!(
-            super::thinking_slot(None, Some(ActorSlot::Npc(0))),
-            Some(ActorSlot::Npc(0))
+            super::thinking_slot(pending, Some(None), false, absent),
+            None
         );
-        assert_eq!(super::thinking_slot(None, Some(ActorSlot::Hero(0))), None);
+        assert_eq!(
+            super::thinking_slot(pending, Some(Some(7)), false, absent),
+            None
+        );
+        assert_eq!(
+            super::thinking_slot(pending, None, false, BattleState::Acting),
+            None
+        );
+        assert_eq!(
+            super::thinking_slot(Some(ActorSlot::Hero(0)), None, false, absent),
+            None
+        );
+        // A newly selected addressee replaces an older speaker rather than inheriting its wait.
+        assert_eq!(
+            super::thinking_slot(pending, Some(Some(6)), false, absent),
+            pending
+        );
     }
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
@@ -4341,5 +4430,215 @@ mod tests {
             pending,
             std::collections::VecDeque::from([(42, crate::stage_machines::ClipState::Failed, 20,)])
         );
+    }
+}
+
+/// Provider-free check of the real narration planner and conductor clip lifecycle.
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+#[cfg_attr(
+    feature = "public-scene-delivery-fixture",
+    wasm_bindgen::prelude::wasm_bindgen
+)]
+pub fn narration_once_dom_check() -> Result<String, JsValue> {
+    let text = "The party arrives beneath the market's lanterns.";
+    let row = TableLine {
+        sequence: 41,
+        actor_id: String::new(),
+        speaker: NARRATOR_NAME.to_owned(),
+        role: TableRole::Narrator,
+        kind: TableKind::Action,
+        text: text.to_owned(),
+        scripted: false,
+        roll: None,
+    };
+    let rows = [row];
+    let fresh = [&rows[0]];
+    let scene = SceneScript {
+        narration: text,
+        previous_narration: "The gate closes behind you.",
+        lines: &rows,
+        fresh: &fresh,
+        ..Default::default()
+    };
+    let voice = VoiceLine {
+        role: crate::voice_line::NARRATOR_ROLE.to_owned(),
+        text: text.to_owned(),
+    };
+    let voices = [voice];
+    let scripts = |scene: &SceneScript<'_>| {
+        scene_lines_once(scene)
+            .into_iter()
+            .filter_map(|line| match line {
+                SceneScriptLine::Narration(text) => {
+                    Some(narration_line(text, &voices, scene.restart))
+                }
+                SceneScriptLine::Table(line) => script_line(line, &[], &voices, scene.restart),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let script = scripts(&scene);
+    if script.len() != 1 {
+        return Err(JsValue::from_str(
+            "one narration queued more than one stage line",
+        ));
+    }
+    let mut conductor = Conductor::new();
+    conductor.set_sound(true);
+    let mut pending = VecDeque::from(conductor.restart(
+        0,
+        ViewPlan {
+            diff: Default::default(),
+            script,
+            cast: Vec::new(),
+        },
+    ));
+    let (mut requests, mut plays, mut openings) = (0, 0, 0);
+    for now in [0, 1_000, 5_000, 15_000, 30_000] {
+        pending.extend(conductor.on_tick(now));
+        while let Some(command) = pending.pop_front() {
+            match command {
+                Command::Clip {
+                    id,
+                    op: ClipOp::Request,
+                    ..
+                } => {
+                    requests += 1;
+                    pending.extend(conductor.on_clip(now, id, ClipSignal::Loaded));
+                }
+                Command::Clip {
+                    id,
+                    op: ClipOp::Play,
+                    ..
+                } => {
+                    plays += 1;
+                    pending.extend(conductor.on_clip(
+                        now,
+                        id,
+                        ClipSignal::Started {
+                            duration_ms: Some(1_000),
+                        },
+                    ));
+                    pending.extend(conductor.on_clip(now + 1_000, id, ClipSignal::Finished));
+                }
+                Command::Line {
+                    state: LineState::Opening,
+                    ..
+                } => openings += 1,
+                _ => {}
+            }
+        }
+    }
+    if (requests, plays, openings) != (1, 1, 1) {
+        return Err(JsValue::from_str(&format!(
+            "narration lifecycle counts: requests={requests}, plays={plays}, openings={openings}"
+        )));
+    }
+    let delayed_row = SceneScript {
+        previous_narration: text,
+        ..scene
+    };
+    if !scripts(&delayed_row).is_empty() {
+        return Err(JsValue::from_str(
+            "late table projection replayed narration",
+        ));
+    }
+    let repeated = [
+        rows[0].clone(),
+        TableLine {
+            sequence: 42,
+            ..rows[0].clone()
+        },
+    ];
+    let repeated_fresh = [&repeated[1]];
+    let repetition = SceneScript {
+        lines: &repeated,
+        fresh: &repeated_fresh,
+        ..delayed_row
+    };
+    if scripts(&repetition).len() != 1 {
+        return Err(JsValue::from_str(
+            "a distinct sequenced repetition was lost",
+        ));
+    }
+    let delayed_scene = SceneScript {
+        fresh: &[],
+        previous_narration: "",
+        ..delayed_row
+    };
+    if !scripts(&delayed_scene).is_empty() {
+        return Err(JsValue::from_str(
+            "late scene projection replayed table narration",
+        ));
+    }
+    let reload = SceneScript {
+        restart: true,
+        ..delayed_scene
+    };
+    let restored = conductor.restart(
+        31_000,
+        ViewPlan {
+            diff: Default::default(),
+            script: scripts(&reload),
+            cast: Vec::new(),
+        },
+    );
+    conductor.set_sound(false);
+    conductor.set_sound(true);
+    let mut restored = restored;
+    restored.extend(conductor.on_tick(32_000));
+    if restored.iter().any(|command| {
+        matches!(
+            command,
+            Command::Clip {
+                op: ClipOp::Request | ClipOp::Play,
+                ..
+            }
+        )
+    }) {
+        return Err(JsValue::from_str(
+            "reload or sound unlock replayed recovered narration",
+        ));
+    }
+    let mut muted = Conductor::new();
+    let mut commands = muted.restart(
+        0,
+        ViewPlan {
+            diff: Default::default(),
+            script: vec![narration_line(text, &voices, false)],
+            cast: Vec::new(),
+        },
+    );
+    muted.set_sound(true);
+    commands.extend(muted.on_tick(100));
+    commands.extend(muted.on_view(
+        200,
+        ViewPlan {
+            diff: Default::default(),
+            script: scripts(&delayed_row),
+            cast: Vec::new(),
+        },
+    ));
+    if commands.iter().any(|command| {
+        matches!(
+            command,
+            Command::Clip {
+                op: ClipOp::Request | ClipOp::Play,
+                ..
+            }
+        )
+    }) {
+        return Err(JsValue::from_str(
+            "mid-line sound unlock restarted the current narration",
+        ));
+    }
+    Ok("narration once: simultaneous and delayed projections, one opening/request/play, silent reload and mid-line unlock passed".to_owned())
+}
+
+#[cfg(test)]
+mod narration_once_tests {
+    #[test]
+    fn scene_and_table_narration_share_one_stage_turn_and_clip() {
+        super::narration_once_dom_check().unwrap();
     }
 }
