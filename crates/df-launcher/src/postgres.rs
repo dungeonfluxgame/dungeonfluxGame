@@ -26,7 +26,17 @@ pub fn quiet(program: &Path) -> Command {
 }
 
 fn run(command: &mut Command, what: &str) -> Result<String, io::Error> {
+    let started = std::time::Instant::now();
     let output = command.output()?;
+    crate::log::event(
+        "DATABASE_TOOL",
+        format!(
+            "what={} ok={} ms={}",
+            crate::log::value(what),
+            output.status.success(),
+            started.elapsed().as_millis()
+        ),
+    );
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
@@ -68,6 +78,7 @@ fn port_answers(port: u16) -> bool {
 /// Starts the cluster unless ours already runs. Returns whether this call started it.
 pub fn ensure_running(install: &Install, port: u16) -> Result<bool, io::Error> {
     if ours_running(install, port) {
+        crate::log::event("DATABASE_REUSED", format!("port={port}"));
         return Ok(false);
     }
     if port_answers(port) {
@@ -97,6 +108,7 @@ pub fn ensure_running(install: &Install, port: u16) -> Result<bool, io::Error> {
     // The server pg_ctl starts inherits pg_ctl's standard handles and outlives it, so pipes
     // would never reach end-of-file: wait on the exit status and read the log on failure.
     let log = install.play_root.join("postgres.log");
+    let started = std::time::Instant::now();
     let status = quiet(&install.postgres_tool("pg_ctl"))
         .arg("-D")
         .arg(&data)
@@ -108,6 +120,14 @@ pub fn ensure_running(install: &Install, port: u16) -> Result<bool, io::Error> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
+    crate::log::event(
+        "DATABASE_STARTED",
+        format!(
+            "port={port} ok={} ms={}",
+            status.success(),
+            started.elapsed().as_millis()
+        ),
+    );
     if !status.success() {
         let tail = crate::files::tail(&log, 1);
         return Err(io::Error::other(format!(

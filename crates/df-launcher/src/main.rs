@@ -15,6 +15,7 @@ mod desktop;
 mod files;
 mod form;
 mod install;
+mod log;
 mod platform;
 mod postgres;
 mod preview;
@@ -108,6 +109,7 @@ fn launch(words: Vec<String>) -> Result<(), String> {
     }
     let data = files::data_folder(arguments.data_dir)
         .map_err(|error| format!("DungeonFlux could not open its data folder: {error}"))?;
+    log::init(&data);
     let config = config::locate(arguments.config, &data);
     if let Some(command) = arguments.command {
         let app = app::App::new(data, config, false, Box::new(|_| {}));

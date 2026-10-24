@@ -1281,6 +1281,21 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_config_file_is_never_overwritten() {
+        let (app, data) = app("damaged");
+        let path = data.join("dungeonflux.toml");
+        std::fs::write(&path, "[keys]\nopenai = \"kept\"\n[network\n").unwrap();
+        let refused = handle(&app, "POST", "/keys", b"credential=fal&value=new-value");
+        assert_eq!(refused.status, 422);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("openai = \"kept\"")
+        );
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
     fn keys_are_stored_without_ever_rendering_the_value() {
         let (app, data) = app("keys");
         let saved = handle(

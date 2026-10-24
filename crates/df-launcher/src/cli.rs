@@ -23,6 +23,7 @@ Commands (for agents and scripts; no window opens):
   stop [--force]     Save and stop the running game (and the database the launcher started).
   status             Print RUNNING ... or IDLE.
   saves              List saved games, newest first.
+  logs [--lines N]   Print the launcher's log (last 200 lines unless N is given).
 
   --dev-control      Turn on the server's developer control for this game and print its
                      DEV_CONTROL url and token file (for df-transport-fixture dev).
@@ -50,6 +51,7 @@ pub enum Command {
     Stop { force: bool },
     Status,
     Saves,
+    Logs { lines: usize },
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -65,8 +67,19 @@ pub fn parse(name: &str, rest: &[String]) -> Result<Command, String> {
     let mut flags = Flags::default();
     let mut positional = Vec::new();
     let mut force = false;
+    let mut lines = None;
     while let Some(word) = words.next() {
         match word {
+            "--lines" if name == "logs" => {
+                let count = words.next().ok_or("--lines needs a number")?;
+                lines = Some(
+                    count
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|count| (1..=100_000).contains(count))
+                        .ok_or("--lines takes a number from 1 to 100000")?,
+                );
+            }
             "--dev-control" => flags.dev_control = true,
             "--open-display" => flags.open_display = true,
             "--force" => force = true,
@@ -111,16 +124,30 @@ pub fn parse(name: &str, rest: &[String]) -> Result<Command, String> {
         "stop" if flags == Flags::default() => only_flags(Command::Stop { force }),
         "status" if !force && flags == Flags::default() => only_flags(Command::Status),
         "saves" if !force && flags == Flags::default() => only_flags(Command::Saves),
+        "logs" if !force && flags == Flags::default() => only_flags(Command::Logs {
+            lines: lines.unwrap_or(200),
+        }),
         _ => Err(format!("{name} does not take these options")),
     }
 }
 
 pub fn is_command(word: &str) -> bool {
-    matches!(word, "start" | "resume" | "stop" | "status" | "saves")
+    matches!(
+        word,
+        "start" | "resume" | "stop" | "status" | "saves" | "logs"
+    )
 }
 
 pub fn run(app: &Arc<App>, command: Command) -> Result<(), String> {
+    crate::log::event(
+        "CLI_COMMAND",
+        format!("command={}", crate::log::value(format!("{command:?}"))),
+    );
     match command {
+        Command::Logs { lines } => {
+            println!("{}", crate::log::tail(app.data(), lines));
+            Ok(())
+        }
         Command::Start { adventure, flags } => {
             let game = app.new_game(adventure);
             started(app.start_blocking(&game, options(&flags)), &flags)

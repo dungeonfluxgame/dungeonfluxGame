@@ -279,14 +279,12 @@ impl Settings {
             ("postgres_folder", &mut next.postgres_folder),
             ("play_folder", &mut next.play_folder),
         ] {
-            let value = form.get(field).unwrap_or("").trim();
-            if value.len() > 1024 || value.chars().any(char::is_control) {
-                errors.push(FieldError {
+            match folder_problem(form.get(field).unwrap_or("").trim()) {
+                Some(message) => errors.push(FieldError {
                     field,
-                    message: "Enter a folder path of up to 1,024 characters.".to_owned(),
-                });
-            } else {
-                *slot = value.to_owned();
+                    message: message.to_owned(),
+                }),
+                None => *slot = form.get(field).unwrap_or("").trim().to_owned(),
             }
         }
         if errors.is_empty() {
@@ -378,6 +376,31 @@ fn choice<T: Copy>(
         });
     }
     found
+}
+
+/// Why a folder setting is refused, if it is. The build and PostgreSQL folders name programs
+/// the launcher runs, so network (UNC) paths are refused for all folders.
+pub fn folder_problem(value: &str) -> Option<&'static str> {
+    if value.len() > 1024 || value.chars().any(char::is_control) {
+        Some("Enter a folder path of up to 1,024 characters.")
+    } else if value.starts_with("\\\\") || value.starts_with("//") {
+        Some("Choose a folder on this PC; network folders are not allowed.")
+    } else {
+        None
+    }
+}
+
+/// Setting names whose values differ, for the log (values themselves are not logged).
+pub fn changed_names(before: &Settings, after: &Settings) -> Vec<String> {
+    let (Ok(before), Ok(after)) = (toml::Table::try_from(before), toml::Table::try_from(after))
+    else {
+        return Vec::new();
+    };
+    after
+        .iter()
+        .filter(|(name, value)| before.get(*name) != Some(value))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// An external server is named by its origin only: `http://host:port`, no path or query.
@@ -483,6 +506,15 @@ mod tests {
                 base.with_form(&full_form(&overrides)).is_err(),
                 "{overrides:?}"
             );
+        }
+    }
+
+    #[test]
+    fn folders_on_other_machines_are_refused() {
+        assert!(folder_problem("").is_none());
+        assert!(folder_problem("C:\\games\\build").is_none());
+        for refused in ["\\\\server\\share", "//server/share", "a\nb"] {
+            assert!(folder_problem(refused).is_some(), "{refused:?}");
         }
     }
 

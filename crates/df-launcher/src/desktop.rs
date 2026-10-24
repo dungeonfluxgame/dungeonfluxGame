@@ -21,6 +21,7 @@ use wry::{
 
 use crate::{
     app::{App, ShellEvent},
+    log,
     platform::InstanceGuard,
     settings::{DisplayScreen, FullScreen},
     ui,
@@ -30,8 +31,44 @@ use crate::{
 enum UserEvent {
     Shell(ShellEvent),
     ShowControl,
-    /// The closing display window's last screenshot is saved; it can go now.
-    DropDisplay,
+    /// The closing display window (this generation) may go: its last screenshot is saved, or
+    /// the capture took too long.
+    DropDisplay(u64),
+}
+
+/// How long a closing display waits for its last screenshot before closing anyway.
+const CAPTURE_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Scheme, host and port of an absolute `http`/`https` URL, compared exactly (never by text
+/// prefix). URLs carrying a user name or password are refused.
+fn origin_of(url: &str) -> Option<(String, String, u16)> {
+    let uri: wry::http::Uri = url.parse().ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    let authority = uri.authority()?;
+    if authority.as_str().contains('@') {
+        return None;
+    }
+    Some((
+        scheme,
+        authority.host().to_ascii_lowercase(),
+        authority.port_u16().unwrap_or(default_port),
+    ))
+}
+
+/// Hands a link to the system browser, but only a plain `http`/`https` link: never a file,
+/// a custom scheme or a program.
+fn open_external(url: &str, from: &str) {
+    if origin_of(url).is_some() {
+        log::event("LINK_OPENED_EXTERNALLY", format!("from={from}"));
+        let _ = open::that_detached(url);
+    } else {
+        log::event("LINK_REFUSED", format!("from={from}"));
+    }
 }
 
 /// Where the control pages are served. WebView2 maps custom schemes to `http://<scheme>.localhost`.
@@ -44,7 +81,8 @@ const CONTROL_ORIGIN: &str = "dungeonflux://localhost";
 struct Display {
     view: WebView,
     window: Window,
-    origin: String,
+    origin: (String, String, u16),
+    generation: u64,
 }
 
 pub fn run(
@@ -83,6 +121,7 @@ pub fn run(
         .with_min_inner_size(LogicalSize::new(520.0, 480.0))
         .with_window_icon(icon())
         .build(&event_loop)?;
+    log::event("WINDOW_CONTROL_OPENED", "");
     let handler_app = Arc::clone(&app);
     let control_view = WebViewBuilder::new_with_web_context(&mut context)
         .with_custom_protocol("dungeonflux".into(), move |_id, request| {
@@ -91,14 +130,15 @@ pub fn run(
         .with_url("dungeonflux://localhost/")
         .with_background_color((9, 19, 29, 255))
         .with_navigation_handler(|url| {
-            let ours = url.starts_with(CONTROL_ORIGIN) || url.starts_with("dungeonflux:");
-            if !ours && (url.starts_with("http://") || url.starts_with("https://")) {
-                let _ = open::that_detached(&url);
+            let ours =
+                url.starts_with("dungeonflux:") || origin_of(&url) == origin_of(CONTROL_ORIGIN);
+            if !ours {
+                open_external(&url, "control");
             }
             ours
         })
         .with_new_window_req_handler(|url, _features| {
-            let _ = open::that_detached(&url);
+            open_external(&url, "control");
             NewWindowResponse::Deny
         })
         .with_devtools(cfg!(debug_assertions))
@@ -108,13 +148,14 @@ pub fn run(
     if let Some(url) = connect
         && let Err(message) = app.connect_to(&url, true)
     {
-        eprintln!("CONNECT refused: {message}");
+        log::event("CONNECT_REFUSED", format!("reason={}", log::value(message)));
     }
     if show_display {
         app.open_display();
     }
 
     let mut display: Option<Display> = None;
+    let mut generation = 0u64;
     let mut control_visible = true;
     let drop_proxy = event_loop.create_proxy();
 
@@ -130,12 +171,16 @@ pub fn run(
                 full_screen,
             })) => {
                 match &display {
-                    Some(open) if url.starts_with(&open.origin) => {
+                    Some(open) if origin_of(&url).as_ref() == Some(&open.origin) => {
+                        // Also undoes the hiding of a display that was closing.
+                        open.window.set_visible(true);
                         open.window.set_minimized(false);
                         open.window.set_focus();
+                        log::event("WINDOW_DISPLAY_FOCUSED", "");
                     }
                     _ => {
                         display = None;
+                        generation += 1;
                         match open_display(
                             target,
                             &mut context,
@@ -143,11 +188,15 @@ pub fn run(
                             &url,
                             screen,
                             full_screen,
+                            generation,
                         ) {
                             Ok(opened) => display = Some(opened),
                             Err(error) => {
-                                eprintln!("DISPLAY_WINDOW error={error}");
-                                let _ = open::that_detached(&url);
+                                log::event(
+                                    "WINDOW_DISPLAY_FAILED",
+                                    format!("error={}", log::value(error.to_string())),
+                                );
+                                open_external(&url, "display-fallback");
                             }
                         }
                     }
@@ -155,6 +204,9 @@ pub fn run(
                 report_display(&app, display.as_ref());
             }
             Event::UserEvent(UserEvent::Shell(ShellEvent::CloseDisplay)) => {
+                if display.is_some() {
+                    log::event("WINDOW_DISPLAY_CLOSED", "reason=game_ended");
+                }
                 display = None;
                 report_display(&app, None);
                 if !control_visible {
@@ -177,14 +229,22 @@ pub fn run(
                     capture(&open.view, path, Box::new(|| {}));
                 }
             }
-            Event::UserEvent(UserEvent::DropDisplay) => {
-                display = None;
-                report_display(&app, None);
-                if !control_visible {
-                    *control_flow = ControlFlow::Exit;
+            Event::UserEvent(UserEvent::DropDisplay(closing)) => {
+                // A late timer must not close a display opened since.
+                if display
+                    .as_ref()
+                    .is_some_and(|open| open.generation == closing)
+                {
+                    log::event("WINDOW_DISPLAY_CLOSED", "reason=closed_by_user");
+                    display = None;
+                    report_display(&app, None);
+                    if !control_visible {
+                        *control_flow = ControlFlow::Exit;
+                    }
                 }
             }
             Event::UserEvent(UserEvent::ShowControl) => {
+                log::event("WINDOW_CONTROL_SHOWN", "reason=launcher_opened_again");
                 control.set_visible(true);
                 control.set_minimized(false);
                 control.set_focus();
@@ -199,30 +259,39 @@ pub fn run(
                 if window_id == control.id() {
                     // The game keeps running (REF-005); keep the table display up if it is open.
                     if display.is_some() {
+                        log::event("WINDOW_CONTROL_HIDDEN", "reason=display_still_open");
                         control.set_visible(false);
                         control_visible = false;
                     } else {
+                        log::event("LAUNCHER_EXIT", "reason=window_closed");
                         *control_flow = ControlFlow::Exit;
                     }
                 } else if let Some(open) = display
                     .as_ref()
                     .filter(|open| open.window.id() == window_id)
                 {
-                    // Keep a picture of the table for the saved-game card, then close.
-                    open.window.set_visible(false);
+                    // Keep a picture of the table for the saved-game card, then close: when the
+                    // capture is saved, or after CAPTURE_WAIT if WebView2 never answers.
+                    let closing = open.generation;
                     match app.current_screenshot_path() {
                         Some(path) => {
+                            log::event("SCREENSHOT_REQUESTED", "reason=display_closed");
                             let proxy = drop_proxy.clone();
                             capture(
                                 &open.view,
                                 path,
                                 Box::new(move || {
-                                    let _ = proxy.send_event(UserEvent::DropDisplay);
+                                    let _ = proxy.send_event(UserEvent::DropDisplay(closing));
                                 }),
                             );
+                            let late = drop_proxy.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(CAPTURE_WAIT);
+                                let _ = late.send_event(UserEvent::DropDisplay(closing));
+                            });
                         }
                         None => {
-                            let _ = drop_proxy.send_event(UserEvent::DropDisplay);
+                            let _ = drop_proxy.send_event(UserEvent::DropDisplay(closing));
                         }
                     }
                 }
@@ -236,19 +305,29 @@ pub fn run(
 #[cfg(windows)]
 fn capture(view: &WebView, path: PathBuf, done: Box<dyn FnOnce()>) {
     // A failed request never calls back, so `done` must then run here.
+    let started = std::time::Instant::now();
     let shared = std::rc::Rc::new(std::cell::RefCell::new(Some(done)));
     let later = std::rc::Rc::clone(&shared);
+    let saved_to = path.clone();
     let result = crate::platform::capture_webview(
         view,
         path,
         Box::new(move || {
+            let bytes = std::fs::metadata(&saved_to).map_or(0, |meta| meta.len());
+            log::event(
+                "SCREENSHOT_DONE",
+                format!("bytes={bytes} ms={}", started.elapsed().as_millis()),
+            );
             if let Some(done) = later.borrow_mut().take() {
                 done();
             }
         }),
     );
     if let Err(error) = result {
-        eprintln!("SCREENSHOT request_failed error={error}");
+        log::event(
+            "SCREENSHOT_FAILED",
+            format!("error={}", log::value(error.to_string())),
+        );
         if let Some(done) = shared.borrow_mut().take() {
             done();
         }
@@ -294,6 +373,7 @@ fn open_display(
     url: &str,
     screen: DisplayScreen,
     full_screen: FullScreen,
+    generation: u64,
 ) -> Result<Display, Box<dyn std::error::Error>> {
     let (monitor, second) = choose_monitor(target, control, screen);
     let full = match full_screen {
@@ -313,33 +393,42 @@ fn open_display(
             builder = builder.with_fullscreen(Some(Fullscreen::Borderless(Some(monitor.clone()))));
         }
     }
+    let origin = origin_of(url).ok_or("the table display address is not an http address")?;
     let window = builder.build(target)?;
-    let origin = url
-        .split_once("/gameplay/")
-        .map_or(url, |(origin, _)| origin)
-        .to_owned();
     let allowed = origin.clone();
     let view = WebViewBuilder::new_with_web_context(context)
         .with_url(url)
         .with_autoplay(true)
         .with_background_color((0, 0, 0, 255))
         .with_navigation_handler(move |next| {
-            let ours = next.starts_with(&allowed);
-            if !ours && (next.starts_with("http://") || next.starts_with("https://")) {
-                let _ = open::that_detached(&next);
+            let ours = origin_of(&next).as_ref() == Some(&allowed);
+            if !ours {
+                open_external(&next, "display");
             }
             ours
         })
         .with_new_window_req_handler(|next, _features| {
-            let _ = open::that_detached(&next);
+            open_external(&next, "display");
             NewWindowResponse::Deny
         })
         .with_devtools(cfg!(debug_assertions))
         .build(&window)?;
+    log::event(
+        "WINDOW_DISPLAY_OPENED",
+        format!(
+            "screen={} second_screen={second} full_screen={full}",
+            log::value(
+                monitor
+                    .and_then(|monitor| monitor.name())
+                    .unwrap_or_default()
+            )
+        ),
+    );
     Ok(Display {
         view,
         window,
         origin,
+        generation,
     })
 }
 
@@ -355,14 +444,17 @@ fn icon() -> Option<Icon> {
 }
 
 fn respond(app: &Arc<App>, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    let started = std::time::Instant::now();
     let method = request.method().as_str().to_owned();
-    // Only the launcher's own pages may act on it.
+    // Only the launcher's own pages may act on it. (Only this webview has the scheme, so a
+    // foreign page cannot reach it; the check is a second line.)
     let foreign = request
         .headers()
         .get(header::ORIGIN)
         .and_then(|origin| origin.to_str().ok())
         .is_some_and(|origin| origin != CONTROL_ORIGIN && origin != "null");
     if method == "POST" && foreign {
+        log::event("PAGE_REFUSED", "reason=foreign_origin");
         return plain(403, "Refused");
     }
     let target = request
@@ -371,6 +463,7 @@ fn respond(app: &Arc<App>, request: Request<Vec<u8>>) -> Response<Cow<'static, [
         .map_or("/", |path| path.as_str())
         .to_owned();
     let page = ui::handle(app, &method, &target, request.body());
+    log_request(&method, &target, page.status, started);
     let mut builder = Response::builder()
         .status(page.status)
         .header(header::CONTENT_TYPE, page.content_type)
@@ -383,9 +476,57 @@ fn respond(app: &Arc<App>, request: Request<Vec<u8>>) -> Response<Cow<'static, [
         .unwrap_or_else(|_| plain(500, "The launcher page could not be built"))
 }
 
+/// One line per page or form, without the query string or body (a form may carry a key).
+pub fn log_request(method: &str, target: &str, status: u16, started: std::time::Instant) {
+    let path = target.split('?').next().unwrap_or("/");
+    if path.starts_with("/art/") || path == "/style.css" {
+        return;
+    }
+    log::event(
+        "PAGE",
+        format!(
+            "method={method} path={} status={status} ms={}",
+            log::value(path),
+            started.elapsed().as_millis()
+        ),
+    );
+}
+
 fn plain(status: u16, text: &'static str) -> Response<Cow<'static, [u8]>> {
     let mut response = Response::new(Cow::Borrowed(text.as_bytes()));
     *response.status_mut() = wry::http::StatusCode::from_u16(status)
         .unwrap_or(wry::http::StatusCode::INTERNAL_SERVER_ERROR);
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origins_compare_exactly_and_refuse_tricks() {
+        let game = origin_of("http://127.0.0.1:63419/gameplay/display");
+        assert_eq!(game, Some(("http".into(), "127.0.0.1".into(), 63419)));
+        assert_eq!(origin_of("http://127.0.0.1:63419/other"), game);
+        for other in [
+            "http://127.0.0.1:63419.evil.test/gameplay/display",
+            "http://127.0.0.1:63420/gameplay/display",
+            "https://127.0.0.1:63419/gameplay/display",
+        ] {
+            assert_ne!(origin_of(other), game, "{other}");
+        }
+        for refused in [
+            "http://user@127.0.0.1:63419/",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-settings:privacy",
+            "javascript:alert(1)",
+            "C:\\Windows\\notepad.exe",
+        ] {
+            assert_eq!(origin_of(refused), None, "{refused}");
+        }
+        assert_eq!(
+            origin_of("https://Example.org/x"),
+            Some(("https".into(), "example.org".into(), 443))
+        );
+    }
 }

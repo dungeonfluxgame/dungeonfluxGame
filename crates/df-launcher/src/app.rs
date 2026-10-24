@@ -15,7 +15,7 @@ use crate::{
     credentials::{self, Credential, Keys},
     form::Form,
     install::Install,
-    platform, postgres,
+    log, platform, postgres,
     saves::{self, Adventure, SavedGame},
     server,
     settings::{DisplayScreen, DisplayTarget, FieldError, FullScreen, ServerMode, Settings},
@@ -95,6 +95,12 @@ pub struct RunRecord {
     pub postgres_started: bool,
     pub play_root: PathBuf,
     pub postgres_bin: PathBuf,
+    /// The database port this game started with; settings may change while it runs.
+    #[serde(default)]
+    pub database_port: u16,
+    /// Set by whoever is stopping the game, so other launchers read its end as a clean stop.
+    #[serde(default)]
+    pub stopping: bool,
     /// The server's `DEV CONTROL on url=… token_file=…` line, when developer control is on.
     #[serde(default)]
     pub dev_control: Option<String>,
@@ -192,15 +198,31 @@ impl App {
         windowed: bool,
         notify: Box<dyn Fn(ShellEvent) + Send + Sync>,
     ) -> Arc<Self> {
+        log::event(
+            "LAUNCHER_START",
+            format!(
+                "windowed={windowed} data={} config={} version={}",
+                log::value(data.display().to_string()),
+                log::value(config_path.display().to_string()),
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
         let (config, settings_problem) = match config::load(&config_path) {
             Ok(config) => {
                 // First run: write the full commented file so it can be edited by hand.
                 if !config_path.exists() {
-                    let _ = config::save(&config_path, &config);
+                    let created = config::save(&config_path, &config);
+                    log::event("CONFIG_CREATED", format!("ok={}", created.is_ok()));
                 }
                 (config, None)
             }
-            Err(error) => (Config::default(), Some(error.to_string())),
+            Err(error) => {
+                log::event(
+                    "CONFIG_DAMAGED",
+                    format!("error={}", log::value(error.to_string())),
+                );
+                (Config::default(), Some(error.to_string()))
+            }
         };
         let app = Arc::new(Self {
             data,
@@ -229,6 +251,7 @@ impl App {
     }
 
     fn set_phase(&self, phase: Phase) {
+        log_phase(&phase);
         let refresh = {
             let mut inner = self.lock();
             inner.phase = phase;
@@ -243,8 +266,22 @@ impl App {
         &self.data
     }
 
+    /// The settings as the configuration file holds them now (another launcher or the command
+    /// line may have changed it). A damaged file keeps the last good settings in memory.
     pub fn settings(&self) -> Settings {
+        self.reload_config();
         self.lock().config.settings.clone()
+    }
+
+    fn reload_config(&self) {
+        match config::load(&self.config_path) {
+            Ok(fresh) => {
+                let mut inner = self.lock();
+                inner.config = fresh;
+                inner.settings_problem = None;
+            }
+            Err(error) => self.lock().settings_problem = Some(error.to_string()),
+        }
     }
 
     pub fn phase(&self) -> Phase {
@@ -275,16 +312,21 @@ impl App {
         }
     }
 
-    /// Picks up a game started by the command line while this window was open.
+    /// Picks up a game started by the command line while this window was open. Only from Idle:
+    /// a failed stop must keep showing its Force stop choice.
     pub fn refresh_from_disk(self: &Arc<Self>) {
-        if !self.startable() {
+        if !matches!(self.lock().phase, Phase::Idle { .. }) {
             return;
         }
         let Some(run) = self.read_run() else {
             return;
         };
-        if platform::process_is(run.pid, &run.server_exe) {
-            self.lock().phase = Phase::Running(run.clone());
+        if !run.stopping && platform::process_is(run.pid, &run.server_exe) {
+            log::event(
+                "GAME_ADOPTED",
+                format!("name={} pid={}", log::value(&run.game.name), run.pid),
+            );
+            self.set_phase(Phase::Running(run.clone()));
             self.spawn_monitor(run);
         }
     }
@@ -299,6 +341,7 @@ impl App {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        self.reload_config();
         let (phase, settings, settings_problem, display_open, display_full_screen) = {
             let inner = self.lock();
             (
@@ -338,17 +381,34 @@ impl App {
             return;
         };
         if platform::process_is(run.pid, &run.server_exe) {
+            log::event(
+                "GAME_RECONNECTED",
+                format!("name={} pid={}", log::value(&run.game.name), run.pid),
+            );
             self.lock().phase = Phase::Running(run.clone());
             self.spawn_monitor(run);
             return;
         }
         let install = run.postgres_install();
         if run.postgres_started {
-            let port = self.lock().config.settings.database_port;
+            // The port the game started with, not today's setting.
+            let port = if run.database_port == 0 {
+                self.lock().config.settings.database_port
+            } else {
+                run.database_port
+            };
             if postgres::ours_running(&install, port) {
-                let _ = postgres::stop(&install);
+                let stopped = postgres::stop(&install);
+                log::event(
+                    "DATABASE_STOPPED",
+                    format!("reason=stale_record ok={}", stopped.is_ok()),
+                );
             }
         }
+        log::event(
+            "GAME_ENDED_WHILE_CLOSED",
+            format!("name={}", log::value(&run.game.name)),
+        );
         let _ = std::fs::remove_file(&path);
         self.lock().phase = Phase::Idle {
             notice: Some(format!(
@@ -390,6 +450,14 @@ impl App {
             return;
         }
         let game = self.new_game(adventure);
+        log::event(
+            "ACTION_START_NEW",
+            format!(
+                "adventure={} name={}",
+                adventure.server_value(),
+                log::value(&game.name)
+            ),
+        );
         self.begin(game);
     }
 
@@ -397,8 +465,15 @@ impl App {
         if !self.startable() {
             return;
         }
-        if let Some(game) = self.find_save(database) {
-            self.begin(game);
+        match self.find_save(database) {
+            Some(game) => {
+                log::event("ACTION_RESUME", format!("name={}", log::value(&game.name)));
+                self.begin(game);
+            }
+            None => log::event(
+                "ACTION_RESUME_UNKNOWN",
+                format!("database={}", log::value(database)),
+            ),
         }
     }
 
@@ -424,6 +499,7 @@ impl App {
             Phase::Failed(failure) => failure.recovery.clone(),
             _ => return,
         };
+        log::event("ACTION_RETRY", "");
         match recovery {
             Recovery::Retry(game) => self.begin(game),
             Recovery::StopAgain(run) => self.begin_stop(*run),
@@ -453,6 +529,16 @@ impl App {
     }
 
     fn step(&self, game: &SavedGame, step: Step, detail: &str) {
+        // Only changes refresh the page; repeated status lines would reload it constantly.
+        let unchanged = matches!(&self.lock().phase,
+            Phase::Starting { step: current, detail: shown, .. } if *current == step && shown == detail);
+        if unchanged {
+            return;
+        }
+        log::event(
+            "START_STEP",
+            format!("step={step:?} detail={}", log::value(detail)),
+        );
         self.set_phase(Phase::Starting {
             game: game.clone(),
             step,
@@ -465,7 +551,8 @@ impl App {
         game: &SavedGame,
         options: StartOptions,
     ) -> Result<RunRecord, Box<Failure>> {
-        let mut settings = self.lock().config.settings.clone();
+        let started = std::time::Instant::now();
+        let mut settings = self.settings();
         settings.dev_control |= options.dev_control;
         let failed = |title: &str, message: String| {
             Box::new(Failure {
@@ -477,6 +564,16 @@ impl App {
         };
         let install = Install::locate(&settings)
             .map_err(|missing| failed("DungeonFlux can't find the game", missing.0))?;
+        log::event(
+            "INSTALL",
+            format!(
+                "root={} server={} postgres={} play={}",
+                log::value(install.root.display().to_string()),
+                log::value(install.server_exe.display().to_string()),
+                log::value(install.postgres_bin.display().to_string()),
+                log::value(install.play_root.display().to_string())
+            ),
+        );
         let keys = self
             .keys(&settings, Some(&install))
             .map_err(|error| failed("The keys can't be read", error.to_string()))?;
@@ -537,13 +634,33 @@ impl App {
             adventure: game.adventure,
             stop_dir: &stop_dir,
         };
+        // Names only: values may be keys.
+        let names: Vec<String> = server::environment(&launch)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
         let mut child = match server::spawn(&launch, &log) {
             Ok(child) => child,
             Err(error) => {
+                log::event(
+                    "SERVER_SPAWN_FAILED",
+                    format!("error={}", log::value(error.to_string())),
+                );
                 stop_postgres();
                 return Err(failed("The game couldn't start", error.to_string()));
             }
         };
+        log::event(
+            "SERVER_SPAWNED",
+            format!(
+                "pid={} database={} listen={} log={} env={}",
+                child.id(),
+                game.database,
+                network.listen,
+                log::value(log.display().to_string()),
+                names.join(",")
+            ),
+        );
         let origin = network
             .public_url
             .clone()
@@ -559,6 +676,8 @@ impl App {
             postgres_started,
             play_root: install.play_root.clone(),
             postgres_bin: install.postgres_bin.clone(),
+            database_port: settings.database_port,
+            stopping: false,
             dev_control: None,
         };
         // Written before the wait, so a launcher closed during startup still finds the game.
@@ -581,6 +700,7 @@ impl App {
         let ready = match waited {
             Ok(server::Wait::Ready(ready)) => ready,
             Ok(server::Wait::Exited(code)) => {
+                log::event("SERVER_EXITED_STARTING", format!("code={code:?}"));
                 stop_postgres();
                 self.clear_run();
                 return Err(failure_with_log(
@@ -597,6 +717,10 @@ impl App {
                 ));
             }
             Ok(server::Wait::TimedOut) | Err(_) => {
+                log::event(
+                    "SERVER_NOT_READY",
+                    format!("limit_s={}", READY_LIMIT.as_secs()),
+                );
                 let _ = server::request_stop(&run.stop_dir);
                 if child.wait_timeout(STOP_LIMIT).is_none() {
                     let _ = child.kill();
@@ -626,6 +750,16 @@ impl App {
             let mut inner = self.lock();
             inner.child = Some(child);
         }
+        log::event(
+            "GAME_READY",
+            format!(
+                "name={} pid={} ms={} display={}",
+                log::value(&run.game.name),
+                run.pid,
+                started.elapsed().as_millis(),
+                run.display_url
+            ),
+        );
         self.set_phase(Phase::Running(run.clone()));
         self.spawn_monitor(run.clone());
         if !options.quiet_display {
@@ -636,6 +770,10 @@ impl App {
 
     fn show_display_per_settings(&self, url: &str) {
         let settings = self.lock().config.settings.clone();
+        log::event(
+            "DISPLAY_AUTO_OPEN",
+            format!("target={:?}", settings.display),
+        );
         match settings.display {
             DisplayTarget::Window if self.windowed => (self.notify)(ShellEvent::OpenDisplay {
                 url: url.to_owned(),
@@ -663,6 +801,7 @@ impl App {
             return;
         };
         let settings = self.lock().config.settings.clone();
+        log::event("ACTION_SHOW_DISPLAY", format!("windowed={}", self.windowed));
         if self.windowed {
             (self.notify)(ShellEvent::OpenDisplay {
                 url,
@@ -676,11 +815,13 @@ impl App {
 
     pub fn open_display_in_browser(&self) {
         if let Some(url) = self.display_url() {
+            log::event("ACTION_DISPLAY_BROWSER", "");
             let _ = open::that_detached(url);
         }
     }
 
     pub fn set_display_full_screen(&self, full: bool) {
+        log::event("ACTION_DISPLAY_FULL_SCREEN", format!("full={full}"));
         (self.notify)(ShellEvent::DisplayFullScreen(full));
     }
 
@@ -689,6 +830,12 @@ impl App {
         let refresh = {
             let mut inner = self.lock();
             let changed = inner.display_open != open || inner.display_full_screen != full_screen;
+            if changed {
+                log::event(
+                    "DISPLAY_STATE",
+                    format!("open={open} full_screen={full_screen}"),
+                );
+            }
             inner.display_open = open;
             inner.display_full_screen = full_screen;
             changed && inner.view == View::Home
@@ -718,11 +865,13 @@ impl App {
                 // A fresh picture every two minutes, so a resume card stays current even if
                 // the game ends without a clean stop.
                 if seconds.is_multiple_of(120)
+                    && app.lock().display_open
                     && let Some(path) = app.screenshot_path(&run.game.database)
                 {
+                    log::event("SCREENSHOT_REQUESTED", "reason=periodic");
                     (app.notify)(ShellEvent::CaptureDisplay { path });
                 }
-                let alive = {
+                let owned = {
                     let mut inner = app.lock();
                     let watching =
                         matches!(&inner.phase, Phase::Running(current) if current.pid == run.pid);
@@ -731,23 +880,37 @@ impl App {
                     }
                     match inner.child.as_mut() {
                         Some(child) if child.id() == run.pid => {
-                            matches!(child.try_wait(), Ok(None))
+                            Some(matches!(child.try_wait(), Ok(None)))
                         }
-                        _ => platform::process_is(run.pid, &run.server_exe),
+                        _ => None,
                     }
                 };
+                // The process query runs without the lock, so pages never wait on it.
+                let alive = owned.unwrap_or_else(|| platform::process_is(run.pid, &run.server_exe));
                 if alive {
                     continue;
                 }
                 app.lock().child = None;
                 (app.notify)(ShellEvent::CloseDisplay);
-                // Stopped from the command line: that command already saved and cleaned up.
-                if app.read_run().is_none_or(|current| current.pid != run.pid) {
+                // Stopped elsewhere (the command line or another window): that stop saved the
+                // game and cleans up; this window only reports it.
+                if app
+                    .read_run()
+                    .is_none_or(|current| current.pid != run.pid || current.stopping)
+                {
+                    log::event(
+                        "GAME_STOPPED_ELSEWHERE",
+                        format!("name={}", log::value(&run.game.name)),
+                    );
                     app.set_phase(Phase::Idle {
                         notice: Some(format!("{} was stopped and saved.", run.game.name)),
                     });
                     return;
                 }
+                log::event(
+                    "GAME_ENDED_UNEXPECTEDLY",
+                    format!("name={} pid={}", log::value(&run.game.name), run.pid),
+                );
                 if run.postgres_started {
                     let _ = postgres::stop(&run.postgres_install());
                 }
@@ -772,12 +935,21 @@ impl App {
     }
 
     fn begin_stop(self: &Arc<Self>, run: RunRecord) {
+        log::event(
+            "ACTION_STOP",
+            format!("name={}", log::value(&run.game.name)),
+        );
         self.set_phase(Phase::Stopping(run.clone()));
         let app = Arc::clone(self);
         std::thread::spawn(move || {
+            app.mark_stopping(&run);
             app.capture_before_close(&run);
             (app.notify)(ShellEvent::CloseDisplay);
             if let Err(error) = server::request_stop(&run.stop_dir) {
+                log::event(
+                    "STOP_REQUEST_FAILED",
+                    format!("error={}", log::value(error.to_string())),
+                );
                 app.set_phase(Phase::Failed(Failure {
                     title: "The game can't be asked to stop".to_owned(),
                     message: format!("{error} You can force it to stop instead."),
@@ -786,12 +958,20 @@ impl App {
                 }));
                 return;
             }
+            log::event(
+                "STOP_REQUESTED",
+                format!("name={}", log::value(&run.game.name)),
+            );
             if app.wait_for_exit(&run, STOP_LIMIT) {
                 app.finish_stop(
                     &run,
                     format!("{} is saved. Resume it any time.", run.game.name),
                 );
             } else {
+                log::event(
+                    "STOP_TIMED_OUT",
+                    format!("limit_s={}", STOP_LIMIT.as_secs()),
+                );
                 app.set_phase(Phase::Failed(Failure {
                     title: format!("{} hasn't stopped yet", run.game.name),
                     message: "It may still be saving. Try stopping again in a moment, or force it to stop. Forcing it can keep this game from resuming for about five minutes.".to_owned(),
@@ -800,6 +980,14 @@ impl App {
                 }));
             }
         });
+    }
+
+    /// Records in the running-game file that this stop is deliberate, so a launcher watching
+    /// the same game reads the server's exit as a clean stop rather than a crash.
+    fn mark_stopping(&self, run: &RunRecord) {
+        let mut marked = run.clone();
+        marked.stopping = true;
+        let _ = self.write_run(&marked);
     }
 
     /// Asks the display window for a last picture of the table and waits briefly for it.
@@ -811,6 +999,7 @@ impl App {
         let before = std::fs::metadata(&path)
             .and_then(|meta| meta.modified())
             .ok();
+        log::event("SCREENSHOT_REQUESTED", "reason=stop");
         (self.notify)(ShellEvent::CaptureDisplay { path: path.clone() });
         let started = std::time::Instant::now();
         while started.elapsed() < Duration::from_secs(3) {
@@ -818,10 +1007,15 @@ impl App {
                 .and_then(|meta| meta.modified())
                 .ok();
             if now.is_some() && now != before {
+                log::event(
+                    "SCREENSHOT_SAVED",
+                    format!("reason=stop ms={}", started.elapsed().as_millis()),
+                );
                 return;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        log::event("SCREENSHOT_MISSING", "reason=stop waited_ms=3000");
     }
 
     /// The command line's stop: graceful, on the caller's thread.
@@ -830,9 +1024,20 @@ impl App {
             .read_run()
             .filter(|run| platform::process_is(run.pid, &run.server_exe))
             .ok_or_else(|| "No game is running.".to_owned())?;
+        log::event(
+            "CLI_STOP",
+            format!("name={} force={force}", log::value(&run.game.name)),
+        );
+        self.set_phase(Phase::Stopping(run.clone()));
+        self.mark_stopping(&run);
         if force {
             platform::terminate(run.pid, &run.server_exe).map_err(|error| error.to_string())?;
-            let _ = self.wait_for_exit(&run, Duration::from_secs(5));
+            if !self.wait_for_exit(&run, Duration::from_secs(5)) {
+                return Err(format!(
+                    "{} did not end after being forced to stop; it is left as it is.",
+                    run.game.name
+                ));
+            }
         } else {
             server::request_stop(&run.stop_dir).map_err(|error| error.to_string())?;
             if !self.wait_for_exit(&run, STOP_LIMIT) {
@@ -857,31 +1062,57 @@ impl App {
             }) => run.as_ref().clone(),
             _ => return,
         };
+        log::event(
+            "ACTION_FORCE_STOP",
+            format!("name={}", log::value(&run.game.name)),
+        );
         self.set_phase(Phase::Stopping(run.clone()));
         let app = Arc::clone(self);
         std::thread::spawn(move || {
-            let notice = match platform::terminate(run.pid, &run.server_exe) {
-                Ok(()) => format!(
-                    "{} was forced to stop. It can be resumed in about five minutes.",
-                    run.game.name
-                ),
-                Err(error) => format!("{} could not be forced to stop: {error}", run.game.name),
+            let terminated = platform::terminate(run.pid, &run.server_exe);
+            // Only a confirmed exit ends tracking; otherwise the game is still running.
+            if terminated.is_ok() && app.wait_for_exit(&run, Duration::from_secs(5)) {
+                app.finish_stop(
+                    &run,
+                    format!(
+                        "{} was forced to stop. It can be resumed in about five minutes.",
+                        run.game.name
+                    ),
+                );
+                return;
+            }
+            let reason = match terminated {
+                Err(error) => error.to_string(),
+                Ok(()) => "It was still running five seconds later.".to_owned(),
             };
-            let _ = app.wait_for_exit(&run, Duration::from_secs(5));
-            app.finish_stop(&run, notice);
+            log::event(
+                "FORCE_STOP_FAILED",
+                format!("reason={}", log::value(&reason)),
+            );
+            app.set_phase(Phase::Failed(Failure {
+                title: format!("{} could not be forced to stop", run.game.name),
+                message: format!(
+                    "{reason} Try again, or end df-transport-fixture in Task Manager."
+                ),
+                log_tail: crate::files::tail(&run.log, 20),
+                recovery: Recovery::StopAgain(Box::new(run)),
+            }));
         });
     }
 
     fn wait_for_exit(&self, run: &RunRecord, limit: Duration) -> bool {
         let started = std::time::Instant::now();
         while started.elapsed() < limit {
-            let alive = {
+            let owned = {
                 let mut inner = self.lock();
                 match inner.child.as_mut() {
-                    Some(child) if child.id() == run.pid => matches!(child.try_wait(), Ok(None)),
-                    _ => platform::process_is(run.pid, &run.server_exe),
+                    Some(child) if child.id() == run.pid => {
+                        Some(matches!(child.try_wait(), Ok(None)))
+                    }
+                    _ => None,
                 }
             };
+            let alive = owned.unwrap_or_else(|| platform::process_is(run.pid, &run.server_exe));
             if !alive {
                 return true;
             }
@@ -892,11 +1123,20 @@ impl App {
 
     fn finish_stop(&self, run: &RunRecord, mut notice: String) {
         self.lock().child = None;
-        if run.postgres_started
-            && let Err(error) = postgres::stop(&run.postgres_install())
-        {
-            notice.push_str(&format!(" The game database is still running: {error}"));
+        if run.postgres_started {
+            let stopped = postgres::stop(&run.postgres_install());
+            log::event(
+                "DATABASE_STOPPED",
+                format!("reason=game_stopped ok={}", stopped.is_ok()),
+            );
+            if let Err(error) = stopped {
+                notice.push_str(&format!(" The game database is still running: {error}"));
+            }
         }
+        log::event(
+            "GAME_STOPPED",
+            format!("name={}", log::value(&run.game.name)),
+        );
         let mut played = run.game.clone();
         played.last_played = chrono::Utc::now().timestamp();
         let _ = saves::record(&self.data, &played);
@@ -906,19 +1146,27 @@ impl App {
         });
     }
 
-    /// Developer mode: use a server started elsewhere instead of the launcher's own.
-    pub fn connect(&self) -> Result<(), String> {
+    /// Developer mode: use a server started elsewhere instead of the launcher's own. The name
+    /// lookup and connection test run off the window's thread.
+    pub fn connect(self: &Arc<Self>) -> Result<(), String> {
         if !self.startable() {
             return Ok(());
         }
-        let settings = self.lock().config.settings.clone();
+        let settings = self.settings();
         if settings.server_mode != ServerMode::External {
             return Err(
                 "Choose \"Connect to a server that is already running\" in Settings first."
                     .to_owned(),
             );
         }
-        self.connect_to(&settings.external_url, false)
+        crate::settings::external_origin(&settings.external_url)?;
+        let app = Arc::clone(self);
+        std::thread::spawn(move || {
+            if let Err(message) = app.connect_to(&settings.external_url, false) {
+                log::event("CONNECT_REFUSED", format!("reason={}", log::value(message)));
+            }
+        });
+        Ok(())
     }
 
     /// Attaches to a server started elsewhere for this session only (`--connect`, or the
@@ -929,6 +1177,7 @@ impl App {
             return Ok(());
         }
         let origin = crate::settings::external_origin(url)?;
+        log::event("ACTION_CONNECT", format!("origin={}", log::value(&origin)));
         let host = origin
             .split_once("://")
             .map(|(_, rest)| rest)
@@ -968,14 +1217,21 @@ impl App {
 
     pub fn disconnect(&self) {
         if matches!(self.lock().phase, Phase::Connected { .. }) {
+            log::event("ACTION_DISCONNECT", "");
             (self.notify)(ShellEvent::CloseDisplay);
             self.set_phase(Phase::Idle { notice: None });
         }
     }
 
-    /// Applies `change` to a copy of the configuration, saves it, then keeps it.
+    /// Applies `change` to the configuration file as it is on disk now (the command line or a
+    /// hand edit may have changed it), saves it, then keeps it. A damaged file is never
+    /// overwritten: that would lose every setting and key in it.
     fn change_config(&self, change: impl FnOnce(&mut Config)) -> Result<(), io::Error> {
-        let mut next = self.lock().config.clone();
+        let mut next = config::load(&self.config_path).map_err(|error| {
+            io::Error::other(format!(
+                "{error} Fix or remove the file first; nothing was changed."
+            ))
+        })?;
         change(&mut next);
         config::save(&self.config_path, &next)?;
         let mut inner = self.lock();
@@ -985,7 +1241,15 @@ impl App {
     }
 
     pub fn save_settings(&self, form: &Form) -> Result<(), Vec<FieldError>> {
-        let next = self.settings().with_form(form)?;
+        let current = self.settings();
+        let next = current.with_form(form)?;
+        log::event(
+            "SETTINGS_SAVED",
+            format!(
+                "changed={}",
+                crate::settings::changed_names(&current, &next).join(",")
+            ),
+        );
         self.change_config(|config| config.settings = next)
             .map_err(|error| {
                 vec![FieldError {
@@ -1002,6 +1266,8 @@ impl App {
                 "A key is one line of letters, digits and symbols, without spaces.".to_owned(),
             );
         }
+        // The credential's name only, never its value.
+        log::event("KEY_SAVED", format!("credential={}", credential.id()));
         self.change_config(|config| {
             config.keys.insert(credential, value.to_owned());
         })
@@ -1009,6 +1275,7 @@ impl App {
     }
 
     pub fn remove_key(&self, credential: Credential) -> Result<(), String> {
+        log::event("KEY_REMOVED", format!("credential={}", credential.id()));
         self.change_config(|config| {
             config.keys.remove(&credential);
         })
@@ -1020,11 +1287,13 @@ impl App {
             Phase::Running(run) | Phase::Stopping(run) => run.log.parent().map(Path::to_path_buf),
             _ => None,
         };
+        let settings = self.settings();
         let folder = folder.or_else(|| {
-            Install::locate(&self.lock().config.settings)
+            Install::locate(&settings)
                 .ok()
                 .map(|install| install.play_root.join("launcher-logs"))
         });
+        log::event("ACTION_OPEN_LOGS", "");
         if let Some(folder) = folder.filter(|folder| folder.is_dir()) {
             let _ = open::that_detached(folder);
         }
@@ -1038,6 +1307,23 @@ impl App {
         if let Some(folder) = self.config_path.parent() {
             let _ = open::that_detached(folder);
         }
+    }
+}
+
+fn log_phase(phase: &Phase) {
+    let (name, game) = match phase {
+        Phase::Idle { .. } => ("idle", None),
+        Phase::Starting { game, .. } => ("starting", Some(game.name.as_str())),
+        Phase::Running(run) => ("running", Some(run.game.name.as_str())),
+        Phase::Connected { origin } => ("connected", Some(origin.as_str())),
+        Phase::Stopping(run) => ("stopping", Some(run.game.name.as_str())),
+        Phase::Failed(failure) => ("failed", Some(failure.title.as_str())),
+    };
+    if name != "starting" {
+        log::event(
+            "PHASE",
+            format!("to={name} about={}", log::value(game.unwrap_or(""))),
+        );
     }
 }
 
@@ -1139,6 +1425,8 @@ mod tests {
             postgres_started: false,
             play_root: data.join("play"),
             postgres_bin: data.join("pg"),
+            database_port: 55517,
+            stopping: false,
             dev_control: None,
         };
         std::fs::write(data.join(RUN_FILE), toml::to_string(&run).unwrap()).unwrap();

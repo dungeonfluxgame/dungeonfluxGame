@@ -19,13 +19,17 @@ pub fn serve(app: Arc<App>, address: SocketAddr) -> io::Result<()> {
     let listener = TcpListener::bind(address)?;
     let local = listener.local_addr()?;
     println!("PREVIEW url=http://{local}/ data={}", app.data().display());
+    crate::log::event("PREVIEW_LISTENING", format!("address={local}"));
     let hosts = [local.to_string(), format!("localhost:{}", local.port())];
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
         };
         if let Err(error) = answer(&app, stream, &hosts) {
-            eprintln!("PREVIEW request_failed error={error}");
+            crate::log::event(
+                "PREVIEW_REQUEST_FAILED",
+                format!("error={}", crate::log::value(error.to_string())),
+            );
         }
     }
     Ok(())
@@ -42,9 +46,12 @@ fn answer(app: &Arc<App>, stream: TcpStream, hosts: &[String]) -> io::Result<()>
         return write(stream, 400, "text/plain", b"Bad request", None);
     };
     let (method, target) = (method.to_owned(), target.to_owned());
+    let started = std::time::Instant::now();
     let mut length = 0usize;
     let mut host_ok = false;
-    let mut origin_ok = true;
+    // A form post must say where it came from, and it must be this page. "null" (sandboxed
+    // frames, file pages) and a missing Origin are refused: any web page could send those.
+    let mut origin_ok = false;
     let mut header_bytes = 0;
     loop {
         let mut line = String::new();
@@ -62,13 +69,19 @@ fn answer(app: &Arc<App>, stream: TcpStream, hosts: &[String]) -> io::Result<()>
             // Refuses DNS-rebinding and cross-site form posts aimed at the preview port.
             "host" => host_ok = hosts.iter().any(|host| value == host),
             "origin" => {
-                origin_ok =
-                    value == "null" || hosts.iter().any(|host| value == format!("http://{host}"));
+                origin_ok = hosts.iter().any(|host| value == format!("http://{host}"));
             }
             _ => {}
         }
     }
     if !host_ok || (method == "POST" && !origin_ok) {
+        crate::log::event(
+            "PAGE_REFUSED",
+            format!(
+                "reason={} method={method}",
+                if host_ok { "origin" } else { "host" }
+            ),
+        );
         return write(stream, 403, "text/plain", b"Refused", None);
     }
     if length > MAXIMUM_FORM_BYTES {
@@ -77,6 +90,7 @@ fn answer(app: &Arc<App>, stream: TcpStream, hosts: &[String]) -> io::Result<()>
     let mut body = vec![0; length];
     reader.read_exact(&mut body)?;
     let page = ui::handle(app, &method, &target, &body);
+    crate::desktop::log_request(&method, &target, page.status, started);
     write(
         stream,
         page.status,
