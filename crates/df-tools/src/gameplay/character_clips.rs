@@ -1304,10 +1304,7 @@ type NativeProviders = (
 
 fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
     if !live
-        || !super::media_policy::enabled(
-            std::env::var("DF_GAMEPLAY_CHARACTER_VIDEO"),
-            "DF_GAMEPLAY_CHARACTER_VIDEO",
-        )?
+        || !super::media_policy::gates().allows(super::media_policy::Capability::CharacterVideo)
     {
         // Cached clips remain readable, but no clip-only image frames or video are generated.
         return Ok((None, None));

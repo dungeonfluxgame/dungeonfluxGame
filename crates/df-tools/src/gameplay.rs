@@ -764,6 +764,17 @@ pub async fn serve(
     .await
 }
 
+/// Jev's credential and endpoint when the Jev gate allows it and its key is set.
+fn jev_settings() -> Result<Option<startup_configuration::ApproachSettings>, io::Error> {
+    if !media_policy::gates().allows(media_policy::Capability::Jev) {
+        return Ok(None);
+    }
+    startup_configuration::approach_settings(
+        std::env::var("DF_JEV_API_KEY"),
+        std::env::var("DF_JEV_BASE_URL"),
+    )
+}
+
 async fn serve_run(
     #[cfg(windows)] mut console_stop: watch::Receiver<bool>,
     database: tokio_postgres::Config,
@@ -771,6 +782,10 @@ async fn serve_run(
     fresh_seed: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let interactive = std::env::args().nth(4).is_none();
+    // Every paid capability's switch, read once; generation sites ask `media_policy::gates()`.
+    let gates = media_policy::Gates::from_environment()?;
+    media_policy::install(gates);
+    println!("{}", gates.startup_line());
     let mut adventure_settings = if interactive {
         Some(startup_configuration::adventure_settings(
             startup_configuration::AdventureInputs::from_environment(),
@@ -894,14 +909,8 @@ async fn serve_run(
     } else {
         storyteller::Storyteller::disabled()
     });
-    let approach_model = approach_model::ApproachModel::configured(if interactive {
-        startup_configuration::approach_settings(
-            std::env::var("DF_JEV_API_KEY"),
-            std::env::var("DF_JEV_BASE_URL"),
-        )?
-    } else {
-        None
-    });
+    let approach_model =
+        approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
     println!("{}", approach_model.startup_line());
     if interactive {
         let settings = adventure_settings
@@ -1122,8 +1131,9 @@ async fn serve_run(
         .map_err(|_| io::Error::other("run identity refused"))?;
     let cold =
         journey::initial().map_err(|_| io::Error::other("gameplay baseline validation failed"))?;
-    let plates_enabled =
-        startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?;
+    let plates_enabled = startup_configuration::plates_enabled(
+        media_policy::gates().input(media_policy::Capability::Plates),
+    )?;
     let codec = NativeCodecLimits {
         maximum_document_bytes: 1024 * 1024,
         maximum_allocated_bytes: 2 * 1024 * 1024,
@@ -1676,7 +1686,11 @@ async fn serve_run(
         })
     };
     let splat_worlds = match std::env::var("WORLDLABS_API_KEY") {
-        Ok(key) if interactive && !key.is_empty() => {
+        Ok(key)
+            if interactive
+                && !key.is_empty()
+                && media_policy::gates().allows(media_policy::Capability::SplatWorlds) =>
+        {
             let maker = df_providers::NativeWorldLabs::new(
                 df_providers::WorldLabsConfig::live(),
                 &key,
@@ -1742,14 +1756,7 @@ async fn serve_run(
         interactive,
     )?;
     let _fight_foresight_worker = fight_foresight::start(
-        approach_model::ApproachModel::configured(if interactive {
-            startup_configuration::approach_settings(
-                std::env::var("DF_JEV_API_KEY"),
-                std::env::var("DF_JEV_BASE_URL"),
-            )?
-        } else {
-            None
-        }),
+        approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None }),
         table_log.clone(),
         receiver.clone(),
     );
@@ -1805,11 +1812,14 @@ async fn serve_run(
     // demand as a resource of the generation hub (the one the imagery owns). Generation needs
     // ELEVENLABS_API_KEY and ffmpeg; without them places keep the shared score and their beds.
     let (music_line, music_routes) = if interactive {
-        let jev =
-            approach_model::ApproachModel::configured(startup_configuration::approach_settings(
-                std::env::var("DF_JEV_API_KEY"),
-                std::env::var("DF_JEV_BASE_URL"),
-            )?);
+        // Jev plans place music only when music may be generated.
+        let jev = approach_model::ApproachModel::configured(
+            if media_policy::gates().allows(media_policy::Capability::Music) {
+                jev_settings()?
+            } else {
+                None
+            },
+        );
         let adapter = place_music::HubMusic::start(
             place_music::MusicInputs::from_environment(),
             &std::env::current_dir()?,

@@ -40,6 +40,14 @@ pub(super) async fn photo_check(
     if query.path.is_empty() {
         return Err(bad_request("photo-check needs a saved image path"));
     }
+    // A judgement is a paid picture call: refused when this run's pictures are off.
+    if !crate::gameplay::media_policy::gates()
+        .allows(crate::gameplay::media_policy::Capability::Pictures)
+    {
+        return Err(super::failed(
+            "photo judge off: pictures are off for this run",
+        ));
+    }
     let credential = std::env::var("OPENAI_API_KEY")
         .map_err(|_| super::failed("photo judge credential unavailable"))?;
     let judge = df_providers::NativePlateJudge::new(

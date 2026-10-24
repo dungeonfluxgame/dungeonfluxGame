@@ -64,7 +64,8 @@ impl Portraits {
     }
 
     pub(super) fn start(hub: Hub, current: &Path) -> Result<Self, io::Error> {
-        let enabled = match std::env::var("DF_GAMEPLAY_CREATOR_PORTRAITS")
+        let enabled = match crate::gameplay::media_policy::gates()
+            .input(crate::gameplay::media_policy::Capability::CreatorPortraits)
             .ok()
             .as_deref()
         {

@@ -123,7 +123,8 @@ impl MusicInputs {
     pub(in crate::gameplay) fn from_environment() -> Self {
         Self {
             credential: std::env::var("ELEVENLABS_API_KEY"),
-            mode: std::env::var("DF_GAMEPLAY_MUSIC"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::Music),
             cache: std::env::var("DF_GAMEPLAY_MUSIC_CACHE"),
             ffmpeg: std::env::var("DF_FFMPEG"),
         }

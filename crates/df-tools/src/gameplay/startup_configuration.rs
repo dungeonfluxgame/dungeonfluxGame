@@ -265,7 +265,8 @@ impl VoiceInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("ELEVENLABS_API_KEY"),
-            mode: std::env::var("DF_GAMEPLAY_VOICE"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::Voice),
             cache_dir: std::env::var("DF_GAMEPLAY_VOICE_CACHE"),
             narrator_voice: std::env::var("DF_GAMEPLAY_VOICE_NARRATOR"),
             npc_voice: std::env::var("DF_GAMEPLAY_VOICE_NPC"),
@@ -1120,7 +1121,8 @@ impl StorytellerInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("OPENAI_API_KEY"),
-            mode: std::env::var("DF_GAMEPLAY_STORYTELLER"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::Storyteller),
             model: std::env::var("DF_GAMEPLAY_TEXT_MODEL"),
             cache: std::env::var("DF_GAMEPLAY_TEXT_CACHE"),
             deadline_seconds: std::env::var("DF_GAMEPLAY_TEXT_DEADLINE_SECONDS"),
@@ -1224,7 +1226,8 @@ impl ImageryInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("OPENAI_API_KEY"),
-            mode: std::env::var("DF_GAMEPLAY_IMAGERY"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::Pictures),
             model: std::env::var("DF_GAMEPLAY_IMAGERY_MODEL"),
             quality: std::env::var("DF_GAMEPLAY_IMAGERY_QUALITY"),
             interval_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS"),

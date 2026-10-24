@@ -44,8 +44,8 @@ pub(in crate::gameplay) async fn start(
     storyteller: Option<Arc<Storyteller>>,
     runtime: &tokio::runtime::Handle,
 ) -> Started {
-    if std::env::var("DF_GAMEPLAY_MEMORY")
-        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))
+    if !crate::gameplay::media_policy::gates()
+        .allows(crate::gameplay::media_policy::Capability::Memory)
     {
         return Started {
             memory: None,

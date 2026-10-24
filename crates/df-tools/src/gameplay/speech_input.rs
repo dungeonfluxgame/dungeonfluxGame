@@ -92,7 +92,8 @@ impl SpeechInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("ELEVENLABS_API_KEY"),
-            mode: std::env::var("DF_GAMEPLAY_STT"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::SpeechInput),
             model: std::env::var("DF_GAMEPLAY_STT_MODEL"),
         }
     }

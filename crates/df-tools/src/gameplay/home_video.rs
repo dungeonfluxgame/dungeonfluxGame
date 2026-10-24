@@ -131,8 +131,10 @@ pub(crate) struct HomeVideoInputs {
 impl HomeVideoInputs {
     pub(crate) fn from_environment() -> Self {
         Self {
-            mode: std::env::var("DF_GAMEPLAY_HOME_VIDEO"),
-            scene_mode: std::env::var("DF_GAMEPLAY_SCENE_VIDEO"),
+            mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::HomeVideo),
+            scene_mode: crate::gameplay::media_policy::gates()
+                .input(crate::gameplay::media_policy::Capability::SceneVideo),
             model: std::env::var("DF_GAMEPLAY_HOME_VIDEO_MODEL"),
             cache: std::env::var("DF_GAMEPLAY_HOME_VIDEO_CACHE"),
             credential: std::env::var("FAL_KEY"),

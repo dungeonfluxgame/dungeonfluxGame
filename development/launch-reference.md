@@ -201,6 +201,31 @@ configuration still requires a usable OpenAI credential before routing, so this 
 not a new promise that a fal-only environment works. No provider call is implied by
 reading configuration or listing the planned species/class catalog.
 
+### Generation gates
+
+Every paid capability has one switch, and the server reads all of them once at startup
+(`media_policy::Gates`, printed as one `GATES storyteller=on ... splat_worlds=off` line).
+Each generation site asks the gates, so a switch set to `off` stops every provider call that
+capability makes, whatever keys are present. Values are `on` or `off`; unset or empty takes
+the default; anything else refuses startup without echoing the value.
+
+| Switch | Capability | Default |
+|---|---|---|
+| `DF_GAMEPLAY_STORYTELLER` | AI narration (OpenAI) | on |
+| `DF_GAMEPLAY_MEMORY` | Story memory (OpenAI) | on |
+| `DF_GAMEPLAY_VOICE` | Narration and character voices (ElevenLabs) | on |
+| `DF_GAMEPLAY_MUSIC` | Place music (ElevenLabs) and Jev's planning of it | on |
+| `DF_GAMEPLAY_STT` | Speaking from phones (ElevenLabs) | on |
+| `DF_GAMEPLAY_IMAGERY` | Scene pictures and the dev photo check | on |
+| `DF_GAMEPLAY_PLATES` | Composed scene plates | on |
+| `DF_GAMEPLAY_CREATOR_PORTRAITS` | Creator portraits | off |
+| `DF_GAMEPLAY_HOME_VIDEO`, `_SCENE_VIDEO`, `_CHARACTER_VIDEO` | Video (fal), and the OpenAI frames character clips need | off |
+| `DF_GAMEPLAY_JEV` | Jev reading players' lines and foreseeing fights | on |
+| `DF_GAMEPLAY_SPLAT_WORLDS` | World Labs 3D places (cached worlds stay readable) | on |
+
+The desktop launcher (`dungeonflux.exe`) always writes every switch, keeps 3D places off
+unless turned on in Settings, and hands the server only the keys its enabled features need.
+
 ### Explicit creator portraits
 
 `DF_GAMEPLAY_CREATOR_PORTRAITS=on` enables the creator's explicit **Generate portrait / Regenerate portrait** actions; default `off`. The helper accepts `--creator-portraits` and requires inherited `OPENAI_API_KEY`, projected only as `DF_GAMEPLAY_CREATOR_OPENAI_KEY` in its child. It never reads `.env`; automatic scene/NPC imagery, music, video, speech and embedding providers stay keyless/off.
