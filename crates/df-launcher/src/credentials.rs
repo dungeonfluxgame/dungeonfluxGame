@@ -10,15 +10,17 @@ pub enum Credential {
     Fal,
     Jev,
     Bfl,
+    Worldlabs,
 }
 
 impl Credential {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Openai,
         Self::Elevenlabs,
         Self::Fal,
         Self::Jev,
         Self::Bfl,
+        Self::Worldlabs,
     ];
 
     /// The name in the form and in the configuration file's `[keys]` section.
@@ -29,6 +31,7 @@ impl Credential {
             Self::Fal => "fal",
             Self::Jev => "jev",
             Self::Bfl => "bfl",
+            Self::Worldlabs => "worldlabs",
         }
     }
 
@@ -45,6 +48,7 @@ impl Credential {
             Self::Fal => "fal",
             Self::Jev => "Jev (TypeSafe AI)",
             Self::Bfl => "Black Forest Labs",
+            Self::Worldlabs => "World Labs",
         }
     }
 
@@ -56,6 +60,7 @@ impl Credential {
             Self::Fal => "Generated video clips and the FLUX picture option.",
             Self::Jev => "Reading players' choices, and sorting portrait requests.",
             Self::Bfl => "The alternate portrait route for mature character appearances.",
+            Self::Worldlabs => "Explorable 3D places.",
         }
     }
 
@@ -67,6 +72,7 @@ impl Credential {
             Self::Fal => &["FAL_KEY", "DF_FAL_KEY"],
             Self::Jev => &["DF_JEV_API_KEY"],
             Self::Bfl => &["BFL_API_KEY"],
+            Self::Worldlabs => &["WORLDLABS_API_KEY"],
         }
     }
 }

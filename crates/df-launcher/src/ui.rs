@@ -1009,7 +1009,7 @@ fn settings_page(
         ),
     );
     let story = format!(
-        "<section id=\"story\"><h2>Story and sound</h2>{}{}{}{}{}{}{}</section>",
+        "<section id=\"story\"><h2>Story and sound</h2>{}{}{}{}{}{}{}{}</section>",
         fields.radios("content_rating", "Content rating", &[
             ("mature", "Mature", "For adults: gore, strong language and frank flirting can appear."),
             ("restrained", "Restrained", "Family-friendly: no gore or strong language, and flirting stays light."),
@@ -1022,10 +1022,11 @@ fn settings_page(
         fields.check("narration_voice", "Narration voices", &format!("Narration and characters are spoken aloud on the table display.{}", needs(snapshot, &[Credential::Elevenlabs])), settings.narration_voice),
         fields.check("music", "Music", &format!("Music made for each place, playing on the table display.{}", needs(snapshot, &[Credential::Elevenlabs])), settings.music),
         fields.check("speech_input", "Talk to characters", &format!("Players can hold to speak on their phones instead of typing.{}", needs(snapshot, &[Credential::Elevenlabs])), settings.speech_input),
+        fields.check("action_reading", "Understand players' actions", &format!("An AI reads what players say and do to pick the right rule, and plans fights ahead. Without it, players choose from the listed actions.{}", needs(snapshot, &[Credential::Jev])), settings.action_reading),
         fields.check("choice_hints", "Numbered choices on the display", "Show the numbered choice chips on the table display. Players can still change this during play.", settings.choice_hints),
     );
     let pictures = format!(
-        "<section id=\"pictures\"><h2>Pictures</h2>{}{}{}{}{}{}</section>",
+        "<section id=\"pictures\"><h2>Pictures</h2>{}{}{}{}{}{}{}</section>",
         fields.check("scene_pictures", "Scene pictures", &format!("Pictures of people and places are made as the story goes.{}", needs(snapshot, &[Credential::Openai])), settings.scene_pictures),
         fields.check("scene_plates", "A picture for every scene", "Each story scene gets a composed picture. Needs scene pictures.", settings.scene_plates),
         fields.radios("picture_quality", "Picture quality", &[
@@ -1046,6 +1047,7 @@ fn settings_page(
         }),
         fields.check("creator_portraits", "Character portraits", &format!("Players can generate a portrait of their hero while creating it. Each portrait is a paid picture.{}", needs(snapshot, &[Credential::Openai, Credential::Jev])), settings.creator_portraits),
         fields.check("creator_alternate_route", "Alternate route for mature portraits", &format!("Portraits with adult anatomy, nudity or fantasy violence go to Black Forest Labs. Needs character portraits.{}", needs(snapshot, &[Credential::Bfl])), settings.creator_alternate_route),
+        fields.check("splat_worlds", "Explorable 3D places", &format!("Some places become 3D scenes the camera moves through. Each place is a costly generation, so this is off unless you turn it on.{}", needs(snapshot, &[Credential::Worldlabs])), settings.splat_worlds),
     );
     let video = format!(
         "<section id=\"video\"><h2>Video</h2><p class=\"section-note\">Generated video costs much more than pictures, so it is off unless you turn it on.{}</p>{}{}{}</section>",

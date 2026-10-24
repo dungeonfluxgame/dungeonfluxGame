@@ -59,11 +59,44 @@ pub fn network(settings: &Settings, address: Option<Ipv4Addr>) -> Network {
 fn inherited_setting(name: &str) -> bool {
     name.starts_with("DF_GAMEPLAY_")
         || name.starts_with("DF_JEV_")
+        || name.starts_with("DF_HOME_VIDEO_")
         || name.starts_with("DUNGEONFLUX_")
         || matches!(
             name,
-            "OPENAI_API_KEY" | "ELEVENLABS_API_KEY" | "FAL_KEY" | "DF_FAL_KEY" | "BFL_API_KEY"
+            "OPENAI_API_KEY"
+                | "ELEVENLABS_API_KEY"
+                | "FAL_KEY"
+                | "DF_FAL_KEY"
+                | "BFL_API_KEY"
+                | "WORLDLABS_API_KEY"
         )
+}
+
+/// Whether any feature this game runs with uses `credential`. A key nothing needs is never
+/// handed to the server, so a feature turned off cannot reach its provider by any path.
+fn needed(settings: &Settings, credential: Credential) -> bool {
+    match credential {
+        Credential::Openai => {
+            settings.storyteller
+                || settings.story_memory
+                || settings.scene_pictures
+                || settings.character_video
+        }
+        Credential::Elevenlabs => {
+            settings.narration_voice || settings.music || settings.speech_input
+        }
+        Credential::Fal => {
+            settings.home_video
+                || settings.scene_video
+                || settings.character_video
+                || (settings.scene_pictures
+                    && settings.picture_provider == crate::settings::PictureProvider::Flux)
+        }
+        Credential::Jev => settings.action_reading,
+        Credential::Worldlabs => settings.splat_worlds,
+        // Read only through the creator's own variables below.
+        Credential::Bfl => false,
+    }
 }
 
 pub struct Launch<'a> {
@@ -137,7 +170,11 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
         ("ELEVENLABS_API_KEY", Credential::Elevenlabs),
         ("FAL_KEY", Credential::Fal),
         ("DF_JEV_API_KEY", Credential::Jev),
+        ("WORLDLABS_API_KEY", Credential::Worldlabs),
     ] {
+        if !needed(launch.settings, credential) {
+            continue;
+        }
         if let Some(value) = keys.value(credential) {
             environment.push((name.into(), value.into()));
         }
@@ -485,7 +522,106 @@ mod tests {
                 .contains("FLUX pictures")
         );
         assert!(inherited_setting("DF_GAMEPLAY_HOME_VIDEO"));
+        assert!(inherited_setting("WORLDLABS_API_KEY"));
+        assert!(inherited_setting("DF_HOME_VIDEO_KEY_FILE"));
         assert!(!inherited_setting("PATH"));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn every_feature_off_hands_the_server_no_key_and_every_switch_off() {
+        let data = std::env::temp_dir().join(format!("df-launcher-off-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let env_file = data.join(".env");
+        std::fs::write(
+            &env_file,
+            "OPENAI_API_KEY=k1\nELEVENLABS_API_KEY=k2\nFAL_KEY=k3\nDF_JEV_API_KEY=k4\nBFL_API_KEY=k5\nWORLDLABS_API_KEY=k6\n",
+        )
+        .unwrap();
+        let keys =
+            credentials::resolve(&std::collections::BTreeMap::new(), Some(&env_file)).unwrap();
+        let install = Install {
+            root: PathBuf::from("/game"),
+            server_exe: PathBuf::from("/game/server"),
+            web_dir: PathBuf::from("/game/web"),
+            assets_dir: PathBuf::from("/game/assets/ui"),
+            postgres_bin: PathBuf::from("/pg"),
+            play_root: PathBuf::from("/game/play"),
+            env_file,
+        };
+        let off = Settings {
+            storyteller: false,
+            story_memory: false,
+            narration_voice: false,
+            music: false,
+            speech_input: false,
+            action_reading: false,
+            scene_pictures: false,
+            scene_plates: false,
+            picture_provider: crate::settings::PictureProvider::Flux,
+            ..Settings::default()
+        };
+        let network = network(&off, None);
+        let launch = |settings: &Settings| {
+            environment(&Launch {
+                install: &install,
+                settings,
+                keys: &keys,
+                network: &network,
+                database: "df_gameplay_demo_play_x",
+                adventure: Adventure::Harbor,
+                stop_dir: Path::new("/game/play/run/stop.1"),
+            })
+        };
+        let environment = launch(&off);
+        for (name, value) in &environment {
+            assert!(
+                !["k1", "k2", "k3", "k4", "k5", "k6"].contains(&value.as_str()),
+                "{name} carries a key"
+            );
+        }
+        for switch in [
+            "DF_GAMEPLAY_STORYTELLER",
+            "DF_GAMEPLAY_MEMORY",
+            "DF_GAMEPLAY_VOICE",
+            "DF_GAMEPLAY_MUSIC",
+            "DF_GAMEPLAY_STT",
+            "DF_GAMEPLAY_JEV",
+            "DF_GAMEPLAY_IMAGERY",
+            "DF_GAMEPLAY_PLATES",
+            "DF_GAMEPLAY_CREATOR_PORTRAITS",
+            "DF_GAMEPLAY_SPLAT_WORLDS",
+            "DF_GAMEPLAY_HOME_VIDEO",
+            "DF_GAMEPLAY_SCENE_VIDEO",
+            "DF_GAMEPLAY_CHARACTER_VIDEO",
+        ] {
+            let value = environment
+                .iter()
+                .find(|(name, _)| name == switch)
+                .map(|(_, value)| value.as_str());
+            assert_eq!(value, Some("off"), "{switch}");
+        }
+        // Each feature brings exactly the key it needs.
+        let with = |change: fn(&mut Settings)| {
+            let mut settings = off.clone();
+            change(&mut settings);
+            let mut names: Vec<String> = launch(&settings)
+                .into_iter()
+                .filter(|(_, value)| value.starts_with('k') && value.len() == 2)
+                .map(|(name, _)| name)
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(with(|s| s.scene_video = true), ["FAL_KEY"]);
+        assert_eq!(with(|s| s.music = true), ["ELEVENLABS_API_KEY"]);
+        assert_eq!(with(|s| s.action_reading = true), ["DF_JEV_API_KEY"]);
+        assert_eq!(with(|s| s.splat_worlds = true), ["WORLDLABS_API_KEY"]);
+        assert_eq!(with(|s| s.storyteller = true), ["OPENAI_API_KEY"]);
+        assert_eq!(
+            with(|s| s.scene_pictures = true),
+            ["FAL_KEY", "OPENAI_API_KEY"]
+        );
         std::fs::remove_dir_all(data).unwrap();
     }
 }

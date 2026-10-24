@@ -35,6 +35,8 @@ narration_voice = true
 music = true
 # Players can talk to characters from their phones. Needs an ElevenLabs key.
 speech_input = true
+# Jev reads what players say and do, and foresees fights. Needs a Jev key.
+action_reading = true
 # Numbered choice chips on the table display.
 choice_hints = true
 
@@ -52,6 +54,8 @@ picture_provider = "openai"
 creator_portraits = false
 # Send mature hero portraits to Black Forest Labs. Needs a BFL key.
 creator_alternate_route = false
+# Explorable 3D places, each a costly generation; off by default. Needs a World Labs key.
+splat_worlds = false
 
 # Generated video costs much more than pictures; all off by default.
 [video]
@@ -76,6 +80,8 @@ fal = ""
 jev = ""
 # Black Forest Labs: Alternate portrait route for mature appearances.
 bfl = ""
+# World Labs: Explorable 3D places.
+worldlabs = ""
 
 # For working on DungeonFlux; players can leave these alone.
 [developer]

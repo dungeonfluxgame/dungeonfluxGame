@@ -89,6 +89,10 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
                 "Players can talk to characters from their phones. Needs an ElevenLabs key.",
             ),
             (
+                "action_reading",
+                "Jev reads what players say and do, and foresees fights. Needs a Jev key.",
+            ),
+            (
                 "choice_hints",
                 "Numbered choice chips on the table display.",
             ),
@@ -118,6 +122,10 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
             (
                 "creator_alternate_route",
                 "Send mature hero portraits to Black Forest Labs. Needs a BFL key.",
+            ),
+            (
+                "splat_worlds",
+                "Explorable 3D places, each a costly generation; off by default. Needs a World Labs key.",
             ),
         ],
     ),
@@ -180,7 +188,7 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
     ),
 ];
 
-const KEY_COMMENTS: [(Credential, &str); 5] = [
+const KEY_COMMENTS: [(Credential, &str); 6] = [
     (
         Credential::Openai,
         "Storyteller, story memory, scene pictures, character portraits.",
@@ -201,6 +209,7 @@ const KEY_COMMENTS: [(Credential, &str); 5] = [
         Credential::Bfl,
         "Alternate portrait route for mature appearances.",
     ),
+    (Credential::Worldlabs, "Explorable 3D places."),
 ];
 
 pub const FILE_NAME: &str = "dungeonflux.toml";

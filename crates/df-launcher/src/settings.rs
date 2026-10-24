@@ -92,6 +92,7 @@ pub struct Settings {
     pub narration_voice: bool,
     pub music: bool,
     pub speech_input: bool,
+    pub action_reading: bool,
     pub choice_hints: bool,
 
     pub scene_pictures: bool,
@@ -100,6 +101,7 @@ pub struct Settings {
     pub picture_provider: PictureProvider,
     pub creator_portraits: bool,
     pub creator_alternate_route: bool,
+    pub splat_worlds: bool,
 
     pub home_video: bool,
     pub scene_video: bool,
@@ -131,6 +133,7 @@ impl Default for Settings {
             narration_voice: true,
             music: true,
             speech_input: true,
+            action_reading: true,
             choice_hints: true,
             scene_pictures: true,
             scene_plates: true,
@@ -138,6 +141,7 @@ impl Default for Settings {
             picture_provider: PictureProvider::Openai,
             creator_portraits: false,
             creator_alternate_route: false,
+            splat_worlds: false,
             home_video: false,
             scene_video: false,
             character_video: false,
@@ -253,6 +257,7 @@ impl Settings {
         next.narration_voice = checked("narration_voice");
         next.music = checked("music");
         next.speech_input = checked("speech_input");
+        next.action_reading = checked("action_reading");
         next.choice_hints = checked("choice_hints");
         next.scene_pictures = checked("scene_pictures");
         next.scene_plates = checked("scene_plates");
@@ -279,6 +284,7 @@ impl Settings {
         .unwrap_or(self.picture_provider);
         next.creator_portraits = checked("creator_portraits");
         next.creator_alternate_route = checked("creator_alternate_route");
+        next.splat_worlds = checked("splat_worlds");
         next.home_video = checked("home_video");
         next.scene_video = checked("scene_video");
         next.character_video = checked("character_video");
@@ -342,6 +348,7 @@ impl Settings {
             ("DF_GAMEPLAY_VOICE", switch(self.narration_voice)),
             ("DF_GAMEPLAY_MUSIC", switch(self.music)),
             ("DF_GAMEPLAY_STT", switch(self.speech_input)),
+            ("DF_GAMEPLAY_JEV", switch(self.action_reading)),
             ("DF_GAMEPLAY_CHOICE_HINTS", switch(self.choice_hints)),
             ("DF_GAMEPLAY_IMAGERY", switch(self.scene_pictures)),
             ("DF_GAMEPLAY_PLATES", switch(self.scene_plates)),
@@ -366,6 +373,7 @@ impl Settings {
                 "DF_GAMEPLAY_CREATOR_PORTRAITS",
                 switch(self.creator_portraits),
             ),
+            ("DF_GAMEPLAY_SPLAT_WORLDS", switch(self.splat_worlds)),
             ("DF_GAMEPLAY_HOME_VIDEO", switch(self.home_video)),
             ("DF_GAMEPLAY_SCENE_VIDEO", switch(self.scene_video)),
             ("DF_GAMEPLAY_CHARACTER_VIDEO", switch(self.character_video)),
