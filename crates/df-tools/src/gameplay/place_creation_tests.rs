@@ -54,86 +54,49 @@ pub(in crate::gameplay) fn request() -> CreationRequest {
 }
 
 pub(in crate::gameplay) fn place_slot() -> Value {
-    json!({
-        "name": "Market Street",
-        "short": "a cobbled street where northbound merchants load wagons",
-        "kind": "market-street",
-        "narration": "You step out onto Market Street. Carts crowd the cobbles, and merchants load wagons for the northern road.",
-        "greeting": "Mind the wheels, friends!",
-        "speaker": "Hobb",
-        "wares": [{
-            "seller": "Wenna",
-            "name": "saffron pinch",
-            "description": "A paper twist of saffron for a pot of stew.",
-            "price_cp": 10,
-        }],
-        "services": [{
-            "provider": "Hobb",
-            "name": "wagon directions",
-            "description": "Hobb points out the northern road and its toll gate.",
-            "price_cp": 10,
-        }],
-        "exits": [{
-            "name": "north alley",
-            "position": "between two stalls",
-            "beyond": "a narrow alley toward the north gate",
-        }, {
-            "name": "Carriage lane",
-            "position": "past the wagons",
-            "beyond": "the carriage stand where coaches leave for the city centre",
-        }],
-        "landmarks": [
-            {"name": "the Bell Tower", "direction": "up the hill past the well"},
-            {"name": "Saint Ivo's Temple", "direction": "two streets east"},
-        ],
-    })
+    json!({"market":true,"name":"Market Street","short":"a cobbled market for northbound merchants","kind":"market-street","narration":"Three canvas stalls line Market Street.","greeting":"Mind the wheels, friends!","speaker":"Hobb","wares":[{"seller":"Wenna","name":"saffron pinch","description":"A saffron twist.","price_cp":10},{"seller":"Wenna","name":"pepper pinch","description":"A pepper twist.","price_cp":5},{"seller":"Hobb","name":"oats","description":"A small sack.","price_cp":5},{"seller":"Hobb","name":"barley","description":"A small sack.","price_cp":4},{"seller":"Yara","name":"herring","description":"A fresh fish.","price_cp":2},{"seller":"Yara","name":"trout","description":"A river fish.","price_cp":3}],"services":[{"provider":"Hobb","name":"wagon directions","description":"Directions to the north road.","price_cp":10}],"exits":[{"name":"north alley","position":"between two stalls","beyond":"the north gate alley"},{"name":"Carriage lane","position":"past the wagons","beyond":"the carriage stand"}],"landmarks":[{"name":"the Bell Tower","direction":"up the hill"},{"name":"Saint Ivo's Temple","direction":"two streets east"}],"stalls":[{"name":"cart stall","keeper":"Hobb","position":"beside the wagon"},{"name":"spice stall","keeper":"Wenna","position":"on the east side"},{"name":"fish stall","keeper":"Yara","position":"by the fountain"}],"mentioned_stalls":["spice stall","cart stall"]})
 }
 
 pub(in crate::gameplay) fn people_slot() -> Value {
-    json!([
-        {
-            "name": "Hobb",
-            "role": "carter",
-            "description": "A broad carter in a dusty coat checks the straps on a wagon.",
-            "position": "beside the wagon",
-            "gender": "he",
-            "wants": "Load the wagon before dusk.",
-            "attitude": "friendly",
-            "stat_block": "commoner",
-            "knowledge": [
-                "The northern wagons leave from this street.",
-                "Merchants gather here before dawn.",
-                "I have driven this road for years.",
-            ],
-        },
-        {
-            "name": "Wenna",
-            "role": "spice seller",
-            "description": "A quick-handed woman weighs saffron at a small stall.",
-            "position": "at the spice stall",
-            "gender": "she",
-            "wants": "Sell the saffron before it spoils.",
-            "attitude": "indifferent",
-            "stat_block": "commoner",
-            "knowledge": [
-                "Spice stalls line the east side.",
-                "The watch walks the street at noon.",
-                "My stall is older than the well.",
-            ],
-        },
-    ])
+    json!([{"name":"Hobb","purse_cp":2400,"role":"carter","description":"A broad carter in a dusty coat.","position":"beside the wagon","gender":"he","age":"adult","wants":"Load before dusk.","attitude":"friendly","stat_block":"commoner","knowledge":["Wagons load here.","Bell Tower uphill.","I drive wagons."]},{"name":"Wenna","purse_cp":5000,"role":"spice seller","description":"A quick-handed adult weighs saffron.","position":"at the spice stall","gender":"she","age":"adult","wants":"Sell spices.","attitude":"indifferent","stat_block":"commoner","knowledge":["Spices are sold here.","Bell Tower uphill.","I sell spices."]},{"name":"Yara","purse_cp":500,"role":"fish seller","description":"A brisk adult in an apron.","position":"by the fountain","gender":"she","age":"adult","wants":"Sell fish.","attitude":"friendly","stat_block":"commoner","knowledge":["Fish came today.","Bell Tower uphill.","I keep this stall."]}])
 }
 
 pub(in crate::gameplay) fn things_slot() -> Value {
-    json!([
-        {"name": "handcart", "detail": "A two-wheeled handcart stacked with bolts of wool. Its handle is worn smooth.", "position": "by the curb", "portable": false},
-        {"name": "spice stall", "detail": "A canvas-roofed stall with jars of saffron and pepper. The jars are lined up by size.", "position": "on the east side", "portable": false},
-        {"name": "water trough", "detail": "A long stone trough fed by a lead pipe. Mule hoofprints surround it.", "position": "near the wagons", "portable": false},
-        {"name": "lamp post", "detail": "An iron lamp post with a glass lantern. Moths circle the unlit wick.", "position": "at the corner", "portable": false},
-    ])
+    json!([{"name":"cart stall","detail":"A handcart holds grain. Its handle is smooth.","position":"by the curb","portable":false},{"name":"spice stall","detail":"A canvas stall holds spices. Its jars stand in rows.","position":"on the east side","portable":false},{"name":"fish stall","detail":"A stall holds fish on wet boards. A fountain stands behind it.","position":"by the fountain","portable":false},{"name":"lamp post","detail":"An iron post holds a lantern. Its wick is unlit.","position":"at the corner","portable":false}])
 }
 
 pub(in crate::gameplay) fn answer(place: &Value, people: &Value, things: &Value) -> Value {
+    let mut place = place.clone();
+    let mut people = people.clone();
+    // Legacy fake adults predate explicit voice-age bands and purses; production admission
+    // still requires both fields, and invalid-input tests bypass this fixture serializer.
+    for person in people.as_array_mut().unwrap() {
+        person
+            .as_object_mut()
+            .unwrap()
+            .entry("age")
+            .or_insert(json!("adult"));
+        person
+            .as_object_mut()
+            .unwrap()
+            .entry("purse_cp")
+            .or_insert(json!(500));
+    }
+    // Callers reusing this market template for a gate/other destination replace its cast.
+    // Such fake destinations have no inherited trading stalls or seller bindings.
+    if place["stalls"].as_array().is_some_and(|stalls| {
+        stalls.iter().any(|stall| {
+            !people
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|person| person["name"] == stall["keeper"])
+        })
+    }) {
+        place["market"] = json!(false);
+        place["stalls"] = json!([]);
+        place["mentioned_stalls"] = json!([]);
+    }
     json!({
         "place": place.to_string(),
         "people": people.to_string(),
@@ -151,6 +114,114 @@ fn built() -> PlaceRecord {
     .expect("a valid answer")
 }
 
+#[tokio::test]
+async fn local_reference_judges_a_plausible_unrecorded_stall_under_a_schema() {
+    let mut scene = super::super::pack::scene(super::super::pack::SceneKey::Opening);
+    scene.setting = Some(super::super::adventure::setting::SceneSetting {
+        place_id: "place-gullwatch-market-street".into(),
+        name: "Gullwatch Market Street".into(),
+        short: "an open street lined with ordinary market stalls".into(),
+        kind: SettingKind::MarketStreet,
+        exterior: true,
+        art_key: "market-street".into(),
+        model: None,
+    });
+    let jev_endpoint = FakeEndpoint::start(vec![choice("o1"), choice("o1")]);
+    let story = FakeEndpoint::start(vec![Reply::Output(json!({"spot":json!({
+        "name":"fruit stand", "look":"A canvas stall with baskets of red apples."
+    }).to_string()}))]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/plausible-reference")
+        .join(std::process::id().to_string());
+    let storyteller = teller(story.address, 0, Duration::from_secs(5), &cache);
+    let result = judge_local_reference(
+        &storyteller,
+        &jev(&jev_endpoint),
+        &scene,
+        "I go over to a fruit seller and see what is on offer.",
+        &[],
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result,
+        LocalReference::Spot(LandmarkDraft {
+            name: "fruit stand".into(),
+            direction: "A canvas stall with baskets of red apples.".into()
+        })
+    );
+    assert_eq!(jev_endpoint.connections(), 2);
+    assert!(
+        story.bodies()[0]["input"]
+            .as_str()
+            .unwrap()
+            .contains("output_schema")
+    );
+    assert!(
+        jev_endpoint.bodies()[1]
+            .to_string()
+            .contains("avoid duplicating")
+    );
+}
+
+#[test]
+fn place_creation_admits_and_preserves_generated_working_capital_and_requires_it_for_new_people() {
+    let record = built();
+    assert_eq!(record.people[1].purse_cp, 5000);
+    assert_eq!(record.expand().unwrap().model.people[1].coin_cp, 5000);
+    let stored = serde_json::to_string(&record).unwrap();
+    let restored: PlaceRecord = serde_json::from_str(&stored).unwrap();
+    assert_eq!(restored.expand().unwrap().model.people[1].coin_cp, 5000);
+    for value in [
+        json!(-1),
+        json!(1.5),
+        json!(place::MAXIMUM_PURSE_CP + 1),
+        Value::Null,
+    ] {
+        let mut people = people_slot();
+        people[1]["purse_cp"] = value;
+        assert!(
+            build(
+                &request(),
+                &place_slot().to_string(),
+                &people.to_string(),
+                &things_slot().to_string()
+            )
+            .is_err()
+        );
+    }
+    let mut people = people_slot();
+    people[1].as_object_mut().unwrap().remove("purse_cp");
+    assert_eq!(
+        build(
+            &request(),
+            &place_slot().to_string(),
+            &people.to_string(),
+            &things_slot().to_string()
+        ),
+        Err(CreationError::Invalid("purse_cp"))
+    );
+    let mut penniless = people_slot();
+    penniless[1]["purse_cp"] = json!(0);
+    assert_eq!(
+        build(
+            &request(),
+            &place_slot().to_string(),
+            &penniless.to_string(),
+            &things_slot().to_string()
+        ),
+        Err(CreationError::Invalid("merchant_purse"))
+    );
+    let mut legacy = serde_json::to_value(record).unwrap();
+    legacy["people"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("purse_cp");
+    let legacy: PlaceRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.expand().unwrap().model.people[1].coin_cp, 0);
+}
+
 #[test]
 fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_model() {
     let record = built();
@@ -159,7 +230,7 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
     assert!(record.stored_bytes() <= place::MAXIMUM_PLACE_BYTES);
     let expanded = record.expand().expect("expands");
     assert!(expanded.model.validate_structure().is_ok());
-    assert_eq!(expanded.model.offers.len(), 1);
+    assert_eq!(expanded.model.offers.len(), 6);
     assert_eq!(expanded.model.offers[0].seller_id, "market-street-wenna");
     assert_eq!(expanded.model.offers[0].name, "saffron pinch");
     assert_eq!(expanded.model.offers[0].cost_cp, 10);
@@ -190,7 +261,7 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
             .iter()
             .map(|member| member.name.as_str())
             .collect::<Vec<_>>(),
-        ["Hobb", "Wenna"]
+        ["Hobb", "Wenna", "Yara"]
     );
     assert_eq!(expanded.model.time_of_day, "afternoon");
     assert_eq!(expanded.model.weather, "dry and cool outside");
@@ -377,24 +448,26 @@ fn an_answer_that_breaks_a_rule_of_a_place_is_refused_and_names_the_rule() {
 #[test]
 fn a_place_that_would_not_fit_the_checkpoint_text_is_refused_not_truncated() {
     let result = with(|place, people, things| {
+        // Character bounds do not bound UTF-8 bytes; exercise the current journal byte limit.
+        let wide = "\u{1f9f5}";
         place["name"] = json!("N".repeat(40));
-        place["short"] = json!("s".repeat(80));
-        place["narration"] = json!("n".repeat(260));
-        place["greeting"] = json!("g".repeat(120));
+        place["short"] = json!(wide.repeat(80));
+        place["narration"] = json!(wide.repeat(260));
+        place["greeting"] = json!(wide.repeat(120));
         place["exits"] = json!([
-            {"name": "e".repeat(32), "position": "p".repeat(32), "beyond": "b".repeat(100)},
-            {"name": "f".repeat(32), "position": "p".repeat(32), "beyond": "b".repeat(100)},
+            {"name": "e".repeat(32), "position": wide.repeat(32), "beyond": wide.repeat(100)},
+            {"name": "f".repeat(32), "position": wide.repeat(32), "beyond": wide.repeat(100)},
         ]);
         for person in people.as_array_mut().unwrap() {
-            person["role"] = json!("r".repeat(32));
-            person["description"] = json!("a".repeat(110));
-            person["position"] = json!("p".repeat(32));
-            person["wants"] = json!("b".repeat(60));
-            person["knowledge"] = json!(["c".repeat(80), "d".repeat(80), "e".repeat(80)]);
+            person["role"] = json!(wide.repeat(32));
+            person["description"] = json!(wide.repeat(110));
+            person["position"] = json!(wide.repeat(32));
+            person["wants"] = json!(wide.repeat(60));
+            person["knowledge"] = json!([wide.repeat(80), wide.repeat(80), wide.repeat(80)]);
         }
         for thing in things.as_array_mut().unwrap() {
-            thing["detail"] = json!(format!("{}. {}.", "f".repeat(100), "g".repeat(100)));
-            thing["position"] = json!("p".repeat(32));
+            thing["detail"] = json!(format!("{}. {}.", wide.repeat(100), wide.repeat(100)));
+            thing["position"] = json!(wide.repeat(32));
         }
     });
     // Every field is within its own bound, yet the whole is more than the checkpoint holds.
@@ -681,12 +754,14 @@ fn a_new_place_never_repeats_a_place_or_a_person_the_run_has() {
             "{name}"
         );
     }
-    // A landmark that is a place the run has is refused, as is a missing second exit.
-    assert_eq!(
-        with(|place, _, _| place["landmarks"][0]["name"] = json!("Marek's Cloth Shop"))
-            .unwrap_err(),
-        CreationError::Invalid("landmarks")
-    );
+    // Redundant landmarks are dropped; the destination remains valid even with one left.
+    let cleaned = with(|place, _, _| {
+        place["landmarks"][0]["name"] = json!("Marek's Cloth Shop");
+    })
+    .unwrap();
+    assert_eq!(cleaned.landmarks.len(), 1);
+    assert_eq!(cleaned.landmarks[0].name, "Saint Ivo's Temple");
+    assert!(cleaned.expand().is_ok());
     assert_eq!(
         with(|place, _, _| {
             place["landmarks"].as_array_mut().unwrap().pop();
@@ -748,12 +823,12 @@ fn common_nouns_are_stored_in_lower_case_and_proper_names_keep_their_capitals() 
         assert_eq!(common_noun(written, &proper), stored, "{written}");
     }
     let record = with(|place, _, things| {
-        things[0]["name"] = json!("Handcart");
+        things[0]["name"] = json!("Cart stall");
         place["wares"][0]["name"] = json!("Saffron pinch");
         place["services"][0]["name"] = json!("Wagon directions");
     })
     .expect("a valid answer");
-    assert_eq!(record.things[0].name, "handcart");
+    assert_eq!(record.things[0].name, "cart stall");
     assert_eq!(record.wares[0].name, "saffron pinch");
     assert_eq!(record.services[0].name, "wagon directions");
 }
@@ -802,6 +877,7 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
     let endpoint = FakeEndpoint::start(vec![
         Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
         Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
+        Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
     ]);
     let cache = cache_directory("place-creation-refused");
     let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
@@ -809,7 +885,7 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
         create(&storyteller, &request()).await.unwrap_err(),
         CreationError::Invalid("kind")
     );
-    assert_eq!(endpoint.connections(), 2, "one retry, then it stops");
+    assert_eq!(endpoint.connections(), 3, "two retries, then it stops");
     let down = FakeEndpoint::start(vec![Reply::Status(500, json!({"error": "down"}))]);
     let storyteller = teller(
         down.address,
@@ -820,5 +896,172 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
     assert_eq!(
         create(&storyteller, &request()).await.unwrap_err(),
         CreationError::Model
+    );
+}
+
+#[test]
+fn generated_people_require_typed_voice_presentation_and_age() {
+    for (field, value) in [
+        ("gender", json!("male")),
+        ("gender", json!("it")),
+        ("age", json!("ancient")),
+    ] {
+        let mut people = people_slot();
+        people[0][field] = value;
+        assert!(
+            build(
+                &request(),
+                &place_slot().to_string(),
+                &people.to_string(),
+                &things_slot().to_string()
+            )
+            .is_err()
+        );
+    }
+    let mut people = people_slot();
+    people[0].as_object_mut().unwrap().remove("age");
+    assert_eq!(
+        build(
+            &request(),
+            &place_slot().to_string(),
+            &people.to_string(),
+            &things_slot().to_string()
+        ),
+        Err(CreationError::Invalid("age"))
+    );
+}
+
+#[test]
+fn generated_voice_bands_survive_storage_and_legacy_people_remain_adult() {
+    let mut people = people_slot();
+    people[0]["age"] = json!("elder");
+    people[1]["age"] = json!("young");
+    let place = build(
+        &request(),
+        &place_slot().to_string(),
+        &people.to_string(),
+        &things_slot().to_string(),
+    )
+    .unwrap();
+    let stored = serde_json::to_value(&place).unwrap();
+    let restored: PlaceRecord = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(
+        restored.expand().unwrap().cast[0].age,
+        Some(super::super::pack::Age::Elder)
+    );
+    assert_eq!(
+        restored.expand().unwrap().cast[1].age,
+        Some(super::super::pack::Age::Young)
+    );
+    let mut legacy = stored;
+    for person in legacy["people"].as_array_mut().unwrap() {
+        person.as_object_mut().unwrap().remove("age");
+    }
+    let restored: PlaceRecord = serde_json::from_value(legacy).unwrap();
+    assert!(
+        restored
+            .expand()
+            .unwrap()
+            .cast
+            .iter()
+            .all(|person| person.age == Some(super::super::pack::Age::Adult))
+    );
+}
+#[test]
+fn market_stalls_bind_distinct_keepers_purses_visible_positions_and_multiple_wares() {
+    let market = built();
+    assert_eq!(market.stalls.len(), 3);
+    let expanded = market.expand().unwrap();
+    for stall in &market.stalls {
+        let keeper = expanded
+            .model
+            .people
+            .iter()
+            .find(|person| person.name == stall.keeper)
+            .unwrap();
+        assert!(keeper.coin_cp > 0);
+        assert!(keeper.position.contains(&stall.name));
+        assert!(
+            expanded
+                .model
+                .things
+                .iter()
+                .any(|thing| thing.name == stall.name)
+        );
+        assert!(
+            (2..=4).contains(
+                &expanded
+                    .model
+                    .offers
+                    .iter()
+                    .filter(|offer| offer.seller_id == keeper.id)
+                    .count()
+            )
+        );
+    }
+    let mut unknown = place_slot();
+    unknown["mentioned_stalls"] = json!(["west jewel stall"]);
+    assert_eq!(
+        build(
+            &request(),
+            &unknown.to_string(),
+            &people_slot().to_string(),
+            &things_slot().to_string()
+        )
+        .unwrap_err(),
+        CreationError::Invalid("mentioned_stall")
+    );
+    let mut orphan = place_slot();
+    orphan["stalls"][0]["keeper"] = json!("Nobody");
+    assert!(
+        build(
+            &request(),
+            &orphan.to_string(),
+            &people_slot().to_string(),
+            &things_slot().to_string()
+        )
+        .is_err()
+    );
+    let mut incomplete = place_slot();
+    incomplete["wares"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|ware| ware["name"] != "trout");
+    assert!(
+        build(
+            &request(),
+            &incomplete.to_string(),
+            &people_slot().to_string(),
+            &things_slot().to_string()
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn generated_market_retries_a_single_vendor_layout_then_admits_several_stalls() {
+    let mut missing = place_slot();
+    missing["stalls"] = json!([missing["stalls"][1].clone()]);
+    missing["mentioned_stalls"] = json!(["spice stall"]);
+    missing["wares"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|ware| ware["seller"] == "Wenna");
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(answer(&missing, &people_slot(), &things_slot())),
+        Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
+    ]);
+    let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS40/market-generation")
+        .join(std::process::id().to_string());
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    let market = create(&storyteller, &request()).await.unwrap();
+    assert_eq!(market.stalls.len(), 3);
+    assert_eq!(endpoint.connections(), 2);
+    assert!(
+        endpoint.bodies()[1]["input"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_place")
     );
 }

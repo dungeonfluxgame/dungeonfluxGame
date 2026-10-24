@@ -139,6 +139,7 @@ pub(crate) fn terminal_outcome(
 struct CompletionMessage {
     outcome: ChapterOutcome,
     context: df_observe::OperationContext,
+    audit: df_observe::AuditContext,
 }
 #[derive(Clone)]
 pub(crate) struct CompletionObserver {
@@ -159,8 +160,9 @@ impl CompletionObserver {
             .ends_with(&self.configuration_suffix)
         {
             if !self.queued.swap(true, Ordering::AcqRel) {
-                eprintln!(
-                    "CAMPAIGN completion refused: checkpoint campaign pin mismatch; game continues"
+                crate::gameplay::actor::record_audit_line(
+                    "gameplay.campaign_completion",
+                    "CAMPAIGN completion outcome=refused cause=checkpoint-pin-mismatch".to_owned(),
                 );
             }
             return;
@@ -190,6 +192,7 @@ impl CompletionObserver {
                 let message = CompletionMessage {
                     outcome,
                     context: span.capture_context(),
+                    audit: span.capture_audit_context(),
                 };
                 if self.sender.try_send(message).is_ok() {
                     self.queued.store(true, Ordering::Release);
@@ -201,8 +204,10 @@ impl CompletionObserver {
             Ok(None) => {}
             Err(_) => {
                 if !self.queued.swap(true, Ordering::AcqRel) {
-                    eprintln!(
-                        "CAMPAIGN completion refused: durable terminal facts are inconsistent; game continues"
+                    crate::gameplay::actor::record_audit_line(
+                        "gameplay.campaign_completion",
+                        "CAMPAIGN completion outcome=refused cause=terminal-facts-inconsistent"
+                            .to_owned(),
                     );
                 }
             }
@@ -219,7 +224,10 @@ impl Drop for CompletionWorker {
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
-            eprintln!("CAMPAIGN completion worker failed; game continues");
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.campaign_completion",
+                "CAMPAIGN completion outcome=failed cause=worker-join".to_owned(),
+            );
         }
     }
 }
@@ -249,8 +257,12 @@ pub(crate) fn worker(
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 };
-                let mut span =
-                    df_observe::begin_dispatched(&message.context, "gameplay.campaign.chapter");
+                let _audit_scope = df_observe::audit_scope(message.audit.clone());
+                let mut span = df_observe::begin_dispatched_with_audit(
+                    &message.context,
+                    &message.audit,
+                    "gameplay.campaign.chapter",
+                );
                 let result = (|| {
                     let store = CampaignStore::new(&run.root, &run.id)?;
                     let stored =
@@ -278,9 +290,21 @@ pub(crate) fn worker(
                 match result {
                     Ok(()) => span.finish_unmeasured("recorded_or_idempotent_replay"),
                     Err(error) => {
-                        eprintln!(
-                            "CAMPAIGN id={} chapter={} completion: {}; game continues",
-                            run.id, run.number, error
+                        crate::gameplay::actor::record_audit_line(
+                            "gameplay.campaign_completion",
+                            format!(
+                                "CAMPAIGN completion id={} chapter={} outcome=pending cause={:?}",
+                                run.id,
+                                run.number,
+                                match &error {
+                                    super::campaign_store::StoreError::Id => "invalid-id",
+                                    super::campaign_store::StoreError::Busy => "busy",
+                                    super::campaign_store::StoreError::Conflict => "conflict",
+                                    super::campaign_store::StoreError::Corrupt(_) => "corrupt",
+                                    super::campaign_store::StoreError::Campaign(_) => "campaign",
+                                    super::campaign_store::StoreError::Io { .. } => "io",
+                                }
+                            ),
                         );
                         span.finish_unmeasured("durable_completion_pending_resume");
                     }

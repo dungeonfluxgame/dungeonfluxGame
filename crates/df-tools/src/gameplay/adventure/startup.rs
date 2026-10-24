@@ -45,6 +45,7 @@ pub(crate) enum StartupError {
     Connection,
     Driver,
     Seed,
+    FreeRoam(crate::gameplay::place_creation::CreationError),
     Tables(TablesError),
     Generate(GenerateError),
     Record(RecordError),
@@ -64,6 +65,9 @@ impl fmt::Display for StartupError {
             }
             Self::Driver => f.write_str("adventure database driver did not close"),
             Self::Seed => f.write_str("OS adventure seed unavailable"),
+            Self::FreeRoam(error) => {
+                write!(f, "free-roam generation unavailable: {}", error.label())
+            }
             Self::Tables(e) => e.fmt(f),
             Self::Generate(e) => e.fmt(f),
             Self::Record(e) => e.fmt(f),
@@ -252,6 +256,21 @@ async fn fresh_adventure(
     settings: &AdventureSettings,
     storyteller: &Storyteller,
 ) -> Result<FreshAdventure, StartupError> {
+    if settings.mode == super::super::startup_configuration::AdventureMode::FreeRoam {
+        let seed = match settings.seed {
+            Some(seed) => seed,
+            None => u64::from_le_bytes(model::random::<8>().map_err(|_| StartupError::Seed)?),
+        };
+        let generated =
+            super::free_roam::generate(seed, settings.rules_mode, content_rating(), storyteller)
+                .await
+                .map_err(StartupError::FreeRoam)?;
+        return Ok(FreshAdventure {
+            generated,
+            model: None,
+            prose: "prose=narrative-engine free roam".into(),
+        });
+    }
     if settings.mode == super::super::startup_configuration::AdventureMode::MerchantShop {
         return Ok(FreshAdventure {
             generated: fresh_shop(settings)?,
@@ -359,6 +378,13 @@ fn select_with(
         AdventureStartup::Fresh => {
             let fresh = match fresh {
                 Some(fresh) => fresh,
+                None if settings.mode
+                    == super::super::startup_configuration::AdventureMode::FreeRoam =>
+                {
+                    return Err(StartupError::FreeRoam(
+                        crate::gameplay::place_creation::CreationError::Off,
+                    ));
+                }
                 None => FreshAdventure {
                     generated: if settings.mode
                         == super::super::startup_configuration::AdventureMode::MerchantShop

@@ -419,6 +419,12 @@ fn valid_sleight_adjudication(
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SceneChangeKind {
+    /// Coin leg of one committed merchant exchange; custody legs share its journal decision.
+    MerchantExchangeCoin {
+        hero_id: String,
+        received_cp: u32,
+        paid_cp: u32,
+    },
     /// A fight's canonical result, including its source-grounded carried objects.
     FightEnded {
         outcome: SceneFightOutcome,
@@ -837,6 +843,17 @@ impl SceneModel {
                 );
             }
         }
+        // A carried stack (twenty arrows, ten rations) is one entry in the shared contents: its
+        // extra units would otherwise repeat it per unit, and six heroes' starting gear pushed the
+        // view past the client's 64 KiB decode limit (2026-10-24, the TV could not connect).
+        if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
+            things.retain(|view| {
+                !view
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_extra_unit)
+            });
+        }
         contents["offers"] = serde_json::json!(
             self.offers
                 .iter()
@@ -859,6 +876,9 @@ impl SceneModel {
             .inventory()
             .into_iter()
             .filter_map(|mut entry| {
+                if is_extra_unit(&entry.item_id) {
+                    return None;
+                }
                 if let Some(thing) = self.things.iter().find(|thing| thing.id == entry.item_id) {
                     if !thing.in_scene || !thing.publicly_visible {
                         return None;
@@ -1755,7 +1775,8 @@ impl SceneModel {
                         return Err(SceneModelError::Contradiction);
                     }
                 }
-                SceneChangeKind::CoinReceived { .. }
+                SceneChangeKind::MerchantExchangeCoin { .. }
+                | SceneChangeKind::CoinReceived { .. }
                 | SceneChangeKind::CoinLifted { .. }
                 | SceneChangeKind::ServiceRendered { .. }
                 | SceneChangeKind::CoercedCoin { .. } => {
@@ -1914,6 +1935,20 @@ impl SceneModel {
                 SceneChangeKind::PersonMoved { position } => person.position = position.clone(),
                 SceneChangeKind::AttitudeChanged { hero_id, attitude } => {
                     person.attitudes.insert(hero_id.clone(), *attitude);
+                }
+                SceneChangeKind::MerchantExchangeCoin {
+                    hero_id,
+                    received_cp,
+                    paid_cp,
+                } => {
+                    if person.role == "hero" || !person_ids.contains(hero_id.as_str()) {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    person.coin_cp = person
+                        .coin_cp
+                        .checked_add(*received_cp)
+                        .and_then(|coin| coin.checked_sub(*paid_cp))
+                        .ok_or(SceneModelError::Contradiction)?;
                 }
                 SceneChangeKind::CoinReceived { amount_cp, .. } => {
                     person.coin_cp = person
@@ -3314,4 +3349,10 @@ fn matching_people<'a>(people: &'a [ScenePerson], line: &str) -> Vec<&'a ScenePe
                 .any(|alias| aliases.contains(&alias))
         })
         .collect()
+}
+
+/// The second and later units of a carried stack (`equipment-<id>-unit-<n>`), which the shared
+/// scene contents show once, as the stack's first unit.
+fn is_extra_unit(id: &str) -> bool {
+    id.starts_with("equipment-") && id.contains("-unit-")
 }

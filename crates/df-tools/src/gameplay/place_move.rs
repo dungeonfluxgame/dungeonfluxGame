@@ -107,12 +107,112 @@ pub(super) enum MoveTarget {
     Exit(String),
     Known(String),
     Landmark(LandmarkDraft),
+    /// A model-selected named spot within the current place; direction carries its visible look.
+    Spot(LandmarkDraft),
     New,
+}
+
+/// The current fiction's travel restriction. The authoritative owner repeats this at admission.
+pub(super) fn travel_blocker(
+    current: &Checkpoint,
+) -> Result<Option<&'static str>, df_session::submission::RepositoryError> {
+    let state = current.state();
+    if journey::phase(current)? == rpc::JourneyPhase::Room {
+        return Ok(Some(
+            "Bring your heroes into the story before setting off together.",
+        ));
+    }
+    if beat_script_runtime::ended(state)? || beat_script_runtime::closing(state)? {
+        return Ok(Some(
+            "Finish this chapter before beginning another journey.",
+        ));
+    }
+    if state
+        .encounters
+        .iter()
+        .any(|encounter| encounter.active_turn.is_some())
+    {
+        return Ok(Some("You cannot set off while the fight blocks your way."));
+    }
+    super::beat_script::with_script(|script| {
+        let beat = script.current(state)?;
+        if script.is_canonical()
+            && matches!(
+                beat.state.durable.as_str(),
+                "opening" | "courier-answer-seal" | "courier-answer-escort"
+            )
+            && !beat_script_runtime::opening_threat_resolved(state)?
+        {
+            return Ok(Some(
+                "The enforcer bars the courier's way, his hand on his scimitar. Settle the threat before your party can leave together.",
+            ));
+        }
+        Ok(None)
+    })
+}
+
+/// One truthful phone destination. The caller binds the selection to the observed revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TravelOption {
+    pub(super) id: String,
+    pub(super) label: String,
+    pub(super) target: MoveTarget,
+}
+
+pub(super) fn travel_options(
+    current: &Checkpoint,
+) -> Result<Vec<TravelOption>, df_session::submission::RepositoryError> {
+    if travel_blocker(current)?.is_some() {
+        return Ok(vec![]);
+    }
+    let state = current.state();
+    let scene = beat_script_runtime::scene(state)?;
+    let Some(snapshot) = journey::living_scene::snapshot(state, &scene)? else {
+        return Ok(vec![]);
+    };
+    let party = place::whereabouts(state, &scene)?;
+    let mut options = Vec::new();
+    let mut reached = Vec::new();
+    for exit in snapshot.model.ways_out.iter().filter(|exit| exit.open) {
+        match place::destination(state, &party.home, &party.here, exit)? {
+            Destination::Story { .. } => continue,
+            Destination::Home => reached.push(party.home.clone()),
+            Destination::Created(known) => reached.push(known.place_id),
+            Destination::Create { .. } => {}
+        }
+        options.push(TravelOption {
+            id: format!("exit:{}", exit.id),
+            label: format!("Travel via {}", exit.name),
+            target: MoveTarget::Exit(exit.id.clone()),
+        });
+    }
+    for (index, landmark) in place::landmarks_here(state, &party.here)?
+        .into_iter()
+        .enumerate()
+    {
+        options.push(TravelOption {
+            id: format!("landmark:{index}"),
+            label: format!("Travel to {}", landmark.name),
+            target: MoveTarget::Landmark(landmark),
+        });
+    }
+    for known in place::reachable(state, &party)? {
+        if reached.contains(&known.id) {
+            continue;
+        }
+        options.push(TravelOption {
+            id: format!("known:{}", known.id),
+            label: format!("Travel to {}", known.name),
+            target: MoveTarget::Known(known.id),
+        });
+    }
+    Ok(options)
 }
 
 /// A move that is ready to commit: its destination is resolved and, when it is new, made.
 pub(super) struct PreparedMove {
     operation: OperationId,
+    expected_basis: df_model::checkpoint::Basis,
     from: String,
     from_name: String,
     exit: String,
@@ -176,15 +276,229 @@ fn following_operation(operation: OperationId) -> Option<OperationId> {
     OperationId::from_bytes(&digest[..16]).ok()
 }
 
+/// The gate's published scene has no synthetic way back to the outside approach.
+pub(in crate::gameplay) fn destination_scene(
+    current: &Checkpoint,
+    record: &place::PlaceRecord,
+    base: &pack::Scene,
+) -> Result<pack::Scene, df_session::submission::RepositoryError> {
+    let free_roam = super::adventure::free_roam::world();
+    let mut scene = if free_roam
+        .as_ref()
+        .is_some_and(|world| world.gate.place_id == record.place_id)
+    {
+        pack::scene(pack::SceneKey::Opening)
+    } else {
+        place::scene_of(record, base)?
+    };
+    if free_roam.is_some() {
+        let snapshot = journey::living_scene::snapshot(current.state(), &scene)?
+            .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+        let setting = scene
+            .setting
+            .as_mut()
+            .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+        setting.model = Some(snapshot.model);
+    }
+    Ok(scene)
+}
+
 impl Service {
+    /// A Jev travel intent: choose a destination, commit it once, then speak one arrival line.
+    pub(super) async fn travel_by_line(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        scene: &pack::Scene,
+    ) -> Result<DialogueReply, tonic::Status> {
+        let expected = self.updates.borrow().basis();
+        if df_api::session_id(request.session_id.as_ref()).ok() != Some(expected.session)
+            || df_api::run_id(request.run_id.as_ref()).ok() != Some(expected.run)
+            || df_api::session_revision(request.observed_revision.as_ref()).ok()
+                != Some(expected.revision)
+            || request.finality != rpc::DialogueFinality::Final as i32
+            || request.context == rpc::DialogueContext::Meta as i32
+        {
+            return Err(tonic::Status::failed_precondition(
+                "the departure's session or scene changed",
+            ));
+        }
+        let (hero, hero_index) = self
+            .speaking_hero(credential)
+            .await
+            .ok_or_else(|| tonic::Status::failed_precondition("travel needs a seated hero"))?;
+        let current = self.updates.borrow().clone();
+        let refusal = travel_blocker(&current).map_err(actor::unavailable)?;
+        let response = |line: String, disposition: rpc::DialogueDisposition, revision| {
+            DialogueReply::Raw(
+                rpc::DialogueResponse {
+                    input_id: request.input_id.clone(),
+                    disposition: disposition as i32,
+                    revision: Some(wire::revision(revision)),
+                    npc_reply: line,
+                    ..Default::default()
+                },
+                None,
+            )
+        };
+        if let Some(line) = refusal {
+            freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
+            freeform_action::publish_outcome(
+                &self.table_log,
+                hero_index,
+                None::<super::table_log::RollRow>,
+                line,
+            );
+            return Ok(response(
+                line.to_owned(),
+                rpc::DialogueDisposition::Rejected,
+                self.updates.borrow().basis().revision,
+            ));
+        }
+        let choices = self
+            .choices(scene)
+            .ok_or_else(|| tonic::Status::unavailable("the current routes are unavailable"))?;
+        let target = match self.heading(&request.text, &hero, &choices).await {
+            Some(target) => target,
+            None => {
+                if let Some(response) = self
+                    .local_reference_call(credential, request, scene, false)
+                    .await?
+                {
+                    return Ok(DialogueReply::Raw(response, None));
+                }
+                let line = "You stay together here; no way onward has been chosen.";
+                freeform_action::publish_hero_line(
+                    &self.table_log,
+                    &hero,
+                    hero_index,
+                    &request.text,
+                );
+                freeform_action::publish_outcome(
+                    &self.table_log,
+                    hero_index,
+                    None::<super::table_log::RollRow>,
+                    line,
+                );
+                return Ok(response(
+                    line.into(),
+                    rpc::DialogueDisposition::Rejected,
+                    self.updates.borrow().basis().revision,
+                ));
+            }
+        };
+        let operation = df_api::operation_id(request.input_id.as_ref())
+            .map_err(|_| tonic::Status::invalid_argument("travel input identity required"))?;
+        if self.updates.borrow().basis() != expected {
+            return Err(tonic::Status::aborted(
+                "the departure's scene changed while choosing a route",
+            ));
+        }
+        let moved = match self
+            .move_party_toward(credential, operation, target, &request.text)
+            .await
+        {
+            Ok(moved) => moved,
+            Err(MoveError::Status(error)) => return Err(error),
+            Err(MoveError::Refused(reason)) => {
+                let line = super::actor::place_actor::travel_refusal_line(reason);
+                freeform_action::publish_hero_line(
+                    &self.table_log,
+                    &hero,
+                    hero_index,
+                    &request.text,
+                );
+                freeform_action::publish_outcome(
+                    &self.table_log,
+                    hero_index,
+                    None::<super::table_log::RollRow>,
+                    line,
+                );
+                return Ok(response(
+                    line.to_owned(),
+                    rpc::DialogueDisposition::Rejected,
+                    self.updates.borrow().basis().revision,
+                ));
+            }
+        };
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
+        freeform_action::publish_outcome(
+            &self.table_log,
+            hero_index,
+            None::<super::table_log::RollRow>,
+            &moved.line,
+        );
+        Ok(response(
+            moved.line,
+            rpc::DialogueDisposition::Action,
+            moved.revision,
+        ))
+    }
+
     /// The current place, its exits and every place the run knows, for the dev CLI.
     pub(super) fn place_report(&self) -> Result<Value, tonic::Status> {
         let current = self.updates.borrow().clone();
         report(&current).map_err(actor::unavailable)
     }
 
+    /// Queues future media through the existing plate and place-music owners.
+    fn prepare_place_media(
+        &self,
+        scene: Result<pack::Scene, df_session::submission::RepositoryError>,
+        source: super::living_scenes::PlateAheadSource,
+    ) {
+        if super::adventure::free_roam::world().is_some()
+            && let Ok(scene) = &scene
+        {
+            let place_id = scene
+                .setting
+                .as_ref()
+                .map_or("none", |setting| setting.place_id.as_str());
+            let outcome = match super::place_music::installed() {
+                Some(music) => match music.prepare_scene(scene) {
+                    Ok(Some(plan)) => format!("outcome=planned plan_state={}", plan.state),
+                    Ok(None) => "outcome=no_plan".to_owned(),
+                    Err(error) => format!("outcome=projection_failed reason={error:?}"),
+                },
+                None => "outcome=disabled".to_owned(),
+            };
+            actor::record_audit_line(
+                "gameplay.free_roam",
+                format!("FREE_ROAM ahead_media place={place_id} kind=music_ambience {outcome}"),
+            );
+        }
+        self.living.plan_plate(scene, source);
+    }
+
+    /// Restores speculative neighbours for the current saved place without making a move.
+    /// Startup can call this after constructing the service; travel retries an interrupted warm-up.
+    pub(super) async fn prepare_free_roam_current(&self) -> Result<(), tonic::Status> {
+        let Some(world) = super::adventure::free_roam::world() else {
+            return Ok(());
+        };
+        let current = self.updates.borrow().clone();
+        let scene = beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+        let setting = scene
+            .setting
+            .as_ref()
+            .ok_or_else(|| tonic::Status::unavailable("free-roam current place absent"))?;
+        let record = if setting.place_id == world.gate.place_id {
+            world.gate
+        } else {
+            place::created(current.state())
+                .map_err(actor::unavailable)?
+                .remove(&setting.place_id)
+                .ok_or_else(|| {
+                    tonic::Status::unavailable("free-roam current place record absent")
+                })?
+        };
+        self.prepare_free_roam_neighbours(&current, &scene, &record)
+            .await;
+        Ok(())
+    }
+
     /// The speaking hero of a seat and their table index.
-    async fn speaking_hero(&self, credential: [u8; 32]) -> Option<(String, u32)> {
+    pub(super) async fn speaking_hero(&self, credential: [u8; 32]) -> Option<(String, u32)> {
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::SpeechMember { credential, reply })
@@ -304,15 +618,80 @@ impl Service {
         if !performance.succeeded {
             return None;
         }
+        let current = self.updates.borrow().clone();
+        match travel_blocker(&current) {
+            Ok(Some(line)) => {
+                freeform_action::publish_outcome(
+                    &self.table_log,
+                    hero_index,
+                    None::<super::table_log::RollRow>,
+                    line,
+                );
+                return Some(DialogueReply::Raw(
+                    rpc::DialogueResponse {
+                        input_id: request.input_id.clone(),
+                        disposition: rpc::DialogueDisposition::Rejected as i32,
+                        revision: Some(wire::revision(current.basis().revision)),
+                        npc_reply: line.to_owned(),
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            Err(error) => {
+                actor::record_unavailable("travel-blocker", &format!("{error:?}"));
+                return None;
+            }
+            Ok(None) => {}
+        }
         let choices = self.choices(scene)?;
-        let target = self.heading(&request.text, hero, &choices).await?;
+        let target = match self.heading(&request.text, hero, &choices).await {
+            Some(target) => target,
+            None => {
+                return match self
+                    .local_reference_call(credential, request, scene, true)
+                    .await
+                {
+                    Ok(Some(response)) => Some(DialogueReply::Raw(response, None)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        actor::record_unavailable("local-spot-move", error.message());
+                        None
+                    }
+                };
+            }
+        };
         let operation = df_api::operation_id(request.input_id.as_ref()).ok()?;
         let moved = match self
             .move_party_toward(credential, operation, target, &request.text)
             .await
         {
             Ok(moved) => moved,
-            Err(MoveError::Refused(_)) | Err(MoveError::Status(_)) => return None,
+            Err(MoveError::Refused(reason)) => {
+                // A refused destination is told in the fiction; returning None here would let the
+                // ordinary success narration claim the party left.
+                let line = super::actor::place_actor::travel_refusal_line(reason);
+                freeform_action::publish_outcome(
+                    &self.table_log,
+                    hero_index,
+                    None::<super::table_log::RollRow>,
+                    line,
+                );
+                return Some(DialogueReply::Raw(
+                    rpc::DialogueResponse {
+                        input_id: request.input_id.clone(),
+                        disposition: rpc::DialogueDisposition::Rejected as i32,
+                        revision: Some(wire::revision(self.updates.borrow().basis().revision)),
+                        npc_reply: line.to_owned(),
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            Err(MoveError::Status(status)) => {
+                actor::record_unavailable("freeform-travel", &format!("{:?}", status.code()));
+                return None;
+            }
         };
         let roll = performance.check.as_ref().map(|check| check.row());
         freeform_action::publish_outcome(&self.table_log, hero_index, roll, &moved.line);
@@ -581,6 +960,12 @@ impl Service {
         target: MoveTarget,
         goal: &str,
     ) -> Result<Box<Moved>, MoveError> {
+        if let Some(reason) = travel_blocker(&self.updates.borrow()).map_err(state_failure)? {
+            return Err(tonic::Status::failed_precondition(reason).into());
+        }
+        if !matches!(&target, MoveTarget::Spot(_)) {
+            self.prepare_free_roam_current().await?;
+        }
         let prepared = self.prepare_move(operation, target, goal).await?;
         self.commit_prepared(credential, prepared).await
     }
@@ -592,6 +977,9 @@ impl Service {
         current: &Checkpoint,
         operation: OperationId,
     ) -> Result<(), MoveError> {
+        if super::adventure::free_roam::world().is_some() {
+            return Ok(());
+        }
         // Forecast and opening share one owned gate; waiting for preparation never commits
         // movement and cancellation releases the guard automatically.
         let _preparation = super::fight_foresight::preparation_guard().await;
@@ -670,6 +1058,10 @@ impl Service {
             .setting
             .as_ref()
             .map_or_else(|| scene.title.clone(), |setting| setting.name.clone());
+        let spot = match &target {
+            MoveTarget::Spot(spot) => Some(spot.clone()),
+            _ => None,
+        };
         let (exit, destination, landmark) = match target {
             MoveTarget::Exit(exit_id) => {
                 let exit = snapshot
@@ -697,11 +1089,27 @@ impl Service {
             MoveTarget::Landmark(landmark) => {
                 (None, Destination::Create { named: None }, Some(landmark))
             }
+            MoveTarget::Spot(spot) => {
+                let existing = place::spots_here(state, &party.here)
+                    .map_err(state_failure)?
+                    .into_iter()
+                    .find(|known| place::name_key(&known.name) == place::name_key(&spot.name));
+                let destination = match existing {
+                    Some(known) => place::destination_of(state, &party.home, &known.id)
+                        .map_err(state_failure)?,
+                    None => Destination::Create { named: None },
+                };
+                (None, destination, Some(spot))
+            }
             MoveTarget::New => (None, Destination::Create { named: None }, None),
         };
-        let exit_id = exit
-            .as_ref()
-            .map_or_else(|| JOURNEY_EXIT.to_owned(), |exit| exit.id.clone());
+        let exit_id = spot.as_ref().map_or_else(
+            || {
+                exit.as_ref()
+                    .map_or_else(|| JOURNEY_EXIT.to_owned(), |exit| exit.id.clone())
+            },
+            |spot| place::spot_exit(&spot.name),
+        );
         let (to, created) = match destination {
             Destination::Home => (party.home.clone(), None),
             Destination::Created(known) => (known.place_id, None),
@@ -716,7 +1124,17 @@ impl Service {
                     audit_refusal(&party.here, &exit_id, PlaceRefusal::RunFull.label());
                     return Err(PlaceRefusal::RunFull.into());
                 }
-                let request = self
+                let ready = super::adventure::free_roam::prepared(&current)
+                    .into_iter()
+                    .find(|ready| {
+                        ready.from == party.here
+                            && (ready.exit == exit_id
+                                || landmark.as_ref().is_some_and(|landmark| {
+                                    place::name_key(&landmark.name)
+                                        == place::name_key(&ready.place.name)
+                                }))
+                    });
+                let mut request = self
                     .creation_request(
                         &current,
                         &scene,
@@ -728,12 +1146,70 @@ impl Service {
                     )
                     .await
                     .map_err(state_failure)?;
+                if let Some(spot) = &spot {
+                    if let Some(origin) = place::created(state)
+                        .map_err(state_failure)?
+                        .get(&party.here)
+                        .cloned()
+                        .or_else(|| {
+                            super::adventure::free_roam::world()
+                                .filter(|world| world.gate.place_id == party.here)
+                                .map(|world| world.gate)
+                        })
+                        && let Some(stall) = origin.stalls.iter().find(|stall| {
+                            place::name_key(&stall.name) == place::name_key(&spot.name)
+                        })
+                        && let Some(keeper) = origin
+                            .people
+                            .iter()
+                            .find(|person| person.name == stall.keeper)
+                    {
+                        request.canon["local_stall"] = json!({"stall":stall,"keeper":keeper,
+                            "wares":origin.wares.iter().filter(|ware| ware.seller == keeper.name).collect::<Vec<_>>()});
+                    }
+                    request.canon["local_spot"] = json!({
+                        "name": spot.name,
+                        "look": spot.direction,
+                        "parent_place": party.here,
+                        "parent_name": from_name,
+                        "arrival_question": goal.chars().take(500).collect::<String>(),
+                        "picture_evidence": journey::living_scene::picture_features(state, &party.here)
+                            .map_err(state_failure)?.into_iter().filter(|record| {
+                                record.seen_in_picture.iter().any(|feature| {
+                                    place::name_key(&feature.name) == place::name_key(&spot.name)
+                                })
+                            }).collect::<Vec<_>>(),
+                    });
+                }
+                let free_roam = super::adventure::free_roam::world();
+                let ahead = super::adventure::free_roam::prepared(&current);
+                if let Some(world) = &free_roam {
+                    request.adventure = world.city.description();
+                    request.canon["city"] = json!(world.city);
+                    request
+                        .place_names
+                        .extend(ahead.iter().map(|ready| ready.place.name.clone()));
+                    request.people_names.extend(ahead.iter().flat_map(|ready| {
+                        ready.place.people.iter().map(|person| person.name.clone())
+                    }));
+                    request
+                        .taken_ids
+                        .extend(ahead.iter().map(|ready| ready.place.place_id.clone()));
+                }
                 let (storyteller, _) = self.npc_voice.hero_identity_models();
-                let made = tokio::time::timeout(
-                    CREATION_DEADLINE,
-                    place_creation::create(storyteller, &request),
-                )
-                .await;
+                let made = match ready {
+                    Some(ready) => Ok(Ok(ready.place)),
+                    None => {
+                        tokio::time::timeout(CREATION_DEADLINE, async {
+                            if free_roam.is_some() || spot.is_some() {
+                                place_creation::create_silent(storyteller, &request).await
+                            } else {
+                                place_creation::create(storyteller, &request).await
+                            }
+                        })
+                        .await
+                    }
+                };
                 let record = match made {
                     Ok(Ok(record)) => record,
                     Ok(Err(error)) => {
@@ -748,6 +1224,25 @@ impl Service {
                 (record.place_id.clone(), Some(record))
             }
         };
+        let known_places = place::created(state).map_err(state_failure)?;
+        let destination_record = created
+            .clone()
+            .or_else(|| known_places.get(&to).cloned())
+            .or_else(|| {
+                super::adventure::free_roam::world()
+                    .filter(|world| world.gate.place_id == to)
+                    .map(|world| world.gate)
+            });
+        if let Some(record) = &destination_record {
+            self.prepare_place_media(
+                destination_scene(&current, record, &scene),
+                super::living_scenes::PlateAheadSource::Generated,
+            );
+            if spot.is_none() {
+                self.prepare_free_roam_neighbours(&current, &scene, record)
+                    .await;
+            }
+        }
         let to_short = match &created {
             Some(record) => record.short.clone(),
             None => place::created(state)
@@ -758,6 +1253,7 @@ impl Service {
         };
         Ok(PreparedMove {
             operation,
+            expected_basis: current.basis(),
             from: party.here,
             from_name,
             exit: exit_id,
@@ -772,10 +1268,14 @@ impl Service {
         credential: [u8; 32],
         prepared: PreparedMove,
     ) -> Result<Box<Moved>, MoveError> {
+        if let Some(reason) = travel_blocker(&self.updates.borrow()).map_err(state_failure)? {
+            return Err(tonic::Status::failed_precondition(reason).into());
+        }
         self.commit_move(
             credential,
             MoveProposal {
                 operation: prepared.operation,
+                expected_basis: prepared.expected_basis,
                 from: prepared.from,
                 exit: prepared.exit,
                 to: prepared.to,
@@ -800,6 +1300,7 @@ impl Service {
             credential,
             MoveProposal {
                 operation,
+                expected_basis: current.basis(),
                 from: party.here,
                 exit: DEV_EXIT.to_owned(),
                 to: place_id.to_owned(),
@@ -827,8 +1328,141 @@ impl Service {
             .map_err(|_| tonic::Status::deadline_exceeded("the change of place timed out"))?
             .map_err(|_| tonic::Status::unavailable("gameplay actor stopped"))??;
         match outcome {
-            MoveOutcome::Moved(moved) => Ok(moved),
+            MoveOutcome::Moved(mut moved) => {
+                self.voice
+                    .register_people(self.updates.borrow().state())
+                    .map_err(actor::unavailable)?;
+                if super::adventure::free_roam::world().is_some() {
+                    moved.line = moved.narration.clone();
+                }
+                Ok(moved)
+            }
             MoveOutcome::Refused(reason) => Err(MoveError::Refused(reason)),
+        }
+    }
+
+    /// Bounded owned look-ahead before arrival, never an authoritative move or a detached job.
+    async fn prepare_free_roam_neighbours(
+        &self,
+        current: &Checkpoint,
+        base: &pack::Scene,
+        origin: &place::PlaceRecord,
+    ) {
+        let Some(world) = super::adventure::free_roam::world() else {
+            return;
+        };
+        let Ok(scene) = destination_scene(current, origin, base) else {
+            return;
+        };
+        let Some(model) = scene
+            .setting
+            .as_ref()
+            .and_then(|setting| setting.model.as_ref())
+        else {
+            return;
+        };
+        let home = match place::home_id(&pack::scene(pack::SceneKey::Opening)) {
+            Ok(home) => home,
+            Err(_) => {
+                audit_refusal(&origin.place_id, "ahead", "look_ahead_home");
+                return;
+            }
+        };
+        for exit in model
+            .ways_out
+            .iter()
+            .filter(|exit| exit.open && exit.id != place::WAY_BACK)
+            .take(2)
+        {
+            match place::destination(current.state(), &home, &origin.place_id, exit) {
+                Ok(Destination::Created(record)) => {
+                    self.prepare_place_media(
+                        destination_scene(current, &record, base),
+                        super::living_scenes::PlateAheadSource::Travel,
+                    );
+                    continue;
+                }
+                Ok(Destination::Home) => {
+                    self.prepare_place_media(
+                        destination_scene(current, &world.gate, base),
+                        super::living_scenes::PlateAheadSource::Travel,
+                    );
+                    continue;
+                }
+                Ok(Destination::Story { .. }) => continue,
+                Ok(Destination::Create { .. }) => {}
+                Err(_) => {
+                    audit_refusal(&origin.place_id, &exit.id, "look_ahead_state");
+                    continue;
+                }
+            }
+            let ahead = super::adventure::free_roam::prepared(current);
+            if let Some(ready) = ahead
+                .iter()
+                .find(|ready| ready.from == origin.place_id && ready.exit == exit.id)
+            {
+                self.prepare_place_media(
+                    destination_scene(current, &ready.place, base),
+                    super::living_scenes::PlateAheadSource::Generated,
+                );
+                continue;
+            }
+            let request = self
+                .creation_request(current, &scene, model, Some(exit), None, "", None)
+                .await;
+            let mut request = match request {
+                Ok(request) => request,
+                Err(_) => {
+                    audit_refusal(&origin.place_id, &exit.id, "look_ahead_state");
+                    continue;
+                }
+            };
+            request.adventure = world.city.description();
+            request.canon["city"] = json!(world.city);
+            request
+                .place_names
+                .extend(ahead.iter().map(|ready| ready.place.name.clone()));
+            request.place_names.push(origin.name.clone());
+            request
+                .taken_ids
+                .extend(ahead.iter().map(|ready| ready.place.place_id.clone()));
+            request.taken_ids.push(origin.place_id.clone());
+            request.people_names.extend(
+                ahead
+                    .iter()
+                    .flat_map(|ready| ready.place.people.iter().map(|person| person.name.clone())),
+            );
+            let (storyteller, _) = self.npc_voice.hero_identity_models();
+            match tokio::time::timeout(
+                CREATION_DEADLINE,
+                place_creation::create_silent(storyteller, &request),
+            )
+            .await
+            {
+                Ok(Ok(record)) => {
+                    self.prepare_place_media(
+                        destination_scene(current, &record, base),
+                        super::living_scenes::PlateAheadSource::Generated,
+                    );
+                    actor::record_audit_line(
+                        "gameplay.free_roam",
+                        format!(
+                            "FREE_ROAM look_ahead from={} exit={} place={} outcome=ready",
+                            origin.place_id, exit.id, record.place_id
+                        ),
+                    );
+                    super::adventure::free_roam::remember(
+                        current,
+                        super::adventure::free_roam::PreparedPlace {
+                            from: origin.place_id.clone(),
+                            exit: exit.id.clone(),
+                            place: record,
+                        },
+                    );
+                }
+                Ok(Err(error)) => audit_refusal(&origin.place_id, &exit.id, error.label()),
+                Err(_) => audit_refusal(&origin.place_id, &exit.id, "look_ahead_deadline"),
+            }
         }
     }
 
@@ -1086,6 +1720,10 @@ pub(super) fn report(
             "title": scene.title,
             "people": scene.cast.iter().map(|member| member.name.clone()).collect::<Vec<_>>(),
         },
+        "city": super::adventure::free_roam::world().map(|world| world.city),
+        "prepared_ahead": super::adventure::free_roam::prepared(&current).into_iter().map(|ready| json!({
+            "from": ready.from, "exit": ready.exit, "id": ready.place.place_id, "name": ready.place.name,
+        })).collect::<Vec<_>>(),
         "exits": exits,
         "known": known,
         "moves": moves,

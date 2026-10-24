@@ -62,6 +62,311 @@ fn operation(number: u8) -> OperationId {
     OperationId::from_bytes(&[number; 16]).unwrap()
 }
 
+fn fruit_picture(plate_key: &str) -> journey::living_scene::PictureFeatures {
+    journey::living_scene::PictureFeatures {
+        place: STREET.into(),
+        plate_key: plate_key.into(),
+        seen_in_picture: vec![journey::living_scene::VisibleFeature {
+            name: "fruit stand".into(),
+            look: "A canvas stall with red apples in shallow baskets.".into(),
+            region: [650, 220, 920, 600],
+            recorded_id: None,
+        }],
+    }
+}
+
+#[test]
+fn established_observation_detail_commits_with_its_answer_and_survives_replay() {
+    use prost::Message;
+    with_shop(|opening, _| {
+        let choices = [
+            ("attempt-skill", "investigation"),
+            ("attempt-thing", "thing-shop-counter"),
+        ]
+        .into_iter()
+        .map(|(group, value)| rpc::JourneyChoice {
+            group_id: group.into(),
+            option_id: value.into(),
+        })
+        .collect();
+        let (kind, _, offer_id) = runtime::view_offers(&opening, native::first())
+            .unwrap()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == rpc::GameplayActionKind::ExamineHarborSeal)
+            .unwrap();
+        let basis = opening.basis();
+        let request = rpc::SubmitActionRequest {
+            session_id: Some(rpc::SessionId {
+                value: Some(basis.session.as_bytes().to_vec()),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(basis.run.as_bytes().to_vec()),
+            }),
+            observed_revision: Some(wire::revision(basis.revision)),
+            operation_id: Some(rpc::OperationId {
+                value: Some(vec![77; 16]),
+            }),
+            offer_id,
+            action_kind: kind as i32,
+            action_choices: choices,
+            ..Default::default()
+        };
+        let input = wire::journey_input(&request, native::first(), &opening).unwrap();
+        let checked = journey::stage_with_supplier(&opening, &input, &mut |_| Ok(18)).unwrap();
+        let operation = checked.state().decisions.last().unwrap().operation;
+        let check = journey::accepted(checked.state().decisions.last().unwrap())
+            .unwrap()
+            .check
+            .unwrap();
+        let scene = runtime::scene(checked.state()).unwrap();
+        let who = journey::player_entity(native::first(), &checked).unwrap();
+        let source_hash = journey::living_scene::observation_source_hash(&scene).unwrap();
+        let detail = journey::living_scene::EstablishedDetail {
+            target: "thing-shop-counter".into(),
+            question: "Does the counter wobble?".into(),
+            detail: "Its legs sit flat on the boards.".into(),
+            source_hash: source_hash.clone(),
+            consistency_approved: true,
+        };
+        let record = journey::living_scene::ObservationFinding {
+            id: format!("observation-{}", journey::hex(operation.as_bytes())),
+            operation: journey::hex(operation.as_bytes()),
+            actor: journey::hex(who.as_bytes()),
+            hero: journey::name(checked.state(), who).unwrap(),
+            audience: "shared".into(),
+            check: journey::hex(&check.encode_to_vec()),
+            target: detail.target.clone(),
+            source_revision: check.source_revision.clone(),
+            source_epoch: checked.basis().revision.epoch().get(),
+            source_sequence: checked.basis().revision.sequence(),
+            source_hash: source_hash.clone(),
+            scene: scene.key,
+            selected_source_ids: vec![],
+            text: "Brynn finds the counter steady on its legs.".into(),
+            unavailable: false,
+        };
+        let mut denied = detail.clone();
+        denied.consistency_approved = false;
+        assert!(
+            journey::living_scene::commit_observation_with_detail(
+                &checked,
+                checked.basis(),
+                record.clone(),
+                Some(denied)
+            )
+            .is_err()
+        );
+        let completed = journey::living_scene::commit_observation_with_detail(
+            &checked,
+            checked.basis(),
+            record.clone(),
+            Some(detail.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            journey::living_scene::established_detail_for(completed.state(), HOME, &detail.target)
+                .unwrap(),
+            Some(detail.clone())
+        );
+        assert_eq!(
+            journey::living_scene::observation_journal(completed.state()).unwrap(),
+            vec![record]
+        );
+        let after = runtime::scene(completed.state()).unwrap();
+        assert_eq!(
+            journey::living_scene::observation_source_hash(&after).unwrap(),
+            source_hash
+        );
+        assert_eq!(
+            journey::living_scene::established_detail_for(
+                &completed.state().clone(),
+                HOME,
+                &detail.target
+            )
+            .unwrap(),
+            Some(detail)
+        );
+    });
+}
+
+#[test]
+fn picture_features_are_place_bound_deduplicated_and_survive_later_plates_and_returns() {
+    with_shop(|opening, _| {
+        let made = street(&model_of(&opening));
+        let street = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let record = fruit_picture("approved-plate-one");
+        let seen = journey::living_scene::commit_picture_features(
+            &street,
+            street.basis(),
+            operation(41),
+            record.clone(),
+        )
+        .unwrap();
+        let duplicate = journey::living_scene::commit_picture_features(
+            &seen,
+            seen.basis(),
+            operation(42),
+            record,
+        )
+        .unwrap();
+        assert_eq!(duplicate, seen);
+        let later = journey::living_scene::commit_picture_features(
+            &seen,
+            seen.basis(),
+            operation(43),
+            fruit_picture("approved-plate-two"),
+        )
+        .unwrap();
+        let all = journey::living_scene::picture_features(later.state(), STREET).unwrap();
+        assert_eq!(
+            all.iter()
+                .flat_map(|record| &record.seen_in_picture)
+                .count(),
+            1
+        );
+        assert_eq!(all[0].plate_key, "approved-plate-one");
+        let back = commit(&later, 44, place::WAY_BACK, HOME, None).unwrap();
+        assert!(
+            journey::living_scene::picture_features(back.state(), HOME)
+                .unwrap()
+                .is_empty()
+        );
+        let returned = commit(&back, 45, "street-door", STREET, None).unwrap();
+        assert_eq!(
+            journey::living_scene::picture_features(returned.state(), STREET).unwrap(),
+            all
+        );
+        assert!(
+            journey::living_scene::commit_picture_features(
+                &returned,
+                street.basis(),
+                operation(46),
+                fruit_picture("stale")
+            )
+            .is_err()
+        );
+        let mut invalid = fruit_picture("bad-region");
+        invalid.seen_in_picture[0].region = [900, 200, 600, 500];
+        assert!(
+            journey::living_scene::commit_picture_features(
+                &returned,
+                returned.basis(),
+                operation(47),
+                invalid
+            )
+            .is_err()
+        );
+    });
+}
+
+#[test]
+fn seen_picture_reference_moves_to_a_generated_spot_and_return_reuses_it() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let street = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let seen = journey::living_scene::commit_picture_features(
+            &street,
+            street.basis(),
+            operation(41),
+            fruit_picture("approved-street-plate"),
+        )
+        .unwrap();
+        let mut spot = named_place("fruit stand");
+        let mut place: Value = serde_json::from_str(spot["place"].as_str().unwrap()).unwrap();
+        place["speaker"] = json!("");
+        place["greeting"] = json!("");
+        place["narration"] = json!(
+            "You gather at the fruit stand. Mira offers crisp apples in shallow baskets; Market Street stays in view behind you."
+        );
+        place["wares"] = json!([{"seller":"Mira Fen", "name":"apple", "description":"A crisp red apple from the basket.", "price_cp":2}]);
+        place["exits"] = json!([]);
+        place["landmarks"] = json!([]);
+        place["market"] = json!(false);
+        place["stalls"] = json!([]);
+        place["mentioned_stalls"] = json!([]);
+        spot["place"] = json!(place.to_string());
+        let (choices, story, voice) = travel_voice(
+            vec![choice("o4"), choice("o1")],
+            vec![Reply::Output(spot)],
+            "HS40-picture-spot",
+        );
+        let table = Table::start(seen, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let response = run(table.service.local_reference_call([1;32], &line(&table, 42,
+            "I wander over to the fruit stand in the background and take a good look. What's on offer?"), &scene, false)).unwrap().unwrap();
+        assert!(response.npc_reply.contains("apples"));
+        let at_spot = table.current();
+        let spot_id = runtime::scene(at_spot.state())
+            .unwrap()
+            .setting
+            .unwrap()
+            .place_id;
+        assert_ne!(spot_id, STREET);
+        assert_eq!(model_of(&at_spot).ways_out[0].beyond_place_id, STREET);
+        assert_eq!(model_of(&at_spot).offers[0].cost_cp, 2);
+        assert_eq!(place::created(at_spot.state()).unwrap().len(), 2);
+        run(table
+            .service
+            .move_party_through([1; 32], operation(43), place::WAY_BACK))
+        .unwrap_or_else(|_| panic!("return"));
+        let returned = table.current();
+        let scene = runtime::scene(returned.state()).unwrap();
+        run(table.service.local_reference_call(
+            [1; 32],
+            &line(&table, 44, "I go back to that apple stall."),
+            &scene,
+            false,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            runtime::scene(table.current().state())
+                .unwrap()
+                .setting
+                .unwrap()
+                .place_id,
+            spot_id
+        );
+        assert_eq!(place::created(table.current().state()).unwrap().len(), 2);
+        assert_eq!(story.connections(), 1);
+        assert_eq!(choices.connections(), 2);
+        let request = story.bodies()[0]["input"].as_str().unwrap().to_owned();
+        assert!(request.contains("local_spot") && request.contains("arrival_question"));
+        assert!(request.contains("red apples") && request.contains("Market Street"));
+    });
+}
+
+#[test]
+fn an_impossible_local_reference_is_refused_specifically_in_fiction_without_a_move() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let street = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let text = "There is no royal vault on this open street; Wenna's spice stall stands at the corner.";
+        let (_choices, story, voice) = travel_voice(
+            vec![choice("o5")],
+            vec![Reply::Output(json!({"refusal":text}))],
+            "HS40-impossible-spot",
+        );
+        let table = Table::start(street.clone(), loaded, voice);
+        let scene = runtime::scene(street.state()).unwrap();
+        let response = run(table.service.local_reference_call(
+            [1; 32],
+            &line(&table, 41, "I examine the royal vault beside us."),
+            &scene,
+            false,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.npc_reply, text);
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(table.current(), street);
+        assert_eq!(story.connections(), 1);
+    });
+}
+
 /// What the owner does with a proposal: checks it, builds the candidate and commits it.
 fn commit(
     current: &Checkpoint,
@@ -157,7 +462,7 @@ fn leaving_through_the_door_moves_the_party_and_the_display_view_names_the_new_s
         assert_eq!(scene.place, "Market Street");
         assert_eq!(scene.location_id, STREET);
         assert_eq!(scene.scene_asset, "live-room-photo");
-        assert_eq!(names(&scene), ["Hobb", "Wenna"]);
+        assert_eq!(names(&scene), ["Hobb", "Wenna", "Yara"]);
         assert!(
             scene
                 .cast
@@ -187,7 +492,7 @@ fn leaving_through_the_door_moves_the_party_and_the_display_view_names_the_new_s
         let model = model_of(&moved);
         assert!(model.people.iter().any(|person| person.name == "Brynn"));
         assert!(model.people.iter().any(|person| person.name == "Vale"));
-        assert_eq!(model.offers.len(), 1);
+        assert_eq!(model.offers.len(), 6);
         assert_eq!(model.offers[0].seller_id, "market-street-wenna");
         assert_eq!(model.offers[0].cost_cp, 10);
         assert_eq!(model.services.len(), 1);
@@ -234,7 +539,7 @@ fn a_created_place_is_reused_on_return_and_the_shop_stays_in_the_world() {
         );
         let again = commit(&back, 43, "street-door", STREET, None).unwrap();
         assert_eq!(display_scene(&again).title, "Market Street");
-        assert_eq!(names(&display_scene(&again)), ["Hobb", "Wenna"]);
+        assert_eq!(names(&display_scene(&again)), ["Hobb", "Wenna", "Yara"]);
         assert_eq!(model_of(&again).offers, model_of(&out).offers);
         assert_eq!(model_of(&again).services, model_of(&out).services);
         assert_eq!(place::created(again.state()).unwrap().len(), 1);
@@ -276,7 +581,7 @@ fn the_screens_find_a_created_place_where_the_owner_publishes_it() {
                 .iter()
                 .map(|member| member.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Hobb", "Wenna"]
+            ["Hobb", "Wenna", "Yara"]
         );
         // What the place music reads about the place comes from the same publication.
         let published = place::registered_setting(STREET).unwrap();
@@ -716,10 +1021,7 @@ fn a_leaving_line_goes_through_jev_and_the_storyteller_to_a_committed_move_the_t
             &performed_move(true),
         ));
         let told = replied(reply);
-        assert_eq!(
-            told,
-            "Brynn leads the party through the street door to Market Street."
-        );
+        assert_eq!(told, "Brynn leads the party to Market Street.");
         // The state changed, and only then did the table hear of it.
         let now = table.current();
         assert_eq!(runtime::scene(now.state()).unwrap().title, "Market Street");
@@ -754,11 +1056,11 @@ fn a_leaving_line_goes_through_jev_and_the_storyteller_to_a_committed_move_the_t
         let changes = actor::audit_lines_containing(
             "PLACE change from=place-mareks-cloth-shop to=place-market-street",
         );
-        assert!(
-            changes
-                .iter()
-                .any(|line| line.ends_with("exit=street-door created=true"))
-        );
+        assert!(changes.iter().any(|line| {
+            // The shared audit path appends correlation fields after the original event.
+            line.split_once(" op=")
+                .is_some_and(|(event, _)| event.ends_with("exit=street-door created=true"))
+        }));
         assert!(
             !actor::audit_lines_containing(
                 "PLACE judged from=place-mareks-cloth-shop source=jev exit=street-door"
@@ -788,7 +1090,7 @@ fn the_party_comes_back_through_the_way_back_and_a_second_trip_makes_nothing_new
             (
                 71,
                 "I walk out of the shop into the street.",
-                "Brynn leads the party through the street door to Market Street.",
+                "Brynn leads the party to Market Street.",
             ),
             // The way back names the place once (P6-170).
             (
@@ -799,7 +1101,7 @@ fn the_party_comes_back_through_the_way_back_and_a_second_trip_makes_nothing_new
             (
                 73,
                 "I step out into the street again.",
-                "Brynn leads the party through the street door to Market Street.",
+                "Brynn leads the party to Market Street.",
             ),
         ] {
             let scene = runtime::scene(table.current().state()).unwrap();
@@ -828,7 +1130,7 @@ fn narration_never_claims_a_change_that_did_not_happen() {
         let scene = runtime::scene(opening.state()).unwrap();
         // Jev finds no exit in the line: the party stays, the table is told nothing, no place is made.
         // The shop's choices are its street door, a journey elsewhere, and staying (o3).
-        let exits = FakeEndpoint::start(vec![choice("o3")]);
+        let exits = FakeEndpoint::start(vec![choice("o3"), choice("o3")]);
         let storyteller = FakeEndpoint::start(vec![]);
         let cache = cache_directory("place-service-stays");
         let voice = voice_of(
@@ -876,11 +1178,12 @@ fn narration_never_claims_a_change_that_did_not_happen() {
         assert!(table.lines().is_empty());
 
         // Jev names the door but the storyteller cannot make the place beyond it: the party stays
-        // where it is, nothing is committed, nothing is told, and the refusal is audited.
+        // where it is, nothing is committed, and an explicit refusal is told and audited.
         let exits = FakeEndpoint::start(vec![choice("o1")]);
         let mut wrong = place_slot();
         wrong["kind"] = json!("dragon-lair");
         let storyteller = FakeEndpoint::start(vec![
+            Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
             Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
             Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
         ]);
@@ -894,19 +1197,29 @@ fn narration_never_claims_a_change_that_did_not_happen() {
             ),
         );
         let table = Table::start(opening.clone(), loaded.clone(), voice);
-        assert!(
-            run(table.service.leave_by_freeform(
-                [1; 32],
-                &line(&table, 82, "I go out through the front door."),
-                &scene,
-                "Brynn",
-                0,
-                &performed_move(true),
-            ))
-            .is_none()
+        let Some(DialogueReply::Raw(response, _)) = run(table.service.leave_by_freeform(
+            [1; 32],
+            &line(&table, 82, "I go out through the front door."),
+            &scene,
+            "Brynn",
+            0,
+            &performed_move(true),
+        )) else {
+            panic!("failed generation returns an explicit refusal");
+        };
+        let refusal = actor::place_actor::travel_refusal_line(PlaceRefusal::CreationUnavailable);
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
         );
+        assert_eq!(response.npc_reply, refusal);
         assert_eq!(table.current(), opening);
-        assert!(table.lines().is_empty());
+        assert!(place::created(table.current().state()).unwrap().is_empty());
+        let rows = table.table.lines();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].role, rpc::TableRole::Narrator as i32);
+        assert_eq!(rows[0].kind, rpc::TableKind::Action as i32);
+        assert_eq!(rows[0].text, refusal);
         assert!(
             !actor::audit_lines_containing(
                 "PLACE refused from=place-mareks-cloth-shop to=none exit=street-door reason=kind"
@@ -916,16 +1229,23 @@ fn narration_never_claims_a_change_that_did_not_happen() {
 
         // Without Jev nothing is guessed from the words.
         let table = Table::start(opening.clone(), loaded, Arc::new(NpcVoice::silent()));
-        assert!(
-            run(table.service.leave_by_freeform(
-                [1; 32],
-                &line(&table, 83, "I leave."),
-                &scene,
-                "Brynn",
-                0,
-                &performed_move(true),
-            ))
-            .is_none()
+        let Some(DialogueReply::Raw(response, _)) = run(table.service.leave_by_freeform(
+            [1; 32],
+            &line(&table, 83, "I leave."),
+            &scene,
+            "Brynn",
+            0,
+            &performed_move(true),
+        )) else {
+            panic!("unavailable local navigation is answered in fiction");
+        };
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(
+            response.npc_reply,
+            "The party stays together; the way to that spot isn't clear yet."
         );
         assert_eq!(table.current(), opening);
     });
@@ -1042,7 +1362,20 @@ fn named_place(name: &str) -> Value {
     let mut place = place_slot();
     place["name"] = json!(name);
     place["speaker"] = json!("Oren Vale");
-    place["wares"][0]["seller"] = json!("Mira Fen");
+    for ware in place["wares"].as_array_mut().unwrap() {
+        ware["seller"] = json!(match ware["seller"].as_str().unwrap() {
+            "Hobb" => "Oren Vale",
+            "Wenna" => "Mira Fen",
+            _ => "Tess Brook",
+        });
+    }
+    for stall in place["stalls"].as_array_mut().unwrap() {
+        stall["keeper"] = json!(match stall["keeper"].as_str().unwrap() {
+            "Hobb" => "Oren Vale",
+            "Wenna" => "Mira Fen",
+            _ => "Tess Brook",
+        });
+    }
     place["services"][0]["provider"] = json!("Oren Vale");
     place["landmarks"] = json!([
         {"name": "the Clock Arch", "direction": "at the end of the street"},
@@ -1051,6 +1384,7 @@ fn named_place(name: &str) -> Value {
     let mut people = people_slot();
     people[0]["name"] = json!("Oren Vale");
     people[1]["name"] = json!("Mira Fen");
+    people[2]["name"] = json!("Tess Brook");
     answer(&place, &people, &things_slot())
 }
 
@@ -1122,7 +1456,11 @@ fn a_stated_destination_no_exit_leads_to_is_made_from_the_heros_words_and_reache
                 "PLACE change from=place-mareks-cloth-shop to=place-the-carriage-stand"
             )
             .iter()
-            .any(|line| line.ends_with("exit=journey created=true"))
+            .any(|line| {
+                // The shared audit path appends correlation fields after the original event.
+                line.split_once(" op=")
+                    .is_some_and(|(event, _)| event.ends_with("exit=journey created=true"))
+            })
         );
     });
 }
@@ -1395,7 +1733,8 @@ fn a_plain_look_at_a_created_place_needs_no_roll_and_tells_its_people_and_goods(
             117,
             "I look around the market: the stalls, the people, what's being sold.",
         );
-        let room = target_named(&scene, "the room");
+        let room = target_named(&scene, "Market Street");
+        assert_eq!(room.id, "room");
         let response = run(table
             .service
             .plain_observation(&request, &scene, &room, "Brynn", 0))
@@ -1406,11 +1745,11 @@ fn a_plain_look_at_a_created_place_needs_no_roll_and_tells_its_people_and_goods(
             "{told}"
         );
         assert!(
-            told.contains("Hobb, the carter, is beside the wagon."),
+            told.contains("Hobb, the carter, is at the cart stall, beside the wagon."),
             "{told}"
         );
         assert!(
-            told.contains("On sale: saffron pinch from Wenna for 1 sp."),
+            told.contains("Wenna at the spice stall, on the east side sells saffron pinch (1 sp)"),
             "{told}"
         );
         assert!(
@@ -1461,7 +1800,9 @@ fn a_check_the_owner_refuses_is_answered_with_what_is_plainly_there() {
             .unrolled_observation(&request, &scene, &hobb, "Brynn", 0))
         .npc_reply;
         assert!(
-            told.starts_with("Brynn looks at Hobb. Hobb is the carter here, beside the wagon."),
+            told.starts_with(
+                "Brynn looks at Hobb. Hobb is the carter here, at the cart stall, beside the wagon."
+            ),
             "{told}"
         );
         assert!(
@@ -1645,5 +1986,245 @@ fn likely_exit_prepares_one_destination_and_photo_then_opening_reuses_it_without
             assert!(place::created(table.current().state()).unwrap().is_empty());
             fight_foresight::TEST_DIRECTOR.with(|slot| *slot.borrow_mut() = None);
         })
+    });
+}
+
+#[test]
+fn place_move_travel_line_reaches_market_square_for_one_four_and_six_heroes() {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+    )
+    .unwrap();
+    for count in [1, 4, 6] {
+        pack::with_test_pack(loaded.clone(), || {
+            use crate::gameplay::beat_script_runtime::{
+                OpeningSkill, OpeningSocialAttempt, opening_social_tests, stage_opening_social,
+            };
+            use df_rules::influence::{Attitude, Willingness};
+            let opening = opening_social_tests::opening(count);
+            let member = journey::participants(&opening)[0].member;
+            let settled = stage_opening_social(
+                &opening,
+                operation(90),
+                OpeningSocialAttempt {
+                    member,
+                    skill: OpeningSkill::Persuasion,
+                    attitude: Attitude::Hostile,
+                    willingness: Willingness::Hesitant,
+                    faces: &[20, 20],
+                    changed_after: None,
+                },
+            )
+            .unwrap()
+            .checkpoint;
+            let exits = FakeEndpoint::start(vec![choice("o2")]);
+            let mut market = place_slot();
+            market["name"] = json!("Market Square");
+            market["narration"] =
+                json!("Market stalls ring the square. Carters make room for the arriving party.");
+            let storyteller = FakeEndpoint::start(vec![Reply::Output(answer(
+                &market,
+                &people_slot(),
+                &things_slot(),
+            ))]);
+            let cache = cache_directory("hs26-market-travel");
+            let voice = voice_of(
+                &exits,
+                teller(storyteller.address, 0, Duration::from_secs(5), &cache),
+            );
+            let table = Table::start(settled.clone(), loaded.clone(), voice);
+            let scene = runtime::scene(settled.state()).unwrap();
+            let request = line(&table, 91, "Let's go to the market square.");
+            let reply = run(table.service.travel_by_line([1; 32], &request, &scene)).unwrap();
+            let DialogueReply::Raw(response, None) = reply else {
+                panic!("travel returns committed raw response")
+            };
+            assert_eq!(
+                response.disposition,
+                rpc::DialogueDisposition::Action as i32
+            );
+            assert!(response.npc_reply.contains("Market Square"));
+            assert_eq!(
+                runtime::scene(table.current().state()).unwrap().title,
+                "Market Square"
+            );
+            assert_eq!(table.current().state().characters.len(), count);
+            assert!(table.current().state().encounters.is_empty());
+            assert_eq!(
+                table
+                    .lines()
+                    .iter()
+                    .filter(|(speaker, _)| speaker == "Narrator")
+                    .count(),
+                1
+            );
+            assert_eq!(exits.connections(), 1);
+            assert!(
+                exits.bodies()[0]
+                    .to_string()
+                    .contains("Let's go to the market square.")
+            );
+        });
+    }
+}
+
+#[test]
+fn place_move_travel_refuses_the_unresolved_enforcer_and_unstarted_room() {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+    )
+    .unwrap();
+    pack::with_test_pack(loaded.clone(), || {
+        let room = journey::initial().unwrap();
+        assert!(travel_blocker(&room).unwrap().unwrap().contains("heroes"));
+        assert!(travel_options(&room).unwrap().is_empty());
+        for count in [1, 4, 6] {
+            let opening = runtime::opening_social_tests::opening(count);
+            let scene = runtime::scene(opening.state()).unwrap();
+            let table = Table::start(
+                opening.clone(),
+                loaded.clone(),
+                Arc::new(NpcVoice::silent()),
+            );
+            let request = line(
+                &table,
+                92,
+                "Courier, you walk with us up to the market square.",
+            );
+            let reply = run(table.service.travel_by_line([1; 32], &request, &scene)).unwrap();
+            let DialogueReply::Raw(response, None) = reply else {
+                panic!("fictional refusal")
+            };
+            assert_eq!(
+                response.disposition,
+                rpc::DialogueDisposition::Rejected as i32
+            );
+            assert!(response.npc_reply.contains("enforcer"));
+            assert_eq!(table.current(), opening);
+            assert!(travel_options(&opening).unwrap().is_empty());
+        }
+    });
+}
+#[test]
+fn market_departure_to_a_recorded_stall_keeps_its_keeper_and_stock_and_reuses_the_spot() {
+    with_shop(|opening, loaded| {
+        let market = street(&model_of(&opening));
+        let current = commit(&opening, 120, "street-door", STREET, Some(&market)).unwrap();
+        let mut spot = named_place("fish stall");
+        let mut draft: Value = serde_json::from_str(spot["place"].as_str().unwrap()).unwrap();
+        draft["speaker"] = json!("");
+        draft["greeting"] = json!("");
+        draft["exits"] = json!([]);
+        draft["landmarks"] = json!([]);
+        draft["market"] = json!(false);
+        draft["stalls"] = json!([]);
+        draft["mentioned_stalls"] = json!([]);
+        draft["narration"] = json!(
+            "The party gathers at Yara's fish stall. Herring costs 2 cp and trout 3 cp; Market Street stays behind them."
+        );
+        spot["place"] = json!(draft.to_string());
+        let mut people: Value = serde_json::from_str(spot["people"].as_str().unwrap()).unwrap();
+        people[2]["name"] = json!("Yara");
+        spot["people"] = json!(people.to_string());
+        // The departure judge says stay: this is inside the place. The local judge picks fish.
+        let (_choices, story, voice) = travel_voice(
+            vec![choice("o7"), choice("o3"), choice("o1")],
+            vec![Reply::Output(spot)],
+            "HS40-market-stall",
+        );
+        let table = Table::start(current, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let reply = run(table.service.travel_by_line([1;32], &line(&table, 121,
+            "I walk over to the fish stall by the fountain. What do they sell and what are the prices?"), &scene)).unwrap();
+        let told = replied(Some(reply));
+        assert!(told.contains("Herring costs 2 cp and trout 3 cp"));
+        assert!(!told.contains("clear destination"));
+        let close = table.current();
+        let model = model_of(&close);
+        let keeper = model
+            .people
+            .iter()
+            .find(|person| person.name == "Yara")
+            .unwrap();
+        let original = market.expand().unwrap();
+        let original_keeper = original
+            .model
+            .people
+            .iter()
+            .find(|person| person.name == "Yara")
+            .unwrap();
+        assert_eq!(keeper.id, original_keeper.id);
+        assert_eq!(keeper.coin_cp, original_keeper.coin_cp);
+        assert_eq!(keeper.description, original_keeper.description);
+        let goods = model
+            .offers
+            .iter()
+            .filter(|offer| offer.seller_id == keeper.id)
+            .map(|offer| (offer.name.as_str(), offer.cost_cp))
+            .collect::<Vec<_>>();
+        assert_eq!(goods, [("herring", 2), ("trout", 3)]);
+        assert_eq!(model.ways_out[0].beyond_place_id, STREET);
+        let close_id = runtime::scene(close.state())
+            .unwrap()
+            .setting
+            .unwrap()
+            .place_id;
+        run(table
+            .service
+            .move_party_through([1; 32], operation(122), place::WAY_BACK))
+        .unwrap_or_else(|_| panic!("recorded way back"));
+        let returned = runtime::scene(table.current().state()).unwrap();
+        run(table.service.local_reference_call(
+            [1; 32],
+            &line(&table, 123, "I return to that fish stall."),
+            &returned,
+            false,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            runtime::scene(table.current().state())
+                .unwrap()
+                .setting
+                .unwrap()
+                .place_id,
+            close_id
+        );
+        assert_eq!(story.connections(), 1);
+        let sent = story.bodies()[0]["input"].as_str().unwrap().to_owned();
+        assert!(
+            sent.contains("local_stall")
+                && sent.contains("arrival_question")
+                && sent.contains("Yara")
+        );
+    });
+}
+
+#[test]
+fn market_look_lists_distinct_stalls_and_their_goods_for_the_next_choice() {
+    with_shop(|opening, _| {
+        let market = street(&model_of(&opening));
+        let current = commit(&opening, 124, "street-door", STREET, Some(&market)).unwrap();
+        let scene = runtime::scene(current.state()).unwrap();
+        let facts = investigation::place_facts(&scene).unwrap().join(" ");
+        assert!(facts.contains("Stalls in view:"));
+        for (stall, goods) in [
+            ("cart stall", "oats"),
+            ("spice stall", "saffron pinch"),
+            ("fish stall", "herring"),
+        ] {
+            assert!(facts.contains(stall), "{facts}");
+            assert!(facts.contains(goods), "{facts}");
+        }
+        let room = target_named(&scene, "Market Street");
+        let line = investigation::plain_look(&scene, &room, "Pip")
+            .unwrap()
+            .fallback();
+        assert!(
+            line.contains("fish stall") && line.contains("herring"),
+            "{line}"
+        );
     });
 }

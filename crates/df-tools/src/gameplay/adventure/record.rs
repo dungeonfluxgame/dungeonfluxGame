@@ -467,6 +467,7 @@ pub(crate) fn reload(
                         | "tactical.cover-representative-height"
                         | "tactical.initiative-ties-input-order"
                         | "tactical.dead-space-passable"
+                        | "tactical.area-cell-centres-eight-directions"
                 ) || loaded.tuning.tactical.is_none()
             })
     {

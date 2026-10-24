@@ -43,7 +43,10 @@ pub(in crate::gameplay) const UNNAMED: &str = "none";
 /// Places one run may create. A full run refuses a new place and keeps the party where it is.
 pub(in crate::gameplay) const MAXIMUM_CREATED_PLACES: usize = 8;
 /// A created place's bounded cast, retained in its canonical record.
-pub(in crate::gameplay) const MAXIMUM_PEOPLE: usize = 3;
+pub(in crate::gameplay) const MAXIMUM_PEOPLE: usize = 5;
+/// Maximum working capital for one locally generated trader: 10,000 GP. This is a world-data
+/// capacity bound, independent of ware prices and provider spending.
+pub(in crate::gameplay) const MAXIMUM_PURSE_CP: u32 = 1_000_000;
 /// The exit every created place has back to the place it was entered from.
 pub(in crate::gameplay) const WAY_BACK: &str = "way-back";
 /// The exit name of a development move that goes straight to a place the run has.
@@ -51,18 +54,22 @@ pub(in crate::gameplay) const DEV_EXIT: &str = "dev";
 /// The exit name of a journey: the party travels to a stated destination that no exit of the
 /// place leads to (a place the run has, a landmark, or a new place), on foot or by a hired ride.
 pub(in crate::gameplay) const JOURNEY_EXIT: &str = "journey";
+/// Journal binding of a local spot, scoped to the place where it was first approached.
+pub(in crate::gameplay) const SPOT_PREFIX: &str = "spot-";
 /// Onward exits a created place may list besides its way back. The scene model holds at most
 /// three ways out, so a created place has its way back and up to two ways on.
 pub(in crate::gameplay) const MAXIMUM_ONWARD_EXITS: usize = 2;
 /// Named landmarks near a created place: canon its people know and destinations a journey reaches.
 pub(in crate::gameplay) const MAXIMUM_LANDMARKS: usize = 3;
 
-/// The largest serialized journal entry. The checkpoint codec keeps every stored text to 4,096
-/// bytes, so a place is stored as the compact answer that made it and expanded into its scene
-/// model and cast each time it is read. The expansion is deterministic.
-pub(in crate::gameplay) const MAXIMUM_ENTRY_BYTES: usize = 3_950;
+/// The largest serialized journal entry. A place is stored as the compact answer that made it and
+/// expanded into its scene model and cast each time it is read; the expansion is deterministic.
+/// The entry travels in the decision's semantic text, which the checkpoint bounds per text far
+/// above this; the old 4 KiB figure starved a four-person gate with wares and purses (owner,
+/// 2026-10-24: "remove the limits"), so a place may now be about four times larger.
+pub(in crate::gameplay) const MAXIMUM_ENTRY_BYTES: usize = 16_000;
 /// The largest serialized place inside an entry.
-pub(in crate::gameplay) const MAXIMUM_PLACE_BYTES: usize = 3_150;
+pub(in crate::gameplay) const MAXIMUM_PLACE_BYTES: usize = 12_000;
 
 /// A created place: durable world state, stored whole in the journal entry that created it.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -77,7 +84,7 @@ pub(in crate::gameplay) struct PlaceRecord {
     pub(in crate::gameplay) kind: SettingKind,
     /// What the TV and the table are told when the party arrives.
     pub(in crate::gameplay) narration: String,
-    /// The person who speaks first on arrival (a name from `people`).
+    /// The first speaker (a name from `people`), or empty with `greeting` for a silent arrival.
     pub(in crate::gameplay) speaker: String,
     pub(in crate::gameplay) greeting: String,
     pub(in crate::gameplay) exits: Vec<ExitDraft>,
@@ -91,6 +98,24 @@ pub(in crate::gameplay) struct PlaceRecord {
     /// journey; a place made before landmarks existed has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::gameplay) landmarks: Vec<LandmarkDraft>,
+    /// A close view inside `origin`, retaining the visible feature that prompted the move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::gameplay) local_spot: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::gameplay) stalls: Vec<StallDraft>,
+    #[serde(default, skip_serializing_if = "is_not_market")]
+    pub(in crate::gameplay) market: bool,
+    /// An existing keeper keeps the same identity when viewed from a local stall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::gameplay) local_keeper: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct StallDraft {
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) keeper: String,
+    pub(in crate::gameplay) position: String,
 }
 
 /// A named place near a created place: what it is called and where it lies from here.
@@ -127,9 +152,15 @@ pub(in crate::gameplay) struct PersonDraft {
     pub(in crate::gameplay) role: String,
     pub(in crate::gameplay) description: String,
     pub(in crate::gameplay) position: String,
-    pub(in crate::gameplay) gender: String,
+    pub(in crate::gameplay) gender: Gender,
+    /// Explicit generated age; absent only in old saved records, whose cast was adult.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::gameplay) age: Option<Age>,
     pub(in crate::gameplay) wants: String,
     pub(in crate::gameplay) attitude: String,
+    /// Admitted working capital; old saved places had no purse.
+    #[serde(default)]
+    pub(in crate::gameplay) purse_cp: u32,
     /// Missing only in records written before created people had combat statistics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::gameplay) stat_block: Option<PersonStatBlock>,
@@ -201,6 +232,11 @@ pub(in crate::gameplay) struct Expanded {
     pub(in crate::gameplay) cast: Vec<SceneCastMember>,
 }
 
+// Omitted defaults preserve the size of pre-market saved place records.
+fn is_not_market(market: &bool) -> bool {
+    !*market
+}
+
 fn within(value: &str, maximum: usize) -> bool {
     let length = value.trim().chars().count();
     length > 0 && length <= maximum && !value.chars().any(char::is_control)
@@ -257,9 +293,46 @@ impl PlaceRecord {
         slug(self.place_id.trim_start_matches("place-"))
     }
 
+    fn person_prefix(&self, name: &str) -> String {
+        if self.local_keeper.as_deref() == Some(name) {
+            slug(self.origin.id.trim_start_matches("place-"))
+        } else {
+            self.prefix()
+        }
+    }
+
     /// The serialized size of the place.
     pub(in crate::gameplay) fn stored_bytes(&self) -> usize {
         serde_json::to_vec(self).map_or(usize::MAX, |bytes| bytes.len())
+    }
+
+    /// Brings an over-long generated place under the stored bound by dropping whole optional
+    /// lines, never cutting a sentence: preserve the three required knowledge lines for each
+    /// person and every declared stall, then reduce other scenery to the minimum of four.
+    /// The model does not keep to a length
+    /// asked of it (2026-10-24: a four-person gate came back ~3.6k characters every time).
+    pub(in crate::gameplay) fn compact_to_fit(&mut self) {
+        while self.stored_bytes() > MAXIMUM_PLACE_BYTES {
+            if let Some(person) = self
+                .people
+                .iter_mut()
+                .filter(|person| person.knowledge.len() > 3)
+                .max_by_key(|person| person.knowledge.len())
+            {
+                person.knowledge.pop();
+            } else if self.things.len() > 4
+                && let Some(index) = self.things.iter().rposition(|thing| {
+                    !self
+                        .stalls
+                        .iter()
+                        .any(|stall| name_key(&stall.name) == name_key(&thing.name))
+                })
+            {
+                self.things.remove(index);
+            } else {
+                return;
+            }
+        }
     }
 
     /// The scene model and the cast this place stands for. Deterministic: the same record always
@@ -271,14 +344,18 @@ impl PlaceRecord {
         let mut offers = Vec::new();
         let mut services = Vec::new();
         for person in &self.people {
-            let id = format!("{prefix}-{}", slug(&person.name));
+            let id = format!(
+                "{}-{}",
+                self.person_prefix(&person.name),
+                slug(&person.name)
+            );
             let attitude = match person.attitude.as_str() {
                 "friendly" => StartingAttitude::Friendly,
                 "indifferent" => StartingAttitude::Indifferent,
                 "hostile" => StartingAttitude::Hostile,
                 _ => return Err(PlaceRefusal::InvalidPlace),
             };
-            let gender = Gender::from_table(&person.gender).ok_or(PlaceRefusal::InvalidPlace)?;
+            let gender = person.gender;
             let name = person.name.trim().to_owned();
             let role = person.role.trim().to_owned();
             people.push(ScenePerson {
@@ -287,7 +364,14 @@ impl PlaceRecord {
                 role: role.clone(),
                 description: person.description.trim().to_owned(),
                 relation_to_speaker: cut(&format!("a local at {}", self.name.trim()), 100),
-                position: person.position.trim().to_owned(),
+                position: self
+                    .stalls
+                    .iter()
+                    .find(|stall| stall.keeper == person.name)
+                    .map_or_else(
+                        || person.position.trim().to_owned(),
+                        |stall| format!("at the {}, {}", stall.name, stall.position),
+                    ),
                 aliases: if role == name {
                     vec![name.clone()]
                 } else {
@@ -308,7 +392,7 @@ impl PlaceRecord {
                     })
                     .collect(),
                 wants: person.wants.trim().to_owned(),
-                coin_cp: 0,
+                coin_cp: person.purse_cp,
                 passive_perception: 10,
             });
             cast.push(SceneCastMember {
@@ -319,7 +403,7 @@ impl PlaceRecord {
                 portrait: art_contract::CANONICAL_PHOTO.to_owned(),
                 voice: "an even, plain adult voice".to_owned(),
                 gender: Some(gender),
-                age: Some(Age::Adult),
+                age: Some(person.age.unwrap_or(Age::Adult)),
                 stat_block: Some(
                     person
                         .stat_block
@@ -330,7 +414,11 @@ impl PlaceRecord {
             });
         }
         for ware in &self.wares {
-            let seller_id = format!("{prefix}-{}", slug(&ware.seller));
+            let seller_id = format!(
+                "{}-{}",
+                self.person_prefix(&ware.seller),
+                slug(&ware.seller)
+            );
             let offer_id = format!("{seller_id}-ware-{}", slug(&ware.name));
             offers.push(SceneOffer {
                 id: offer_id.clone(),
@@ -343,7 +431,11 @@ impl PlaceRecord {
             });
         }
         for service in &self.services {
-            let provider_id = format!("{prefix}-{}", slug(&service.provider));
+            let provider_id = format!(
+                "{}-{}",
+                self.person_prefix(&service.provider),
+                slug(&service.provider)
+            );
             services.push(SceneService {
                 id: format!("{provider_id}-service-{}", slug(&service.name)),
                 provider_id,
@@ -427,7 +519,7 @@ impl PlaceRecord {
             || !within(&self.name, 40)
             || !within(&self.short, 80)
             || !within(&self.narration, 260)
-            || !within(&self.greeting, 120)
+            || !(self.speaker.is_empty() && self.greeting.is_empty() || within(&self.greeting, 120))
             || !within(&self.origin.id, 96)
             || !within(&self.origin.name, 64)
             || !within(&self.origin.time_of_day, 32)
@@ -436,8 +528,47 @@ impl PlaceRecord {
             || self.landmarks.len() > MAXIMUM_LANDMARKS
             || !(2..=MAXIMUM_PEOPLE).contains(&self.people.len())
             || !(4..=5).contains(&self.things.len())
+            || self
+                .local_spot
+                .as_ref()
+                .is_some_and(|look| !within(look, 60))
         {
             return Err(invalid);
+        }
+        if self.stalls.len() > 5
+            || self.market && self.local_spot.is_none() && !(3..=5).contains(&self.stalls.len())
+            || self.local_keeper.as_ref().is_some_and(|keeper| {
+                self.local_spot.is_none()
+                    || !self.people.iter().any(|person| person.name == *keeper)
+            })
+        {
+            return Err(invalid);
+        }
+        let mut stall_names = std::collections::BTreeSet::new();
+        let mut keepers = std::collections::BTreeSet::new();
+        for stall in &self.stalls {
+            if !within(&stall.name, 32)
+                || !within(&stall.position, 32)
+                || !self
+                    .things
+                    .iter()
+                    .any(|thing| name_key(&thing.name) == name_key(&stall.name))
+                || !stall_names.insert(name_key(&stall.name))
+                || !keepers.insert(name_key(&stall.keeper))
+                || !self
+                    .people
+                    .iter()
+                    .any(|person| person.name == stall.keeper && person.purse_cp > 0)
+                || !(2..=4).contains(
+                    &self
+                        .wares
+                        .iter()
+                        .filter(|ware| ware.seller == stall.keeper)
+                        .count(),
+                )
+            {
+                return Err(invalid);
+            }
         }
         let prefix = self.prefix();
         let mut ids: Vec<String> = Vec::new();
@@ -452,7 +583,8 @@ impl PlaceRecord {
                 || !within(&person.description, 110)
                 || !within(&person.position, 32)
                 || !within(&person.wants, 60)
-                || person.knowledge.len() != 3
+                || person.purse_cp > MAXIMUM_PURSE_CP
+                || !(1..=3).contains(&person.knowledge.len())
                 || person.knowledge.iter().any(|line| !within(line, 80))
                 || slug(&person.name).is_empty()
             {
@@ -555,10 +687,11 @@ impl PlaceRecord {
             }
             landmarks.push(key);
         }
-        if !self
-            .people
-            .iter()
-            .any(|person| person.name.trim() == self.speaker.trim())
+        if !(self.speaker.is_empty() && self.greeting.is_empty())
+            && !self
+                .people
+                .iter()
+                .any(|person| person.name.trim() == self.speaker.trim())
         {
             return Err(invalid);
         }
@@ -642,6 +775,40 @@ pub(in crate::gameplay) fn created(
         }
     }
     Ok(places)
+}
+
+/// Stable binding for a model-named spot, never a parse of a player's words.
+pub(in crate::gameplay) fn spot_exit(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(name_key(name).as_bytes());
+    format!("{SPOT_PREFIX}{}", super::journey::hex(&digest[..12]))
+}
+
+/// Spots already admitted in this place. Reusing their binding prevents another copy on return.
+pub(in crate::gameplay) fn spots_here(
+    state: &GameState,
+    here: &str,
+) -> Result<Vec<KnownPlace>, RepositoryError> {
+    let places = created(state)?;
+    let mut spots = Vec::new();
+    for (_, entry) in entries(state)? {
+        if entry.change.from == here
+            && entry.change.exit.starts_with(SPOT_PREFIX)
+            && !spots
+                .iter()
+                .any(|spot: &KnownPlace| spot.id == entry.change.to)
+        {
+            let record = places
+                .get(&entry.change.to)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            spots.push(KnownPlace {
+                id: record.place_id.clone(),
+                name: record.name.clone(),
+                short: record.short.clone(),
+            });
+        }
+    }
+    Ok(spots)
 }
 
 /// The ids of every place the story itself owns: the settings of the pack's scenes.
@@ -863,7 +1030,14 @@ pub(in crate::gameplay) fn landmarks_here(
     here: &str,
 ) -> Result<Vec<LandmarkDraft>, RepositoryError> {
     let made = created(state)?;
-    let Some(record) = made.get(here) else {
+    let initial = super::adventure::free_roam::world();
+    let record = made.get(here).or_else(|| {
+        initial
+            .as_ref()
+            .filter(|world| world.gate.place_id == here)
+            .map(|world| &world.gate)
+    });
+    let Some(record) = record else {
         return Ok(Vec::new());
     };
     let mut taken: Vec<String> = story_places()
@@ -1061,9 +1235,11 @@ fn way_back(origin: &PlaceOrigin) -> SceneWayOut {
     }
 }
 
-/// What the table is told when the party moves, from the committed move alone.
-pub(in crate::gameplay) fn arrival_line(hero: &str, exit_name: &str, place_name: &str) -> String {
-    format!("{hero} leads the party through the {exit_name} to {place_name}.")
+/// What the table is told when the party moves, from the committed move alone. The way is not
+/// named: generated ways read as routes ("the road to the market"), so "through the {way} to
+/// {place}" doubled its article and its destination on the TV (2026-10-24).
+pub(in crate::gameplay) fn arrival_line(hero: &str, place_name: &str) -> String {
+    format!("{hero} leads the party to {place_name}.")
 }
 
 /// What the table is told when the party goes back the way it came, from the committed move alone.
@@ -1083,6 +1259,7 @@ pub(in crate::gameplay) struct Admitted {
 }
 
 /// Why a move could not be admitted: a rule refused it, or the checkpoint could not be read.
+#[derive(Debug)]
 pub(in crate::gameplay) enum PlaceFailure {
     Refused(PlaceRefusal),
     State(RepositoryError),
@@ -1126,6 +1303,32 @@ pub(in crate::gameplay) fn admit(
             Destination::Story { .. } => return Err(PlaceRefusal::StoryPlace.into()),
         }
         "a development order".to_owned()
+    } else if exit.starts_with(SPOT_PREFIX) {
+        if to == party.here {
+            return Err(PlaceRefusal::InvalidPlace.into());
+        }
+        match created_place {
+            Some(made) => {
+                if made.origin.id != party.here
+                    || made.local_spot.is_none()
+                    || spot_exit(&made.name) != exit
+                {
+                    return Err(PlaceRefusal::InvalidPlace.into());
+                }
+                admit_new(state, party, to, None, made)?;
+            }
+            None => {
+                let spots = spots_here(state, &party.here)?;
+                let known = spots
+                    .iter()
+                    .find(|spot| spot.id == to)
+                    .ok_or(PlaceRefusal::InvalidPlace)?;
+                if spot_exit(&known.name) != exit {
+                    return Err(PlaceRefusal::InvalidPlace.into());
+                }
+            }
+        }
+        "a nearby spot".to_owned()
     } else if exit == JOURNEY_EXIT {
         // A journey reaches a place the run has, by name, or makes the one new place it heads for.
         if to == party.here {
@@ -1199,6 +1402,37 @@ fn admit_new(
     if known.len() >= MAXIMUM_CREATED_PLACES {
         return Err(PlaceRefusal::RunFull.into());
     }
+    if let Some(keeper_name) = &made.local_keeper {
+        let origin = known
+            .get(&party.here)
+            .cloned()
+            .or_else(|| {
+                super::adventure::free_roam::world()
+                    .filter(|world| world.gate.place_id == party.here)
+                    .map(|world| world.gate)
+            })
+            .ok_or(PlaceRefusal::InvalidPlace)?;
+        let keeper = origin
+            .people
+            .iter()
+            .find(|person| person.name == *keeper_name)
+            .ok_or(PlaceRefusal::InvalidPlace)?;
+        if made.origin.id != party.here
+            || !origin.stalls.iter().any(|stall| {
+                name_key(&stall.name) == name_key(&made.name) && stall.keeper == *keeper_name
+            })
+            || !made.people.contains(keeper)
+            || made.wares
+                != origin
+                    .wares
+                    .iter()
+                    .filter(|ware| ware.seller == *keeper_name)
+                    .cloned()
+                    .collect::<Vec<_>>()
+        {
+            return Err(PlaceRefusal::InvalidPlace.into());
+        }
+    }
     made.validate()?;
     Ok(())
 }
@@ -1238,6 +1472,9 @@ pub(in crate::gameplay) fn plan(
     if from != party.here {
         return Err(PlaceRefusal::NotHere.into());
     }
+    if let Some(reason) = super::place_move::travel_blocker(current)? {
+        return Err(PlaceRefusal::TravelBlocked(reason).into());
+    }
     let admitted = admit(state, &snapshot.model, &party, exit, to, created_place)?;
     let entry = PlaceEntry {
         hero: hero.to_owned(),
@@ -1245,7 +1482,7 @@ pub(in crate::gameplay) fn plan(
             JOURNEY_EXIT => journey_line(hero, &admitted.to_name),
             // The way back is named for the place it leads to, so the place is named once.
             WAY_BACK => return_line(hero, &admitted.to_name),
-            _ => arrival_line(hero, &admitted.exit_name, &admitted.to_name),
+            _ => arrival_line(hero, &admitted.to_name),
         },
         change: PlaceMove {
             from: from.to_owned(),
@@ -1265,7 +1502,10 @@ pub(in crate::gameplay) fn plan(
         .next_sequence()
         .map_err(|_| PlaceRefusal::Refused)?;
     let candidate = super::journey::living_scene::commit_place_move(current, operation, &entry)
-        .map_err(|_| PlaceRefusal::Refused)?;
+        .map_err(|error| {
+            super::actor::record_unavailable("place-commit-candidate", &format!("{error:?}"));
+            PlaceRefusal::Refused
+        })?;
     if candidate.basis().revision != next {
         return Err(PlaceRefusal::Refused.into());
     }
@@ -1292,6 +1532,8 @@ pub(in crate::gameplay) fn plan(
 /// player words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum PlaceRefusal {
+    /// The current story or encounter prevents departure.
+    TravelBlocked(&'static str),
     /// No exit of this place was chosen.
     NoExit,
     /// The exit is shut.
@@ -1319,6 +1561,7 @@ pub(in crate::gameplay) enum PlaceRefusal {
 impl PlaceRefusal {
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
+            Self::TravelBlocked(_) => "travel_blocked",
             Self::NoExit => "no_exit",
             Self::Closed => "exit_closed",
             Self::NotHere => "not_here",

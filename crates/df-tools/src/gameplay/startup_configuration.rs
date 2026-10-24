@@ -2010,6 +2010,7 @@ pub(super) enum AdventureMode {
     Random,
     Campaign,
     MerchantShop,
+    FreeRoam,
 }
 pub(super) struct AdventureInputs {
     pub(super) mode: Result<String, VarError>,
@@ -2109,10 +2110,11 @@ pub(super) fn adventure_settings(
         Some("random") => AdventureMode::Random,
         Some("campaign") => AdventureMode::Campaign,
         Some("merchant-shop") => AdventureMode::MerchantShop,
+        Some("free-roam") => AdventureMode::FreeRoam,
         _ => {
             return Err(AdventureSettingsError {
                 variable: "DF_GAMEPLAY_ADVENTURE",
-                expected: "harbor, random, campaign or merchant-shop",
+                expected: "harbor, random, campaign, merchant-shop or free-roam",
             });
         }
     };
@@ -2199,6 +2201,15 @@ mod adventure_settings_tests {
                 "{mode:?} {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn free_roam_is_an_explicit_adventure_mode() {
+        let mut raw = inputs();
+        raw.mode = Ok("free-roam".into());
+        let settings = adventure_settings(raw, Path::new("/game")).unwrap();
+        assert_eq!(settings.mode, AdventureMode::FreeRoam);
+        assert_eq!(settings.chapter_type, None);
     }
 
     #[test]

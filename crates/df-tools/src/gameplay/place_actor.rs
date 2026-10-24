@@ -25,6 +25,7 @@ use crate::gameplay::{
 /// Everything the owner needs to commit one move.
 pub(in crate::gameplay) struct MoveProposal {
     pub(in crate::gameplay) operation: df_types::OperationId,
+    pub(in crate::gameplay) expected_basis: df_model::checkpoint::Basis,
     /// The place the party leaves; it must be the place it stands in.
     pub(in crate::gameplay) from: String,
     /// The exit of `from` taken, or [`DEV_EXIT`] for a development move to a place the run has.
@@ -71,6 +72,42 @@ fn refused(proposal: &MoveProposal, reason: PlaceRefusal) -> Result<MoveOutcome,
     Ok(MoveOutcome::Refused(reason))
 }
 
+/// A refused journey is still an event at the table. Describe only the known restriction;
+/// generation failure must not invent a collapsed road or another persistent world fact.
+pub(in crate::gameplay) fn publish_travel_refusal(
+    log: &crate::gameplay::table_log::TableLog,
+    reason: PlaceRefusal,
+) {
+    let line = travel_refusal_line(reason);
+    log.push(
+        "Narrator",
+        df_protocol::common::TableRole::Narrator,
+        0,
+        df_protocol::common::TableKind::Action,
+        line,
+    );
+}
+
+pub(in crate::gameplay) fn travel_refusal_line(reason: PlaceRefusal) -> &'static str {
+    match reason {
+        PlaceRefusal::TravelBlocked(reason) => reason,
+        PlaceRefusal::Closed => "The way is closed. You remain where you are.",
+        PlaceRefusal::StoryPlace => {
+            "You have heard of that destination, but have not found a route there from here."
+        }
+        PlaceRefusal::NoExit => "You have not found a way out in that direction.",
+        PlaceRefusal::NotHere => "Your party has already moved on from that departure point.",
+        PlaceRefusal::AlreadyKnown => "You already know that place; take the route back to it.",
+        PlaceRefusal::CreationUnavailable | PlaceRefusal::InvalidPlace | PlaceRefusal::TooLarge => {
+            "You look for a route ahead, but cannot make it out yet. Your party stays together here."
+        }
+        PlaceRefusal::Duplicate => "Your party has already made that journey.",
+        PlaceRefusal::RunFull | PlaceRefusal::Refused => {
+            "Your party cannot set off that way yet. You remain here."
+        }
+    }
+}
+
 impl Actor {
     /// Commits one change of place, or says why not. `Err` is only an authority failure.
     pub(super) fn place_move(
@@ -89,6 +126,9 @@ impl Actor {
         }
         let member = self.dialogue_member(credential)?;
         let current = self.owner.checkpoint().clone();
+        if proposal.expected_basis != current.basis() {
+            return Err(tonic::Status::aborted("the departure's scene changed"));
+        }
         let hero_entity = journey::player_entity(member, &current).map_err(unavailable)?;
         let hero = journey::name(current.state(), hero_entity).map_err(unavailable)?;
         let planned = match place::plan(
@@ -106,7 +146,13 @@ impl Actor {
         };
         let candidate = planned.candidate;
         let (entry, to_name, arrival) = (planned.entry, planned.to_name, planned.arrival);
-        let marker = format!("place-move:{}", journey::hex(proposal.operation.as_bytes()));
+        let marker = format!(
+            "place-move:{}:{}:{}:{}",
+            journey::hex(proposal.operation.as_bytes()),
+            proposal.from,
+            proposal.exit,
+            proposal.to
+        );
         let speaker = current
             .state()
             .characters
@@ -196,5 +242,28 @@ impl Actor {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_actor_travel_refusals_are_visible_and_do_not_expose_generation_errors() {
+        let log = crate::gameplay::table_log::TableLog::new();
+        for reason in [
+            PlaceRefusal::Closed,
+            PlaceRefusal::CreationUnavailable,
+            PlaceRefusal::TravelBlocked("Dain bars the courier's way."),
+        ] {
+            publish_travel_refusal(&log, reason);
+        }
+        let lines = log.lines();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].text.contains("closed"));
+        assert!(lines[1].text.contains("stays together here"));
+        assert!(!lines[1].text.contains("generation"));
+        assert!(lines[2].text.contains("Dain"));
     }
 }

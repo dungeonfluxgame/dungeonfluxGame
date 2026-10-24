@@ -22,6 +22,7 @@ pub(crate) mod dossier_tables;
 #[cfg(test)]
 mod dossier_tests;
 mod expression;
+pub(crate) mod free_roam;
 mod generate;
 mod listener;
 mod mature_overlay;
@@ -43,10 +44,10 @@ use super::{
     pack::{PackFile, TuningFile},
     startup_configuration::ContentRating,
 };
+use df_render::art_contract;
 #[cfg(test)]
 pub(crate) use generate::opening_dressing;
 pub(crate) use generate::{generate, generate_with_prose};
-use df_render::art_contract;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 pub(crate) use tables::{Tables, TablesError};
