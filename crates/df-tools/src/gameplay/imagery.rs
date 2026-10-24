@@ -203,34 +203,43 @@ impl ImageKind {
     }
 }
 
-/// The quality and size a kind is drawn at. Dev play-tests draw plates at backdrop size and medium
-/// quality, rooms and close-ups at low quality, and people at medium so identity references hold;
+/// The provider's smallest accepted picture (`df_providers` image edit validation): sides are
+/// multiples of 16 and the area is at least this many pixels.
+const PROVIDER_MINIMUM_PIXELS: u64 = 655_360;
+
+/// The smallest provider-accepted size with the same shape as `output`.
+fn smallest_like(output: OutputSpec) -> OutputSpec {
+    let area = f64::from(output.width) * f64::from(output.height);
+    let scale = (PROVIDER_MINIMUM_PIXELS as f64 / area).sqrt().min(1.0);
+    let side = |length: u32| ((f64::from(length) * scale / 16.0).ceil() as u32 * 16).max(16);
+    let (mut width, mut height) = (side(output.width), side(output.height));
+    while u64::from(width) * u64::from(height) < PROVIDER_MINIMUM_PIXELS {
+        if width <= height {
+            width += 16;
+        } else {
+            height += 16;
+        }
+    }
+    OutputSpec {
+        width,
+        height,
+        transparent: output.transparent,
+    }
+}
+
+/// The quality and size a kind is drawn at. Dev play-tests draw every kind at low quality and the
+/// smallest size the provider accepts in its shape (owner 2026-10-24: the cheapest dev setting);
 /// production draws everything at the configured quality and full size.
 fn drawn_for(
     profile: super::startup_configuration::ImageryProfile,
     configured: ImageQuality,
-    kind: ImageKind,
+    _kind: ImageKind,
     output: OutputSpec,
 ) -> (ImageQuality, OutputSpec) {
     use super::startup_configuration::ImageryProfile;
     match profile {
         ImageryProfile::Production => (configured, output),
-        ImageryProfile::Dev => match kind {
-            ImageKind::ScenePlate | ImageKind::ScenePlateEdit => (
-                ImageQuality::Medium,
-                if output == OutputSpec::PLATE {
-                    OutputSpec::BACKDROP
-                } else {
-                    output
-                },
-            ),
-            ImageKind::CanonicalRoom | ImageKind::ArtifactCloseUp | ImageKind::SceneRefresh => {
-                (ImageQuality::Low, output)
-            }
-            ImageKind::CanonicalCharacter | ImageKind::CastExpression => {
-                (ImageQuality::Medium, output)
-            }
-        },
+        ImageryProfile::Dev => (ImageQuality::Low, smallest_like(output)),
     }
 }
 
@@ -240,28 +249,21 @@ mod drawn_tests {
     use crate::gameplay::startup_configuration::ImageryProfile;
 
     #[test]
-    fn the_dev_profile_draws_cheaper_plates_rooms_and_close_ups_and_keeps_people() {
+    fn the_dev_profile_draws_every_kind_low_at_the_smallest_accepted_size() {
         let dev = |kind, output| drawn_for(ImageryProfile::Dev, ImageQuality::High, kind, output);
-        assert_eq!(
-            dev(ImageKind::ScenePlate, OutputSpec::PLATE),
-            (ImageQuality::Medium, OutputSpec::BACKDROP)
-        );
-        assert_eq!(
-            dev(ImageKind::ScenePlateEdit, OutputSpec::PLATE),
-            (ImageQuality::Medium, OutputSpec::BACKDROP)
-        );
-        assert_eq!(
-            dev(ImageKind::CanonicalRoom, OutputSpec::BACKDROP),
-            (ImageQuality::Low, OutputSpec::BACKDROP)
-        );
-        assert_eq!(
-            dev(ImageKind::ArtifactCloseUp, OutputSpec::CLOSE_UP),
-            (ImageQuality::Low, OutputSpec::CLOSE_UP)
-        );
-        assert_eq!(
-            dev(ImageKind::CanonicalCharacter, OutputSpec::CUTOUT),
-            (ImageQuality::Medium, OutputSpec::CUTOUT)
-        );
+        let size = |spec: OutputSpec| (spec.width, spec.height);
+        let (quality, plate) = dev(ImageKind::ScenePlate, OutputSpec::PLATE);
+        assert_eq!((quality, size(plate)), (ImageQuality::Low, (1088, 608)));
+        assert_eq!(size(dev(ImageKind::CanonicalRoom, OutputSpec::BACKDROP).1), (1088, 608));
+        assert_eq!(size(dev(ImageKind::ArtifactCloseUp, OutputSpec::CLOSE_UP).1), (944, 704));
+        let (quality, cutout) = dev(ImageKind::CanonicalCharacter, OutputSpec::CUTOUT);
+        assert_eq!((quality, size(cutout)), (ImageQuality::Low, (672, 992)));
+        assert!(cutout.transparent);
+        for spec in [OutputSpec::PLATE, OutputSpec::BACKDROP, OutputSpec::CLOSE_UP, OutputSpec::CUTOUT] {
+            let small = smallest_like(spec);
+            assert!(u64::from(small.width) * u64::from(small.height) >= PROVIDER_MINIMUM_PIXELS);
+            assert!(small.width % 16 == 0 && small.height % 16 == 0);
+        }
         for kind in [ImageKind::ScenePlate, ImageKind::CanonicalRoom, ImageKind::ArtifactCloseUp] {
             assert_eq!(
                 drawn_for(ImageryProfile::Production, ImageQuality::High, kind, OutputSpec::PLATE),
@@ -1420,9 +1422,9 @@ impl Engine {
         use super::startup_configuration::ImageryProfile;
         match (self.profile, self.drawn(kind, OutputSpec::PLATE).0) {
             (ImageryProfile::Production, _) => self.quality_label(),
-            (ImageryProfile::Dev, ImageQuality::Low) => "dev-low",
-            (ImageryProfile::Dev, ImageQuality::Medium) => "dev-medium",
-            (ImageryProfile::Dev, ImageQuality::High) => "dev-high",
+            (ImageryProfile::Dev, ImageQuality::Low) => "dev-min-low",
+            (ImageryProfile::Dev, ImageQuality::Medium) => "dev-min-medium",
+            (ImageryProfile::Dev, ImageQuality::High) => "dev-min-high",
         }
     }
 
