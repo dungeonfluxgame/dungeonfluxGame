@@ -50,13 +50,14 @@ fn roll_notice(journey: &rpc::JourneyView) -> Option<String> {
         return Some(format!("Hit Point Die: {roll}"));
     }
     let combat = journey.combat.as_ref()?;
-    let mut outcomes = combat
+    let mut released_outcomes = combat
         .death_save_outcomes
         .iter()
         .filter(|outcome| outcome.sequence <= combat.released_sequence)
         .collect::<Vec<_>>();
-    outcomes.sort_by_key(|outcome| outcome.sequence);
-    let lines = outcomes.into_iter()
+    released_outcomes.sort_by_key(|outcome| outcome.sequence);
+    let lines = released_outcomes
+        .into_iter()
         .map(|outcome| {
             let (result, explanation, _) = super::combat::death_save_result(outcome);
             format!("{} rolls a Death Saving Throw: d20 {} · {result} — {explanation} · {} successes, {} failures", outcome.actor_name, outcome.attack_die, outcome.death_successes, outcome.death_failures)
@@ -125,11 +126,15 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
 /// The continue choice names its one destination, unless its own wording already does
 /// ("Follow Rowan to the Vestry" needs no "· the Vestry" after it).
 fn continue_label(label: &str, destination: &str) -> String {
-    let named = destination
+    let destination_without_article = destination
         .strip_prefix("the ")
         .or_else(|| destination.strip_prefix("The "))
         .unwrap_or(destination);
-    if named.is_empty() || label.to_lowercase().contains(&named.to_lowercase()) {
+    if destination_without_article.is_empty()
+        || label
+            .to_lowercase()
+            .contains(&destination_without_article.to_lowercase())
+    {
         label.to_owned()
     } else {
         format!("{label} · {destination}")

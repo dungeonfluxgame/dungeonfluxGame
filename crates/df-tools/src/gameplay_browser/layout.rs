@@ -13,9 +13,9 @@ use std::{
 };
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::Element;
-const CLOCK_MS: u32 = 500;
-const REPORT_MS: f64 = 1000.0;
-const MAX_SCAN: usize = 16384;
+const SAMPLE_INTERVAL_MS: u32 = 500;
+const UNCHANGED_REPORT_INTERVAL_MS: f64 = 1000.0;
+const MAXIMUM_SCANNED_ELEMENTS: usize = 16384;
 const MISSING_ARIA_VALUE: &str = "__df_layout_aria_missing__";
 thread_local! {
     static ACTIVE:RefCell<Option<Controller>>=const{RefCell::new(None)};
@@ -31,10 +31,10 @@ struct Controller {
     next_id: u64,
     sample: u64,
     generation: u64,
-    dirty: bool,
-    inflight: bool,
-    last_sent: f64,
-    overflow: usize,
+    is_dirty: bool,
+    report_in_flight: bool,
+    last_sent_ms: f64,
+    overflow_count: usize,
     clock: Option<gloo_timers::callback::Interval>,
 }
 impl Drop for Controller {
@@ -211,10 +211,10 @@ impl Controller {
         let mut candidates = vec![self.root.clone()];
         candidates.extend(aliases);
         let mut rest = Vec::new();
-        let mut overflow = 0;
+        let mut overflow_count = 0;
         for index in 0..nodes.length() {
-            if index as usize >= MAX_SCAN {
-                overflow += 1;
+            if index as usize >= MAXIMUM_SCANNED_ELEMENTS {
+                overflow_count += 1;
                 continue;
             }
             let Some(element) = nodes.item(index).and_then(|n| n.dyn_into::<Element>().ok()) else {
@@ -242,7 +242,7 @@ impl Controller {
             }
             if self.registry.len() >= contract::MAX_ELEMENTS {
                 element.remove_attribute("data-layout-id")?;
-                overflow += 1;
+                overflow_count += 1;
                 continue;
             }
             let known = element
@@ -273,20 +273,20 @@ impl Controller {
             self.apply_visibility(&id, &element)?;
             self.registry.insert(id, element);
         }
-        self.overflow = overflow;
-        self.dirty |= before != self.registry.keys().cloned().collect();
+        self.overflow_count = overflow_count;
+        self.is_dirty |= before != self.registry.keys().cloned().collect();
         self.root
-            .set_attribute("data-layout-overflow", &overflow.to_string())?;
+            .set_attribute("data-layout-overflow", &overflow_count.to_string())?;
         Ok(())
     }
     fn sample(&mut self) -> Result<LayoutReadback, JsValue> {
         let window =
             web_sys::window().ok_or_else(|| JsValue::from_str("layout window unavailable"))?;
-        let width = window
+        let viewport_width_px = window
             .inner_width()?
             .as_f64()
             .ok_or_else(|| JsValue::from_str("layout viewport width unavailable"))?;
-        let height = window
+        let viewport_height_px = window
             .inner_height()?
             .as_f64()
             .ok_or_else(|| JsValue::from_str("layout viewport height unavailable"))?;
@@ -381,9 +381,12 @@ impl Controller {
         let report = LayoutReadback {
             sample: self.sample,
             revision: self.document.revision,
-            viewport: Viewport { width, height },
+            viewport: Viewport {
+                width: viewport_width_px,
+                height: viewport_height_px,
+            },
             elements,
-            overflow: self.overflow,
+            overflow: self.overflow_count,
         };
         report
             .validate()
@@ -453,11 +456,14 @@ pub(super) fn apply(
                 next_id: 0,
                 sample: 0,
                 generation,
-                dirty: true,
-                inflight: false,
-                last_sent: 0.0,
-                overflow: 0,
-                clock: Some(gloo_timers::callback::Interval::new(CLOCK_MS, tick)),
+                is_dirty: true,
+                report_in_flight: false,
+                last_sent_ms: 0.0,
+                overflow_count: 0,
+                clock: Some(gloo_timers::callback::Interval::new(
+                    SAMPLE_INTERVAL_MS,
+                    tick,
+                )),
             });
         }
         let controller = active
@@ -471,9 +477,9 @@ pub(super) fn apply(
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         if controller.stylesheet.text_content().as_deref() != Some(css.as_str()) {
             controller.stylesheet.set_text_content(Some(&css));
-            controller.dirty = true;
+            controller.is_dirty = true;
         }
-        controller.dirty |= document.revision != controller.document.revision;
+        controller.is_dirty |= document.revision != controller.document.revision;
         controller.document = document;
         controller.refresh()?;
         root.set_attribute("data-layout-revision", &revision.to_string())?;
@@ -499,7 +505,10 @@ fn tick() {
         }
         controller.refresh()?;
         let now = js_sys::Date::now();
-        if controller.inflight || (!controller.dirty && now - controller.last_sent < REPORT_MS) {
+        if controller.report_in_flight
+            || (!controller.is_dirty
+                && now - controller.last_sent_ms < UNCHANGED_REPORT_INTERVAL_MS)
+        {
             return Ok(None);
         }
         let Some(client) = controller.client.upgrade() else {
@@ -522,9 +531,9 @@ fn tick() {
                     .map_err(|_| JsValue::from_str("layout page encoding failed"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        controller.inflight = true;
-        controller.dirty = false;
-        controller.last_sent = now;
+        controller.report_in_flight = true;
+        controller.is_dirty = false;
+        controller.last_sent_ms = now;
         controller
             .root
             .set_attribute("data-layout-report", "pending")?;
@@ -588,7 +597,7 @@ fn tick() {
         ACTIVE.with(|active| {
             let mut active = active.borrow_mut();
             if let Some(c) = active.as_mut().filter(|c| c.generation == generation) {
-                c.inflight = false;
+                c.report_in_flight = false;
                 let status = if outcome.is_err() {
                     "failed"
                 } else if c.document.revision == revision {
@@ -632,10 +641,10 @@ mod tests {
             next_id: 0,
             sample: 0,
             generation: 1,
-            dirty: true,
-            inflight: false,
-            last_sent: 0.0,
-            overflow: 0,
+            is_dirty: true,
+            report_in_flight: false,
+            last_sent_ms: 0.0,
+            overflow_count: 0,
             clock: None,
         }
     }
@@ -869,7 +878,7 @@ mod tests {
         }
         c.refresh().unwrap();
         assert_eq!(c.registry.len(), contract::MAX_ELEMENTS);
-        assert!(c.overflow > 0);
+        assert!(c.overflow_count > 0);
         assert!(c.registry.contains_key("dm-overlay"));
         c.document.overrides.insert(
             "dm-overlay".into(),

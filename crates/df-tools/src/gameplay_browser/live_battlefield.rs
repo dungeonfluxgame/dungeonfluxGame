@@ -31,12 +31,12 @@ const DEFAULT_SPLAT_LOD: u32 = 1;
 const DEFAULT_PREVIEW_HEROES: usize = 3;
 const DEFAULT_PREVIEW_ENEMIES: usize = 1;
 /// The most figures per side the preview stands without a layout to seat them.
-const PREVIEW_MAX_PER_SIDE: usize = 6;
+const MAXIMUM_PREVIEW_FIGURES_PER_SIDE: usize = 6;
 /// Standing height of a person-sized hero as staged for the TV, so a person reads
 /// across a room; small creatures keep their own smaller heights.
 const PERSON_HEIGHT_M: f32 = 1.72;
-const BATTLEFIELD_BEAT_LOG_CAP: usize = 32;
-const CARD_LOG_CAP: usize = 40;
+const MAXIMUM_BATTLEFIELD_BEAT_LOG_ENTRIES: usize = 32;
+const MAXIMUM_CARD_LOG_ENTRIES: usize = 40;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
@@ -395,10 +395,10 @@ const PREVIEW_FOE: (&str, &str, &str) = (
 /// How many figures per side a preview can stand on `layout`: what it seats, never fewer than one.
 fn preview_limit(layout: Option<&battle::Layout>) -> usize {
     layout
-        .map_or(PREVIEW_MAX_PER_SIDE, |layout| {
+        .map_or(MAXIMUM_PREVIEW_FIGURES_PER_SIDE, |layout| {
             layout.heroes.len().min(layout.enemies.len())
         })
-        .clamp(1, PREVIEW_MAX_PER_SIDE.max(4))
+        .clamp(1, MAXIMUM_PREVIEW_FIGURES_PER_SIDE.max(4))
 }
 
 /// The preview's heroes (Tobin the fighter, Sylvie the archer, Nimrael, then more of the same
@@ -1415,10 +1415,10 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             // Stills: the figures stand and the stage stays as it is (or orbits, when asked).
             with_preview(|stage| {
                 stage.establish();
-                let named = request
+                let shot_pose = request
                     .shot
                     .and_then(|shot| stage.scene().cameras.get(&shot).copied());
-                if let Some(pose) = request.free_camera.or(named) {
+                if let Some(pose) = request.free_camera.or(shot_pose) {
                     stage.set_camera_pose(pose);
                 }
             });
@@ -2386,7 +2386,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .outcomes
                 .iter()
                 .rev()
-                .take(BATTLEFIELD_BEAT_LOG_CAP)
+                .take(MAXIMUM_BATTLEFIELD_BEAT_LOG_ENTRIES)
                 .map(|outcome| (outcome.sequence, outcome.clone()))
                 .collect();
             if let Some(outcome) = presenting {
@@ -2396,7 +2396,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .outcomes
                 .iter()
                 .rev()
-                .take(BATTLEFIELD_BEAT_LOG_CAP)
+                .take(MAXIMUM_BATTLEFIELD_BEAT_LOG_ENTRIES)
                 .filter_map(|outcome| {
                     outcome
                         .presentation
@@ -3478,7 +3478,7 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
         if let Some(phase_log) = phase_log {
             LIVE.with(|live| {
                 let mut live = live.borrow_mut();
-                if live.battlefield_beat_log.len() >= BATTLEFIELD_BEAT_LOG_CAP {
+                if live.battlefield_beat_log.len() >= MAXIMUM_BATTLEFIELD_BEAT_LOG_ENTRIES {
                     live.battlefield_beat_log.pop_front();
                 }
                 live.battlefield_beat_log.push_back(phase_log);
@@ -4053,7 +4053,7 @@ fn record_card_values(
             .map(|(sequence, ..)| *sequence)
             .max()
             .unwrap_or(0);
-        if live.card_log.len() >= CARD_LOG_CAP {
+        if live.card_log.len() >= MAXIMUM_CARD_LOG_ENTRIES {
             live.card_log.pop_front();
         }
         live.card_log.push_back(format!(

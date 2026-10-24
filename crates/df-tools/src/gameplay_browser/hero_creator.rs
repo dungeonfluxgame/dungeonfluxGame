@@ -73,15 +73,15 @@ impl IdentityDraft {
     }
 
     pub(super) fn to_rpc(&self) -> Result<rpc::HeroIdentity, JsValue> {
-        let field = |id: &str| -> Result<String, JsValue> {
-            let mut fields = self
+        let option_id_for_group = |group_id: &str| -> Result<String, JsValue> {
+            let mut group_choices = self
                 .appearance
                 .iter()
-                .filter(|choice| choice.group_id == id);
-            let choice = fields
+                .filter(|choice| choice.group_id == group_id);
+            let choice = group_choices
                 .next()
                 .ok_or_else(|| JsValue::from_str("Choose all your hero's details."))?;
-            if fields.next().is_some() || choice.option_id.is_empty() {
+            if group_choices.next().is_some() || choice.option_id.is_empty() {
                 return Err(JsValue::from_str("Choose one option for each hero detail."));
             }
             Ok(choice.option_id.clone())
@@ -89,16 +89,16 @@ impl IdentityDraft {
         Ok(rpc::HeroIdentity {
             appearance: Some(rpc::HeroAppearance {
                 public_description: self.public_description.clone(),
-                presentation: field("presentation")?,
-                pronouns: field("pronouns")?,
-                age: field("age")?,
-                build: field("build")?,
-                skin: field("skin")?,
-                hair: field("hair")?,
-                hair_color: field("hair-color")?,
-                eyes: field("eyes")?,
-                mark: field("mark")?,
-                attire: field("attire")?,
+                presentation: option_id_for_group("presentation")?,
+                pronouns: option_id_for_group("pronouns")?,
+                age: option_id_for_group("age")?,
+                build: option_id_for_group("build")?,
+                skin: option_id_for_group("skin")?,
+                hair: option_id_for_group("hair")?,
+                hair_color: option_id_for_group("hair-color")?,
+                eyes: option_id_for_group("eyes")?,
+                mark: option_id_for_group("mark")?,
+                attire: option_id_for_group("attire")?,
             }),
             origin: self.origin.clone(),
             occupation: self.occupation.clone(),

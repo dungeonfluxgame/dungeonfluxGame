@@ -42,12 +42,13 @@ pub(super) fn retain_available(
     groups: &[rpc::JourneyGroup],
     choices: &mut Vec<rpc::JourneyChoice>,
 ) {
-    let selected = choices.clone();
+    let selected_choices = choices.clone();
     choices.retain(|choice| {
         groups.iter().any(|group| {
             group.group_id == choice.group_id
                 && group.options.iter().any(|option| {
-                    option.option_id == choice.option_id && option_available(option, &selected)
+                    option.option_id == choice.option_id
+                        && option_available(option, &selected_choices)
                 })
         })
     });

@@ -177,22 +177,22 @@ pub(super) fn mount(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     listen(&mut listeners, &notebook_sheet, {
         let closing = notebook_sheet.clone();
         move |event| {
-            let outside = event
+            let is_tap_outside_panel = event
                 .target()
                 .and_then(|target| target.dyn_into::<Element>().ok())
                 .is_some_and(|target| target.is_same_node(Some(closing.as_ref())));
-            if outside {
+            if is_tap_outside_panel {
                 let _ = closing.remove_attribute("data-open");
             }
         }
     })?;
     // A tap on the dimmed backdrop, outside the panel, closes the sheet.
     listen(&mut listeners, &sheet, move |event| {
-        let outside = event
+        let is_tap_outside_panel = event
             .target()
             .and_then(|target| target.dyn_into::<Element>().ok())
             .is_some_and(|target| target.is_same_node(Some(closing.as_ref())));
-        if outside {
+        if is_tap_outside_panel {
             let _ = closing.remove_attribute("data-open");
         }
     })?;
@@ -243,14 +243,14 @@ fn notebook_seen(notes: &Element) -> u64 {
 }
 
 fn mark_notebook_seen(notes: &Element) {
-    let latest = notes
+    let latest_order = notes
         .get_attribute("data-latest-order")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or_default();
     if let Some(storage) =
         web_sys::window().and_then(|window| window.session_storage().ok().flatten())
     {
-        let _ = storage.set_item(&notebook_key(notes), &latest.to_string());
+        let _ = storage.set_item(&notebook_key(notes), &latest_order.to_string());
     }
     let _ = notes.remove_attribute("data-unread");
 }
