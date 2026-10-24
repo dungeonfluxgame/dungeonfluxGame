@@ -116,6 +116,10 @@ const SECTIONS: &[(&str, &str, &[Field])] = &[
             ),
             ("picture_quality", "\"low\", \"medium\" or \"high\"."),
             (
+                "picture_profile",
+                "\"production\", or \"dev\" for cheaper play-testing (smaller scene pictures, low-quality rooms and close-ups).",
+            ),
+            (
                 "picture_provider",
                 "\"openai\", or \"flux\" (developer option, needs a fal key).",
             ),

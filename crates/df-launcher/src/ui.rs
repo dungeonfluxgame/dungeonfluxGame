@@ -9,7 +9,7 @@ use crate::{
     saves::{Adventure, SavedGame},
     settings::{
         Animations, ContentRating, DisplayScreen, DisplayTarget, FieldError, FullScreen,
-        PictureProvider, PictureQuality, ServerMode, Settings,
+        PictureProfile, PictureProvider, PictureQuality, ServerMode, Settings,
     },
 };
 
@@ -1448,7 +1448,7 @@ fn settings_page(
         fields.check("choice_hints", "Numbered choices on the display", "Show the numbered choice chips on the table display. Players can still change this during play.", settings.choice_hints),
     );
     let pictures = format!(
-        "<section id=\"pictures\"><h2>Pictures</h2>{}{}{}{}{}{}{}</section>",
+        "<section id=\"pictures\"><h2>Pictures</h2>{}{}{}{}{}{}{}{}</section>",
         fields.check("scene_pictures", "Scene pictures", &format!("Pictures of people and places are made as the story goes.{}", needs(snapshot, &[Credential::Openai])), settings.scene_pictures),
         fields.check("scene_plates", "A picture for every scene", "Each story scene gets a composed picture. Needs scene pictures.", settings.scene_plates),
         fields.radios("picture_quality", "Picture quality", &[
@@ -1459,6 +1459,13 @@ fn settings_page(
             PictureQuality::Low => "low",
             PictureQuality::Medium => "medium",
             PictureQuality::High => "high",
+        }),
+        fields.radios("picture_profile", "Picture cost", &[
+            ("production", "Full", "Every picture at the chosen quality and full size."),
+            ("dev", "Play-testing", "Cheaper: smaller scene pictures, and rooms and close-ups at low quality."),
+        ], match settings.picture_profile {
+            PictureProfile::Production => "production",
+            PictureProfile::Dev => "dev",
         }),
         fields.radios("picture_provider", "Picture service", &[
             ("openai", "OpenAI", "The standard picture service."),
@@ -1808,7 +1815,7 @@ mod tests {
     #[test]
     fn settings_save_round_trips_and_errors_keep_the_page() {
         let (app, data) = app("settings");
-        let body = b"game_port=64001&database_port=55517&display=browser&display_screen=main&full_screen=never&animations=follow-windows&content_rating=restrained&picture_quality=low&picture_provider=openai&server_mode=managed&storyteller=on";
+        let body = b"game_port=64001&database_port=55517&display=browser&display_screen=main&full_screen=never&animations=follow-windows&content_rating=restrained&picture_quality=low&picture_profile=dev&picture_provider=openai&server_mode=managed&storyteller=on";
         let saved = handle(&app, "POST", "/settings", body);
         assert_eq!(saved.location.as_deref(), Some("/settings?saved=1"));
         let page = text(&handle(&app, "GET", "/settings", b""));

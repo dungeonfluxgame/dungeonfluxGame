@@ -164,6 +164,12 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
             "DF_GAMEPLAY_MUSIC_CACHE".into(),
             path(play.join("music-cache")),
         ),
+        // Hand-tuned TV values (zoom, margins, focus, thinking), kept across restarts and read on
+        // every display load, so changing them needs no rebuild.
+        (
+            "DF_GAMEPLAY_DISPLAY_TUNING".into(),
+            path(play.join("display-tuning.css")),
+        ),
     ];
     if let Some(public) = &launch.network.public_url {
         environment.push(("DF_GAMEPLAY_PUBLIC_URL".into(), public.clone()));

@@ -50,6 +50,8 @@ scene_pictures = true
 scene_plates = true
 # "low", "medium" or "high".
 picture_quality = "medium"
+# "production", or "dev" for cheaper play-testing (smaller scene pictures, low-quality rooms and close-ups).
+picture_profile = "production"
 # "openai", or "flux" (developer option, needs a fal key).
 picture_provider = "openai"
 # Hero portraits during character creation. Needs OpenAI and Jev keys.

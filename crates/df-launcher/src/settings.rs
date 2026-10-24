@@ -80,6 +80,16 @@ pub enum PictureQuality {
     High,
 }
 
+/// How much pictures cost to draw: `dev` is for play-testing (smaller scene pictures, low-quality
+/// rooms and close-ups); `production` draws every picture at `picture_quality` and full size.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PictureProfile {
+    #[default]
+    Production,
+    Dev,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PictureProvider {
@@ -123,6 +133,7 @@ pub struct Settings {
     pub scene_pictures: bool,
     pub scene_plates: bool,
     pub picture_quality: PictureQuality,
+    pub picture_profile: PictureProfile,
     pub picture_provider: PictureProvider,
     pub creator_portraits: bool,
     pub creator_alternate_route: bool,
@@ -166,6 +177,7 @@ impl Default for Settings {
             scene_pictures: true,
             scene_plates: true,
             picture_quality: PictureQuality::Medium,
+            picture_profile: PictureProfile::Production,
             picture_provider: PictureProvider::Openai,
             creator_portraits: false,
             creator_alternate_route: false,
@@ -312,6 +324,16 @@ impl Settings {
             ],
         )
         .unwrap_or(self.picture_quality);
+        next.picture_profile = choice(
+            form,
+            "picture_profile",
+            &mut errors,
+            &[
+                ("production", PictureProfile::Production),
+                ("dev", PictureProfile::Dev),
+            ],
+        )
+        .unwrap_or(self.picture_profile);
         next.picture_provider = choice(
             form,
             "picture_provider",
@@ -399,6 +421,14 @@ impl Settings {
                     PictureQuality::Low => "low",
                     PictureQuality::Medium => "medium",
                     PictureQuality::High => "high",
+                }
+                .to_owned(),
+            ),
+            (
+                "DF_GAMEPLAY_IMAGERY_PROFILE",
+                match self.picture_profile {
+                    PictureProfile::Production => "production",
+                    PictureProfile::Dev => "dev",
                 }
                 .to_owned(),
             ),
@@ -520,6 +550,7 @@ mod tests {
             ("content_rating", "mature"),
             ("storyteller", "on"),
             ("picture_quality", "medium"),
+            ("picture_profile", "production"),
             ("picture_provider", "openai"),
             ("server_mode", "managed"),
         ];
