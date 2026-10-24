@@ -28,7 +28,7 @@ body:has(.tv-stage){overflow:hidden}
 .tv-code{font-size:var(--fs-code);letter-spacing:.08em;line-height:1.05;color:#f6dca4;padding-left:.08em;white-space:nowrap}
 .tv-hint{margin:0;font:italic var(--fs-label)/1.3 var(--serif);color:#b8c5d2;text-shadow:none}
 
-.tv-party{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u)*1.2)}
+.tv-party{display:grid;grid-template-columns:repeat(var(--seats,6),minmax(0,1fr));gap:calc(var(--u)*1.2)}
 .tv-card{display:grid;grid-template-columns:auto minmax(0,1fr);gap:calc(var(--u)*1.2);align-items:center;padding:calc(var(--u)*.3) calc(var(--u)*.8);border-width:calc(var(--u)*1.1)}
 .tv-roster .tv-card{background:linear-gradient(135deg,#142133d9,#0a111ce6)}
 .tv-card[data-empty]{opacity:.6}
@@ -38,6 +38,10 @@ body:has(.tv-stage){overflow:hidden}
 .tv-portrait-img{position:absolute;inset:0;background-size:cover;background-position:center 18%}
 .tv-portrait-img[style*="documentary-photo"],.tv-bigcard-crest[style*="documentary-photo"]{background-size:240% auto;background-position:50% 0}
 .tv-roster .tv-portrait{width:calc(var(--u)*7.6)}
+/* In a scene the cast portraits are full-figure cut-outs (head near the top, about a tenth of the
+   height): the speaker card and party strip zoom to head and shoulders with the head near the middle
+   (owner 2026-10-24: the portrait cut heads off and showed a tiny full figure). */
+.tv-stage[data-tv-mode=scene] :is(.tv-lower,.tv-speaker,.tv-partybar) .tv-portrait-img:not([style*="documentary-photo"]){background-size:200% auto;background-position:54% -7%}
 .tv-member-name{font-size:var(--fs-name);line-height:1.2;overflow-wrap:anywhere}
 .tv-member-role{font:italic var(--fs-label)/1.3 var(--serif);color:#c9bb9b;text-shadow:none}
 .tv-member-status{font:var(--fs-label)/1.3 var(--serif);color:#e4c38b;text-shadow:none}
@@ -52,12 +56,19 @@ body:has(.tv-stage){overflow:hidden}
 .tv-speaker-name{margin:0 0 calc(var(--u)*.2);font-size:var(--fs-name);font-weight:400;line-height:1.2;letter-spacing:.1em;text-transform:uppercase;color:var(--gold)}
 .tv-quote{margin:0;max-width:44ch;font-size:var(--fs-line);line-height:1.28;font-style:italic;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
 
-.tv-partybar{grid-row:5;justify-self:center}
-.tv-partybar .tv-party{display:flex;gap:calc(var(--u)*1.6)}
-.tv-partybar .tv-card{min-width:calc(var(--u)*21)}
-.tv-partybar .tv-portrait{width:calc(var(--u)*4.6)}
+.tv-partybar{grid-row:5;justify-self:stretch;width:100%}
+.tv-partybar .tv-party{display:grid;grid-template-columns:repeat(var(--seats,6),minmax(0,1fr));gap:calc(var(--u)*.7)}
+.tv-partybar .tv-card{min-width:0;height:calc(var(--u)*5.2);padding:calc(var(--u)*.4) calc(var(--u)*.6);gap:calc(var(--u)*.6);border:1px solid #c9a35f88;border-image:none;border-radius:calc(var(--u)*.35)}
+.tv-partybar .tv-portrait{width:calc(var(--u)*3.2);border-radius:50%}
+.tv-partybar .tv-member-name{font-size:calc(var(--u)*1.2);line-height:1.15;max-height:2.3em;overflow:hidden}
+.tv-partybar .tv-member-status{font-size:calc(var(--u)*1);white-space:nowrap}
 .tv-partybar .tv-member-role{display:none}
 .tv-stage[data-tv-mode=lobby] .tv-partybar{display:none}
+/* The party strip matters in a fight, not in talk (owner 2026-10-24: the whole block, not only the
+   HP text): a minute into a scene without a fight it sinks away, and it returns the moment a fight
+   begins (the selector stops matching). */
+.tv-stage[data-tv-mode=scene][data-battle-state=absent] .tv-partybar{animation:df-party-quiet 1.4s cubic-bezier(.4,0,.2,1) 60s forwards}
+@keyframes df-party-quiet{to{opacity:0;transform:translateY(40%);visibility:hidden}}
 .tv-dock{display:none}
 
 /* The problem toast, shared by both roles; it shows only while it has something to say. */
@@ -137,6 +148,50 @@ DC or AC, verdict), held for its reading time and faded by the line machine. */
 .tv-roll-verdict[data-verdict=failure]{color:#e7a39a}
 /* A stale narrator line must not appear to explain a hero's active roll. */
 .live-screen[data-role=display]:has(.tv-roll) .tv-dm{display:none}
+/* A scene roll owns the lower third (owner 2026-10-24: the text box hides while the dice roll).
+   The scene title, narration box and speaker card step aside; the party bar stays. The roll is one
+   panel where the text box was, below the faces: the dice on the left (the counted die large, a
+   discarded die small and grey), who and what on the right at once, then the sum small and the
+   outcome large when the die lands. Fight rolls keep their own layout (.battlefield, combat panel). */
+/* !important: the narration box's own done-line rule (live_stage.css) forces it visible with a longer selector. */
+.tv-stage:has(> .tv-roll) :is(.tv-stagebox,.tv-caption-lane,.tv-headline,.tv-scene-context){opacity:0!important;visibility:hidden!important;transition:opacity .25s ease,visibility 0s .25s}
+.tv-stage>.tv-roll{--roll-face:"Sitka Banner","Palatino Linotype","Book Antiqua",var(--serif);--roll-glow:#e8cb94;top:auto;bottom:calc(4.5vh + var(--u)*7.2);transform:translateX(-50%);flex-direction:row;gap:calc(var(--u)*2.4);width:min(calc(var(--u)*64),92vw);box-sizing:border-box;padding:calc(var(--u)*.9) calc(var(--u)*2.4) calc(var(--u)*.9) calc(var(--u)*1.4);background:linear-gradient(100deg,#060c15f4,#0d1824f0 55%,#060c15ea);border:1px solid #c9a35f8c;border-radius:calc(var(--u)*.5);box-shadow:0 1.2vh 4vh #000c,inset 0 1px 0 #f3dfb022;animation:df-roll-rise .5s cubic-bezier(.2,.9,.25,1) both;transition:border-color .5s ease .2s,box-shadow .6s ease .2s}
+@keyframes df-roll-rise{from{opacity:0;transform:translate(-50%,calc(var(--u)*2.2)) scale(.97)}to{opacity:1;transform:translateX(-50%)}}
+@keyframes df-roll-sink{to{opacity:0;transform:translate(-50%,calc(var(--u)*1.4))}}
+.tv-stage>.tv-roll[data-phase=closing]{animation:df-roll-sink .36s ease forwards}
+/* A gold hairline draws across the top edge as the panel arrives. */
+.tv-stage>.tv-roll::before{content:"";position:absolute;left:6%;right:6%;top:-1px;height:2px;background:linear-gradient(90deg,transparent,#f3d898 30%,#fff1c8 50%,#f3d898 70%,transparent);transform-origin:50% 50%;animation:df-roll-sweep .9s cubic-bezier(.3,.8,.2,1) .1s both}
+@keyframes df-roll-sweep{from{transform:scaleX(0);opacity:0}40%{opacity:1}to{transform:scaleX(1);opacity:.85}}
+/* The outcome's light: a soft glow behind the verdict, green-gold for success, ember for failure. */
+.tv-stage>.tv-roll::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(ellipse 34% 90% at 86% 55%,color-mix(in srgb,var(--roll-glow) 26%,transparent),transparent 70%);opacity:0;transition:opacity .7s ease .3s}
+.tv-stage>.tv-roll[data-succeeded=true]{--roll-glow:#9fd38a}
+.tv-stage>.tv-roll[data-succeeded=false]{--roll-glow:#e2765f}
+.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing])::after{opacity:1}
+.tv-stage>.tv-roll[data-succeeded=true]:is([data-phase=result],[data-phase=closing]){border-color:#a9cf95b0;box-shadow:0 1.2vh 4vh #000c,0 0 3.2vh #9fd38a2e,inset 0 1px 0 #f3dfb022}
+.tv-stage>.tv-roll[data-succeeded=false]:is([data-phase=result],[data-phase=closing]){border-color:#d98c7c99;box-shadow:0 1.2vh 4vh #000c,0 0 3.2vh #e2765f26,inset 0 1px 0 #f3dfb022}
+.tv-stage>.tv-roll>*{position:relative;z-index:1}
+.tv-stage>.tv-roll .tv-roll-dice{position:relative;flex:none;display:grid;grid-template-columns:auto auto;grid-template-rows:calc(var(--u)*10) auto;align-items:center;justify-items:center;column-gap:calc(var(--u)*.6);row-gap:calc(var(--u)*.4);min-width:calc(var(--u)*15)}
+/* The clip's square is mostly margin (the die fills about 42%): a 24u square shows a die of about 10u. */
+.tv-stage>.tv-roll .tv-die{--die-size:calc(var(--u)*24);grid-row:1;flex:none;margin:calc(var(--u)*-7) calc(var(--u)*-6.5);transition:filter .6s ease}
+.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) .tv-die:not([data-kept="false"]){filter:drop-shadow(0 0 1.6vh color-mix(in srgb,var(--roll-glow) 45%,transparent))}
+.tv-stage>.tv-roll .tv-die[data-kept="false"]{--die-size:calc(var(--u)*15);margin:calc(var(--u)*-4.4) calc(var(--u)*-4.2);opacity:.38;filter:grayscale(1) brightness(.75)}
+.tv-stage>.tv-roll[data-dice] .tv-die[data-kept="true"]::before,.tv-stage>.tv-roll[data-dice] .tv-die[data-kept="true"]::after{content:none}
+.tv-stage>.tv-roll[data-dice="2"] .tv-roll-dice::after{grid-column:1/-1;grid-row:2;position:relative;z-index:1;font:italic 400 clamp(14px,calc(var(--u)*.95),40px)/1.2 var(--roll-face);letter-spacing:.03em;color:#cdbb95;white-space:nowrap;text-shadow:0 1px 6px #000}
+.tv-stage>.tv-roll[data-mode=disadvantage] .tv-roll-dice::after{content:'Disadvantage · lower die counts'}
+.tv-stage>.tv-roll[data-mode=advantage] .tv-roll-dice::after{content:'Advantage · higher die counts'}
+.tv-stage>.tv-roll .tv-roll-card{flex:1;min-width:0;max-width:none;margin:0;padding:0;text-align:left;background:none;border:0;border-radius:0;box-shadow:none;opacity:1;transform:none;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:calc(var(--u)*2);row-gap:calc(var(--u)*.35);align-items:baseline;align-content:center}
+.tv-stage>.tv-roll .tv-roll-label{grid-column:1/3;font:600 clamp(22px,calc(var(--u)*1.75),80px)/1.15 var(--roll-face);letter-spacing:.02em;color:#f1dfb4;text-shadow:0 2px 10px #000;animation:df-roll-label .55s cubic-bezier(.2,.9,.25,1) .18s both}
+@keyframes df-roll-label{from{opacity:0;transform:translateX(calc(var(--u)*-1))}to{opacity:1;transform:none}}
+.tv-stage>.tv-roll .tv-roll-sum{grid-column:1;margin:0;font:500 clamp(20px,calc(var(--u)*1.55),72px)/1.2 var(--roll-face);font-variant-numeric:lining-nums tabular-nums;letter-spacing:.02em;color:#d9cfb8;opacity:0}
+.tv-stage>.tv-roll .tv-roll-verdict{grid-column:2;grid-row:2;align-self:end;margin:0;font:700 clamp(36px,calc(var(--u)*3.6),160px)/1 var(--roll-face);letter-spacing:.1em;opacity:0}
+.tv-stage>.tv-roll .tv-roll-verdict[data-verdict=success]{color:#cfe8b4;text-shadow:0 0 2.4vh #9fd38a66,0 2px 10px #000}
+.tv-stage>.tv-roll .tv-roll-verdict[data-verdict=failure]{color:#f0a493;text-shadow:0 0 2.4vh #e2765f59,0 2px 10px #000}
+.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) .tv-roll-sum{animation:df-roll-sum .45s cubic-bezier(.2,.9,.25,1) both}
+@keyframes df-roll-sum{from{opacity:0;transform:translateY(calc(var(--u)*.6))}to{opacity:1;transform:none}}
+/* The outcome lands like a stamp: large and soft, then hard and settled. */
+.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) .tv-roll-verdict{animation:df-roll-stamp .62s cubic-bezier(.2,.9,.2,1) .18s both}
+@keyframes df-roll-stamp{0%{opacity:0;transform:scale(1.65);filter:blur(7px);letter-spacing:.32em}55%{opacity:1;transform:scale(.96);filter:blur(0);letter-spacing:.08em}100%{opacity:1;transform:none;filter:none;letter-spacing:.1em}}
+@media (prefers-reduced-motion:reduce){.tv-stage>.tv-roll,.tv-stage>.tv-roll::before,.tv-stage>.tv-roll .tv-roll-label{animation-duration:.01s}.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) :is(.tv-roll-sum,.tv-roll-verdict){animation:df-roll-sum .3s ease both}}
 /* FIGHT-001: on the flat stage the dice join the roll panel in flow, so they never cover
 its text and never hide behind it. The panel is a flex column; the dice ride centered
 above its entries. */
@@ -200,3 +255,64 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
 .tv-kill-shot[hidden]{display:none}
 .tv-kill-shot-clip{width:100%;height:100%;object-fit:cover;display:block}
 .tv-kill-shot-caption{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);color:#efe6ce;font:calc(var(--u)*2.4)/1.2 var(--serif);letter-spacing:.04em;text-align:center;text-shadow:0 2px 12px rgba(0,0,0,.85);pointer-events:none}
+/* The sound control: with no words beside it (sound on or muted) the button is the glyph alone, so
+   the empty label and its gap go and the speaker sits in the optical middle (its waves make the
+   drawing heavier on the right of its box). !important: the control's own inline style sets them. */
+.tv-voice-icon{display:flex;align-items:center;justify-content:center}
+.tv-voice-label:empty{display:none}
+.tv-voice-control:has(.tv-voice-label:empty){gap:0!important;justify-content:center;padding:.45em .9em!important}
+.tv-voice-control[data-voice-state=on] .tv-voice-icon svg{transform:translateX(.06em)}
+/* The sword marks an action in a fight; outside one (looking, browsing, haggling) the italic
+   action style is enough, and a sword reads as a threat (owner screenshot 2026-10-24). */
+.tv-stage[data-battle-state=absent] .tv-bubble[data-kind=action] .tv-bubble-text::before{content:none}
+/* The check card follows the scene roll, so it speaks the roll panel's language (owner 2026-10-24:
+   the two looked too different): the same navy glass, gold hairline and display face, a gold kept
+   die, the outcome set like the roll's verdict, and the border tinted by the outcome. */
+.tv-stage .tv-check-result{--check-soot:#08111b;--check-walnut:#0d1824;--check-ash:#e6dcc3;--check-bronze:#c9a35f;--check-face:"Sitka Banner","Palatino Linotype","Book Antiqua",var(--serif);position:relative;border:1px solid #c9a35f8c;border-radius:calc(var(--u)*.5);background:linear-gradient(100deg,#060c15f4,#0d1824f0 55%,#060c15ea);box-shadow:0 1.2vh 4vh #000c,inset 0 1px 0 #f3dfb022}
+.tv-stage .tv-check-result::before{content:"";position:absolute;z-index:1;left:6%;right:6%;top:-1px;height:2px;background:linear-gradient(90deg,transparent,#f3d898 30%,#fff1c8 50%,#f3d898 70%,transparent);pointer-events:none;animation:df-roll-sweep .9s cubic-bezier(.3,.8,.2,1) .1s both}
+.tv-stage .tv-check-result[data-check-managed]{animation:df-check-rise .45s cubic-bezier(.2,.9,.25,1) backwards}
+@keyframes df-check-rise{from{opacity:0;transform:translateY(calc(var(--u)*1.4))}to{opacity:1;transform:none}}
+.tv-stage .tv-check-hero{font:italic 400 max(20px,calc(var(--u)*1.2))/1.1 var(--check-face);color:#cdbb95}
+.tv-stage .tv-check-intention{font:600 max(26px,calc(var(--u)*1.8))/1.18 var(--check-face);letter-spacing:.01em;color:#f1dfb4;text-shadow:0 2px 10px #000}
+.tv-stage .tv-check-skill,.tv-stage .tv-check-mode{font:400 max(18px,calc(var(--u)*1.15))/1.3 var(--check-face);color:#cdbb95}
+.tv-stage .tv-check-roll{border-inline-start:1px solid #c9a35f40;background:radial-gradient(ellipse 80% 70% at 50% 45%,#e8cb941a,transparent 75%)}
+.tv-stage .tv-check-die-label,.tv-stage .tv-check-equation{font-family:var(--check-face);color:#cdbb95}
+.tv-stage .tv-check-die{font-family:var(--check-face)}
+.tv-stage .tv-check-die[data-kept]{color:#0b1521;filter:drop-shadow(0 0 1.2vh #e8cb9455)}
+.tv-stage .tv-check-die[data-kept]::before{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M50 2 93 26v48L50 98 7 74V26Z M50 2 22 68h56Z M7 26l15 42-15 6m86-48L78 68l15 6M22 68l28 30 28-30' fill='none' stroke='%230b1521' stroke-opacity='.4' stroke-width='1.3'/%3E%3C/svg%3E") center/100% 100%,linear-gradient(145deg,#fff1c8,#e8cb94 45%,#a8833f)}
+.tv-stage .tv-check-die[data-kept]::after{font-family:var(--check-face);font-style:italic;color:#cdbb95}
+.tv-stage .tv-check-total{font:700 max(30px,calc(var(--u)*2.1))/1 var(--check-face);color:#f7efdc}
+.tv-stage .tv-check-resolution{border-top:1px solid #c9a35f40;background:linear-gradient(180deg,#0b152199,#060c1566)}
+.tv-stage .tv-check-outcome{font:700 max(26px,calc(var(--u)*1.75))/1 var(--check-face);letter-spacing:.1em;text-transform:uppercase;color:#cfe8b4;text-shadow:0 0 2.4vh #9fd38a66,0 2px 10px #000}
+.tv-stage .tv-check-result[data-succeeded=false] .tv-check-outcome{color:#f0a493;text-shadow:0 0 2.4vh #e2765f59,0 2px 10px #000}
+.tv-stage .tv-check-result[data-check-managed]:is([data-check-phase=result],[data-check-phase=closing]) .tv-check-outcome{animation:df-roll-stamp .62s cubic-bezier(.2,.9,.2,1) both}
+.tv-stage .tv-check-result[data-succeeded=true]:is([data-check-phase=result],[data-check-phase=closing]){border-color:#a9cf95b0}
+.tv-stage .tv-check-result[data-succeeded=false]:is([data-check-phase=result],[data-check-phase=closing]){border-color:#d98c7c99}
+.tv-stage .tv-check-finding{font:400 var(--fs-label)/1.38 var(--check-face);color:#ece3cc}
+@media (prefers-reduced-motion:reduce){.tv-stage .tv-check-result::before,.tv-stage .tv-check-result[data-check-managed]{animation-duration:.01s}.tv-stage .tv-check-result[data-check-managed]:is([data-check-phase=result],[data-check-phase=closing]) .tv-check-outcome{animation:none}}
+/* The sound control waits for the mouse: hidden until it moves, shown for 15 s after the last
+   movement, then faded (owner 2026-10-24). live_voice.rs flips data-pointer between a and b on
+   movement so the animation restarts; keyboard focus always shows it. !important: the control's
+   inline style sets its opacity. */
+.tv-voice-control:not([data-pointer]){opacity:0!important;visibility:hidden}
+.tv-voice-control[data-pointer=a]{animation:df-sound-awake-a 15.8s linear forwards}
+.tv-voice-control[data-pointer=b]{animation:df-sound-awake-b 15.8s linear forwards}
+@keyframes df-sound-awake-a{0%,94.9%{opacity:.92;visibility:visible}100%{opacity:0;visibility:hidden}}
+@keyframes df-sound-awake-b{0%,94.9%{opacity:.92;visibility:visible}100%{opacity:0;visibility:hidden}}
+.tv-voice-control:focus-visible{opacity:.92!important;visibility:visible!important;animation:none}
+/* The stage never scrolls (owner screenshot 2026-10-24: a black band mid-screen). Hidden figure
+   sprites reach below the window, and `overflow:hidden` still lets focus or scrollIntoView move the
+   stage: it had scrolled 93px, lifting the plate and opening a gap above the bottom letterbox bar.
+   `clip` clips the same way and forbids any scrolling. */
+.tv-stage{overflow:clip}
+/* The party mural (owner 2026-10-24, lane HS49 makes the image once per session): while a scene's
+   plate is still being made and none is on screen, the whole party hangs framed like a gallery print
+   on the dark stage: a warm pool of light, a dark mat with a double gold rule, a slow settle on entry
+   and the gentlest breathing while it waits; the plate's arrival cross-fades it away. */
+.tv-mural{position:absolute;inset:0;z-index:5;display:grid;place-items:start center;padding-top:calc(5vh + var(--u)*6);box-sizing:border-box;pointer-events:none;opacity:0;visibility:hidden;background:radial-gradient(ellipse 58% 52% at 50% 40%,#2b2215 0%,#121820 55%,#05080d 100%);transition:opacity .9s ease,visibility 0s .9s}
+.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural{opacity:1;visibility:visible;transition:opacity 1.4s ease,visibility 0s}
+.tv-mural-art{display:block;height:min(58vh,calc(80vw*9/16));aspect-ratio:16/9;object-fit:cover;border:1px solid #e8cb94b3;outline:1px solid #e8cb9447;outline-offset:calc(var(--u)*.7);box-shadow:0 0 0 calc(var(--u)*1.5) #0d131b,0 0 0 calc(var(--u)*1.58) #c9a35f66,0 3vh 9vh #000d,0 0 14vh #e8cb941f;filter:saturate(.92) contrast(1.04)}
+.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural-art{animation:df-mural-settle 1.8s cubic-bezier(.2,.8,.2,1) both,df-mural-breathe 16s ease-in-out 1.8s infinite alternate}
+@keyframes df-mural-settle{from{opacity:0;transform:scale(1.035)}to{opacity:1;transform:none}}
+@keyframes df-mural-breathe{to{transform:scale(1.018)}}
+@media (prefers-reduced-motion:reduce){.tv-stage[data-tv-mode=scene][data-mural=ready][data-plate-loading]:not([data-plate-key]) .tv-mural-art{animation:df-mural-settle .01s both}}

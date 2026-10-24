@@ -19,7 +19,8 @@
 .tv-plate-loading::before{content:'';width:calc(var(--u)*.7);height:calc(var(--u)*.7);border:1px solid #e8cb94b3;border-right-color:transparent;border-radius:50%;animation:df-plate-loading-turn 1.8s linear infinite}
 .tv-stage[data-tv-mode=scene][data-plate-loading] .tv-plate-loading{opacity:.82;visibility:visible;transition:opacity .55s ease,visibility 0s}
 @keyframes df-plate-loading-turn{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.tv-plate-loading::before{animation:none}.tv-plate-loading{transition:none}}
+/* The spinner is the only sign the scene is still coming, so it keeps turning, slower, under reduced motion. */
+@media (prefers-reduced-motion:reduce){.tv-plate-loading::before{animation-duration:2.8s}.tv-plate-loading{transition:none}}
 .tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
 .tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:none}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
@@ -132,8 +133,16 @@
    box speaking. */
 .tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1);transform:scale(var(--plate-scale));transition:transform var(--plate-zoom-duration) var(--plate-zoom-ease),transform-origin var(--plate-zoom-duration) var(--plate-zoom-ease)}
 .tv-stage:has(.tv-bubble[data-line-state=speaking],.tv-lower[data-line-state=speaking]) .tv-plate-zoom{--plate-scale:1.16;--plate-zoom-duration:6s;--plate-zoom-ease:cubic-bezier(.16,1,.3,1)}
-.tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1)}
+/* The narrator's turn pulls the camera slowly back past the resting frame (owner 2026-10-24); the
+   image's own drift scale (1.07+) keeps every edge covered at .98. */
+.tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{--plate-scale:.98;--plate-zoom-duration:8s;--plate-zoom-ease:cubic-bezier(.22,.6,.3,1)}
 .tv-stage[data-shot=plate] .tv-plate-img{animation:df-plate-drift 47s ease-in-out infinite alternate}
+/* A held camera: the faintest uneven sway on the frame, under the image's slow drift, so the picture
+   breathes like a shot rather than a still (owner 2026-10-24). Off with reduced motion or drift off. */
+.tv-stage[data-shot=plate] .tv-plate-frame{animation:df-plate-handheld 9.7s ease-in-out infinite}
+@keyframes df-plate-handheld{0%,100%{transform:translate(0,0) rotate(0)}17%{transform:translate(.12%,-.08%) rotate(.03deg)}33%{transform:translate(-.06%,.1%) rotate(-.02deg)}52%{transform:translate(.09%,.05%) rotate(.04deg)}71%{transform:translate(-.11%,-.04%) rotate(-.03deg)}86%{transform:translate(.04%,.09%) rotate(.01deg)}}
+.tv-stage[data-fx-drift=off][data-shot=plate] .tv-plate-frame{animation:none}
+@media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-frame{animation:none}}
 .tv-stage[data-shot=plate] .tv-plate-img[data-i="1"]{animation-duration:53s;animation-direction:alternate-reverse}
 @keyframes df-plate-drift{0%{transform:scale(1.07) translate(-1.4%,-.6%) rotate(-.25deg)}50%{transform:scale(1.1) translate(.4%,.7%) rotate(.1deg)}100%{transform:scale(1.08) translate(1.4%,-.4%) rotate(.3deg)}}
 .tv-plate-vignette::before,.tv-plate-vignette::after{content:'';position:absolute;inset:0;pointer-events:none}

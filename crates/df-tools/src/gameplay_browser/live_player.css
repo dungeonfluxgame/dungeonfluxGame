@@ -163,3 +163,46 @@ main .client.display{background:transparent}
 .client.player .dialogue-recovery[data-typed] .talk-hold{min-height:44px;padding:8px 12px;background:#0a0e12;border-color:#555c61;font-size:15px}
 .client.player .live-dock .say-more{margin-top:0}
 .client.player .df-exploration .exploration-actions:has(.exploration-choices:empty){display:none}
+
+/* Phone, tablet and desktop (2026-10-24). Phones keep one column under the scene. Tablets stack the speaker
+   above the choices and let the choices share rows instead of crushing them into slivers. Desktops put the
+   talk box beside the hero sheet and float the tabs as a dock under the content. The scene is only as tall
+   as what it holds, so nothing leaves a dead band between the choices and the talk box. */
+.client.player .df-exploration{min-height:auto}
+.client.player .df-exploration .exploration-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
+.client.player .df-exploration .exploration-choice button{min-height:52px;line-height:1.3;text-wrap:balance}
+/* Look around: the finding picker and the button share a row that wraps, the picker always readable. */
+.client.player .offered-action{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
+.client.player .offered-action .attack-option{display:flex;flex-direction:column;gap:5px;flex:1 1 220px;min-width:0;font:13px/1.3 var(--serif);color:#cfc3a8}
+.client.player .offered-action select{width:100%;min-height:46px;padding:0 12px;border:1px solid #c9a35f66;border-radius:6px;background:#0b1520;color:#f3ead6;font:16px var(--serif)}
+.client.player .offered-action button.offered{flex:1 1 220px}
+/* Small labels never under 12px. */
+.client.player .overline,.client.player .join-roster-heading,.client.player .join-presence,.client.player .join-readiness{font-size:12px}
+/* The library's save note: a short pill at the top instead of a loose line under the page. */
+.client.player>.hero-library-status{position:fixed;z-index:36;left:50%;top:14px;translate:-50% 0;max-width:min(440px,calc(100% - 32px));margin:0;padding:9px 16px;border:1px solid #c9a35f88;border-radius:999px;background:#080f19f2;color:#f3ead6;font:13px/1.3 var(--serif);text-align:center;box-shadow:0 10px 30px #000a;pointer-events:none;animation:library-note 5s ease forwards}
+.client.player>.hero-library-status:empty{display:none}
+@keyframes library-note{0%{opacity:0;translate:-50% -8px}8%,82%{opacity:1;translate:-50% 0}100%{opacity:0;translate:-50% -8px;visibility:hidden}}
+@media(prefers-reduced-motion:reduce){.client.player>.hero-library-status{animation-duration:.01s;animation-delay:5s}}
+/* Tablets: the speaker above the choices, full width each. Sheets become a centred panel. */
+@media(min-width:701px){
+  .live-sheet{inset:0;align-items:center;justify-content:center;padding:24px 24px calc(96px + env(safe-area-inset-bottom))}
+  .live-sheet-panel{width:min(640px,100%);max-height:min(82vh,860px);border:1px solid #c9a35f88;border-radius:16px;box-shadow:0 30px 80px #000c}
+}
+@media(min-width:701px) and (max-width:1099px){
+  .client.player .df-exploration .exploration-interaction{grid-template-columns:minmax(0,1fr)}
+  .client.player .live-dock{width:min(720px,92%)}
+}
+/* Desktops: two columns under the scene (talking and acting on the left, the hero sheet on the right, held
+   in view) and the tabs as a floating dock. */
+@media(min-width:1100px){
+  .client.player .live-dock{width:min(1240px,92%);display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,400px);column-gap:28px;align-items:start}
+  .client.player .live-dock>*{grid-column:1;min-width:0}
+  .client.player .live-dock>.live-sheet-inline{grid-column:2;grid-row:1/span 8;position:sticky;top:16px;max-height:calc(100svh - 128px);overflow:auto;margin-top:12px;scrollbar-width:thin}
+  .client.player .live-tabs{left:50%;right:auto;bottom:16px;translate:-50% 0;width:min(560px,calc(100% - 32px));padding:6px;border:1px solid #c9a35f66;border-radius:16px;background:#070c13e8;backdrop-filter:blur(10px);box-shadow:0 18px 44px #000b}
+  .client.player{padding-bottom:calc(110px + env(safe-area-inset-bottom))}
+  /* Say it stays inside its box; pinning it above the phone tab bar only matters on phones. */
+  .client.player .dialogue-controls{position:static}
+}
+/* The Menu and Notes sheets keep their Close inside the panel (the full character sheet's Close is the
+   fixed one in live_combat/style.rs). */
+.client.player .live-sheet-panel>.live-sheet-close{position:static;inset:auto;width:100%;margin-top:14px;padding:10px 18px;border:1px solid #555c61;border-radius:6px;background:#0a0e12;color:var(--df-film-ivory);font:16px var(--serif)}
