@@ -7,6 +7,7 @@ use df_types::{AccountId, CampaignId, OperationId};
 use super::{CampaignService, Ports, refuse};
 use crate::{
     audit::{AuditLine, failure_word},
+    draft::{DraftRow, DraftStepData},
     errors::{Outcome, Refusal},
     records::{CampaignRow, ContentRating, NewCampaign, RoomCodes},
     roles::Delegations,
@@ -43,16 +44,7 @@ impl<P: Ports> CampaignService<P> {
         }
         // Creating is a change like any other: the per-account limit comes before any read.
         self.change_allowed(account)?;
-        let Some(profile) = self.inner.accounts.profile(account).await? else {
-            return refuse(Refusal::NotFound);
-        };
-        if !profile.status.is_active() {
-            return refuse(Refusal::AccountClosing);
-        }
-        // A verified creator always has a tenant; both are checked here, not by a foreign key.
-        let (true, Some(tenant)) = (profile.verified, profile.tenant) else {
-            return refuse(Refusal::NotAllowed);
-        };
+        let tenant = self.verified_creator(account).await?;
         let fingerprint = tagged_digest(
             "df-campaign create fingerprint v1",
             format!(
@@ -82,6 +74,129 @@ impl<P: Ports> CampaignService<P> {
                 fingerprint,
                 self.now_ms(),
             )
+            .await;
+        match &result {
+            Ok(created) => AuditLine::new("CAMPAIGN", "created")
+                .campaign(created.id)
+                .actor(account)
+                .reason("ok")
+                .ms(started.elapsed().as_millis())
+                .emit("campaign.created"),
+            Err(failure) => AuditLine::new("CAMPAIGN", "refused")
+                .actor(account)
+                .reason(failure_word(*failure))
+                .emit("campaign.refused"),
+        }
+        result
+    }
+
+    /// The creator's tenant. A creator is an active account with a verified email, and a verified
+    /// creator always has a tenant; both are checked here, not by a foreign key. An unverified
+    /// email is its own refusal so the screen can offer B's resend.
+    async fn verified_creator(&self, account: AccountId) -> Outcome<df_types::TenantId> {
+        let Some(profile) = self.inner.accounts.profile(account).await? else {
+            return refuse(Refusal::NotFound);
+        };
+        if !profile.status.is_active() {
+            return refuse(Refusal::AccountClosing);
+        }
+        if !profile.verified {
+            return refuse(Refusal::EmailUnverified);
+        }
+        match profile.tenant {
+            Some(tenant) => Ok(tenant),
+            None => refuse(Refusal::NotAllowed),
+        }
+    }
+
+    /// Starting a draft and saving a step share one per-account limit.
+    fn draft_save_allowed(&self, account: AccountId) -> Outcome<()> {
+        let result = self
+            .inner
+            .throttles
+            .draft_saves
+            .attempt(account, self.now_ms());
+        self.window_outcome(result, "CAMPAIGN", "campaign.draft_saturated")
+    }
+
+    /// Step 0 of the wizard: a draft with the defaults, at step 1.
+    pub async fn start_draft(&self, account: AccountId) -> Outcome<DraftRow> {
+        self.draft_save_allowed(account)?;
+        let tenant = self.verified_creator(account).await?;
+        let result = self
+            .inner
+            .store
+            .start_draft(account, tenant, self.now_ms())
+            .await;
+        match &result {
+            Ok(_) => AuditLine::new("CAMPAIGN", "draft_started")
+                .actor(account)
+                .reason("ok")
+                .emit("campaign.draft_started"),
+            Err(failure) => AuditLine::new("CAMPAIGN", "refused")
+                .actor(account)
+                .reason(failure_word(*failure))
+                .emit("campaign.refused"),
+        }
+        result
+    }
+
+    pub async fn get_draft(&self, account: AccountId, draft: CampaignId) -> Outcome<DraftRow> {
+        self.inner
+            .store
+            .get_draft(account, draft, self.now_ms())
+            .await
+    }
+
+    /// Saves one step. A step is validated before anything is read, so an invalid body costs no
+    /// transaction.
+    pub async fn save_draft_step(
+        &self,
+        account: AccountId,
+        draft: CampaignId,
+        data: DraftStepData,
+    ) -> Outcome<DraftRow> {
+        data.validate(&self.inner.tunables)
+            .map_err(crate::errors::Failure::Refused)?;
+        self.draft_save_allowed(account)?;
+        self.verified_creator(account).await?;
+        let result = self
+            .inner
+            .store
+            .save_draft_step(account, draft, data, self.now_ms())
+            .await;
+        match &result {
+            Ok(saved) => AuditLine::new("CAMPAIGN", "step_saved")
+                .campaign(saved.id)
+                .actor(account)
+                .reason("ok")
+                .emit("campaign.step_saved"),
+            Err(failure) => AuditLine::new("CAMPAIGN", "refused")
+                .actor(account)
+                .reason(failure_word(*failure))
+                .emit("campaign.refused"),
+        }
+        result
+    }
+
+    /// Flips a finished draft to an active campaign. Idempotent by operation id.
+    pub async fn finish_draft(
+        &self,
+        account: AccountId,
+        draft: CampaignId,
+        operation: OperationId,
+    ) -> Outcome<CampaignRow> {
+        let started = Instant::now();
+        self.change_allowed(account)?;
+        self.verified_creator(account).await?;
+        let fingerprint = tagged_digest(
+            "df-campaign finish fingerprint v1",
+            draft.as_bytes().as_slice(),
+        );
+        let result = self
+            .inner
+            .store
+            .finish_draft(account, draft, operation, fingerprint, self.now_ms())
             .await;
         match &result {
             Ok(created) => AuditLine::new("CAMPAIGN", "created")

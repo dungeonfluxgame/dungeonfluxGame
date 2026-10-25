@@ -6,7 +6,9 @@
 mod campaigns;
 mod display;
 mod invites;
+mod lobby;
 mod members;
+mod views;
 
 use std::{net::IpAddr, sync::Arc};
 
@@ -28,6 +30,10 @@ use crate::{
 pub use crate::throttles::{IpKeys, KeysRefusal, ServiceKeys, ip_keys};
 pub use campaigns::CreateCampaign;
 pub use display::{Challenge, RedeemedTicket};
+pub use lobby::{LobbySeatView, LobbyView, StartOutcome};
+pub use views::{
+    Dashboard, DashboardEntry, LiveSession, Overview, RosterEntry, SessionReading, Tab,
+};
 
 /// The collaborators of the service, bundled so signatures stay short.
 pub trait Ports: Send + Sync + 'static {
@@ -82,6 +88,8 @@ pub enum CapabilityDecision {
 pub struct DevCampaigns {
     pub by_status: Vec<(String, u64)>,
     pub saturated_refusals: Vec<(&'static str, u64)>,
+    /// For each address layer, the distinct address prefixes that fill its tight map in one window.
+    pub sizing: Vec<crate::config::LayerSizing>,
 }
 
 impl DevCampaigns {
@@ -93,6 +101,17 @@ impl DevCampaigns {
         text.push_str("throttle layers: refusals because the map was full\n");
         for (layer, count) in &self.saturated_refusals {
             text.push_str(&format!("  {layer}: {count}\n"));
+        }
+        text.push_str(
+            "address layers: prefixes that fill the tight map in one window
+",
+        );
+        for item in &self.sizing {
+            text.push_str(&format!(
+                "  {}: {} (loose limit {})
+",
+                item.layer, item.prefixes_to_fill_tight, item.loose_limit
+            ));
         }
         text
     }
@@ -156,6 +175,9 @@ impl<P: Ports> CampaignService<P> {
             GateRefusal::Throttled => "throttled",
             GateRefusal::Saturated => "saturated",
         });
+        if refusal == GateRefusal::Saturated {
+            line = line.alert();
+        }
         if let Some(keys) = keys {
             line = line.ip_hash(&keys.tight);
         }
@@ -182,6 +204,28 @@ impl<P: Ports> CampaignService<P> {
         )
     }
 
+    /// The answer for a per-key window (a limit keyed by an account, a pairing or a ticket): the
+    /// caller sees `Throttled` either way, and a refusal because the map was full is an alert line.
+    /// An ordinary throttle is not audited per request.
+    fn window_outcome(
+        &self,
+        result: Result<(), GateRefusal>,
+        family: &'static str,
+        saturated_event: &'static str,
+    ) -> Outcome<()> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(GateRefusal::Throttled) => refuse(Refusal::Throttled),
+            Err(GateRefusal::Saturated) => {
+                AuditLine::new(family, "refused")
+                    .reason("saturated")
+                    .alert()
+                    .emit(saturated_event);
+                refuse(Refusal::Throttled)
+            }
+        }
+    }
+
     /// A per-account limit on a change; `Throttled` when spent.
     fn change_allowed(&self, account: AccountId) -> Outcome<()> {
         let result = self
@@ -189,11 +233,7 @@ impl<P: Ports> CampaignService<P> {
             .throttles
             .member_changes
             .attempt(account, self.now_ms());
-        if result.is_ok() {
-            Ok(())
-        } else {
-            refuse(Refusal::Throttled)
-        }
+        self.window_outcome(result, "CAMPAIGN", "campaign.change_saturated")
     }
 
     // ---- Authority -------------------------------------------------------------------------
@@ -311,6 +351,7 @@ impl<P: Ports> CampaignService<P> {
         Ok(DevCampaigns {
             by_status: self.inner.store.campaign_counts().await?,
             saturated_refusals: self.inner.throttles.saturation_report(),
+            sizing: self.inner.tunables.throttle_sizing(),
         })
     }
 }

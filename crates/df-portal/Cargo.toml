@@ -1,0 +1,37 @@
+[package]
+name = "df-portal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-customer = { path = "../df-customer" }
+df-account-app = { path = "../df-account-app" }
+df-observe = { path = "../df-observe" }
+df-types = { path = "../df-types" }
+axum = { version = "0.8", default-features = false, features = ["form", "json", "query", "http1", "tokio", "matched-path"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "net"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-customer = { path = "../df-customer", features = ["test-fakes"] }
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal"] }
+tower = { version = "0.5", features = ["util"] }
+
+[features]
+dev-routes = []
+test-fakes = ["df-customer/test-fakes"]
+
+[[example]]
+name = "account_app_preview"
+path = "examples/account_app_preview.rs"
+required-features = ["test-fakes"]
+
+[[example]]
+name = "portal_preview"
+path = "examples/portal_preview.rs"
+required-features = ["dev-routes", "test-fakes"]

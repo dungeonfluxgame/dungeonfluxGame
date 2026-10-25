@@ -1,0 +1,509 @@
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+
+use super::fixtures::{Browser, Harness, ORIGIN};
+use crate::app_api::{ids::hex, ports::Actor};
+
+async fn actor(browser: &Browser<'_>, name: &str) -> Actor {
+    Actor {
+        account: browser.account_id().await,
+        display_name: name.to_owned(),
+        is_verified: true,
+    }
+}
+
+/// Robin hosts "The Lantern Road"; returns the campaign id.
+async fn host_with_campaign(harness: &Harness) -> (Browser<'_>, String) {
+    let mut robin = harness.browser();
+    robin.sign_up_verified("robin@example.test").await;
+    let who = actor(&robin, "Robin").await;
+    let campaign = harness
+        .ports
+        .campaigns
+        .seed_campaign(&who, "The Lantern Road");
+    (robin, hex(campaign.as_bytes()))
+}
+
+async fn invite(host: &mut Browser<'_>, campaign: &str, kind: &str) -> Value {
+    let operation = host.operation().await;
+    host.post(
+        &format!("/app/api/campaigns/{campaign}/invitations"),
+        &json!({"kind": kind, "operation": operation}),
+    )
+    .await
+    .json()
+}
+
+fn token_of(link: &str) -> String {
+    link.split_once("#token=").unwrap().1.to_owned()
+}
+
+async fn accept(browser: &mut Browser<'_>, token: Option<&str>) -> super::fixtures::Reply {
+    let operation = browser.operation().await;
+    browser
+        .post(
+            "/app/api/join/accept",
+            &json!({"token": token, "operation": operation}),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn another_accounts_campaign_and_lobby_are_not_found_exactly_like_missing_ones() {
+    let harness = Harness::new().await;
+    let (mut robin, campaign) = host_with_campaign(&harness).await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(crate::app_api::ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let session = hex(session.as_bytes());
+    assert_eq!(
+        robin
+            .get(&format!("/app/api/campaigns/{campaign}"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    let missing = "ab".repeat(16);
+    let paths = [
+        (
+            format!("/app/api/campaigns/{campaign}"),
+            format!("/app/api/campaigns/{missing}"),
+        ),
+        (
+            format!("/app/api/sessions/{session}/lobby"),
+            format!("/app/api/sessions/{missing}/lobby"),
+        ),
+    ];
+    for (foreign, absent) in paths {
+        let foreign = sam.get(&foreign).await;
+        let absent = sam.get(&absent).await;
+        assert_eq!(foreign.status, StatusCode::NOT_FOUND);
+        assert_eq!(foreign.body, absent.body);
+    }
+    let dashboard = sam.get("/app/api/campaigns").await.json();
+    assert_eq!(dashboard["campaigns"], json!([]));
+}
+
+#[tokio::test]
+async fn the_wizard_creates_a_campaign_from_a_saved_draft_once_per_operation() {
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("robin@example.test").await;
+    let catalog = host.get("/app/api/campaigns/new").await.json();
+    assert_eq!(catalog["maximum_seats"], json!(6));
+    let draft = host
+        .post("/app/api/campaigns/drafts", &json!({}))
+        .await
+        .json();
+    let draft_id = draft["draft_id"].as_str().unwrap().to_owned();
+    assert_eq!(draft["step"], json!(1));
+    let mut body = draft["draft"].clone();
+    let finish = |operation: String| json!({ "operation": operation });
+    let operation = host.operation().await;
+    let incomplete = host
+        .post(
+            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
+            &finish(operation),
+        )
+        .await;
+    assert_eq!(
+        incomplete.json()["refusal"],
+        json!("campaign_name_required")
+    );
+    body["name"] = json!("The Lantern Road");
+    body["adventure_id"] = json!("lantern-road");
+    body["content_rating"] = json!("teen");
+    for step in 1..=5 {
+        let saved = host
+            .send(
+                super::fixtures::Req::new(
+                    axum::http::Method::PUT,
+                    &format!("/app/api/campaigns/drafts/{draft_id}/steps/{step}"),
+                )
+                .json(&json!({ "draft": body })),
+            )
+            .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        assert_eq!(saved.json()["step"], json!(step));
+    }
+    let operation = host.operation().await;
+    let created = host
+        .post(
+            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
+            &finish(operation.clone()),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let again = host
+        .post(
+            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
+            &finish(operation),
+        )
+        .await;
+    assert_eq!(again.json(), created.json());
+    let dashboard = host.get("/app/api/campaigns").await.json();
+    assert_eq!(dashboard["campaigns"].as_array().unwrap().len(), 1);
+    assert_eq!(dashboard["campaigns"][0]["role"], json!("host"));
+    let out_of_range = host
+        .send(
+            super::fixtures::Req::new(
+                axum::http::Method::PUT,
+                &format!("/app/api/campaigns/drafts/{draft_id}/steps/6"),
+            )
+            .json(&json!({ "draft": body })),
+        )
+        .await;
+    assert_eq!(out_of_range.code(), "not_found");
+}
+
+#[tokio::test]
+async fn an_unverified_account_cannot_start_a_draft() {
+    let harness = Harness::new().await;
+    let mut browser = harness.browser();
+    browser.session().await;
+    let operation = browser.operation().await;
+    browser
+        .post(
+            "/app/api/sign-up",
+            &json!({"email": "robin@example.test", "password": super::fixtures::PASSWORD,
+                "is_adult": true, "accepts_terms": true,
+                "terms_version": df_account_app::wire::CURRENT_TERMS_VERSION,
+                "operation": operation}),
+        )
+        .await;
+    browser
+        .sign_in("robin@example.test", super::fixtures::PASSWORD)
+        .await;
+    assert_eq!(
+        browser.get("/app/api/campaigns").await.json()["can_create"],
+        json!(false)
+    );
+    let reply = browser.post("/app/api/campaigns/drafts", &json!({})).await;
+    assert_eq!(reply.code(), "not_verified");
+}
+
+#[tokio::test]
+async fn an_invitation_link_is_shown_once_and_keeps_its_token_in_the_fragment() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let created = invite(&mut host, &campaign, "player").await;
+    let link = created["link"].as_str().unwrap();
+    assert!(
+        link.starts_with(&format!("{ORIGIN}/app/join#token=")),
+        "{link}"
+    );
+    let token = token_of(link);
+    let overview = host.get(&format!("/app/api/campaigns/{campaign}")).await;
+    assert!(!overview.body.contains(&token));
+    assert_eq!(overview.json()["invitations"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn only_a_host_or_co_host_can_invite() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let link = invite(&mut host, &campaign, "player").await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    assert_eq!(
+        accept(&mut sam, Some(&token_of(&link))).await.status,
+        StatusCode::OK
+    );
+    let refused = invite(&mut sam, &campaign, "player").await;
+    assert_eq!(refused["code"], json!("forbidden"));
+}
+
+#[tokio::test]
+async fn a_held_invitation_survives_sign_in_and_joins_without_the_token_in_a_url() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let link = invite(&mut host, &campaign, "player").await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let token = token_of(&link);
+    let mut guest = harness.browser();
+    guest.session().await;
+    let preview = guest
+        .post("/app/api/join/preview", &json!({"token": token}))
+        .await;
+    assert_eq!(
+        preview.json(),
+        json!({"campaign_name": "The Lantern Road", "host_name": "Robin",
+            "scheduled_at_ms": null, "content_rating": "teen"})
+    );
+    let held = guest
+        .post("/app/api/join/hold", &json!({"token": token}))
+        .await;
+    let cookie = held.set_cookie("__Host-df_join").unwrap();
+    assert!(
+        cookie.contains("HttpOnly") && cookie.contains("Secure") && cookie.contains("Max-Age=3600")
+    );
+    assert_eq!(
+        guest.get("/app/api/join/pending").await.json()["preview"]["campaign_name"],
+        json!("The Lantern Road")
+    );
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    sam.cookies.insert("__Host-df_join".into(), token.clone());
+    let accepted = accept(&mut sam, None).await;
+    assert_eq!(accepted.json()["campaign_id"], json!(campaign));
+    assert!(
+        accepted
+            .set_cookie("__Host-df_join")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    let dashboard = sam.get("/app/api/campaigns").await.json();
+    assert_eq!(dashboard["campaigns"][0]["role"], json!("player"));
+    let again = accept(&mut sam, Some(&token)).await;
+    assert_eq!(again.json()["reason"], json!("already_joined"));
+}
+
+#[tokio::test]
+async fn a_failed_invitation_carries_a_reason_and_never_a_preview() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let created = invite(&mut host, &campaign, "player").await;
+    let token = token_of(created["link"].as_str().unwrap());
+    let mut guest = harness.browser();
+    guest.session().await;
+    let unknown = guest
+        .post("/app/api/join/preview", &json!({"token": "ab".repeat(32)}))
+        .await;
+    let malformed = guest
+        .post("/app/api/join/preview", &json!({"token": "not a token"}))
+        .await;
+    assert_eq!(unknown.json()["reason"], json!("no_longer_valid"));
+    assert_eq!(unknown.body, malformed.body);
+    let operation = host.operation().await;
+    host.post(
+        &format!(
+            "/app/api/campaigns/{campaign}/invitations/{}/revoke",
+            created["invitation_id"].as_str().unwrap()
+        ),
+        &json!({"operation": operation}),
+    )
+    .await;
+    let revoked = guest
+        .post("/app/api/join/preview", &json!({"token": token}))
+        .await;
+    assert_eq!(revoked.json()["reason"], json!("revoked"));
+    for reply in [&unknown, &revoked] {
+        assert!(!reply.body.contains("Lantern") && !reply.body.contains("Robin"));
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    }
+    let second = invite(&mut host, &campaign, "player").await;
+    harness.clock.advance_ms(8 * 24 * 60 * 60 * 1000);
+    let expired = guest
+        .post(
+            "/app/api/join/preview",
+            &json!({"token": token_of(second["link"].as_str().unwrap())}),
+        )
+        .await;
+    assert_eq!(expired.json()["reason"], json!("expired"));
+}
+
+#[tokio::test]
+async fn a_full_table_turns_players_away_but_not_contributors() {
+    let harness = Harness::new().await;
+    let (_host, campaign) = host_with_campaign(&harness).await;
+    let id = crate::app_api::ids::campaign(&campaign).unwrap();
+    for (index, name) in ["Ann", "Bo", "Cy"].iter().enumerate() {
+        let account =
+            df_types::AccountId::from_bytes(&[u8::try_from(index).unwrap() + 1; 16]).unwrap();
+        harness.ports.campaigns.seed_member(
+            id,
+            &Actor {
+                account,
+                display_name: (*name).to_owned(),
+                is_verified: true,
+            },
+            df_account_app::wire_campaign::CampaignRole::Player,
+        );
+    }
+    let player = harness
+        .ports
+        .campaigns
+        .seed_invitation(id, df_account_app::wire_campaign::InvitationKind::Player)
+        .unwrap();
+    let contributor = harness
+        .ports
+        .campaigns
+        .seed_invitation(
+            id,
+            df_account_app::wire_campaign::InvitationKind::Contributor,
+        )
+        .unwrap();
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    assert_eq!(
+        accept(&mut sam, Some(&token_of(&player))).await.json()["reason"],
+        json!("full")
+    );
+    let joined = accept(&mut sam, Some(&token_of(&contributor))).await;
+    assert_eq!(joined.status, StatusCode::OK, "{}", joined.body);
+    assert_eq!(
+        sam.get("/app/api/campaigns").await.json()["campaigns"][0]["role"],
+        json!("contributor")
+    );
+}
+
+#[tokio::test]
+async fn a_room_code_request_waits_for_the_host_to_approve_or_deny() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let operation = host.operation().await;
+    let rotated = host
+        .post(
+            &format!("/app/api/campaigns/{campaign}/code/rotate"),
+            &json!({"operation": operation}),
+        )
+        .await
+        .json();
+    let code = rotated["room_code"]["code"].as_str().unwrap().to_owned();
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    let looked = sam
+        .post(
+            "/app/api/join/code/lookup",
+            &json!({"code": code.to_lowercase()}),
+        )
+        .await;
+    assert_eq!(looked.json()["campaign_name"], json!("The Lantern Road"));
+    let wrong = sam
+        .post("/app/api/join/code/lookup", &json!({"code": "ZZZZ-ZZZZ"}))
+        .await;
+    assert_eq!(wrong.json()["reason"], json!("no_longer_valid"));
+    let operation = sam.operation().await;
+    let request = sam
+        .post(
+            "/app/api/join/code/request",
+            &json!({"code": code, "operation": operation}),
+        )
+        .await;
+    assert_eq!(request.json(), json!({"campaign_name": "The Lantern Road"}));
+    assert_eq!(
+        sam.get("/app/api/campaigns").await.json()["campaigns"],
+        json!([])
+    );
+    let overview = host
+        .get(&format!("/app/api/campaigns/{campaign}"))
+        .await
+        .json();
+    let request_id = overview["join_requests"][0]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let operation = host.operation().await;
+    let approved = host
+        .post(
+            &format!("/app/api/campaigns/{campaign}/requests/{request_id}/approve"),
+            &json!({"role": "player", "operation": operation}),
+        )
+        .await;
+    assert_eq!(approved.json()["members"].as_array().unwrap().len(), 2);
+    assert_eq!(approved.json()["join_requests"], json!([]));
+    assert_eq!(
+        sam.get("/app/api/campaigns").await.json()["campaigns"][0]["role"],
+        json!("player")
+    );
+}
+
+#[tokio::test]
+async fn players_ready_up_and_only_the_host_starts_once_everyone_is_ready() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let operation = host.operation().await;
+    let opened = host
+        .post(
+            &format!("/app/api/campaigns/{campaign}/lobby"),
+            &json!({"operation": operation}),
+        )
+        .await;
+    let session = opened.json()["session_id"].as_str().unwrap().to_owned();
+    let link = invite(&mut host, &campaign, "player").await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    accept(&mut sam, Some(&token_of(&link))).await;
+    let start = |operation: String| json!({ "operation": operation });
+    let lobby_path = format!("/app/api/sessions/{session}/lobby");
+    let operation = sam.operation().await;
+    let by_player = sam
+        .post(&format!("{lobby_path}/start"), &start(operation))
+        .await;
+    assert_eq!(by_player.code(), "forbidden");
+    let operation = host.operation().await;
+    let blocked = host
+        .post(&format!("{lobby_path}/start"), &start(operation))
+        .await;
+    assert_eq!(blocked.code(), "stale_form");
+    let view = host.get(&lobby_path).await.json();
+    assert_eq!(view["start_blockers"], json!(["member_not_ready"]));
+    assert_eq!(view["can_manage"], json!(true));
+    for browser in [&mut host, &mut sam] {
+        let operation = browser.operation().await;
+        let ready = browser
+            .post(&format!("{lobby_path}/ready"), &start(operation))
+            .await;
+        assert_eq!(ready.status, StatusCode::OK, "{}", ready.body);
+    }
+    let operation = sam.operation().await;
+    let microphone = sam
+        .post(
+            &format!("{lobby_path}/microphone"),
+            &json!({"prefers_typing": false, "permission": "declined", "operation": operation}),
+        )
+        .await;
+    assert_eq!(
+        microphone.json()["members"][1]["microphone"],
+        json!("declined")
+    );
+    let operation = host.operation().await;
+    let started = host
+        .post(&format!("{lobby_path}/start"), &start(operation))
+        .await;
+    assert_eq!(started.json()["has_started"], json!(true));
+}
+
+#[tokio::test]
+async fn the_host_cannot_leave_but_a_player_can() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let link = invite(&mut host, &campaign, "player").await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut sam = harness.browser();
+    sam.sign_up_verified("sam@example.test").await;
+    accept(&mut sam, Some(&token_of(&link))).await;
+    let leave = format!("/app/api/campaigns/{campaign}/leave");
+    let operation = host.operation().await;
+    assert_eq!(
+        host.post(&leave, &json!({"operation": operation}))
+            .await
+            .code(),
+        "forbidden"
+    );
+    let operation = sam.operation().await;
+    assert_eq!(
+        sam.post(&leave, &json!({"operation": operation}))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        sam.get("/app/api/campaigns").await.json()["campaigns"],
+        json!([])
+    );
+}

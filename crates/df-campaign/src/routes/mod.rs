@@ -10,11 +10,14 @@
 mod campaigns;
 mod cookies;
 mod display;
+mod drafts;
 mod guard;
 mod joining;
+mod lobby;
 mod request;
 mod responses;
 mod table;
+mod views;
 
 #[cfg(test)]
 mod tests;
@@ -76,6 +79,7 @@ fn mount<P: Ports, G: Guard>(route: &'static RouteSpec) -> MethodRouter<App<P, G
     let filter = match route.verb {
         Verb::Get => MethodFilter::GET,
         Verb::Post => MethodFilter::POST,
+        Verb::Put => MethodFilter::PUT,
     };
     on(
         filter,
@@ -121,6 +125,21 @@ async fn dispatch<P: Ports, G: Guard>(
 async fn handle<P: Ports, G: Guard>(id: RouteId, ctx: &Ctx<'_, P, G>) -> Handled {
     match id {
         RouteId::CreateCampaign => campaigns::create_campaign(ctx).await,
+        RouteId::Dashboard => views::dashboard(ctx).await,
+        RouteId::Overview => views::overview(ctx).await,
+        RouteId::CampaignSettings => views::settings(ctx).await,
+        RouteId::CampaignSessions => views::sessions(ctx).await,
+        RouteId::OpenLobby => lobby::open(ctx).await,
+        RouteId::LobbyView => lobby::view(ctx).await,
+        RouteId::LobbyCharacter => lobby::character(ctx).await,
+        RouteId::LobbyReady => lobby::ready(ctx).await,
+        RouteId::LobbyUnready => lobby::unready(ctx).await,
+        RouteId::LobbyMicrophone => lobby::microphone(ctx).await,
+        RouteId::LobbyStart => lobby::start(ctx).await,
+        RouteId::StartDraft => drafts::start(ctx).await,
+        RouteId::GetDraft => drafts::get(ctx).await,
+        RouteId::SaveDraftStep => drafts::save_step(ctx).await,
+        RouteId::FinishDraft => drafts::finish(ctx).await,
         RouteId::MyMembership => campaigns::my_membership(ctx).await,
         RouteId::Archive => campaigns::archive(ctx).await,
         RouteId::Unarchive => campaigns::unarchive(ctx).await,

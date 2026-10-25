@@ -53,6 +53,13 @@ impl AuditLine {
         self
     }
 
+    /// Marks the line for the operator's alert rule (`alert=yes`). Only the events in
+    /// [`ALERT_EVENTS`] carry it.
+    pub fn alert(mut self) -> Self {
+        self.fields.push(("alert", "yes".to_owned()));
+        self
+    }
+
     /// A closed reason word (`expired`, `throttled`, `ok`, ...), never free text.
     pub fn reason(mut self, reason: &'static str) -> Self {
         self.fields.push(("reason", reason.to_owned()));
@@ -84,6 +91,25 @@ impl AuditLine {
         df_observe::record_audit_line(event, self.text());
     }
 }
+
+/// The audit events that carry `alert=yes`: a throttle layer refused because its map was full of live
+/// windows (a flood of new keys, or a limit set too low for the load). S2's alert rule fires on
+/// the field or on these names; the dev view's saturation counters show the same thing per layer.
+pub const ALERT_EVENTS: [&str; 13] = [
+    "roomcode.saturated",
+    "invite.saturated",
+    "invite.create_saturated",
+    "campaign.change_saturated",
+    "campaign.draft_saturated",
+    "lobby.change_saturated",
+    "lobby.host_saturated",
+    "display.challenge_saturated",
+    "display.status_saturated",
+    "display.ticket_saturated",
+    "display.approval_saturated",
+    "display.redeem_saturated",
+    "display.renew_saturated",
+];
 
 /// The closed reason word of a refusal, for the `refused` lines.
 pub fn refusal_word(refusal: Refusal) -> &'static str {

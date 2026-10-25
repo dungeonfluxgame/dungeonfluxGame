@@ -1,0 +1,24 @@
+[package]
+name = "df-workos"
+description = "The WorkOS User Management adapter behind the account service's identity provider port, and a faithful in-memory WorkOS for tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# The in-memory WorkOS (`FakeWorkOsServer`) for tests of this crate and its consumers.
+test-fakes = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-customer = { path = "../df-customer" }
+df-observe = { path = "../df-observe" }
+base64 = "=0.22.1"
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+serde_json = "=1.0.151"
+tokio = { workspace = true, features = ["rt", "time"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-customer = { path = "../df-customer", features = ["test-fakes"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }

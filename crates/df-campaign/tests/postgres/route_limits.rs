@@ -780,12 +780,12 @@ fn made_up_cookies() -> String {
 #[tokio::test]
 async fn made_up_cookies_cannot_fill_the_redeem_and_renew_windows_and_a_real_pairing_still_redeems()
 {
-    // The per-pairing and per-ticket maps hold eight keys; the address layer would allow a
+    // The id-keyed maps hold sixteen keys; the address layer would allow a
     // thousand calls a minute. Counting a window for every cookie the caller invents would fill
-    // them in eight calls and stop every display for an hour.
+    // them in sixteen calls and stop every display for an hour.
     let tunables = Tunables {
-        throttle_maximum_keys_tight: 8,
-        display_ticket_limit_per_ip_per_minute: 1_000,
+        throttle_maximum_keys_account: 16,
+        display_ticket_limit_per_ip_per_minute: 100,
         ..Tunables::default()
     };
     let site = Site::with_tunables("cookieflood", tunables).await;
@@ -883,5 +883,110 @@ async fn creating_campaigns_is_limited_per_account_before_any_work() {
         "{}",
         third.text
     );
+    site.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_ticket_cookie_with_the_wrong_device_cannot_spend_the_real_displays_renewal_window() {
+    let tunables = Tunables {
+        display_renew_limit_per_ticket_per_hour: 1,
+        display_ticket_limit_per_ip_per_minute: 100,
+        ..Tunables::default()
+    };
+    let site = Site::with_tunables("wrongdevice", tunables).await;
+    let table = table(&site).await;
+    let session = session_id(1);
+    site.sessions
+        .set(session, table.campaign, SessionPhase::Lobby);
+    let (device, ticket) = paired_display(&site, &table, session).await;
+    let renew = |cookie: String| {
+        let site = &site;
+        async move {
+            site.send(
+                Method::POST,
+                "/display/renew",
+                None,
+                Some(&json!({})),
+                &display_headers(cookie),
+            )
+            .await
+        }
+    };
+    // Someone who holds only the ticket cookie, with devices of their own choosing.
+    for _ in 0..5 {
+        let other_device = format!("{DEVICE_COOKIE}={}", random_hex() + &random_hex());
+        let stolen = renew(format!("{other_device}; {ticket}")).await;
+        assert_eq!(stolen.status, StatusCode::FORBIDDEN, "{}", stolen.text);
+    }
+    // The real display's one renewal of the hour is still there: refused by the rules (too
+    // early), not by the window; only its second call is throttled.
+    let both = format!("{device}; {ticket}");
+    assert_eq!(renew(both.clone()).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(renew(both).await.status, StatusCode::TOO_MANY_REQUESTS);
+    site.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_refusal_because_a_map_was_full_is_an_alert_line_and_ordinary_throttles_are_not() {
+    df_observe::install_audit_sink(capture);
+    // One account key fits; the second account's first change finds the map full. One loose address
+    // key fits; a preview from a second prefix finds that map full.
+    let tunables = Tunables {
+        throttle_maximum_keys_account: 1,
+        throttle_maximum_keys_loose: 1,
+        member_change_limit_per_account_per_minute: 1,
+        ..Tunables::default()
+    };
+    let site = Site::with_tunables("saturationalert", tunables).await;
+    let first = site.person(1).await;
+    let second = site.person(2).await;
+    assert_eq!(
+        site.post("/campaigns", first, &create_body("A"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // The first account's second change is an ordinary throttle: no alert.
+    assert_eq!(
+        site.post("/campaigns", first, &create_body("B"))
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(lines_for("campaign.change_saturated").is_empty());
+    let full = site.post("/campaigns", second, &create_body("C")).await;
+    assert_eq!(full.status, StatusCode::TOO_MANY_REQUESTS);
+    let preview = |address: &'static str| {
+        let site = &site;
+        async move {
+            site.send(
+                Method::POST,
+                "/join/preview",
+                None,
+                Some(&json!({"token": "c".repeat(64)})),
+                &[("x-test-ip", address.into())],
+            )
+            .await
+        }
+    };
+    assert_eq!(preview("203.0.113.5").await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        preview("198.51.100.5").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Every saturated line carries the alert field, and its event name is on the alert list.
+    let mut saturated = 0;
+    for (event, line) in lines_for("reason=saturated") {
+        saturated += 1;
+        assert!(line.contains("alert=yes"), "{line}");
+        assert!(
+            df_campaign::audit::ALERT_EVENTS.contains(&event.as_str()),
+            "{event}"
+        );
+    }
+    assert_eq!(saturated, 2);
+    for (_, line) in lines_for("reason=throttled") {
+        assert!(!line.contains("alert=yes"), "{line}");
+    }
     site.cleanup().await;
 }

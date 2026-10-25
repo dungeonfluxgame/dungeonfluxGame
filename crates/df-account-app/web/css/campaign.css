@@ -1,0 +1,145 @@
+/* Campaign screens: the create wizard, overview, join, lobby and the TV's pairing screen.
+   Concatenated after base.css; it only adds rules for what base.css does not already style. */
+
+/* ---------------------------------------------------------------- wizard */
+
+.wizard-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0 0 28px;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--tallow);
+}
+
+.wizard-step {
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+
+/* The current step is bold and underlined as well as named: never colour alone. */
+.wizard-step.is-current {
+  font-weight: 600;
+  color: var(--parchment);
+  border-bottom-color: var(--lantern);
+}
+
+@media (max-width: 640px) {
+  .wizard-steps {
+    flex-direction: column;
+  }
+}
+
+.form > h2 {
+  margin: 0;
+}
+
+.pace-note {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--tallow);
+}
+
+.pace-note .pill {
+  margin-right: 6px;
+}
+
+/* ---------------------------------------------------------------- overview and lobby */
+
+.panel h3 {
+  margin: 22px 0 10px;
+  font-size: 22px;
+}
+
+.panel .actions {
+  margin-top: 16px;
+}
+
+.panel .copy-field {
+  margin-top: 12px;
+}
+
+.member-detail {
+  display: block;
+}
+
+#start-blockers {
+  margin: 0 0 8px;
+  font-family: var(--sans);
+}
+
+.pairing-found {
+  display: grid;
+  gap: 16px;
+}
+
+.pairing-warning {
+  margin: 0;
+  font-family: var(--sans);
+  padding: 12px 16px;
+  background: var(--smoke-2);
+  border-left: 3px solid var(--lantern);
+  border-radius: var(--radius);
+}
+
+.code-small {
+  font-size: 24px;
+  padding: 4px 12px;
+  letter-spacing: 0.1em;
+}
+
+/* ---------------------------------------------------------------- the TV */
+
+.display-screen {
+  text-align: center;
+}
+
+.display-screen .page > h1 {
+  max-width: none;
+  font-size: clamp(36px, 6vw, 80px);
+}
+
+.display-screen .lede {
+  max-width: 40ch;
+  margin-left: auto;
+  margin-right: auto;
+  font-size: clamp(24px, 3vw, 44px);
+}
+
+.display-screen .actions {
+  justify-content: center;
+}
+
+.display-screen .btn {
+  min-height: 72px;
+  padding: 16px 40px;
+  font-size: clamp(24px, 2.6vw, 36px);
+}
+
+.display-code-line {
+  margin: 32px 0;
+}
+
+.display-code {
+  font-size: clamp(56px, 12vw, 180px);
+  padding: 24px 40px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.display-waiting {
+  font-family: var(--sans);
+  font-size: clamp(22px, 2.6vw, 36px);
+  color: var(--tide);
+}
+
+.display-screen .problem {
+  max-width: 40ch;
+  margin: 0 auto;
+  text-align: left;
+  font-size: clamp(22px, 2.6vw, 36px);
+}

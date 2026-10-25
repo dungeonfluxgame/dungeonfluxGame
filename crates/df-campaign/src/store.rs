@@ -12,13 +12,20 @@ use std::future::Future;
 use df_types::{AccountId, CampaignId, MemberId, OperationId, SessionId};
 
 use crate::{
+    draft::{DraftRow, DraftStepData},
     errors::{Outcome, StoreResult},
     ids::{InvitationId, PairingId, ProposalId, RequestId, TicketId},
     join_invitation::JoinRole,
+    lobby::CharacterChoice,
+    lobby_state::{
+        LobbyMemberRow, LobbyRows, MicrophonePreference, MicrophoneReport, SeatedMember,
+        StartReadiness,
+    },
     records::{
-        AccountStatus, CampaignChange, CampaignHead, CampaignRow, CodeRow, DeviceLabel, EventRow,
-        InvitationRow, MemberRow, MemberSnapshot, NewCampaign, OldHostBecomes, PairingRow,
-        RequestRow, RevokeReason, TicketRow, TransferKind,
+        AccountStatus, CampaignChange, CampaignHead, CampaignRow, CodeRow, DashboardRow,
+        DeviceLabel, EventRow, InvitationRow, MemberRow, MemberSnapshot, NewCampaign,
+        OldHostBecomes, OverviewRows, PairingRow, RequestRow, RevokeReason, TicketRow,
+        TransferKind,
     },
     roles::Delegations,
 };
@@ -87,6 +94,26 @@ pub trait SessionDirectory: Send + Sync + 'static {
         &self,
         campaign: CampaignId,
     ) -> impl Future<Output = StoreResult<Option<(SessionId, SessionPhase)>>> + Send;
+
+    /// Opens the campaign's single non-ended session in the lobby state, or returns the one that
+    /// exists. Idempotent.
+    ///
+    /// TODO(S1-03): O1's `open_session`.
+    fn open_session(
+        &self,
+        campaign: CampaignId,
+    ) -> impl Future<Output = StoreResult<(SessionId, SessionPhase)>> + Send;
+
+    /// O1's `Start`, with the seated, authorized members; O1 re-checks authority from the
+    /// database. Called after the funding owner has opened funding (decision 29: finance, then O1).
+    ///
+    /// TODO(S1-03): O1's `Start`.
+    fn start_session(
+        &self,
+        session: SessionId,
+        campaign: CampaignId,
+        roster: &[SeatedMember],
+    ) -> impl Future<Output = StoreResult<()>> + Send;
 }
 
 /// F's side of a membership event. One method, a notification: it has no way to cancel, release
@@ -100,6 +127,23 @@ pub trait FundingDirectory: Send + Sync + 'static {
         campaign: CampaignId,
         event_seq: u64,
     ) -> impl Future<Output = ()> + Send;
+
+    /// F's typed `start_readiness` for a session. The lobby shows it and `decide_start` blocks on
+    /// it; this crate never computes it.
+    ///
+    /// TODO(S1-04): F's real answer.
+    fn start_readiness(
+        &self,
+        campaign: CampaignId,
+        session: SessionId,
+    ) -> impl Future<Output = StoreResult<StartReadiness>> + Send;
+
+    /// F's `open_session_funding`, called before O1's `Start`.
+    fn open_session_funding(
+        &self,
+        campaign: CampaignId,
+        session: SessionId,
+    ) -> impl Future<Output = StoreResult<()>> + Send;
 }
 
 /// O1's three-part owner fence, as the caller presents it.
@@ -262,6 +306,108 @@ pub trait CampaignStore: Send + Sync + 'static {
     fn create_campaign(
         &self,
         new: NewCampaign,
+        operation: OperationId,
+        fingerprint: [u8; 32],
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<CampaignRow>> + Send;
+
+    // Reads for the dashboard and the campaign tabs. Each is one statement on the read pool.
+
+    /// The campaigns the account is an active member of (active and archived, never deleting),
+    /// most recently active first, at most `limit`.
+    fn dashboard_campaigns(
+        &self,
+        account: AccountId,
+        limit: u32,
+    ) -> impl Future<Output = StoreResult<Vec<DashboardRow>>> + Send;
+
+    /// The overview of a campaign for one of its active members; `None` for anyone else and for
+    /// a campaign that is a draft or being deleted.
+    fn campaign_overview(
+        &self,
+        account: AccountId,
+        campaign: CampaignId,
+    ) -> impl Future<Output = StoreResult<Option<OverviewRows>>> + Send;
+
+    // The lobby (8.4). Reads are plain statements; changes lock account, campaign, lobby row.
+
+    /// The seated members with their lobby rows and the live displays of a session; `None` for a
+    /// campaign that is missing or is neither active nor archived.
+    fn lobby_rows(
+        &self,
+        session: SessionId,
+        campaign: CampaignId,
+        now_ms: u64,
+    ) -> impl Future<Output = StoreResult<Option<LobbyRows>>> + Send;
+
+    /// A seated member picks (or clears) their character. Clears ready.
+    fn choose_character(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        choice: CharacterChoice,
+        reference: Option<[u8; 16]>,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<LobbyMemberRow>> + Send;
+
+    /// Ready needs a chosen character.
+    fn set_ready(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        ready: bool,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<LobbyMemberRow>> + Send;
+
+    fn set_microphone(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        preference: MicrophonePreference,
+        report: MicrophoneReport,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<LobbyMemberRow>> + Send;
+
+    // The create wizard (8.1). A draft is a campaign row in the `draft` state with no members and no
+    // events; only its owner reaches it, and every other caller sees it as missing.
+    fn start_draft(
+        &self,
+        owner: AccountId,
+        tenant: df_types::TenantId,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<DraftRow>> + Send;
+
+    fn get_draft(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<DraftRow>> + Send;
+
+    /// The owner's drafts that have not expired, oldest first (the dashboard's "resume").
+    fn list_drafts(
+        &self,
+        owner: AccountId,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<Vec<DraftRow>>> + Send;
+
+    fn save_draft_step(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
+        data: DraftStepData,
+        now_ms: u64,
+    ) -> impl Future<Output = Outcome<DraftRow>> + Send;
+
+    /// Flips the draft to an active campaign with the owner as host and appends `joined`; the
+    /// operation id makes a repeat return the same campaign.
+    fn finish_draft(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
         operation: OperationId,
         fingerprint: [u8; 32],
         now_ms: u64,
@@ -529,6 +675,7 @@ pub trait CampaignStore: Send + Sync + 'static {
     fn session_started(
         &self,
         campaign: CampaignId,
+        session: SessionId,
         fence: OwnerFence,
         now_ms: u64,
     ) -> impl Future<Output = Outcome<()>> + Send;

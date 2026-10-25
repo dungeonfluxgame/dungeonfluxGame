@@ -26,3 +26,5 @@ mod schema;
 mod smoke;
 mod timeouts;
 mod transfers;
+mod views;
+mod wizard;

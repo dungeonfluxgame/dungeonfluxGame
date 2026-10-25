@@ -838,3 +838,56 @@ async fn closure_alerts_and_notices_are_audited() {
     );
     bench.world.cleanup().await;
 }
+
+#[tokio::test]
+async fn closing_deletes_the_accounts_unfinished_drafts_and_nothing_else() {
+    use df_campaign::store::CampaignStore;
+    let bench = Bench::new("closedrafts").await;
+    let world = &bench.world;
+    let owner = world.account(1).await;
+    let other = world.account(2).await;
+    let kept = world.campaign(owner, 4).await;
+    let draft = world
+        .store
+        .start_draft(owner, crate::fixture::tenant_id(), world.now())
+        .await
+        .unwrap();
+    let theirs = world
+        .store
+        .start_draft(other, crate::fixture::tenant_id(), world.now())
+        .await
+        .unwrap();
+    // The campaign is archived first, as it must be before B closes the account.
+    archive(world, owner, kept.id).await;
+    let mut b = bench.b().await;
+    let tx = b.client.transaction().await.unwrap();
+    mark_closing(&tx, owner).await;
+    bench
+        .participant
+        .schedule_archived_deletions(&tx, owner, world.now() + 30 * 24 * 3_600_000)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let remaining: Vec<Vec<u8>> = world
+        .db
+        .admin
+        .client
+        .query(
+            "SELECT campaign_id FROM campaigns.campaign WHERE status = 'draft'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(remaining, vec![theirs.id.as_bytes().to_vec()]);
+    assert!(
+        world
+            .store
+            .get_draft(owner, draft.id, world.now())
+            .await
+            .is_err()
+    );
+    bench.world.cleanup().await;
+}

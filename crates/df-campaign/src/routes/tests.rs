@@ -4,9 +4,9 @@ use df_campaign_wire as wire;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 
 use super::{
-    AuthClass, DEVICE_COOKIE, DEVICE_HEADER, DisplayRequestRefusal, Gate, ROUTES, TICKET_COOKIE,
-    check_display_request, clear_cookie, cookie_value, ends_display_pairing, failure_reason,
-    refusal_reason, set_cookie,
+    AuthClass, DEVICE_COOKIE, DEVICE_HEADER, DisplayRequestRefusal, Gate, ROUTES, RouteId,
+    TICKET_COOKIE, check_display_request, clear_cookie, cookie_value, ends_display_pairing,
+    failure_reason, refusal_reason, set_cookie,
 };
 use crate::{
     display_pairing::{PairingRefusal, TicketRefusal},
@@ -166,6 +166,21 @@ fn every_route_that_changes_a_campaign_names_its_gate() {
 }
 
 #[test]
+fn invitation_accept_and_room_code_routes_require_an_authenticated_session() {
+    for id in [
+        RouteId::JoinAccept,
+        RouteId::CodeLookup,
+        RouteId::CodeRequest,
+    ] {
+        let route = ROUTES
+            .iter()
+            .find(|route| route.id == id)
+            .expect("every route id appears in ROUTES");
+        assert_eq!(route.auth, AuthClass::Session, "{id:?}");
+    }
+}
+
+#[test]
 fn every_refusal_and_store_error_has_a_status_and_a_reason() {
     let refusals = [
         Refusal::NotFound,
@@ -198,6 +213,10 @@ fn every_refusal_and_store_error_has_a_status_and_a_reason() {
         Refusal::SeatsFull,
         Refusal::OwnerAccountNotActive,
         Refusal::TooManyCampaigns,
+        Refusal::EmailUnverified,
+        Refusal::DraftsFull,
+        Refusal::DraftIncomplete,
+        Refusal::CharacterNotChosen,
         Refusal::ContributorsFull,
         Refusal::NotSeated,
         Refusal::ContributorCannotBeCoHost,

@@ -1,7 +1,7 @@
 //! Invitations, room codes and join requests: tokens and codes are made and read here, the
 //! guess throttles are applied here, and the store decides everything else.
 
-use std::{net::IpAddr, time::Instant};
+use std::{future::Future, net::IpAddr, time::Instant};
 
 use df_campaign_wire::{InvitationCreated, InvitePreview, RoomCodeCreated};
 use df_types::{AccountId, CampaignId, OperationId};
@@ -18,6 +18,52 @@ use crate::{
     short_code::ShortCode,
     store::{Accepted, AccountDirectory, CampaignStore, Decision, NewInvitation, PreviewFacts},
 };
+
+const INVITATION_REFUSAL_FLOOR: std::time::Duration = std::time::Duration::from_millis(5);
+
+fn conceal_invitation_failure(failure: crate::errors::Failure) -> crate::errors::Failure {
+    match failure {
+        crate::errors::Failure::Refused(
+            Refusal::InvitationUnknown
+            | Refusal::Join(
+                crate::join_invitation::JoinFailure::Expired
+                | crate::join_invitation::JoinFailure::Revoked
+                | crate::join_invitation::JoinFailure::Exhausted,
+            ),
+        ) => crate::errors::Failure::Refused(Refusal::InvitationUnknown),
+        other => other,
+    }
+}
+
+async fn equalize_invitation_refusal(started: Instant) {
+    tokio::time::sleep(INVITATION_REFUSAL_FLOOR.saturating_sub(started.elapsed())).await;
+}
+
+async fn accept_invitation_lookup<T, Lookup, LookupFuture>(
+    started: Instant,
+    parsed_digest: Option<[u8; 32]>,
+    lookup: Lookup,
+) -> Outcome<T>
+where
+    Lookup: FnOnce([u8; 32]) -> LookupFuture,
+    LookupFuture: Future<Output = Outcome<T>>,
+{
+    let result = lookup(parsed_digest.unwrap_or([0; 32])).await;
+    if parsed_digest.is_none() {
+        equalize_invitation_refusal(started).await;
+        return match result {
+            Err(crate::errors::Failure::Store(error)) => Err(error.into()),
+            _ => refuse(Refusal::InvitationUnknown),
+        };
+    }
+    match result {
+        Ok(value) => Ok(value),
+        Err(failure) => {
+            equalize_invitation_refusal(started).await;
+            Err(conceal_invitation_failure(failure))
+        }
+    }
+}
 
 impl<P: Ports> CampaignService<P> {
     pub async fn create_invitation(
@@ -37,9 +83,7 @@ impl<P: Ports> CampaignService<P> {
             .throttles
             .invitation_create
             .attempt(actor, self.now_ms());
-        if allowed.is_err() {
-            return refuse(Refusal::Throttled);
-        }
+        self.window_outcome(allowed, "INVITE", "invite.create_saturated")?;
         let lifetime_ms = match lifetime_hours {
             Some(hours) if (1..=tunables.invitation_lifetime_hours).contains(&hours) => {
                 u64::from(hours) * 3_600_000
@@ -166,24 +210,34 @@ impl<P: Ports> CampaignService<P> {
         ) {
             return refuse(Refusal::Throttled);
         }
-        let Some(digest) = Self::token_digest(token) else {
-            AuditLine::new("INVITE", "refused")
-                .reason("unknown")
-                .emit("invite.refused");
-            return refuse(Refusal::InvitationUnknown);
-        };
+        let parsed = Self::token_digest(token);
+        let digest = parsed.unwrap_or([0; 32]);
         let result = self
             .inner
             .store
             .preview_invitation(digest, self.now_ms())
             .await;
         let facts = match result {
-            Ok(facts) => facts,
+            Ok(facts) if parsed.is_some() => facts,
+            Ok(_) => {
+                AuditLine::new("INVITE", "refused")
+                    .reason("unknown")
+                    .emit("invite.refused");
+                equalize_invitation_refusal(started).await;
+                return refuse(Refusal::InvitationUnknown);
+            }
             Err(failure) => {
                 AuditLine::new("INVITE", "refused")
                     .reason(failure_word(failure))
                     .emit("invite.refused");
-                return Err(failure);
+                equalize_invitation_refusal(started).await;
+                return Err(match (parsed.is_none(), failure) {
+                    (true, crate::errors::Failure::Refused(_)) => {
+                        crate::errors::Failure::Refused(Refusal::InvitationUnknown)
+                    }
+                    (false, failure) => conceal_invitation_failure(failure),
+                    (true, failure) => failure,
+                });
             }
         };
         AuditLine::new("INVITE", "previewed")
@@ -201,6 +255,7 @@ impl<P: Ports> CampaignService<P> {
         operation: OperationId,
     ) -> Outcome<Accepted> {
         let allowed = self.inner.throttles.accept_gate(account, self.now_ms());
+        let started = Instant::now();
         if !self.passed(
             allowed,
             || AuditLine::new("INVITE", "refused").actor(account),
@@ -209,16 +264,15 @@ impl<P: Ports> CampaignService<P> {
         ) {
             return refuse(Refusal::Throttled);
         }
-        let Some(digest) = Self::token_digest(token) else {
-            return refuse(Refusal::InvitationUnknown);
-        };
+        let parsed_digest = Self::token_digest(token);
         self.require_verified_to_join(account).await?;
-        let result = self
-            .inner
-            .store
-            .accept_invitation(account, digest, operation, self.now_ms())
-            .await;
-        let accepted = match result {
+        let accepted = match accept_invitation_lookup(started, parsed_digest, |digest| {
+            self.inner
+                .store
+                .accept_invitation(account, digest, operation, self.now_ms())
+        })
+        .await
+        {
             Ok(accepted) => accepted,
             Err(failure) => {
                 AuditLine::new("INVITE", "refused")
@@ -415,5 +469,73 @@ impl<P: Ports> CampaignService<P> {
             self.notify(campaign).await;
         }
         Ok(member)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::join_invitation::JoinFailure;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    #[tokio::test]
+    async fn malformed_and_unknown_acceptance_tokens_do_the_same_delayed_lookup() {
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let delayed_unknown = |digest: [u8; 32]| {
+            let lookups = Arc::clone(&lookups);
+            async move {
+                lookups.fetch_add(1, Ordering::SeqCst);
+                assert!(digest == [0; 32] || digest == [7; 32]);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                Err::<(), _>(crate::errors::Failure::Refused(Refusal::InvitationUnknown))
+            }
+        };
+
+        let malformed_started = Instant::now();
+        let malformed = accept_invitation_lookup(malformed_started, None, delayed_unknown).await;
+        let malformed_elapsed = malformed_started.elapsed();
+        let known_shape_started = Instant::now();
+        let unknown =
+            accept_invitation_lookup(known_shape_started, Some([7; 32]), delayed_unknown).await;
+        let known_shape_elapsed = known_shape_started.elapsed();
+
+        assert_eq!(
+            malformed,
+            Err(crate::errors::Failure::Refused(Refusal::InvitationUnknown))
+        );
+        assert_eq!(malformed, unknown);
+        assert_eq!(lookups.load(Ordering::SeqCst), 2);
+        assert!(
+            malformed_elapsed.abs_diff(known_shape_elapsed) <= Duration::from_millis(4),
+            "malformed={malformed_elapsed:?}, well_formed={known_shape_elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_expired_revoked_and_exhausted_invites_share_one_refusal() {
+        let failures = [
+            crate::errors::Failure::Refused(Refusal::InvitationUnknown),
+            crate::errors::Failure::Refused(Refusal::Join(JoinFailure::Expired)),
+            crate::errors::Failure::Refused(Refusal::Join(JoinFailure::Revoked)),
+            crate::errors::Failure::Refused(Refusal::Join(JoinFailure::Exhausted)),
+        ];
+        for failure in failures {
+            assert_eq!(
+                conceal_invitation_failure(failure),
+                crate::errors::Failure::Refused(Refusal::InvitationUnknown)
+            );
+        }
+        assert_eq!(
+            conceal_invitation_failure(crate::errors::Failure::Refused(Refusal::Join(
+                JoinFailure::Full
+            ))),
+            crate::errors::Failure::Refused(Refusal::Join(JoinFailure::Full))
+        );
     }
 }

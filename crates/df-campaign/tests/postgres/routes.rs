@@ -99,6 +99,7 @@ pub const ORIGIN: &str = "https://play.example.test";
 
 pub struct Response {
     pub status: StatusCode,
+    pub headers: axum::http::HeaderMap,
     pub cookies: Vec<String>,
     pub body: Value,
     pub text: String,
@@ -223,6 +224,7 @@ impl Site {
             .await
             .unwrap();
         let status = response.status();
+        let headers = response.headers().clone();
         let cookies = response
             .headers()
             .get_all(header::SET_COOKIE)
@@ -236,6 +238,7 @@ impl Site {
         let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         Response {
             status,
+            headers,
             cookies,
             body,
             text,
@@ -258,6 +261,46 @@ impl Site {
         drop(service);
         world.cleanup().await;
     }
+}
+
+#[tokio::test]
+async fn malformed_and_unknown_invites_check_verification_before_lookup_and_match_responses() {
+    let site = Site::with_tunables(
+        "unverified_invites",
+        Tunables {
+            require_verified_email_to_join: true,
+            ..Tunables::default()
+        },
+    )
+    .await;
+    let account = site.person(20).await;
+    site.accounts.add(
+        account,
+        "Person 20",
+        false,
+        Some(tenant_id()),
+        AccountStatus::Active,
+    );
+    let malformed = site
+        .post(
+            "/join/accept",
+            account,
+            &json!({"token": "!", "operation": operation()}),
+        )
+        .await;
+    let unknown = site
+        .post(
+            "/join/accept",
+            account,
+            &json!({"token": "a".repeat(64), "operation": operation()}),
+        )
+        .await;
+
+    assert_eq!(malformed.status, unknown.status);
+    assert_eq!(malformed.headers, unknown.headers);
+    assert_eq!(malformed.text, unknown.text);
+    assert_eq!(malformed.body, json!({"reason": "not_allowed"}));
+    site.cleanup().await;
 }
 
 async fn display_state(site: &Site, cookie: String) -> Value {
@@ -384,6 +427,14 @@ fn sample_body(route: &RouteSpec, campaign_name: &str) -> Option<Value> {
     use RouteId::*;
     Some(match route.id {
         CreateCampaign => create_body("Another"),
+        StartDraft => json!({}),
+        OpenLobby | LobbyStart | LobbyReady | LobbyUnready => json!({}),
+        LobbyCharacter => json!({"choice": "undecided", "character_ref": null}),
+        LobbyMicrophone => json!({"preference": "ask", "report": "unknown"}),
+        SaveDraftStep => {
+            json!({"name": "Another", "adventure_kind": "bundled", "content_rating": "standard", "seat_count": 4})
+        }
+        FinishDraft => json!({"operation": operation()}),
         Archive | RequestDelete => json!({"typed_name": campaign_name}),
         CreateInvitation => json!({"joins_as": "player", "lifetime_hours": null, "max_uses": null}),
         JoinPreview => json!({"token": random_hex() + &random_hex()}),
@@ -403,7 +454,8 @@ fn sample_body(route: &RouteSpec, campaign_name: &str) -> Option<Value> {
         DisplayUnpair => json!({"ticket_id": null}),
         DisplayRedeem | DisplayRenew | DisplayChallenge => json!({}),
         Unarchive | RevokeInvitation | RotateCode | DenyRequest | RemoveMember | AllowRejoin
-        | DemoteCoHost | Leave | AcceptTransfer | CancelTransfer | MyMembership | DisplayStatus => {
+        | DemoteCoHost | Leave | AcceptTransfer | CancelTransfer | MyMembership | DisplayStatus
+        | GetDraft | Dashboard | Overview | CampaignSettings | CampaignSessions | LobbyView => {
             return None;
         }
     })
@@ -413,6 +465,7 @@ pub(crate) fn method_of(route: &RouteSpec) -> Method {
     match route.verb {
         Verb::Get => Method::GET,
         Verb::Post => Method::POST,
+        Verb::Put => Method::PUT,
     }
 }
 
@@ -460,6 +513,8 @@ async fn every_session_route_refuses_a_request_with_no_session() {
             ("invitation", random_hex()),
             ("request", random_hex()),
             ("proposal", random_hex()),
+            ("draft", random_hex()),
+            ("step", "1".to_owned()),
             ("session", id_text(session_id(1).as_bytes())),
         ];
         let path = fill(route.path, &ids);
@@ -562,6 +617,8 @@ async fn a_display_ticket_is_refused_by_every_non_public_route() {
             ("invitation", random_hex()),
             ("request", random_hex()),
             ("proposal", random_hex()),
+            ("draft", random_hex()),
+            ("step", "1".to_owned()),
             ("session", id_text(session.as_bytes())),
         ];
         let path = fill(route.path, &ids);
@@ -802,6 +859,8 @@ async fn account_b_ids_answer_like_missing_ids_on_every_route() {
                     ("invitation", random_hex()),
                     ("request", random_hex()),
                     ("proposal", random_hex()),
+                    ("draft", random_hex()),
+                    ("step", "1".to_owned()),
                     ("session", id_text(session.as_bytes())),
                 ],
             )
@@ -1014,7 +1073,7 @@ async fn failure_responses_show_no_campaign_details_and_unknown_equals_malformed
     let campaign = site.world.campaign(host, 2).await;
     let world = &site.world;
     let mut tokens = Vec::new();
-    // Expired, revoked, exhausted: three links with their own failure.
+    // Expired, revoked and exhausted links share the unknown-token response.
     let expired = df_campaign::secrets::SecretToken::generate().unwrap();
     let revoked = df_campaign::secrets::SecretToken::generate().unwrap();
     let spent = df_campaign::secrets::SecretToken::generate().unwrap();
@@ -1081,10 +1140,13 @@ async fn failure_responses_show_no_campaign_details_and_unknown_equals_malformed
         .await
         .unwrap();
     world.clock.advance_ms(10);
-    tokens.push(("invitation_expired", expired.text()));
-    tokens.push(("invitation_revoked", revoked.text()));
-    tokens.push(("invitation_exhausted", spent.text()));
-    for (reason, token) in tokens {
+    tokens.push(expired.text());
+    tokens.push(revoked.text());
+    tokens.push(spent.text());
+    tokens.push("a".repeat(64));
+    tokens.push("not a token".to_owned());
+    let mut refusal: Option<Response> = None;
+    for token in tokens {
         let response = site
             .send(
                 Method::POST,
@@ -1096,11 +1158,18 @@ async fn failure_responses_show_no_campaign_details_and_unknown_equals_malformed
             .await;
         assert_eq!(
             response.body,
-            json!({"reason": reason}),
+            json!({"reason": "invitation_unknown"}),
             "{}",
             response.text
         );
         assert!(!response.text.contains("Sunken") && !response.text.contains("Person"));
+        if let Some(first) = &refusal {
+            assert_eq!(response.status, first.status);
+            assert_eq!(response.headers, first.headers);
+            assert_eq!(response.text, first.text);
+        } else {
+            refusal = Some(response);
+        }
     }
     // A full table: the player link of a two-seat table that is full.
     let full = df_campaign::secrets::SecretToken::generate().unwrap();
@@ -1129,27 +1198,6 @@ async fn failure_responses_show_no_campaign_details_and_unknown_equals_malformed
         )
         .await;
     assert_eq!(response.body, json!({"reason": "full"}));
-    // Unknown and malformed tokens are byte-identical.
-    let unknown = site
-        .send(
-            Method::POST,
-            "/join/preview",
-            None,
-            Some(&json!({"token": "a".repeat(64)})),
-            &[],
-        )
-        .await;
-    let malformed = site
-        .send(
-            Method::POST,
-            "/join/preview",
-            None,
-            Some(&json!({"token": "not a token"})),
-            &[],
-        )
-        .await;
-    assert_eq!(unknown.status, malformed.status);
-    assert_eq!(unknown.text, malformed.text);
     site.cleanup().await;
 }
 

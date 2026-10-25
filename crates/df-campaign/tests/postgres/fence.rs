@@ -8,7 +8,7 @@ use df_campaign::{
 use df_types::CampaignId;
 
 use crate::{
-    fixture::{World, tenant_id},
+    fixture::{World, session_id, tenant_id},
     membership::refusal_of,
 };
 
@@ -49,14 +49,24 @@ async fn a_write_with_the_current_fence_succeeds_and_a_stale_one_is_refused() {
     own(&world, campaign.id).await;
     world
         .store
-        .session_started(campaign.id, fence(1, 5, PLACEMENT), world.now())
+        .session_started(
+            campaign.id,
+            session_id(1),
+            fence(1, 5, PLACEMENT),
+            world.now(),
+        )
         .await
         .unwrap();
     // A stale claim sequence.
     assert_eq!(
         world
             .store
-            .session_started(campaign.id, fence(1, 4, PLACEMENT), world.now())
+            .session_started(
+                campaign.id,
+                session_id(1),
+                fence(1, 4, PLACEMENT),
+                world.now()
+            )
             .await,
         Err(Failure::Store(StoreError::FenceStale))
     );
@@ -64,7 +74,12 @@ async fn a_write_with_the_current_fence_succeeds_and_a_stale_one_is_refused() {
     assert_eq!(
         world
             .store
-            .session_started(campaign.id, fence(1, 5, [8; 16]), world.now())
+            .session_started(
+                campaign.id,
+                session_id(1),
+                fence(1, 5, [8; 16]),
+                world.now()
+            )
             .await,
         Err(Failure::Store(StoreError::FenceStale))
     );
@@ -72,7 +87,12 @@ async fn a_write_with_the_current_fence_succeeds_and_a_stale_one_is_refused() {
     assert_eq!(
         world
             .store
-            .session_started(campaign.id, fence(2, 5, PLACEMENT), world.now())
+            .session_started(
+                campaign.id,
+                session_id(1),
+                fence(2, 5, PLACEMENT),
+                world.now()
+            )
             .await,
         Err(Failure::Store(StoreError::FenceStale))
     );
@@ -83,6 +103,7 @@ async fn a_write_with_the_current_fence_succeeds_and_a_stale_one_is_refused() {
                 .store
                 .session_started(
                     CampaignId::from_bytes(&[0xEE; 16]).unwrap(),
+                    session_id(1),
                     fence(1, 5, PLACEMENT),
                     world.now()
                 )
@@ -119,7 +140,12 @@ async fn session_started_refuses_a_campaign_that_is_not_active() {
         refusal_of(
             world
                 .store
-                .session_started(campaign.id, fence(1, 5, PLACEMENT), world.now())
+                .session_started(
+                    campaign.id,
+                    session_id(1),
+                    fence(1, 5, PLACEMENT),
+                    world.now()
+                )
                 .await
         ),
         Refusal::CampaignUnavailable
@@ -141,13 +167,23 @@ async fn a_fenced_write_during_a_halt_gets_the_retryable_refusal_and_succeeds_af
         .unwrap();
     let during = world
         .store
-        .session_started(campaign.id, fence(1, 5, PLACEMENT), world.now())
+        .session_started(
+            campaign.id,
+            session_id(1),
+            fence(1, 5, PLACEMENT),
+            world.now(),
+        )
         .await;
     assert_eq!(during, Err(Failure::Store(StoreError::ServiceHalting)));
     halt.client.batch_execute("COMMIT").await.unwrap();
     world
         .store
-        .session_started(campaign.id, fence(1, 5, PLACEMENT), world.now())
+        .session_started(
+            campaign.id,
+            session_id(1),
+            fence(1, 5, PLACEMENT),
+            world.now(),
+        )
         .await
         .unwrap();
     world.cleanup().await;

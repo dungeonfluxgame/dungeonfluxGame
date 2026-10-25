@@ -1,0 +1,322 @@
+/* DungeonFlux portal pages. Tokens follow docs/styles.css (the committed home page): gilt is the
+   story and the main action, river-blue is the engine, parchment is reading text. Round 4 ports
+   the home page itself; these rules keep the account pages in the same look meanwhile. */
+
+:root {
+  --night: #08111f;
+  --night-2: #0d1a2e;
+  --night-3: #1a2a44;
+  --gilt: #e6b45e;
+  --gilt-hi: #fbe2a6;
+  --gilt-lo: #9a6b2a;
+  --flux: #7fd0f2;
+  --parchment: #f1e7d0;
+  --mist: #b7c0cf;
+  --danger: #f08a7a;
+  --danger-lo: #6b2a22;
+  --success: #9ed9a6;
+
+  --head: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+  --serif: "EB Garamond", "Iowan Old Style", Georgia, serif;
+
+  --tune-portal-width: 44rem;
+  --gutter: clamp(16px, 4vw, 48px);
+  --space: 1rem;
+  --r: 4px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--night);
+  color: var(--parchment);
+  font: 400 clamp(17px, 0.3vw + 16px, 19px) / 1.6 var(--serif);
+}
+
+a {
+  color: var(--gilt-hi);
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--gilt-hi);
+  outline-offset: 3px;
+}
+
+h1,
+h2 {
+  font-family: var(--head);
+  font-weight: 600;
+  line-height: 1.1;
+  color: #fbf1da;
+}
+
+h1 {
+  font-size: clamp(2rem, 2vw + 1.4rem, 2.8rem);
+  margin: 0 0 var(--space);
+}
+
+h2 {
+  font-size: clamp(1.4rem, 1vw + 1.1rem, 1.8rem);
+  margin: calc(var(--space) * 2) 0 calc(var(--space) / 2);
+}
+
+.skip {
+  position: absolute;
+  left: 12px;
+  top: -60px;
+  padding: 10px 16px;
+  background: var(--gilt);
+  color: #1c1204;
+}
+
+.skip:focus {
+  top: 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.site-header,
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+  padding: var(--space) var(--gutter);
+  background: var(--night-2);
+  border-bottom: 1px solid var(--night-3);
+}
+
+.site-footer {
+  border-top: 1px solid var(--night-3);
+  border-bottom: none;
+  justify-content: flex-start;
+  font-size: 0.9rem;
+}
+
+.brand {
+  font-family: var(--head);
+  font-weight: 700;
+  font-size: 1.6rem;
+  color: var(--gilt);
+  text-decoration: none;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space) * 1.25);
+}
+
+nav a {
+  color: var(--parchment);
+  text-decoration: none;
+}
+
+nav a:hover {
+  text-decoration: underline;
+}
+
+main {
+  width: min(100% - 2 * var(--gutter), var(--tune-portal-width));
+  margin: calc(var(--space) * 2.5) auto calc(var(--space) * 4);
+}
+
+.lead {
+  font-size: 1.15em;
+  color: var(--mist);
+}
+
+.hint {
+  margin: 0.2rem 0 0.4rem;
+  color: var(--mist);
+  font-size: 0.92rem;
+}
+
+form {
+  margin: var(--space) 0;
+}
+
+.field {
+  margin: 0 0 calc(var(--space) * 1.25);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  color: var(--parchment);
+  background: var(--night-2);
+  border: 1px solid var(--mist);
+  border-radius: var(--r);
+}
+
+.field.invalid input {
+  border: 2px solid var(--danger);
+}
+
+.field-error {
+  margin: 0.2rem 0;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.button {
+  display: inline-block;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+  padding: 0.7rem 1.3rem;
+  font: 600 1rem / 1.2 var(--serif);
+  border-radius: var(--r);
+  border: 2px solid transparent;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button.primary {
+  background: var(--gilt);
+  color: #1c1204;
+}
+
+.button.primary:hover {
+  background: var(--gilt-hi);
+}
+
+.button.secondary {
+  background: transparent;
+  color: var(--parchment);
+  border-color: var(--mist);
+}
+
+.button.danger {
+  background: var(--danger-lo);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.error-summary,
+.notice {
+  margin: 0 0 calc(var(--space) * 1.5);
+  padding: var(--space);
+  border-radius: var(--r);
+  border-left: 6px solid var(--mist);
+  background: var(--night-2);
+}
+
+.error-summary {
+  border-left-color: var(--danger);
+}
+
+.error-summary h2 {
+  margin-top: 0;
+  font-size: 1.2rem;
+}
+
+.notice.success {
+  border-left-color: var(--success);
+}
+
+.notice.warning {
+  border-left-color: var(--gilt);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1.2rem;
+}
+
+.summary dt {
+  color: var(--mist);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+.links {
+  padding-left: 1.2rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  padding: 0.5rem 0.4rem;
+  text-align: left;
+  border-bottom: 1px solid var(--night-3);
+  vertical-align: middle;
+}
+
+th {
+  color: var(--mist);
+  font-weight: 600;
+}
+
+.actions {
+  margin-top: calc(var(--space) * 1.5);
+}
+
+section {
+  margin-bottom: calc(var(--space) * 2);
+}
+
+@media (max-width: 40rem) {
+  table,
+  thead,
+  tbody,
+  tr,
+  th,
+  td {
+    display: block;
+  }
+
+  thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  tr {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--night-3);
+  }
+
+  td {
+    border: none;
+    padding: 0.15rem 0;
+  }
+
+  .summary {
+    grid-template-columns: 1fr;
+  }
+}

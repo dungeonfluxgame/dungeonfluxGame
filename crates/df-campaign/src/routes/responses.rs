@@ -88,6 +88,10 @@ pub fn refusal_reason(refusal: Refusal) -> (StatusCode, wire::Reason) {
         Refusal::ContributorCannotBeCoHost => (StatusCode::CONFLICT, R::ContributorCannotBeCoHost),
         Refusal::TransferTargetNotAllowed => (StatusCode::CONFLICT, R::TransferTargetNotAllowed),
         Refusal::TooManyCampaigns => (StatusCode::CONFLICT, R::TooManyCampaigns),
+        Refusal::EmailUnverified => (StatusCode::FORBIDDEN, R::EmailUnverified),
+        Refusal::DraftsFull => (StatusCode::CONFLICT, R::DraftsFull),
+        Refusal::DraftIncomplete => (StatusCode::CONFLICT, R::DraftIncomplete),
+        Refusal::CharacterNotChosen => (StatusCode::CONFLICT, R::CharacterNotChosen),
         Refusal::Throttled => (StatusCode::TOO_MANY_REQUESTS, R::Throttled),
     }
 }

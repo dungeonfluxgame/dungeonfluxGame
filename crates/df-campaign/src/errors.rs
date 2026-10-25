@@ -74,6 +74,14 @@ pub enum Refusal {
     ProposalExpired,
     OwnerAccountNotActive,
     TooManyCampaigns,
+    /// The creator's email is not verified (decision 12); drafts cannot be started.
+    EmailUnverified,
+    /// The account already holds `drafts_per_account` unfinished drafts.
+    DraftsFull,
+    /// Finish was asked before every step was saved.
+    DraftIncomplete,
+    /// Ready was asked before a character was chosen.
+    CharacterNotChosen,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

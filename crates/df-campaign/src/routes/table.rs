@@ -6,6 +6,7 @@
 pub enum Verb {
     Get,
     Post,
+    Put,
 }
 
 /// What a route needs from the caller.
@@ -43,6 +44,21 @@ pub enum Gate {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteId {
     CreateCampaign,
+    Dashboard,
+    Overview,
+    CampaignSettings,
+    CampaignSessions,
+    OpenLobby,
+    LobbyView,
+    LobbyCharacter,
+    LobbyReady,
+    LobbyUnready,
+    LobbyMicrophone,
+    LobbyStart,
+    StartDraft,
+    GetDraft,
+    SaveDraftStep,
+    FinishDraft,
     MyMembership,
     Archive,
     Unarchive,
@@ -103,7 +119,7 @@ const fn spec(
 
 use AuthClass::{Device, Public, PublicWithPresessionCsrf, Session};
 use Gate::{AnyAccount, HostOnly, HostOrOwner, NotMemberAction, Owner, SelfMember};
-use Verb::{Get, Post};
+use Verb::{Get, Post, Put};
 
 const INVITE: Gate = Gate::Capability(crate::roles::Capability::InviteOrRemovePlayers);
 const START: Gate = Gate::Capability(crate::roles::Capability::StartOrPauseSession);
@@ -116,6 +132,105 @@ pub const ROUTES: &[RouteSpec] = &[
         RouteId::CreateCampaign,
         Post,
         "/campaigns",
+        Session,
+        AnyAccount,
+    ),
+    spec(RouteId::Dashboard, Get, "/campaigns", Session, AnyAccount),
+    spec(
+        RouteId::Overview,
+        Get,
+        "/campaigns/{campaign}",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::CampaignSettings,
+        Get,
+        "/campaigns/{campaign}/settings",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::CampaignSessions,
+        Get,
+        "/campaigns/{campaign}/sessions",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::OpenLobby,
+        Post,
+        "/campaigns/{campaign}/lobby",
+        Session,
+        START,
+    ),
+    spec(
+        RouteId::LobbyView,
+        Get,
+        "/campaigns/{campaign}/sessions/{session}/lobby",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::LobbyCharacter,
+        Post,
+        "/campaigns/{campaign}/sessions/{session}/lobby/character",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::LobbyReady,
+        Post,
+        "/campaigns/{campaign}/sessions/{session}/lobby/ready",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::LobbyUnready,
+        Post,
+        "/campaigns/{campaign}/sessions/{session}/lobby/unready",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::LobbyMicrophone,
+        Post,
+        "/campaigns/{campaign}/sessions/{session}/lobby/microphone",
+        Session,
+        SelfMember,
+    ),
+    spec(
+        RouteId::LobbyStart,
+        Post,
+        "/campaigns/{campaign}/sessions/{session}/lobby/start",
+        Session,
+        START,
+    ),
+    spec(
+        RouteId::StartDraft,
+        Post,
+        "/campaigns/drafts",
+        Session,
+        AnyAccount,
+    ),
+    spec(
+        RouteId::GetDraft,
+        Get,
+        "/campaigns/drafts/{draft}",
+        Session,
+        AnyAccount,
+    ),
+    spec(
+        RouteId::SaveDraftStep,
+        Put,
+        "/campaigns/drafts/{draft}/steps/{step}",
+        Session,
+        AnyAccount,
+    ),
+    spec(
+        RouteId::FinishDraft,
+        Post,
+        "/campaigns/drafts/{draft}/finish",
         Session,
         AnyAccount,
     ),

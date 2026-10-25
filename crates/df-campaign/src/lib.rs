@@ -9,7 +9,7 @@
 // TEMPORARY (round 1): the pure policy files live in `df-auth` and `df-session`, whose module
 // lists are held by B. They are compiled here by path until B declares them there; then these
 // become `pub use df_auth::{roles, short_code, keyed_throttle}` and
-// `pub use df_session::{join_invitation, display_pairing}` and nothing else changes. The files
+// `pub use df_session::{join_invitation, display_pairing, lobby}` and nothing else changes. The files
 // reach `crate::throttle`, which this crate provides below.
 mod throttle {
     pub use df_auth::throttle::*;
@@ -20,6 +20,8 @@ pub mod display_pairing;
 pub mod join_invitation;
 #[path = "../../df-auth/src/keyed_throttle.rs"]
 pub mod keyed_throttle;
+#[path = "../../df-session/src/lobby.rs"]
+pub mod lobby;
 #[path = "../../df-auth/src/roles.rs"]
 pub mod roles;
 #[path = "../../df-auth/src/short_code.rs"]
@@ -28,10 +30,12 @@ pub mod short_code;
 pub mod audit;
 pub mod clock;
 pub mod config;
+pub mod draft;
 pub mod errors;
 #[cfg(any(test, feature = "test-fakes"))]
 pub mod fakes;
 pub mod ids;
+pub mod lobby_state;
 pub mod records;
 #[cfg(feature = "routes")]
 pub mod routes;

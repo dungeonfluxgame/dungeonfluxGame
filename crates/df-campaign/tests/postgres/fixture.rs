@@ -7,6 +7,7 @@
 
 use df_campaign::store::NewInvitation;
 use std::{
+    sync::OnceLock,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -29,8 +30,25 @@ use tokio_postgres::{Client, Config, NoTls};
 use crate::campaign_store::{Connect, PgCampaignStore, TimeoutPolicy};
 
 const FORBIDDEN_PORTS: [u16; 1] = [63309];
-const DATABASE_PREFIX: &str = "df_campaigns_test_s1_";
+const DEFAULT_DATABASE_PREFIX: &str = "df_campaigns_test_s1_";
 const STALE_AFTER_SECONDS: u64 = 2 * 3_600;
+
+fn database_prefix() -> &'static str {
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    PREFIX
+        .get_or_init(|| {
+            let prefix = std::env::var("DUNGEONFLUX_CAMPAIGNS_PG_DATABASE_PREFIX")
+                .unwrap_or_else(|_| DEFAULT_DATABASE_PREFIX.to_owned());
+            assert!(
+                prefix.ends_with('_')
+                    && prefix.len() <= 32
+                    && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+                "DUNGEONFLUX_CAMPAIGNS_PG_DATABASE_PREFIX must be a <=32 character SQL-safe prefix ending in underscore"
+            );
+            prefix
+        })
+        .as_str()
+}
 
 /// How old a leftover must be to be dropped; `DUNGEONFLUX_CAMPAIGNS_PG_STALE_SECONDS` overrides it
 /// (0 drops every leftover of this fixture, for a run when no other S1 test is live).
@@ -205,7 +223,8 @@ impl TestDb {
         let postgres = raw("postgres", "postgres").await;
         scavenge(&postgres).await;
         let name = format!(
-            "{DATABASE_PREFIX}{}_{}_{}",
+            "{}{}_{}_{}",
+            database_prefix(),
             unix_seconds(),
             COUNTER.fetch_add(1, Ordering::SeqCst),
             label
@@ -213,7 +232,7 @@ impl TestDb {
         assert!(name.len() <= 63, "database name {name} is too long");
         postgres
             .client
-            .batch_execute(&format!("CREATE DATABASE {name}"))
+            .batch_execute(&format!("CREATE DATABASE \"{name}\""))
             .await
             .expect("create the test database");
         let admin = raw("postgres", &name).await;
@@ -370,22 +389,22 @@ async fn scavenge(postgres: &Raw) {
     let rows = postgres
         .client
         .query(
-            "SELECT datname FROM pg_database WHERE datname LIKE $1",
-            &[&format!("{DATABASE_PREFIX}%")],
+            "SELECT datname FROM pg_database WHERE left(datname, char_length($1)) = $1",
+            &[&database_prefix()],
         )
         .await
         .expect("list test databases");
     for row in rows {
         let name: String = row.get(0);
         let created: Option<u64> = name
-            .trim_start_matches(DATABASE_PREFIX)
+            .trim_start_matches(database_prefix())
             .split('_')
             .next()
             .and_then(|text| text.parse().ok());
         if created.is_some_and(|created| unix_seconds().saturating_sub(created) >= stale_after()) {
             let _ = postgres
                 .client
-                .batch_execute(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                .batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
                 .await;
         }
     }
@@ -545,6 +564,51 @@ impl World {
             .events_after(campaign, 0, 1_000)
             .await
             .expect("events")
+    }
+
+    /// The number of events written for a campaign given as hex (a draft has none).
+    pub async fn events_of_draft(&self, draft: &str) -> i64 {
+        let id = CampaignId::from_hex(draft).expect("a campaign id");
+        self.db
+            .admin
+            .client
+            .query_one(
+                "SELECT count(*) FROM campaigns.campaign_event WHERE campaign_id = $1",
+                &[&id.as_bytes().as_slice()],
+            )
+            .await
+            .expect("event count")
+            .get(0)
+    }
+
+    /// (status, has a sponsor, custom hourly figure or 0, the draft step is null) of a row.
+    pub async fn draft_columns(&self, draft: &str) -> (String, bool, i64, bool) {
+        let id = CampaignId::from_hex(draft).expect("a campaign id");
+        let row = self
+            .db
+            .admin
+            .client
+            .query_one(
+                "SELECT status, sponsor_account_id IS NOT NULL,                  COALESCE(custom_hourly_micro_dollars, 0), draft_step IS NULL                  FROM campaigns.campaign WHERE campaign_id = $1",
+                &[&id.as_bytes().as_slice()],
+            )
+            .await
+            .expect("campaign row");
+        (row.get(0), row.get(1), row.get(2), row.get(3))
+    }
+
+    pub async fn draft_has_sponsor(&self, draft: &str) -> Option<bool> {
+        let id = CampaignId::from_hex(draft).expect("a campaign id");
+        self.db
+            .admin
+            .client
+            .query_opt(
+                "SELECT sponsor_account_id IS NOT NULL FROM campaigns.campaign                  WHERE campaign_id = $1",
+                &[&id.as_bytes().as_slice()],
+            )
+            .await
+            .expect("campaign row")
+            .map(|row| row.get(0))
     }
 
     pub async fn feed_epoch(&self, campaign: CampaignId) -> FeedEpoch {

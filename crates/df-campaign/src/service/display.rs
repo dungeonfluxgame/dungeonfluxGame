@@ -23,6 +23,15 @@ use crate::{
     },
 };
 
+fn may_count_renew_attempt(failure: Failure) -> bool {
+    !matches!(
+        failure,
+        Failure::Refused(Refusal::Ticket(
+            TicketRefusal::Revoked | TicketRefusal::WrongDevice
+        )) | Failure::Store(_)
+    )
+}
+
 /// A device secret and its pairing, as the display receives them.
 pub struct Challenge {
     pub pairing: PairingRow,
@@ -46,7 +55,7 @@ impl<P: Ports> CampaignService<P> {
         if !self.passed(
             gate,
             || AuditLine::new("DISPLAY", "challenge_refused"),
-            ("display.challenge_refused", "display.challenge_refused"),
+            ("display.challenge_throttled", "display.challenge_saturated"),
             Some(&keys),
         ) {
             return refuse(Refusal::Throttled);
@@ -156,7 +165,11 @@ impl<P: Ports> CampaignService<P> {
 
     /// The session must belong to this campaign and still be usable; any other session answers
     /// like a missing one. Only called after the caller has been authorized for the campaign.
-    async fn session_of(&self, campaign: CampaignId, session: SessionId) -> Outcome<SessionPhase> {
+    pub(super) async fn session_of(
+        &self,
+        campaign: CampaignId,
+        session: SessionId,
+    ) -> Outcome<SessionPhase> {
         match self.inner.sessions.session(session).await? {
             Some(facts) if facts.campaign == campaign => Ok(facts.phase),
             _ => refuse(Refusal::NotFound),
@@ -178,9 +191,7 @@ impl<P: Ports> CampaignService<P> {
             .throttles
             .display_approval
             .attempt(actor, self.now_ms());
-        if allowed.is_err() {
-            return refuse(Refusal::Throttled);
-        }
+        self.window_outcome(allowed, "DISPLAY", "display.approval_saturated")?;
         if !self.session_of(campaign, session).await?.is_usable() {
             return refuse(Refusal::SessionEnded);
         }
@@ -242,15 +253,8 @@ impl<P: Ports> CampaignService<P> {
         let pairing = self.inner.store.pairing_status(device, now).await?;
         // At most a few redemptions per pairing per hour: each call opens a transaction. The window
         // exists only for a pairing the store has just confirmed, so random cookies cannot fill it.
-        if self
-            .inner
-            .throttles
-            .redeem_pairing
-            .attempt(device, now)
-            .is_err()
-        {
-            return refuse(Refusal::Throttled);
-        }
+        let window = self.inner.throttles.redeem_pairing.attempt(device, now);
+        self.window_outcome(window, "DISPLAY", "display.redeem_saturated")?;
         let usable = match pairing.session {
             Some(session) => self.session_usable(session).await,
             None => true,
@@ -323,20 +327,14 @@ impl<P: Ports> CampaignService<P> {
             Ok(found) => self.session_usable(found.ticket.session).await,
             // An unknown ticket answers like a revoked one: there is nothing to renew and no
             // window to count against, so a random cookie costs the address layer and nothing else.
-            Err(failure @ Failure::Refused(Refusal::Ticket(TicketRefusal::Revoked)))
-            | Err(failure @ Failure::Store(_)) => return Err(*failure),
+            // A ticket presented with the wrong device secret is refused the same way: whoever holds
+            // only the ticket cookie must not be able to spend the real display's renewal window.
+            Err(failure) if !may_count_renew_attempt(*failure) => return Err(*failure),
             Err(_) => true,
         };
         // Counted only now that the ticket exists: the window is keyed by a cookie the caller picks.
-        if self
-            .inner
-            .throttles
-            .renew_ticket
-            .attempt(ticket, now)
-            .is_err()
-        {
-            return refuse(Refusal::Throttled);
-        }
+        let window = self.inner.throttles.renew_ticket.attempt(ticket, now);
+        self.window_outcome(window, "DISPLAY", "display.renew_saturated")?;
         let result = self
             .inner
             .store
@@ -431,11 +429,16 @@ impl<P: Ports> CampaignService<P> {
         Ok(revoked)
     }
 
-    pub async fn session_started(&self, campaign: CampaignId, fence: OwnerFence) -> Outcome<()> {
+    pub async fn session_started(
+        &self,
+        campaign: CampaignId,
+        session: SessionId,
+        fence: OwnerFence,
+    ) -> Outcome<()> {
         let result = self
             .inner
             .store
-            .session_started(campaign, fence, self.now_ms())
+            .session_started(campaign, session, fence, self.now_ms())
             .await;
         if let Err(failure) = &result {
             AuditLine::new("LOBBY", "fence_refused")
@@ -444,5 +447,26 @@ impl<P: Ports> CampaignService<P> {
                 .emit("lobby.fence_refused");
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_device_and_unconfirmed_tickets_do_not_consume_a_renewal_window() {
+        assert!(!may_count_renew_attempt(Failure::Refused(Refusal::Ticket(
+            TicketRefusal::WrongDevice
+        ))));
+        assert!(!may_count_renew_attempt(Failure::Refused(Refusal::Ticket(
+            TicketRefusal::Revoked
+        ))));
+        assert!(!may_count_renew_attempt(Failure::Store(
+            StoreError::Unavailable
+        )));
+        assert!(may_count_renew_attempt(Failure::Refused(Refusal::Ticket(
+            TicketRefusal::Expired
+        ))));
     }
 }

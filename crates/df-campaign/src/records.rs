@@ -733,3 +733,30 @@ pub struct CancelReport {
     /// Already `deleting`: the cancellation is refused and the person is told.
     pub already_deleting: Vec<CampaignId>,
 }
+
+/// One line of the dashboard: a campaign the account is an active member of.
+#[derive(Clone, Debug)]
+pub struct DashboardRow {
+    pub id: CampaignId,
+    pub name: String,
+    pub status: CampaignStatus,
+    pub content_rating: ContentRating,
+    pub seat_count: u32,
+    pub seats_in_use: u32,
+    pub planned_session_at_ms: Option<u64>,
+    pub scheduled_delete_at_ms: Option<u64>,
+    pub last_event_at_ms: u64,
+    pub role: CampaignRole,
+    pub is_owner: bool,
+}
+
+/// What the overview and settings tabs are built from, read in one statement so the roster, the
+/// counts and the settings agree.
+#[derive(Clone, Debug)]
+pub struct OverviewRows {
+    pub campaign: CampaignRow,
+    pub settings: crate::draft::CampaignSettings,
+    /// Active members, host first, then by join time.
+    pub members: Vec<MemberRow>,
+    pub pending_requests: u32,
+}

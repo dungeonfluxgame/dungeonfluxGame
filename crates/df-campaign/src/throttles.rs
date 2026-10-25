@@ -201,6 +201,9 @@ pub(crate) struct Throttles {
     pub(crate) invitation_create: KeyLimit<AccountId>,
     pub(crate) display_approval: KeyLimit<AccountId>,
     pub(crate) member_changes: KeyLimit<AccountId>,
+    pub(crate) draft_saves: KeyLimit<AccountId>,
+    pub(crate) lobby_changes: KeyLimit<AccountId>,
+    pub(crate) lobby_host: KeyLimit<AccountId>,
     challenge_ip: AddressLayer,
     status_ip: AddressLayer,
     ticket_ip: AddressLayer,
@@ -256,6 +259,21 @@ impl Throttles {
                 MINUTE,
                 accounts,
             ),
+            draft_saves: KeyLimit::new(
+                tunables.draft_save_limit_per_account_per_hour,
+                HOUR,
+                accounts,
+            ),
+            lobby_changes: KeyLimit::new(
+                tunables.lobby_change_limit_per_account_per_hour,
+                HOUR,
+                accounts,
+            ),
+            lobby_host: KeyLimit::new(
+                tunables.lobby_host_limit_per_account_per_hour,
+                HOUR,
+                accounts,
+            ),
             challenge_ip: AddressLayer::new(
                 tunables.display_challenge_limit_per_ip_per_minute,
                 multiplier,
@@ -277,15 +295,17 @@ impl Throttles {
                 tight,
                 loose,
             ),
+            // Keyed by a pairing or a ticket the store has confirmed, so they are bounded by what
+            // exists and sized with the other id-keyed windows.
             redeem_pairing: KeyLimit::new(
                 tunables.display_redeem_limit_per_pairing_per_hour,
                 HOUR,
-                tight,
+                accounts,
             ),
             renew_ticket: KeyLimit::new(
                 tunables.display_renew_limit_per_ticket_per_hour,
                 HOUR,
-                tight,
+                accounts,
             ),
         }
     }
@@ -341,6 +361,9 @@ impl Throttles {
             ("invitation_create", self.invitation_create.saturated()),
             ("display_approval", self.display_approval.saturated()),
             ("member_changes", self.member_changes.saturated()),
+            ("draft_saves", self.draft_saves.saturated()),
+            ("lobby_changes", self.lobby_changes.saturated()),
+            ("lobby_host", self.lobby_host.saturated()),
             ("challenge_ip", self.challenge_ip.saturated()),
             ("status_ip", self.status_ip.saturated()),
             ("ticket_ip", self.ticket_ip.saturated()),

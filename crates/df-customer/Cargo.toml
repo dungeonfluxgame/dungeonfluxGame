@@ -1,0 +1,27 @@
+[package]
+name = "df-customer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# In-memory store, recording mail sender, fake clock and the store contract tests, for the
+# tests of this crate and its consumers. Never enabled in a production build.
+test-fakes = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-auth = { path = "../df-auth" }
+df-observe = { path = "../df-observe" }
+df-types = { path = "../df-types" }
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "password-hash"] }
+getrandom = "=0.3.4"
+hmac = "=0.13.0"
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+subtle = "=2.6.1"
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "sync", "macros", "test-util"] }

@@ -1,0 +1,79 @@
+/* Operator console screens. Only rules for the console's own parts; tables, rows, pills, forms and
+   panels come from base.css. */
+
+.admin-chrome {
+  padding-top: 20px;
+  border-bottom: 1px solid var(--ash);
+}
+
+.admin-who {
+  margin: 0 0 8px;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--tallow);
+}
+
+.admin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 6px 14px;
+  border-bottom: 2px solid transparent;
+  font-family: var(--sans);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--parchment);
+  text-decoration: none;
+}
+
+.admin-link:hover {
+  color: var(--tide);
+}
+
+.admin-link.is-current {
+  border-bottom-color: var(--tide);
+  color: var(--tide);
+}
+
+.admin .page {
+  padding-top: clamp(24px, 3vw, 40px);
+}
+
+.admin-narrow {
+  max-width: 34rem;
+}
+
+.admin-result,
+.admin-action {
+  margin-bottom: 24px;
+}
+
+.admin-result {
+  font-family: var(--sans);
+}
+
+.admin-action > h2 {
+  font-size: 22px;
+}
+
+.admin .empty {
+  font-family: var(--sans);
+  color: var(--tallow);
+}
+
+.admin .actions {
+  margin-top: 8px;
+}
+
+.admin .row-meta {
+  display: block;
+}

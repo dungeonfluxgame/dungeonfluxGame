@@ -411,3 +411,35 @@ async fn the_store_refuses_to_open_when_the_databases_commit_bound_is_longer_tha
     assert!(opened.is_ok());
     world.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_service_role_can_delete_a_draft_and_nothing_that_is_a_campaign() {
+    use df_campaign::store::CampaignStore;
+    let (world, campaign) = world_with_campaign("deleteguard").await;
+    let owner = world.account(7).await;
+    let draft = world
+        .store
+        .start_draft(owner, crate::fixture::tenant_id(), world.now())
+        .await
+        .unwrap();
+    let session = world.db.raw_as(&world.role).await;
+    let error = session
+        .client
+        .execute(
+            "DELETE FROM campaigns.campaign WHERE campaign_id = $1",
+            &[&campaign.as_bytes().as_slice()],
+        )
+        .await
+        .expect_err("an active campaign is never deleted");
+    assert_eq!(code(&error), Some("42501"));
+    let removed = session
+        .client
+        .execute(
+            "DELETE FROM campaigns.campaign WHERE campaign_id = $1",
+            &[&draft.id.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    world.cleanup().await;
+}

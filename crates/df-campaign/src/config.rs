@@ -32,6 +32,11 @@ pub struct Tunables {
     pub display_renew_limit_per_ticket_per_hour: u32,
     pub member_change_limit_per_account_per_minute: u32,
     pub campaigns_per_account: u32,
+    /// Unfinished wizard drafts one account may hold, and how long a draft lives untouched.
+    pub drafts_per_account: u32,
+    pub draft_retention_days: u32,
+    /// Starting a draft and saving a step share this limit.
+    pub draft_save_limit_per_account_per_hour: u32,
     /// 0 means the campaign's seat count (players) or the contributor limit (contributors).
     pub invitation_default_max_uses: u32,
     pub retention_tick_seconds: u32,
@@ -60,6 +65,20 @@ pub struct Tunables {
     pub leave_all_chunk: u32,
     pub transfer_expiry_hours: u32,
     pub require_verified_email_to_join: bool,
+    /// The campaigns one dashboard lists, and how many of them (the most recently active) are asked
+    /// for their live session.
+    pub lobby_change_limit_per_account_per_hour: u32,
+    /// Opening the lobby and starting share this limit.
+    pub lobby_host_limit_per_account_per_hour: u32,
+    /// Whether Start needs a paired display (a deployment policy, not a campaign setting).
+    pub start_requires_display: bool,
+    pub dashboard_maximum_campaigns: u32,
+    pub dashboard_session_lookups: u32,
+    /// Whether the characters, assets and funding screens of other owners are mounted; the
+    /// overview lists a tab only when its target exists.
+    pub tab_characters_mounted: bool,
+    pub tab_assets_mounted: bool,
+    pub tab_funding_mounted: bool,
 }
 
 impl Default for Tunables {
@@ -86,6 +105,9 @@ impl Default for Tunables {
             display_renew_limit_per_ticket_per_hour: 12,
             member_change_limit_per_account_per_minute: 60,
             campaigns_per_account: 20,
+            drafts_per_account: 5,
+            draft_retention_days: 30,
+            draft_save_limit_per_account_per_hour: 20,
             invitation_default_max_uses: 0,
             retention_tick_seconds: 30,
             closure_archived_delete_notice_days: 30,
@@ -111,6 +133,14 @@ impl Default for Tunables {
             leave_all_chunk: 20,
             transfer_expiry_hours: 48,
             require_verified_email_to_join: false,
+            lobby_change_limit_per_account_per_hour: 60,
+            lobby_host_limit_per_account_per_hour: 10,
+            start_requires_display: false,
+            dashboard_maximum_campaigns: 100,
+            dashboard_session_lookups: 20,
+            tab_characters_mounted: false,
+            tab_assets_mounted: false,
+            tab_funding_mounted: false,
         }
     }
 }
@@ -121,9 +151,64 @@ pub enum TunablesRefusal {
     /// The overlap must exceed the transaction timeout, or a late commit could be read past.
     OverlapNotAboveTimeout,
     DefaultSeatsAboveMaximum,
+    /// An address layer whose tight map is smaller than its loose map, or whose limits let fewer
+    /// than [`MINIMUM_PREFIXES_TO_FILL`] distinct address prefixes fill the tight map in one
+    /// window. The name is the layer.
+    ThrottleMapsDoNotMatchLimits(&'static str),
+}
+
+/// The fewest distinct address prefixes (IPv6 /48 or IPv4 /24) that may fill an address layer's
+/// tight map within one window. Below it a small botnet could keep every new address out of the
+/// layer, so the configuration is refused at load.
+pub const MINIMUM_PREFIXES_TO_FILL: u64 = 256;
+
+/// How many tight keys one address prefix can create in one window, and so how many prefixes fill
+/// the tight map: `ceil(tight map / loose limit)`. The loose limit is the tight limit times the
+/// loose multiplier, and the loose key is checked first, so a prefix cannot create more tight
+/// keys than that. An IPv4 /24 holds only 256 addresses, so for IPv4 the count is never lower
+/// than this; the IPv6 figure is the worst case and the one reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LayerSizing {
+    pub layer: &'static str,
+    pub tight_limit: u32,
+    pub loose_limit: u64,
+    pub prefixes_to_fill_tight: u64,
 }
 
 impl Tunables {
+    /// The IP-keyed layers with their tight limits, in the order the dev view lists them.
+    fn address_layers(&self) -> [(&'static str, u32); 5] {
+        [
+            ("code_ip", self.lookup_limit_per_ip),
+            ("preview_ip", self.preview_limit_per_ip_per_minute),
+            (
+                "challenge_ip",
+                self.display_challenge_limit_per_ip_per_minute,
+            ),
+            ("status_ip", self.display_status_limit_per_ip_per_minute),
+            ("ticket_ip", self.display_ticket_limit_per_ip_per_minute),
+        ]
+    }
+
+    /// The sizing of every address layer: the numbers the design note quotes and the dev view shows.
+    pub fn throttle_sizing(&self) -> Vec<LayerSizing> {
+        self.address_layers()
+            .into_iter()
+            .map(|(layer, tight_limit)| {
+                let loose_limit = u64::from(tight_limit)
+                    .saturating_mul(u64::from(self.throttle_loose_multiplier));
+                let tight_keys =
+                    u64::try_from(self.throttle_maximum_keys_tight).unwrap_or(u64::MAX);
+                LayerSizing {
+                    layer,
+                    tight_limit,
+                    loose_limit,
+                    prefixes_to_fill_tight: tight_keys.div_ceil(loose_limit.max(1)),
+                }
+            })
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<(), TunablesRefusal> {
         if self.feed_overlap_seconds <= self.feed_transaction_timeout_seconds {
             return Err(TunablesRefusal::OverlapNotAboveTimeout);
@@ -131,7 +216,21 @@ impl Tunables {
         if self.default_seats > self.maximum_seats {
             return Err(TunablesRefusal::DefaultSeatsAboveMaximum);
         }
+        if self.throttle_maximum_keys_tight < self.throttle_maximum_keys_loose {
+            return Err(TunablesRefusal::ThrottleMapsDoNotMatchLimits(
+                "tight_below_loose",
+            ));
+        }
+        for sizing in self.throttle_sizing() {
+            if sizing.prefixes_to_fill_tight < MINIMUM_PREFIXES_TO_FILL {
+                return Err(TunablesRefusal::ThrottleMapsDoNotMatchLimits(sizing.layer));
+            }
+        }
         Ok(())
+    }
+
+    pub fn draft_retention_ms(&self) -> u64 {
+        hours_ms(self.draft_retention_days * 24)
     }
 
     pub fn invitation_lifetime_ms(&self) -> u64 {
@@ -200,6 +299,16 @@ impl Tunables {
                 }
             };
         }
+        macro_rules! knob_size {
+            ($field:ident, $low:expr, $high:expr) => {
+                if let Some(raw) = value.get(stringify!($field)) {
+                    match raw.as_u64().and_then(|n| usize::try_from(n).ok()) {
+                        Some(n) if ($low..=$high).contains(&n) => tunables.$field = n,
+                        _ => report(stringify!($field)),
+                    }
+                }
+            };
+        }
         knob!(maximum_seats, 1, 64);
         knob!(default_seats, 1, 64);
         knob!(maximum_contributors, 0, 1_000);
@@ -221,6 +330,9 @@ impl Tunables {
         knob!(display_renew_limit_per_ticket_per_hour, 1, 10_000);
         knob!(member_change_limit_per_account_per_minute, 1, 10_000);
         knob!(campaigns_per_account, 1, 10_000);
+        knob!(drafts_per_account, 1, 100);
+        knob!(draft_retention_days, 1, 365);
+        knob!(draft_save_limit_per_account_per_hour, 1, 10_000);
         knob!(invitation_default_max_uses, 0, 1_000);
         knob!(retention_tick_seconds, 1, 3_600);
         knob!(closure_archived_delete_notice_days, 14, 365);
@@ -241,13 +353,29 @@ impl Tunables {
         knob!(feed_transaction_timeout_seconds, 1, 300);
         knob!(feed_overlap_seconds, 2, 3_600);
         knob!(leave_all_chunk, 1, 1_000);
+        knob!(lobby_change_limit_per_account_per_hour, 1, 10_000);
+        knob!(lobby_host_limit_per_account_per_hour, 1, 10_000);
+        knob!(dashboard_maximum_campaigns, 1, 1_000);
+        knob!(dashboard_session_lookups, 0, 100);
+        knob_size!(throttle_maximum_keys_tight, 1_024, 16_777_216);
+        knob_size!(throttle_maximum_keys_loose, 1_024, 16_777_216);
+        knob_size!(throttle_maximum_keys_account, 1_024, 16_777_216);
         knob!(transfer_expiry_hours, 1, 24 * 30);
-        if let Some(raw) = value.get("require_verified_email_to_join") {
-            match raw.as_bool() {
-                Some(flag) => tunables.require_verified_email_to_join = flag,
-                None => report("require_verified_email_to_join"),
-            }
+        macro_rules! flag {
+            ($field:ident) => {
+                if let Some(raw) = value.get(stringify!($field)) {
+                    match raw.as_bool() {
+                        Some(flag) => tunables.$field = flag,
+                        None => report(stringify!($field)),
+                    }
+                }
+            };
         }
+        flag!(require_verified_email_to_join);
+        flag!(start_requires_display);
+        flag!(tab_characters_mounted);
+        flag!(tab_assets_mounted);
+        flag!(tab_funding_mounted);
         tunables.validate()?;
         Ok(tunables)
     }
@@ -286,6 +414,60 @@ mod tests {
             Tunables::from_json(r#"{"feed_overlap_seconds": 10}"#, |_| {}),
             Err(TunablesRefusal::OverlapNotAboveTimeout)
         );
+    }
+
+    #[test]
+    fn the_default_sizing_figures_are_the_ones_the_design_note_quotes() {
+        let sizing = Tunables::default().throttle_sizing();
+        let prefixes = |layer: &str| {
+            sizing
+                .iter()
+                .find(|item| item.layer == layer)
+                .map(|item| item.prefixes_to_fill_tight)
+        };
+        // 262,144 tight keys over a loose limit of 100 (lookups), 60 (challenges), 300 (the rest).
+        assert_eq!(prefixes("code_ip"), Some(2_622));
+        assert_eq!(prefixes("challenge_ip"), Some(4_370));
+        assert_eq!(prefixes("preview_ip"), Some(874));
+        assert_eq!(prefixes("status_ip"), Some(874));
+        assert_eq!(prefixes("ticket_ip"), Some(874));
+    }
+
+    #[test]
+    fn default_throttle_maps_load_validate_with_at_least_256_prefixes_remaining() {
+        let tunables = Tunables::default();
+        assert_eq!(tunables.validate(), Ok(()));
+        for sizing in tunables.throttle_sizing() {
+            assert!(
+                sizing.prefixes_to_fill_tight >= MINIMUM_PREFIXES_TO_FILL,
+                "{} fills after {} distinct IPv6 /48 prefixes",
+                sizing.layer,
+                sizing.prefixes_to_fill_tight
+            );
+        }
+    }
+
+    #[test]
+    fn limits_that_let_a_few_prefixes_fill_the_tight_map_are_refused_at_load() {
+        // 262,144 / (10,000 * 10) rounds up to 3 prefixes.
+        let json = r#"{"preview_limit_per_ip_per_minute": 10000}"#;
+        assert_eq!(
+            Tunables::from_json(json, |_| {}),
+            Err(TunablesRefusal::ThrottleMapsDoNotMatchLimits("preview_ip"))
+        );
+        let small_map = r#"{"throttle_maximum_keys_tight": 4096}"#;
+        assert_eq!(
+            Tunables::from_json(small_map, |_| {}),
+            Err(TunablesRefusal::ThrottleMapsDoNotMatchLimits(
+                "tight_below_loose"
+            ))
+        );
+        // A matching pair loads, and the map sizes are configurable.
+        let sized =
+            r#"{"throttle_maximum_keys_tight": 524288, "throttle_maximum_keys_loose": 131072}"#;
+        let loaded = Tunables::from_json(sized, |_| {}).unwrap();
+        assert_eq!(loaded.throttle_maximum_keys_tight, 524_288);
+        assert_eq!(loaded.throttle_maximum_keys_loose, 131_072);
     }
 
     #[test]
