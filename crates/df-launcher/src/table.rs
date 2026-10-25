@@ -12,11 +12,11 @@ use std::{
 const TOKEN_HEADER: &str = "X-DungeonFlux-Launcher";
 const CONNECT_LIMIT: Duration = Duration::from_millis(700);
 const READ_LIMIT: Duration = Duration::from_millis(2500);
-const STATUS_BYTES_MAX: usize = 64 * 1024;
+const MAXIMUM_STATUS_BYTES: usize = 64 * 1024;
 /// A creator portrait or canonical image; larger answers are refused.
 pub const PORTRAIT_BYTES_MAX: usize = 6 * 1024 * 1024;
 /// The party the server can seat (REF-062); extra lines are ignored.
-const HEROES_MAX: usize = 6;
+const MAXIMUM_HEROES: usize = 6;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TableStatus {
@@ -57,7 +57,7 @@ pub fn fetch(display_url: &str, token: &str) -> io::Result<TableStatus> {
         display_url,
         "/gameplay/launcher-status",
         token,
-        STATUS_BYTES_MAX,
+        MAXIMUM_STATUS_BYTES,
     )?;
     Ok(parse(&String::from_utf8_lossy(&body)))
 }
@@ -107,9 +107,9 @@ pub fn parse(text: &str) -> TableStatus {
             Some("adventure") => status.adventure = fields.next().unwrap_or_default().to_owned(),
             Some("scene") => status.scene = fields.next().unwrap_or_default().to_owned(),
             Some("place") => status.place = fields.next().unwrap_or_default().to_owned(),
-            Some("hero") if status.heroes.len() < HEROES_MAX => {
-                let parts: Vec<&str> = fields.collect();
-                if let [ready, hit_points, maximum, portrait, name] = parts.as_slice()
+            Some("hero") if status.heroes.len() < MAXIMUM_HEROES => {
+                let hero_fields: Vec<&str> = fields.collect();
+                if let [ready, hit_points, maximum, portrait, name] = hero_fields.as_slice()
                     && !name.trim().is_empty()
                 {
                     status.heroes.push(Hero {
@@ -128,7 +128,12 @@ pub fn parse(text: &str) -> TableStatus {
 }
 
 /// One HTTP/1.1 GET to the game server's own address (from its display link).
-fn get(display_url: &str, path: &str, token: &str, limit: usize) -> io::Result<Vec<u8>> {
+fn get(
+    display_url: &str,
+    path: &str,
+    token: &str,
+    maximum_body_bytes: usize,
+) -> io::Result<Vec<u8>> {
     let authority = display_url
         .strip_prefix("http://")
         .and_then(|rest| rest.split('/').next())
@@ -147,13 +152,13 @@ fn get(display_url: &str, path: &str, token: &str, limit: usize) -> io::Result<V
     )?;
     let mut response = Vec::new();
     stream
-        .take(u64::try_from(limit + 16 * 1024).unwrap_or(u64::MAX))
+        .take(u64::try_from(maximum_body_bytes + 16 * 1024).unwrap_or(u64::MAX))
         .read_to_end(&mut response)?;
-    body(&response, limit)
+    body(&response, maximum_body_bytes)
 }
 
 /// The body of a complete `200` response, plain or chunked.
-fn body(response: &[u8], limit: usize) -> io::Result<Vec<u8>> {
+fn body(response: &[u8], maximum_body_bytes: usize) -> io::Result<Vec<u8>> {
     let split = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -169,7 +174,7 @@ fn body(response: &[u8], limit: usize) -> io::Result<Vec<u8>> {
     } else {
         rest.to_vec()
     };
-    if content.len() > limit {
+    if content.len() > maximum_body_bytes {
         return Err(io::Error::other("too_large"));
     }
     Ok(content)

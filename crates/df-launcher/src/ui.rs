@@ -1192,8 +1192,6 @@ fn saved_games(snapshot: &Snapshot) -> String {
     )
 }
 
-// ---------------------------------------------------------------------------------- settings
-
 struct Fields<'a> {
     errors: &'a [FieldError],
 }
@@ -1714,7 +1712,6 @@ mod tests {
         assert!(page.contains("class=\"ambience\" aria-hidden=\"true\""));
         assert!(page.contains("Stop and save"));
         assert!(!page.contains("Saved games"));
-        // Two clocks that count on from the session and the whole game, and the table frame.
         assert!(page.contains("<span class=\"tablet-label\">This session</span><span class=\"clock\" style=\"--start: 12"));
         assert!(page.contains("<span class=\"tablet-label\">All sessions</span><span class=\"clock\" style=\"--start: 37"));
         assert!(page.contains("aria-label=\"2 minutes\""));
