@@ -126,8 +126,9 @@ pub fn grid_words(
     }
     let mut raise = |cell: Cell, code: f32| {
         if grid.is_walkable(cell) {
-            let index = HEADER_WORDS + (cell.row as u32 * grid.cols() + cell.col as u32) as usize;
-            words[index] = words[index].max(code);
+            let cell_code_index =
+                HEADER_WORDS + (cell.row as u32 * grid.cols() + cell.col as u32) as usize;
+            words[cell_code_index] = words[cell_code_index].max(code);
         }
     };
     for (cell, side) in standing {

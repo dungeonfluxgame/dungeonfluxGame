@@ -1111,11 +1111,11 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
     let roll_call = all_landed + DICE_READ;
     builder.at(roll_call, Step::Banner(None));
     builder.at(roll_call, Step::ClearDice);
-    let individual = rolls.len().min(MAX_INDIVIDUAL_STOPS);
-    let grouped = &rolls[individual..];
-    let stops = individual + usize::from(!grouped.is_empty());
-    let per_stop = (MAX_ROLL_CALL / stops as u32).clamp(MIN_STOP, STOP);
-    let travel = (per_stop * 3 / 10).min(Duration::from_millis(350));
+    let individual_stop_count = rolls.len().min(MAX_INDIVIDUAL_STOPS);
+    let grouped = &rolls[individual_stop_count..];
+    let stop_count = individual_stop_count + usize::from(!grouped.is_empty());
+    let duration_per_stop = (MAX_ROLL_CALL / stop_count as u32).clamp(MIN_STOP, STOP);
+    let travel = (duration_per_stop * 3 / 10).min(Duration::from_millis(350));
     let ready_for = |token: &Token| {
         if token.side == Side::Enemy {
             ReadyStyle::Snarl
@@ -1125,8 +1125,8 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
             ReadyStyle::Brandish
         }
     };
-    for (index, roll) in rolls.iter().take(individual).enumerate() {
-        let at = roll_call + per_stop * index as u32;
+    for (index, roll) in rolls.iter().take(individual_stop_count).enumerate() {
+        let at = roll_call + duration_per_stop * index as u32;
         let arrive = at + travel;
         let token = find(tokens, &roll.token)?;
         builder.at(
@@ -1163,13 +1163,13 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
             Step::Sting {
                 token: roll.token.clone(),
                 index: index as u32,
-                last: index + 1 == stops,
+                last: index + 1 == stop_count,
             },
         );
     }
     if let (Some(head), Some(tail)) = (grouped.first(), grouped.last()) {
         // One sweep over everyone left: a wide shot between the first and last of them.
-        let at = roll_call + per_stop * individual as u32;
+        let at = roll_call + duration_per_stop * individual_stop_count as u32;
         let arrive = at + travel;
         builder.at(
             at,
@@ -1197,7 +1197,7 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
                 arrive,
                 Step::InitiativeBadge {
                     token: roll.token.clone(),
-                    order: (individual + offset) as u32 + 1,
+                    order: (individual_stop_count + offset) as u32 + 1,
                     total: roll.total,
                 },
             );
@@ -1207,14 +1207,14 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
             arrive,
             Step::Sting {
                 token: head.token.clone(),
-                index: individual as u32,
+                index: individual_stop_count as u32,
                 last: true,
             },
         );
     }
 
     // Pull back, then the round banner and the first turn.
-    let over = roll_call + per_stop * stops as u32;
+    let over = roll_call + duration_per_stop * stop_count as u32;
     builder.at(
         over,
         Step::Whip {
