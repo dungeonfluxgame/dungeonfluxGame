@@ -8,10 +8,31 @@ use std::{
     io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
+// O_NOFOLLOW differs by target. macOS: 0x100. Linux x86 and x86_64: 0x20000. Linux aarch64 and
+// arm: 0x8000 (on those, 0x20000 is not O_NOFOLLOW, so an open would follow the link silently).
+// Values from the kernel's per-arch fcntl headers; the crate has no libc dependency to check against.
 #[cfg(target_os = "macos")]
 const NOFOLLOW: i32 = 0x100;
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
 const NOFOLLOW: i32 = 0x20000;
+#[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+const NOFOLLOW: i32 = 0x8000;
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm"
+    ))
+))]
+compile_error!(
+    "df-telemetry: O_NOFOLLOW is not verified for this Linux architecture; add its value to ownership.rs"
+);
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+compile_error!(
+    "df-telemetry: O_NOFOLLOW is not verified for this unix target; add its value to ownership.rs"
+);
 /// Stable Win32 flag values for no-follow opens that can also open directories.
 /// The identity fields themselves come from the `winapi-util` safe wrapper.
 #[cfg(windows)]
@@ -225,5 +246,33 @@ impl OwnedRoot {
             path: path.to_owned(),
             _lock: lock,
         })
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::NOFOLLOW;
+    use std::{
+        fs::{self, OpenOptions},
+        os::unix::fs::{OpenOptionsExt, symlink},
+    };
+
+    // A wrong NOFOLLOW value opens the target instead of refusing the link, so this fails on the
+    // wrong target. ELOOP is errno 40 on the Linux architectures this crate builds for.
+    #[test]
+    fn nofollow_refuses_a_symlink_on_linux() {
+        let dir =
+            std::env::temp_dir().join(format!("df-telemetry-nofollow-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        let link = dir.join("link");
+        fs::write(&target, b"x").unwrap();
+        symlink(&target, &link).unwrap();
+        let result = OpenOptions::new()
+            .read(true)
+            .custom_flags(NOFOLLOW)
+            .open(&link);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(40));
     }
 }
