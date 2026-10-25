@@ -149,16 +149,16 @@ pub(in crate::gameplay) fn hero_death_at_blow(
 }
 
 fn clean_fact(text: &str) -> Option<String> {
-    let cleaned: String = text
+    let sanitized: String = text
         .trim()
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    let cleaned = cleaned.trim().to_owned();
-    if cleaned.is_empty() {
+    let sanitized = sanitized.trim();
+    if sanitized.is_empty() {
         return None;
     }
-    Some(cleaned.chars().take(MAXIMUM_FACT_CHARACTERS).collect())
+    Some(sanitized.chars().take(MAXIMUM_FACT_CHARACTERS).collect())
 }
 
 /// The deterministic identity of a blow: same blow, same id, so a replayed
