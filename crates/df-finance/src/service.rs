@@ -55,6 +55,7 @@ pub enum FinanceError {
     ReconciliationSourcePeriod,
     ReconciliationOverflow,
     ReconciliationUnknownAccount(u16),
+    ReconciliationUnknownReferenceKind(String),
     ReconciliationPort,
     Database(tokio_postgres::Error),
 }

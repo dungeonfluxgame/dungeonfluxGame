@@ -21,28 +21,53 @@ fn ops_04_detects_unexplained_account_imbalance_and_serializes_period_runs() {
             invoices: FakeReconciliationSource::default(),
             dispatches: FakeReconciliationSource::default(),
         };
-        let clean = reconcile_period(
-            &mut world.scratch.connect().await,
-            period_id,
-            &clean_sources,
-        )
-        .await
-        .expect("clean reconciliation");
+        let mut clean_client = world.scratch.connect().await;
+        let clean = reconcile_period(&mut clean_client, period_id, &clean_sources)
+            .await
+            .expect("clean reconciliation");
         assert!(clean.is_clean());
 
         let imbalanced_sources = ReconciliationPorts {
-            processor: FakeReconciliationSource::new(vec![SourceLine {
-                kind: df_finance::reconciliation::ReferenceKind::ProcessorCapture,
-                reference: "capture-ops-04".into(),
+            processor: FakeReconciliationSource::new(vec![
+                SourceLine {
+                    kind: df_finance::reconciliation::ReferenceKind::ProcessorCapture,
+                    reference: "capture-ops-04".into(),
+                    period_id,
+                    account: AccountCode::ProcessorClearing,
+                    amount_micro_dollars: 125_000,
+                },
+                SourceLine {
+                    kind: df_finance::reconciliation::ReferenceKind::ProcessorRefund,
+                    reference: "refund-ops-04".into(),
+                    period_id,
+                    account: AccountCode::RefundPayable,
+                    amount_micro_dollars: -25_000,
+                },
+                SourceLine {
+                    kind: df_finance::reconciliation::ReferenceKind::ProcessorDispute,
+                    reference: "dispute-ops-04".into(),
+                    period_id,
+                    account: AccountCode::DisputeFundsWithheld,
+                    amount_micro_dollars: 35_000,
+                },
+            ]),
+            invoices: FakeReconciliationSource::new(vec![SourceLine {
+                kind: df_finance::reconciliation::ReferenceKind::SupplierInvoice,
+                reference: "invoice-ops-04".into(),
                 period_id,
-                account: AccountCode::ProcessorClearing,
-                amount_micro_dollars: 125_000,
+                account: AccountCode::SupplierPayable,
+                amount_micro_dollars: -45_000,
             }]),
-            invoices: FakeReconciliationSource::default(),
-            dispatches: FakeReconciliationSource::default(),
+            dispatches: FakeReconciliationSource::new(vec![SourceLine {
+                kind: df_finance::reconciliation::ReferenceKind::Dispatch,
+                reference: "attempt-ops-04".into(),
+                period_id,
+                account: AccountCode::SupplierExposureOpen,
+                amount_micro_dollars: 55_000,
+            }]),
         };
 
-        let blocker = world.scratch.connect().await;
+        let mut blocker = world.scratch.connect().await;
         let held = blocker.transaction().await.expect("lock transaction");
         held.query_one("SELECT pg_advisory_xact_lock($1::integer)", &[&period_id])
             .await
@@ -82,8 +107,15 @@ fn ops_04_detects_unexplained_account_imbalance_and_serializes_period_runs() {
             .expect("reconciliation completes")
             .expect("reconciliation task")
             .expect("imbalanced reconciliation");
-        assert_eq!(report.differences.len(), 1);
-        assert_eq!(report.differences[0].account_code, 1100);
+        assert_eq!(report.differences.len(), 5);
+        assert_eq!(
+            report
+                .differences
+                .iter()
+                .map(|difference| difference.account_code)
+                .collect::<Vec<_>>(),
+            [1100, 1300, 2300, 2500, 9100]
+        );
         assert_eq!(report.differences[0].unexplained_micro_dollars, 125_000);
 
         let verification = verify_journal_hash_chain(&world.admin)
