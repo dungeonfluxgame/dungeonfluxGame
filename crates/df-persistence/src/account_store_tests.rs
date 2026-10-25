@@ -192,7 +192,7 @@ postgres_contract!(
     the_provider_checks_the_password_for_sensitive_actions_and_closing_deletes_its_user,
     password_and_email_changes_are_not_offered_while_the_provider_holds_them,
     an_operator_lookup_finds_an_account_by_exact_address_or_id_only,
-    verifying_replaces_the_sign_up_password_and_ends_earlier_sessions,
+    verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions,
     verifying_at_the_provider_replaces_its_password_and_a_refused_password_leaves_the_link,
     a_login_after_the_closing_window_does_not_reopen_the_account,
     closing_needs_a_fresh_proof_within_five_minutes,

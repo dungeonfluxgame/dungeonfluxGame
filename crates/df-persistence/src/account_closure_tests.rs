@@ -684,7 +684,7 @@ mod service_role {
         retention_deletes_a_closed_accounts_personal_data_after_the_window,
         the_provider_checks_the_password_for_sensitive_actions_and_closing_deletes_its_user,
         closing_schedules_archived_deletions_cancels_proposals_and_reopening_undoes_them,
-        verifying_replaces_the_sign_up_password_and_ends_earlier_sessions,
+        verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions,
         a_provider_reset_works_once_and_signs_out_everywhere,
     );
 }
