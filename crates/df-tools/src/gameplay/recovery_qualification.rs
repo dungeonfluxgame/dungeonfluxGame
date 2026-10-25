@@ -1501,9 +1501,14 @@ fn recovery_creation_body_passes_actual_source_character_validator() {
     let initial = journey::initial().unwrap();
     let body = create(&initial, 0x93);
     let character = body.character.unwrap();
+    // The portrait choice is identity metadata, not a mechanical build group. The submit path
+    // filters choices with the same predicate before it validates the build (actor.rs).
     let selections = character
         .choices
         .iter()
+        .filter(|choice| {
+            crate::gameplay::hero_identity::is_character_pack_validation_choice(&choice.group_id)
+        })
         .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
         .collect::<Vec<_>>();
     assert!(

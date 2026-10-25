@@ -1758,26 +1758,21 @@ fn audit_phase_name(phase: rpc::JourneyPhase) -> &'static str {
     }
 }
 
+/// The member's journey in one audience projection. Callers that read several audit fields from
+/// the same checkpoint take it once, because each projection rebuilds the whole view.
+fn audit_journey(checkpoint: &Checkpoint, member: df_types::MemberId) -> Option<rpc::JourneyView> {
+    let view = wire::journey_view(checkpoint, LocalDemoRole::Player, member).ok()?;
+    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+        return None;
+    };
+    player.journey
+}
+
 fn audit_combat_view(
     checkpoint: &Checkpoint,
     member: df_types::MemberId,
 ) -> Option<rpc::CombatView> {
-    let view = wire::journey_view(checkpoint, LocalDemoRole::Player, member).ok()?;
-    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
-        return None;
-    };
-    player.journey?.combat
-}
-
-fn audit_hero(checkpoint: &Checkpoint, member: df_types::MemberId) -> Option<String> {
-    let view = wire::journey_view(checkpoint, LocalDemoRole::Player, member).ok()?;
-    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
-        return None;
-    };
-    player
-        .journey?
-        .own_character
-        .map(|character| character.name)
+    audit_journey(checkpoint, member)?.combat
 }
 
 fn after_grant_reconnect<T>(
@@ -4921,7 +4916,13 @@ impl Actor {
         let before_phase = super::journey::phase(before).ok();
         let after_phase = super::journey::phase(after).ok();
         let before_combat = audit_combat_view(before, member);
-        let after_combat = audit_combat_view(after, member);
+        let (after_combat, hero) = match audit_journey(after, member) {
+            Some(journey) => (
+                journey.combat,
+                journey.own_character.map(|character| character.name),
+            ),
+            None => (None, None),
+        };
         if kind == rpc::GameplayActionKind::CreateCharacter
             && let Some(character) = after
                 .state()
@@ -4985,11 +4986,10 @@ impl Actor {
                     } else {
                         "none"
                     },
-                    audit_combat_view(before, member).map_or(0, |combat| combat.round),
+                    before_combat.as_ref().map_or(0, |combat| combat.round),
                 ),
             );
         }
-        let hero = audit_hero(after, member);
         if let Some(actor) = hero.as_deref() {
             if kind == rpc::GameplayActionKind::ExamineHarborSeal
                 && let Some(check) = accepted.check.as_ref()

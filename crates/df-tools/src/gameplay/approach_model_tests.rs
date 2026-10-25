@@ -198,7 +198,7 @@ async fn jev_skill_deadline_is_neutral_speech_with_no_skill_or_thing() {
     let endpoint = FakeEndpoint::start(vec![
         answer("o3"),
         Reply::DelayedStatus(
-            Duration::from_millis(900),
+            past_deadline(),
             200,
             json!({"answers": {"q1": {"type": "choice", "choice": "o1"}}}),
         ),
@@ -234,7 +234,7 @@ async fn jev_off_classify_input_is_neutral_and_makes_no_request() {
 #[tokio::test(flavor = "current_thread")]
 async fn jev_timeout_on_an_observation_is_neutral_speech() {
     let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
-        Duration::from_millis(900),
+        past_deadline(),
         200,
         json!({"answers": {"q1": {"type": "choice", "choice": "o3"}}}),
     )]);
@@ -376,6 +376,11 @@ async fn approach_definitions_make_a_fair_favour_bargain_and_a_tip_kindness() {
         "{instructions}"
     );
     assert!(instructions.contains("tip or a gift"), "{instructions}");
+}
+
+/// A Jev reply delayed past the classifier deadline, so the bounded call times out.
+fn past_deadline() -> Duration {
+    DEADLINE + Duration::from_millis(500)
 }
 
 pub(in crate::gameplay) fn model(endpoint: &FakeEndpoint) -> ApproachModel {
@@ -617,9 +622,9 @@ async fn adventure_subject_options_include_its_object_and_reject_an_unlisted_per
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn an_answer_after_eight_hundred_milliseconds_times_out_without_retrying() {
+async fn an_answer_after_the_deadline_times_out_without_retrying() {
     let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
-        Duration::from_millis(900),
+        past_deadline(),
         200,
         json!({"answers": {"q1": {"type": "choice", "choice": "o7"}}}),
     )]);
@@ -637,6 +642,26 @@ async fn an_answer_after_eight_hundred_milliseconds_times_out_without_retrying()
         logged,
         "APPROACH source=unavailable label=other subject=other reason=timeout"
     );
+    assert_eq!(endpoint.connections(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_jev_answer_slower_than_the_old_800_ms_deadline_is_still_accepted() {
+    // Owner decision, 2026-10-24: the Jev deadline is 4 s, raised from 800 ms. This answer lands
+    // after the old bound and before the current one, so it must be accepted, not timed out.
+    assert_eq!(DEADLINE, Duration::from_secs(4));
+    let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
+        Duration::from_millis(900),
+        200,
+        json!({"answers": {"q1": {"type": "choice", "choice": "o1"}}}),
+    )]);
+    let labels = [("alpha", "the first option"), ("beta", "the second option")];
+
+    let chosen = model(&endpoint)
+        .choose_label(&json!({}), "Pick one label.", &labels)
+        .await;
+
+    assert_eq!(chosen, Ok("alpha"));
     assert_eq!(endpoint.connections(), 1);
 }
 
@@ -859,7 +884,7 @@ async fn no_jev_answer_routes_to_the_focus_and_never_to_an_exact_match() {
     assert_eq!(failed.reason, "provider_failure");
 
     let timed_out = model(&FakeEndpoint::start(vec![Reply::DelayedStatus(
-        Duration::from_millis(900),
+        past_deadline(),
         200,
         json!({"answers": {"q1": {"type": "choice", "choice": "o4"}}}),
     )]))
@@ -1131,7 +1156,7 @@ async fn physical_words_without_jev_stay_neutral_speech() {
     assert_eq!(quiet.source, "unavailable");
 
     let timed_out = model(&FakeEndpoint::start(vec![Reply::DelayedStatus(
-        Duration::from_millis(900),
+        past_deadline(),
         200,
         json!({"answers": {"q1": {"type": "choice", "choice": "o10"}}}),
     )]))
@@ -1383,7 +1408,7 @@ async fn choose_label_reports_each_typed_reason_without_guessing() {
     assert_eq!(JevUnavailable::UnknownChoice.label(), "unknown_choice");
 
     let timed_out = model(&FakeEndpoint::start(vec![Reply::DelayedStatus(
-        Duration::from_millis(900),
+        past_deadline(),
         200,
         json!({"answers": {"q1": {"type": "choice", "choice": "o1"}}}),
     )]))
@@ -1449,7 +1474,7 @@ async fn live_addressee_probe_absent_discourse_and_background() {
 #[test]
 fn no_const_or_static_english_phrase_table_decides_meaning() {
     // Each entry is (file, item). Only closed Jev label catalogs and structural ids may be listed.
-    const ALLOWED: [(&str, &str); 14] = [
+    const ALLOWED: [(&str, &str); 16] = [
         // Jev's closed intent labels, each with the criterion text Jev reads.
         ("approach_model.rs", "INTENTS"),
         // Jev's closed attempt-skill labels, each with its criterion text.
@@ -1478,6 +1503,12 @@ fn no_const_or_static_english_phrase_table_decides_meaning() {
         ("freeform_action.rs", "STRIKE_MEANS"),
         // Jev's closed service labels; the chosen label maps back to a listed ledger service.
         ("dialogue.rs", "SERVICE_CHOICES"),
+        // Jev's closed opening-social labels (not_request, same_request, ...); each label is a
+        // choose_label answer that the caller maps to a branch, never a phrase match.
+        ("dialogue.rs", "OPENING_SOCIAL_CHOICES"),
+        // Jev's closed opening willingness labels (willing, hesitant, unwilling, ...), used with
+        // choose_label for Dain's stand-down judgement.
+        ("dialogue.rs", "OPENING_WILLINGNESS_CHOICES"),
     ];
     let sources = [
         ("approach_model.rs", include_str!("approach_model.rs")),
