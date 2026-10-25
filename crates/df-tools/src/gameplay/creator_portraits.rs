@@ -33,6 +33,8 @@ use tonic::{Request, Status};
 const PREPARING_PORTRAIT: &str = "Preparing your portrait…";
 const CREATING_PORTRAIT: &str = "Creating your portrait…";
 const READY_PORTRAIT: &str = "Portrait ready";
+/// The largest portrait image served or attached, drafts and approved appearances alike.
+const MAXIMUM_PORTRAIT_BYTES: u64 = 6 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(super) struct Portraits {
@@ -332,7 +334,7 @@ impl Portraits {
         };
         match self.image(&key).await {
             imagery::Lookup::Image { bytes, .. }
-                if !bytes.is_empty() && bytes.len() <= 6 * 1024 * 1024 =>
+                if !bytes.is_empty() && bytes.len() as u64 <= MAXIMUM_PORTRAIT_BYTES =>
             {
                 super::actor::record_audit_line(
                     "gameplay.creator_portrait_attach",
@@ -403,7 +405,7 @@ async fn approved_reference_at(
         || !key.bytes().all(|byte| byte.is_ascii_hexdigit())
         || asset.kind != df_model::checkpoint::AssetKind::Image
         || asset.byte_length == 0
-        || asset.byte_length > 6 * 1024 * 1024
+        || asset.byte_length > MAXIMUM_PORTRAIT_BYTES
     {
         return Err(ImageFailure::InvalidRequest);
     }
@@ -421,7 +423,7 @@ async fn approved_reference_at(
             return Err(ImageFailure::InvalidRequest);
         }
         let mut bytes = Vec::new();
-        file.take(6 * 1024 * 1024 + 1)
+        file.take(MAXIMUM_PORTRAIT_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| ImageFailure::InvalidRequest)?;
         if bytes.len() as u64 != asset.byte_length
@@ -1077,7 +1079,7 @@ async fn respond(
             })
         })
         .unwrap_or_else(|| "committed-asset".to_owned());
-    if asset.byte_length > 6 * 1024 * 1024 {
+    if asset.byte_length > MAXIMUM_PORTRAIT_BYTES {
         let _scope = df_observe::audit_scope(audit.clone());
         super::actor::record_audit_line("gameplay.creator_portrait_image", "CREATOR_PORTRAIT event=image-served outcome=not_found reason=oversize operation_hash=none".to_owned());
         return StatusCode::NOT_FOUND.into_response();
@@ -1090,7 +1092,8 @@ async fn respond(
             return Err(std::io::Error::other("Portrait cache size mismatch"));
         }
         let mut bytes = Vec::new();
-        file.take(6 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        file.take(MAXIMUM_PORTRAIT_BYTES + 1)
+            .read_to_end(&mut bytes)?;
         Ok::<_, std::io::Error>(bytes)
     })
     .await
@@ -1131,10 +1134,18 @@ async fn serve_draft(
     audit: &df_observe::AuditContext,
     grant: &str,
 ) -> Response {
+    let Some(presented) = super::parse_binding(grant) else {
+        return refuse_image(audit, "unknown-capability", "none");
+    };
     let issued = portraits.requests.lock().ok().and_then(|requests| {
-        let entry = requests
-            .values()
-            .find(|entry| super::journey::hex(&entry.grant) == grant)?;
+        // Every entry is compared, so the scan does not reveal which draft matched.
+        let entry = requests.values().fold(None, |found, entry| {
+            if same_grant(&entry.grant, &presented) {
+                Some(entry)
+            } else {
+                found
+            }
+        })?;
         match portraits.imagery.as_ref()?.hub().status(&entry.resource) {
             ResourceStatus::Ready(generated) => {
                 Some((generated.handle, entry.diagnostic_operation))
@@ -1147,6 +1158,11 @@ async fn serve_draft(
     };
     let operation_hash = operation.to_string();
     match portraits.image(&handle).await {
+        imagery::Lookup::Image { bytes, format: _ }
+            if bytes.len() as u64 > MAXIMUM_PORTRAIT_BYTES =>
+        {
+            refuse_image(audit, "oversize", &operation_hash)
+        }
         imagery::Lookup::Image { bytes, format: _ } => {
             portrait_event_scoped(
                 audit,
@@ -1172,6 +1188,18 @@ fn refuse_image(audit: &df_observe::AuditContext, reason: &str, operation_hash: 
         ),
     );
     StatusCode::NOT_FOUND.into_response()
+}
+
+/// Compares two capabilities over every byte with no early exit, so the time taken does not show
+/// how long a prefix matched.
+fn same_grant(issued: &[u8; 32], presented: &[u8; 32]) -> bool {
+    issued
+        .iter()
+        .zip(presented)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn portrait_image(bytes: impl IntoResponse) -> Response {
@@ -2014,5 +2042,47 @@ mod catalog_tests {
             StatusCode::NOT_FOUND
         );
         let _removed = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_draft_is_served_up_to_the_portrait_bound_and_refused_one_byte_beyond_it() {
+        let root = std::env::temp_dir().join(format!("df-draft-bound-{}", std::process::id()));
+        let _removed = std::fs::remove_dir_all(&root);
+        let fixture = super::super::imagery::tests::DirectionFixture::new(&root);
+        let mut portraits = Portraits::disabled();
+        portraits.imagery = Some(fixture.imagery.clone());
+        let grant = [0x44; 32];
+        let key = ready_draft(&portraits, &fixture, "draft-a", [1; 32], grant).await;
+        let path = root.join(format!("{key}.jpg"));
+        let capability = super::super::journey::hex(&grant);
+        let audit = df_observe::AuditContext::default();
+        let largest = usize::try_from(MAXIMUM_PORTRAIT_BYTES).unwrap();
+        std::fs::write(&path, vec![7_u8; largest]).unwrap();
+        assert_eq!(
+            served_bytes(respond(&portraits, &audit, &capability, None).await)
+                .await
+                .len(),
+            largest
+        );
+        std::fs::write(&path, vec![7_u8; largest + 1]).unwrap();
+        assert_eq!(
+            respond(&portraits, &audit, &capability, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let _removed = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_capability_matches_only_when_every_byte_matches() {
+        let issued = [0x5a; 32];
+        assert!(same_grant(&issued, &[0x5a; 32]));
+        let mut last_byte_differs = issued;
+        last_byte_differs[31] ^= 1;
+        assert!(!same_grant(&issued, &last_byte_differs));
+        let mut first_byte_differs = issued;
+        first_byte_differs[0] ^= 0x80;
+        assert!(!same_grant(&issued, &first_byte_differs));
     }
 }
