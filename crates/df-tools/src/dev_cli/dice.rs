@@ -24,7 +24,7 @@ enum Command {
 
 fn die_sides(name: &str) -> Result<u32, String> {
     DICE.iter()
-        .find(|(known, _)| *known == name)
+        .find(|(die_name, _)| *die_name == name)
         .map(|(_, sides)| *sides)
         .ok_or_else(|| {
             format!("--die must be one of d4, d6, d8, d10, d12, d20, d100 (got {name:?})")

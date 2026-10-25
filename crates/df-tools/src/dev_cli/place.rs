@@ -23,14 +23,14 @@ fn parse(positional: &[String], options: &[(String, String)]) -> Result<Command,
     match positional.get(1).map(String::as_str) {
         None => Ok(Command::Show),
         Some("list") if positional.len() == 2 => Ok(Command::List),
-        Some(op @ ("go" | "travel")) => {
+        Some(operation @ ("go" | "travel")) => {
             let target = positional[2..].join(" ");
             if target.trim().is_empty() {
                 return Err(
                     "place go needs an exit or a place, e.g. dev place go street-door".into(),
                 );
             }
-            Ok(if op == "travel" {
+            Ok(if operation == "travel" {
                 Command::Travel { target }
             } else {
                 Command::Go { target }

@@ -149,15 +149,15 @@ pub(crate) fn down_at(
     presented: u64,
     latest: bool,
 ) -> bool {
-    let waiting = marks
+    let has_waiting_beats = marks
         .iter()
-        .any(|(sequence, who, _)| who == name && *sequence > presented);
-    if !waiting {
+        .any(|(sequence, creature, _)| creature == name && *sequence > presented);
+    if !has_waiting_beats {
         return latest;
     }
     marks
         .iter()
-        .filter(|(sequence, who, _)| who == name && *sequence <= presented)
+        .filter(|(sequence, creature, _)| creature == name && *sequence <= presented)
         .max_by_key(|(sequence, ..)| *sequence)
         .is_some_and(|(.., down)| *down)
 }
@@ -165,8 +165,10 @@ pub(crate) fn down_at(
 /// A square on the grid.
 pub(crate) type Square = (u32, u32);
 
-fn adjacent(a: Square, b: Square) -> bool {
-    a != b && a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1
+fn adjacent(first_square: Square, second_square: Square) -> bool {
+    first_square != second_square
+        && first_square.0.abs_diff(second_square.0) <= 1
+        && first_square.1.abs_diff(second_square.1) <= 1
 }
 
 /// A move cut in two by the reaction that interrupted it.
