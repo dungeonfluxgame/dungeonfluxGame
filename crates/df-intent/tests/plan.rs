@@ -432,7 +432,7 @@ fn empty_count_byte_and_comparison_boundaries_are_explicit() {
         validate(&[], &current, bounds()).unwrap_err(),
         PlanError::EmptyPlan
     );
-    let bytes = steps
+    let retained_bytes = steps
         .iter()
         .map(|input| input.retained_bytes().unwrap())
         .sum::<usize>();
@@ -446,7 +446,7 @@ fn empty_count_byte_and_comparison_boundaries_are_explicit() {
             ..bounds()
         },
         PlanLimits {
-            maximum_total_input_bytes: bytes - 1,
+            maximum_total_input_bytes: retained_bytes - 1,
             ..bounds()
         },
         PlanLimits {
@@ -469,7 +469,7 @@ fn empty_count_byte_and_comparison_boundaries_are_explicit() {
             &current,
             PlanLimits {
                 maximum_steps: 2,
-                maximum_total_input_bytes: bytes,
+                maximum_total_input_bytes: retained_bytes,
                 maximum_comparisons: 1,
                 ..bounds()
             }

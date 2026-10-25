@@ -201,14 +201,14 @@ fn duplicate_target_bindings_never_turn_collection_order_into_authority() {
 fn exact_owned_bytes_and_candidate_scan_bounds_remain_explicit() {
     let current = current();
     let set = set(&current, &[4, 5]);
-    let bytes = set.retained_bytes().unwrap();
+    let retained_bytes = set.retained_bytes().unwrap();
     assert!(
         resolve(
             &current,
             &set,
             TargetSelection::Unspecified,
             TargetResolutionLimits {
-                output_bytes: bytes,
+                output_bytes: retained_bytes,
                 ..bounds()
             }
         )
@@ -216,7 +216,7 @@ fn exact_owned_bytes_and_candidate_scan_bounds_remain_explicit() {
     );
     for limits in [
         TargetResolutionLimits {
-            output_bytes: bytes - 1,
+            output_bytes: retained_bytes - 1,
             ..bounds()
         },
         TargetResolutionLimits {
