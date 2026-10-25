@@ -268,6 +268,36 @@ async fn strings(client: &Client, sql: &str) -> Vec<String> {
 }
 
 #[test]
+fn every_table_with_a_policy_enforces_row_security() {
+    run(async {
+        let Some(scratch) = Scratch::open().await else {
+            return;
+        };
+        let client = scratch.connect().await;
+        let unprotected: Vec<String> = client
+            .query(
+                "SELECT DISTINCT p.schemaname || '.' || p.tablename \
+                 FROM pg_policies p \
+                 JOIN pg_namespace n ON n.nspname = p.schemaname \
+                 JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = p.tablename \
+                 WHERE NOT c.relrowsecurity OR NOT c.relforcerowsecurity \
+                 ORDER BY 1",
+                &[],
+            )
+            .await
+            .expect("policy row-security catalog")
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert!(
+            unprotected.is_empty(),
+            "policies without forced RLS: {unprotected:?}"
+        );
+        scratch.finish().await;
+    });
+}
+
+#[test]
 fn every_relation_granted_to_a_service_role_is_protected_across_the_whole_hosted_migration_set() {
     run(async {
         let Some(scratch) = Scratch::open().await else {

@@ -64,7 +64,9 @@ BEGIN
         'df_runtime.campaign_owners', 'df_runtime.placements',
         'df_runtime.campaign_game_sessions', 'df_runtime.placement_requests',
         'df_runtime.dispatcher_instances', 'df_runtime.refetch_requests',
-        'df_runtime.table_sessions', 'df_runtime.meter_segments', 'df_game.sessions']
+        'df_runtime.table_sessions', 'df_runtime.meter_segments', 'df_game.sessions',
+        'df_game.checkpoints', 'df_game.operations', 'df_game.facts', 'df_game.intents',
+        'df_game.retired_namespaces']
     LOOP
         EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', v_table);
         EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', v_table);

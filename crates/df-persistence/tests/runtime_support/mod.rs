@@ -162,7 +162,18 @@ impl Scratch {
             .as_nanos();
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-        let database = format!("df_runtime_test_{nanos}_{}_{serial}", std::process::id());
+        let prefix = std::env::var("DUNGEONFLUX_RUNTIME_PG_PREFIX").unwrap_or_else(|_| "df".into());
+        assert!(
+            !prefix.is_empty()
+                && prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+            "scratch database prefix must contain only ASCII letters, digits and underscores"
+        );
+        let database = format!(
+            "{prefix}_runtime_test_{nanos}_{}_{serial}",
+            std::process::id()
+        );
         connect(&admin)
             .await
             .batch_execute(&format!("CREATE DATABASE {database}"))
@@ -680,6 +691,68 @@ pub async fn add_game_session(client: &Client, table: &Table, session: &[u8]) {
         )
         .await
         .expect("game session");
+}
+
+/// Seeds one checkpoint, operation, fact and intent for a game session.
+pub async fn add_game_rows(client: &Client, table: &Table, session: &[u8]) {
+    let principal = vec![0x71_u8; 16];
+    let namespace = vec![0x72_u8; 16];
+    let operation = vec![0x73_u8; 16];
+    let effect = vec![0x74_u8; 16];
+    let run_id = vec![0x01_u8; 16];
+    client
+        .execute(
+            "INSERT INTO df_game.checkpoints (tenant_id, session_id, recovery_epoch, \
+             in_epoch_sequence, run_id, schema_version, codec_version, complete_envelope) \
+             VALUES ($1::bytea, $2::bytea, 1, 1, $3::bytea, 1, 1, '\\x00')",
+            &[&table.tenant, &session, &run_id],
+        )
+        .await
+        .expect("checkpoint fixture");
+    client
+        .execute(
+            "INSERT INTO df_game.operations (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, fingerprint_version, canonical_fingerprint, committed_epoch, \
+             committed_sequence, receipt_version, receipt) VALUES ($1::bytea, $2::bytea, $3::bytea, \
+             $4::bytea, 1, $5::bytea, 1, $6, 1, 1, 1, NULL)",
+            &[
+                &table.tenant,
+                &session,
+                &principal,
+                &namespace,
+                &operation,
+                &vec![0x75_u8; 32],
+            ],
+        )
+        .await
+        .expect("operation fixture");
+    client
+        .execute(
+            "INSERT INTO df_game.facts (tenant_id, session_id, committed_epoch, \
+             committed_sequence, ordinal, fact_version, fact) VALUES ($1::bytea, $2::bytea, 1, 1, 0, 1, '\\x01')",
+            &[&table.tenant, &session],
+        )
+        .await
+        .expect("fact fixture");
+    client
+        .execute(
+            "INSERT INTO df_game.intents (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, slot, effect_id, run_id, committed_epoch, committed_sequence, \
+             process_generation, execution_mode, intent_kind, intent_version, intent) \
+             VALUES ($1::bytea, $2::bytea, $3::bytea, $4::bytea, 1, $5::bytea, 0, $6::bytea, \
+             $7::bytea, 1, 1, 1, 1, 1, 1, '\\x01')",
+            &[
+                &table.tenant,
+                &session,
+                &principal,
+                &namespace,
+                &operation,
+                &effect,
+                &run_id,
+            ],
+        )
+        .await
+        .expect("intent fixture");
 }
 
 /// Whether `fence` passes `fence_current` on `path` (`game` or `paid`), asked as `df_control`.

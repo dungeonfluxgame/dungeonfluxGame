@@ -153,6 +153,105 @@ fn a_runtime_cannot_write_a_game_row_for_another_campaigns_session() {
 }
 
 #[test]
+fn a_runtime_cannot_read_or_write_another_campaigns_checkpoint_operation_fact_or_intent() {
+    run(async {
+        let Some(scratch) = Scratch::open().await else {
+            return;
+        };
+        let client = scratch.connect().await;
+        let ((_, first), (second_table, _)) = two_serving_campaigns(&client).await;
+        let session = vec![0x62_u8; 16];
+        let principal = vec![0x71_u8; 16];
+        let namespace = vec![0x72_u8; 16];
+        let operation = vec![0x73_u8; 16];
+        let run_id = vec![0x01_u8; 16];
+        let operation_foreign = vec![0x76_u8; 16];
+        let fingerprint_foreign = vec![0x77_u8; 32];
+        let effect_foreign = vec![0x78_u8; 16];
+        add_game_rows(&client, &second_table, &session).await;
+
+        for table in ["checkpoints", "operations", "facts", "intents"] {
+            let sql = format!("SELECT count(*) FROM df_game.{table} WHERE session_id = $1");
+            let rows = as_runtime(&client, &first.token, &sql, &[&session])
+                .await
+                .expect("foreign row is hidden");
+            assert_eq!(rows[0].get::<_, i64>(0), 0, "{table}");
+        }
+
+        let refused = as_runtime(
+            &client,
+            &first.token,
+            "INSERT INTO df_game.checkpoints (tenant_id, session_id, recovery_epoch, \
+             in_epoch_sequence, run_id, schema_version, codec_version, complete_envelope) \
+             VALUES ($1::bytea, $2::bytea, 1, 2, $3::bytea, 1, 1, '\\x00')",
+            &[&second_table.tenant, &session, &run_id],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&refused.expect_err("foreign checkpoint")).as_deref(),
+            Some("42501")
+        );
+        let refused = as_runtime(
+            &client,
+            &first.token,
+            "INSERT INTO df_game.operations (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, fingerprint_version, canonical_fingerprint, committed_epoch, \
+             committed_sequence, receipt_version, receipt) VALUES ($1::bytea, $2::bytea, $3::bytea, \
+             $4::bytea, 1, $5::bytea, 1, $6, 1, 1, 1, NULL)",
+            &[
+                &second_table.tenant,
+                &session,
+                &principal,
+                &namespace,
+                &operation_foreign,
+                &fingerprint_foreign,
+            ],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&refused.expect_err("foreign operation")).as_deref(),
+            Some("42501")
+        );
+        let refused = as_runtime(
+            &client,
+            &first.token,
+            "INSERT INTO df_game.facts (tenant_id, session_id, committed_epoch, committed_sequence, \
+             ordinal, fact_version, fact) VALUES ($1::bytea, $2::bytea, 1, 1, 1, 1, '\\x02')",
+            &[&second_table.tenant, &session],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&refused.expect_err("foreign fact")).as_deref(),
+            Some("42501")
+        );
+        let refused = as_runtime(
+            &client,
+            &first.token,
+            "INSERT INTO df_game.intents (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, slot, effect_id, run_id, committed_epoch, committed_sequence, \
+             process_generation, execution_mode, intent_kind, intent_version, intent) \
+             VALUES ($1::bytea, $2::bytea, $3::bytea, $4::bytea, 1, $5::bytea, 1, $6::bytea, \
+             $7::bytea, 1, 1, 1, 1, 1, 1, '\\x02')",
+            &[
+                &second_table.tenant,
+                &session,
+                &principal,
+                &namespace,
+                &operation,
+                &effect_foreign,
+                &run_id,
+            ],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&refused.expect_err("foreign intent")).as_deref(),
+            Some("42501")
+        );
+        scratch.finish().await;
+    });
+}
+
+#[test]
 fn a_superseded_or_expired_token_sees_no_game_rows() {
     run(async {
         let Some(scratch) = Scratch::open().await else {

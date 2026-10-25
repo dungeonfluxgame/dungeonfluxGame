@@ -105,7 +105,14 @@ fn an_importer_is_refused_on_another_campaign() {
         let (first, second) = two_campaigns();
         let other_session = vec![0x72_u8; 16];
         add_game_session(&client, &second, &other_session).await;
+        add_game_rows(&client, &second, &other_session).await;
+        let operation_foreign = vec![0x76_u8; 16];
+        let fingerprint_foreign = vec![0x77_u8; 32];
+        let effect_foreign = vec![0x78_u8; 16];
         open_import(&client, &first, JOB_TOKEN, 600).await;
+        let principal = vec![0x71_u8; 16];
+        let namespace = vec![0x72_u8; 16];
+        let operation = vec![0x73_u8; 16];
         let run_id = vec![0x01_u8; 16];
         let foreign_checkpoint = as_importer(
             &client,
@@ -116,6 +123,69 @@ fn an_importer_is_refused_on_another_campaign() {
         .await;
         assert_eq!(
             sqlstate(&foreign_checkpoint.expect_err("refused")).as_deref(),
+            Some("42501")
+        );
+        for table in ["checkpoints", "operations", "facts", "intents"] {
+            let sql = format!("SELECT count(*) FROM df_game.{table} WHERE session_id = $1");
+            let rows = as_importer(&client, JOB_TOKEN, &sql, &[&other_session])
+                .await
+                .expect("foreign row is hidden");
+            assert_eq!(rows[0].get::<_, i64>(0), 0, "{table}");
+        }
+        let foreign_operation = as_importer(
+            &client,
+            JOB_TOKEN,
+            "INSERT INTO df_game.operations (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, fingerprint_version, canonical_fingerprint, committed_epoch, \
+             committed_sequence, receipt_version, receipt) VALUES ($1::bytea, $2::bytea, $3::bytea, \
+             $4::bytea, 1, $5::bytea, 1, $6, 1, 1, 1, NULL)",
+            &[
+                &second.tenant,
+                &other_session,
+                &principal,
+                &namespace,
+                &operation_foreign,
+                &fingerprint_foreign,
+            ],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&foreign_operation.expect_err("refused")).as_deref(),
+            Some("42501")
+        );
+        let foreign_fact = as_importer(
+            &client,
+            JOB_TOKEN,
+            "INSERT INTO df_game.facts (tenant_id, session_id, committed_epoch, committed_sequence, \
+             ordinal, fact_version, fact) VALUES ($1::bytea, $2::bytea, 1, 1, 1, 1, '\\x02')",
+            &[&second.tenant, &other_session],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&foreign_fact.expect_err("refused")).as_deref(),
+            Some("42501")
+        );
+        let foreign_intent = as_importer(
+            &client,
+            JOB_TOKEN,
+            "INSERT INTO df_game.intents (tenant_id, session_id, principal_id, command_namespace, \
+             recovery_epoch, operation_id, slot, effect_id, run_id, committed_epoch, committed_sequence, \
+             process_generation, execution_mode, intent_kind, intent_version, intent) \
+             VALUES ($1::bytea, $2::bytea, $3::bytea, $4::bytea, 1, $5::bytea, 1, $6::bytea, \
+             $7::bytea, 1, 1, 1, 1, 1, 1, '\\x02')",
+            &[
+                &second.tenant,
+                &other_session,
+                &principal,
+                &namespace,
+                &operation,
+                &effect_foreign,
+                &run_id,
+            ],
+        )
+        .await;
+        assert_eq!(
+            sqlstate(&foreign_intent.expect_err("refused")).as_deref(),
             Some("42501")
         );
         let foreign_story = as_importer(
