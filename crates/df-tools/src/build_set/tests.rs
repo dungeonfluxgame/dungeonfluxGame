@@ -282,7 +282,7 @@ fn publication_recovery_boundary() {
                 .is_err()
         );
         let mut length = fixture.manifest.clone();
-        length.parts[index].len += 1;
+        length.parts[index].length_bytes += 1;
         assert!(
             Publisher::acquire(&fixture.root)
                 .unwrap()
@@ -298,12 +298,12 @@ fn publication_recovery_boundary() {
     extra.parts.push(Part {
         role: "unknown".into(),
         path: "web/unknown".into(),
-        len: 1,
+        length_bytes: 1,
         digest: [0; 32],
     });
     assert!(extra.serialize().is_err());
     let mut overbound = fixture.manifest.clone();
-    overbound.parts[0].len = REQUIRED[0].2 + 1;
+    overbound.parts[0].length_bytes = REQUIRED[0].2 + 1;
     assert!(matches!(overbound.validate(), Err(BuildSetError::Limit)));
     for path in [
         "/absolute",
@@ -361,7 +361,8 @@ fn publication_recovery_boundary() {
                 "missing" => fs::remove_file(&target).unwrap(),
                 "truncated" => {
                     let file = fs::OpenOptions::new().write(true).open(&target).unwrap();
-                    file.set_len(f.manifest.parts[index].len - 1).unwrap();
+                    file.set_len(f.manifest.parts[index].length_bytes - 1)
+                        .unwrap();
                 }
                 "mutated" => {
                     let mut bytes = fs::read(&target).unwrap();
@@ -590,7 +591,7 @@ fn bounded_inputs() {
         let part = Part {
             role: format!("asset:a{index}"),
             path: format!("web/assets/a{index}"),
-            len: 1,
+            length_bytes: 1,
             digest: [0; 32],
         };
         content.push_str(&format!(
@@ -630,7 +631,7 @@ fn bounded_inputs() {
 
     let mut web_boundary = maximum.clone();
     for part in &mut web_boundary.parts[REQUIRED.len()..REQUIRED.len() + 7] {
-        part.len = 16 * 1024 * 1024;
+        part.length_bytes = 16 * 1024 * 1024;
     }
     let last = REQUIRED.len() + 7;
     let other_web: u64 = web_boundary
@@ -638,22 +639,22 @@ fn bounded_inputs() {
         .iter()
         .enumerate()
         .filter(|(index, part)| *index != last && part.path.starts_with("web/"))
-        .map(|(_, part)| part.len)
+        .map(|(_, part)| part.length_bytes)
         .sum();
-    web_boundary.parts[last].len = WEB_LIMIT - other_web;
+    web_boundary.parts[last].length_bytes = WEB_LIMIT - other_web;
     assert!(web_boundary.validate().is_ok());
-    web_boundary.parts[last].len += 1;
+    web_boundary.parts[last].length_bytes += 1;
     assert!(matches!(web_boundary.validate(), Err(BuildSetError::Limit)));
 
     // Each sparse file is created only inside its fresh fixture namespace. Metadata
     // admission rejects limit+1 before hashing its potentially large logical length.
-    for (index, (_, path, limit)) in REQUIRED.into_iter().enumerate() {
+    for (index, (_, path, limit_bytes)) in REQUIRED.into_iter().enumerate() {
         let f = Fixture::new();
         let previous = f.current();
         let mut boundary = f.manifest.clone();
-        boundary.parts[index].len = limit;
+        boundary.parts[index].length_bytes = limit_bytes;
         assert!(boundary.validate().is_ok(), "{path}");
-        boundary.parts[index].len += 1;
+        boundary.parts[index].length_bytes += 1;
         assert!(
             matches!(boundary.validate(), Err(BuildSetError::Limit)),
             "{path}"
@@ -662,7 +663,7 @@ fn bounded_inputs() {
             .write(true)
             .open(f.input.join(path))
             .unwrap()
-            .set_len(limit + 1)
+            .set_len(limit_bytes + 1)
             .unwrap();
         assert!(seal(&f.input, &identity(1)).is_err(), "{path}");
         assert!(

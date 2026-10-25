@@ -35,7 +35,7 @@ pub(super) async fn run(client: &Client, flags: &[(String, String)]) -> CommandR
             "--to must be room, creation, opening, dialogue, combat, complete or ended",
         );
     }
-    let maximum = match flag("--max-steps").unwrap_or("256").parse::<usize>() {
+    let maximum_steps = match flag("--max-steps").unwrap_or("256").parse::<usize>() {
         Ok(count) if (1..=512).contains(&count) => count,
         _ => return client.print_error("--max-steps must be 1 to 512"),
     };
@@ -46,7 +46,7 @@ pub(super) async fn run(client: &Client, flags: &[(String, String)]) -> CommandR
     let mut steps = Vec::new();
     match tokio::time::timeout(
         client.timeout,
-        drive(client, target, maximum, heroes, &mut steps),
+        drive(client, target, maximum_steps, heroes, &mut steps),
     )
     .await
     {
@@ -68,7 +68,7 @@ pub(super) async fn run(client: &Client, flags: &[(String, String)]) -> CommandR
 async fn drive(
     client: &Client,
     target: &str,
-    maximum: usize,
+    maximum_steps: usize,
     heroes: usize,
     steps: &mut Vec<Value>,
 ) -> Result<Value, String> {
@@ -85,7 +85,7 @@ async fn drive(
                 state["phase"].as_str().unwrap_or("unknown")
             ));
         }
-        if steps.len() >= maximum {
+        if steps.len() >= maximum_steps {
             return Err("play exhausted --max-steps".to_owned());
         }
         let seats = state["seats"].as_array().ok_or("state has no seats")?;

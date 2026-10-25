@@ -1,7 +1,7 @@
 use super::{
     BuildSetError, IDENTITY_LIMIT, MANIFEST_LIMIT, Manifest, PART_LIMIT, Part, REQUIRED, Result,
     SelectedSet, VisibleSet, compare_identity, content_parts, hex, parse_digest, parse_identity,
-    role_limit, safe_relative,
+    role_limit_bytes, safe_relative,
 };
 use crate::file_identity::{self, FileIdentity, same};
 use df_types::BuildIdentity;
@@ -53,7 +53,7 @@ fn canonical_directory(path: &Path, mode: u32) -> Result<FileIdentity> {
     Ok(identity)
 }
 
-fn regular(path: &Path, maximum: u64) -> Result<FileIdentity> {
+fn regular(path: &Path, maximum_bytes: u64) -> Result<FileIdentity> {
     if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err(BuildSetError::UnsafePath);
     }
@@ -64,14 +64,14 @@ fn regular(path: &Path, maximum: u64) -> Result<FileIdentity> {
     if !identity.is_file() || identity.is_symlink() || identity.links() != 1 {
         return Err(BuildSetError::UnsafePath);
     }
-    if identity.len() > maximum {
+    if identity.len() > maximum_bytes {
         return Err(BuildSetError::Limit);
     }
     Ok(identity)
 }
 
-fn open_regular(path: &Path, maximum: u64) -> Result<(File, FileIdentity)> {
-    let before = regular(path, maximum)?;
+fn open_regular(path: &Path, maximum_bytes: u64) -> Result<(File, FileIdentity)> {
+    let before = regular(path, maximum_bytes)?;
     let file = File::open(path)?;
     let after_open = file_identity::snapshot_file(&file)?;
     if !same(&before, &after_open) || !same(&before, &file_identity::snapshot_path(path)?) {
@@ -89,42 +89,42 @@ fn finish_read(path: &Path, file: &File, before: &FileIdentity) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn read_external(path: &Path, maximum: usize) -> Result<Vec<u8>> {
-    let (mut file, before) = open_regular(path, maximum as u64)?;
+pub(super) fn read_external(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>> {
+    let (mut file, before) = open_regular(path, maximum_bytes as u64)?;
     let mut bytes = Vec::new();
     (&mut file)
-        .take(maximum as u64 + 1)
+        .take(maximum_bytes as u64 + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > maximum {
+    if bytes.len() > maximum_bytes {
         return Err(BuildSetError::Limit);
     }
     finish_read(path, &file, &before)?;
     Ok(bytes)
 }
 
-pub(super) fn observe_file(path: &Path, maximum: u64) -> Result<(u64, [u8; 32])> {
-    let (mut file, before) = open_regular(path, maximum)?;
+pub(super) fn observe_file(path: &Path, maximum_bytes: u64) -> Result<(u64, [u8; 32])> {
+    let (mut file, before) = open_regular(path, maximum_bytes)?;
     let mut hash = Sha256::new();
-    let mut length = 0_u64;
+    let mut length_bytes = 0_u64;
     let mut buffer = [0; 16 * 1024];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        length = length
+        length_bytes = length_bytes
             .checked_add(read as u64)
             .ok_or(BuildSetError::Limit)?;
-        if length > maximum {
+        if length_bytes > maximum_bytes {
             return Err(BuildSetError::Limit);
         }
         hash.update(&buffer[..read]);
     }
     finish_read(path, &file, &before)?;
-    if length != before.len() {
+    if length_bytes != before.len() {
         return Err(BuildSetError::DigestMismatch);
     }
-    Ok((length, hash.finalize().into()))
+    Ok((length_bytes, hash.finalize().into()))
 }
 
 fn inside(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -232,7 +232,9 @@ fn verify_parts(root: &Path, manifest: &Manifest, immutable: bool) -> Result<()>
     );
     tree(root, &files, immutable)?;
     for part in &manifest.parts {
-        if observe_file(&inside(root, &part.path)?, role_limit(part)?)? != (part.len, part.digest) {
+        if observe_file(&inside(root, &part.path)?, role_limit_bytes(part)?)?
+            != (part.length_bytes, part.digest)
+        {
             return Err(BuildSetError::DigestMismatch);
         }
     }
@@ -248,12 +250,12 @@ pub(super) fn seal(input: &Path, expected: &BuildIdentity) -> Result<Manifest> {
     )?)?;
     compare_identity(expected, &observed)?;
     let mut parts = Vec::with_capacity(REQUIRED.len());
-    for (role, path, maximum) in REQUIRED {
-        let (len, digest) = observe_file(&inside(input, path)?, maximum)?;
+    for (role, path, maximum_bytes) in REQUIRED {
+        let (length_bytes, digest) = observe_file(&inside(input, path)?, maximum_bytes)?;
         parts.push(Part {
             role: role.into(),
             path: path.into(),
-            len,
+            length_bytes,
             digest,
         });
     }
@@ -504,22 +506,22 @@ fn copy_part(
     step: &mut dyn FnMut(Phase) -> Result<()>,
 ) -> Result<()> {
     let source = inside(input, &part.path)?;
-    let (mut reader, before) = open_regular(&source, role_limit(part)?)?;
+    let (mut reader, before) = open_regular(&source, role_limit_bytes(part)?)?;
     let target = staging.join(&part.path);
     let parent = target.parent().ok_or(BuildSetError::UnsafePath)?;
     file_identity::create_dir_all(parent)?;
     let mut writer = file_identity::create_file_exclusive(&target)?;
     step(Phase::FileCreated(index))?;
     let mut hash = Sha256::new();
-    let mut len = 0_u64;
+    let mut length_bytes = 0_u64;
     let mut buffer = [0; 16 * 1024];
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        len += read as u64;
-        if len > part.len {
+        length_bytes += read as u64;
+        if length_bytes > part.length_bytes {
             return Err(BuildSetError::DigestMismatch);
         }
         writer.write_all(&buffer[..read])?;
@@ -527,7 +529,7 @@ fn copy_part(
     }
     finish_read(&source, &reader, &before)?;
     let digest: [u8; 32] = hash.finalize().into();
-    if len != part.len || digest != part.digest {
+    if length_bytes != part.length_bytes || digest != part.digest {
         return Err(BuildSetError::DigestMismatch);
     }
     step(Phase::FileWritten(index))?;
@@ -662,9 +664,9 @@ pub(super) fn select(root: &Path, id: [u8; 32]) -> Result<SelectedSet> {
 }
 
 pub(super) fn read_checked(root: &Path, part: &Part) -> Result<Vec<u8>> {
-    let bytes = read_external(&inside(root, &part.path)?, role_limit(part)? as usize)?;
+    let bytes = read_external(&inside(root, &part.path)?, role_limit_bytes(part)? as usize)?;
     let observed: [u8; 32] = Sha256::digest(&bytes).into();
-    if bytes.len() as u64 != part.len || observed != part.digest {
+    if bytes.len() as u64 != part.length_bytes || observed != part.digest {
         return Err(BuildSetError::DigestMismatch);
     }
     Ok(bytes)

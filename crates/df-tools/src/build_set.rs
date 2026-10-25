@@ -118,7 +118,7 @@ type Result<T> = std::result::Result<T, BuildSetError>;
 struct Part {
     role: String,
     path: String,
-    len: u64,
+    length_bytes: u64,
     digest: [u8; 32],
 }
 
@@ -228,18 +228,20 @@ fn parse_digest(value: &str) -> Result<[u8; 32]> {
 fn part_line(line: &str) -> Result<Part> {
     let fields: Vec<_> = line.split('\t').take(5).collect();
     match fields.as_slice() {
-        [role, path, len, digest] => {
+        [role, path, length, digest] => {
             safe_relative(path)?;
-            let len = len
+            let length_bytes = length
                 .parse::<u64>()
                 .map_err(|_| BuildSetError::InvalidFormat)?;
-            if len == 0 || len.to_string() != *fields.get(2).ok_or(BuildSetError::InvalidFormat)? {
+            if length_bytes == 0
+                || length_bytes.to_string() != *fields.get(2).ok_or(BuildSetError::InvalidFormat)?
+            {
                 return Err(BuildSetError::InvalidFormat);
             }
             Ok(Part {
                 role: (*role).into(),
                 path: (*path).into(),
-                len,
+                length_bytes,
                 digest: parse_digest(digest)?,
             })
         }
@@ -247,12 +249,12 @@ fn part_line(line: &str) -> Result<Part> {
     }
 }
 
-fn role_limit(part: &Part) -> Result<u64> {
-    if let Some((_, path, limit)) = REQUIRED.iter().find(|(role, _, _)| *role == part.role) {
+fn role_limit_bytes(part: &Part) -> Result<u64> {
+    if let Some((_, path, limit_bytes)) = REQUIRED.iter().find(|(role, _, _)| *role == part.role) {
         if *path != part.path {
             return Err(BuildSetError::ComponentClosure);
         }
-        return Ok(*limit);
+        return Ok(*limit_bytes);
     }
     let id = part
         .role
@@ -272,22 +274,24 @@ impl Manifest {
         }
         let mut roles = BTreeSet::new();
         let mut paths = BTreeSet::new();
-        let mut total = 0_u64;
-        let mut web = 0_u64;
+        let mut total_bytes = 0_u64;
+        let mut web_bytes = 0_u64;
         for part in &self.parts {
             safe_relative(&part.path)?;
             if !roles.insert(part.role.as_str()) || !paths.insert(part.path.as_str()) {
                 return Err(BuildSetError::ComponentClosure);
             }
-            if part.len == 0 || part.len > role_limit(part)? {
+            if part.length_bytes == 0 || part.length_bytes > role_limit_bytes(part)? {
                 return Err(BuildSetError::Limit);
             }
-            total = total.checked_add(part.len).ok_or(BuildSetError::Limit)?;
+            total_bytes = total_bytes
+                .checked_add(part.length_bytes)
+                .ok_or(BuildSetError::Limit)?;
             if part.path.starts_with("web/") {
-                web += part.len;
+                web_bytes += part.length_bytes;
             }
         }
-        if total > TOTAL_LIMIT || web > WEB_LIMIT {
+        if total_bytes > TOTAL_LIMIT || web_bytes > WEB_LIMIT {
             return Err(BuildSetError::Limit);
         }
         if REQUIRED.iter().any(|(role, _, _)| !roles.contains(role)) {
@@ -343,7 +347,7 @@ impl Manifest {
                 "{}\t{}\t{}\t{}\n",
                 part.role,
                 part.path,
-                part.len,
+                part.length_bytes,
                 hex(&part.digest)
             ));
         }
@@ -373,7 +377,7 @@ fn content_parts(bytes: &[u8], identity: &BuildIdentity) -> Result<Vec<Part>> {
             return Err(BuildSetError::Limit);
         }
         let part = part_line(line)?;
-        role_limit(&part)?;
+        role_limit_bytes(&part)?;
         if !part.role.starts_with("asset:")
             || !ids.insert(part.role.clone())
             || !paths.insert(part.path.clone())
@@ -411,7 +415,9 @@ fn verify_native(manifest: &Manifest, executable: &Path, compiled_source: &str) 
         .iter()
         .find(|part| part.role == "native")
         .ok_or(BuildSetError::ComponentClosure)?;
-    if filesystem::observe_file(executable, role_limit(native)?)? != (native.len, native.digest) {
+    if filesystem::observe_file(executable, role_limit_bytes(native)?)?
+        != (native.length_bytes, native.digest)
+    {
         return Err(BuildSetError::NativeMismatch);
     }
     Ok(())
