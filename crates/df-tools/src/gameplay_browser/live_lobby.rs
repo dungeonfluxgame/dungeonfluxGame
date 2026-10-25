@@ -52,8 +52,9 @@ pub(super) struct LobbyScreen {
     scene_asset: RefCell<Option<live_screens::ServerImage>>,
 }
 
-fn initial(name: &str) -> String {
-    name.chars()
+fn initial(member_name: &str) -> String {
+    member_name
+        .chars()
         .next()
         .map_or_else(|| "?".to_owned(), |first| first.to_uppercase().collect())
 }

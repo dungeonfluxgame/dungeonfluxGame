@@ -267,15 +267,15 @@ impl Default for DevelopmentQueue {
     }
 }
 thread_local! {static DEVELOPMENT:RefCell<DevelopmentQueue>=RefCell::new(DevelopmentQueue::default());}
-fn development_clock(real: u64) -> u64 {
+fn development_clock(real_ms: u64) -> u64 {
     DEVELOPMENT.with(|state| {
         let mut state = state.borrow_mut();
         if state.real_ms == 0 {
-            state.clock_ms = real as f64;
+            state.clock_ms = real_ms as f64;
         } else {
-            state.clock_ms += real.saturating_sub(state.real_ms) as f64 * state.speed;
+            state.clock_ms += real_ms.saturating_sub(state.real_ms) as f64 * state.speed;
         }
-        state.real_ms = real;
+        state.real_ms = real_ms;
         state.clock_ms as u64
     })
 }
@@ -2778,26 +2778,26 @@ fn update_speaker_entry(motion: &mut Motion) {
     motion.conductor.set_speaker_entry_ready(ready);
 }
 
-/// Advances the conductor to `now` and applies what it commands.
-fn tick(now: u64) {
-    let now = development_clock(now);
+/// Advances the conductor to `real_ms` and applies what it commands.
+fn tick(real_ms: u64) {
+    let now_ms = development_clock(real_ms);
     let commands = with_motion(|motion| {
         update_speaker_entry(motion);
         motion
             .conductor
             .set_battlefield_busy(super::live_battlefield::is_busy());
-        let mut commands = motion.conductor.on_tick(now);
+        let mut commands = motion.conductor.on_tick(now_ms);
         // A fight's entrance waits for the battlefield; ask how far it is.
         if motion.conductor.wants_battlefield() {
             let entrance = super::live_battlefield::entrance();
             if motion.conductor.battle_state() == BattleState::Entering {
                 let progress = super::live_battlefield::entrance_progress();
                 if motion.battlefield_progress != Some(progress) {
-                    motion.conductor.on_battlefield_progress(now);
+                    motion.conductor.on_battlefield_progress(now_ms);
                     motion.battlefield_progress = Some(progress);
                 }
             }
-            commands.extend(motion.conductor.on_battlefield(now, entrance));
+            commands.extend(motion.conductor.on_battlefield(now_ms, entrance));
             if entrance == crate::stage_conductor::Battlefield::Pending
                 && motion.conductor.battlefield_failed()
             {

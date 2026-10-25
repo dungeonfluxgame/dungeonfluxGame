@@ -89,8 +89,8 @@ const BIG_SFX: &[&str] = &[
 
 /// Colour the running place layers using only the server's phase and bounded intensity.
 /// No track/path changes: a conversation keeps the bed's playhead and shared loop grid.
-fn roleplay_layers(mut layers: [f32; 4], phase: Phase, intensity: u16) -> [f32; 4] {
-    let intensity = f32::from(intensity.min(1000)) / 1000.0;
+fn roleplay_layers(mut layers: [f32; 4], phase: Phase, intensity_permille: u16) -> [f32; 4] {
+    let intensity = f32::from(intensity_permille.min(1000)) / 1000.0;
     layers[0] *= 0.85 + 0.15 * intensity;
     layers[1] *= match phase {
         Phase::Calm | Phase::Release => 0.9 + 0.1 * intensity,

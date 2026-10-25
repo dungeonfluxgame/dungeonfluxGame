@@ -189,7 +189,7 @@ fn finish_loading(clips: Vec<ReadyClip>, key: [u8; 3], path: DicePath) {
     }
 }
 
-async fn fetch_text(url: &str, maximum: u32) -> Option<String> {
+async fn fetch_text(url: &str, maximum_bytes: u32) -> Option<String> {
     let window = web_sys::window()?;
     let response: Response = JsFuture::from(window.fetch_with_str(url))
         .await
@@ -201,7 +201,7 @@ async fn fetch_text(url: &str, maximum: u32) -> Option<String> {
     }
     let text = JsFuture::from(response.text().ok()?).await.ok()?;
     let text = text.as_string()?;
-    if text.is_empty() || text.len() as u32 > maximum {
+    if text.is_empty() || text.len() as u32 > maximum_bytes {
         return None;
     }
     Some(text)
@@ -362,11 +362,11 @@ async fn probe_plays(document: &Document, url: &str) -> bool {
     draw_pixels(document, &video).is_ok()
 }
 
-fn parse_key(text: &str) -> [u8; 3] {
-    let bytes = text.as_bytes();
+fn parse_key(key_color: &str) -> [u8; 3] {
+    let bytes = key_color.as_bytes();
     if bytes.len() == 7 && bytes[0] == b'#' {
         let hex = |index: usize| {
-            u8::from_str_radix(text.get(index..index + 2).unwrap_or(""), 16).unwrap_or(0)
+            u8::from_str_radix(key_color.get(index..index + 2).unwrap_or(""), 16).unwrap_or(0)
         };
         [hex(1), hex(3), hex(5)]
     } else {
