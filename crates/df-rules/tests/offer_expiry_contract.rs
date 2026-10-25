@@ -73,7 +73,7 @@ fn command_limits() -> CommandLimits {
     }
 }
 fn request(reaction: bool) -> CommandInput {
-    let p = pending();
+    let pending_resolution = pending();
     CommandInput {
         basis: basis(),
         observed_revision: basis().revision,
@@ -81,15 +81,15 @@ fn request(reaction: bool) -> CommandInput {
         member: member(3),
         command: if reaction {
             GameCommand::SelectReaction {
-                resolution: p.id,
-                window: p.window.id,
+                resolution: pending_resolution.id,
+                window: pending_resolution.window.id,
                 offer: label("fixture-offer-1"),
                 option: label("fixture-option-1"),
             }
         } else {
             GameCommand::SelectChoice {
-                resolution: p.id,
-                window: p.window.id,
+                resolution: pending_resolution.id,
+                window: pending_resolution.window.id,
                 offer: label("fixture-offer-1"),
                 option: label("fixture-option-1"),
             }
@@ -97,24 +97,24 @@ fn request(reaction: bool) -> CommandInput {
     }
 }
 fn waiting(reaction: bool) -> Checkpoint {
-    let mut s = state();
-    s.facts.push(fact(7, 0));
-    let mut p = pending();
-    if !reaction && let PendingInput::Reaction { remaining } = p.next {
-        p.next = PendingInput::Choice { remaining };
+    let mut game_state = state();
+    game_state.facts.push(fact(7, 0));
+    let mut pending_resolution = pending();
+    if !reaction && let PendingInput::Reaction { remaining } = pending_resolution.next {
+        pending_resolution.next = PendingInput::Choice { remaining };
     }
-    s.pending.push(p);
-    checkpoint(s).unwrap()
+    game_state.pending.push(pending_resolution);
+    checkpoint(game_state).unwrap()
 }
-fn make_checkpoint(mut s: GameState, b: Basis) -> Result<Checkpoint, CheckpointError> {
-    for p in &mut s.pending {
-        p.basis = b;
+fn make_checkpoint(mut game_state: GameState, basis: Basis) -> Result<Checkpoint, CheckpointError> {
+    for pending_resolution in &mut game_state.pending {
+        pending_resolution.basis = basis;
     }
     Checkpoint::new(
         CHECKPOINT_SCHEMA,
-        b,
+        basis,
         pins(),
-        s,
+        game_state,
         ReferenceInventory {
             rules: &[rule()],
             content: &[content()],
@@ -124,12 +124,12 @@ fn make_checkpoint(mut s: GameState, b: Basis) -> Result<Checkpoint, CheckpointE
         limits(),
     )
 }
-fn updated(old: &Checkpoint, change: impl FnOnce(&mut GameState)) -> Checkpoint {
-    let mut s = old.state().clone();
-    change(&mut s);
-    let mut b = old.basis();
-    b.revision = b.revision.next_sequence().unwrap();
-    make_checkpoint(s, b).unwrap()
+fn updated(previous_checkpoint: &Checkpoint, change: impl FnOnce(&mut GameState)) -> Checkpoint {
+    let mut game_state = previous_checkpoint.state().clone();
+    change(&mut game_state);
+    let mut basis = previous_checkpoint.basis();
+    basis.revision = basis.revision.next_sequence().unwrap();
+    make_checkpoint(game_state, basis).unwrap()
 }
 type Error = ResponsePreparationError<Refusal>;
 fn with_pipeline<T>(
@@ -137,7 +137,7 @@ fn with_pipeline<T>(
     current: &Checkpoint,
     handler: &Handler,
     dependencies: &[RuleDependency],
-    call: impl FnOnce(
+    invoke: impl FnOnce(
         &DispatchRegistry<'_, PreconditionedCommandHandler<'_, Handler>>,
         CurrentRuleContext<'_>,
         &RevisionLabel,
@@ -191,7 +191,7 @@ fn with_pipeline<T>(
     )
     .unwrap();
     let registry = DispatchRegistry::from_catalog(catalog, &registrations, 8).unwrap();
-    call(&registry, context(), &selector)
+    invoke(&registry, context(), &selector)
 }
 fn submit(
     prepared: &Checkpoint,
@@ -252,16 +252,30 @@ fn current_choice_and_reaction_enumeration_and_submission_agree_without_spending
         let current = waiting(reaction);
         let before = current.clone();
         let handler = Handler::new();
-        let deps = [
+        let dependencies = [
             RuleDependency::Entity(entity(4)),
             RuleDependency::PendingResolution(pending().id),
         ];
-        let options = enumerate(&current, &current, &handler, &deps, &request(reaction)).unwrap();
+        let options = enumerate(
+            &current,
+            &current,
+            &handler,
+            &dependencies,
+            &request(reaction),
+        )
+        .unwrap();
         assert_eq!(options.len(), 1);
         let GameInput::Game(selected) = &options[0] else {
             panic!("game selection");
         };
-        let candidate = submit(&current, &current, &handler, &deps, selected.clone()).unwrap();
+        let candidate = submit(
+            &current,
+            &current,
+            &handler,
+            &dependencies,
+            selected.clone(),
+        )
+        .unwrap();
         assert_eq!(candidate.state().resources, current.state().resources);
         assert_eq!(candidate.state().draws, current.state().draws);
         assert_eq!(current, before);
@@ -272,21 +286,35 @@ fn current_choice_and_reaction_enumeration_and_submission_agree_without_spending
 fn exact_surviving_offer_admits_old_sequence_after_unrelated_revision_movement() {
     for reaction in [false, true] {
         let prepared = waiting(reaction);
-        let current = updated(&prepared, |s| s.resources[0].value = 3);
+        let current = updated(&prepared, |game_state| game_state.resources[0].value = 3);
         let handler = Handler::new();
-        let deps = [
+        let dependencies = [
             RuleDependency::Entity(entity(4)),
             RuleDependency::PendingResolution(pending().id),
         ];
-        let old = submit(&prepared, &current, &handler, &deps, request(reaction)).unwrap();
-        let fresh = enumerate(&prepared, &current, &handler, &deps, &request(reaction)).unwrap();
+        let old = submit(
+            &prepared,
+            &current,
+            &handler,
+            &dependencies,
+            request(reaction),
+        )
+        .unwrap();
+        let fresh = enumerate(
+            &prepared,
+            &current,
+            &handler,
+            &dependencies,
+            &request(reaction),
+        )
+        .unwrap();
         let GameInput::Game(fresh) = &fresh[0] else {
             panic!("game selection");
         };
         assert_eq!(fresh.basis, current.basis());
         assert_eq!(
             old,
-            submit(&prepared, &current, &handler, &deps, fresh.clone()).unwrap()
+            submit(&prepared, &current, &handler, &dependencies, fresh.clone()).unwrap()
         );
     }
 }
@@ -295,11 +323,11 @@ fn expired_removed_or_replaced_window_refuses_both_paths_before_handler() {
     for reaction in [false, true] {
         let prepared = waiting(reaction);
         for replaced in [false, true] {
-            let current = updated(&prepared, |s| {
+            let current = updated(&prepared, |game_state| {
                 if replaced {
-                    s.pending[0].window.id = WindowId::from_bytes(&[11; 16]).unwrap();
+                    game_state.pending[0].window.id = WindowId::from_bytes(&[11; 16]).unwrap();
                 } else {
-                    s.pending.clear();
+                    game_state.pending.clear();
                 }
             });
             let handler = Handler::new();
@@ -320,8 +348,8 @@ fn withdrawn_offer_or_option_cannot_be_submitted_and_enumeration_uses_current_re
     for reaction in [false, true] {
         let prepared = waiting(reaction);
         for option in [false, true] {
-            let current = updated(&prepared, |s| {
-                let remaining = match &mut s.pending[0].next {
+            let current = updated(&prepared, |game_state| {
+                let remaining = match &mut game_state.pending[0].next {
                     PendingInput::Choice { remaining } | PendingInput::Reaction { remaining } => {
                         remaining
                     }
@@ -351,18 +379,30 @@ fn withdrawn_offer_or_option_cannot_be_submitted_and_enumeration_uses_current_re
 fn changed_target_basis_refuses_query_and_submit_without_invoking_mechanics() {
     for reaction in [false, true] {
         let prepared = waiting(reaction);
-        let current = updated(&prepared, |s| {
-            s.entities[0].position = Some(Position { x: 1, y: 0, z: 0 })
+        let current = updated(&prepared, |game_state| {
+            game_state.entities[0].position = Some(Position { x: 1, y: 0, z: 0 })
         });
         let before = current.clone();
         let handler = Handler::new();
-        let deps = [RuleDependency::Entity(entity(4))];
+        let dependencies = [RuleDependency::Entity(entity(4))];
         assert_eq!(
-            enumerate(&prepared, &current, &handler, &deps, &request(reaction)),
+            enumerate(
+                &prepared,
+                &current,
+                &handler,
+                &dependencies,
+                &request(reaction)
+            ),
             Err(precondition(PreconditionError::StaleEntity))
         );
         assert_eq!(
-            submit(&prepared, &current, &handler, &deps, request(reaction)),
+            submit(
+                &prepared,
+                &current,
+                &handler,
+                &dependencies,
+                request(reaction)
+            ),
             Err(precondition(PreconditionError::StaleEntity))
         );
         assert_eq!(handler.calls.get(), 0);
@@ -373,15 +413,27 @@ fn changed_target_basis_refuses_query_and_submit_without_invoking_mechanics() {
 fn source_declared_time_expiry_refuses_both_paths_without_wall_clock_or_countdown() {
     for reaction in [false, true] {
         let prepared = waiting(reaction);
-        let current = updated(&prepared, |s| s.logical_time.ticks += 1);
+        let current = updated(&prepared, |game_state| game_state.logical_time.ticks += 1);
         let handler = Handler::new();
-        let deps = [RuleDependency::LogicalTime];
+        let dependencies = [RuleDependency::LogicalTime];
         assert_eq!(
-            enumerate(&prepared, &current, &handler, &deps, &request(reaction)),
+            enumerate(
+                &prepared,
+                &current,
+                &handler,
+                &dependencies,
+                &request(reaction)
+            ),
             Err(precondition(PreconditionError::StaleTime))
         );
         assert_eq!(
-            submit(&prepared, &current, &handler, &deps, request(reaction)),
+            submit(
+                &prepared,
+                &current,
+                &handler,
+                &dependencies,
+                request(reaction)
+            ),
             Err(precondition(PreconditionError::StaleTime))
         );
         assert_eq!(handler.calls.get(), 0);
@@ -442,12 +494,12 @@ fn foreign_session_run_epoch_member_and_future_revision_refuse_before_handler() 
 fn current_offer_for_another_member_is_not_the_requesting_members_offer() {
     for reaction in [false, true] {
         let prepared = waiting(reaction);
-        let current = updated(&prepared, |s| {
-            s.members.push(MembershipLink {
+        let current = updated(&prepared, |game_state| {
+            game_state.members.push(MembershipLink {
                 member: member(12),
                 character: None,
             });
-            let remaining = match &mut s.pending[0].next {
+            let remaining = match &mut game_state.pending[0].next {
                 PendingInput::Choice { remaining } | PendingInput::Reaction { remaining } => {
                     remaining
                 }
@@ -470,8 +522,8 @@ fn current_offer_for_another_member_is_not_the_requesting_members_offer() {
 #[test]
 fn structural_list_is_not_source_handler_legality_for_changed_targets() {
     let prepared = waiting(false);
-    let current = updated(&prepared, |s| {
-        s.entities[0].identity_revision = label("changed-target")
+    let current = updated(&prepared, |game_state| {
+        game_state.entities[0].identity_revision = label("changed-target")
     });
     let template = request(false);
     assert_eq!(

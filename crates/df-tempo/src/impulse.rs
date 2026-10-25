@@ -110,13 +110,15 @@ impl ImpulseCurve {
         if presentation_ticks > self.through_ticks {
             return None;
         }
-        let offset = presentation_ticks.checked_sub(self.from_ticks)?;
-        let span = self.through_ticks.checked_sub(self.from_ticks)?;
-        let difference = i128::from(self.through_intensity) - i128::from(self.from_intensity);
+        let presentation_tick_offset = presentation_ticks.checked_sub(self.from_ticks)?;
+        let presentation_tick_span = self.through_ticks.checked_sub(self.from_ticks)?;
+        let intensity_delta = i128::from(self.through_intensity) - i128::from(self.from_intensity);
         // Each factor is at most u64::MAX, so their product fits u128 even at full i64 range.
-        let step = difference.unsigned_abs() * u128::from(offset);
-        let step = u64::try_from(step.checked_div(u128::from(span))?).ok()?;
-        let value = i128::from(self.from_intensity) + difference.signum() * i128::from(step);
+        let intensity_step = intensity_delta.unsigned_abs() * u128::from(presentation_tick_offset);
+        let intensity_step =
+            u64::try_from(intensity_step.checked_div(u128::from(presentation_tick_span))?).ok()?;
+        let value =
+            i128::from(self.from_intensity) + intensity_delta.signum() * i128::from(intensity_step);
         i64::try_from(value).ok()
     }
 }
@@ -195,37 +197,48 @@ pub fn advance_impulse(
             curve: None,
         });
     }
-    let ceiling = i128::from(policy.maximum_absolute_inertia);
-    let offset = (i128::from(advanced.state.inertia)
+    let maximum_absolute_inertia_units = i128::from(policy.maximum_absolute_inertia);
+    let inertia_offset_units = (i128::from(advanced.state.inertia)
         + i128::from(rule.map_or(0, |rule| rule.inertia_units)))
-    .clamp(-ceiling, ceiling);
-    let target = (i128::from(input.target_intensity) + offset).clamp(
+    .clamp(
+        -maximum_absolute_inertia_units,
+        maximum_absolute_inertia_units,
+    );
+    let target_intensity_units = (i128::from(input.target_intensity) + inertia_offset_units).clamp(
         i128::from(policy.minimum_intensity),
         i128::from(policy.maximum_intensity),
     );
-    let start = advanced.state.intensity;
-    let difference = target - i128::from(start);
-    let rate = if difference >= 0 {
+    let starting_intensity_units = advanced.state.intensity;
+    let intensity_delta = target_intensity_units - i128::from(starting_intensity_units);
+    let slew_rate_units_per_tick = if intensity_delta >= 0 {
         rule.map_or(policy.rise_units_per_tick, |rule| rule.rise_units_per_tick)
     } else {
         rule.map_or(policy.fall_units_per_tick, |rule| rule.fall_units_per_tick)
     };
-    let distance = difference.unsigned_abs();
-    let step = if distance <= u128::from(policy.deadband_units) {
+    let intensity_delta_units = intensity_delta.unsigned_abs();
+    let intensity_step_units = if intensity_delta_units <= u128::from(policy.deadband_units) {
         0
     } else {
-        bounded_product(rate, advanced.elapsed_ticks, distance)?
+        bounded_product(
+            slew_rate_units_per_tick,
+            advanced.elapsed_ticks,
+            intensity_delta_units,
+        )?
     };
-    advanced.state.intensity =
-        i64::try_from(i128::from(start) + difference.signum() * i128::from(step))
-            .map_err(|_| ImpulseError::Arithmetic)?;
-    let recovery = bounded_product(
+    advanced.state.intensity = i64::try_from(
+        i128::from(starting_intensity_units)
+            + intensity_delta.signum() * i128::from(intensity_step_units),
+    )
+    .map_err(|_| ImpulseError::Arithmetic)?;
+    let inertia_recovery_units = bounded_product(
         policy.recovery_units_per_tick,
         advanced.elapsed_ticks,
-        offset.unsigned_abs(),
+        inertia_offset_units.unsigned_abs(),
     )?;
-    advanced.state.inertia = i64::try_from(offset - offset.signum() * i128::from(recovery))
-        .map_err(|_| ImpulseError::Arithmetic)?;
+    advanced.state.inertia = i64::try_from(
+        inertia_offset_units - inertia_offset_units.signum() * i128::from(inertia_recovery_units),
+    )
+    .map_err(|_| ImpulseError::Arithmetic)?;
     Ok(ImpulseAdvance {
         basis: checkpoint.basis(),
         curve: Some(ImpulseCurve {
@@ -234,7 +247,7 @@ pub fn advance_impulse(
             ticks_per_second: elapsed_policy
                 .ok_or(ImpulseError::PolicyUnavailable)?
                 .ticks_per_second,
-            from_intensity: start,
+            from_intensity: starting_intensity_units,
             through_intensity: advanced.state.intensity,
         }),
         state: advanced.state,
@@ -243,9 +256,13 @@ pub fn advance_impulse(
     })
 }
 
-fn bounded_product(rate: u64, ticks: u64, ceiling: u128) -> Result<u64, ImpulseError> {
+fn bounded_product(
+    rate_units_per_tick: u64,
+    elapsed_ticks: u64,
+    ceiling_units: u128,
+) -> Result<u64, ImpulseError> {
     // Two u64 factors fit u128. The admitted intensity/offset difference fits u64.
-    u64::try_from((u128::from(rate) * u128::from(ticks)).min(ceiling))
+    u64::try_from((u128::from(rate_units_per_tick) * u128::from(elapsed_ticks)).min(ceiling_units))
         .map_err(|_| ImpulseError::Arithmetic)
 }
 

@@ -95,18 +95,18 @@ pub fn advance_fatigue_modes(
         .map_err(FatigueAdvanceError::Elapsed)?;
     validate_effect_rules(&advanced.state, policy)?;
     if advanced.disposition == ElapsedDisposition::Advanced {
-        for (definition, counter) in &mut advanced.state.fatigue {
+        for (effect_definition, fatigue_counter_units) in &mut advanced.state.fatigue {
             let rule = policy
                 .effects
                 .iter()
-                .find(|rule| rule.definition == *definition)
+                .find(|rule| rule.definition == *effect_definition)
                 .ok_or(FatigueAdvanceError::MissingEffectRule)?;
             let recovery = rule
                 .recovery_units_per_presentation_tick
                 .checked_mul(advanced.elapsed_ticks)
                 .ok_or(FatigueAdvanceError::RecoveryOverflow)?;
             // Recovery consumes existing fatigue and never creates negative debt.
-            *counter = counter.saturating_sub(recovery);
+            *fatigue_counter_units = fatigue_counter_units.saturating_sub(recovery);
         }
     }
     let motion = if preference.reduced_motion || advanced.disposition == ElapsedDisposition::Replay
@@ -132,29 +132,31 @@ fn validate_effect_rules(
     state: &TempoState,
     policy: &FatigueModePolicy,
 ) -> Result<(), FatigueAdvanceError> {
-    for (index, (definition, counter)) in state.fatigue.iter().enumerate() {
+    for (entry_index, (effect_definition, fatigue_counter_units)) in
+        state.fatigue.iter().enumerate()
+    {
         if state
             .fatigue
             .iter()
-            .take(index)
-            .any(|(prior, _)| prior == definition)
+            .take(entry_index)
+            .any(|(prior_definition, _)| prior_definition == effect_definition)
         {
             return Err(FatigueAdvanceError::DuplicateFatigue);
         }
         let rule = policy
             .effects
             .iter()
-            .find(|rule| rule.definition == *definition)
+            .find(|rule| rule.definition == *effect_definition)
             .ok_or(FatigueAdvanceError::MissingEffectRule)?;
-        if *counter > rule.maximum_counter_units {
+        if *fatigue_counter_units > rule.maximum_counter_units {
             return Err(FatigueAdvanceError::CounterLimit);
         }
     }
-    for (index, rule) in policy.effects.iter().enumerate() {
+    for (rule_index, rule) in policy.effects.iter().enumerate() {
         if policy
             .effects
             .iter()
-            .take(index)
+            .take(rule_index)
             .any(|prior| prior.definition == rule.definition)
         {
             return Err(FatigueAdvanceError::DuplicateRule);
@@ -162,7 +164,7 @@ fn validate_effect_rules(
         if !state
             .fatigue
             .iter()
-            .any(|(definition, _)| *definition == rule.definition)
+            .any(|(effect_definition, _)| *effect_definition == rule.definition)
         {
             return Err(FatigueAdvanceError::UnexpectedEffectRule);
         }

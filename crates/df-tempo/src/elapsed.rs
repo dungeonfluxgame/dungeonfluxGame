@@ -128,29 +128,29 @@ pub fn advance_elapsed(
             disposition: ElapsedDisposition::Paused,
         });
     }
-    let tick_nanos = request
+    let elapsed_tick_nanos = request
         .elapsed
         .as_nanos()
         .checked_mul(u128::from(policy.ticks_per_second))
         .ok_or(TempoAdvanceError::TimeOverflow)?;
-    if tick_nanos % 1_000_000_000 != 0 {
+    if elapsed_tick_nanos % 1_000_000_000 != 0 {
         return Err(TempoAdvanceError::FractionalTicks);
     }
-    let ticks =
-        u64::try_from(tick_nanos / 1_000_000_000).map_err(|_| TempoAdvanceError::TimeOverflow)?;
-    if ticks > policy.maximum_elapsed_ticks {
+    let elapsed_ticks = u64::try_from(elapsed_tick_nanos / 1_000_000_000)
+        .map_err(|_| TempoAdvanceError::TimeOverflow)?;
+    if elapsed_ticks > policy.maximum_elapsed_ticks {
         return Err(TempoAdvanceError::ElapsedLimit);
     }
-    let next = state
+    let next_presentation_ticks = state
         .presentation_ticks
-        .checked_add(ticks)
+        .checked_add(elapsed_ticks)
         .ok_or(TempoAdvanceError::TimeOverflow)?;
     let mut state = state.clone();
-    state.presentation_ticks = next;
+    state.presentation_ticks = next_presentation_ticks;
     Ok(ElapsedAdvance {
         state,
-        elapsed_ticks: ticks,
-        disposition: if ticks == 0 {
+        elapsed_ticks,
+        disposition: if elapsed_ticks == 0 {
             ElapsedDisposition::Unchanged
         } else {
             ElapsedDisposition::Advanced
