@@ -214,20 +214,20 @@ impl ServerPlaybackTimeline {
         let elapsed = server_time
             .checked_sub(self.anchor_server_time)
             .ok_or(TimelineError::BeforeAnchor)?;
-        let frames = observed_playback_frame
+        let observed_frame_offset = observed_playback_frame
             .checked_sub(self.first_frame)
             .ok_or(TimelineError::BeforeFirstFrame)?;
-        let rate = u128::from(self.format.sample_rate());
+        let sample_rate_hz = u128::from(self.format.sample_rate());
         let expected = elapsed
             .as_nanos()
-            .checked_mul(rate)
+            .checked_mul(sample_rate_hz)
             .ok_or(TimelineError::ArithmeticOverflow)?;
-        let observed = u128::from(frames)
+        let observed = u128::from(observed_frame_offset)
             .checked_mul(1_000_000_000)
             .ok_or(TimelineError::ArithmeticOverflow)?;
         let budget = maximum_drift
             .as_nanos()
-            .checked_mul(rate)
+            .checked_mul(sample_rate_hz)
             .ok_or(TimelineError::ArithmeticOverflow)?;
         let direction = match observed.cmp(&expected) {
             std::cmp::Ordering::Less => DriftDirection::Behind,

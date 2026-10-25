@@ -12,24 +12,28 @@ use crate::{
     PresentationQueue, QueueError, QueueLimits, QueueSnapshot, QueueState, Replacement,
 };
 
-fn basis(value: Basis) -> PlaybackBasis {
-    PlaybackBasis::new(value.session, value.run, value.revision)
-}
-
-fn cue(value: SpeechIdentity) -> Result<PlaybackCue, QueueError> {
-    PlaybackCue::new(
-        basis(value.basis),
-        *value.job.as_bytes(),
-        value.operation,
-        value.generation,
+fn basis(canonical_basis: Basis) -> PlaybackBasis {
+    PlaybackBasis::new(
+        canonical_basis.session,
+        canonical_basis.run,
+        canonical_basis.revision,
     )
 }
 
-pub(crate) fn speech_identity(value: PlaybackCue) -> SpeechIdentity {
+fn cue(speech_identity: SpeechIdentity) -> Result<PlaybackCue, QueueError> {
+    PlaybackCue::new(
+        basis(speech_identity.basis),
+        *speech_identity.job.as_bytes(),
+        speech_identity.operation,
+        speech_identity.generation,
+    )
+}
+
+pub(crate) fn speech_identity(playback_cue: PlaybackCue) -> SpeechIdentity {
     // PlaybackCue::new validated a nonzero fixed 16-byte job; the canonical JobId
     // uses that same validator. This invariant is independent of external input.
-    let job = JobId::from_bytes(&value.job()).expect("checked nonzero playback job");
-    let projected = value.basis();
+    let job = JobId::from_bytes(&playback_cue.job()).expect("checked nonzero playback job");
+    let projected = playback_cue.basis();
     SpeechIdentity {
         basis: Basis {
             session: projected.session(),
@@ -37,36 +41,36 @@ pub(crate) fn speech_identity(value: PlaybackCue) -> SpeechIdentity {
             revision: projected.revision(),
         },
         job,
-        operation: value.operation(),
-        generation: value.generation(),
+        operation: playback_cue.operation(),
+        generation: playback_cue.generation(),
     }
 }
 
-fn output(value: &AudioOutputLease) -> Result<PlaybackOutput, QueueError> {
-    let (binding, destination) = match value.destination {
+fn output(output_lease: &AudioOutputLease) -> Result<PlaybackOutput, QueueError> {
+    let (binding, destination) = match output_lease.destination {
         AudioDestination::PublicRoom(binding) => (binding, PlaybackDestination::PublicRoom),
         AudioDestination::PrivateListener { binding, .. } => {
             (binding, PlaybackDestination::PrivateListener)
         }
     };
     PlaybackOutput::new(
-        *value.id.as_bytes(),
+        *output_lease.id.as_bytes(),
         binding,
-        value.generation,
+        output_lease.generation,
         destination,
-        value.device_unlocked,
+        output_lease.device_unlocked,
     )
 }
 
-fn source(value: &AssetReference) -> Result<PcmSource, QueueError> {
-    if value.kind != AssetKind::Audio {
+fn source(asset_reference: &AssetReference) -> Result<PcmSource, QueueError> {
+    if asset_reference.kind != AssetKind::Audio {
         return Err(QueueError::WrongAsset);
     }
     PcmSource::new(
-        value.key.clone(),
+        asset_reference.key.clone(),
         AssetManifest {
-            byte_len: value.byte_length,
-            sha256: value.digest.0,
+            byte_len: asset_reference.byte_length,
+            sha256: asset_reference.digest.0,
         },
     )
 }

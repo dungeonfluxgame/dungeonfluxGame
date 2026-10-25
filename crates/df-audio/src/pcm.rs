@@ -65,8 +65,8 @@ impl fmt::Debug for PcmBuffer {
 
 impl PcmBuffer {
     pub fn new(format: PcmFormat, samples: Box<[f32]>) -> Result<Self, PcmRefusal> {
-        let bytes = samples.len().checked_mul(size_of::<f32>());
-        let reason = if bytes.is_none_or(|bytes| bytes > MAX_SAMPLE_BYTES) {
+        let sample_bytes = samples.len().checked_mul(size_of::<f32>());
+        let reason = if sample_bytes.is_none_or(|sample_bytes| sample_bytes > MAX_SAMPLE_BYTES) {
             Some(QueueError::SampleCapacity)
         } else if samples.is_empty()
             || !samples.len().is_multiple_of(usize::from(format.channels))

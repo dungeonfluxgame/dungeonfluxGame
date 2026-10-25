@@ -5,13 +5,13 @@ use df_audio::{
 use df_model::checkpoint::{CaptureLease, RecordId};
 use df_types::{ClientBindingId, MemberId, RevisionLabel};
 
-fn id(byte: u8) -> RecordId {
+fn record_id(byte: u8) -> RecordId {
     RecordId::from_bytes(&[byte; 16]).expect("nonzero test identity")
 }
 
 fn lease() -> CaptureLease {
     CaptureLease {
-        id: id(1),
+        id: record_id(1),
         member: MemberId::from_bytes(&[2; 16]).expect("nonzero test member"),
         binding: ClientBindingId::from_bytes(&[3; 16]).expect("nonzero test binding"),
         generation: 7,

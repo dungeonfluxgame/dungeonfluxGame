@@ -197,11 +197,11 @@ fn graph_code<BeatId, FactId, AlternativeId>(
     }
 }
 
-fn safe_component(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && value
+fn safe_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && component
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
@@ -275,21 +275,21 @@ pub fn validate_import<
         if components.next() != Some(spec.namespace) {
             return Err(refusal(ImportCode::Namespace));
         }
-        let mut count = 1_usize;
-        let mut item = false;
+        let mut path_component_count = 1_usize;
+        let mut has_nested_component = false;
         for component in components {
-            count = count
+            path_component_count = path_component_count
                 .checked_add(1)
                 .ok_or_else(|| refusal(ImportCode::PathDepth))?;
-            if count > spec.limits.max_path_components {
+            if path_component_count > spec.limits.max_path_components {
                 return Err(refusal(ImportCode::PathDepth));
             }
             if !safe_component(component) {
                 return Err(refusal(ImportCode::InvalidPath));
             }
-            item = true;
+            has_nested_component = true;
         }
-        if !item {
+        if !has_nested_component {
             return Err(refusal(ImportCode::InvalidPath));
         }
     }
