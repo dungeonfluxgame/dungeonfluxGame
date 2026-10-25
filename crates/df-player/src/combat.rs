@@ -40,8 +40,8 @@ mod browser {
 
     type Callback = Box<dyn FnMut(CombatIntent)>;
     struct Dispatch {
-        enabled: Cell<bool>,
-        revoked: Cell<bool>,
+        is_enabled: Cell<bool>,
+        is_revoked: Cell<bool>,
         callback: RefCell<Option<Callback>>,
     }
 
@@ -144,8 +144,8 @@ mod browser {
                 phase: RefCell::new(None),
                 focused: RefCell::new(None),
                 dispatch: Rc::new(Dispatch {
-                    enabled: Cell::new(false),
-                    revoked: Cell::new(false),
+                    is_enabled: Cell::new(false),
+                    is_revoked: Cell::new(false),
                     callback: RefCell::new(Some(Box::new(on_intent))),
                 }),
             };
@@ -198,14 +198,14 @@ mod browser {
             )?);
             let dispatch = Rc::clone(&self.dispatch);
             phase.on_intent(move |intent| {
-                if !dispatch.enabled.get() || dispatch.revoked.get() {
+                if !dispatch.is_enabled.get() || dispatch.is_revoked.get() {
                     return;
                 }
                 let callback = dispatch.callback.borrow_mut().take();
                 if let Some(mut callback) = callback {
                     // No borrow crosses application code, which may update/revoke.
                     callback(intent);
-                    if !dispatch.revoked.get() {
+                    if !dispatch.is_revoked.get() {
                         *dispatch.callback.borrow_mut() = Some(callback);
                     }
                 }
@@ -221,7 +221,7 @@ mod browser {
             revision: SessionRevision,
             view: &CombatPhaseView<'_>,
         ) -> Result<(), CombatMountError> {
-            if self.dispatch.revoked.get() {
+            if self.dispatch.is_revoked.get() {
                 return Err(CombatMountError::Revoked);
             }
             view.validate(self.limits).map_err(CombatError::from)?;
@@ -231,7 +231,7 @@ mod browser {
                 return Err(CombatMountError::Admission(admission));
             }
             self.retain_focus();
-            self.dispatch.enabled.set(false);
+            self.dispatch.is_enabled.set(false);
             self.root
                 .set_attribute("inert", "")
                 .map_err(CombatError::from)?;
@@ -268,17 +268,17 @@ mod browser {
                 .remove_attribute("inert")
                 .map_err(CombatError::from)?;
             self.restore_focus()?;
-            self.dispatch.enabled.set(true);
+            self.dispatch.is_enabled.set(true);
             Ok(())
         }
         /// Offline/reconnecting presentation disables even synthetic events while
         /// retaining valid local focus/drafts. Only a newer accepted view resumes.
         pub fn suspend_input(&self) -> Result<(), CombatMountError> {
-            if self.dispatch.revoked.get() {
+            if self.dispatch.is_revoked.get() {
                 return Err(CombatMountError::Revoked);
             }
             self.retain_focus();
-            self.dispatch.enabled.set(false);
+            self.dispatch.is_enabled.set(false);
             self.root
                 .set_attribute("inert", "")
                 .map_err(CombatError::from)?;
@@ -287,8 +287,8 @@ mod browser {
         /// Repeatable terminal disposal clears caller-retained private DOM and
         /// drafts before releasing listeners. Old offers cannot submit afterward.
         pub fn revoke(&self) -> Result<(), CombatMountError> {
-            self.dispatch.revoked.set(true);
-            self.dispatch.enabled.set(false);
+            self.dispatch.is_revoked.set(true);
+            self.dispatch.is_enabled.set(false);
             self.dispatch.callback.borrow_mut().take();
             self.focused.borrow_mut().take();
             let mut failure = None;

@@ -22,11 +22,11 @@ mod browser {
         detail: "Send the supplied offer",
         disabled_reason: None,
     }];
-    fn error(value: impl std::fmt::Display) -> JsValue {
-        JsValue::from_str(&value.to_string())
+    fn error(message: impl std::fmt::Display) -> JsValue {
+        JsValue::from_str(&message.to_string())
     }
-    fn require(value: bool, message: &str) -> Result<(), JsValue> {
-        if value {
+    fn require(condition: bool, message: &str) -> Result<(), JsValue> {
+        if condition {
             Ok(())
         } else {
             Err(JsValue::from_str(message))
@@ -67,7 +67,7 @@ mod browser {
     fn view(
         binding: ClientBindingId,
         revision: SessionRevision,
-        display: bool,
+        is_display: bool,
         scene: ConceptScene,
     ) -> ExplorationView<'static> {
         ExplorationView {
@@ -82,7 +82,7 @@ mod browser {
                 scene_label: "Verified scene",
                 narration: "Lanterns guide the party toward the bridge.",
                 connection: "Controlled fixture",
-                notice: if display {
+                notice: if is_display {
                     "Separate public projection"
                 } else {
                     "Player projection"
@@ -122,17 +122,21 @@ mod browser {
         root.query_selector(".scene-art")?
             .ok_or_else(|| JsValue::from_str("mounted image missing"))
     }
-    fn update(fixture: &mut Fixture, selected: bool) -> Result<(), JsValue> {
+    fn update(fixture: &mut Fixture, is_selected: bool) -> Result<(), JsValue> {
         let revision = fixture
             .revision
             .next_sequence()
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
-        let keys = if selected {
+        let keys = if is_selected {
             std::slice::from_ref(&fixture.key)
         } else {
             &[]
         };
-        let selected = if selected { Some(&fixture.key) } else { None };
+        let selected_asset = if is_selected {
+            Some(&fixture.key)
+        } else {
+            None
+        };
         fixture.player_fetch = fixture
             .player
             .update_with_scene_assets(
@@ -141,7 +145,7 @@ mod browser {
                     scope: scope(3),
                     revision,
                     references: keys,
-                    selected,
+                    selected: selected_asset,
                 },
             )
             .map_err(error)?;
@@ -153,16 +157,16 @@ mod browser {
                     scope: scope(4),
                     revision,
                     references: keys,
-                    selected,
+                    selected: selected_asset,
                 },
             )
             .map_err(error)?;
         fixture.revision = revision;
         Ok(())
     }
-    fn verify_offer(f: &Fixture) -> Result<(), JsValue> {
-        let before = *f.inputs.borrow();
-        for root in [f.player.root(), f.display.root()] {
+    fn verify_offer(fixture: &Fixture) -> Result<(), JsValue> {
+        let before = *fixture.inputs.borrow();
+        for root in [fixture.player.root(), fixture.display.root()] {
             let button = root
                 .query_selector(".exploration-choice button")?
                 .ok_or_else(|| JsValue::from_str("offer missing"))?
@@ -170,7 +174,7 @@ mod browser {
             button.click();
         }
         require(
-            *f.inputs.borrow() == before + 2,
+            *fixture.inputs.borrow() == before + 2,
             "image lifecycle blocked offered role input",
         )
     }

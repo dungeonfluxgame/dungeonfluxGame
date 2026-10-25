@@ -53,7 +53,7 @@ mod browser {
         phase: ExplorationPhase,
         order: RefCell<ViewStore<()>>,
         limits: ExplorationLimits,
-        revoked: Cell<bool>,
+        is_revoked: Cell<bool>,
     }
 
     impl PlayerExploration {
@@ -82,7 +82,7 @@ mod browser {
                 phase,
                 order: RefCell::new(order),
                 limits,
-                revoked: Cell::new(false),
+                is_revoked: Cell::new(false),
             })
         }
 
@@ -99,7 +99,7 @@ mod browser {
         /// obsolete input. Failed rendering keeps the attempted watermark and input
         /// suspended; recovery requires a newer complete permitted snapshot.
         pub fn update(&self, view: &ExplorationView<'_>) -> Result<(), ExplorationMountError> {
-            if self.revoked.get() {
+            if self.is_revoked.get() {
                 return Err(ExplorationMountError::Revoked);
             }
             view.validate(self.limits).map_err(ExplorationError::from)?;
@@ -125,7 +125,7 @@ mod browser {
             scope: CacheScope,
             limits: SceneImageLimits,
         ) -> Result<(), ExplorationMountError> {
-            if self.revoked.get() {
+            if self.is_revoked.get() {
                 return Err(ExplorationMountError::Revoked);
             }
             self.phase
@@ -137,7 +137,7 @@ mod browser {
             view: &ExplorationView<'_>,
             assets: CampaignSceneAssets<'_>,
         ) -> Result<Option<FetchToken>, ExplorationMountError> {
-            if self.revoked.get() {
+            if self.is_revoked.get() {
                 return Err(ExplorationMountError::Revoked);
             }
             view.validate(self.limits).map_err(ExplorationError::from)?;
@@ -163,7 +163,7 @@ mod browser {
             token: &FetchToken,
             bytes: Vec<u8>,
         ) -> Result<(), ExplorationMountError> {
-            if self.revoked.get() {
+            if self.is_revoked.get() {
                 return Err(ExplorationMountError::Revoked);
             }
             self.phase
@@ -174,7 +174,7 @@ mod browser {
         /// Connection/presentation suspension preserves valid drafts and nodes but
         /// disables submissions. Only update with a newer accepted view resumes.
         pub fn suspend_input(&self) -> Result<(), ExplorationMountError> {
-            if self.revoked.get() {
+            if self.is_revoked.get() {
                 return Err(ExplorationMountError::Revoked);
             }
             self.phase
@@ -185,7 +185,7 @@ mod browser {
         /// Terminal, idempotent disposal. Caller-held raw Text, attributes and draft
         /// references are erased in place; callbacks can no longer submit input.
         pub fn revoke(&self) -> Result<(), ExplorationMountError> {
-            self.revoked.set(true);
+            self.is_revoked.set(true);
             self.phase.dispose().map_err(ExplorationMountError::from)
         }
     }

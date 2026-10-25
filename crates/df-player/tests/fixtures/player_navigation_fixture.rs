@@ -84,12 +84,12 @@ mod browser {
     use wasm_bindgen::{JsCast, prelude::*};
     use web_sys::{Document, Element, HtmlButtonElement, HtmlInputElement, Node};
 
-    const MAX_INTENTS: u32 = 256;
+    const MAXIMUM_INTENTS: u32 = 256;
     #[derive(Default)]
     struct Intents {
         count: u32,
         last: Option<JoinPhaseIntent>,
-        capacity_failed: bool,
+        has_capacity_failure: bool,
     }
     struct Fixture {
         screen: PlayerJoinScreen,
@@ -413,7 +413,10 @@ mod browser {
     pub fn fixture_intent_count() -> Result<u32, JsValue> {
         with_fixture(|fixture| {
             let record = fixture.intents.borrow();
-            check(!record.capacity_failed, "fixture intent capacity exceeded")?;
+            check(
+                !record.has_capacity_failure,
+                "fixture intent capacity exceeded",
+            )?;
             Ok(record.count)
         })
     }
@@ -539,14 +542,14 @@ mod browser {
             PlayerJoinConnection::Connected,
             move |intent| {
                 let mut record = observed.borrow_mut();
-                if record.count >= MAX_INTENTS {
-                    record.capacity_failed = true;
+                if record.count >= MAXIMUM_INTENTS {
+                    record.has_capacity_failure = true;
                     return;
                 }
                 record.count = match record.count.checked_add(1) {
                     Some(count) => count,
                     None => {
-                        record.capacity_failed = true;
+                        record.has_capacity_failure = true;
                         return;
                     }
                 };

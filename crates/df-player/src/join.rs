@@ -104,8 +104,8 @@ mod browser {
             document: &Document,
             root: &Element,
             selector: &str,
-            scene: bool,
-            alive: &Rc<Cell<bool>>,
+            is_scene: bool,
+            is_alive: &Rc<Cell<bool>>,
         ) -> Result<Self, JoinPhaseError> {
             let image = root
                 .query_selector(selector)?
@@ -113,20 +113,20 @@ mod browser {
                 .dyn_into::<HtmlImageElement>()
                 .map_err(|_| JsValue::from_str("join artwork node has wrong type"))?;
             let fallback = document
-                .create_element(if scene { "div" } else { "span" })?
+                .create_element(if is_scene { "div" } else { "span" })?
                 .dyn_into::<HtmlElement>()
                 .map_err(|_| JsValue::from_str("join artwork fallback has wrong type"))?;
             fallback.set_attribute(
                 "data-join-art-fallback",
-                if scene { "scene" } else { "narrator" },
+                if is_scene { "scene" } else { "narrator" },
             )?;
             fallback.set_attribute("role", "status")?;
-            fallback.set_attribute("style", if scene {
+            fallback.set_attribute("style", if is_scene {
                 "position:absolute;inset:0;z-index:-3;background:radial-gradient(ellipse at top,#244354,#070d14 70%);color:#c5d1d8;display:grid;place-items:center;font:14px system-ui;text-align:center;padding:24px"
             } else {
                 "min-width:46px;min-height:46px;border-radius:50%;border:1px solid #d1b67c;color:#d1b67c;display:inline-grid;place-items:center;font:20px Georgia"
             })?;
-            fallback.set_text_content(Some(if scene {
+            fallback.set_text_content(Some(if is_scene {
                 "The story continues · scene art unavailable"
             } else {
                 "✦"
@@ -135,19 +135,20 @@ mod browser {
                 .parent_node()
                 .ok_or_else(|| JsValue::from_str("join artwork parent missing"))?
                 .append_child(&fallback)?;
-            let update = |image: HtmlImageElement, fallback: HtmlElement, alive: Rc<Cell<bool>>| {
-                Closure::wrap(Box::new(move |_: Event| {
-                    // A queued completion for an earlier src cannot publish while
-                    // the browser reports the current image is still loading.
-                    if alive.get() && image.complete() {
-                        let missing = image.natural_width() == 0;
-                        image.set_hidden(missing);
-                        fallback.set_hidden(!missing);
-                    }
-                }) as Box<dyn FnMut(Event)>)
-            };
-            let load = update(image.clone(), fallback.clone(), Rc::clone(alive));
-            let error = update(image.clone(), fallback.clone(), Rc::clone(alive));
+            let update =
+                |image: HtmlImageElement, fallback: HtmlElement, is_alive: Rc<Cell<bool>>| {
+                    Closure::wrap(Box::new(move |_: Event| {
+                        // A queued completion for an earlier src cannot publish while
+                        // the browser reports the current image is still loading.
+                        if is_alive.get() && image.complete() {
+                            let missing = image.natural_width() == 0;
+                            image.set_hidden(missing);
+                            fallback.set_hidden(!missing);
+                        }
+                    }) as Box<dyn FnMut(Event)>)
+                };
+            let load = update(image.clone(), fallback.clone(), Rc::clone(is_alive));
+            let error = update(image.clone(), fallback.clone(), Rc::clone(is_alive));
             image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
             if let Err(error_value) =
                 image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())
@@ -202,9 +203,9 @@ mod browser {
         surface: JoinPhaseSurface,
         connection: PlayerJoinConnection,
         generation: Option<u64>,
-        current_render_ready: bool,
-        input_enabled: Rc<Cell<bool>>,
-        alive: Rc<Cell<bool>>,
+        is_current_render_ready: bool,
+        is_input_enabled: Rc<Cell<bool>>,
+        is_alive: Rc<Cell<bool>>,
         resume_focus: Option<HtmlElement>,
         art: Vec<OptionalArt>,
     }
@@ -235,8 +236,9 @@ mod browser {
             fieldset.set_attribute("style", "border:0;padding:0;margin:0;min-inline-size:0")?;
             root.append_child(&status)?;
             root.append_child(&fieldset)?;
-            let input_enabled = Rc::new(Cell::new(connection == PlayerJoinConnection::Connected));
-            let gate = Rc::clone(&input_enabled);
+            let is_input_enabled =
+                Rc::new(Cell::new(connection == PlayerJoinConnection::Connected));
+            let gate = Rc::clone(&is_input_enabled);
             let surface = JoinPhaseSurface::create(
                 document,
                 input.identifier,
@@ -259,9 +261,9 @@ mod browser {
                 surface,
                 connection,
                 generation: Some(view.stamp.generation),
-                current_render_ready: true,
-                input_enabled,
-                alive: Rc::new(Cell::new(true)),
+                is_current_render_ready: true,
+                is_input_enabled,
+                is_alive: Rc::new(Cell::new(true)),
                 resume_focus: None,
                 art: Vec::new(),
             };
@@ -270,14 +272,14 @@ mod browser {
                 screen.surface.root(),
                 ".scene-art",
                 true,
-                &screen.alive,
+                &screen.is_alive,
             )?);
             screen.art.push(OptionalArt::mount(
                 document,
                 screen.surface.root(),
                 ".narrator",
                 false,
-                &screen.alive,
+                &screen.is_alive,
             )?);
             screen.set_connection(connection)?;
             slot.append_child(screen.root())?;
@@ -296,21 +298,21 @@ mod browser {
             }
             let mut nodes = Vec::new();
             collect_nodes(self.surface.root().as_ref(), &mut nodes);
-            let was_enabled = self.input_enabled.replace(false);
+            let was_input_enabled = self.is_input_enabled.replace(false);
             let result = self.surface.update(view);
             let detached = nodes
                 .into_iter()
                 .filter(|node| !self.surface.root().contains(Some(node)))
                 .collect();
             if let Err(cleanup) = scrub_nodes(detached) {
-                self.current_render_ready = false;
+                self.is_current_render_ready = false;
                 self.fieldset.set_disabled(true);
                 return Err(self.retire_after_error(cleanup));
             }
             match result {
                 Ok(JoinUpdate::Applied) => {
-                    self.current_render_ready = true;
-                    self.input_enabled
+                    self.is_current_render_ready = true;
+                    self.is_input_enabled
                         .set(self.connection == PlayerJoinConnection::Connected);
                     self.fieldset
                         .set_disabled(self.connection != PlayerJoinConnection::Connected);
@@ -320,15 +322,15 @@ mod browser {
                     Ok(JoinUpdate::Applied)
                 }
                 Ok(stale) => {
-                    self.input_enabled.set(was_enabled);
+                    self.is_input_enabled.set(was_input_enabled);
                     Ok(stale)
                 }
                 Err(error @ JoinPhaseError::InvalidView(_)) => {
-                    self.input_enabled.set(was_enabled);
+                    self.is_input_enabled.set(was_input_enabled);
                     Err(error.into())
                 }
                 Err(error) => {
-                    self.current_render_ready = false;
+                    self.is_current_render_ready = false;
                     self.fieldset.set_disabled(true);
                     self.status.set_text_content(Some(
                         "Join presentation unavailable · awaiting a current view",
@@ -349,8 +351,8 @@ mod browser {
                     JoinPhaseError::from(JoinValidationError::GenerationNotAdvanced).into(),
                 );
             }
-            self.input_enabled.set(false);
-            self.current_render_ready = false;
+            self.is_input_enabled.set(false);
+            self.is_current_render_ready = false;
             self.resume_focus = None;
             let mut nodes = Vec::new();
             collect_nodes(self.surface.root().as_ref(), &mut nodes);
@@ -366,7 +368,7 @@ mod browser {
                 return Err(self.retire_after_error(error));
             }
             self.generation = Some(view.stamp.generation);
-            self.current_render_ready = true;
+            self.is_current_render_ready = true;
             for art in &self.art {
                 art.refresh();
             }
@@ -389,12 +391,12 @@ mod browser {
                     .and_then(|node| node.dyn_into::<HtmlElement>().ok());
             }
             self.connection = connection;
-            let enabled =
-                connection == PlayerJoinConnection::Connected && self.current_render_ready;
-            self.input_enabled.set(enabled);
-            self.fieldset.set_disabled(!enabled);
+            let is_enabled =
+                connection == PlayerJoinConnection::Connected && self.is_current_render_ready;
+            self.is_input_enabled.set(is_enabled);
+            self.fieldset.set_disabled(!is_enabled);
             self.status.set_text_content(Some(match connection {
-                PlayerJoinConnection::Connected if self.current_render_ready => {
+                PlayerJoinConnection::Connected if self.is_current_render_ready => {
                     "Connected · player join and lobby"
                 }
                 PlayerJoinConnection::Connected => {
@@ -407,7 +409,7 @@ mod browser {
                     "Offline · join input suspended; membership unchanged"
                 }
             }));
-            if enabled
+            if is_enabled
                 && let Some(element) = self.resume_focus.take()
                 && element.is_connected()
                 && !element.matches(":disabled")?
@@ -431,10 +433,10 @@ mod browser {
         /// optional-art listeners, and scrubs raw Text/Element references before
         /// component disposal can detach them from the retained DOM tree.
         pub fn revoke(&mut self) -> Result<(), PlayerJoinError> {
-            self.input_enabled.set(false);
-            self.alive.set(false);
+            self.is_input_enabled.set(false);
+            self.is_alive.set(false);
             self.generation = None;
-            self.current_render_ready = false;
+            self.is_current_render_ready = false;
             self.resume_focus = None;
             self.fieldset.set_disabled(true);
             self.surface.invitation().input().set_value("");

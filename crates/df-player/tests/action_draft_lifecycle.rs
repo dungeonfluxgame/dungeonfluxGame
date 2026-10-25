@@ -52,7 +52,7 @@ fn request() -> SubmitActionRequest {
 fn draft() -> ActionDraft {
     ActionDraft::from_uncertain(UncertainOperation::new(key(), request())).unwrap()
 }
-fn receipt(accepted: bool) -> DecisionReceipt {
+fn receipt(is_accepted: bool) -> DecisionReceipt {
     let request = request();
     DecisionReceipt {
         session_id: request.session_id,
@@ -60,7 +60,7 @@ fn receipt(accepted: bool) -> DecisionReceipt {
         operation_id: request.operation_id,
         revision: Some(wire_revision(8)),
         replayed: true,
-        outcome: Some(if accepted {
+        outcome: Some(if is_accepted {
             wire::decision_receipt::Outcome::Accepted(Box::default())
         } else {
             wire::decision_receipt::Outcome::Rejected(wire::Rejection {
@@ -90,10 +90,10 @@ fn port(outcome: Result<LookupOutcome<DecisionReceipt>, &'static str>) -> Port {
         calls: Vec::new(),
     }
 }
-fn committed(value: DecisionReceipt) -> Result<LookupOutcome<DecisionReceipt>, &'static str> {
+fn committed(receipt: DecisionReceipt) -> Result<LookupOutcome<DecisionReceipt>, &'static str> {
     Ok(LookupOutcome::Committed {
         revision: revision(8),
-        receipt: value,
+        receipt,
     })
 }
 fn ready<F: Future>(future: F) -> F::Output {

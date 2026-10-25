@@ -135,8 +135,8 @@ mod browser {
         } else {
             "private-roll"
         })?;
-        let pending = mode == Mode::Pending;
-        let enabled = mode != Mode::Locked;
+        let is_pending = mode == Mode::Pending;
+        let is_enabled = mode != Mode::Locked;
         let mut offers = vec![
             CombatOffer {
                 key: "action",
@@ -153,8 +153,8 @@ mod browser {
                 } else {
                     "Take aim at the dockwarden"
                 },
-                enabled,
-                pending,
+                enabled: is_enabled,
+                pending: is_pending,
             },
             CombatOffer {
                 key: "reaction",
@@ -163,8 +163,8 @@ mod browser {
                 kind: CombatOfferKind::Reaction,
                 label: "Take a reaction",
                 explanation: "When an opening appears",
-                enabled: enabled && mode == Mode::Reaction,
-                pending,
+                enabled: is_enabled && mode == Mode::Reaction,
+                pending: is_pending,
             },
             CombatOffer {
                 key: "roll",
@@ -173,8 +173,8 @@ mod browser {
                 kind: CombatOfferKind::Roll,
                 label: "Roll the dice",
                 explanation: "Await the result",
-                enabled: enabled && mode == Mode::Ready,
-                pending,
+                enabled: is_enabled && mode == Mode::Ready,
+                pending: is_pending,
             },
         ];
         if reordered {
@@ -226,7 +226,7 @@ mod browser {
                 Some(CombatDraft {
                     key: "same-draft-owner",
                     label: "Describe your approach",
-                    enabled: enabled && !pending,
+                    enabled: is_enabled && !is_pending,
                     feedback: if mode == Mode::Refused {
                         CombatFeedback::Refused("Choose another approach. Your words are saved.")
                     } else {
@@ -234,7 +234,7 @@ mod browser {
                     },
                 })
             },
-            feedback: if pending {
+            feedback: if is_pending {
                 CombatFeedback::Pending("Your move is being considered…")
             } else if mode == Mode::Refused {
                 CombatFeedback::Refused("That move is no longer available.")
