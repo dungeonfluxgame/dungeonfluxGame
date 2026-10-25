@@ -189,11 +189,11 @@ impl<'a> SemanticReplay<'a> {
         limits: ReplayLimits,
     ) -> Result<Self, ReplayError> {
         validate_limits(limits)?;
-        let mut records = decisions
+        let mut record_count = decisions
             .len()
             .checked_add(jobs.len())
             .ok_or(ReplayError::Capacity)?;
-        if records > limits.maximum_records {
+        if record_count > limits.maximum_records {
             return Err(ReplayError::Capacity);
         }
         let mut bytes = 0usize;
@@ -210,13 +210,15 @@ impl<'a> SemanticReplay<'a> {
             {
                 return Err(ReplayError::Stale);
             }
-            for count in [
+            for related_record_count in [
                 decision.facts.len(),
                 decision.draws.len(),
                 decision.effects.len(),
             ] {
-                records = records.checked_add(count).ok_or(ReplayError::Capacity)?;
-                if records > limits.maximum_records {
+                record_count = record_count
+                    .checked_add(related_record_count)
+                    .ok_or(ReplayError::Capacity)?;
+                if record_count > limits.maximum_records {
                     return Err(ReplayError::Capacity);
                 }
             }
@@ -322,11 +324,15 @@ fn repeated<T: PartialEq>(records: &[T]) -> bool {
         .any(|(index, record)| records.iter().take(index).any(|prior| prior == record))
 }
 
-fn count_text(bytes: &mut usize, output: &str, limits: ReplayLimits) -> Result<(), ReplayError> {
-    *bytes = bytes
+fn count_text(
+    semantic_bytes: &mut usize,
+    output: &str,
+    limits: ReplayLimits,
+) -> Result<(), ReplayError> {
+    *semantic_bytes = semantic_bytes
         .checked_add(output.len())
         .ok_or(ReplayError::Capacity)?;
-    if *bytes > limits.maximum_semantic_bytes {
+    if *semantic_bytes > limits.maximum_semantic_bytes {
         return Err(ReplayError::Capacity);
     }
     Ok(())

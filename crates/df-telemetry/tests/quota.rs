@@ -14,14 +14,14 @@ use std::{
 const WAIT: Duration = Duration::from_secs(5);
 const SMALL_SQLITE_BYTES: u64 = 262_144;
 
-fn root(case: &str) -> PathBuf {
+fn fixture_path(scenario: &str) -> PathBuf {
     assert!(
         [
             "quota-spool-exact",
             "quota-sqlite-recovery",
             "quota-combined"
         ]
-        .contains(&case)
+        .contains(&scenario)
     );
     let namespace = std::env::var("DF_TELEMETRY_FIXTURE_NAMESPACE").unwrap_or_else(|_| {
         format!(
@@ -41,7 +41,7 @@ fn root(case: &str) -> PathBuf {
     );
     let path =
         PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-            .join(format!("ownedfixture-{namespace}-{case}"));
+            .join(format!("ownedfixture-{namespace}-{scenario}"));
     assert!(path.file_name().unwrap().len() <= 100);
     assert!(
         !path.exists(),
@@ -51,7 +51,7 @@ fn root(case: &str) -> PathBuf {
     path
 }
 
-fn producer(store: &Store, limits: TelemetryLimits, sequence: i64) -> NativeProducer {
+fn create_producer(store: &Store, limits: TelemetryLimits, sequence: i64) -> NativeProducer {
     let build = BuildIdentity::new(
         Some("quota-source"),
         Some("quota-native"),
@@ -70,7 +70,7 @@ fn producer(store: &Store, limits: TelemetryLimits, sequence: i64) -> NativeProd
     .unwrap()
 }
 
-fn capture(producer: &mut NativeProducer, sequence: u8) -> CapturedBatch {
+fn capture_log(producer: &mut NativeProducer, sequence: u8) -> CapturedBatch {
     let key = producer
         .reserve(RecordId::new([sequence; 16]).unwrap())
         .unwrap();
@@ -99,11 +99,11 @@ fn frame_bytes(path: &std::path::Path) -> u64 {
 
 #[test]
 fn exact_spool_quota_refuses_new_record_without_losing_committed_identity() {
-    let path = root("quota-spool-exact");
+    let path = fixture_path("quota-spool-exact");
     let limits = TelemetryLimits::default();
     let mut store = Store::open(&path, limits, None).unwrap();
-    let mut source = producer(&store, limits, 1);
-    let first = capture(&mut source, 1);
+    let mut source = create_producer(&store, limits, 1);
+    let first = capture_log(&mut source, 1);
     assert_eq!(
         first.pending.wait(WAIT).unwrap().durability,
         Durability::Committed
@@ -119,8 +119,8 @@ fn exact_spool_quota_refuses_new_record_without_losing_committed_identity() {
     let mut store = Store::open(&path, limits, None).unwrap();
     assert_eq!(store.health().spool_bytes, limits.spool_bytes);
     let prior_health = store.health();
-    let mut source = producer(&store, limits, 2);
-    let refused = capture(&mut source, 2);
+    let mut source = create_producer(&store, limits, 2);
+    let refused = capture_log(&mut source, 2);
     assert_eq!(refused.pending.wait(WAIT), Err(TelemetryError::Capacity));
     let health = store.health();
     assert_eq!(
@@ -193,14 +193,14 @@ fn exact_spool_quota_refuses_new_record_without_losing_committed_identity() {
 
 #[test]
 fn sqlite_physical_quota_preserves_spooled_work_and_reports_controlled_lag() {
-    let path = root("quota-sqlite-recovery");
+    let path = fixture_path("quota-sqlite-recovery");
     let limits = TelemetryLimits {
         sqlite_bytes: SMALL_SQLITE_BYTES,
         ..Default::default()
     };
     let mut store = Store::open(&path, limits, None).unwrap();
-    let mut source = producer(&store, limits, 1);
-    let captured = capture(&mut source, 1);
+    let mut source = create_producer(&store, limits, 1);
+    let captured = capture_log(&mut source, 1);
     let receipt = captured.pending.wait(WAIT).unwrap();
     assert_eq!(receipt.durability, Durability::Spooled);
     assert_eq!(
@@ -273,7 +273,7 @@ fn sqlite_physical_quota_preserves_spooled_work_and_reports_controlled_lag() {
 
 #[test]
 fn simultaneous_sink_and_spool_quota_exposes_loss_and_recovers_prior_acceptance() {
-    let path = root("quota-combined");
+    let path = fixture_path("quota-combined");
     let limits = TelemetryLimits {
         sqlite_bytes: SMALL_SQLITE_BYTES,
         spool_bytes: 4096,
@@ -281,11 +281,11 @@ fn simultaneous_sink_and_spool_quota_exposes_loss_and_recovers_prior_acceptance(
     };
     let mut store = Store::open(&path, limits, None).unwrap();
     let prior_gaps = store.health().unconfirmed_gaps;
-    let mut source = producer(&store, limits, 1);
+    let mut source = create_producer(&store, limits, 1);
     let mut accepted = Vec::new();
     let mut refused = None;
     for sequence in 1..=16 {
-        let captured = capture(&mut source, sequence);
+        let captured = capture_log(&mut source, sequence);
         match captured.pending.wait(WAIT) {
             Ok(receipt) => {
                 assert_eq!(receipt.durability, Durability::Spooled);
