@@ -44,6 +44,8 @@ fn player_message(sequence: Option<u64>) -> ViewMessage {
             private_clue: "The sealed packet bears a second mark.".to_owned(),
             action_available: true,
             offers: vec![offer("opaque:ask-courier:v7", 4)],
+            operational_notice: String::new(),
+            spend: None,
             scene: None,
             journey: None,
         })),
