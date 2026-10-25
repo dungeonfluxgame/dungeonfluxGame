@@ -32,10 +32,19 @@ impl NativeFileStore {
         fs::create_dir_all(root.join("promotion"))?;
         require_objects_dir(&root.join("objects"))?;
         sync_directory(&root)?;
+        crate::native_object_store::reap_stale_temporaries(&root);
         Ok(Self {
             root,
             max_object_bytes,
         })
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn max_object_bytes(&self) -> u64 {
+        self.max_object_bytes
     }
 
     fn object_path(&self, digest: &[u8; 32]) -> PathBuf {
@@ -259,18 +268,18 @@ impl AssetStore for NativeFileStore {
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
 
 #[cfg(windows)]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(_path: &Path) -> std::io::Result<()> {
     // Windows does not support flushing directory handles like Unix fsync.
     Ok(())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

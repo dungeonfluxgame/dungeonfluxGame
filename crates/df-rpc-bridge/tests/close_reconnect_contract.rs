@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+mod support;
+
 use axum::{Router, extract::WebSocketUpgrade, response::IntoResponse, routing::get};
 use df_rpc_bridge::{
     ConnectionMetrics, ConnectionSnapshot, FRAME_BYTES, NativeIncoming, RECEIVE_BYTES, TunnelStream,
@@ -309,4 +311,65 @@ async fn native_close_outcomes_match_consumed_result_derived_json() {
     actual.push_str("\n  ]\n}\n");
     println!("RESULT_DERIVED_NATIVE_JSON={actual}");
     assert_eq!(actual, include_str!("close_reconnect_contract.json"));
+}
+
+#[tokio::test]
+async fn fault_proxy_preserves_bytes_and_applies_seeded_latency() {
+    use support::fault_proxy::{FaultProfile, FaultProxy};
+
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("echo listener");
+    let upstream_address = upstream.local_addr().expect("echo address");
+    let echo = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut stream, _) = upstream.accept().await.expect("echo accept");
+            let mut buffer = [0; 1024];
+            loop {
+                let count = stream.read(&mut buffer).await.expect("echo read");
+                if count == 0 {
+                    break;
+                }
+                stream
+                    .write_all(&buffer[..count])
+                    .await
+                    .expect("echo write");
+            }
+        }
+    });
+    let baseline = FaultProxy::start(upstream_address, FaultProfile::default())
+        .await
+        .expect("baseline proxy");
+    let measured = FaultProxy::start(
+        upstream_address,
+        FaultProfile {
+            latency: Duration::from_millis(20),
+            jitter: Duration::from_millis(5),
+            seed: 42,
+            ..FaultProfile::default()
+        },
+    )
+    .await
+    .expect("delayed proxy");
+    let payload = vec![0x5a; 512];
+    let baseline_ms = round_trip(baseline.address(), &payload).await;
+    let delayed_ms = round_trip(measured.address(), &payload).await;
+    println!("NET_PROXY_MEASURE bytes=512 baseline_ms={baseline_ms} injected_ms={delayed_ms}");
+    assert!(delayed_ms >= baseline_ms + 30);
+    echo.abort();
+}
+
+async fn round_trip(address: std::net::SocketAddr, payload: &[u8]) -> u128 {
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("proxy connect");
+    let started = std::time::Instant::now();
+    stream.write_all(payload).await.expect("send payload");
+    let mut received = vec![0; payload.len()];
+    stream
+        .read_exact(&mut received)
+        .await
+        .expect("receive payload");
+    assert_eq!(received, payload);
+    started.elapsed().as_millis()
 }

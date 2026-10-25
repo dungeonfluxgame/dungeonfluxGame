@@ -14,6 +14,8 @@ const ELEVEN_BASE: &str = "https://api.elevenlabs.io";
 const ELEVEN_MODEL: &str = "eleven_flash_v2_5";
 const ELEVEN_OUTPUT_FORMAT: &str = "mp3_22050_32";
 const FAL_QUEUE_BASE: &str = "https://queue.fal.run/fal-ai/flux/schnell";
+// Repo research specifies this no-store control; verify current fal docs before relying on it.
+const FAL_STORE_IO_HEADER: (&str, &str) = ("X-Fal-Store-IO", "0");
 
 /// HTTP method used by the generic mapped request value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,6 +79,7 @@ impl HttpRequest {
                 ("Authorization", format!("Key {credential}")),
                 ("Content-Type", "application/json".to_owned()),
                 ("X-Fal-No-Retry", "1".to_owned()),
+                (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
             ],
             body,
         }
@@ -395,6 +398,7 @@ pub fn fal_submit_request(api_key: &str, prompt: &str) -> Result<HttpRequest, Ht
         headers: vec![
             ("Authorization", format!("Key {api_key}")),
             ("Content-Type", "application/json".to_owned()),
+            (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
         ],
         body: body.into_bytes(),
     })
@@ -611,7 +615,10 @@ fn fal_get_request(
     Ok(HttpRequest {
         method: HttpMethod::Get,
         url,
-        headers: vec![("Authorization", format!("Key {api_key}"))],
+        headers: vec![
+            ("Authorization", format!("Key {api_key}")),
+            (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
+        ],
         body: Vec::new(),
     })
 }

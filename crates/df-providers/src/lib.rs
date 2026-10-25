@@ -13,6 +13,8 @@ mod reconciliation;
 mod registry;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod metering;
+#[cfg(not(target_arch = "wasm32"))]
 mod native_http;
 #[cfg(not(target_arch = "wasm32"))]
 mod speech_adapter;
@@ -22,6 +24,11 @@ mod systemone;
 mod text_response;
 #[cfg(not(target_arch = "wasm32"))]
 mod text_schema;
+#[cfg(not(target_arch = "wasm32"))]
+pub use metering::{
+    AnsweredUsage, CallMeter, CallTicket, MeterSlot, MeteredClient, SentCall,
+    refusal_may_be_billed, settle_refusal, settle_status, status_may_be_billed,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use systemone::{SystemOneChoiceProvider, SystemOneError};
 
@@ -135,7 +142,7 @@ mod eleven_music;
 pub use eleven_music::{
     AMBIENCE_MAXIMUM_SECONDS, ElevenMusicConfig, ElevenMusicError, GeneratedAudio,
     MUSIC_MAXIMUM_LENGTH_MILLIS, MUSIC_MAXIMUM_PROMPT_CHARACTERS, MUSIC_MINIMUM_LENGTH_MILLIS,
-    NativeElevenMusicProvider,
+    MUSIC_MODEL, NativeElevenMusicProvider, SOUND_MODEL,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod fal_segment;

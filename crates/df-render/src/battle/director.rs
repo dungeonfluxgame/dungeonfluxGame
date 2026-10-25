@@ -2719,7 +2719,7 @@ mod tests {
             hit + SETTLE_PAN <= Duration::from_millis(1_500),
             "the next roll can begin within 1.5 s of contact: {hit:?}"
         );
-        assert!(super::super::float_text::HOLD_S >= 2.5);
+        const { assert!(super::super::float_text::HOLD_S >= 2.5) };
     }
 
     #[test]

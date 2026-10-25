@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::{
     cell::{Cell, RefCell},
     future::{Future, poll_fn},
@@ -49,6 +50,45 @@ pub enum RpcError {
     Capacity,
     StreamClosed,
     StreamNotDrained,
+}
+
+/// Capped exponential retry window; the caller supplies a uniform sample for full jitter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReconnectBackoff {
+    base_delay: Duration,
+    maximum_delay: Duration,
+    retry_index: u32,
+}
+
+impl ReconnectBackoff {
+    pub fn new(base_delay: Duration, maximum_delay: Duration) -> Option<Self> {
+        (base_delay > Duration::ZERO && maximum_delay >= base_delay).then_some(Self {
+            base_delay,
+            maximum_delay,
+            retry_index: 0,
+        })
+    }
+
+    /// Caps a caller generated random sample at min(base * 2^retry, maximum).
+    pub fn delay(&self, jitter_sample: Duration) -> Duration {
+        jitter_sample.min(self.retry_cap())
+    }
+
+    pub fn advance(&mut self) {
+        self.retry_index = self.retry_index.saturating_add(1);
+    }
+
+    pub fn reset(&mut self) {
+        self.retry_index = 0;
+    }
+
+    fn retry_cap(&self) -> Duration {
+        let multiplier = 1_u32.checked_shl(self.retry_index).unwrap_or(u32::MAX);
+        self.base_delay
+            .checked_mul(multiplier)
+            .unwrap_or(self.maximum_delay)
+            .min(self.maximum_delay)
+    }
 }
 
 type RpcResponse<Body> = Result<Response<Body>, RpcError>;
@@ -405,5 +445,48 @@ impl<Message> RpcStream<Message> {
     fn dispose(&mut self) {
         drop(self.stream.take());
         drop(self.lease.take());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::ReconnectBackoff;
+    use std::time::Duration;
+
+    #[test]
+    fn retry_delay_uses_full_jitter_window_and_caps_exponential_growth() {
+        let mut backoff = ReconnectBackoff::new(Duration::from_millis(250), Duration::from_secs(8))
+            .expect("valid backoff bounds");
+        assert_eq!(
+            backoff.delay(Duration::from_millis(200)),
+            Duration::from_millis(200)
+        );
+        assert_eq!(
+            backoff.delay(Duration::from_secs(1)),
+            Duration::from_millis(250)
+        );
+        backoff.advance();
+        assert_eq!(
+            backoff.delay(Duration::from_secs(1)),
+            Duration::from_millis(500)
+        );
+        for _ in 0..8 {
+            backoff.advance();
+        }
+        assert_eq!(
+            backoff.delay(Duration::from_secs(20)),
+            Duration::from_secs(8)
+        );
+        backoff.reset();
+        assert_eq!(
+            backoff.delay(Duration::from_secs(20)),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn retry_backoff_rejects_invalid_bounds() {
+        assert!(ReconnectBackoff::new(Duration::ZERO, Duration::from_secs(1)).is_none());
+        assert!(ReconnectBackoff::new(Duration::from_secs(2), Duration::from_secs(1)).is_none());
     }
 }

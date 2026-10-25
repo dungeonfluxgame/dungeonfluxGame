@@ -305,6 +305,7 @@ fn json_body(response: &NativeHttpResponse) -> Result<Value, ImageEditError> {
 }
 
 /// The documented fal error message, kept separate from the request and other response fields.
+#[cfg(test)]
 fn fal_error_message(body: &[u8], credential: &str) -> Option<String> {
     let value = parse_unique_json(
         body,
@@ -492,7 +493,13 @@ mod tests {
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("fixture request");
             let mut request = [0; 4096];
-            let _ = stream.read(&mut request);
+            let request_size = stream.read(&mut request).expect("fixture request read");
+            let request = String::from_utf8_lossy(&request[..request_size]).to_ascii_lowercase();
+            let (status, body) = if request.contains("\r\nx-fal-store-io: 0\r\n") {
+                (status, body)
+            } else {
+                (400, "missing X-Fal-Store-IO")
+            };
             write!(
                 stream,
                 "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

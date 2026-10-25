@@ -362,11 +362,14 @@ mod native {
         count: usize,
         connected_after_removal: &BTreeMap<(Cell, Cell), bool>,
     ) -> Vec<Vec<Cell>> {
+        struct Search<'a> {
+            grid: &'a Grid,
+            free: &'a BTreeSet<Cell>,
+            candidates: &'a [Cell],
+            connected_after_removal: &'a BTreeMap<(Cell, Cell), bool>,
+        }
         fn collect(
-            grid: &Grid,
-            free: &BTreeSet<Cell>,
-            candidates: &[Cell],
-            connected_after_removal: &BTreeMap<(Cell, Cell), bool>,
+            search: &Search<'_>,
             start: usize,
             remaining: usize,
             selected: &mut Vec<Cell>,
@@ -375,7 +378,7 @@ mod native {
             if remaining == 0 {
                 let occupied: BTreeSet<_> = selected.iter().copied().collect();
                 let valid = selected.iter().all(|&spawn| {
-                    neighbours(grid, free, spawn, None)
+                    neighbours(search.grid, search.free, spawn, None)
                         .iter()
                         .filter(|neighbour| !occupied.contains(neighbour))
                         .count()
@@ -384,7 +387,7 @@ mod native {
                             .iter()
                             .filter(|&&other| other != spawn)
                             .all(|&other| {
-                                connected_after_removal.get(&(spawn, other)) == Some(&true)
+                                search.connected_after_removal.get(&(spawn, other)) == Some(&true)
                             })
                 });
                 if valid {
@@ -392,36 +395,24 @@ mod native {
                 }
                 return;
             }
-            if candidates.len().saturating_sub(start) < remaining {
+            if search.candidates.len().saturating_sub(start) < remaining {
                 return;
             }
-            for index in start..=candidates.len() - remaining {
-                selected.push(candidates[index]);
-                collect(
-                    grid,
-                    free,
-                    candidates,
-                    connected_after_removal,
-                    index + 1,
-                    remaining - 1,
-                    selected,
-                    results,
-                );
+            for index in start..=search.candidates.len() - remaining {
+                selected.push(search.candidates[index]);
+                collect(search, index + 1, remaining - 1, selected, results);
                 selected.pop();
             }
         }
 
         let mut results = Vec::new();
-        collect(
+        let search = Search {
             grid,
             free,
             candidates,
             connected_after_removal,
-            0,
-            count,
-            &mut Vec::new(),
-            &mut results,
-        );
+        };
+        collect(&search, 0, count, &mut Vec::new(), &mut results);
         results
     }
 

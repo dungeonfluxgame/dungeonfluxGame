@@ -1,14 +1,23 @@
-#[path = "../src/lib.rs"]
-mod server;
-
-use server::deployment::{
+use crate::deployment::{
     DeploymentMode, DeploymentPolicy, DeploymentRefusal, InstanceId, InstanceIdRefusal,
-    OtherStorageRoots, SessionOwner, StorageRoot, TelemetryRootRefusal, TelemetryRoots,
+    SessionOwner,
 };
+use crate::deployment::{OtherStorageRoots, StorageRoot, TelemetryRootRefusal, TelemetryRoots};
 use std::path::Path;
 
 fn instance(value: &str) -> InstanceId {
     InstanceId::new(value).unwrap()
+}
+
+/// The fixture paths are POSIX; on Windows a drive letter makes them absolute. The leak is a
+/// few bytes per call in a test process.
+fn rooted(path: &str) -> &'static str {
+    let rooted = if cfg!(windows) {
+        format!("C:{path}")
+    } else {
+        path.to_string()
+    };
+    Box::leak(rooted.into_boxed_str())
 }
 
 fn roots(database: &str, spool: &str, segments: &str) -> TelemetryRoots {
@@ -22,9 +31,9 @@ fn roots(database: &str, spool: &str, segments: &str) -> TelemetryRoots {
 
 fn other_roots() -> OtherStorageRoots<'static> {
     OtherStorageRoots {
-        postgresql: Path::new("/srv/postgresql"),
-        durable_media: Path::new("/srv/media"),
-        workflow_database: Path::new("/srv/workflow/workflow.sqlite3"),
+        postgresql: Path::new(rooted("/srv/postgresql")),
+        durable_media: Path::new(rooted("/srv/media")),
+        workflow_database: Path::new(rooted("/srv/workflow/workflow.sqlite3")),
     }
 }
 
@@ -75,9 +84,9 @@ fn instance_ids_are_bounded_and_path_safe() {
 fn telemetry_roots_bind_to_selected_instance_and_are_distinct() {
     let policy = DeploymentPolicy::initial(instance("server-a"));
     let configured = roots(
-        "/srv/telemetry/server-a/telemetry.sqlite3",
-        "/srv/telemetry/server-a/spool",
-        "/srv/telemetry/server-a/segments",
+        rooted("/srv/telemetry/server-a/telemetry.sqlite3"),
+        rooted("/srv/telemetry/server-a/spool"),
+        rooted("/srv/telemetry/server-a/segments"),
     );
     assert_eq!(
         configured.clone().validate_for(&policy, other_roots()),
@@ -86,7 +95,11 @@ fn telemetry_roots_bind_to_selected_instance_and_are_distinct() {
 
     let mismatched = TelemetryRoots {
         instance: instance("server-b"),
-        ..roots("/srv/a.db", "/srv/a-spool", "/srv/a-segments")
+        ..roots(
+            rooted("/srv/a.db"),
+            rooted("/srv/a-spool"),
+            rooted("/srv/a-segments"),
+        )
     };
     assert_eq!(
         mismatched.validate_for(&policy, other_roots()),
@@ -100,19 +113,19 @@ fn missing_or_unsafe_roots_are_rejected_for_each_telemetry_role() {
     for (database, spool, segments, expected) in [
         (
             "",
-            "/srv/spool",
-            "/srv/segments",
+            rooted("/srv/spool"),
+            rooted("/srv/segments"),
             TelemetryRootRefusal::NotAbsolute(StorageRoot::TelemetryDatabase),
         ),
         (
-            "/srv/db",
+            rooted("/srv/db"),
             "",
-            "/srv/segments",
+            rooted("/srv/segments"),
             TelemetryRootRefusal::NotAbsolute(StorageRoot::TelemetrySpool),
         ),
         (
-            "/srv/db",
-            "/srv/spool",
+            rooted("/srv/db"),
+            rooted("/srv/spool"),
             "",
             TelemetryRootRefusal::NotAbsolute(StorageRoot::TelemetrySegments),
         ),
@@ -123,7 +136,11 @@ fn missing_or_unsafe_roots_are_rejected_for_each_telemetry_role() {
         );
     }
 
-    let traversal = roots("/srv/db", "/srv/spool/../workflow", "/srv/segments");
+    let traversal = roots(
+        rooted("/srv/db"),
+        rooted("/srv/spool/../workflow"),
+        rooted("/srv/segments"),
+    );
     assert_eq!(
         traversal.validate_for(&policy, other_roots()),
         Err(TelemetryRootRefusal::ParentTraversal(
@@ -141,16 +158,16 @@ fn each_telemetry_root_rejects_overlap_with_every_other_authority() {
         StorageRoot::TelemetrySegments,
     ];
     let protected = [
-        (StorageRoot::Postgresql, "/srv/postgresql/nested"),
-        (StorageRoot::DurableMedia, "/srv/media/nested"),
-        (StorageRoot::WorkflowDatabase, "/srv/workflow"),
+        (StorageRoot::Postgresql, rooted("/srv/postgresql/nested")),
+        (StorageRoot::DurableMedia, rooted("/srv/media/nested")),
+        (StorageRoot::WorkflowDatabase, rooted("/srv/workflow")),
     ];
     for (index, telemetry_owner) in telemetry_owners.into_iter().enumerate() {
         for (protected_owner, protected_path) in protected {
             let mut paths = [
-                "/srv/telemetry/db",
-                "/srv/telemetry/spool",
-                "/srv/telemetry/segments",
+                rooted("/srv/telemetry/db"),
+                rooted("/srv/telemetry/spool"),
+                rooted("/srv/telemetry/segments"),
             ];
             paths[index] = protected_path;
             assert_eq!(
@@ -164,13 +181,14 @@ fn each_telemetry_root_rejects_overlap_with_every_other_authority() {
     }
 
     for (first, second, first_owner, second_owner) in [(
-        "/srv/telemetry/same",
-        "/srv/telemetry/same",
+        rooted("/srv/telemetry/same"),
+        rooted("/srv/telemetry/same"),
         StorageRoot::TelemetryDatabase,
         StorageRoot::TelemetrySpool,
     )] {
         assert_eq!(
-            roots(first, second, "/srv/other-segments").validate_for(&policy, other_roots()),
+            roots(first, second, rooted("/srv/other-segments"))
+                .validate_for(&policy, other_roots()),
             Err(TelemetryRootRefusal::Overlap {
                 first: first_owner,
                 second: second_owner,
@@ -180,9 +198,9 @@ fn each_telemetry_root_rejects_overlap_with_every_other_authority() {
 
     assert_eq!(
         roots(
-            "/srv/telemetry",
-            "/srv/other-spool",
-            "/srv/telemetry/segments"
+            rooted("/srv/telemetry"),
+            rooted("/srv/other-spool"),
+            rooted("/srv/telemetry/segments")
         )
         .validate_for(&policy, other_roots()),
         Err(TelemetryRootRefusal::Overlap {

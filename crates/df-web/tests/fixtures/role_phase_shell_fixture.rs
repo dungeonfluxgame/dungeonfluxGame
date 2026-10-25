@@ -2013,6 +2013,59 @@ mod browser {
         })
     }
     #[wasm_bindgen]
+    pub fn shell_check_operational_notice() -> Result<(), JsValue> {
+        FIXTURE.with(|owner| {
+            let owner = owner.borrow();
+            let fixture = owner
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("fixture disposed"))?;
+            let notice = "Narration provider unavailable; no new charge";
+            fixture
+                .player
+                .set_operational_notice(Some(notice))
+                .map_err(error)?;
+            fixture
+                .display
+                .set_operational_notice(Some(notice))
+                .map_err(error)?;
+            require(
+                fixture
+                    .player
+                    .root()
+                    .text_content()
+                    .unwrap_or_default()
+                    .contains(notice)
+                    && fixture
+                        .display
+                        .root()
+                        .text_content()
+                        .unwrap_or_default()
+                        .contains(notice),
+                "quota notice did not appear on both role shells",
+            )?;
+            fixture.player.set_operational_notice(None).map_err(error)?;
+            fixture
+                .display
+                .set_operational_notice(None)
+                .map_err(error)?;
+            require(
+                !fixture
+                    .player
+                    .root()
+                    .text_content()
+                    .unwrap_or_default()
+                    .contains(notice)
+                    && !fixture
+                        .display
+                        .root()
+                        .text_content()
+                        .unwrap_or_default()
+                        .contains(notice),
+                "quota notice did not clear on both role shells",
+            )
+        })
+    }
+    #[wasm_bindgen]
     pub fn shell_shutdown() -> Result<(), JsValue> {
         FIXTURE.with(|owner| {
             let mut fixture = owner

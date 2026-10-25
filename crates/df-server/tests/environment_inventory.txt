@@ -1,0 +1,52 @@
+# Environment reads and child-process spawns in the game library that the hosted runtime seam
+# (hosted runtime design 8.2, 8.4) will move into configuration fields or behind local-dev.
+# Format: <path> <sites>. A line may be lowered or deleted when its reads move; the scan test
+# fails when a file gains sites or a new file appears. Test-only fixtures are listed too until
+# they are confirmed under cfg(test).
+crates/df-persistence/src/decision_rows.rs 1
+crates/df-persistence/src/owned_pg_suite_fixture.rs 14
+crates/df-persistence/src/story_memory_pg_fixture.rs 3
+crates/df-protocol/build.rs 1
+crates/df-tools/build.rs 10
+crates/df-tools/src/build_set.rs 2
+crates/df-tools/src/dev_cli.rs 4
+crates/df-tools/src/file_identity.rs 2
+crates/df-tools/src/gameplay.rs 45
+crates/df-tools/src/gameplay/adventure/campaign_startup.rs 2
+crates/df-tools/src/gameplay/adventure/cli.rs 6
+crates/df-tools/src/gameplay/cache_replay_locale_contract.rs 1
+crates/df-tools/src/gameplay/character_clips.rs 4
+crates/df-tools/src/gameplay/cost.rs 1
+crates/df-tools/src/gameplay/courier_npc_qualification.rs 4
+crates/df-tools/src/gameplay/courier_process_qualification.rs 3
+crates/df-tools/src/gameplay/creator_portraits.rs 7
+crates/df-tools/src/gameplay/dev_control/direct.rs 1
+crates/df-tools/src/gameplay/dev_control/mod.rs 3
+crates/df-tools/src/gameplay/dev_control/reads.rs 1
+crates/df-tools/src/gameplay/dev_control/timeline.rs 2
+crates/df-tools/src/gameplay/display_tuning.rs 1
+crates/df-tools/src/gameplay/hero_library.rs 2
+crates/df-tools/src/gameplay/home_video.rs 3
+crates/df-tools/src/gameplay/imagery.rs 2
+crates/df-tools/src/gameplay/imagery/figure_masks.rs 2
+crates/df-tools/src/gameplay/imagery/photo_check.rs 1
+crates/df-tools/src/gameplay/inn_qualification.rs 3
+crates/df-tools/src/gameplay/journey/tactical.rs 2
+crates/df-tools/src/gameplay/launcher_status.rs 1
+crates/df-tools/src/gameplay/media_policy.rs 1
+crates/df-tools/src/gameplay/memory/startup.rs 2
+crates/df-tools/src/gameplay/place_music/master.rs 2
+crates/df-tools/src/gameplay/place_music/resource.rs 3
+crates/df-tools/src/gameplay/recovery_qualification.rs 4
+crates/df-tools/src/gameplay/rest_qualification.rs 3
+crates/df-tools/src/gameplay/restart_qualification.rs 3
+crates/df-tools/src/gameplay/speech_input.rs 2
+crates/df-tools/src/gameplay/splat_world.rs 1
+crates/df-tools/src/gameplay/startup_configuration.rs 32
+crates/df-tools/src/gameplay/startup_contract.rs 1
+crates/df-tools/src/gameplay/tempo.rs 1
+crates/df-tools/src/gameplay/timing.rs 3
+crates/df-tools/src/gameplay_browser/presentation_ingress.rs 1
+crates/df-tools/src/main.rs 2
+crates/df-tools/src/preview.rs 3
+crates/df-tools/src/stage_conductor.rs 1

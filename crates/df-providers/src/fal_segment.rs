@@ -10,8 +10,8 @@
 //! The mask is as large as the picture that was sent (the reply carries no size), so the caller
 //! passes the picture's width and height and the adapter checks every run against them.
 //!
-//! The call has a price, not a cap: [`SegmentModel::price_micro_dollars`] is what fal charges for
-//! one call, for the caller's spend ledger to record. A call that was sent is charged whatever its
+//! The call has a price, not a cap, and the price is not kept here: the caller's cost book reads it
+//! from the price file by [`SegmentModel::endpoint`]. A call that was sent is charged whatever its
 //! outcome ([`FalSegmentError::was_sent`]).
 
 use std::{
@@ -42,6 +42,7 @@ pub enum SegmentModel {
     /// `fal-ai/sam-3-1/image-rle`: the owner's choice.
     Sam31,
     /// `fal-ai/sam-3/image-rle`: the same stills at half the price, kept for comparison runs.
+    /// Prices live in `content/pricing.json`, read by the cost book; this client holds none.
     Sam3,
 }
 
@@ -58,15 +59,6 @@ impl SegmentModel {
         match self {
             Self::Sam31 => "sam-3.1",
             Self::Sam3 => "sam-3",
-        }
-    }
-
-    /// What fal charges for one call, in millionths of a US dollar (fal's pricing API, checked
-    /// 2026-10-17: USD 0.01 and USD 0.005).
-    pub const fn price_micro_dollars(self) -> u64 {
-        match self {
-            Self::Sam31 => 10_000,
-            Self::Sam3 => 5_000,
         }
     }
 }
@@ -906,9 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn prices_and_failure_classes_follow_the_research() {
-        assert_eq!(SegmentModel::Sam31.price_micro_dollars(), 10_000);
-        assert_eq!(SegmentModel::Sam3.price_micro_dollars(), 5_000);
+    fn endpoints_and_failure_classes_follow_the_research() {
         assert_eq!(SegmentModel::Sam31.endpoint(), "fal-ai/sam-3-1/image-rle");
         assert!(!FalSegmentError::InvalidRequest.was_sent());
         assert!(FalSegmentError::Provider(500).was_sent());

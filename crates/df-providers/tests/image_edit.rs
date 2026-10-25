@@ -1,6 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::Duration;
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener},
+    thread,
+    time::Duration,
+};
 
 use df_providers::{
     ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel, ImageFormat,
@@ -160,4 +165,104 @@ fn only_the_documented_models_are_accepted_by_id() {
     );
     assert_eq!(ImageEditModel::from_model_id("dall-e-3"), None);
     assert_eq!(ImageEditModel::from_model_id(""), None);
+}
+
+/// A loopback server that reads one whole request, answers it with `status` and `body`, then
+/// closes. Each test gets its own server, so a retry would find no listener and fail the call.
+fn answer_once(status: &'static str, body: &'static str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let read = socket.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).ok();
+    });
+    address
+}
+
+async fn generate_against(status: &'static str, body: &'static str) -> Result<(), ImageEditError> {
+    let config = ImageEditConfig::loopback_fixture(answer_once(status, body)).unwrap();
+    let provider =
+        NativeImageEditProvider::new(config, "test-credential", Duration::from_secs(5)).unwrap();
+    provider
+        .edit(&edit(&[]), Duration::from_secs(5))
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn a_429_with_an_insufficient_quota_reason_is_quota_exhausted_not_a_rate_limit() {
+    let body =
+        r#"{"error":{"code":"insufficient_quota","message":"You exceeded your current quota."}}"#;
+    assert_eq!(
+        generate_against("429 Too Many Requests", body).await,
+        Err(ImageEditError::QuotaExhausted)
+    );
+}
+
+#[tokio::test]
+async fn a_429_with_a_credit_balance_reason_is_quota_exhausted() {
+    let body = r#"{"error":{"code":"credit_balance_exhausted"}}"#;
+    assert_eq!(
+        generate_against("429 Too Many Requests", body).await,
+        Err(ImageEditError::QuotaExhausted)
+    );
+}
+
+#[tokio::test]
+async fn a_429_rate_limit_stays_a_provider_status_that_can_be_retried() {
+    let body = r#"{"error":{"code":"rate_limit_exceeded","message":"Slow down."}}"#;
+    assert_eq!(
+        generate_against("429 Too Many Requests", body).await,
+        Err(ImageEditError::Provider(429))
+    );
+}
+
+#[tokio::test]
+async fn a_429_without_a_structured_reason_stays_a_provider_status() {
+    assert_eq!(
+        generate_against("429 Too Many Requests", "not json").await,
+        Err(ImageEditError::Provider(429))
+    );
+}
+
+#[tokio::test]
+async fn a_429_with_a_null_code_takes_the_quota_reason_from_the_error_type() {
+    let body = r#"{"error":{"code":null,"type":"insufficient_quota","message":"You exceeded your current quota."}}"#;
+    assert_eq!(
+        generate_against("429 Too Many Requests", body).await,
+        Err(ImageEditError::QuotaExhausted)
+    );
+}
+
+#[tokio::test]
+async fn a_429_whose_code_is_a_rate_limit_ignores_the_error_type() {
+    let body = r#"{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}"#;
+    assert_eq!(
+        generate_against("429 Too Many Requests", body).await,
+        Err(ImageEditError::Provider(429))
+    );
 }

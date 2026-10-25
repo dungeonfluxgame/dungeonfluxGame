@@ -17,7 +17,11 @@
 //! / total timeouts, bounded headers and streamed bounded bodies) and validates
 //! its bounds through [`NativeHttpLimits`] / `NativeHttp` construction.
 
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{
+    fmt,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -34,6 +38,7 @@ const MAXIMUM_HEADER_BYTES: usize = 16 * 1024;
 const MAXIMUM_CHUNKS: usize = 65_536;
 const MAXIMUM_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const EXPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DOWNLOAD_HOSTS: &[&str] = &["cdn.marble.worldlabs.ai", "wlt-ai-cdn.art"];
 
 /// The Marble models this client can ask for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -398,12 +403,27 @@ impl NativeWorldLabs {
         if maximum_bytes == 0 || maximum_bytes > MAXIMUM_DOWNLOAD_BYTES {
             return Err(WorldLabsError::InvalidRequest);
         }
+        let deadline = tokio::time::Instant::now() + self.total_timeout;
         let target = self.resolve_download_url(url)?;
-        let send = self.client.get(&target).send();
-        let mut response = tokio::time::timeout(self.total_timeout, send)
+        let (client, pinned_addresses) = match self.fixture {
+            Some(_) => (self.client.clone(), None),
+            None => {
+                let (client, addresses) =
+                    pinned_download_client(&target, self.total_timeout, deadline).await?;
+                (client, Some(addresses))
+            }
+        };
+        let send = client.get(&target).send();
+        let mut response = tokio::time::timeout_at(deadline, send)
             .await
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(map_reqwest_error)?;
+        if let Some(accepted) = &pinned_addresses {
+            let connected = response.remote_addr().ok_or(WorldLabsError::Transport)?;
+            if !accepted.contains(&connected.ip()) {
+                return Err(WorldLabsError::Transport);
+            }
+        }
         if response.status().is_redirection() {
             return Err(WorldLabsError::Transport);
         }
@@ -421,7 +441,7 @@ impl NativeWorldLabs {
         let mut body: Vec<u8> = Vec::new();
         let mut chunks = 0usize;
         loop {
-            let next = tokio::time::timeout(self.total_timeout, response.chunk())
+            let next = tokio::time::timeout_at(deadline, response.chunk())
                 .await
                 .map_err(|_| WorldLabsError::Timeout)?;
             let Some(chunk) = next.map_err(map_reqwest_error)? else {
@@ -468,7 +488,10 @@ impl NativeWorldLabs {
         }
         let parsed = reqwest::Url::parse(url).map_err(|_| WorldLabsError::InvalidRequest)?;
         if parsed.scheme() != "https"
-            || parsed.host_str().is_none()
+            || !parsed
+                .host_str()
+                .is_some_and(|host| DOWNLOAD_HOSTS.contains(&host))
+            || parsed.port().is_some_and(|port| port != 443)
             || !parsed.username().is_empty()
             || parsed.password().is_some()
         {
@@ -542,6 +565,85 @@ impl NativeWorldLabs {
             return Err(WorldLabsError::Output);
         }
         parse_json(&bytes)
+    }
+}
+
+async fn pinned_download_client(
+    target: &str,
+    total_timeout: Duration,
+    deadline: tokio::time::Instant,
+) -> Result<(reqwest::Client, Vec<IpAddr>), WorldLabsError> {
+    let parsed = reqwest::Url::parse(target).map_err(|_| WorldLabsError::InvalidRequest)?;
+    let host = parsed.host_str().ok_or(WorldLabsError::InvalidRequest)?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or(WorldLabsError::InvalidRequest)?;
+    let resolved: Vec<SocketAddr> =
+        tokio::time::timeout_at(deadline, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| WorldLabsError::Timeout)?
+            .map_err(|_| WorldLabsError::Transport)?
+            .collect();
+    if resolved.is_empty()
+        || resolved
+            .iter()
+            .any(|address| !is_public_address(address.ip()))
+    {
+        return Err(WorldLabsError::Transport);
+    }
+    let pinned: Vec<SocketAddr> = resolved.clone();
+    let client = reqwest::Client::builder()
+        .tls_backend_rustls()
+        .https_only(true)
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
+        .connection_verbose(false)
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(5).min(total_timeout))
+        .read_timeout(total_timeout)
+        .timeout(total_timeout)
+        .resolve_to_addrs(host, &pinned)
+        .build()
+        .map_err(|_| WorldLabsError::Transport)?;
+    Ok((
+        client,
+        resolved.into_iter().map(|address| address.ip()).collect(),
+    ))
+}
+
+fn is_public_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [a, b, c, _] = address.octets();
+            !(a == 0
+                || a == 10
+                || a == 127
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 169 && b == 254)
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && b == 0 && c == 0)
+                || (a == 192 && b == 0 && c == 2)
+                || (a == 192 && b == 88 && c == 99)
+                || (a == 192 && b == 168)
+                || (a == 198 && (b == 18 || b == 19 || b == 51 && c == 100))
+                || (a == 203 && b == 0 && c == 113)
+                || a >= 224)
+        }
+        IpAddr::V6(address) => {
+            let segments = address.segments();
+            !((segments[0] & 0xe000) != 0x2000
+                || address.is_unspecified()
+                || address.is_loopback()
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xff00) == 0xff00
+                || (segments[0] == 0x2001 && segments[1] <= 0x01ff)
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| !is_public_address(IpAddr::V4(mapped))))
+        }
     }
 }
 
@@ -758,6 +860,7 @@ mod tests {
         status: u16,
         content_type: &'static str,
         body: Vec<u8>,
+        location: Option<&'static str>,
     }
 
     fn json_reply(status: u16, value: Value) -> Reply {
@@ -765,6 +868,7 @@ mod tests {
             status,
             content_type: "application/json",
             body: serde_json::to_vec(&value).unwrap(),
+            location: None,
         }
     }
 
@@ -851,8 +955,12 @@ mod tests {
                     });
                     let reply = replies[index.min(replies.len() - 1)].clone();
                     index += 1;
+                    let location = reply
+                        .location
+                        .map(|value| format!("Location: {value}\r\n"))
+                        .unwrap_or_default();
                     let header = format!(
-                        "HTTP/1.1 {} fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 {} fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{location}\r\n",
                         reply.status,
                         reply.content_type,
                         reply.body.len()
@@ -1098,11 +1206,13 @@ mod tests {
                 status: 200,
                 content_type: "application/octet-stream",
                 body: b"PLYDATA".to_vec(),
+                location: None,
             },
             Reply {
                 status: 200,
                 content_type: "application/octet-stream",
                 body: b"PLYDATA".to_vec(),
+                location: None,
             },
         ]);
         let client = fixture.client();
@@ -1117,6 +1227,75 @@ mod tests {
             seen.iter().all(|call| call.key.is_none()),
             "download must not send the key"
         );
+    }
+
+    #[test]
+    fn returned_download_urls_are_restricted_to_documented_https_hosts_and_default_port() {
+        let client =
+            NativeWorldLabs::new(WorldLabsConfig::live(), KEY, Duration::from_secs(5)).unwrap();
+        for allowed in [
+            "https://cdn.marble.worldlabs.ai/world/asset.ply?sig=secret",
+            "https://wlt-ai-cdn.art/example_exports/world.ply",
+            "https://wlt-ai-cdn.art:443/example_exports/world.ply",
+        ] {
+            assert_eq!(client.resolve_download_url(allowed).unwrap(), allowed);
+        }
+        for refused in [
+            "http://wlt-ai-cdn.art/world.ply",
+            "https://attacker.example/world.ply",
+            "https://wlt-ai-cdn.art:8443/world.ply",
+            "https://user@wlt-ai-cdn.art/world.ply",
+            "https://127.0.0.1/world.ply",
+            "https://[::1]/world.ply",
+        ] {
+            assert_eq!(
+                client.resolve_download_url(refused).unwrap_err(),
+                WorldLabsError::InvalidRequest,
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn destination_filter_refuses_private_link_local_and_reserved_addresses() {
+        for refused in [
+            "0.0.0.0",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.0.1",
+            "198.18.0.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "::",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+        ] {
+            let address = refused.parse().unwrap();
+            assert!(!is_public_address(address), "{refused}");
+        }
+        for allowed in ["8.8.8.8", "2606:4700:4700::1111"] {
+            let address = allowed.parse().unwrap();
+            assert!(is_public_address(address), "{allowed}");
+        }
+    }
+
+    #[tokio::test]
+    async fn returned_download_redirect_is_refused() {
+        let mut redirect = json_reply(302, json!({}));
+        redirect.location = Some("https://attacker.example/x");
+        let mut fixture = Fixture::new(vec![redirect]);
+        let client = fixture.client();
+        let url = format!("http://{}/asset.ply", fixture.address);
+        assert_eq!(
+            client.download(&url, 1024).await.unwrap_err(),
+            WorldLabsError::Transport
+        );
+        assert_eq!(fixture.finish().len(), 1);
     }
 
     #[tokio::test]

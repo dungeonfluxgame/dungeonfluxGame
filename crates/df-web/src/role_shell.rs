@@ -191,6 +191,7 @@ pub struct RoleShell {
     document: Document,
     root: Element,
     status: Element,
+    operational_notice: Element,
     slot: HtmlFieldSetElement,
     input_identifier: String,
     binding: ClientBindingId,
@@ -236,6 +237,11 @@ impl RoleShell {
         status.set_attribute("aria-live", "polite")?;
         status.set_attribute("style", "margin:0;padding:8px 4%;background:#0a1521;color:#c8b992;border-block-end:1px solid #34404a;font-size:12px;line-height:1.5;overflow-wrap:anywhere")?;
         status.set_text_content(Some("Waiting for a permitted view"));
+        let operational_notice = document.create_element("p")?;
+        operational_notice.set_attribute("role", "status")?;
+        operational_notice.set_attribute("aria-live", "polite")?;
+        operational_notice.set_attribute("hidden", "")?;
+        operational_notice.set_attribute("style", "margin:0;padding:4px 4%;background:#17212a;color:#c8b992;border-block-end:1px solid #34404a;font-size:11px;line-height:1.4;overflow-wrap:anywhere")?;
         let slot = document
             .create_element("fieldset")?
             .dyn_into::<HtmlFieldSetElement>()
@@ -244,12 +250,14 @@ impl RoleShell {
         slot.set_attribute("aria-label", "Current game presentation")?;
         slot.set_disabled(true);
         root.append_child(&status)?;
+        root.append_child(&operational_notice)?;
         root.append_child(&slot)?;
         parent.append_child(&root)?;
         Ok(Self {
             document: document.clone(),
             root,
             status,
+            operational_notice,
             slot,
             input_identifier: input_identifier.to_owned(),
             binding,
@@ -275,6 +283,24 @@ impl RoleShell {
     }
     pub fn revision(&self) -> Option<SessionRevision> {
         self.order.current().map(|(revision, ())| revision)
+    }
+
+    /// Show the server's non-narrative operational notice, or clear its status line.
+    pub fn set_operational_notice(&self, notice: Option<&str>) -> Result<(), RoleShellError> {
+        if self.disposed {
+            return Err(RoleShellError::Disposed);
+        }
+        match notice.filter(|notice| !notice.is_empty()) {
+            Some(notice) => {
+                self.operational_notice.set_text_content(Some(notice));
+                self.operational_notice.remove_attribute("hidden")?;
+            }
+            None => {
+                self.operational_notice.set_text_content(None);
+                self.operational_notice.set_attribute("hidden", "")?;
+            }
+        }
+        Ok(())
     }
 
     /// Supply a newer complete presentation mapped from the current authorized

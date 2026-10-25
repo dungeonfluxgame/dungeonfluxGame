@@ -304,7 +304,7 @@ mod tests {
             request_body("m", &many),
             Err(EmbeddingError::InvalidRequest)
         );
-        assert!(EmbeddingError::InvalidRequest.was_sent() == false);
+        assert!(!EmbeddingError::InvalidRequest.was_sent());
         assert!(EmbeddingError::Provider(500).was_sent());
     }
 

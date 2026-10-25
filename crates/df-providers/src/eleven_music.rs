@@ -17,8 +17,10 @@ use crate::native_http::{NativeHttp, NativeResponseProfile};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 const LIVE_BASE: &str = "https://api.elevenlabs.io";
-const MUSIC_MODEL: &str = "music_v2";
-const SOUND_MODEL: &str = "eleven_text_to_sound_v2";
+/// The model `/v1/music` is asked for.
+pub const MUSIC_MODEL: &str = "music_v2";
+/// The model `/v1/sound-generation` is asked for.
+pub const SOUND_MODEL: &str = "eleven_text_to_sound_v2";
 const OUTPUT_FORMAT: &str = "mp3_44100_128";
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;

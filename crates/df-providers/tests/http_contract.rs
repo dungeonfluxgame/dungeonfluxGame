@@ -89,6 +89,7 @@ fn fal_submit_request_matches_queue_auth_and_selected_model_fields() {
     assert_eq!(request.url(), "https://queue.fal.run/fal-ai/flux/schnell");
     assert_eq!(request.header("Authorization"), Some("Key private-key"));
     assert_eq!(request.header("Content-Type"), Some("application/json"));
+    assert_eq!(request.header("X-Fal-Store-IO"), Some("0"));
     assert_eq!(
         request.body(),
         br#"{"prompt":"A watchtower at dusk","num_inference_steps":4,"image_size":"landscape_4_3","num_images":1,"enable_safety_checker":true,"output_format":"jpeg"}"#
@@ -188,11 +189,13 @@ fn fal_status_and_result_requests_use_canonical_encoded_urls() {
         status.url(),
         "https://queue.fal.run/fal-ai/flux/schnell/requests/request%2Fwith%20space/status"
     );
+    assert_eq!(status.header("X-Fal-Store-IO"), Some("0"));
     assert_eq!(result.method(), HttpMethod::Get);
     assert_eq!(
         result.url(),
         "https://queue.fal.run/fal-ai/flux/schnell/requests/request%2Fwith%20space/response"
     );
+    assert_eq!(result.header("X-Fal-Store-IO"), Some("0"));
     assert_eq!(status.header("Authorization"), Some("Key private-key"));
     assert_eq!(status.body(), b"");
 }

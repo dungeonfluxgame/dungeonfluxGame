@@ -1,7 +1,4 @@
-#[path = "../src/lib.rs"]
-mod server;
-
-use server::composition_registry::*;
+use crate::composition_registry::*;
 
 const CONSUMER_SOURCES: &[(&str, &str)] = &[
     (

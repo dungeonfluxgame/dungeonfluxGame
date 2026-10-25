@@ -8,17 +8,22 @@
 //! answer are never logged or placed in errors. The description is a fixed phrase of the server's
 //! closed vocabulary, never player text.
 
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
+use crate::metering::{
+    CallMeter, MeterSlot, MeteredClient, SentCall, chat_usage, settle_refusal, settle_status,
+};
 use crate::native_http::NativeHttp;
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-5.5";
+/// The most the model may write in one location.
+const MAXIMUM_COMPLETION_TOKENS: u64 = 2000;
 const MAXIMUM_PICTURE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_DESCRIPTION_CHARACTERS: usize = 300;
 const MAXIMUM_TARGETS: usize = 4;
@@ -87,6 +92,7 @@ pub struct NativeHeadLocator {
     endpoint: String,
     credential: String,
     http: NativeHttp,
+    meter: MeterSlot,
 }
 
 impl fmt::Debug for NativeHeadLocator {
@@ -103,6 +109,7 @@ impl NativeHeadLocator {
         config: HeadLocateConfig,
         credential: &str,
         total_timeout: Duration,
+        meter: Arc<dyn CallMeter>,
     ) -> Result<Self, HeadLocateError> {
         if credential.is_empty()
             || credential.len() > 4096
@@ -128,6 +135,7 @@ impl NativeHeadLocator {
             ),
             credential: credential.to_owned(),
             http,
+            meter: MeterSlot::new(meter),
         })
     }
 
@@ -142,41 +150,85 @@ impl NativeHeadLocator {
         deadline: Duration,
     ) -> Result<Vec<LocatedHead>, HeadLocateError> {
         let body = request_body(picture, reference, targets)?;
+        // The pictures travel as base64 data URIs; everything else in the body is text.
+        let encoded = |bytes: &[u8]| bytes.len().div_ceil(3) * 4;
+        let text_bytes = body
+            .len()
+            .saturating_sub(encoded(picture) + reference.map_or(0, encoded));
+        let pictures = 1 + usize::from(reference.is_some());
         let request = HttpRequest::bearer_native(
             &self.endpoint,
             &self.credential,
             "application/json".to_owned(),
             body,
         );
-        let response = self
+        let ticket = self.meter.sent(SentCall {
+            client: MeteredClient::HeadLocator,
+            model: MODEL,
+            text_bytes,
+            pictures,
+            maximum_output_tokens: MAXIMUM_COMPLETION_TOKENS,
+        });
+        let response = match self
             .http
             .execute(request, deadline, std::future::pending())
             .await
-            .map_err(|failure| HeadLocateError::Transport(failure.reason))?;
+        {
+            Ok(response) => response,
+            Err(failure) => {
+                settle_refusal(ticket, failure.reason);
+                return Err(HeadLocateError::Transport(failure.reason));
+            }
+        };
         match response.status {
             200 => {}
-            401 | 403 => return Err(HeadLocateError::Unauthorized),
-            status => return Err(HeadLocateError::Provider(status)),
+            status => {
+                settle_status(ticket, status);
+                return Err(match status {
+                    401 | 403 => HeadLocateError::Unauthorized,
+                    status => HeadLocateError::Provider(status),
+                });
+            }
         }
-        let value = parse_unique_json(
+        let parsed = parse_unique_json(
             &response.body,
             TextSchemaLimits {
                 maximum_schema_bytes: MAXIMUM_RESPONSE_BYTES,
                 maximum_depth: 16,
                 maximum_nodes: 4096,
             },
-        )
-        .map_err(|_| HeadLocateError::Output)?;
-        let content = value
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .ok_or(HeadLocateError::Output)?;
-        parse_heads(content, targets)
+        );
+        let usage = parsed.as_ref().map(chat_usage).unwrap_or_default();
+        let heads = parsed
+            .map_err(|_| HeadLocateError::Output)
+            .and_then(|value| heads_in(&value, targets));
+        // A 200 is a billed call, whatever the answer's shape; an answer with no head box in it
+        // is billed and of no use.
+        if let Some(ticket) = ticket {
+            if heads.is_ok() {
+                ticket.answered(usage);
+            } else {
+                ticket.unusable(usage);
+            }
+        }
+        heads
     }
+}
+
+/// The head boxes in a chat-completions answer.
+fn heads_in(
+    value: &Value,
+    targets: &[LocateTarget<'_>],
+) -> Result<Vec<LocatedHead>, HeadLocateError> {
+    let content = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .ok_or(HeadLocateError::Output)?;
+    parse_heads(content, targets)
 }
 
 /// The request body: the pictures as data URIs and the fixed instruction.
@@ -232,7 +284,7 @@ fn request_body(
     }
     serde_json::to_vec(&json!({
         "model": MODEL,
-        "max_completion_tokens": 2000,
+        "max_completion_tokens": MAXIMUM_COMPLETION_TOKENS,
         "messages": [{"role": "user", "content": content}],
     }))
     .map_err(|_| HeadLocateError::InvalidRequest)

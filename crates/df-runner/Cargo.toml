@@ -1,0 +1,32 @@
+[package]
+name = "df-runner"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[features]
+# The faithful Docker proxy fake, for the runner's own tests and for composition tests.
+test-fakes = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-observe = { path = "../df-observe" }
+serde_json = "=1.0.151"
+tokio = { version = "=1.53.1", default-features = false, features = ["rt", "rt-multi-thread", "process", "sync", "time", "macros"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The proxy contract test compiles the proxy's own policy source, which needs serde's traits.
+serde = { version = "=1.0.229", default-features = false }
+
+[[test]]
+name = "cleared_environment"
+path = "tests/cleared_environment.rs"
+# The test executable is also the runtime stand-in the launcher starts.
+harness = false
+
+
+[[test]]
+name = "proxy_contract"
+path = "tests/proxy_contract.rs"
+required-features = ["test-fakes"]

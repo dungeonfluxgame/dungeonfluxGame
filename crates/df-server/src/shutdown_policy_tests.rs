@@ -1,12 +1,9 @@
-#[path = "../src/lib.rs"]
-mod serverlib;
-
-use df_session::effects::{
-    DispatchKnowledge, DispatchLookup, DispatchRecord, EffectRepositoryError,
-};
-use serverlib::shutdown_policy::{
+use crate::shutdown_policy::{
     AdmissionDecision, AdmissionHold, AdmissionMode, AdmissionPolicy, AdmissionRefusal,
     DrainPolicy, DrainRefusal, DrainStatus, DrainStep, MAX_RETAINED_POSSIBLE_SENDS, RetainRefusal,
+};
+use df_session::effects::{
+    DispatchKnowledge, DispatchLookup, DispatchRecord, EffectRepositoryError,
 };
 
 type Record = DispatchRecord<&'static str, &'static str, &'static str>;

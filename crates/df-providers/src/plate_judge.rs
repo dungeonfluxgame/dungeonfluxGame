@@ -8,17 +8,23 @@
 //! never logged or placed in errors. Who a person is and which way they face are never decided
 //! by name, word or position matching: this call is the judge.
 
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
+use crate::metering::{
+    AnsweredUsage, CallMeter, MeterSlot, MeteredClient, SentCall, chat_usage, settle_refusal,
+    settle_status,
+};
 use crate::native_http::NativeHttp;
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-5.5";
+/// The most the model may write in one judgement.
+const MAXIMUM_COMPLETION_TOKENS: u64 = 3000;
 const MAXIMUM_PICTURES: usize = 16;
 const MAXIMUM_PICTURE_BYTES: usize = 1024 * 1024;
 /// All pictures of one call together; their base64 stays inside the transport's 16 MiB bound.
@@ -153,6 +159,7 @@ pub struct NativePlateJudge {
     endpoint: String,
     credential: String,
     http: NativeHttp,
+    meter: MeterSlot,
 }
 
 impl fmt::Debug for NativePlateJudge {
@@ -169,6 +176,7 @@ impl NativePlateJudge {
         config: PlateJudgeConfig,
         credential: &str,
         total_timeout: Duration,
+        meter: Arc<dyn CallMeter>,
     ) -> Result<Self, PlateJudgeError> {
         if credential.is_empty()
             || credential.len() > 4096
@@ -194,6 +202,7 @@ impl NativePlateJudge {
             ),
             credential: credential.to_owned(),
             http,
+            meter: MeterSlot::new(meter),
         })
     }
 
@@ -282,45 +291,74 @@ impl NativePlateJudge {
             "application/json".to_owned(),
             body,
         );
-        let response = self
+        let ticket = self.meter.sent(SentCall {
+            client: MeteredClient::PlateJudge,
+            model: MODEL,
+            text_bytes: instruction.len() + schema.to_string().len(),
+            pictures: pictures.len(),
+            maximum_output_tokens: MAXIMUM_COMPLETION_TOKENS,
+        });
+        let response = match self
             .http
             .execute(request, deadline, std::future::pending())
             .await
-            .map_err(|failure| PlateJudgeError::Transport(failure.reason))?;
+        {
+            Ok(response) => response,
+            Err(failure) => {
+                settle_refusal(ticket, failure.reason);
+                return Err(PlateJudgeError::Transport(failure.reason));
+            }
+        };
         match response.status {
             200 => {}
-            401 | 403 => return Err(PlateJudgeError::Unauthorized),
-            status => return Err(PlateJudgeError::Provider(status)),
+            status => {
+                settle_status(ticket, status);
+                return Err(match status {
+                    401 | 403 => PlateJudgeError::Unauthorized,
+                    status => PlateJudgeError::Provider(status),
+                });
+            }
         }
-        let value = parse_unique_json(
+        let parsed = parse_unique_json(
             &response.body,
             TextSchemaLimits {
                 maximum_schema_bytes: MAXIMUM_RESPONSE_BYTES,
                 maximum_depth: 16,
                 maximum_nodes: 4096,
             },
-        )
-        .map_err(|_| PlateJudgeError::Output)?;
-        let content = value
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .ok_or(PlateJudgeError::Output)?;
-        let tokens = |name: &str| {
-            value
-                .get("usage")
-                .and_then(|usage| usage.get(name))
-                .and_then(Value::as_u64)
-        };
-        Ok(JudgeAnswer {
-            value: serde_json::from_str(content).map_err(|_| PlateJudgeError::Output)?,
-            input_tokens: tokens("prompt_tokens"),
-            output_tokens: tokens("completion_tokens"),
-        })
+        );
+        let usage = parsed.as_ref().map(chat_usage).unwrap_or_default();
+        let answer = parsed
+            .map_err(|_| PlateJudgeError::Output)
+            .and_then(|value| judge_answer(&value, usage));
+        // A 200 is a billed call, whatever the answer's shape; an answer that does not parse is
+        // billed and of no use.
+        if let Some(ticket) = ticket {
+            if answer.is_ok() {
+                ticket.answered(usage);
+            } else {
+                ticket.unusable(usage);
+            }
+        }
+        answer
     }
+}
+
+/// The judgement in a chat-completions answer.
+fn judge_answer(value: &Value, usage: AnsweredUsage) -> Result<JudgeAnswer, PlateJudgeError> {
+    let content = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .ok_or(PlateJudgeError::Output)?;
+    Ok(JudgeAnswer {
+        value: serde_json::from_str(content).map_err(|_| PlateJudgeError::Output)?,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+    })
 }
 
 fn parse_photo_answer(
@@ -456,7 +494,7 @@ fn request_body(
     }
     serde_json::to_vec(&json!({
         "model": MODEL,
-        "max_completion_tokens": 3000,
+        "max_completion_tokens": MAXIMUM_COMPLETION_TOKENS,
         "messages": [{"role": "user", "content": content}],
         "response_format": {
             "type": "json_schema",

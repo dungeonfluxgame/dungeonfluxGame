@@ -214,8 +214,12 @@ pub enum ImageEditError {
     Refused,
     /// The supplier rejected the credential.
     Unauthorized,
-    /// The supplier answered with another failure status, or was rate limited.
+    /// The supplier answered with another failure status, or rate limited the call (a 429
+    /// without a quota reason). Waiting can clear it.
     Provider(u16),
+    /// The supplier answered 429 with a structured reason that waiting does not clear: the
+    /// account is out of credit or quota. Never retried.
+    QuotaExhausted,
     Transport(NativeHttpRefusal),
     /// A success answer whose image was absent, undecodable, of another size or not complete.
     Output,
@@ -323,6 +327,9 @@ impl NativeImageEditProvider {
             200 => {}
             401 | 403 => return Err(ImageEditError::Unauthorized),
             400 if is_moderation_block(&response.body) => return Err(ImageEditError::Refused),
+            429 if is_quota_exhaustion(&response.body) => {
+                return Err(ImageEditError::QuotaExhausted);
+            }
             status => return Err(ImageEditError::Provider(status)),
         }
         let value = parse_unique_json(
@@ -376,6 +383,26 @@ fn is_moderation_block(body: &[u8]) -> bool {
     [&b"moderation_blocked"[..], &b"content_policy_violation"[..]]
         .iter()
         .any(|needle| body.windows(needle.len()).any(|window| window == *needle))
+}
+
+/// The structured reason a 429 carries when the account has no credit or quota left. The reason is
+/// `error.code`; when that is null the reason is `error.type`. Unlike a rate limit, waiting does not
+/// clear it. The body itself is never kept.
+fn is_quota_exhaustion(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body).is_ok_and(|value| {
+        let error = &value["error"];
+        error["code"]
+            .as_str()
+            .or_else(|| error["type"].as_str())
+            .is_some_and(|reason| {
+                matches!(
+                    reason,
+                    "insufficient_quota"
+                        | "billing_hard_limit_reached"
+                        | "credit_balance_exhausted"
+                )
+            })
+    })
 }
 
 /// A random multipart boundary that does not occur in any part.
