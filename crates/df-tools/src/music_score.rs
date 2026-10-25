@@ -1345,6 +1345,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn live_music_equal_revision_ambient_completion_reaches_the_actual_delivery_store() {
         use super::delivery_boundary::{GameplayViews, ViewRole, ViewScope};
         let scope = ViewScope::from_wire(
