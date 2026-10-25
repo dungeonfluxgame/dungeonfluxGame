@@ -152,6 +152,8 @@ fn fight_table(
         });
     });
     Table {
+        lose_reply: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        advance_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service,
         table,
         updates,

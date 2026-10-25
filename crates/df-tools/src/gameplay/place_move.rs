@@ -47,6 +47,13 @@ const CREATION_DEADLINE: Duration = Duration::from_secs(90);
 const RECENT_LINES: usize = 10;
 const RECENT_LINE_CHARACTERS: usize = 200;
 const STATEMENT_LIMIT: usize = 8;
+/// Said when a chosen move could not be recorded: the party is where it was. In the fiction, as
+/// the route-ahead refusal is.
+const MOVE_NOT_RECORDED: &str =
+    "You look for a route ahead, but cannot make it out yet. Your party stays together here.";
+/// Added after a paid ride could not start. Only the purse fact; the owner decides the refund
+/// (issue-triage TRV-01).
+const FARE_KEPT: &str = "The coins you paid are already spent.";
 
 tokio::task_local! {
     /// The input boundary scopes this across heading judgement and the resulting move.
@@ -225,6 +232,26 @@ fn audit_refusal(from: &str, exit: &str, reason: &str) {
     place::audit_refused(from, "none", exit, reason);
 }
 
+/// The key that tells one ride's audit lines from another's: the hash of the line's own input.
+fn audit_key(request: &rpc::RawDialogueRequest) -> u64 {
+    let input = request
+        .input_id
+        .as_ref()
+        .and_then(|id| id.value.as_deref())
+        .unwrap_or_default();
+    df_observe::operation_hash(input)
+}
+
+/// A paid fare whose journey did not start: the coins stay spent, and the audit says why.
+fn audit_fare_kept(service_id: &str, price_cp: u32, reason: &str, key: u64) {
+    actor::record_audit_line(
+        "gameplay.place",
+        format!(
+            "PLACE ride outcome=fare_kept service={service_id} price_cp={price_cp} reason={reason} key={key}"
+        ),
+    );
+}
+
 /// One exit as the CLI and the audit see it: where it leads, as far as the run knows.
 fn leads_to(
     current: &Checkpoint,
@@ -388,12 +415,62 @@ pub(super) struct RideFare {
     pub(super) provider: String,
 }
 
-/// A ride the hero hailed or hired, ready to go once any fare is paid.
+/// A ride the hero hailed or hired, ready to go once any fare is paid. A ride that the travel
+/// restriction already blocks has no fare and no destination: it is answered, never bought.
 pub(super) struct Ride {
-    prepared: PreparedMove,
+    journey: RideJourney,
     pub(super) fare: Option<RideFare>,
     hero: String,
     hero_index: u32,
+}
+
+enum RideJourney {
+    Ready(PreparedMove),
+    /// The restriction in force, as the table is told it.
+    Blocked(Refusal),
+}
+
+/// What a refused ride tells the table, and the reason its audit line gives.
+#[derive(Clone, Copy)]
+struct Refusal {
+    line: &'static str,
+    reason: &'static str,
+}
+
+/// What a ride did to the party's journey. Either way the table has been told the `line`; only
+/// `Travelled` is travel narration.
+pub(super) enum RideOutcome {
+    Travelled {
+        line: String,
+        revision: df_types::SessionRevision,
+    },
+    /// The journey did not start: the refusal, not travel narration.
+    NotTaken {
+        line: String,
+        revision: df_types::SessionRevision,
+    },
+}
+
+/// A journey the party made: where it arrived, the owner's arrival line, and the revision it made.
+struct Arrival {
+    place_name: String,
+    line: String,
+    revision: df_types::SessionRevision,
+}
+
+/// Why a prepared journey did not commit. A blocked journey is refused before the owner sees it.
+enum CommitFailure {
+    Blocked(&'static str),
+    Move(MoveError),
+}
+
+impl From<CommitFailure> for MoveError {
+    fn from(failure: CommitFailure) -> Self {
+        match failure {
+            CommitFailure::Blocked(reason) => tonic::Status::failed_precondition(reason).into(),
+            CommitFailure::Move(error) => error,
+        }
+    }
 }
 
 /// What Jev chooses among for a line in the place the party stands in, with each exit's id.
@@ -790,16 +867,7 @@ impl Service {
                     None::<super::table_log::RollRow>,
                     line,
                 );
-                return Some(DialogueReply::Raw(
-                    rpc::DialogueResponse {
-                        input_id: request.input_id.clone(),
-                        disposition: rpc::DialogueDisposition::Rejected as i32,
-                        revision: Some(wire::revision(current.basis().revision)),
-                        npc_reply: line.to_owned(),
-                        ..Default::default()
-                    },
-                    None,
-                ));
+                return Some(self.rejected_reply(request, line));
             }
             Err(error) => {
                 actor::record_unavailable("travel-blocker", &format!("{error:?}"));
@@ -824,7 +892,13 @@ impl Service {
                 };
             }
         };
-        let operation = df_api::operation_id(request.input_id.as_ref()).ok()?;
+        let operation = match df_api::operation_id(request.input_id.as_ref()) {
+            Ok(operation) => operation,
+            Err(error) => {
+                actor::record_unavailable("freeform-travel", &format!("{error:?}"));
+                return Some(self.move_not_recorded(request, hero_index));
+            }
+        };
         let moved = match self
             .move_party_toward(credential, operation, target, &request.text)
             .await
@@ -840,20 +914,14 @@ impl Service {
                     None::<super::table_log::RollRow>,
                     line,
                 );
-                return Some(DialogueReply::Raw(
-                    rpc::DialogueResponse {
-                        input_id: request.input_id.clone(),
-                        disposition: rpc::DialogueDisposition::Rejected as i32,
-                        revision: Some(wire::revision(self.updates.borrow().basis().revision)),
-                        npc_reply: line.to_owned(),
-                        ..Default::default()
-                    },
-                    None,
-                ));
+                return Some(self.rejected_reply(request, line));
             }
             Err(MoveError::Status(status)) => {
-                actor::record_unavailable("freeform-travel", &format!("{:?}", status.code()));
-                return None;
+                actor::record_unavailable(
+                    "freeform-travel",
+                    &format!("{:?}: {}", status.code(), status.message()),
+                );
+                return Some(self.move_not_recorded(request, hero_index));
             }
         };
         let roll = performance.check.as_ref().map(|check| check.row());
@@ -870,10 +938,13 @@ impl Service {
         ))
     }
 
-    /// A line that hails or hires a ride to another place, as Jev reads it: the destination is
-    /// chosen and, when new, made before any fare is paid, so a paid fare is never left without a
-    /// journey. The fare is the listed paid service Jev finds is this ride, when there is one. `None`
-    /// when the line is no ride, names nowhere to go, or the destination cannot be made.
+    /// A line that hails or hires a ride to another place, as Jev reads it. Jev judges the line
+    /// first, so ordinary chatter is never answered as a ride. Then the travel restriction is
+    /// checked before the fare is judged, and again after the destination is made, so a restriction
+    /// that starts in between buys nothing. The result is a `Ride` with a fare when the line is a
+    /// ride the restriction allows, or a `Ride` with no fare and a `Blocked` journey when it does
+    /// not. `None` when the line is no ride, names nowhere to go, or the destination cannot be made;
+    /// no fare is bought in any `None` case.
     pub(super) async fn hailed_ride(
         &self,
         credential: [u8; 32],
@@ -898,6 +969,9 @@ impl Service {
                 );
                 return None;
             }
+        }
+        if let Some(blocked) = self.blocked_ride(hero.clone(), hero_index) {
+            return Some(blocked);
         }
         let current = self.updates.borrow().clone();
         let model = journey::living_scene::snapshot(current.state(), scene)
@@ -956,46 +1030,235 @@ impl Service {
             .prepare_move(operation, target, &request.text)
             .await
             .ok()?;
+        if let Some(blocked) = self.blocked_ride(hero.clone(), hero_index) {
+            drop(prepared);
+            return Some(blocked);
+        }
         Some(Ride {
-            prepared,
+            journey: RideJourney::Ready(prepared),
             fare,
             hero,
             hero_index,
         })
     }
 
-    /// Takes a ride the hero hailed: commits the journey, then tells the table the hero's line
-    /// (unless an interaction already showed it), the travel beat and the arrival, in that order.
-    pub(super) async fn take_ride(
+    /// The restriction in force now, as the ride it refuses: no fare and no journey. A restriction
+    /// that cannot be read refuses too, since nothing is bought on an unknown state; that case is
+    /// audited as unavailable. `None` when the party may set off.
+    pub(super) fn blocked_ride(&self, hero: String, hero_index: u32) -> Option<Ride> {
+        let refusal = match travel_blocker(&self.updates.borrow()) {
+            Ok(None) => return None,
+            Ok(Some(line)) => Refusal {
+                line,
+                reason: "travel_blocked",
+            },
+            Err(error) => {
+                actor::record_unavailable("ride-restriction", &format!("{error:?}"));
+                Refusal {
+                    line: MOVE_NOT_RECORDED,
+                    reason: "restriction_unreadable",
+                }
+            }
+        };
+        Some(Ride {
+            journey: RideJourney::Blocked(refusal),
+            fare: None,
+            hero,
+            hero_index,
+        })
+    }
+
+    /// The last check before a fare is bought: a ride whose restriction now holds is returned as
+    /// the blocked ride, and the purchase does not happen. Called by the dialogue boundary.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "called by the dialogue boundary before the purchase; the dialogue.rs change is filed for N"
+        )
+    )]
+    pub(super) fn recheck_before_fare(&self, ride: Ride) -> Ride {
+        let Ride {
+            journey,
+            fare,
+            hero,
+            hero_index,
+        } = ride;
+        match self.blocked_ride(hero.clone(), hero_index) {
+            Some(blocked) => blocked,
+            None => Ride {
+                journey,
+                fare,
+                hero,
+                hero_index,
+            },
+        }
+    }
+
+    /// The rejected answer to a line whose move did not happen. Nothing moved, so the answer
+    /// cannot be mistaken for the ordinary narration of a move.
+    fn rejected_reply(&self, request: &rpc::RawDialogueRequest, line: &str) -> DialogueReply {
+        DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Rejected as i32,
+                revision: Some(wire::revision(self.updates.borrow().basis().revision)),
+                npc_reply: line.to_owned(),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// A chosen move that could not be recorded: the table hears it and the party stays put.
+    fn move_not_recorded(
+        &self,
+        request: &rpc::RawDialogueRequest,
+        hero_index: u32,
+    ) -> DialogueReply {
+        freeform_action::publish_outcome(
+            &self.table_log,
+            hero_index,
+            None::<super::table_log::RollRow>,
+            MOVE_NOT_RECORDED,
+        );
+        self.rejected_reply(request, MOVE_NOT_RECORDED)
+    }
+
+    /// Takes a ride the hero hailed or hired and says which way it went. The table hears the hero's
+    /// line (unless an interaction already showed it), then either the travel beat and the arrival
+    /// or the refusal. A fare paid is said to stand. Arrival is decided from the committed state,
+    /// never from a revision change alone.
+    pub(super) async fn take_ride_outcome(
         &self,
         credential: [u8; 32],
         request: &rpc::RawDialogueRequest,
         ride: Ride,
         line_shown: bool,
-    ) -> Option<DialogueReply> {
-        let from_name = ride.prepared.from_name.clone();
-        let to_short = ride.prepared.to_short.clone();
-        let moved = self.commit_prepared(credential, ride.prepared).await.ok()?;
+    ) -> RideOutcome {
+        let key = audit_key(request);
+        let Ride {
+            journey,
+            fare,
+            hero,
+            hero_index,
+        } = ride;
         if !line_shown {
-            freeform_action::publish_hero_line(
-                &self.table_log,
-                &ride.hero,
-                ride.hero_index,
-                &request.text,
-            );
+            freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
         }
+        let prepared = match journey {
+            RideJourney::Ready(prepared) => prepared,
+            RideJourney::Blocked(refusal) => {
+                return self.ride_not_taken(
+                    hero_index,
+                    fare.as_ref(),
+                    refusal.line,
+                    refusal.reason,
+                    key,
+                );
+            }
+        };
+        let from_name = prepared.from_name.clone();
+        let to_short = prepared.to_short.clone();
+        let to = prepared.to.clone();
+        let started = prepared.started;
+        let operation = df_observe::operation_hash(prepared.operation.as_bytes());
+        let arrival = match self.commit_prepared(credential, prepared).await {
+            Ok(moved) => {
+                let moved = *moved;
+                Arrival {
+                    place_name: moved.place_name,
+                    line: moved.line,
+                    revision: moved.revision,
+                }
+            }
+            Err(CommitFailure::Blocked(reason)) => {
+                return self.ride_not_taken(
+                    hero_index,
+                    fare.as_ref(),
+                    reason,
+                    "travel_blocked",
+                    key,
+                );
+            }
+            Err(CommitFailure::Move(MoveError::Refused(reason))) => {
+                return self.ride_not_taken(
+                    hero_index,
+                    fare.as_ref(),
+                    actor::place_actor::travel_refusal_line(reason),
+                    reason.label(),
+                    key,
+                );
+            }
+            Err(CommitFailure::Move(MoveError::Status(status))) => {
+                let code = format!("{:?}", status.code());
+                actor::record_unavailable("ride-travel", &format!("{code}: {}", status.message()));
+                // The reply was lost; the committed state says whether the party moved.
+                match self.arrived(&to) {
+                    Ok(false) => {
+                        return self.ride_not_taken(
+                            hero_index,
+                            fare.as_ref(),
+                            MOVE_NOT_RECORDED,
+                            &code,
+                            key,
+                        );
+                    }
+                    Err(error) => {
+                        actor::record_unavailable("ride-arrival", &format!("{error:?}"));
+                        return self.ride_not_taken(
+                            hero_index,
+                            fare.as_ref(),
+                            MOVE_NOT_RECORDED,
+                            "arrival_unreadable",
+                            key,
+                        );
+                    }
+                    Ok(true) => {}
+                }
+                let state = self.updates.borrow();
+                let place_name = match place::name_of(state.state(), &to) {
+                    Ok(place_name) => place_name,
+                    Err(error) => {
+                        drop(state);
+                        actor::record_unavailable("ride-arrival", &format!("{error:?}"));
+                        return self.ride_not_taken(
+                            hero_index,
+                            fare.as_ref(),
+                            MOVE_NOT_RECORDED,
+                            "arrival_unnamed",
+                            key,
+                        );
+                    }
+                };
+                let revision = state.basis().revision;
+                drop(state);
+                // The owner committed the move, so the work a move starts must still run.
+                self.start_after_move(&to, started, operation);
+                actor::record_audit_line(
+                    "gameplay.place",
+                    format!(
+                        "PLACE ride outcome=arrived_after_lost_reply key={key} operation_hash={operation}"
+                    ),
+                );
+                Arrival {
+                    line: place::journey_line(&hero, &place_name),
+                    place_name,
+                    revision,
+                }
+            }
+        };
         let (storyteller, _) = self.npc_voice.hero_identity_models();
         let beat = place_creation::narrate_travel(
             storyteller,
             &TravelBeat {
-                hero: &ride.hero,
+                hero: &hero,
                 words: &request.text,
                 from: &from_name,
-                to: &moved.place_name,
+                to: &arrival.place_name,
                 to_short: &to_short,
                 ride: true,
-                hired: ride
-                    .fare
+                hired: fare
                     .as_ref()
                     .map(|fare| (fare.name.as_str(), fare.provider.as_str())),
             },
@@ -1003,47 +1266,116 @@ impl Service {
         .await;
         freeform_action::publish_outcome(
             &self.table_log,
-            ride.hero_index,
+            hero_index,
             None::<super::table_log::RollRow>,
             &beat,
         );
         freeform_action::publish_outcome(
             &self.table_log,
-            ride.hero_index,
+            hero_index,
             None::<super::table_log::RollRow>,
-            &moved.line,
+            &arrival.line,
         );
+        RideOutcome::Travelled {
+            line: format!("{beat} {}", arrival.line),
+            revision: arrival.revision,
+        }
+    }
+
+    /// Whether the party stands at `to` in the committed state. Only a committed move from the
+    /// prepared origin brings it there, so unlike a revision change this cannot come from another
+    /// hero's action.
+    fn arrived(&self, to: &str) -> Result<bool, df_session::submission::RepositoryError> {
+        let current = self.updates.borrow().clone();
+        let scene = beat_script_runtime::scene(current.state())?;
+        Ok(place::whereabouts(current.state(), &scene)?.here == to)
+    }
+
+    /// The journey did not start: the refusal is audited, keyed to its input, and told to the table.
+    /// A paid fare is said to stand, and the purse fact is audited with it.
+    fn ride_not_taken(
+        &self,
+        hero_index: u32,
+        fare: Option<&RideFare>,
+        refusal: &str,
+        reason: &str,
+        key: u64,
+    ) -> RideOutcome {
+        actor::record_audit_line(
+            "gameplay.place",
+            format!("PLACE ride outcome=not_taken reason={reason} key={key}"),
+        );
+        let line = match fare {
+            Some(fare) => {
+                audit_fare_kept(&fare.service_id, fare.price_cp, reason, key);
+                format!("{refusal} {FARE_KEPT}")
+            }
+            None => refusal.to_owned(),
+        };
+        freeform_action::publish_outcome(
+            &self.table_log,
+            hero_index,
+            None::<super::table_log::RollRow>,
+            &line,
+        );
+        RideOutcome::NotTaken {
+            line,
+            revision: self.updates.borrow().basis().revision,
+        }
+    }
+
+    /// The reply the dialogue boundary answers a hailed ride with: travel is an action, a journey
+    /// that did not start is rejected, and its text is the one the table was told.
+    pub(super) async fn take_ride(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        ride: Ride,
+        line_shown: bool,
+    ) -> Option<DialogueReply> {
+        let (disposition, line, revision) = match self
+            .take_ride_outcome(credential, request, ride, line_shown)
+            .await
+        {
+            RideOutcome::Travelled { line, revision } => {
+                (rpc::DialogueDisposition::Action, line, revision)
+            }
+            RideOutcome::NotTaken { line, revision } => {
+                (rpc::DialogueDisposition::Rejected, line, revision)
+            }
+        };
         Some(DialogueReply::Raw(
             rpc::DialogueResponse {
                 input_id: request.input_id.clone(),
-                disposition: rpc::DialogueDisposition::Action as i32,
-                revision: Some(wire::revision(moved.revision)),
-                npc_reply: format!("{beat} {}", moved.line),
+                disposition: disposition as i32,
+                revision: Some(wire::revision(revision)),
+                npc_reply: line,
                 ..Default::default()
             },
             None,
         ))
     }
 
-    /// After a listed paid service of the place was bought by a hero's line: when Jev finds that
-    /// buying it is taking a ride now (a carriage hire), the journey starts at once and the table
-    /// is told the travel beat and the arrival. Returns what the table was told and the committed
-    /// revision, or `None` when the service is no ride or the journey could not be made (the
-    /// purchase stands either way: it was committed before this was asked).
+    /// After a listed paid service of the place is bought by a hero's line, when Jev finds that
+    /// buying it is taking a ride now: the ride is judged and prepared before any purchase, so the
+    /// purchase is the only step left and nothing after payment can end silently. `None` only
+    /// before any purchase: the line is no ride, or no route is judged or prepared.
+    /// A restriction is checked after the destination is made, as for a hailed ride. The purchase
+    /// itself is the caller's step: it must re-check with `recheck_before_fare` first (TODO(TRV-01)).
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "the service reply calls it once the TRAVEL request lands"
+            reason = "TODO(TRV-01): wired when the service reply buys between prepare and take"
         )
     )]
-    pub(super) async fn ride_after_service(
+    pub(super) async fn prepare_service_ride(
         &self,
         credential: [u8; 32],
         request: &rpc::RawDialogueRequest,
         scene: &pack::Scene,
         service_id: &str,
-    ) -> Option<(String, df_types::SessionRevision)> {
+    ) -> Option<Ride> {
         let (hero, hero_index) = self.speaking_hero(credential).await?;
         let choices = self.choices(scene)?;
         let current = self.updates.borrow().clone();
@@ -1066,11 +1398,27 @@ impl Service {
             description: &service.description,
             provider: &provider,
         };
-        if !place_creation::judge_ride(jev, &request.text, &hero, &choices.place_name, Some(&offer))
-            .await
-            .ok()?
+        match place_creation::judge_ride(
+            jev,
+            &request.text,
+            &hero,
+            &choices.place_name,
+            Some(&offer),
+        )
+        .await
         {
-            return None;
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(reason) => {
+                actor::record_audit_line(
+                    "gameplay.place",
+                    format!(
+                        "PLACE ride service={service_id} source=unavailable reason={}",
+                        reason.label()
+                    ),
+                );
+                return None;
+            }
         }
         let target = self.heading(&request.text, &hero, &choices).await?;
         let operation = following_operation(df_api::operation_id(request.input_id.as_ref()).ok()?)?;
@@ -1078,8 +1426,12 @@ impl Service {
             .prepare_move(operation, target, &request.text)
             .await
             .ok()?;
-        let ride = Ride {
-            prepared,
+        if let Some(blocked) = self.blocked_ride(hero.clone(), hero_index) {
+            drop(prepared);
+            return Some(blocked);
+        }
+        Some(Ride {
+            journey: RideJourney::Ready(prepared),
             fare: Some(RideFare {
                 service_id: service.id.clone(),
                 price_cp: service.price_cp,
@@ -1088,13 +1440,7 @@ impl Service {
             }),
             hero,
             hero_index,
-        };
-        match self.take_ride(credential, request, ride, true).await? {
-            DialogueReply::Raw(response, _) => {
-                Some((response.npc_reply, self.updates.borrow().basis().revision))
-            }
-            _ => None,
-        }
+        })
     }
 
     /// Moves the party through `exit_id` of the place it stands in. The place is created first
@@ -1127,7 +1473,9 @@ impl Service {
             return Err(tonic::Status::failed_precondition(reason).into());
         }
         let prepared = self.prepare_move(operation, target, goal).await?;
-        self.commit_prepared(credential, prepared).await
+        self.commit_prepared(credential, prepared)
+            .await
+            .map_err(MoveError::from)
     }
 
     /// Prepares the forecast's ordinary exit destination without committing a separate move.
@@ -1404,7 +1752,8 @@ impl Service {
                     None => {
                         tokio::time::timeout(CREATION_DEADLINE, async {
                             if free_roam.is_some() || spot.is_some() {
-                                place_creation::create_silent(storyteller, persona_model, &request).await
+                                place_creation::create_silent(storyteller, persona_model, &request)
+                                    .await
                             } else {
                                 place_creation::create(storyteller, persona_model, &request).await
                             }
@@ -1467,12 +1816,14 @@ impl Service {
         &self,
         credential: [u8; 32],
         mut prepared: PreparedMove,
-    ) -> Result<Box<Moved>, MoveError> {
-        if let Some(reason) = travel_blocker(&self.updates.borrow()).map_err(state_failure)? {
+    ) -> Result<Box<Moved>, CommitFailure> {
+        let blocker = travel_blocker(&self.updates.borrow())
+            .map_err(|error| CommitFailure::Move(state_failure(error)))?;
+        if let Some(reason) = blocker {
             if let Some(cancellation) = &mut prepared.cancellation {
                 cancellation.active = false;
             }
-            return Err(tonic::Status::failed_precondition(reason).into());
+            return Err(CommitFailure::Blocked(reason));
         }
         let started = prepared.started;
         let mut cancellation = prepared.cancellation.take();
@@ -1493,7 +1844,7 @@ impl Service {
         if let Some(cancellation) = &mut cancellation {
             cancellation.active = false;
         }
-        result
+        result.map_err(CommitFailure::Move)
     }
 
     /// Moves the party straight to a place the run already has (development only: no exit is
@@ -1543,20 +1894,23 @@ impl Service {
             .map_err(|_| tonic::Status::unavailable("gameplay actor stopped"))??;
         match outcome {
             MoveOutcome::Moved(mut moved) => {
-                self.voice
-                    .register_people(self.updates.borrow().state())
-                    .map_err(actor::unavailable)?;
+                // The owner has already committed this move: a failed voice registration is its own
+                // audit line, and the caller decides the arrival from the committed revision.
+                if let Err(error) = self.voice.register_people(self.updates.borrow().state()) {
+                    actor::record_unavailable("register-people", &format!("{error:?}"));
+                    return Err(actor::unavailable(error).into());
+                }
                 if super::adventure::free_roam::world().is_some() {
                     moved.line = moved.narration.clone();
                 }
-                self.start_after_move(&moved, started, operation);
+                self.start_after_move(&moved.to, started, operation);
                 Ok(moved)
             }
             MoveOutcome::Refused(reason) => Err(MoveError::Refused(reason)),
         }
     }
 
-    fn start_after_move(&self, moved: &Moved, started: Instant, operation: u64) {
+    fn start_after_move(&self, to: &str, started: Instant, operation: u64) {
         // Replacement cancels the old origin even when the new place has no onward exits.
         self.look_ahead.lock().take();
         let current = self.updates.borrow().clone();
@@ -1565,10 +1919,10 @@ impl Service {
         };
         let record = place::created(current.state())
             .ok()
-            .and_then(|mut places| places.remove(&moved.to))
+            .and_then(|mut places| places.remove(to))
             .or_else(|| {
                 super::adventure::free_roam::world()
-                    .filter(|world| world.gate.place_id == moved.to)
+                    .filter(|world| world.gate.place_id == to)
                     .map(|world| world.gate)
             });
         if let Some(record) = record {
@@ -1805,10 +2159,13 @@ impl Service {
                 #[cfg(test)]
                 let made = match generator {
                     Some(generator) => generator(&request).await,
-                    None => place_creation::create_silent(storyteller, persona_model, &request).await,
+                    None => {
+                        place_creation::create_silent(storyteller, persona_model, &request).await
+                    }
                 };
                 #[cfg(not(test))]
-                let made = place_creation::create_silent(storyteller, persona_model, &request).await;
+                let made =
+                    place_creation::create_silent(storyteller, persona_model, &request).await;
                 let record = made.map_err(|_| ())?;
                 let Some(owner) = owner.upgrade() else {
                     return Err(());

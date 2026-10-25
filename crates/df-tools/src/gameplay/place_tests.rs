@@ -883,6 +883,10 @@ fn development_targets_read_an_exit_by_id_name_or_alias_then_a_place_the_run_has
 struct Owner {
     checkpoint: Checkpoint,
     updates: watch::Sender<Checkpoint>,
+    // When set, the next committed move is made but its reply never reaches the caller.
+    lose_reply: Arc<std::sync::atomic::AtomicBool>,
+    // When set, the next move is not made: the revision advances for another reason and the reply is lost.
+    advance_only: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Reducer<actor::Call> for Owner {
@@ -898,6 +902,19 @@ impl Reducer<actor::Call> for Owner {
             }
             _ => return,
         };
+        if self
+            .advance_only
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            // Another action advances the revision; this move is not made and its reply is lost.
+            let mut basis = self.checkpoint.basis();
+            basis.revision = basis.revision.next_sequence().unwrap();
+            let advanced =
+                crate::gameplay::model::checkpoint(basis, self.checkpoint.state().clone()).unwrap();
+            self.checkpoint = advanced.clone();
+            self.updates.send_replace(advanced);
+            return;
+        }
         let state = self.checkpoint.state();
         let hero = journey::name(state, state.characters[0].entity).unwrap();
         let outcome = match place::plan(
@@ -914,6 +931,12 @@ impl Reducer<actor::Call> for Owner {
                 place::audit_changed(&proposal.from, &proposal.to, &proposal.exit, created);
                 self.checkpoint = planned.candidate.clone();
                 self.updates.send_replace(planned.candidate.clone());
+                if self
+                    .lose_reply
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
                 Ok(MoveOutcome::Moved(Box::new(Moved {
                     revision: planned.candidate.basis().revision,
                     from: proposal.from,
@@ -936,6 +959,8 @@ impl Reducer<actor::Call> for Owner {
 }
 
 struct Table {
+    lose_reply: Arc<std::sync::atomic::AtomicBool>,
+    advance_only: Arc<std::sync::atomic::AtomicBool>,
     service: Service,
     table: Arc<TableLog>,
     updates: watch::Receiver<Checkpoint>,
@@ -962,11 +987,17 @@ impl Table {
             living: LivingScenes::disabled(),
             look_ahead: Arc::default(),
         };
+        let lose_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let owner_lose_reply = lose_reply.clone();
+        let advance_only = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let owner_advance_only = advance_only.clone();
         let owner = std::thread::spawn(move || {
             pack::with_test_pack(loaded, || {
                 let mut owner = Owner {
                     checkpoint: current,
                     updates: updates_in,
+                    lose_reply: owner_lose_reply,
+                    advance_only: owner_advance_only,
                 };
                 let _ = inbox.run(&mut owner);
             });
@@ -977,6 +1008,8 @@ impl Table {
             updates,
             owner: Some(owner),
             sender,
+            lose_reply,
+            advance_only,
         }
     }
 
@@ -1814,7 +1847,7 @@ fn buying_a_ride_service_starts_the_journey_and_any_other_service_does_not() {
         assert!(
             run(table
                 .service
-                .ride_after_service([1; 32], &request, &scene, service))
+                .prepare_service_ride([1; 32], &request, &scene, service))
             .is_none()
         );
         assert_eq!(jev.primary_connections(), 1);
@@ -1839,15 +1872,33 @@ fn buying_a_ride_service_starts_the_journey_and_any_other_service_does_not() {
             116,
             "I hire Hobb's wagon to take us to the city centre.",
         );
-        let (told, revision) = run(table
+        // Judged and prepared before the purchase; the purchase itself is the caller's step.
+        let ride = run(table
             .service
-            .ride_after_service([1; 32], &request, &scene, service))
-        .expect("the journey");
+            .prepare_service_ride([1; 32], &request, &scene, service))
+        .expect("the hire is a ride");
+        assert_eq!(
+            ride.fare.as_ref().map(|fare| fare.service_id.as_str()),
+            Some(service)
+        );
+        let RideOutcome::Travelled {
+            line: told,
+            revision,
+        } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, ride, true))
+        else {
+            panic!("the journey travels");
+        };
         assert!(
             told.ends_with("Brynn leads the party on to The City Centre."),
             "{told}"
         );
         assert_eq!(revision, table.current().basis().revision);
+        assert_eq!(
+            table.lines().last().map(|line| line.1.clone()),
+            Some("Brynn leads the party on to The City Centre.".to_owned())
+        );
     });
 }
 
@@ -2386,7 +2437,11 @@ fn walking_to_a_stall_leaves_out_people_the_market_already_has_instead_of_failin
         let scene = runtime::scene(table.current().state()).unwrap();
         let reply = run(table.service.travel_by_line(
             [1; 32],
-            &line(&table, 131, "I walk over to the fish stall by the fountain."),
+            &line(
+                &table,
+                131,
+                "I walk over to the fish stall by the fountain.",
+            ),
             &scene,
         ))
         .unwrap();
@@ -2402,7 +2457,11 @@ fn walking_to_a_stall_leaves_out_people_the_market_already_has_instead_of_failin
         };
         assert_eq!(yara(&model.people), yara(&original.people));
         assert_eq!(
-            model.people.iter().filter(|person| person.name == "Hobb").count(),
+            model
+                .people
+                .iter()
+                .filter(|person| person.name == "Hobb")
+                .count(),
             0,
             "Hobb stays the market's own person, not a second copy at the stall"
         );
@@ -2881,5 +2940,513 @@ fn hs57_dropped_move_caller_audits_cancellation_without_duplicate_generation() {
             );
             table.service.look_ahead.cancel();
         });
+    });
+}
+
+#[test]
+fn a_move_with_an_unreadable_input_identity_is_answered_and_nothing_moves() {
+    with_shop(|opening, loaded| {
+        let scene = runtime::scene(opening.state()).unwrap();
+        let exits = FakeEndpoint::start(vec![choice("o1")]);
+        let storyteller = FakeEndpoint::start(vec![]);
+        let voice = voice_of(
+            &exits,
+            teller(
+                storyteller.address,
+                0,
+                Duration::from_secs(5),
+                &cache_directory("place-move-unreadable-identity"),
+            ),
+        );
+        let table = Table::start(opening.clone(), loaded, voice);
+        let mut request = line(&table, 84, "I go out through the front door.");
+        request.input_id = Some(rpc::OperationId {
+            value: Some(vec![84; 3]),
+        });
+        let Some(DialogueReply::Raw(response, _)) = run(table.service.leave_by_freeform(
+            [1; 32],
+            &request,
+            &scene,
+            "Brynn",
+            0,
+            &performed_move(true),
+        )) else {
+            panic!("a move with an unreadable identity is answered in fiction");
+        };
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(response.npc_reply, MOVE_NOT_RECORDED);
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some(MOVE_NOT_RECORDED.to_owned())
+        );
+        assert_eq!(table.current(), opening);
+        assert!(place::created(table.current().state()).unwrap().is_empty());
+    });
+}
+
+#[test]
+fn a_move_the_session_owner_cannot_take_is_answered_and_nothing_moves() {
+    with_shop(|opening, loaded| {
+        let scene = runtime::scene(opening.state()).unwrap();
+        let exits = FakeEndpoint::start(vec![choice("o1")]);
+        let storyteller = FakeEndpoint::start(vec![Reply::Output(answer(
+            &place_slot(),
+            &people_slot(),
+            &things_slot(),
+        ))]);
+        let voice = voice_of(
+            &exits,
+            teller(
+                storyteller.address,
+                0,
+                Duration::from_secs(5),
+                &cache_directory("place-move-owner-stopped"),
+            ),
+        );
+        let table = Table::start(opening.clone(), loaded, voice);
+        let _ = table.sender.stop();
+        let Some(DialogueReply::Raw(response, _)) = run(table.service.leave_by_freeform(
+            [1; 32],
+            &line(&table, 85, "I go out through the front door."),
+            &scene,
+            "Brynn",
+            0,
+            &performed_move(true),
+        )) else {
+            panic!("a move the owner cannot take is answered in fiction");
+        };
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(response.npc_reply, MOVE_NOT_RECORDED);
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some(MOVE_NOT_RECORDED.to_owned())
+        );
+        assert_eq!(table.current(), opening);
+    });
+}
+
+#[test]
+fn a_ride_whose_departure_has_gone_is_not_taken_and_its_paid_fare_is_said_to_stand() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![Reply::Output(named_place("The City Centre"))],
+            "place-ride-departure-gone",
+        );
+        let table = Table::start(out, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            113,
+            "I wave down a passing carriage and ask the driver to take us into the heart of the city.",
+        );
+        let mut ride = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        ride.fare = Some(RideFare {
+            service_id: "service-carriage".to_owned(),
+            price_cp: 5,
+            name: "Carriage ride".to_owned(),
+            provider: "Driver".to_owned(),
+        });
+        // The party leaves by another route after the ride was prepared and before it is taken.
+        run(table
+            .service
+            .move_party_to_known([1; 32], operation(114), HOME))
+        .unwrap_or_else(|_| panic!("the dev move home"));
+        let before = table.current();
+        let Some(DialogueReply::Raw(response, _)) =
+            run(table.service.take_ride([1; 32], &request, ride, false))
+        else {
+            panic!("a ride that cannot start is answered in fiction");
+        };
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(
+            response.npc_reply,
+            format!(
+                "{} {FARE_KEPT}",
+                actor::place_actor::travel_refusal_line(PlaceRefusal::NotHere)
+            )
+        );
+        assert_eq!(table.current(), before);
+    });
+}
+
+#[test]
+fn a_paid_service_ride_whose_journey_cannot_start_is_not_told_as_travel() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![Reply::Output(named_place("The City Centre"))],
+            "place-service-ride-not-taken",
+        );
+        let table = Table::start(out, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            117,
+            "I hire the wagon to take us into the heart of the city.",
+        );
+        let mut ride = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        ride.fare = Some(RideFare {
+            service_id: "market-street-hobb-service-wagon-directions".to_owned(),
+            price_cp: 5,
+            name: "Wagon ride".to_owned(),
+            provider: "Hobb".to_owned(),
+        });
+        // The party leaves by another route after the ride was prepared, so the journey is stale.
+        run(table
+            .service
+            .move_party_to_known([1; 32], operation(118), HOME))
+        .unwrap_or_else(|_| panic!("the dev move home"));
+        let before = table.current();
+        let RideOutcome::NotTaken { line, revision } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, ride, false))
+        else {
+            panic!("a journey that cannot start is not reported as travel");
+        };
+        let expected = format!(
+            "{} {FARE_KEPT}",
+            actor::place_actor::travel_refusal_line(PlaceRefusal::NotHere)
+        );
+        assert_eq!(line, expected);
+        assert_eq!(revision, before.basis().revision);
+        assert_eq!(table.current(), before);
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some(expected)
+        );
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=fare_kept service=market-street-hobb-service-wagon-directions price_cp=5 reason=not_here key={}",
+                ride_key(117)
+            ))
+            .is_empty()
+        );
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=not_taken reason=not_here key={}",
+                ride_key(117)
+            ))
+            .is_empty()
+        );
+    });
+}
+
+/// The harbor journey as it stands in its opening threat: departure is blocked until it is settled.
+fn with_harbor<R>(run: impl FnOnce(pack::LoadedPack) -> R) -> R {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+    )
+    .unwrap();
+    pack::with_test_pack(loaded.clone(), || run(loaded))
+}
+
+#[test]
+fn a_hailed_ride_during_a_blocker_takes_no_fare_and_is_refused_in_fiction() {
+    with_harbor(|loaded| {
+        let current = runtime::opening_social_tests::opening(2);
+        let blocker = travel_blocker(&current)
+            .unwrap()
+            .expect("the opening threat blocks departure");
+        let scene = runtime::scene(current.state()).unwrap();
+        let (jev, storyteller, voice) =
+            travel_voice(vec![choice("o2")], vec![], "place-hail-during-blocker");
+        let table = Table::start(current.clone(), loaded, voice);
+        let request = line(
+            &table,
+            121,
+            "I hail that carriage and tell the driver to take us to the city centre.",
+        );
+        let ride = run(table.service.hailed_ride([1; 32], &request, &scene))
+            .expect("the hail is judged a ride");
+        assert!(ride.fare.is_none(), "a blocked ride has no fare to buy");
+        let Some(DialogueReply::Raw(response, _)) =
+            run(table.service.take_ride([1; 32], &request, ride, false))
+        else {
+            panic!("a blocked ride is answered in fiction");
+        };
+        assert_eq!(
+            response.disposition,
+            rpc::DialogueDisposition::Rejected as i32
+        );
+        assert_eq!(response.npc_reply, blocker);
+        assert_eq!(table.current(), current);
+        // Judged as a ride once; no destination was judged or made.
+        assert_eq!(jev.primary_connections(), 1);
+        assert_eq!(storyteller.primary_connections(), 0);
+        let lines = table.lines();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].1, request.text);
+        assert_eq!(lines[1].1, blocker);
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=not_taken reason=travel_blocked key={}",
+                ride_key(121)
+            ))
+            .is_empty()
+        );
+    });
+}
+
+#[test]
+fn a_ride_whose_reply_is_lost_after_the_move_is_told_as_the_arrival() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![
+                Reply::Output(named_place("The City Centre")),
+                Reply::Output(json!({"travel": "Brynn waves down a passing carriage."})),
+            ],
+            "place-ride-lost-reply",
+        );
+        let table = Table::start(out, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            122,
+            "I wave down a passing carriage and ask the driver to take us into the heart of the city.",
+        );
+        let ride = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        // The owner commits the move, then its reply is lost on the way back.
+        table
+            .lose_reply
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let RideOutcome::Travelled {
+            line: told,
+            revision,
+        } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, ride, false))
+        else {
+            panic!("the party travelled, so the lost reply is still an arrival");
+        };
+        assert!(
+            told.ends_with("Brynn leads the party on to The City Centre."),
+            "{told}"
+        );
+        assert_eq!(revision, table.current().basis().revision);
+        assert_eq!(
+            runtime::scene(table.current().state()).unwrap().title,
+            "The City Centre"
+        );
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some("Brynn leads the party on to The City Centre.".to_owned())
+        );
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=arrived_after_lost_reply key={}",
+                ride_key(122)
+            ))
+            .is_empty()
+        );
+    });
+}
+
+#[test]
+fn a_ride_the_owner_cannot_take_is_told_as_not_recorded_and_nothing_moves() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![Reply::Output(named_place("The City Centre"))],
+            "place-ride-owner-gone",
+        );
+        let table = Table::start(out, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            123,
+            "I wave down a passing carriage and ask the driver to take us into the heart of the city.",
+        );
+        let ride = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        let before = table.current();
+        let _ = table.sender.stop();
+        let RideOutcome::NotTaken {
+            line: told,
+            revision,
+        } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, ride, false))
+        else {
+            panic!("a ride the owner cannot take is not reported as travel");
+        };
+        assert_eq!(told, MOVE_NOT_RECORDED);
+        assert_eq!(revision, before.basis().revision);
+        assert_eq!(table.current(), before);
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some(MOVE_NOT_RECORDED.to_owned())
+        );
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=not_taken reason=ResourceExhausted key={}",
+                ride_key(123)
+            ))
+            .is_empty()
+        );
+    });
+}
+
+/// The audit key of a ride whose line has input `input` (see `line`).
+fn ride_key(input: u8) -> u64 {
+    df_observe::operation_hash(&[input; 16])
+}
+
+#[test]
+fn a_revision_that_advances_for_another_reason_is_not_taken_as_an_arrival() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![Reply::Output(named_place("The City Centre"))],
+            "place-ride-unrelated-revision",
+        );
+        let table = Table::start(out, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            124,
+            "I wave down a passing carriage and ask the driver to take us into the heart of the city.",
+        );
+        let ride = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        let before = table.current();
+        // The revision advances, but nothing moves: the owner drops the move's reply.
+        table
+            .advance_only
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let RideOutcome::NotTaken {
+            line: told,
+            revision,
+        } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, ride, false))
+        else {
+            panic!("a revision change alone is not an arrival");
+        };
+        assert_eq!(told, MOVE_NOT_RECORDED);
+        assert_ne!(revision, before.basis().revision);
+        assert_eq!(revision, table.current().basis().revision);
+        assert_eq!(
+            runtime::scene(table.current().state()).unwrap().title,
+            runtime::scene(before.state()).unwrap().title
+        );
+        assert_eq!(
+            table.lines().last().map(|told| told.1.clone()),
+            Some(MOVE_NOT_RECORDED.to_owned())
+        );
+        assert!(
+            !actor::audit_lines_containing(&format!(
+                "PLACE ride outcome=not_taken reason=Unavailable key={}",
+                ride_key(124)
+            ))
+            .is_empty()
+        );
+    });
+}
+
+#[test]
+fn the_restriction_helper_refuses_a_blocked_party_and_passes_a_clear_one() {
+    with_harbor(|loaded| {
+        let blocked = runtime::opening_social_tests::opening(2);
+        let blocker = travel_blocker(&blocked)
+            .unwrap()
+            .expect("the opening threat blocks departure");
+        let table = Table::start(blocked, loaded, Arc::new(NpcVoice::silent()));
+        let ride = table
+            .service
+            .blocked_ride("Dain".to_owned(), 0)
+            .expect("a blocked party refuses the ride");
+        assert!(ride.fare.is_none());
+        let RideJourney::Blocked(refusal) = ride.journey else {
+            panic!("the refusal carries the restriction");
+        };
+        assert_eq!(refusal.line, blocker);
+        assert_eq!(refusal.reason, "travel_blocked");
+    });
+    with_shop(|opening, loaded| {
+        let table = Table::start(opening, loaded, Arc::new(NpcVoice::silent()));
+        assert!(table.service.blocked_ride("Brynn".to_owned(), 0).is_none());
+    });
+}
+
+#[test]
+fn a_clear_ride_keeps_its_fare_at_the_last_check_and_still_travels() {
+    with_shop(|opening, loaded| {
+        let made = street(&model_of(&opening));
+        let out = commit(&opening, 40, "street-door", STREET, Some(&made)).unwrap();
+        let (_jev, _storyteller, voice) = travel_voice(
+            vec![choice("o2"), choice("o2"), choice("o6")],
+            vec![Reply::Output(named_place("The City Centre"))],
+            "place-ride-last-check",
+        );
+        let table = Table::start(out.clone(), loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let request = line(
+            &table,
+            125,
+            "I wave down a passing carriage and ask the driver to take us into the heart of the city.",
+        );
+        // A clear ride keeps its fare and still travels.
+        let mut clear = run(table.service.hailed_ride([1; 32], &request, &scene)).expect("a ride");
+        clear.fare = Some(RideFare {
+            service_id: "market-street-hobb-service-wagon-directions".to_owned(),
+            price_cp: 5,
+            name: "Wagon ride".to_owned(),
+            provider: "Hobb".to_owned(),
+        });
+        let clear = table.service.recheck_before_fare(clear);
+        assert!(clear.fare.is_some());
+        let RideOutcome::Travelled { .. } = run(table
+            .service
+            .take_ride_outcome([1; 32], &request, clear, false))
+        else {
+            panic!("a clear ride travels");
+        };
+    });
+}
+
+#[test]
+fn a_ride_whose_restriction_holds_at_the_last_check_loses_its_fare_before_purchase() {
+    with_harbor(|loaded| {
+        let blocked_state = runtime::opening_social_tests::opening(2);
+        let blocker = travel_blocker(&blocked_state)
+            .unwrap()
+            .expect("the opening threat blocks departure");
+        let table = Table::start(blocked_state, loaded, Arc::new(NpcVoice::silent()));
+        let mut late = table
+            .service
+            .blocked_ride("Dain".to_owned(), 0)
+            .expect("blocked");
+        late.fare = Some(RideFare {
+            service_id: "market-street-hobb-service-wagon-directions".to_owned(),
+            price_cp: 5,
+            name: "Wagon ride".to_owned(),
+            provider: "Hobb".to_owned(),
+        });
+        let checked = table.service.recheck_before_fare(late);
+        assert!(checked.fare.is_none(), "no fare is bought");
+        let RideJourney::Blocked(refusal) = checked.journey else {
+            panic!("the last check refuses the ride");
+        };
+        assert_eq!(refusal.line, blocker);
     });
 }
