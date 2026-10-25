@@ -19,6 +19,12 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      first_release:
+        description: Confirm this is the first release; the protected release environment reviewer must approve it.
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -89,13 +95,16 @@ jobs:
           edge=$(sed -n "s/^EDGE_IMAGE=//p" "$RUNNER_TEMP/built.txt" | tail -n 1)
           test -n "$edge"
           deploy/scripts/check-edge-image.sh "$edge"
-      - name: Fetch the latest signed release's revocation list
+      - name: Set release version date
+        run: echo "DF_VERSION=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+      - name: Fetch and verify every signed release version
         env:
           GH_TOKEN: ${{ github.token }}
           OWNER_TYPE: ${{ github.event.repository.owner.type }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           RELEASE_IMAGE: ghcr.io/${{ github.repository_owner }}/dungeonflux-release
-        run: deploy/scripts/fetch-previous-release.sh "$RELEASE_IMAGE" "$OWNER_TYPE" "$REPOSITORY_OWNER" "$GITHUB_REPOSITORY" "$RUNNER_TEMP"
+          FIRST_RELEASE: ${{ inputs.first_release }}
+        run: deploy/scripts/fetch-previous-release.sh "$RELEASE_IMAGE" "$OWNER_TYPE" "$REPOSITORY_OWNER" "$GITHUB_REPOSITORY" "$RUNNER_TEMP" "$FIRST_RELEASE" "$DF_VERSION"
       - name: Build, push and sign the release image
         env:
           DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
