@@ -1,8 +1,7 @@
 use super::super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 use super::super::super::storyteller::{
-    ADVENTURE_STYLE, CallProfile, Expression, MAXIMUM_PROMPT_BYTES, build_prompt as
-        build_expression_prompt,
-    check_request,
+    ADVENTURE_STYLE, CallProfile, Expression, MAXIMUM_PROMPT_BYTES,
+    build_prompt as build_expression_prompt, check_request,
 };
 use super::super::{generate, record};
 use super::*;
@@ -550,7 +549,10 @@ fn merchant_opening_group_requests_pass_storyteller_validation_in_both_ratings()
                 .iter()
                 .filter(|slot| slot.group == group && names.contains(&slot.name))
                 .collect();
-            let slots: Vec<Slot> = asked.iter().map(|slot| slot_spec(slot, &baseline)).collect();
+            let slots: Vec<Slot> = asked
+                .iter()
+                .map(|slot| slot_spec(slot, &baseline))
+                .collect();
             let with_secret = asked.iter().any(|slot| {
                 slot.sheet.slot == "clue"
                     || (slot.sheet.beat == "resolution" && slot.sheet.slot == "line")

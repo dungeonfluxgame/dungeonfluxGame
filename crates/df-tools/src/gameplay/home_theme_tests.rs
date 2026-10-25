@@ -139,7 +139,10 @@ fn a_file_that_is_not_an_image_is_refused_by_name_as_undecodable() {
 
 #[test]
 fn without_an_installed_asset_root_the_lobby_view_is_the_documented_fallback() {
-    let view = lobby_view("assets/ui/generated/scene-salt-quay-arrival-documentary-photo.webp", None);
+    let view = lobby_view(
+        "assets/ui/generated/scene-salt-quay-arrival-documentary-photo.webp",
+        None,
+    );
     assert!(view.fallback, "a lobby with no installed theme says so");
     assert!(view.atmosphere.is_empty());
     let mood = view.mood.expect("the neutral mood is always sent");

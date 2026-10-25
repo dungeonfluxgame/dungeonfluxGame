@@ -877,7 +877,9 @@ mod free_roam_tests {
                 RulesMode::Standard,
                 ContentRating::default(),
                 &storyteller,
-                &crate::gameplay::place_creation::tests::jev(&crate::gameplay::place_creation::tests::accepting_persona_judge(32)),
+                &crate::gameplay::place_creation::tests::jev(
+                    &crate::gameplay::place_creation::tests::accepting_persona_judge(32),
+                ),
             ))
             .unwrap();
         let (loaded, _) =

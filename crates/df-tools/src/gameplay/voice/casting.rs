@@ -907,9 +907,12 @@ impl super::Voice {
                 .1
                 .push(serde_json::json!({"key":key,"state":state,"ms":null}));
         }
-        let mut report = speakers.into_iter().map(|(speaker, (voice_id, lines))|
-            serde_json::json!({"speaker":speaker,"voice_id":voice_id,"lines":lines,
-                "reason":if speaker == "narrator" { "narrator" } else { "authored_cast" }}))
+        let mut report = speakers
+            .into_iter()
+            .map(|(speaker, (voice_id, lines))| {
+                serde_json::json!({"speaker":speaker,"voice_id":voice_id,"lines":lines,
+                "reason":if speaker == "narrator" { "narrator" } else { "authored_cast" }})
+            })
             .collect::<Vec<_>>();
         if let super::Mode::On { synthesis, .. } = &self.inner.mode {
             for (actor_id, cast) in super::locked(&synthesis.casting.generated).iter() {
@@ -928,9 +931,12 @@ impl super::Voice {
                 report[index]["gender"] = serde_json::json!(cast.speaker.gender.label());
                 report[index]["age"] = serde_json::json!(cast.speaker.age.map(super::Age::label));
                 report[index]["fallback"] = serde_json::json!(voice.fallback);
-                report[index]["reason"] = serde_json::json!(if synthesis.casting.forced.is_some() {
-                    "forced_override"
-                } else { cast.reason.as_str() });
+                report[index]["reason"] =
+                    serde_json::json!(if synthesis.casting.forced.is_some() {
+                        "forced_override"
+                    } else {
+                        cast.reason.as_str()
+                    });
             }
         }
         serde_json::json!(report)

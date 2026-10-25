@@ -704,7 +704,8 @@ fn build_with_arrival(
         if !left_out.is_empty() {
             slot.services
                 .retain(|service| !left_out.contains(&service.provider));
-            slot.stalls.retain(|stall| !left_out.contains(&stall.keeper));
+            slot.stalls
+                .retain(|stall| !left_out.contains(&stall.keeper));
             let stalls = slot.stalls.clone();
             slot.mentioned_stalls.retain(|name| {
                 stalls
@@ -738,8 +739,13 @@ fn build_with_arrival(
     if raw_people.as_array().is_none_or(|people| {
         people.iter().any(|person| {
             // The stall keeper's record is the origin's own and anyone left out is not added.
-            let name = person.get("name").and_then(Value::as_str).unwrap_or_default();
-            if local_keeper.as_ref().is_some_and(|keeper| keeper.name == name)
+            let name = person
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if local_keeper
+                .as_ref()
+                .is_some_and(|keeper| keeper.name == name)
                 || left_out.iter().any(|out| out == name)
             {
                 return false;

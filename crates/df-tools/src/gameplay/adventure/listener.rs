@@ -1,9 +1,9 @@
 //! Listener-safety data the generator derives from the rolled facts: the phrases that give the
 //! private clue away, and who each speaking character is. The pack carries both so that an
 //! in-character reply never has to guess them from prose.
-use df_render::art_contract;
 use super::super::pack::{Age, CastRole, Gender, SceneCastMember, SpeakerProfile};
 use super::schema::{Antagonist, Destination, Secret};
+use df_render::art_contract;
 use std::collections::BTreeMap;
 
 /// The secret's own phrases, the destination's title and the contact's names, without

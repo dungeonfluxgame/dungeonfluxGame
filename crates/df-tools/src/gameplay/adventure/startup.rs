@@ -107,7 +107,9 @@ pub(crate) async fn prepare(
         return super::campaign_startup::select(settings, current, database, state);
     }
     let fresh = match &state {
-        AdventureStartup::Fresh => Some(fresh_adventure(settings, storyteller, persona_model).await?),
+        AdventureStartup::Fresh => {
+            Some(fresh_adventure(settings, storyteller, persona_model).await?)
+        }
         AdventureStartup::Stored(_) => None,
     };
     select_with(settings, current, database, state, fresh)
@@ -218,7 +220,13 @@ async fn fresh_adventure_requests_emotional_profiles_for_generated_dossiers() {
         chapter_type: None,
     };
 
-    let fresh = fresh_adventure(&settings, &storyteller, &crate::gameplay::approach_model::ApproachModel::default()).await.unwrap();
+    let fresh = fresh_adventure(
+        &settings,
+        &storyteller,
+        &crate::gameplay::approach_model::ApproachModel::default(),
+    )
+    .await
+    .unwrap();
     let profile_requests = endpoint
         .bodies()
         .iter()
@@ -263,10 +271,15 @@ async fn fresh_adventure(
             Some(seed) => seed,
             None => u64::from_le_bytes(model::random::<8>().map_err(|_| StartupError::Seed)?),
         };
-        let generated =
-            super::free_roam::generate(seed, settings.rules_mode, content_rating(), storyteller, persona_model)
-                .await
-                .map_err(StartupError::FreeRoam)?;
+        let generated = super::free_roam::generate(
+            seed,
+            settings.rules_mode,
+            content_rating(),
+            storyteller,
+            persona_model,
+        )
+        .await
+        .map_err(StartupError::FreeRoam)?;
         return Ok(FreshAdventure {
             generated,
             model: None,

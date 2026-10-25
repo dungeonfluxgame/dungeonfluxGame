@@ -2231,12 +2231,8 @@ pub(super) fn validate_encounter_choices(
                 .clone()
                 .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase());
             // The check replays against the place the party stood in at that revision.
-            let mut source_scene = super::place::scene_at(
-                current.state(),
-                &beat.id,
-                source_scene,
-                decision.revision,
-            )?;
+            let mut source_scene =
+                super::place::scene_at(current.state(), &beat.id, source_scene, decision.revision)?;
             super::investigation::project_item_story_findings(current.state(), &mut source_scene)?;
             validate_observation_check(
                 current.state(),
