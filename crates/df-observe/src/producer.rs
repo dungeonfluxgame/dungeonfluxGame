@@ -339,7 +339,7 @@ fn validate_time(time: SystemTime) -> Result<(), TelemetryError> {
 }
 // One budget spans the complete caller input, before SDK conversion or allocation.
 // Nonzero structural charges bound empty values too; the node cap bounds traversal.
-const INPUT_NODES_MAX: usize = 512;
+const MAXIMUM_INPUT_NODES: usize = 512;
 const STRUCTURAL_BYTES: usize = 16;
 struct InputBudget {
     bytes_left: usize,
@@ -349,7 +349,7 @@ impl InputBudget {
     fn new(bytes: usize) -> Self {
         Self {
             bytes_left: bytes,
-            nodes_left: INPUT_NODES_MAX,
+            nodes_left: MAXIMUM_INPUT_NODES,
         }
     }
     fn node(&mut self, payload_bytes: usize) -> Result<(), TelemetryError> {
@@ -462,7 +462,7 @@ mod tests {
     fn empty_tree_preflight_exhausts_one_shared_budget_before_sdk_work() {
         let mut budget = InputBudget::new(8192);
         budget.log_value(&tree(2), 0).unwrap();
-        assert_eq!(budget.nodes_left, INPUT_NODES_MAX - 273);
+        assert_eq!(budget.nodes_left, MAXIMUM_INPUT_NODES - 273);
         assert!(matches!(
             budget.log_value(&tree(2), 0),
             Err(TelemetryError::Oversized)

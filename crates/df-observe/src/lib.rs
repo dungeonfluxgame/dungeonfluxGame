@@ -280,7 +280,7 @@ mod native {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    const MAX_SPANS: usize = 512;
+    const MAXIMUM_SPANS: usize = 512;
     #[derive(Clone, Debug, Default)]
     struct BoundedExporter {
         spans: Arc<Mutex<VecDeque<SpanData>>>,
@@ -292,7 +292,7 @@ mod native {
                 OTelSdkError::InternalFailure("fixture export lock poisoned".to_owned())
             })?;
             for span in batch {
-                if spans.len() == MAX_SPANS {
+                if spans.len() == MAXIMUM_SPANS {
                     spans.pop_front();
                     self.dropped.fetch_add(1, Ordering::Relaxed);
                 }

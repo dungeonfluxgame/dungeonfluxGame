@@ -10,11 +10,11 @@ use opentelemetry_proto::tonic::{
 use prost::Message;
 use std::{rc::Rc, time::Duration};
 
-const MAX_RECORDS: usize = 128;
-const MAX_BYTES: usize = 256 * 1024;
-const MAX_RECORD_BYTES: usize = 8192;
-const MAX_UPLOAD_RECORDS: usize = 32;
-const MAX_UPLOAD_BYTES: usize = 64 * 1024;
+const MAXIMUM_RECORDS: usize = 128;
+const MAXIMUM_BYTES: usize = 256 * 1024;
+const MAXIMUM_RECORD_BYTES: usize = 8192;
+const MAXIMUM_UPLOAD_RECORDS: usize = 32;
+const MAXIMUM_UPLOAD_BYTES: usize = 64 * 1024;
 const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Browser capture selects only approved typed fields before standard OTLP encoding.
@@ -101,7 +101,7 @@ struct RetainedRecord {
 pub struct BrowserBuffer {
     owner: Rc<u8>,
     generation: u64,
-    slots: [Option<RetainedRecord>; MAX_RECORDS],
+    slots: [Option<RetainedRecord>; MAXIMUM_RECORDS],
     head: usize,
     count: usize,
     bytes: usize,
@@ -154,7 +154,7 @@ impl BrowserBuffer {
         if record.measured_bytes.is_some_and(|bytes| bytes < 0) {
             return Err(self.refuse(BufferError::InvalidMeasurement));
         }
-        if self.count == MAX_RECORDS {
+        if self.count == MAXIMUM_RECORDS {
             return Err(self.refuse(BufferError::Capacity));
         }
         let request = encode_log(build, key, record);
@@ -165,21 +165,21 @@ impl BrowserBuffer {
         if length == 0 {
             return Err(self.refuse(BufferError::Empty));
         }
-        if length > MAX_RECORD_BYTES {
+        if length > MAXIMUM_RECORD_BYTES {
             return Err(self.refuse(BufferError::Oversized));
         }
-        if self.count == MAX_RECORDS
+        if self.count == MAXIMUM_RECORDS
             || self
                 .bytes
                 .checked_add(length)
-                .is_none_or(|sum| sum > MAX_BYTES)
+                .is_none_or(|sum| sum > MAXIMUM_BYTES)
         {
             return Err(self.refuse(BufferError::Capacity));
         }
         if self.next_record == u64::MAX {
             return Err(self.refuse(BufferError::IdentityExhausted));
         }
-        let index = (self.head + self.count) % MAX_RECORDS;
+        let index = (self.head + self.count) % MAXIMUM_RECORDS;
         self.slots[index] = Some(RetainedRecord {
             ordinal: self.next_record,
             bytes: request.encode_to_vec().into_boxed_slice(),
@@ -207,10 +207,12 @@ impl BrowserBuffer {
         let mut bytes = 0;
         let mut records = 0;
         for offset in 0..self.count {
-            let record = self.slots[(self.head + offset) % MAX_RECORDS]
+            let record = self.slots[(self.head + offset) % MAXIMUM_RECORDS]
                 .as_ref()
                 .ok_or(BufferError::Empty)?;
-            if records == MAX_UPLOAD_RECORDS || bytes + record.bytes.len() > MAX_UPLOAD_BYTES {
+            if records == MAXIMUM_UPLOAD_RECORDS
+                || bytes + record.bytes.len() > MAXIMUM_UPLOAD_BYTES
+            {
                 break;
             }
             bytes += record.bytes.len();
@@ -237,7 +239,7 @@ impl BrowserBuffer {
             || self.lease != Some(lease.identity)
             || self.count < lease.identity.records
             || (0..lease.identity.records)
-                .any(|offset| self.slots[(self.head + offset) % MAX_RECORDS].is_none())
+                .any(|offset| self.slots[(self.head + offset) % MAXIMUM_RECORDS].is_none())
             || self.slots[self.head].as_ref().map(|record| record.ordinal)
                 != Some(lease.identity.first_record)
         {
@@ -252,7 +254,7 @@ impl BrowserBuffer {
     ) -> Result<impl Iterator<Item = &'a [u8]>, BufferError> {
         self.check_lease(lease)?;
         Ok((0..lease.identity.records).filter_map(|offset| {
-            self.slots[(self.head + offset) % MAX_RECORDS]
+            self.slots[(self.head + offset) % MAXIMUM_RECORDS]
                 .as_ref()
                 .map(|record| record.bytes.as_ref())
         }))
@@ -272,7 +274,7 @@ impl BrowserBuffer {
             if let Some(record) = self.slots[self.head].take() {
                 self.bytes -= record.bytes.len();
                 self.count -= 1;
-                self.head = (self.head + 1) % MAX_RECORDS;
+                self.head = (self.head + 1) % MAXIMUM_RECORDS;
             }
         }
         self.lease = None;
@@ -459,21 +461,21 @@ mod tests {
         // This does not claim that public static-name inputs can reach these larger lengths.
         let request = encoded_record(6000);
         let length = request.encoded_len();
-        assert!(length <= MAX_RECORD_BYTES);
+        assert!(length <= MAXIMUM_RECORD_BYTES);
         let mut buffer = BrowserBuffer::new(1);
-        while buffer.bytes + length <= MAX_BYTES {
+        while buffer.bytes + length <= MAXIMUM_BYTES {
             buffer.retain_encoded(&request).unwrap();
         }
         let before = buffer.snapshot();
-        assert!(before.retained_records < MAX_RECORDS);
+        assert!(before.retained_records < MAXIMUM_RECORDS);
         assert_eq!(buffer.retain_encoded(&request), Err(BufferError::Capacity));
         assert_eq!(buffer.snapshot().retained_bytes, before.retained_bytes);
         assert_eq!(buffer.snapshot().retained_records, before.retained_records);
         assert_eq!(buffer.snapshot().refused_records, 1);
         let lease = buffer.begin_upload(Duration::ZERO).unwrap();
-        assert_eq!(lease.records(), MAX_UPLOAD_BYTES / length);
+        assert_eq!(lease.records(), MAXIMUM_UPLOAD_BYTES / length);
         assert_eq!(lease.bytes(), lease.records() * length);
-        assert!(lease.bytes() <= MAX_UPLOAD_BYTES);
+        assert!(lease.bytes() <= MAXIMUM_UPLOAD_BYTES);
         assert_eq!(
             buffer.retain_encoded(&encoded_record(8192)),
             Err(BufferError::Oversized)
