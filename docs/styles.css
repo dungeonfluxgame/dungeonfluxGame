@@ -31,10 +31,10 @@ html { color-scheme: dark; -webkit-text-size-adjust: 100%; scroll-behavior: smoo
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0;
-  font-variant-numeric: lining-nums;
   background: var(--night);
   color: var(--parchment);
   font: 400 clamp(18px, 0.3vw + 17px, 20px)/1.6 var(--serif);
+  font-variant-numeric: lining-nums;
   overflow-x: hidden;
 }
 img { display: block; max-width: 100%; height: auto; }
@@ -61,7 +61,7 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.5em;
   min-height: 44px; padding: 0.6em 1.3em; border-radius: var(--r);
-  font: 600 1.05rem/1.1 var(--head); letter-spacing: 0.02em; text-decoration: none;
+  font: 600 1.05rem/1.1 var(--serif); letter-spacing: 0.01em; text-decoration: none;
   transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
 }
 .btn-gilt { background: linear-gradient(180deg, #f6d28d, var(--gilt) 55%, #c48d3c); color: #1c1204; box-shadow: 0 1px 0 #fff3cf inset, 0 8px 24px rgba(230, 180, 94, 0.22); }
@@ -87,7 +87,7 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
     linear-gradient(180deg, rgba(8, 17, 31, 0.35) 0%, rgba(8, 17, 31, 0) 24%, rgba(8, 17, 31, 0.1) 50%, rgba(8, 17, 31, 0.82) 70%, var(--night) 100%),
     radial-gradient(120% 70% at 50% 100%, rgba(8, 17, 31, 0.55), transparent 70%);
 }
-.hero-place { position: absolute; top: 24px; right: var(--gutter); font: italic 500 1.3rem/1 var(--head); color: var(--gilt-hi); text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8); }
+.hero-place { position: absolute; top: 24px; right: var(--gutter); opacity: 0.8; font: italic 500 0.95rem/1 var(--serif); color: var(--gilt-hi); text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8); }
 .hero-inner { padding-block: 0 clamp(36px, 5vw, 64px); text-align: center; display: grid; justify-items: center; gap: 14px; }
 .early { display: inline-block; margin-right: 0.6em; font: 500 0.9rem/1 var(--head); letter-spacing: 0.06em; color: var(--flux-hi); padding: 0.35em 0.8em; border: 1px solid rgba(127, 208, 242, 0.45); border-radius: 999px; background: rgba(8, 17, 31, 0.55); }
 
@@ -105,15 +105,17 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .hero-lede { max-width: 54ch; color: #e9e1cf; font-size: clamp(1.05rem, 0.4vw + 1rem, 1.25rem); text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9); }
 
 /* Dialogue choices: the game's own choice buttons, used as the calls to action. */
-.choices { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; width: min(100%, 1000px); }
+.choices { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; width: min(100%, 720px); }
 .choice {
   display: flex; align-items: center; gap: 14px; height: 100%; min-height: 64px; padding: 14px 20px;
-  text-align: left; text-decoration: none; color: #f4ecda; font: 500 1.15rem/1.25 var(--head);
+  text-align: left; text-decoration: none; color: #f4ecda; font: 500 1.1rem/1.25 var(--serif);
   background: rgba(8, 14, 24, 0.72); border: 1px solid rgba(241, 231, 208, 0.28); border-radius: var(--r);
   transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
 }
 .choice:hover { color: #fff; border-color: rgba(251, 226, 166, 0.7); background: rgba(14, 22, 36, 0.85); }
-.choice.is-lit { border: 2px solid var(--gilt); color: #fff4d8; box-shadow: 0 0 0 1px rgba(251, 226, 166, 0.25), 0 0 28px rgba(230, 180, 94, 0.28); font-weight: 600; }
+.choice.is-lit { border: 2px solid #f6d28d; color: #1c1204; background: linear-gradient(180deg, #f6d28d, var(--gilt) 55%, #c48d3c); box-shadow: 0 1px 0 #fff3cf inset, 0 0 32px rgba(230, 180, 94, 0.35); font-weight: 600; }
+.choice.is-lit:hover { color: #1c1204; background: linear-gradient(180deg, #fbe2a6, #ecbd6a 55%, #cf9744); border-color: #fbe2a6; }
+.choice.is-lit .choice-icon { color: #1c1204; }
 .choice-icon { flex: none; width: 1.4em; text-align: center; color: var(--gilt-hi); font-size: 1.05rem; }
 .hero-fine { font-size: 0.92rem; color: var(--mist); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9); }
 
@@ -122,25 +124,27 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .section-head p { color: var(--mist); font-size: 1.12rem; max-width: 60ch; }
 
 /* How a night plays: three numbered steps. */
-.how { padding-block: var(--section); }
+.how { padding-block: var(--section) clamp(48px, 6vw, 80px); }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(20px, 2.6vw, 36px); }
 .step { display: grid; align-content: start; gap: 10px; }
 .step-shot { margin: 0 0 8px; border-radius: var(--r); overflow: hidden; border: 1px solid rgba(241, 231, 208, 0.14); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45); }
 .step-num { font: 600 2.6rem/1 var(--head); color: var(--gilt); }
 .step p:last-child { color: #d8d0bf; }
+.steps-note { margin-top: 28px; text-align: center; }
+.steps-cta { display: flex; width: max-content; margin: clamp(28px, 3vw, 44px) auto 0; }
 
 /* What you get: alternating picture and copy. */
 .table { padding-block: var(--section); background: linear-gradient(180deg, var(--night), var(--night-2) 30%, var(--night-2) 70%, var(--night)); }
-.feature { display: grid; grid-template-columns: 1.15fr 1fr; align-items: center; gap: clamp(28px, 5vw, 72px); }
-.feature + .feature { margin-top: clamp(56px, 7vw, 104px); }
-.feature.is-flipped .feature-shot { order: 2; }
+.table .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(48px, 5vw, 80px) clamp(28px, 4vw, 56px); }
+.table .section-head { grid-column: 1 / -1; margin-bottom: 0; }
+.feature { display: grid; grid-template-columns: 1fr; align-items: start; gap: 22px; }
 .feature-shot { margin: 0; border-radius: var(--r); overflow: hidden; }
 .feature-shot img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
 .frame-gilt { border: 1px solid rgba(230, 180, 94, 0.5); box-shadow: 0 0 0 4px rgba(8, 17, 31, 0.9), 0 0 0 5px rgba(230, 180, 94, 0.22), 0 24px 60px rgba(0, 0, 0, 0.55); }
 .frame-flux { border: 1px solid rgba(127, 208, 242, 0.45); box-shadow: 0 0 0 4px rgba(8, 17, 31, 0.9), 0 0 0 5px rgba(127, 208, 242, 0.18), 0 24px 60px rgba(0, 0, 0, 0.55); }
-.feature-copy { display: grid; gap: 14px; max-width: 46ch; }
+.feature-copy { display: grid; gap: 12px; max-width: 52ch; }
 .feature-copy p:last-child { color: #d8d0bf; }
-.feature-tag { font: 600 1.05rem/1 var(--head); }
+.feature-tag { font: 600 0.98rem/1 var(--serif); letter-spacing: 0.02em; }
 .tag-story { color: var(--gilt); }
 .tag-engine { color: var(--flux); }
 
@@ -158,7 +162,7 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .pace > p { color: #d8d0bf; }
 .dials { display: grid; gap: 12px; padding: 22px; border-radius: var(--r); border: 1px solid rgba(127, 208, 242, 0.3); background: rgba(13, 26, 46, 0.7); }
 .dial { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid rgba(127, 208, 242, 0.14); }
-.dial-name { font: 600 1.1rem/1.1 var(--head); color: #eef6fb; }
+.dial-name { font: 600 1.02rem/1.1 var(--serif); color: #eef6fb; }
 .dial-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .dial-options span { padding: 0.3em 0.8em; border-radius: 999px; border: 1px solid rgba(183, 192, 207, 0.3); color: var(--mist); font-size: 0.95rem; }
 .dial-options .is-on { border-color: var(--flux); color: var(--flux-hi); background: rgba(47, 127, 174, 0.25); }
@@ -174,7 +178,7 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .faq-grid { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr); gap: clamp(28px, 5vw, 72px); }
 .faq-side { display: grid; gap: 28px; align-content: start; }
 .needs { padding: 22px; border: 1px solid rgba(241, 231, 208, 0.16); border-radius: var(--r); }
-.needs-title { font: 600 1.2rem/1 var(--head); margin-bottom: 10px; color: var(--gilt); }
+.needs-title { font: 600 1.05rem/1 var(--serif); margin-bottom: 10px; color: var(--gilt); }
 .needs ul { margin: 0; padding-left: 1.1em; color: #d8d0bf; display: grid; gap: 4px; }
 .faq-list details { border-bottom: 1px solid rgba(241, 231, 208, 0.14); }
 .faq-list summary { cursor: pointer; list-style: none; padding: 18px 40px 18px 0; position: relative; font: 600 1.3rem/1.25 var(--head); color: #fbf1da; }
@@ -186,7 +190,7 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 /* Closing. */
 .closing { position: relative; isolation: isolate; overflow: hidden; padding-block: clamp(96px, 12vw, 168px); text-align: center; }
 .closing-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
-.closing::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, var(--night) 0%, rgba(8, 17, 31, 0.55) 35%, rgba(8, 17, 31, 0.6) 70%, var(--night) 100%); }
+.closing::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, var(--night) 0%, rgba(8, 17, 31, 0.4) 35%, rgba(8, 17, 31, 0.5) 70%, var(--night) 100%); }
 .closing-inner { display: grid; justify-items: center; gap: 18px; }
 .closing-inner p { font-size: 1.25rem; color: #efe6d2; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8); }
 .closing h2 { text-shadow: 0 3px 18px rgba(0, 0, 0, 0.85); }
@@ -203,9 +207,11 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
   .bar-nav { display: none; }
   .bar-actions { margin-left: auto; }
   .steps { grid-template-columns: 1fr; max-width: 640px; }
-  .feature, .feature.is-flipped { grid-template-columns: 1fr; }
-  .feature.is-flipped .feature-shot { order: 0; }
   .pricing-grid, .faq-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .table .wrap { grid-template-columns: 1fr; }
 }
 
 /* Phone. */
@@ -215,13 +221,14 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
   .bar-login { font-size: 0.95rem; }
   .hero { min-height: 0; padding-top: 52vw; }
   .hero-art { height: 82vw; bottom: auto; object-position: 40% 30%; -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 100%); mask-image: linear-gradient(180deg, #000 55%, transparent 100%); }
-  .hero-place { top: 12px; font-size: 1rem; }
+  .hero-place { top: 12px; font-size: 0.85rem; }
   .hero-inner { gap: 14px; }
   .choices { grid-template-columns: 1fr; gap: 10px; }
+  .steps-cta { width: 100%; justify-content: center; }
   .choice { min-height: 56px; font-size: 1.08rem; }
   .offer-amount { font-size: 5rem; }
   .dials { padding: 16px; }
 }
 
 /* The font shorthand resets numeral style, so every money and step figure is set to lining numerals here. */
-.btn, .choice, .offer-amount, .balance-row, .step-num, .hero-fine, .fine { font-variant-numeric: lining-nums; }
+.btn, .choice, .offer-amount, .balance-row, .step-num, .hero-fine, .fine, .faq-list summary, .offer-kicker, .dial-name { font-variant-numeric: lining-nums; }
