@@ -46,7 +46,7 @@ impl Readiness {
 #[derive(Clone, Debug)]
 pub struct Gate {
     started_ms: f64,
-    settled: u64,
+    settled_frames: u64,
     revealed_at_ms: Option<f64>,
 }
 
@@ -54,7 +54,7 @@ impl Gate {
     pub fn new(now_ms: f64) -> Self {
         Self {
             started_ms: now_ms,
-            settled: 0,
+            settled_frames: 0,
             revealed_at_ms: None,
         }
     }
@@ -64,11 +64,11 @@ impl Gate {
     pub fn observe(&mut self, now_ms: f64, ready: Readiness) -> Phase {
         if self.revealed_at_ms.is_none() {
             if ready.all() {
-                self.settled += 1;
+                self.settled_frames += 1;
             } else {
-                self.settled = 0;
+                self.settled_frames = 0;
             }
-            if self.settled >= SETTLE_FRAMES || now_ms - self.started_ms >= MAX_HOLD_MS {
+            if self.settled_frames >= SETTLE_FRAMES || now_ms - self.started_ms >= MAX_HOLD_MS {
                 self.revealed_at_ms = Some(now_ms);
             }
         }
@@ -78,7 +78,7 @@ impl Gate {
     pub fn phase(&self, now_ms: f64) -> Phase {
         match self.revealed_at_ms {
             None => Phase::Holding,
-            Some(at) if now_ms - at < FADE_MS => Phase::Revealing,
+            Some(revealed_at_ms) if now_ms - revealed_at_ms < FADE_MS => Phase::Revealing,
             Some(_) => Phase::Gone,
         }
     }

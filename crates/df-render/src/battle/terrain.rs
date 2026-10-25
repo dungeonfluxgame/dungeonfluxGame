@@ -10,7 +10,7 @@
 
 use super::math::Vec3;
 
-const MAX_SAMPLES: usize = 1 << 20;
+const MAXIMUM_SAMPLES: usize = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TerrainError {
@@ -39,7 +39,7 @@ impl HeightField {
         rows: u32,
         heights: Vec<f32>,
     ) -> Result<Self, TerrainError> {
-        if cols < 2 || rows < 2 || (cols as usize).saturating_mul(rows as usize) > MAX_SAMPLES {
+        if cols < 2 || rows < 2 || (cols as usize).saturating_mul(rows as usize) > MAXIMUM_SAMPLES {
             return Err(TerrainError::Size);
         }
         if !step_m.is_finite()
@@ -100,19 +100,20 @@ impl HeightField {
 
     /// Largest height difference between lattice points inside the rectangle.
     pub fn relief_in(&self, min: [f32; 2], max: [f32; 2]) -> f32 {
-        let (mut low, mut high) = (f32::MAX, f32::MIN);
+        let (mut minimum_height, mut maximum_height) = (f32::MAX, f32::MIN);
         let steps = |from: f32, to: f32| {
-            let count = ((to - from) / (self.step_m * 0.5)).ceil().max(1.0) as usize;
-            (0..=count).map(move |i| from + (to - from) * i as f32 / count as f32)
+            let step_count = ((to - from) / (self.step_m * 0.5)).ceil().max(1.0) as usize;
+            (0..=step_count)
+                .map(move |step_index| from + (to - from) * step_index as f32 / step_count as f32)
         };
         for z in steps(min[1], max[1]) {
             for x in steps(min[0], max[0]) {
-                let h = self.height_at(x, z);
-                low = low.min(h);
-                high = high.max(h);
+                let height = self.height_at(x, z);
+                minimum_height = minimum_height.min(height);
+                maximum_height = maximum_height.max(height);
             }
         }
-        high - low
+        maximum_height - minimum_height
     }
 }
 
@@ -238,20 +239,20 @@ fn fill_holes(field: &mut [Option<f32>], cols: usize, rows: usize) {
                 if snapshot[row * cols + col].is_some() {
                     continue;
                 }
-                let mut sum = 0.0;
-                let mut count = 0;
+                let mut neighbor_height_sum = 0.0;
+                let mut neighbor_count = 0;
                 for (dc, dr) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
                     let (c, r) = (col as i64 + dc, row as i64 + dr);
                     if (0..cols as i64).contains(&c)
                         && (0..rows as i64).contains(&r)
-                        && let Some(h) = snapshot[r as usize * cols + c as usize]
+                        && let Some(neighbor_height) = snapshot[r as usize * cols + c as usize]
                     {
-                        sum += h;
-                        count += 1;
+                        neighbor_height_sum += neighbor_height;
+                        neighbor_count += 1;
                     }
                 }
-                if count > 0 {
-                    field[row * cols + col] = Some(sum / count as f32);
+                if neighbor_count > 0 {
+                    field[row * cols + col] = Some(neighbor_height_sum / neighbor_count as f32);
                     changed = true;
                 }
             }
@@ -368,13 +369,18 @@ pub fn blocked_cells(
     let mut blocked = Vec::new();
     for row in 0..rows as i32 {
         for col in 0..cols as i32 {
-            let min = [
+            let cell_origin = [
                 origin[0] + col as f32 * cell_m,
                 origin[1] + row as f32 * cell_m,
             ];
-            let relief = field.relief_in(min, [min[0] + cell_m, min[1] + cell_m]);
-            let per_m2 = density[row as usize * cols as usize + col as usize];
-            if relief > settings.maximum_relief_m || per_m2 >= settings.blockers_per_m2 {
+            let relief = field.relief_in(
+                cell_origin,
+                [cell_origin[0] + cell_m, cell_origin[1] + cell_m],
+            );
+            let blocker_density_per_m2 = density[row as usize * cols as usize + col as usize];
+            if relief > settings.maximum_relief_m
+                || blocker_density_per_m2 >= settings.blockers_per_m2
+            {
                 blocked.push([col, row]);
             }
         }

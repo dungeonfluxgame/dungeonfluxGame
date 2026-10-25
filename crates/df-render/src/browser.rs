@@ -261,12 +261,12 @@ fn append(parent: &Element, child: &Element) -> Result<(), RenderError> {
 }
 
 fn retire_layer(element: &Element) -> Result<(), RenderError> {
-    let result = clear_attributes(
+    let cleanup_result = clear_attributes(
         element,
         &["data-layer-key", "x", "y", "width", "height", "fill"],
     );
     element.remove();
-    result
+    cleanup_result
 }
 
 fn clear_attributes(element: &Element, names: &[&str]) -> Result<(), RenderError> {
@@ -288,12 +288,12 @@ impl TokenNodes {
         self.label.set_text_content(None);
         self.group.set_text_content(None);
         let mut failure = None;
-        for result in [
+        for cleanup_result in [
             clear_attributes(&self.group, &["data-token-key", "transform"]),
             clear_attributes(&self.circle, &["r", "fill"]),
             clear_attributes(&self.label, &["y"]),
         ] {
-            if let Err(error) = result {
+            if let Err(error) = cleanup_result {
                 failure = Some(error);
             }
         }

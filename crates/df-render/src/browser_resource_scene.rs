@@ -22,9 +22,9 @@ pub struct BrowserResourceScene<K: Clone + Eq> {
     renderer: ResourceSceneRenderer<DecodedImage<K>>,
     canvas: HtmlCanvasElement,
     context: CanvasRenderingContext2d,
-    max_surface_bytes: usize,
+    maximum_surface_bytes: usize,
     surface_bytes: usize,
-    selected: Option<K>,
+    selected_resource: Option<K>,
 }
 
 impl<K: Clone + Eq> BrowserResourceScene<K> {
@@ -33,9 +33,9 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
         owner: SceneOwner,
         limits: ResourceLimits,
         preparation_revision: RevisionLabel,
-        max_surface_bytes: usize,
+        maximum_surface_bytes: usize,
     ) -> Result<Self, ImageSurfaceError> {
-        if max_surface_bytes == 0 {
+        if maximum_surface_bytes == 0 {
             return Err(ImageSurfaceError::SurfaceCapacity);
         }
         let renderer = ResourceSceneRenderer::mount(parent, owner, limits, preparation_revision)
@@ -70,9 +70,9 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
             renderer,
             canvas,
             context,
-            max_surface_bytes,
+            maximum_surface_bytes,
             surface_bytes: 0,
-            selected: None,
+            selected_resource: None,
         })
     }
 
@@ -92,16 +92,16 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
         {
             return Ok(outcome);
         }
-        let selected = self.selected.clone();
+        let selected_resource = self.selected_resource.clone();
         self.clear();
-        self.selected = None;
+        self.selected_resource = None;
         let outcome = self
             .renderer
             .update(owner, scene_label, flat, references)
             .map_err(ImageSurfaceError::Scene)?;
         // Optional surface failure leaves the already accepted flat view mounted. The caller
         // receives the typed display failure; geometry is never rolled back into old authority.
-        if let Some(key) = selected.filter(|key| references.contains(key)) {
+        if let Some(key) = selected_resource.filter(|key| references.contains(key)) {
             self.present(&key)?;
         }
         Ok(outcome)
@@ -112,7 +112,7 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
     /// Canvas+ImageData staging needs twice the decoded pixel bytes, bounded before allocation.
     pub fn present(&mut self, key: &K) -> Result<bool, ImageSurfaceError> {
         self.clear();
-        self.selected = None;
+        self.selected_resource = None;
         if !self.canvas.is_connected() {
             return Err(ImageSurfaceError::Browser);
         }
@@ -128,7 +128,7 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
             .len()
             .checked_mul(2)
             .ok_or(ImageSurfaceError::SurfaceCapacity)?;
-        if surface_bytes > self.max_surface_bytes {
+        if surface_bytes > self.maximum_surface_bytes {
             return Err(ImageSurfaceError::SurfaceCapacity);
         }
         let (width, height) = image.dimensions();
@@ -141,14 +141,14 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
             return Err(ImageSurfaceError::Browser);
         }
         self.surface_bytes = surface_bytes;
-        self.selected = Some(key.clone());
+        self.selected_resource = Some(key.clone());
         Ok(true)
     }
 
     /// Call on access/cache invalidation notification as well as before a new disclosure.
     /// No automatic authority subscription exists here; the client owns that notification.
     pub fn refresh(&mut self) -> Result<bool, ImageSurfaceError> {
-        if let Some(key) = self.selected.clone() {
+        if let Some(key) = self.selected_resource.clone() {
             return self.present(&key);
         }
         self.clear();
@@ -177,9 +177,9 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
         self.renderer.finish_failed(token)
     }
     pub fn release(&mut self, key: &K) -> Result<(), ResourceError> {
-        if self.selected.as_ref() == Some(key) {
+        if self.selected_resource.as_ref() == Some(key) {
             self.clear();
-            self.selected = None;
+            self.selected_resource = None;
         }
         self.renderer.release(key)
     }
@@ -207,7 +207,7 @@ impl<K: Clone + Eq> BrowserResourceScene<K> {
     }
     pub fn dispose(&mut self) -> Result<PresentationOutcome, RenderError> {
         self.clear();
-        self.selected = None;
+        self.selected_resource = None;
         self.canvas.remove();
         self.renderer.dispose()
     }

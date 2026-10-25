@@ -61,18 +61,18 @@ pub(crate) struct ActiveEffect {
 
 impl ActiveEffect {
     pub fn view(&self) -> EffectView {
-        let t = (self.age_s / self.cue.duration.as_secs_f32().max(0.001)).clamp(0.0, 1.0);
-        let moving = matches!(
+        let progress = (self.age_s / self.cue.duration.as_secs_f32().max(0.001)).clamp(0.0, 1.0);
+        let travels_to_target = matches!(
             self.cue.kind,
             EffectKind::Bolt | EffectKind::Dart | EffectKind::Bead
         );
         let direction = (self.to - self.from).normalized();
         let lateral = Vec3::new(-direction.z, 0.0, direction.x);
-        let position = if moving {
+        let position = if travels_to_target {
             self.from
-                + (self.to - self.from) * t
-                + lateral * (self.cue.fan_m * (std::f32::consts::PI * t).sin())
-                + Vec3::UP * (self.cue.fan_m.abs() * 0.25 * (std::f32::consts::PI * t).sin())
+                + (self.to - self.from) * progress
+                + lateral * (self.cue.fan_m * (std::f32::consts::PI * progress).sin())
+                + Vec3::UP * (self.cue.fan_m.abs() * 0.25 * (std::f32::consts::PI * progress).sin())
         } else {
             self.to
         };
@@ -87,10 +87,10 @@ impl ActiveEffect {
             position,
             radius_m,
             age_s: self.age_s,
-            opacity: if moving {
+            opacity: if travels_to_target {
                 1.0
             } else {
-                (t * 12.0).min(1.0) * (1.0 - t).powf(0.65)
+                (progress * 12.0).min(1.0) * (1.0 - progress).powf(0.65)
             },
         }
     }

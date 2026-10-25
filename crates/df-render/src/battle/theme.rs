@@ -16,7 +16,7 @@ pub enum Theme {
     Throne,
 }
 
-struct Base {
+struct BaseGrade {
     exposure: f32,
     contrast: f32,
     saturation: f32,
@@ -43,7 +43,7 @@ impl Theme {
         })
     }
 
-    fn base(self) -> Base {
+    fn base(self) -> BaseGrade {
         let (exposure, contrast, saturation, shadow, highlight, strength) = match self {
             Self::Neutral => (0.0, 1.0, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0.0),
             Self::Crypt => (-0.28, 1.1, 0.76, [0.06, 0.13, 0.1], [0.18, 0.1, 0.03], 0.6),
@@ -92,7 +92,7 @@ impl Theme {
                 0.7,
             ),
         };
-        Base {
+        BaseGrade {
             exposure,
             contrast,
             saturation,
@@ -105,17 +105,17 @@ impl Theme {
     /// The grade at the theme's own strength, or at `strength` clamped to 0..=1.
     pub fn grade(self, strength: Option<f32>) -> ColorGrade {
         let base = self.base();
-        let amount = strength
-            .filter(|value| value.is_finite())
+        let strength = strength
+            .filter(|strength| strength.is_finite())
             .unwrap_or(base.strength)
             .clamp(0.0, 1.0);
         ColorGrade {
-            enabled: self != Self::Neutral && amount > 0.0,
-            exposure: base.exposure * amount,
-            contrast: 1.0 + (base.contrast - 1.0) * amount,
-            saturation: 1.0 + (base.saturation - 1.0) * amount,
-            shadow: tint_factors(base.shadow.map(|value| value * amount)),
-            highlight: tint_factors(base.highlight.map(|value| value * amount)),
+            enabled: self != Self::Neutral && strength > 0.0,
+            exposure: base.exposure * strength,
+            contrast: 1.0 + (base.contrast - 1.0) * strength,
+            saturation: 1.0 + (base.saturation - 1.0) * strength,
+            shadow: tint_factors(base.shadow.map(|tint| tint * strength)),
+            highlight: tint_factors(base.highlight.map(|tint| tint * strength)),
         }
     }
 }

@@ -14,9 +14,9 @@ pub(crate) struct BrowserIllustration {
     owner: SceneOwner,
     parent: Element,
     surface: Option<(HtmlCanvasElement, CanvasRenderingContext2d)>,
-    max_surface_bytes: usize,
+    maximum_surface_bytes: usize,
     surface_bytes: usize,
-    selected: Option<CacheKey>,
+    selected_resource: Option<CacheKey>,
     description: String,
     closed: bool,
 }
@@ -27,9 +27,9 @@ impl BrowserIllustration {
         owner: SceneOwner,
         limits: ResourceLimits,
         preparation: RevisionLabel,
-        max_surface_bytes: usize,
+        maximum_surface_bytes: usize,
     ) -> Result<Self, crate::ImageSurfaceError> {
-        if max_surface_bytes == 0 || parent.owner_document().is_none() {
+        if maximum_surface_bytes == 0 || parent.owner_document().is_none() {
             return Err(crate::ImageSurfaceError::SurfaceCapacity);
         }
         Ok(Self {
@@ -38,9 +38,9 @@ impl BrowserIllustration {
             owner,
             parent: parent.clone(),
             surface: None,
-            max_surface_bytes,
+            maximum_surface_bytes,
             surface_bytes: 0,
-            selected: None,
+            selected_resource: None,
             description: String::new(),
             closed: false,
         })
@@ -101,7 +101,7 @@ impl BrowserIllustration {
 
     pub(crate) fn present(&mut self, key: &CacheKey) -> Result<bool, crate::ImageSurfaceError> {
         self.clear();
-        self.selected = None;
+        self.selected_resource = None;
         self.ensure_surface()?;
         let Some(image) = self
             .resources
@@ -111,11 +111,11 @@ impl BrowserIllustration {
             return Ok(false);
         };
         let pixels = image.pixels().map_err(crate::ImageSurfaceError::Resource)?;
-        let bytes = pixels
+        let surface_bytes = pixels
             .len()
             .checked_mul(2)
             .ok_or(crate::ImageSurfaceError::SurfaceCapacity)?;
-        if bytes > self.max_surface_bytes {
+        if surface_bytes > self.maximum_surface_bytes {
             return Err(crate::ImageSurfaceError::SurfaceCapacity);
         }
         let (width, height) = image.dimensions();
@@ -131,8 +131,8 @@ impl BrowserIllustration {
             self.clear();
             return Err(crate::ImageSurfaceError::Browser);
         }
-        self.selected = Some(key.clone());
-        self.surface_bytes = bytes;
+        self.selected_resource = Some(key.clone());
+        self.surface_bytes = surface_bytes;
         Ok(true)
     }
     pub(crate) fn refresh(&mut self) -> Result<bool, crate::ImageSurfaceError> {
@@ -140,10 +140,10 @@ impl BrowserIllustration {
             .surface
             .as_ref()
             .is_some_and(|(canvas, _)| !canvas.hidden());
-        if let Some(key) = self.selected.clone() {
-            let result = self.present(&key)?;
-            self.set_visible(visible && result);
-            return Ok(result);
+        if let Some(key) = self.selected_resource.clone() {
+            let is_presented = self.present(&key)?;
+            self.set_visible(visible && is_presented);
+            return Ok(is_presented);
         }
         self.clear();
         Ok(false)
@@ -205,9 +205,9 @@ impl BrowserIllustration {
         self.resources.readiness(key)
     }
     pub(crate) fn release(&mut self, key: &CacheKey) -> Result<(), ResourceError> {
-        if self.selected.as_ref() == Some(key) {
+        if self.selected_resource.as_ref() == Some(key) {
             self.clear();
-            self.selected = None;
+            self.selected_resource = None;
         }
         self.resources.release(key)
     }
@@ -234,7 +234,7 @@ impl BrowserIllustration {
         }
         self.closed = true;
         self.clear();
-        self.selected = None;
+        self.selected_resource = None;
         self.resources.dispose();
         if let Some((canvas, _)) = self.surface.take() {
             canvas.set_text_content(None);
