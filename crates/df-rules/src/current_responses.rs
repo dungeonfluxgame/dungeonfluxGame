@@ -62,15 +62,15 @@ pub fn current_responses<'a>(
             .checked_add(response.options.len())
             .ok_or(ResponseError::Admission(CommandError::Capacity))?;
     }
-    let retained = records
+    let retained_bytes = records
         .checked_mul(size_of::<&OfferedResponse>())
-        .and_then(|bytes| bytes.checked_add(size_of::<Vec<&OfferedResponse>>()))
+        .and_then(|records_bytes| records_bytes.checked_add(size_of::<Vec<&OfferedResponse>>()))
         .ok_or(ResponseError::Admission(CommandError::Capacity))?;
     if limits.maximum_records == 0
         || limits.maximum_text_bytes == 0
         || records > limits.maximum_records
         || options > limits.maximum_records
-        || retained > limits.maximum_retained_bytes
+        || retained_bytes > limits.maximum_retained_bytes
     {
         return Err(ResponseError::Admission(CommandError::Capacity));
     }
@@ -251,14 +251,14 @@ pub fn offered_current_commands<H: RulesCommandHandler>(
         .ok_or(ResponsePreparationError::Response(
             ResponseError::Admission(CommandError::Capacity),
         ))?;
-    let mut retained = size_of::<Vec<GameInput>>()
+    let mut retained_bytes = size_of::<Vec<GameInput>>()
         .checked_add(count.checked_mul(size_of::<GameInput>()).ok_or(
             ResponsePreparationError::Response(ResponseError::Admission(CommandError::Capacity)),
         )?)
         .ok_or(ResponsePreparationError::Response(
             ResponseError::Admission(CommandError::Capacity),
         ))?;
-    if retained > context.command_limits.maximum_retained_bytes {
+    if retained_bytes > context.command_limits.maximum_retained_bytes {
         return Err(ResponsePreparationError::Response(
             ResponseError::Admission(CommandError::Capacity),
         ));
@@ -296,13 +296,13 @@ pub fn offered_current_commands<H: RulesCommandHandler>(
                 member: template.member,
                 command,
             });
-            retained = input
+            retained_bytes = input
                 .retained_heap_bytes()
-                .and_then(|bytes| retained.checked_add(bytes))
+                .and_then(|input_bytes| retained_bytes.checked_add(input_bytes))
                 .ok_or(ResponsePreparationError::Response(
                     ResponseError::Admission(CommandError::Capacity),
                 ))?;
-            if retained > context.command_limits.maximum_retained_bytes {
+            if retained_bytes > context.command_limits.maximum_retained_bytes {
                 return Err(ResponsePreparationError::Response(
                     ResponseError::Admission(CommandError::Capacity),
                 ));

@@ -160,7 +160,7 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
     }
     if candidate
         .retained_bytes()
-        .filter(|bytes| *bytes <= maximum_candidate_bytes)
+        .filter(|retained_bytes| *retained_bytes <= maximum_candidate_bytes)
         .is_none()
     {
         return Err(InvocationError::Capacity);
@@ -248,15 +248,15 @@ fn validate_draw_input<Rejection>(
     input: RulesCommandInput<'_>,
     current: &Checkpoint,
     operation: OperationId,
-    maximum_bytes: usize,
+    maximum_retained_bytes: usize,
 ) -> Result<(), InvocationError<Rejection>> {
     // Bound the count before traversing supplied records or comparing retained history.
-    let mut bytes = input
+    let mut retained_bytes = input
         .supplied_draws
         .len()
         .checked_add(current.state().draws.len())
         .and_then(|count| count.checked_mul(std::mem::size_of::<ActualDraw>()))
-        .filter(|bytes| *bytes <= maximum_bytes)
+        .filter(|retained_bytes| *retained_bytes <= maximum_retained_bytes)
         .ok_or(InvocationError::Capacity)?;
     for draw in input.supplied_draws {
         for label in [
@@ -265,9 +265,9 @@ fn validate_draw_input<Rejection>(
             &draw.source.entry,
             &draw.source.clause,
         ] {
-            bytes = bytes
+            retained_bytes = retained_bytes
                 .checked_add(label.retained_heap_bytes())
-                .filter(|bytes| *bytes <= maximum_bytes)
+                .filter(|retained_bytes| *retained_bytes <= maximum_retained_bytes)
                 .ok_or(InvocationError::Capacity)?;
         }
     }
@@ -311,7 +311,7 @@ fn validate_draw_input<Rejection>(
             .pending
             .len()
             .checked_mul(std::mem::size_of::<df_model::checkpoint::PendingResolution>())
-            .filter(|bytes| *bytes <= maximum_bytes)
+            .filter(|pending_bytes| *pending_bytes <= maximum_retained_bytes)
             .is_none()
         {
             return Err(InvocationError::Capacity);
