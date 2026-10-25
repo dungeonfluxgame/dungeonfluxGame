@@ -15,7 +15,11 @@ fn effect(entry: &str) -> ContentReference {
         ..content()
     }
 }
-fn modes(current: &Checkpoint, maximum: u64, rate: u64) -> FatigueModePolicy {
+fn mode_policy(
+    current: &Checkpoint,
+    maximum_counter_units: u64,
+    recovery_units_per_presentation_tick: u64,
+) -> FatigueModePolicy {
     FatigueModePolicy {
         definition: current.state().tempo.policy.clone(),
         effects: current
@@ -25,8 +29,8 @@ fn modes(current: &Checkpoint, maximum: u64, rate: u64) -> FatigueModePolicy {
             .iter()
             .map(|(definition, _)| EffectFatigueRule {
                 definition: definition.clone(),
-                maximum_counter_units: maximum,
-                recovery_units_per_presentation_tick: rate,
+                maximum_counter_units,
+                recovery_units_per_presentation_tick,
             })
             .collect(),
         normal_motion: MotionAllowance {
@@ -38,24 +42,24 @@ fn modes(current: &Checkpoint, maximum: u64, rate: u64) -> FatigueModePolicy {
 }
 fn advance(
     current: &Checkpoint,
-    units: Option<u64>,
-    rate: u64,
-    reduced: bool,
+    pressure_units: Option<u64>,
+    recovery_units_per_presentation_tick: u64,
+    reduced_motion: bool,
 ) -> Result<RecoveryProposal, RecoveryError> {
     let elapsed = policy(current);
-    let modes = modes(current, 10, rate);
+    let fatigue_policy = mode_policy(current, 10, recovery_units_per_presentation_tick);
     advance_recovery(
         current,
         current.pins(),
         RecoveryRequest {
             elapsed: request(current, Duration::from_millis(100), false),
             elapsed_policy: Some(&elapsed),
-            fatigue_policy: Some(&modes),
+            fatigue_policy: Some(&fatigue_policy),
             preference: Some(MotionPreference {
                 expected_basis: current.basis(),
-                reduced_motion: reduced,
+                reduced_motion,
             }),
-            pressure_units: units,
+            pressure_units,
         },
         limits(),
     )
@@ -121,13 +125,13 @@ fn canonical_recovery_and_rotation_preserve_all_mechanics_and_game_time() {
 fn reduced_motion_retains_equivalent_readable_emphasis_without_changing_fatigue_policy() {
     let current = checkpoint_for(ExecutionMode::Live, vec![(effect("a"), 5)], 40);
     let ordinary = advance(&current, Some(2), 1, false).unwrap();
-    let reduced = advance(&current, Some(2), 1, true).unwrap();
-    assert_eq!(ordinary.advance.state, reduced.advance.state);
-    assert_eq!(ordinary.rotation, reduced.rotation);
+    let reduced_motion = advance(&current, Some(2), 1, true).unwrap();
+    assert_eq!(ordinary.advance.state, reduced_motion.advance.state);
+    assert_eq!(ordinary.rotation, reduced_motion.rotation);
     assert!(
-        !reduced.advance.motion.screen_shake
-            && !reduced.advance.motion.forced_camera_punch
-            && reduced.advance.motion.readable_emphasis
+        !reduced_motion.advance.motion.screen_shake
+            && !reduced_motion.advance.motion.forced_camera_punch
+            && reduced_motion.advance.motion.readable_emphasis
     );
     assert!(ordinary.advance.motion.screen_shake && ordinary.advance.motion.forced_camera_punch);
 }
@@ -141,14 +145,14 @@ fn replay_pause_and_zero_elapsed_never_charge_or_rotate_fresh_effects() {
     ] {
         let current = checkpoint_for(mode, vec![(effect("a"), 5)], 40);
         let elapsed = policy(&current);
-        let modes = modes(&current, 10, 2);
+        let fatigue_policy = mode_policy(&current, 10, 2);
         let result = advance_recovery(
             &current,
             current.pins(),
             RecoveryRequest {
                 elapsed: request(&current, duration, paused),
                 elapsed_policy: Some(&elapsed),
-                fatigue_policy: Some(&modes),
+                fatigue_policy: Some(&fatigue_policy),
                 preference: Some(MotionPreference {
                     expected_basis: current.basis(),
                     reduced_motion: false,
@@ -207,7 +211,7 @@ fn capped_and_overflowing_pressure_declines_without_clipping_or_partial_charge()
 fn current_basis_policy_preferences_and_limits_are_required_before_rotation() {
     let current = checkpoint_for(ExecutionMode::Live, vec![(effect("a"), 5)], 40);
     let elapsed = policy(&current);
-    let modes = modes(&current, 10, 1);
+    let fatigue_policy = mode_policy(&current, 10, 1);
     for case in ["policy", "preferences", "basis", "capacity"] {
         let mut elapsed_request = request(&current, Duration::from_millis(100), false);
         let mut bound = limits();
@@ -223,7 +227,11 @@ fn current_basis_policy_preferences_and_limits_are_required_before_rotation() {
             RecoveryRequest {
                 elapsed: elapsed_request,
                 elapsed_policy: Some(&elapsed),
-                fatigue_policy: if case == "policy" { None } else { Some(&modes) },
+                fatigue_policy: if case == "policy" {
+                    None
+                } else {
+                    Some(&fatigue_policy)
+                },
                 preference: if case == "preferences" {
                     None
                 } else {
@@ -254,7 +262,7 @@ fn stale_anchor_and_recovery_overflow_preserve_original_checkpoint() {
     let current = checkpoint_for(ExecutionMode::Live, vec![(effect("a"), 5)], 40);
     let original = current.clone();
     let elapsed = policy(&current);
-    let modes = modes(&current, 10, u64::MAX);
+    let fatigue_policy = mode_policy(&current, 10, u64::MAX);
     let mut elapsed_request = request(&current, Duration::from_secs(1), false);
     assert_eq!(
         advance_recovery(
@@ -263,7 +271,7 @@ fn stale_anchor_and_recovery_overflow_preserve_original_checkpoint() {
             RecoveryRequest {
                 elapsed: elapsed_request,
                 elapsed_policy: Some(&elapsed),
-                fatigue_policy: Some(&modes),
+                fatigue_policy: Some(&fatigue_policy),
                 preference: Some(MotionPreference {
                     expected_basis: current.basis(),
                     reduced_motion: false
@@ -284,7 +292,7 @@ fn stale_anchor_and_recovery_overflow_preserve_original_checkpoint() {
             RecoveryRequest {
                 elapsed: elapsed_request,
                 elapsed_policy: Some(&elapsed),
-                fatigue_policy: Some(&modes),
+                fatigue_policy: Some(&fatigue_policy),
                 preference: Some(MotionPreference {
                     expected_basis: current.basis(),
                     reduced_motion: false

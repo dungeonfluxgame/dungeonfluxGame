@@ -38,7 +38,7 @@ fn advance(
     checkpoint: &Checkpoint,
     elapsed: Duration,
     paused: bool,
-    reduced: bool,
+    reduced_motion: bool,
 ) -> Result<FatigueAdvance, FatigueAdvanceError> {
     advance_fatigue_modes(
         checkpoint,
@@ -47,7 +47,7 @@ fn advance(
         Some(&policy(checkpoint)),
         limits(),
         Some(&mode_policy(checkpoint)),
-        Some(preference(checkpoint, reduced)),
+        Some(preference(checkpoint, reduced_motion)),
     )
 }
 
@@ -330,11 +330,11 @@ fn canonical_duplicate_fatigue_and_oversized_policy_are_typed_refusals() {
 fn accessibility_toggle_preserves_counter_result_and_never_infers_boredom_from_activity() {
     let checkpoint = checkpoint_for(ExecutionMode::Live, vec![(content(), 70)], 40);
     let ordinary = advance(&checkpoint, Duration::from_secs(1), false, false).unwrap();
-    let reduced = advance(&checkpoint, Duration::from_secs(1), false, true).unwrap();
-    assert_eq!(ordinary.state, reduced.state);
-    assert_eq!(ordinary.elapsed_ticks, reduced.elapsed_ticks);
+    let reduced_motion = advance(&checkpoint, Duration::from_secs(1), false, true).unwrap();
+    assert_eq!(ordinary.state, reduced_motion.state);
+    assert_eq!(ordinary.elapsed_ticks, reduced_motion.elapsed_ticks);
     assert!(ordinary.motion.screen_shake);
-    assert!(!reduced.motion.screen_shake);
+    assert!(!reduced_motion.motion.screen_shake);
     assert!(!checkpoint.state().activity[0].spotlight_opt_in);
 }
 

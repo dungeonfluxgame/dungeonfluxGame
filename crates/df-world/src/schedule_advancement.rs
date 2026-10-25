@@ -6,7 +6,7 @@ use crate::due_events::{
     DueSelection, DueSelectionError, DueSelectionLimits, DueSelectionRequest, select_due_events,
 };
 
-const MAX_SCHEDULE_RECORDS: usize = 4096;
+const MAXIMUM_SCHEDULE_RECORDS: usize = 4096;
 
 /// Destination policy already admitted by the content/rules/engine owner.
 /// The canonical ScheduledEvent carries no destination; this mapping does not
@@ -83,9 +83,9 @@ pub fn stage_schedule_advancement<'a>(
 ) -> Result<ScheduleAdvancement<'a>, ScheduleAdvancementError> {
     let request = accepted_time.ok_or(ScheduleAdvancementError::TimeNotAccepted)?;
     if limits.entities == 0
-        || limits.entities > MAX_SCHEDULE_RECORDS
+        || limits.entities > MAXIMUM_SCHEDULE_RECORDS
         || limits.destinations == 0
-        || limits.destinations > MAX_SCHEDULE_RECORDS
+        || limits.destinations > MAXIMUM_SCHEDULE_RECORDS
         || limits.movements == 0
         || limits.movements > limits.destinations
         || limits.output_bytes == 0
