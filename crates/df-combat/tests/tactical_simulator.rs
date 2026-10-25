@@ -110,13 +110,13 @@ fn hero(id: u32, cell: Cell) -> CombatantSpec {
 }
 // Test boundary only: same SplitMix64 stream as adventure/rng.rs, recorded before Rules.
 struct Dice {
-    state: u64,
+    random_state: u64,
     ordinal: u32,
 }
 impl Dice {
     fn record(&mut self, sides: u32, source: &RuleReference, ordinal: u32) -> ActualDraw {
-        self.state = self.state.wrapping_add(0x9e3779b97f4a7c15);
-        let mut value = self.state;
+        self.random_state = self.random_state.wrapping_add(0x9e3779b97f4a7c15);
+        let mut value = self.random_state;
         value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
         value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
         value ^= value >> 31;
@@ -279,16 +279,16 @@ fn admitted_choice(state: &Battle, actor: u32, dice: &Dice) -> Action {
 }
 fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
     let mut dice = Dice {
-        state: seed,
+        random_state: seed,
         ordinal: 0,
     };
     let mut state = setup(layout, enemies, &mut dice);
     let mut log: BTreeMap<u32, Vec<String>> = BTreeMap::new();
-    let mut spent: BTreeMap<u32, u16> = BTreeMap::new();
+    let mut ammunition_spent_by_actor: BTreeMap<u32, u16> = BTreeMap::new();
     let mut saw_cover = false;
     let mut saw_range = false;
     let mut saw_long_range = false;
-    let initial_ammo: BTreeMap<_, _> = state
+    let initial_ammunition_by_actor: BTreeMap<_, _> = state
         .combatants()
         .iter()
         .map(|a| (a.id(), (a.arrows(), a.bolts())))
@@ -341,7 +341,7 @@ fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
                 }
             );
             if attack.weapon.ammunition() {
-                *spent.entry(actor).or_default() += 1;
+                *ammunition_spent_by_actor.entry(actor).or_default() += 1;
             }
             log.entry(round).or_default().push(format!(
                 "{}>{} {} {}ft {:?} d{:?}{} dmg{}{}",
@@ -391,17 +391,20 @@ fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
         );
     }
     for actor in state.combatants() {
-        let used = spent.get(&actor.id()).copied().unwrap_or(0);
+        let ammunition_spent = ammunition_spent_by_actor
+            .get(&actor.id())
+            .copied()
+            .unwrap_or(0);
         assert_eq!(
-            actor.arrows() + actor.bolts() + used,
-            initial_ammo[&actor.id()].0 + initial_ammo[&actor.id()].1
+            actor.arrows() + actor.bolts() + ammunition_spent,
+            initial_ammunition_by_actor[&actor.id()].0 + initial_ammunition_by_actor[&actor.id()].1
         );
         if actor.id() == 3 {
-            assert_eq!(actor.arrows(), 20 - used);
-            assert_eq!(actor.ammunition_used(), used);
+            assert_eq!(actor.arrows(), 20 - ammunition_spent);
+            assert_eq!(actor.ammunition_used(), ammunition_spent);
         }
     }
-    let archer_used = state.actor(3).unwrap().ammunition_used();
+    let archer_ammunition_spent = state.actor(3).unwrap().ammunition_used();
     let recovered = dice.step(
         &state,
         3,
@@ -411,7 +414,7 @@ fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
     );
     assert_eq!(
         recovered.battle.actor(3).unwrap().arrows(),
-        20 - archer_used + archer_used / 2
+        20 - archer_ammunition_spent + archer_ammunition_spent / 2
     );
     assert_eq!(state.winner(), Some(Side::Heroes));
     let rounds = state.round();
@@ -449,7 +452,7 @@ fn tactical_simulator_four_complete_source_fights_with_recorded_dice() {
 #[test]
 fn tactical_dash_approaches_after_action_and_every_proposal_makes_progress() {
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let mut state = setup("open-court", &["wolf"], &mut dice);
@@ -469,7 +472,7 @@ fn tactical_dash_approaches_after_action_and_every_proposal_makes_progress() {
 #[test]
 fn tactical_skeleton_uses_actual_ranged_stat_block_and_cover_policy_is_legal() {
     let mut dice = Dice {
-        state: 7,
+        random_state: 7,
         ordinal: 0,
     };
     let mut state = setup("broken-yard", &["skeleton"], &mut dice);
@@ -495,7 +498,7 @@ fn tactical_skeleton_uses_actual_ranged_stat_block_and_cover_policy_is_legal() {
 #[test]
 fn tactical_policy_prefers_reachable_target_and_handles_optional_reactions() {
     let mut dice = Dice {
-        state: 5,
+        random_state: 5,
         ordinal: 0,
     };
     let map = load("open-court");
@@ -553,7 +556,7 @@ fn tactical_monster_unarmed_attacks_do_not_inherit_named_weapon_actions() {
         ("giant-weasel", 2, 1),
     ] {
         let mut dice = Dice {
-            state: 1,
+            random_state: 1,
             ordinal: 0,
         };
         let src = source();
@@ -607,7 +610,7 @@ fn tactical_monster_unarmed_attacks_do_not_inherit_named_weapon_actions() {
 #[test]
 fn tactical_scout_multiattack_admits_only_its_named_actions() {
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let src = source();
@@ -673,7 +676,7 @@ fn tactical_scout_multiattack_admits_only_its_named_actions() {
 fn tactical_approach_uses_rules_attackable_endpoints_instead_of_total_cover_target() {
     let map=BattleMap::from_json(br#"{"schema":2,"grid":{"cols":10,"rows":5,"blocked":[]},"layouts":[{"id":"curtain","obstacles":[{"id":"curtain","kind":"curtain","cells":[[2,1]],"blocks_movement":false,"cover":"total","height_m":3}],"difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[2,1],[6,1]]}}]}"#,"curtain").unwrap();
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let src = source();
@@ -716,7 +719,7 @@ fn tactical_approach_uses_rules_attackable_endpoints_instead_of_total_cover_targ
 #[test]
 fn tactical_optional_masteries_can_be_declined_without_changing_source_damage() {
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let src = source();
@@ -838,7 +841,7 @@ fn tactical_optional_masteries_can_be_declined_without_changing_source_damage() 
 fn tactical_adjacent_ranged_creature_with_safe_retreat_keeps_distance_and_fires() {
     let src = source();
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let specs = vec![
@@ -921,7 +924,7 @@ fn tactical_adjacent_ranged_creature_with_safe_retreat_keeps_distance_and_fires(
 fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat() {
     let src = source();
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let specs = vec![
@@ -1052,7 +1055,7 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
 fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
     let src = source();
     let mut dice = Dice {
-        state: 1,
+        random_state: 1,
         ordinal: 0,
     };
     let specs = vec![

@@ -6,8 +6,8 @@ use df_commerce::{
 };
 use df_types::{Currency, Money, MoneyError, PaidInvoiceId, PriceVersion, SubscriptionId};
 
-fn money(amount: u128) -> Money {
-    Money::new(Currency::parse("USD").unwrap(), amount)
+fn money(micro_dollars: u128) -> Money {
+    Money::new(Currency::parse("USD").unwrap(), micro_dollars)
 }
 
 fn terms(version: u8, amount: u128) -> AllowanceTerms {

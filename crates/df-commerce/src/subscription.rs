@@ -1,6 +1,6 @@
 use df_types::{Currency, Money, MoneyError};
 
-const RENEWAL_GRACE_SECONDS: u64 = 72 * 60 * 60;
+const RENEWAL_GRACE_S: u64 = 72 * 60 * 60;
 
 /// Supplied subscription policy state, independent of gameplay already admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +160,7 @@ pub fn observe_subscription(
             }
             let grace_until = state
                 .paid_through
-                .checked_add(RENEWAL_GRACE_SECONDS)
+                .checked_add(RENEWAL_GRACE_S)
                 .ok_or(SubscriptionRefusal::TimeOverflow)?;
             next.access = if now < grace_until {
                 Access::Grace
@@ -191,10 +191,12 @@ pub fn effective_access(state: SubscriptionState, now: u64) -> Access {
     match state.access {
         Access::Active if now >= state.paid_through => Access::ReadOnly,
         Access::Grace => {
-            let deadline = state.paid_through.checked_add(RENEWAL_GRACE_SECONDS);
-            match (deadline, state.grace_until) {
-                (Some(expected), Some(actual))
-                    if expected == actual && now >= state.paid_through && now < actual =>
+            let grace_deadline_s = state.paid_through.checked_add(RENEWAL_GRACE_S);
+            match (grace_deadline_s, state.grace_until) {
+                (Some(expected), Some(actual_deadline_s))
+                    if expected == actual_deadline_s
+                        && now >= state.paid_through
+                        && now < actual_deadline_s =>
                 {
                     Access::Grace
                 }

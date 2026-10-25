@@ -132,8 +132,8 @@ pub fn propose_spend(
         SpendOperationStatus::Unknown => return Err(SpendRefusal::UnknownOperation),
         SpendOperationStatus::Unseen => {}
     }
-    let maximum = request.maximum_supplier_liability;
-    if maximum.currency() != snapshot.currency
+    let maximum_supplier_liability = request.maximum_supplier_liability;
+    if maximum_supplier_liability.currency() != snapshot.currency
         || consent.maximum.currency() != snapshot.currency
         || snapshot.counters.iter().any(|counter| {
             counter.used.currency() != snapshot.currency
@@ -142,7 +142,7 @@ pub fn propose_spend(
     {
         return Err(MoneyError::CurrencyMismatch.into());
     }
-    if maximum.micros() > consent.maximum.micros() {
+    if maximum_supplier_liability.micros() > consent.maximum.micros() {
         return Err(SpendRefusal::CustomerConsentExceeded);
     }
 
@@ -152,7 +152,7 @@ pub fn propose_spend(
         .checked_add(1)
         .ok_or(SpendRefusal::RevisionOverflow)?;
     for (scope, counter) in SPEND_SCOPES.into_iter().zip(next.counters.iter_mut()) {
-        let proposed_used = counter.used.checked_add(maximum)?;
+        let proposed_used = counter.used.checked_add(maximum_supplier_liability)?;
         if proposed_used.micros() > counter.limit.micros() {
             return Err(SpendRefusal::BudgetExceeded(scope));
         }
@@ -163,7 +163,7 @@ pub fn propose_spend(
         before_revision: snapshot.revision,
         consent_revision: consent.revision,
         consented_maximum: consent.maximum,
-        maximum_supplier_liability: maximum,
+        maximum_supplier_liability,
         next,
     })
 }
@@ -283,8 +283,8 @@ pub fn propose_spend_settlement(
     else {
         return Err(SpendSettlementRefusal::UnknownLiability);
     };
-    let maximum = reservation.maximum_supplier_liability;
-    if maximum.currency() != snapshot.currency
+    let maximum_supplier_liability = reservation.maximum_supplier_liability;
+    if maximum_supplier_liability.currency() != snapshot.currency
         || billed_waste.currency() != snapshot.currency
         || liability_rate.currency() != snapshot.currency
         || snapshot.counters.iter().any(|counter| {
@@ -294,7 +294,7 @@ pub fn propose_spend_settlement(
     {
         return Err(MoneyError::CurrencyMismatch.into());
     }
-    let actual = liability_rate
+    let actual_supplier_liability = liability_rate
         .liability(actual_usage)?
         .checked_add(billed_waste)?;
     let mut next = *snapshot;
@@ -302,13 +302,15 @@ pub fn propose_spend_settlement(
         .revision
         .checked_add(1)
         .ok_or(SpendSettlementRefusal::RevisionOverflow)?;
-    let unused = if actual.micros() <= maximum.micros() {
-        maximum.checked_sub(actual)?
-    } else {
-        Money::new(snapshot.currency, 0)
-    };
-    let platform_loss = if actual.micros() > maximum.micros() {
-        actual.checked_sub(maximum)?
+    let known_unused_release =
+        if actual_supplier_liability.micros() <= maximum_supplier_liability.micros() {
+            maximum_supplier_liability.checked_sub(actual_supplier_liability)?
+        } else {
+            Money::new(snapshot.currency, 0)
+        };
+    let platform_loss = if actual_supplier_liability.micros() > maximum_supplier_liability.micros()
+    {
+        actual_supplier_liability.checked_sub(maximum_supplier_liability)?
     } else {
         Money::new(snapshot.currency, 0)
     };
@@ -317,10 +319,10 @@ pub fn propose_spend_settlement(
         .zip(next.counters.iter_mut())
         .enumerate()
     {
-        if counter.used.micros() < maximum.micros() {
+        if counter.used.micros() < maximum_supplier_liability.micros() {
             return Err(SpendSettlementRefusal::ReservationExceedsExposure(scope));
         }
-        counter.used = counter.used.checked_sub(unused)?;
+        counter.used = counter.used.checked_sub(known_unused_release)?;
         if index < 3 {
             counter.used = counter.used.checked_add(platform_loss)?;
         }
@@ -328,9 +330,9 @@ pub fn propose_spend_settlement(
     Ok(SpendSettlementProposal {
         operation: reservation.operation,
         before_revision: snapshot.revision,
-        maximum_supplier_liability: maximum,
-        actual_supplier_liability: actual,
-        known_unused_release: unused,
+        maximum_supplier_liability,
+        actual_supplier_liability,
+        known_unused_release,
         platform_loss,
         supplier_admissions_blocked: platform_loss.micros() > 0,
         next,

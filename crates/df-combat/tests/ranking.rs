@@ -18,8 +18,8 @@ use df_types::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Offer {
-    id: u8,
-    legal: bool,
+    offer_id: u8,
+    is_legal: bool,
 }
 
 struct FixtureOwner;
@@ -34,11 +34,11 @@ impl LegalOfferOwner for FixtureOwner {
     }
 
     fn is_current_legal(&self, _: &(), _: CandidateContext<'_>, offer: &Offer) -> Result<bool, ()> {
-        Ok(offer.legal)
+        Ok(offer.is_legal)
     }
 
     fn same_offer(&self, left: &Offer, right: &Offer) -> Result<bool, ()> {
-        Ok(left.id == right.id)
+        Ok(left.offer_id == right.offer_id)
     }
 
     fn offer_bytes(&self, _: &Offer) -> Result<usize, ()> {
@@ -228,13 +228,22 @@ fn legal_receipt_ranks_exact_sums_and_explanations_with_stable_ties() {
     let fixture = Fixture::new();
     let context = fixture.context(KnowledgeObserver::Member(member(3)));
     let offers = [
-        Offer { id: 1, legal: true },
-        Offer { id: 2, legal: true },
         Offer {
-            id: 3,
-            legal: false,
+            offer_id: 1,
+            is_legal: true,
         },
-        Offer { id: 4, legal: true },
+        Offer {
+            offer_id: 2,
+            is_legal: true,
+        },
+        Offer {
+            offer_id: 3,
+            is_legal: false,
+        },
+        Offer {
+            offer_id: 4,
+            is_legal: true,
+        },
     ];
     let admitted = fixture.admitted(&offers);
     let first = [
@@ -278,7 +287,7 @@ fn legal_receipt_ranks_exact_sums_and_explanations_with_stable_ties() {
         ranked
             .tactics()
             .iter()
-            .map(|t| t.offer().id)
+            .map(|t| t.offer().offer_id)
             .collect::<Vec<_>>(),
         [1, 2, 4]
     );
@@ -306,7 +315,16 @@ fn an_npc_uses_its_attributed_belief_without_reading_or_changing_world_truth() {
     let fixture = Fixture::new();
     let original = fixture.beliefs.clone();
     let context = fixture.context(KnowledgeObserver::Entity(entity(7)));
-    let offers = [Offer { id: 1, legal: true }, Offer { id: 2, legal: true }];
+    let offers = [
+        Offer {
+            offer_id: 1,
+            is_legal: true,
+        },
+        Offer {
+            offer_id: 2,
+            is_legal: true,
+        },
+    ];
     let admitted = fixture.admitted(&offers);
     let belief = [contribution(
         "criterion-a",
@@ -333,7 +351,7 @@ fn an_npc_uses_its_attributed_belief_without_reading_or_changing_world_truth() {
         limits(),
     )
     .unwrap();
-    assert_eq!(ranked.preferred().unwrap().offer().id, 2);
+    assert_eq!(ranked.preferred().unwrap().offer().offer_id, 2);
     assert_eq!(ranked.preferred().unwrap().contributions(), belief);
     assert_eq!(fixture.beliefs, original);
 }
@@ -342,7 +360,10 @@ fn an_npc_uses_its_attributed_belief_without_reading_or_changing_world_truth() {
 fn secret_values_and_criteria_cannot_affect_the_safe_permission_rejection() {
     let fixture = Fixture::new();
     let context = fixture.context(KnowledgeObserver::Member(member(3)));
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     for (criterion, value) in [("criterion-a", i64::MAX), ("unknown-secret-term", i64::MIN)] {
         let secret = [contribution(
@@ -371,7 +392,10 @@ fn secret_values_and_criteria_cannot_affect_the_safe_permission_rejection() {
 #[test]
 fn another_holder_and_unmapped_member_facts_are_unavailable_to_an_npc() {
     let fixture = Fixture::new();
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     for (observer, evidence) in [
         (
@@ -415,7 +439,10 @@ fn another_holder_and_unmapped_member_facts_are_unavailable_to_an_npc() {
 fn duplicate_terms_unknown_policy_and_overflow_reject_the_entire_batch() {
     let fixture = Fixture::new();
     let context = fixture.context(KnowledgeObserver::Member(member(3)));
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let cases = [
         (
@@ -459,7 +486,10 @@ fn duplicate_terms_unknown_policy_and_overflow_reject_the_entire_batch() {
 fn a_score_cannot_be_reattached_to_an_equal_but_unadmitted_payload() {
     let fixture = Fixture::new();
     let context = fixture.context(KnowledgeObserver::Member(member(3)));
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let clone = offers[0].clone();
     let assignments = [UtilityAssignment {
@@ -493,7 +523,10 @@ fn a_score_cannot_be_reattached_to_an_equal_but_unadmitted_payload() {
 #[test]
 fn every_input_snapshot_must_match_the_admitted_basis_and_pins() {
     let fixture = Fixture::new();
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let assignments = [UtilityAssignment {
         offer: &offers[0],
@@ -532,7 +565,10 @@ fn every_input_snapshot_must_match_the_admitted_basis_and_pins() {
 #[test]
 fn current_observer_and_policy_must_match_the_requested_observation() {
     let fixture = Fixture::new();
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let assignments = [UtilityAssignment {
         offer: &offers[0],
@@ -571,7 +607,10 @@ fn current_observer_and_policy_must_match_the_requested_observation() {
 fn explicit_admission_bounds_are_exact_and_have_no_partial_result() {
     let fixture = Fixture::new();
     let context = fixture.context(KnowledgeObserver::Member(member(3)));
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let contributions = [contribution(
         "criterion-a",
@@ -643,7 +682,10 @@ fn an_empty_legal_inventory_has_an_explicit_no_action_result() {
 #[test]
 fn irrelevant_hidden_claim_changes_leave_a_successful_ranking_identical() {
     let fixture = Fixture::new();
-    let offers = [Offer { id: 1, legal: true }];
+    let offers = [Offer {
+        offer_id: 1,
+        is_legal: true,
+    }];
     let admitted = fixture.admitted(&offers);
     let contributions = [contribution(
         "criterion-a",
