@@ -104,7 +104,7 @@ struct Engine {
     /// Cues scheduled on the audio clock: the node and its start time.
     scheduled: Vec<(AudioBufferSourceNode, f64)>,
     log: Vec<&'static str>,
-    logged: u64,
+    logged_count: u64,
 }
 
 thread_local! {
@@ -135,7 +135,7 @@ impl Engine {
                 .collect(),
             scheduled: Vec::new(),
             log: Vec::new(),
-            logged: 0,
+            logged_count: 0,
         })
     }
 
@@ -150,8 +150,8 @@ impl Engine {
         let Some(Loaded::Ready(buffer)) = self.buffers.get(&cue) else {
             return Ok(());
         };
-        let now = self.context.current_time();
-        self.scheduled.retain(|(_, start)| *start > now);
+        let now_s = self.context.current_time();
+        self.scheduled.retain(|(_, start_s)| *start_s > now_s);
         let source = self.context.create_buffer_source()?;
         source.set_buffer(Some(buffer));
         source.playback_rate().set_value(rate.clamp(0.5, 2.0));
@@ -161,9 +161,9 @@ impl Engine {
             .set_value(cue.volume() * gain * if ducked { DUCKED_VOLUME } else { 1.0 });
         source.connect_with_audio_node(&level)?;
         level.connect_with_audio_node(&self.master)?;
-        let start = now + delay.as_secs_f64();
-        source.start_with_when(start)?;
-        self.scheduled.push((source, start));
+        let start_s = now_s + delay.as_secs_f64();
+        source.start_with_when(start_s)?;
+        self.scheduled.push((source, start_s));
         self.record(cue);
         Ok(())
     }
@@ -171,9 +171,9 @@ impl Engine {
     /// Cues that have not started are obsolete once a newer view arrives. A cue that is
     /// already sounding is left to finish so nothing cuts off with a click.
     fn cancel_unstarted(&mut self) {
-        let now = self.context.current_time();
-        for (source, start) in self.scheduled.drain(..) {
-            if start > now {
+        let now_s = self.context.current_time();
+        for (source, start_s) in self.scheduled.drain(..) {
+            if start_s > now_s {
                 // The node was started with a future time, so stopping it now cancels it.
                 // A browser that refuses leaves a short decorative cue to play out.
                 let scheduled: &web_sys::AudioScheduledSourceNode = source.unchecked_ref();
@@ -188,10 +188,11 @@ impl Engine {
             self.log.remove(0);
         }
         self.log.push(cue.name());
-        self.logged += 1;
+        self.logged_count += 1;
         if let Some(element) = self.document.document_element() {
             let _marked = element.set_attribute(LOG_ATTRIBUTE, &self.log.join(" "));
-            let _counted = element.set_attribute(LOG_COUNT_ATTRIBUTE, &self.logged.to_string());
+            let _counted =
+                element.set_attribute(LOG_COUNT_ATTRIBUTE, &self.logged_count.to_string());
         }
     }
 }
@@ -314,7 +315,7 @@ pub(super) fn play(cue: Cue, delay: Duration) {
 }
 
 /// As [`play`] with a level and a playback speed (above 1 raises the pitch).
-fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32, ending: bool) {
+fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32, is_ending: bool) {
     if matches!(cue, Cue::Hit | Cue::Miss) && BATTLEFIELD_OWNS_COMBAT.with(std::cell::Cell::get) {
         return;
     }
@@ -328,7 +329,7 @@ fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32, ending: bool) {
         };
         if engine.document.hidden()
             || !matches!(engine.buffers.get(&cue), Some(Loaded::Ready(_)))
-            || (ending && !claim_ending_sting())
+            || (is_ending && !claim_ending_sting())
         {
             return;
         }

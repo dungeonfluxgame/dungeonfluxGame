@@ -11,14 +11,14 @@ pub(super) enum PollOutcome {
 #[derive(Default)]
 pub(super) struct ReclaimPoll {
     code: String,
-    wrong_room: bool,
-    failures: u32,
+    is_wrong_room: bool,
+    failure_count: u32,
     retry_at_ms: u64,
 }
 
 impl ReclaimPoll {
     pub(super) fn wrong_room(&self, code: &str) -> bool {
-        self.code == code && self.wrong_room
+        self.code == code && self.is_wrong_room
     }
 
     pub(super) fn ready(&mut self, code: &str, now_ms: u64) -> bool {
@@ -28,20 +28,20 @@ impl ReclaimPoll {
                 ..Self::default()
             };
         }
-        !self.wrong_room && now_ms >= self.retry_at_ms
+        !self.is_wrong_room && now_ms >= self.retry_at_ms
     }
 
     pub(super) fn observe(&mut self, code: &str, now_ms: u64, outcome: PollOutcome) {
         self.code = code.to_owned();
         match outcome {
-            PollOutcome::WrongRoom => self.wrong_room = true,
+            PollOutcome::WrongRoom => self.is_wrong_room = true,
             PollOutcome::Available => {
-                self.failures = 0;
+                self.failure_count = 0;
                 self.retry_at_ms = now_ms.saturating_add(5_000);
             }
             PollOutcome::Refused | PollOutcome::Failed => {
-                let wait_ms = (5_000_u64 << self.failures.min(4)).min(60_000);
-                self.failures = self.failures.saturating_add(1);
+                let wait_ms = (5_000_u64 << self.failure_count.min(4)).min(60_000);
+                self.failure_count = self.failure_count.saturating_add(1);
                 self.retry_at_ms = now_ms.saturating_add(wait_ms);
             }
         }

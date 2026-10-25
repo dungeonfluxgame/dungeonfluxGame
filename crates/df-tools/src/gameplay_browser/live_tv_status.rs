@@ -6,7 +6,7 @@ pub(super) fn plate_loading_visible(state: Option<&str>, server_pending: bool) -
 pub(super) const PLATE_TRANSITION_RECOVERY_MS: f64 = 1_100.0;
 
 pub(super) fn plate_transition_expired(started_ms: Option<f64>, now_ms: f64) -> bool {
-    started_ms.is_some_and(|started| now_ms - started >= PLATE_TRANSITION_RECOVERY_MS)
+    started_ms.is_some_and(|started_ms| now_ms - started_ms >= PLATE_TRANSITION_RECOVERY_MS)
 }
 
 /// The title card's existing five-second establishing animation finishes before dialogue.
@@ -17,10 +17,11 @@ pub(super) fn speaker_entry_ready(
     picture_shown_ms: Option<f64>,
     now_ms: f64,
 ) -> bool {
-    scene_started_ms.is_none_or(|started| {
-        now_ms - started >= ESTABLISHING_BEAT_MS
-            && picture_shown_ms.is_some_and(|shown| {
-                shown >= started && now_ms - shown >= PLATE_TRANSITION_RECOVERY_MS
+    scene_started_ms.is_none_or(|scene_started_ms| {
+        now_ms - scene_started_ms >= ESTABLISHING_BEAT_MS
+            && picture_shown_ms.is_some_and(|picture_shown_ms| {
+                picture_shown_ms >= scene_started_ms
+                    && now_ms - picture_shown_ms >= PLATE_TRANSITION_RECOVERY_MS
             })
     })
 }
