@@ -519,9 +519,9 @@ mod tests {
         config
             .host("127.0.0.1")
             .port(port)
-            .user(&std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_USER").unwrap_or("memtest".into()))
+            .user(std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_USER").unwrap_or("memtest".into()))
             .dbname(
-                &std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_DATABASE").unwrap_or("postgres".into()),
+                std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_DATABASE").unwrap_or("postgres".into()),
             );
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -544,9 +544,9 @@ mod tests {
         config
             .host("127.0.0.1")
             .port(port)
-            .user(&std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_USER").unwrap_or("memtest".into()))
+            .user(std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_USER").unwrap_or("memtest".into()))
             .dbname(
-                &std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_DATABASE").unwrap_or("postgres".into()),
+                std::env::var("DUNGEONFLUX_HERO_LIBRARY_PG_DATABASE").unwrap_or("postgres".into()),
             );
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

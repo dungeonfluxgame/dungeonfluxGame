@@ -12,7 +12,7 @@ use opentelemetry_proto::tonic::{
 use prost::Message;
 use std::time::Duration;
 
-fn build() -> BuildIdentity {
+fn build_identity() -> BuildIdentity {
     BuildIdentity::new(
         Some("source"),
         Some("native"),
@@ -22,7 +22,7 @@ fn build() -> BuildIdentity {
     )
     .unwrap()
 }
-fn key(sequence: i64) -> CaptureKey {
+fn capture_key(sequence: i64) -> CaptureKey {
     let mut id = [0; 16];
     id[..8].copy_from_slice(&sequence.to_be_bytes());
     CaptureKey {
@@ -31,7 +31,7 @@ fn key(sequence: i64) -> CaptureKey {
         sequence: SourceSequence::new(sequence).unwrap(),
     }
 }
-fn record() -> BrowserLog {
+fn browser_log() -> BrowserLog {
     BrowserLog {
         timestamp_unix_nanos: 1,
         observed_unix_nanos: 2,
@@ -50,7 +50,7 @@ fn record() -> BrowserLog {
         )),
     }
 }
-fn decoded(bytes: &[u8]) -> LogRecord {
+fn decode_log_record(bytes: &[u8]) -> LogRecord {
     let request = ExportLogsServiceRequest::decode(bytes).unwrap();
     assert_eq!(request.resource_logs.len(), 1);
     let resource = &request.resource_logs[0];
@@ -62,11 +62,13 @@ fn decoded(bytes: &[u8]) -> LogRecord {
 #[test]
 fn standard_otlp_capture_contains_only_approved_typed_fields_and_identity() {
     let mut buffer = BrowserBuffer::new(1);
-    let admitted = key(7);
-    buffer.retain_log(&build(), admitted, record()).unwrap();
+    let admitted_key = capture_key(7);
+    buffer
+        .retain_log(&build_identity(), admitted_key, browser_log())
+        .unwrap();
     let lease = buffer.begin_upload(Duration::ZERO).unwrap();
     let bytes = buffer.upload_records(&lease).unwrap().next().unwrap();
-    let log = decoded(bytes);
+    let log = decode_log_record(bytes);
     assert!(log.body.is_none());
     assert_eq!(log.time_unix_nano, 1);
     assert_eq!(log.observed_time_unix_nano, 2);
@@ -74,7 +76,7 @@ fn standard_otlp_capture_contains_only_approved_typed_fields_and_identity() {
     assert_eq!(log.span_id, [5; 8]);
     assert_eq!(log.flags, 1);
     assert_eq!(log.event_name, "browser.fixture");
-    let attrs: std::collections::BTreeMap<_, _> = log
+    let attributes: std::collections::BTreeMap<_, _> = log
         .attributes
         .iter()
         .map(|entry| {
@@ -84,34 +86,46 @@ fn standard_otlp_capture_contains_only_approved_typed_fields_and_identity() {
             )
         })
         .collect();
-    assert_eq!(attrs.len(), 9);
+    assert_eq!(attributes.len(), 9);
     assert_eq!(
-        attrs["df.producer_id"],
-        &Value::StringValue(admitted.producer.hex())
+        attributes["df.producer_id"],
+        &Value::StringValue(admitted_key.producer.hex())
     );
     assert_eq!(
-        attrs["df.record_id"],
-        &Value::StringValue(admitted.record.hex())
+        attributes["df.record_id"],
+        &Value::StringValue(admitted_key.record.hex())
     );
-    assert_eq!(attrs["df.source_sequence"], &Value::IntValue(7));
-    assert_eq!(attrs["rpc.bytes"], &Value::IntValue(0));
-    assert_eq!(attrs["rpc.bytes.measured"], &Value::BoolValue(true));
-    assert_eq!(attrs["df.session"], &Value::StringValue("02".repeat(16)));
-    assert_eq!(attrs["df.operation"], &Value::StringValue("03".repeat(16)));
-    assert_eq!(attrs["fixture.build"], &Value::StringValue("source".into()));
-    assert_eq!(attrs["rpc.status"], &Value::StringValue("complete".into()));
+    assert_eq!(attributes["df.source_sequence"], &Value::IntValue(7));
+    assert_eq!(attributes["rpc.bytes"], &Value::IntValue(0));
+    assert_eq!(attributes["rpc.bytes.measured"], &Value::BoolValue(true));
+    assert_eq!(
+        attributes["df.session"],
+        &Value::StringValue("02".repeat(16))
+    );
+    assert_eq!(
+        attributes["df.operation"],
+        &Value::StringValue("03".repeat(16))
+    );
+    assert_eq!(
+        attributes["fixture.build"],
+        &Value::StringValue("source".into())
+    );
+    assert_eq!(
+        attributes["rpc.status"],
+        &Value::StringValue("complete".into())
+    );
 }
 #[test]
 fn item_overflow_is_visible_and_never_evicts_existing_records() {
     let mut buffer = BrowserBuffer::new(1);
     for sequence in 1..=128 {
         buffer
-            .retain_log(&build(), key(sequence), record())
+            .retain_log(&build_identity(), capture_key(sequence), browser_log())
             .unwrap();
     }
     let before = buffer.snapshot();
     assert_eq!(
-        buffer.retain_log(&build(), key(129), record()),
+        buffer.retain_log(&build_identity(), capture_key(129), browser_log()),
         Err(BufferError::Capacity)
     );
     let after = buffer.snapshot();
@@ -125,7 +139,7 @@ fn item_overflow_is_visible_and_never_evicts_existing_records() {
         .upload_records(&lease)
         .unwrap()
         .map(|bytes| {
-            let log = decoded(bytes);
+            let log = decode_log_record(bytes);
             log.attributes
                 .into_iter()
                 .find(|entry| entry.key == "df.source_sequence")
@@ -142,7 +156,9 @@ fn item_overflow_is_visible_and_never_evicts_existing_records() {
 #[test]
 fn deadline_failure_and_retry_preserve_original_bytes() {
     let mut buffer = BrowserBuffer::new(4);
-    buffer.retain_log(&build(), key(1), record()).unwrap();
+    buffer
+        .retain_log(&build_identity(), capture_key(1), browser_log())
+        .unwrap();
     let first = buffer.begin_upload(Duration::from_secs(2)).unwrap();
     let original = buffer
         .upload_records(&first)
@@ -192,7 +208,7 @@ fn prefix_acknowledgment_preserves_later_append_and_fifo_wrap() {
     let mut buffer = BrowserBuffer::new(1);
     for sequence in 1..=128 {
         buffer
-            .retain_log(&build(), key(sequence), record())
+            .retain_log(&build_identity(), capture_key(sequence), browser_log())
             .unwrap();
     }
     for sequence in 129..=256 {
@@ -201,11 +217,13 @@ fn prefix_acknowledgment_preserves_later_append_and_fifo_wrap() {
             .acknowledge_durable(&lease, Duration::from_secs(1))
             .unwrap();
         buffer
-            .retain_log(&build(), key(sequence), record())
+            .retain_log(&build_identity(), capture_key(sequence), browser_log())
             .unwrap();
     }
     let lease = buffer.begin_upload(Duration::ZERO).unwrap();
-    buffer.retain_log(&build(), key(257), record()).unwrap();
+    buffer
+        .retain_log(&build_identity(), capture_key(257), browser_log())
+        .unwrap();
     let before = buffer.snapshot().retained_records;
     buffer
         .acknowledge_durable(&lease, Duration::from_secs(1))
@@ -215,11 +233,15 @@ fn prefix_acknowledgment_preserves_later_append_and_fifo_wrap() {
 #[test]
 fn reconstructed_same_generation_owner_rejects_old_callback_but_moving_preserves_it() {
     let mut original = BrowserBuffer::new(20);
-    original.retain_log(&build(), key(1), record()).unwrap();
+    original
+        .retain_log(&build_identity(), capture_key(1), browser_log())
+        .unwrap();
     let old = original.begin_upload(Duration::ZERO).unwrap();
     drop(original);
     let mut replacement = BrowserBuffer::new(20);
-    replacement.retain_log(&build(), key(2), record()).unwrap();
+    replacement
+        .retain_log(&build_identity(), capture_key(2), browser_log())
+        .unwrap();
     let new = replacement.begin_upload(Duration::ZERO).unwrap();
     assert_eq!(
         replacement.acknowledge_durable(&old, Duration::from_secs(1)),
@@ -235,10 +257,14 @@ fn reconstructed_same_generation_owner_rejects_old_callback_but_moving_preserves
 #[test]
 fn rebind_reports_gap_and_same_generation_does_not_reuse_lease_identity() {
     let mut buffer = BrowserBuffer::new(1);
-    buffer.retain_log(&build(), key(1), record()).unwrap();
+    buffer
+        .retain_log(&build_identity(), capture_key(1), browser_log())
+        .unwrap();
     let old = buffer.begin_upload(Duration::ZERO).unwrap();
     assert_eq!(buffer.invalidate(1), 1);
-    buffer.retain_log(&build(), key(2), record()).unwrap();
+    buffer
+        .retain_log(&build_identity(), capture_key(2), browser_log())
+        .unwrap();
     let new = buffer.begin_upload(Duration::ZERO).unwrap();
     assert_eq!(
         buffer.fail_upload(&old, UploadFailure::Transport),
@@ -251,13 +277,13 @@ fn rebind_reports_gap_and_same_generation_does_not_reuse_lease_identity() {
 #[test]
 fn capture_refusals_do_not_retain_input_or_fabricate_measurements() {
     let mut buffer = BrowserBuffer::new(1);
-    let mut input = record();
+    let mut input = browser_log();
     input.event_name = "";
     assert_eq!(
-        buffer.retain_log(&build(), key(1), input),
+        buffer.retain_log(&build_identity(), capture_key(1), input),
         Err(BufferError::Empty)
     );
-    let mut input = record();
+    let mut input = browser_log();
     input.status = concat!(
         "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -266,13 +292,13 @@ fn capture_refusals_do_not_retain_input_or_fabricate_measurements() {
         "x"
     );
     assert_eq!(
-        buffer.retain_log(&build(), key(2), input),
+        buffer.retain_log(&build_identity(), capture_key(2), input),
         Err(BufferError::Oversized)
     );
-    let mut input = record();
+    let mut input = browser_log();
     input.measured_bytes = Some(-1);
     assert_eq!(
-        buffer.retain_log(&build(), key(3), input),
+        buffer.retain_log(&build_identity(), capture_key(3), input),
         Err(BufferError::InvalidMeasurement)
     );
     assert_eq!(buffer.snapshot().retained_bytes, 0);
@@ -281,7 +307,9 @@ fn capture_refusals_do_not_retain_input_or_fabricate_measurements() {
         buffer.begin_upload(Duration::ZERO),
         Err(BufferError::Empty)
     ));
-    buffer.retain_log(&build(), key(4), record()).unwrap();
+    buffer
+        .retain_log(&build_identity(), capture_key(4), browser_log())
+        .unwrap();
     assert!(matches!(
         buffer.begin_upload(Duration::MAX),
         Err(BufferError::ClockOverflow)
@@ -307,13 +335,15 @@ fn largest_bounded_public_log_exposes_exact_retained_payload_accounting() {
     )
     .unwrap();
     let mut buffer = BrowserBuffer::new(1);
-    let mut input = record();
+    let mut input = browser_log();
     input.event_name = NAME;
     input.status = NAME;
     input.timestamp_unix_nanos = u64::MAX;
     input.observed_unix_nanos = u64::MAX;
     input.measured_bytes = Some(i64::MAX);
-    buffer.retain_log(&build, key(i64::MAX), input).unwrap();
+    buffer
+        .retain_log(&build, capture_key(i64::MAX), input)
+        .unwrap();
     let lease = buffer.begin_upload(Duration::ZERO).unwrap();
     let length = buffer.upload_records(&lease).unwrap().next().unwrap().len();
     assert_eq!(lease.bytes(), length);
