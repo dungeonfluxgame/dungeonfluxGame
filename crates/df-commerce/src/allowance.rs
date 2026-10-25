@@ -192,18 +192,18 @@ pub fn propose_allowance_downgrade(
     {
         return Err(AllowanceRefusal::InvalidDowngrade);
     }
-    let mut next = *state;
-    next.revision = state
+    let mut next_state = *state;
+    next_state.revision = state
         .revision
         .checked_add(1)
         .ok_or(AllowanceRefusal::RevisionOverflow)?;
-    next.scheduled_downgrade = Some(ScheduledDowngrade {
+    next_state.scheduled_downgrade = Some(ScheduledDowngrade {
         effective_from: state.subscription_state.paid_through,
         terms,
     });
     Ok(AllowanceTransition {
         before_revision: state.revision,
-        next,
+        next: next_state,
         grant: None,
     })
 }
@@ -229,12 +229,12 @@ pub fn propose_allowance_renewal(
     let subscription =
         observe_subscription(state.subscription_state, observation.subscription, now)
             .map_err(AllowanceRefusal::Subscription)?;
-    let mut next = *state;
-    next.revision = state
+    let mut next_state = *state;
+    next_state.revision = state
         .revision
         .checked_add(1)
         .ok_or(AllowanceRefusal::RevisionOverflow)?;
-    next.subscription_state = subscription.next;
+    next_state.subscription_state = subscription.next;
     let grant = match observation.subscription.outcome {
         PaymentOutcome::Settled(invoice) => {
             if request.grant.period
@@ -252,13 +252,13 @@ pub fn propose_allowance_renewal(
             if invoice.selected_allowance != terms.supplier_allowance {
                 return Err(AllowanceRefusal::TermsMismatch);
             }
-            next.current_terms = terms;
-            next.current_grant = Some(request.grant);
+            next_state.current_terms = terms;
+            next_state.current_grant = Some(request.grant);
             if state
                 .scheduled_downgrade
                 .is_some_and(|change| invoice.period_start >= change.effective_from)
             {
-                next.scheduled_downgrade = None;
+                next_state.scheduled_downgrade = None;
             }
             Some(AllowanceGrant {
                 id: request.grant,
@@ -274,7 +274,7 @@ pub fn propose_allowance_renewal(
     };
     Ok(AllowanceTransition {
         before_revision: state.revision,
-        next,
+        next: next_state,
         grant,
     })
 }

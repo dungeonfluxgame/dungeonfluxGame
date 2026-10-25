@@ -235,19 +235,19 @@ pub fn propose_credit_adjustment(
             CreditRefusal::ConflictingOperation
         });
     }
-    let mut next = state;
+    let mut next_state = state;
     let adjustment = match receipt.event {
         CreditEvent::UnknownTopup => return Err(CreditRefusal::UnknownPayment),
         CreditEvent::SettledTopup { amount } => {
             require_amount(state, amount)?;
-            next.topup_principal = state.topup_principal.checked_add(amount)?;
-            next.deferred_credit = state.deferred_credit.checked_add(amount)?;
+            next_state.topup_principal = state.topup_principal.checked_add(amount)?;
+            next_state.deferred_credit = state.deferred_credit.checked_add(amount)?;
             CreditAdjustment::TopupDeferred { amount }
         }
         CreditEvent::Consume { amount } => {
             require_available(state, amount)?;
-            next.deferred_credit = state.deferred_credit.checked_sub(amount)?;
-            next.earned_credit = state.earned_credit.checked_add(amount)?;
+            next_state.deferred_credit = state.deferred_credit.checked_sub(amount)?;
+            next_state.earned_credit = state.earned_credit.checked_add(amount)?;
             CreditAdjustment::ConsumptionEarned { amount }
         }
         CreditEvent::ReverseConsumption {
@@ -265,8 +265,8 @@ pub fn propose_credit_adjustment(
             if amount.micros() > original.remaining_reversible.micros() {
                 return Err(CreditRefusal::ExceedsOriginalCharge);
             }
-            next.earned_credit = state.earned_credit.checked_sub(amount)?;
-            next.deferred_credit = state.deferred_credit.checked_add(amount)?;
+            next_state.earned_credit = state.earned_credit.checked_sub(amount)?;
+            next_state.deferred_credit = state.deferred_credit.checked_add(amount)?;
             CreditAdjustment::ConsumptionReversed {
                 original_operation,
                 amount,
@@ -277,7 +277,7 @@ pub fn propose_credit_adjustment(
             if observation.refund.is_some() {
                 return Err(CreditRefusal::WrongRefund);
             }
-            next.refund_hold = state.refund_hold.checked_add(amount)?;
+            next_state.refund_hold = state.refund_hold.checked_add(amount)?;
             CreditAdjustment::RefundHeld(RefundObligation {
                 operation: receipt.operation,
                 held: amount,
@@ -310,16 +310,16 @@ pub fn propose_credit_adjustment(
                     ..refund
                 }),
                 RefundOutcome::KnownSuccess => {
-                    next.refund_hold = state.refund_hold.checked_sub(held)?;
-                    next.deferred_credit = state.deferred_credit.checked_sub(held)?;
-                    next.refunded_principal = state.refunded_principal.checked_add(held)?;
+                    next_state.refund_hold = state.refund_hold.checked_sub(held)?;
+                    next_state.deferred_credit = state.deferred_credit.checked_sub(held)?;
+                    next_state.refunded_principal = state.refunded_principal.checked_add(held)?;
                     CreditAdjustment::RefundPaid {
                         operation: refund_operation,
                         amount: held,
                     }
                 }
                 RefundOutcome::KnownFailure => {
-                    next.refund_hold = state.refund_hold.checked_sub(held)?;
+                    next_state.refund_hold = state.refund_hold.checked_sub(held)?;
                     CreditAdjustment::RefundFailed {
                         operation: refund_operation,
                         released_hold: held,
@@ -328,14 +328,14 @@ pub fn propose_credit_adjustment(
             }
         }
     };
-    next.revision = state
+    next_state.revision = state
         .revision
         .checked_add(1)
         .ok_or(CreditRefusal::RevisionOverflow)?;
-    validate_state(next)?;
+    validate_state(next_state)?;
     Ok(CreditTransition {
         before_revision: state.revision,
-        next,
+        next: next_state,
         receipt,
         adjustment,
     })

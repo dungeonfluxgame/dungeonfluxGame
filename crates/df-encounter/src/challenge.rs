@@ -653,14 +653,14 @@ fn admit_references<'a, Owner: EncounterSourceOwner>(
     references: impl IntoIterator<Item = ReferenceUse<'a>>,
 ) -> Result<(), EncounterError<Owner::Error>> {
     for usage in references {
-        let status = owner
+        let admission = owner
             .admit_reference(current, mode, usage.purpose, usage.reference)
             .map_err(EncounterError::Owner)?;
-        if status != SourceAdmission::Admitted {
+        if admission != SourceAdmission::Admitted {
             return Err(EncounterError::SourceGap(ChallengeSourceGap {
                 purpose: usage.purpose,
                 index: usage.index,
-                reason: status,
+                reason: admission,
             }));
         }
     }
