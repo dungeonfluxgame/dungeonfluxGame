@@ -101,67 +101,70 @@ pub enum GraphError<BeatId, FactId, AlternativeId> {
 }
 
 struct WorkBudget {
-    remaining: usize,
+    remaining_work: usize,
 }
 
 impl WorkBudget {
     fn charge(&mut self, units: usize) -> Result<(), GraphLimit> {
-        self.remaining = self.remaining.checked_sub(units).ok_or(GraphLimit::Work)?;
+        self.remaining_work = self
+            .remaining_work
+            .checked_sub(units)
+            .ok_or(GraphLimit::Work)?;
         Ok(())
     }
 }
 
-fn reachable(
+fn find_reachable_nodes(
     edges: &[Vec<usize>],
     start: usize,
     budget: &mut WorkBudget,
 ) -> Result<Vec<bool>, GraphLimit> {
     budget.charge(edges.len())?;
-    let mut seen = vec![false; edges.len()];
-    let mut pending = vec![start];
+    let mut reachable = vec![false; edges.len()];
+    let mut pending_indices = vec![start];
     // Indices are created internally from the validated, enumerated beat map.
-    seen[start] = true;
-    while let Some(current) = pending.pop() {
+    reachable[start] = true;
+    while let Some(current) = pending_indices.pop() {
         budget.charge(1)?;
         for next in &edges[current] {
             budget.charge(1)?;
-            if !seen[*next] {
-                seen[*next] = true;
-                pending.push(*next);
+            if !reachable[*next] {
+                reachable[*next] = true;
+                pending_indices.push(*next);
             }
         }
     }
-    Ok(seen)
+    Ok(reachable)
 }
 
-fn cycle(
+fn find_cycle(
     edges: &[Vec<usize>],
     budget: &mut WorkBudget,
 ) -> Result<Option<(usize, usize)>, GraphLimit> {
     budget.charge(edges.len())?;
-    let mut colors = vec![0_u8; edges.len()];
-    let mut pending = Vec::new();
-    for (start, _) in edges.iter().enumerate() {
+    let mut visit_states = vec![0_u8; edges.len()];
+    let mut pending_visits = Vec::new();
+    for (starting_index, _) in edges.iter().enumerate() {
         budget.charge(1)?;
-        if colors[start] != 0 {
+        if visit_states[starting_index] != 0 {
             continue;
         }
-        colors[start] = 1;
-        pending.push((start, 0));
-        while let Some((current, next_index)) = pending.last_mut() {
+        visit_states[starting_index] = 1;
+        pending_visits.push((starting_index, 0));
+        while let Some((current, next_index)) = pending_visits.last_mut() {
             budget.charge(1)?;
             let Some(next) = edges[*current].get(*next_index).copied() else {
-                colors[*current] = 2;
-                pending.pop();
+                visit_states[*current] = 2;
+                pending_visits.pop();
                 continue;
             };
             *next_index += 1;
-            if colors[next] == 1 {
+            if visit_states[next] == 1 {
                 return Ok(Some((*current, next)));
             }
-            if colors[next] == 0 {
-                colors[next] = 1;
-                pending.push((next, 0));
+            if visit_states[next] == 0 {
+                visit_states[next] = 1;
+                pending_visits.push((next, 0));
             }
         }
     }
@@ -190,7 +193,7 @@ pub fn validate_graph<BeatId: Ord + Clone, FactId: Ord + Clone, AlternativeId: O
         }
     }
     let mut budget = WorkBudget {
-        remaining: limits.max_work,
+        remaining_work: limits.max_work,
     };
     let mut beat_indices = BTreeMap::new();
     let mut edge_count = 0_usize;
@@ -241,19 +244,20 @@ pub fn validate_graph<BeatId: Ord + Clone, FactId: Ord + Clone, AlternativeId: O
         }
         edges.push(next_indices);
     }
-    if let Some((from, to)) = cycle(&edges, &mut budget).map_err(GraphError::LimitExceeded)? {
+    if let Some((from, to)) = find_cycle(&edges, &mut budget).map_err(GraphError::LimitExceeded)? {
         return Err(GraphError::Cycle {
             from: graph.beats[from].id.clone(),
             to: graph.beats[to].id.clone(),
         });
     }
-    let from_start = reachable(&edges, start, &mut budget).map_err(GraphError::LimitExceeded)?;
-    let mut reachable_exit = false;
+    let reachable_from_start =
+        find_reachable_nodes(&edges, start, &mut budget).map_err(GraphError::LimitExceeded)?;
+    let mut has_reachable_exit = false;
     for (index, beat) in graph.beats.iter().enumerate() {
         budget.charge(1).map_err(GraphError::LimitExceeded)?;
-        reachable_exit |= beat.terminal && from_start[index];
+        has_reachable_exit |= beat.terminal && reachable_from_start[index];
     }
-    if !reachable_exit {
+    if !has_reachable_exit {
         return Err(GraphError::NoReachableExit);
     }
     for alternative in graph.alternatives {
@@ -286,13 +290,15 @@ pub fn validate_graph<BeatId: Ord + Clone, FactId: Ord + Clone, AlternativeId: O
                 exit: alternative.exit.clone(),
             }
         })?;
-        if !from_start[owner] {
+        if !reachable_from_start[owner] {
             return Err(GraphError::UnreachableAlternativeOwner {
                 alternative: alternative.id.clone(),
                 owner: alternative.owner.clone(),
             });
         }
-        if !reachable(&edges, owner, &mut budget).map_err(GraphError::LimitExceeded)?[entry] {
+        if !find_reachable_nodes(&edges, owner, &mut budget).map_err(GraphError::LimitExceeded)?
+            [entry]
+        {
             return Err(GraphError::UnreachableAlternativeEntry {
                 alternative: alternative.id.clone(),
                 owner: alternative.owner.clone(),
@@ -305,7 +311,9 @@ pub fn validate_graph<BeatId: Ord + Clone, FactId: Ord + Clone, AlternativeId: O
                 exit: alternative.exit.clone(),
             });
         }
-        if !reachable(&edges, entry, &mut budget).map_err(GraphError::LimitExceeded)?[exit] {
+        if !find_reachable_nodes(&edges, entry, &mut budget).map_err(GraphError::LimitExceeded)?
+            [exit]
+        {
             return Err(GraphError::UnreachableAlternativeExit {
                 alternative: alternative.id.clone(),
                 entry: alternative.entry.clone(),
