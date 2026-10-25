@@ -207,6 +207,10 @@ variable "public_hostname" {
   description = "The one public origin of this environment (the edge serves the static docs site, /app/, the APIs and /sessions/* here); www redirects to it. Written to the edge environment file as DF_PUBLIC_HOST."
   type        = string
   default     = "dungeonfluxdnd.com"
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.public_hostname))
+    error_message = "public_hostname must be a lower-case DNS name such as dungeonfluxdnd.com (letters, digits, dots and dashes only: it is written to the edge environment file)."
+  }
 }
 
 variable "manage_dns" {
@@ -258,4 +262,62 @@ variable "dmarc_report_address" {
   description = "Mailbox for DMARC aggregate reports (owner decision)."
   type        = string
   default     = ""
+}
+
+variable "cosign_certificate_identity" {
+  description = "The exact GitHub Actions workflow identity (https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main) whose signatures df-deploy accepts for releases and SSH key sets. Required."
+  type        = string
+}
+
+variable "cosign_oidc_issuer" {
+  description = "OIDC issuer of that identity."
+  type        = string
+  default     = "https://token.actions.githubusercontent.com"
+}
+
+variable "cosign_version" {
+  description = "cosign release to install on the hosts (for example v2.4.1). Required."
+  type        = string
+}
+
+variable "cosign_sha256" {
+  description = "SHA-256 of that release's cosign-linux-amd64 binary. Required."
+  type        = string
+}
+
+variable "release_repository_prefix" {
+  description = "Registry repository family (for example ghcr.io/OWNER/dungeonflux). Required."
+  type        = string
+}
+
+variable "cosign_keys_certificate_identity" {
+  description = "The EXACT workflow identity that signs SSH key sets: https://github.com/OWNER/REPO/.github/workflows/keys.yml@refs/heads/main. A different workflow from the release one (cosign_certificate_identity), behind a GitHub environment named keys with required reviewers."
+  type        = string
+  default     = ""
+}
+
+variable "release_registry_user" {
+  description = "User name for the registry login when the image packages are private (the pull token is the secret registry_pull_token). Empty when the packages are public."
+  type        = string
+  default     = ""
+}
+
+variable "acme_email" {
+  description = "Contact address for the edge's certificate authority account (DF_ACME_EMAIL)."
+  type        = string
+  default     = ""
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$", var.acme_email))
+    error_message = "acme_email is required in production and must be a plain e-mail address (the certificate authority contact; it is written to the edge environment file)."
+  }
+}
+
+variable "edge_allowed_cidrs" {
+  description = "Source CIDRs the edge serves (DF_ALLOWED_CIDRS). Production is open to the internet by default."
+  type        = list(string)
+  default     = ["0.0.0.0/0", "::/0"]
+  validation {
+    condition     = alltrue([for c in var.edge_allowed_cidrs : can(cidrhost(c, 0))]) && length(var.edge_allowed_cidrs) > 0
+    error_message = "edge_allowed_cidrs must list at least one valid CIDR (production serves the internet: 0.0.0.0/0 and ::/0 by default)."
+  }
 }

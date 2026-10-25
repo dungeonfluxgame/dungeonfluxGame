@@ -1,5 +1,5 @@
 # STATIC STAGING STAND-IN for the descriptor the trusted runner writes per placement
-# (`df-server campaign-runtime --descriptor /etc/dungeonflux/descriptor.toml`, hosted-runtime-research.md 7).
+# (`df-server campaign-runtime --descriptor /etc/dungeonflux/runtime.toml`, hosted-runtime-research.md 7).
 # In production the runner creates this file on host tmpfs for each placement (campaign, tenant, placement id,
 # fence, limits); here it is fixed so the staging network and secrets split can be exercised. UNVERIFIED
 # PROPOSAL; TODO(O1) owns the schema. No secret values; *_file paths only.

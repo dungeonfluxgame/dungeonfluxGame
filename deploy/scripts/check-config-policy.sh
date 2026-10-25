@@ -66,6 +66,11 @@ for f in "${files[@]}"; do
       fi
       ;;
     *ingestor.toml)
+      metrics_net=$(printf '%s\n' "$code" | sed -n 's/^metrics *= *"\([0-9]*\.[0-9]*\.[0-9]*\)\..*/\1/p')
+      otlp_nets=$(printf '%s\n' "$code" | grep '^otlp' | grep -o '[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*:4317' | sed -E 's/\.[0-9]+:4317$//' | sort -u || true)
+      if [ -z "$metrics_net" ] || printf '%s\n' "$otlp_nets" | grep -qx "$metrics_net"; then
+        fail "$name: the metrics listener must be on a network of its own (the monitoring network), not one that carries OTLP intake"; continue
+      fi
       if has 'allowed_prefixes'; then
         fail "$name: the ingestor must list exact allowed_identities for fixed services, not allowed_prefixes"; continue
       fi
@@ -103,6 +108,30 @@ for f in "${files[@]}"; do
   esac
   pass "$name"
 done
+
+# Production templates (round 2): every @TOKEN@ must be a key of the release environment (manifest entry release_environment), no fake mode
+# may be selected, payments stay in test mode until the owner's phase A, and every file the production compose file mounts must exist.
+allowed_tokens=" INSTANCE_ID ENVIRONMENT PUBLIC_HOST DB_HOST DB_PORT DB_NAME DB_SERVER_NAME SPACES_HOST SPACES_REGION BUCKET_PREFIX "
+before=$failures
+for f in "$root"/deploy/config/production/*; do
+  name=${f#"$root"/}
+  for token in $(sed 's/[[:space:]]*#.*$//' "$f" | grep -o '@[A-Z][A-Z0-9_]*@' | tr -d '@' | sort -u); do
+    case "$allowed_tokens" in *" $token "*) ;; *) fail "$name: unknown template token @${token}@ (not a release environment key)" ;; esac
+  done
+  case "$f" in
+    *.toml)
+      code=$(sed 's/[[:space:]]*#.*$//' "$f")
+      if printf '%s\n' "$code" | grep -Eq 'mode[[:space:]]*=[[:space:]]*"fake"'; then fail "$name: production selects a fake mode"; fi
+      if printf '%s\n' "$code" | grep -Eq '^\[payments\]' && printf '%s\n' "$code" | sed -n '/^\[payments\]/,/^\[/p' | grep -Eq 'mode[[:space:]]*=[[:space:]]*"live"'; then
+        fail "$name: payments must stay in test mode until the owner completes the payment-processor phase"
+      fi
+      ;;
+  esac
+done
+for mounted in $(grep -o '/opt/dungeonflux/current/config/[a-z][a-z.-]*' "$root/deploy/compose/production.compose.yml" | sort -u); do
+  [ -f "$root/deploy/config/production/$(basename "$mounted")" ] || fail "production.compose.yml mounts $mounted but deploy/config/production has no such template"
+done
+if [ "$failures" -eq "$before" ]; then pass "production templates (tokens, no fake mode, payments in test mode, mounted files exist)"; fi
 
 if [ "$failures" -ne 0 ]; then echo "$failures file(s) violate the config policy"; exit 1; fi
 echo "config policy ok"

@@ -12,7 +12,8 @@
 #
 # usage: create-roles.sh --password-dir DIR [--database dungeonflux] > roles.sql
 #   DIR holds db_<role>_password files: db_migrator_password, db_control_password, db_runner_password,
-#   db_campaign_runtime_password, db_egress_password, db_billing_password, db_support_password
+#   db_campaign_runtime_password, db_egress_password, db_accounts_password, db_campaigns_password,
+#   db_finance_password, db_support_password
 #   (made with deploy/scripts/gen-secret.sh). Application passwords never pass through Terraform.
 #
 # HOW AN OPERATOR RUNS IT AGAINST MANAGED POSTGRESQL (critic round 1c, item 7). The database firewall trusts
@@ -41,7 +42,7 @@ case "$database" in *[!A-Za-z0-9_]*|"") echo "bad database name: $database" >&2;
 # shellcheck disable=SC1091
 . "$here/scram-verifier.sh"
 
-roles="migrator control runner campaign_runtime egress billing support"
+roles="migrator control runner campaign_runtime egress accounts campaigns finance support"
 for r in $roles; do
   file="$dir/db_${r}_password"
   [ -s "$file" ] || { echo "missing or empty password file: db_${r}_password" >&2; exit 1; }

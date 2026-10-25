@@ -84,10 +84,14 @@ client_key_file = "/run/secrets/internal_tls_control_key"
 [internal_tls.media_gateway]
 identity = "client_certificate_uri_san"
 uri_san_prefix = "urn:dungeonflux:placement:"
+# Chain pinning (two intermediates, pathlen:0): a placement identity only through the placement issuer.
+issuer_file = "/run/secrets/placement_issuer_certificate"
 
 [internal_tls.dispatcher_gateway]
 identity = "client_certificate_uri_san"
 allowed_identities = ["urn:dungeonflux:dispatcher"]
+# A fixed identity only through the service issuer, never through the placement issuer.
+issuer_file = "/run/secrets/service_issuer_certificate"
 
 [sessions]
 signing_key_file = "/run/secrets/session_signing_key"

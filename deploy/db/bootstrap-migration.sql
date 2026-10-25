@@ -13,7 +13,7 @@
 -- Pattern every owning migration follows (example only, not executed here):
 --   GRANT USAGE ON SCHEMA df_game TO df_campaign_runtime;
 --   GRANT SELECT, INSERT, UPDATE ON df_game.checkpoints TO df_campaign_runtime;   -- the tables it needs
---   GRANT INSERT, SELECT ON df_finance.ledger_entries TO df_billing;              -- append-only: no UPDATE/DELETE
+--   GRANT INSERT, SELECT ON df_finance.ledger_entries TO df_finance;              -- append-only: no UPDATE/DELETE
 --   REVOKE ALL ON FUNCTION df_runtime.fence_current(uuid, uuid, bigint, bigint, uuid) FROM PUBLIC;
 --   GRANT EXECUTE ON FUNCTION df_runtime.fence_current(uuid, uuid, bigint, bigint, uuid) TO df_campaign_runtime, df_egress;
 --   ALTER TABLE df_game.checkpoints ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;

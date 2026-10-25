@@ -1,0 +1,5 @@
+# The signed KEY-SET image <prefix>-keys: the SSH public keys of the CI deploy key and of each person (infra/keys/ in the repository, after
+# review). `df-deploy refresh-keys <digest>` verifies its signature, copies /keys out and hands it to df-keys-apply. Files only.
+# STATUS: UNVERIFIED (never built).
+FROM scratch
+COPY . /keys

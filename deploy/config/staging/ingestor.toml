@@ -11,8 +11,11 @@ environment = "staging"
 # OTLP intake over mTLS on every network a producer lives on: data (control plane), dispatch (the dispatcher) and
 # each runtime slot. A listener never accepts a plaintext connection (critic round 1c, item 2).
 otlp = ["172.30.2.8:4317", "172.30.4.5:4317", "172.30.11.5:4317", "172.30.12.5:4317"]
-# Metrics for Prometheus: data network only, not reachable from a slot.
-metrics = "172.30.2.8:9464"
+# Metrics for Prometheus on the MONITORING network, which carries nothing else (round 2, coordinator ruling e): plaintext is
+# acceptable there. It is not on the data network (which carries database and object-store traffic) and not reachable from a
+# slot, the dispatch network or the ingress network. Prometheus (round 3) joins that network and scrapes this address ONLY: it
+# never scrapes a runtime, the control plane or the dispatcher.
+metrics = "172.30.5.2:9464"
 
 [tls]
 certificate_file = "/run/secrets/ingestor_tls_certificate"
@@ -28,6 +31,8 @@ source = "client_certificate_uri_san"
 # only for placement certificates, whose id varies.
 allowed_identities = ["urn:dungeonflux:dispatcher", "urn:dungeonflux:control-plane"]
 placement_prefix = "urn:dungeonflux:placement:"
+placement_issuer_file = "/run/secrets/placement_issuer_certificate"
+service_issuer_file = "/run/secrets/service_issuer_certificate"
 
 [storage]
 dir = "/var/lib/dungeonflux/telemetry"

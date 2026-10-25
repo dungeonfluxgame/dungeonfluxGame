@@ -30,7 +30,7 @@ set -euo pipefail
 
 declare -A GROUP_GID=(
   [control-plane]=10001 [runtime]=10002 [dispatcher]=10003 [runner]=10004
-  [backup]=10005 [monitoring]=10006 [billing-worker]=10007 [ingestor]=10008 [edge]=10010
+  [backup]=10005 [monitoring]=10006 [billing-worker]=10007 [ingestor]=10008 [edge]=10010 [deploy]=10020
 )
 root=/run/dungeonflux/secrets
 no_chown=0

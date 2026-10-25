@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the control-plane, campaign-runtime and egress images (plan 12.6: build Linux artifacts in CI, publish
+# Build the control-plane, campaign-runtime, egress, runner, docker-proxy and edge images (plan 12.6: build Linux artifacts in CI, publish
 # immutable digests). STATUS: UNVERIFIED (no Docker daemon on the authoring machine).
 #
 # usage: deploy/scripts/build-images.sh [--push] [--sign]
@@ -8,8 +8,8 @@
 #             (KEY=repo:version@sha256:digest) for the CI release job to commit into images.lock
 #             (coordinator decision b). CI only; the registry login happens in the CI job, not here.
 #   --sign    cosign keyless signing of each pushed digest through the CI job's OIDC identity; needs --push.
-#             Deploy-time verification (cosign verify with --certificate-identity and
-#             --certificate-oidc-issuer pinned) is a round 2 script.
+#             Deploy-time verification (df-deploy: cosign verify with --certificate-identity and
+#             --certificate-oidc-issuer pinned, from /etc/dungeonflux/cosign-identity) is infra/cloud-init/df-deploy.sh.
 #
 # Refuses: a dirty working tree, a .env anywhere in the tree, any TODO-CI digest (local build: the two bases;
 # --push: every line of images.lock, so a release never ships with a placeholder), an unpinned base.
@@ -53,7 +53,7 @@ if [ "$push" -eq 1 ]; then
 fi
 # shellcheck disable=SC1090
 set -a; . "$lock"; set +a
-for key in RUST_BASE RUNTIME_BASE; do
+for key in RUST_BASE RUNTIME_BASE EDGE_BUILDER_BASE EDGE_BASE; do
   value=${!key}
   case "$value" in
     *TODO-CI*|"") echo "images.lock: $key has no pinned digest yet" >&2; exit 1 ;;
@@ -80,6 +80,10 @@ build_target() {
     --target "$target"
     --build-arg "RUST_BASE=$RUST_BASE"
     --build-arg "RUNTIME_BASE=$RUNTIME_BASE"
+    --build-arg "EDGE_BUILDER_BASE=$EDGE_BUILDER_BASE"
+    --build-arg "EDGE_BASE=$EDGE_BASE"
+    --build-arg "CADDY_VERSION=$CADDY_VERSION"
+    --build-arg "CADDY_RATELIMIT_REF=$CADDY_RATELIMIT_REF"
     --build-arg "VCS_REF=$vcs_ref"
     --build-arg "VERSION=$version"
     --build-arg "SOURCE_URL=$source_url"
@@ -107,3 +111,6 @@ build_target() {
 build_target control-plane CONTROL_PLANE_IMAGE
 build_target campaign-runtime CAMPAIGN_RUNTIME_IMAGE
 build_target egress EGRESS_IMAGE
+build_target runner RUNNER_IMAGE
+build_target docker-proxy DOCKER_PROXY_IMAGE
+build_target edge EDGE_IMAGE

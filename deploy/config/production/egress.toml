@@ -1,0 +1,65 @@
+# PRODUCTION (and staging-environment) configuration TEMPLATE for `df-server egress --config /etc/dungeonflux/egress.toml`: the dispatcher,
+# the ONLY process that holds provider credentials (decision 18). STATUS: UNVERIFIED PROPOSAL. TODO(O1) owns the schema.
+# @NAME@ tokens are filled by `df-deploy release` from the release environment (see control-plane.toml).
+#
+# Reaches only: PostgreSQL through the db-gate (dispatch network), the control plane's dispatcher gateway (mTLS), the telemetry
+# ingestor, and the model providers over egress-out. It is not on the data network.
+
+[instance]
+id = "@INSTANCE_ID@-egress"
+environment = "@ENVIRONMENT@"
+
+[listen]
+# Runtimes dial the dispatcher on their slot network only, over mTLS. Slots 1 and 2 are the initial capacity; a larger host adds a
+# network to the compose file and an address here in the same reviewed release.
+dispatch = ["172.30.11.4:8082", "172.30.12.4:8082"]
+# Loopback only: the container healthcheck runs inside the container, so no network carries a plaintext health endpoint.
+internal = "127.0.0.1:9092"
+
+[dispatch_tls]
+certificate_file = "/run/secrets/dispatch_tls_certificate"
+key_file = "/run/secrets/dispatch_tls_key"
+client_ca_file = "/run/secrets/internal_ca_certificate"
+identity = "client_certificate_uri_san"
+uri_san_prefix = "urn:dungeonflux:placement:"
+placement_issuer_file = "/run/secrets/placement_issuer_certificate"
+
+[control_plane]
+address = "172.30.4.3:9093"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "control-plane"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
+client_certificate_file = "/run/secrets/dispatcher_client_certificate"
+client_key_file = "/run/secrets/dispatcher_client_key"
+
+[database]
+host = "172.30.4.2"
+port = 5432
+name = "@DB_NAME@"
+user = "df_egress"
+password_file = "/run/secrets/db_egress_password"
+pool_max = 4
+statement_timeout_ms = 10000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "@DB_SERVER_NAME@"
+
+# Live providers. Company spend caps stay off (standing rule); a compromised key is handled by rotation (manifest procedure provider-key).
+[providers]
+mode = "live"
+allow_live = true
+openai_key_file = "/run/secrets/provider_openai_key"
+elevenlabs_key_file = "/run/secrets/provider_elevenlabs_key"
+jev_key_file = "/run/secrets/provider_jev_key"
+fal_key_file = "/run/secrets/provider_fal_key"
+
+[telemetry]
+ingestor = "172.30.4.5:4317"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "ingestor"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
+client_certificate_file = "/run/secrets/dispatcher_client_certificate"
+client_key_file = "/run/secrets/dispatcher_client_key"
+spool_dir = "/var/lib/dungeonflux/spool"

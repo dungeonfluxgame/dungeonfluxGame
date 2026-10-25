@@ -27,6 +27,7 @@ key_file = "/run/secrets/dispatch_tls_key"
 client_ca_file = "/run/secrets/internal_ca_certificate"
 identity = "client_certificate_uri_san"
 uri_san_prefix = "urn:dungeonflux:placement:"
+placement_issuer_file = "/run/secrets/placement_issuer_certificate"
 
 # Outbound to the control plane's dispatcher gateway (internal mTLS), authorized there by this certificate's
 # identity urn:dungeonflux:dispatcher.
@@ -34,6 +35,7 @@ uri_san_prefix = "urn:dungeonflux:placement:"
 address = "172.30.4.3:9093"
 ca_file = "/run/secrets/internal_ca_certificate"
 server_name = "control-plane"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 client_certificate_file = "/run/secrets/dispatcher_client_certificate"
 client_key_file = "/run/secrets/dispatcher_client_key"
 

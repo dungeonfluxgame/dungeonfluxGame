@@ -25,7 +25,13 @@ PSQL_IMAGE=postgres:18.1-bookworm@sha256:TODO-CI
 OBJECT_STORE_IMAGE=quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:TODO-CI
 # Client used by the bucket-init job and the reachability probes (aws cli v2 on Amazon Linux: has bash).
 AWSCLI_IMAGE=amazon/aws-cli:2.22.0@sha256:TODO-CI
-EDGE_IMAGE=caddy:2.10.0-alpine@sha256:TODO-CI
+# The edge is OUR image, built with xcaddy so that it carries a rate-limit module (the stock Caddy image has none, and the pairing and
+# join endpoints need a per-client limit at the edge). EDGE_BUILDER_BASE builds it, EDGE_BASE is its runtime base; the module is pinned
+# by commit (CADDY_RATELIMIT_REF, resolved by the CI release job like the digests). The built image is signed and verified like the others.
+EDGE_BUILDER_BASE=caddy:2.10.0-builder@sha256:TODO-CI
+EDGE_BASE=caddy:2.10.0-alpine@sha256:TODO-CI
+CADDY_VERSION=v2.10.0
+CADDY_RATELIMIT_REF=TODO-CI
 # TCP forwarder that is the only database path a runtime has (staging and production).
 DBGATE_IMAGE=haproxy:3.0.5-alpine@sha256:TODO-CI
 
@@ -34,3 +40,6 @@ DBGATE_IMAGE=haproxy:3.0.5-alpine@sha256:TODO-CI
 CONTROL_PLANE_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-control-plane:0.0.0@sha256:TODO-CI
 CAMPAIGN_RUNTIME_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-campaign-runtime:0.0.0@sha256:TODO-CI
 EGRESS_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-egress:0.0.0@sha256:TODO-CI
+EDGE_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-edge:0.0.0@sha256:TODO-CI
+RUNNER_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-runner:0.0.0@sha256:TODO-CI
+DOCKER_PROXY_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-docker-proxy:0.0.0@sha256:TODO-CI

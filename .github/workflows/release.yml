@@ -1,0 +1,69 @@
+# Build, push and SIGN the release (round 2b). STATUS: UNVERIFIED, never run; added without touching ci.yml.
+#
+# The hosts verify what this workflow signs against ONE pinned identity:
+#   https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main     (Terraform: cosign_certificate_identity)
+# and the OIDC issuer https://token.actions.githubusercontent.com. So this file, and only this file on the main branch, can make an
+# image a host will run. Anyone who can change it can ship code to production: it is reviewed like production code.
+#
+# The job runs in the protected GitHub environment named release (owner as required reviewer; created by the owner, not here).
+#
+# What it does: build-images.sh --push --sign (control-plane, campaign-runtime, egress, runner, docker-proxy, edge), then
+# build-release.sh release --push --sign (the FROM scratch release image with release.lock, the compose file, the edge files and the
+# config templates). It prints RELEASE_DIGEST; an operator or the deploy job then runs `release` and `activate` on the hosts.
+#
+# BEFORE THE FIRST RUN (owner/CI follow-up, recorded in request.md): crates/df-runner needs a binary (the runner image target fails without
+# one); deploy/images/images.lock must have real digests (no TODO-CI) for
+# the base images and CADDY_RATELIMIT_REF; every third-party action below must be pinned to a full commit SHA (the TODO-CI markers);
+# DF_REGISTRY_PREFIX is the repository owner's registry namespace. The signing key is the workflow's OIDC identity: no key is stored.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Only the main branch can produce an image whose signature identity ends in @refs/heads/main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # A protected environment: the owner is its required reviewer, so no push or dispatch alone can sign something the hosts will run.
+    # The owner creates it (Settings > Environments > release > Required reviewers; deployment branch: main). A job that names an
+    # environment that does not exist CREATES AN UNPROTECTED ONE, so create it before the first run.
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4 # TODO-CI: pin to a commit SHA
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3 # TODO-CI: pin to a commit SHA
+      - uses: sigstore/cosign-installer@v3 # TODO-CI: pin to a commit SHA
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Build, push and sign the images
+        env:
+          DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
+          DF_SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: deploy/scripts/build-images.sh --push --sign | tee "$RUNNER_TEMP/built.txt"
+      - name: Check the built edge image (caddy validate, live rate-limit bypass spellings)
+        run: |
+          edge=$(sed -n "s/^EDGE_IMAGE=//p" "$RUNNER_TEMP/built.txt" | tail -n 1)
+          test -n "$edge"
+          deploy/scripts/check-edge-image.sh "$edge"
+      - name: Build, push and sign the release image
+        env:
+          DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
+        run: deploy/scripts/build-release.sh release --built "$RUNNER_TEMP/built.txt" --push --sign | tee "$RUNNER_TEMP/release.txt"
+      - name: Show the digest
+        run: |
+          grep "^RELEASE_DIGEST=" "$RUNNER_TEMP/release.txt"
+          grep "^RELEASE_DIGEST=" "$RUNNER_TEMP/release.txt" >> "$GITHUB_STEP_SUMMARY"

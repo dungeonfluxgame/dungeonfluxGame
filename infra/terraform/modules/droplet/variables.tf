@@ -131,3 +131,43 @@ variable "ssh_target_ips" {
   type        = list(string)
   default     = []
 }
+
+variable "cosign_certificate_identity" {
+  description = "The EXACT certificate identity (the signing workflow, for example https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main) that df-deploy accepts for releases and SSH key sets. Pinned on the host; never a pattern. Required for the application and worker roles; unused by the bastion."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.cosign_certificate_identity == "" || can(regex("^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/\\.github/workflows/[A-Za-z0-9._-]+@refs/(heads/main|tags/[A-Za-z0-9._/-]+)$", var.cosign_certificate_identity))
+    error_message = "cosign_certificate_identity must be one exact GitHub Actions workflow identity on refs/heads/main or a tag (no wildcards)."
+  }
+}
+
+variable "cosign_oidc_issuer" {
+  description = "The OIDC issuer of that identity. GitHub Actions' issuer by default."
+  type        = string
+  default     = "https://token.actions.githubusercontent.com"
+}
+
+variable "cosign_version" {
+  description = "The cosign release to install on application and worker hosts (a tag such as v2.4.1). Required for those roles."
+  type        = string
+  default     = ""
+}
+
+variable "cosign_sha256" {
+  description = "SHA-256 of that release's cosign-linux-amd64 binary; the installer refuses a different file. Required for application and worker roles."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.cosign_sha256 == "" || can(regex("^[0-9a-f]{64}$", var.cosign_sha256))
+    error_message = "cosign_sha256 must be 64 lowercase hex characters."
+  }
+}
+
+variable "release_repository_prefix" {
+  description = "The registry repository family of the images, for example ghcr.io/OWNER/dungeonflux: releases are <prefix>-release, key sets <prefix>-keys, images <prefix>-control-plane and so on. Pinned on the host. Required for application and worker roles."
+  type        = string
+  default     = ""
+}

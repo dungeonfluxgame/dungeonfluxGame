@@ -78,6 +78,21 @@ module "app_droplets" {
   backups_enabled           = var.droplet_backups_enabled
   docker_version_pin        = var.docker_version_pin
   containerd_version_pin    = var.containerd_version_pin
+
+  cosign_certificate_identity      = var.cosign_certificate_identity
+  cosign_oidc_issuer               = var.cosign_oidc_issuer
+  cosign_version                   = var.cosign_version
+  cosign_sha256                    = var.cosign_sha256
+  release_repository_prefix        = var.release_repository_prefix
+  vpc_cidr                         = var.vpc_ip_range
+  release_registry_user            = var.release_registry_user
+  cosign_keys_certificate_identity = var.cosign_keys_certificate_identity
+  edge_environment                 = {
+    DF_PUBLIC_HOST     = var.public_hostname
+    DF_ACME_EMAIL      = var.acme_email
+    DF_ALLOWED_CIDRS   = join(" ", var.edge_allowed_cidrs)
+    DF_TRUSTED_PROXIES = "private_ranges"
+  }
 }
 
 module "worker_droplets" {
@@ -98,6 +113,15 @@ module "worker_droplets" {
   reserved_ip_enabled       = false
   docker_version_pin        = var.docker_version_pin
   containerd_version_pin    = var.containerd_version_pin
+
+  cosign_certificate_identity      = var.cosign_certificate_identity
+  cosign_oidc_issuer               = var.cosign_oidc_issuer
+  cosign_version                   = var.cosign_version
+  cosign_sha256                    = var.cosign_sha256
+  release_repository_prefix        = var.release_repository_prefix
+  vpc_cidr                         = var.vpc_ip_range
+  release_registry_user            = var.release_registry_user
+  cosign_keys_certificate_identity = var.cosign_keys_certificate_identity
 }
 
 module "database" {

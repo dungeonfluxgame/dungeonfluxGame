@@ -203,4 +203,66 @@ variable "public_hostname" {
   description = "The one public origin of the staging environment (staging.dungeonfluxdnd.com, LAUNCH.md decision 32). Written to the edge environment file as DF_PUBLIC_HOST. The staging root manages no DNS: the A record for it is in deploy/dns/records.csv (entered by hand at GoDaddy) or in the production root's optional dns module."
   type        = string
   default     = "staging.dungeonfluxdnd.com"
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.public_hostname))
+    error_message = "public_hostname must be a lower-case DNS name such as dungeonfluxdnd.com (letters, digits, dots and dashes only: it is written to the edge environment file)."
+  }
+}
+
+variable "cosign_certificate_identity" {
+  description = "The exact GitHub Actions workflow identity (https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main) whose signatures df-deploy accepts for releases and SSH key sets. Required."
+  type        = string
+}
+
+variable "cosign_oidc_issuer" {
+  description = "OIDC issuer of that identity."
+  type        = string
+  default     = "https://token.actions.githubusercontent.com"
+}
+
+variable "cosign_version" {
+  description = "cosign release to install on the hosts (for example v2.4.1). Required."
+  type        = string
+}
+
+variable "cosign_sha256" {
+  description = "SHA-256 of that release's cosign-linux-amd64 binary. Required."
+  type        = string
+}
+
+variable "release_repository_prefix" {
+  description = "Registry repository family (for example ghcr.io/OWNER/dungeonflux). Required."
+  type        = string
+}
+
+variable "cosign_keys_certificate_identity" {
+  description = "The EXACT workflow identity that signs SSH key sets: https://github.com/OWNER/REPO/.github/workflows/keys.yml@refs/heads/main. A different workflow from the release one (cosign_certificate_identity), behind a GitHub environment named keys with required reviewers."
+  type        = string
+  default     = ""
+}
+
+variable "release_registry_user" {
+  description = "User name for the registry login when the image packages are private (the pull token is the secret registry_pull_token). Empty when the packages are public."
+  type        = string
+  default     = ""
+}
+
+variable "acme_email" {
+  description = "Contact address for the edge's certificate authority account (DF_ACME_EMAIL)."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.acme_email == "" || can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$", var.acme_email))
+    error_message = "acme_email must be empty or a plain e-mail address (it is written to the edge environment file)."
+  }
+}
+
+variable "edge_allowed_cidrs" {
+  description = "Source CIDRs the edge serves (DF_ALLOWED_CIDRS). EMPTY BY DEFAULT: with nothing set the staging site answers 403 to everyone (it fails closed). Put the owner's and testers' CIDRs here. NOTE: with an empty value Caddy's `{$DF_ALLOWED_CIDRS:127.0.0.1/32}` default may fail the parse instead of applying (still closed); the CI step `deploy/scripts/check-edge-image.sh` runs `caddy validate` with the variable empty and unset to settle which."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for c in var.edge_allowed_cidrs : can(cidrhost(c, 0))])
+    error_message = "edge_allowed_cidrs must be valid CIDRs; an EMPTY list is allowed in staging and means 403 for everyone (the edge fails closed), but see the note in the description about how Caddy parses an empty DF_ALLOWED_CIDRS."
+  }
 }

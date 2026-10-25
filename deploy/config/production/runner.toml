@@ -1,0 +1,76 @@
+# PRODUCTION (and staging-environment) configuration TEMPLATE for `df-runner --config /etc/dungeonflux/runner.toml`: the trusted runner
+# (one per host; plan 12.5). STATUS: UNVERIFIED PROPOSAL. TODO(O1) owns the schema and the binary; the key names are the S2 reading of
+# planning/hosted-runtime-research.md sections 6 and 7. @NAME@ tokens are filled by `df-deploy release` (see control-plane.toml).
+#
+# The runner places campaigns, starts and supervises runtimes ONLY through the docker proxy's unix socket (the proxy checks every
+# request body against the policy in deploy/docker-proxy/src/policy.rs), and writes each slot's files below [slot_files].dir.
+
+[instance]
+id = "@INSTANCE_ID@-runner"
+environment = "@ENVIRONMENT@"
+
+[docker]
+# The proxy's socket; the runner has no Docker socket of its own.
+socket = "/run/proxy/docker.sock"
+# The campaign-runtime image is read from the root-owned allow-list (key "campaign-runtime"); the runner never takes an image
+# reference from the database or the network.
+allowed_images_file = "/etc/dungeonflux/allowed-images.d/allowed"
+
+[database]
+# Its own role, through the db-gate on the runner network.
+host = "172.30.6.2"
+port = 5432
+name = "@DB_NAME@"
+user = "df_runner"
+password_file = "/run/secrets/db_runner_password"
+pool_max = 4
+statement_timeout_ms = 10000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "@DB_SERVER_NAME@"
+
+# Per-slot files. A slot's uid is uid_base + slot. The slot tree is created and OWNED by the root helper df-slot-dirs (descriptor.toml, secrets/
+# per slot, owned by the slot uid); the runner writes only file contents into descriptor.toml and creates or removes files inside
+# secrets/, and never calls chown or chmod. The proxy refuses a bind whose path has a symlink, the wrong type or the wrong owner.
+[slot_files]
+dir = "/run/dungeonflux/runtime"
+uid_base = 20000
+gid = 10002
+
+# Copied into every slot's directory: the shared runtime login, the database CA and the internal CA (all of them hold nothing a runtime
+# may not have). Everything else a runtime needs (placement token, client certificate and key) the runner mints per placement.
+[slot_files.shared]
+db_password_file = "/run/secrets/db_campaign_runtime_password"
+db_ca_file = "/run/secrets/db_ca_certificate"
+internal_ca_file = "/run/secrets/internal_ca_certificate"
+
+# The placement issuer: an intermediate CA signed by the internal CA. The runner mints each runtime's client certificate from it
+# (URI SAN urn:dungeonflux:placement:<id>), valid for the placement's lease plus a short margin, never longer than max_lifetime_hours.
+[placement_issuer]
+certificate_file = "/run/secrets/placement_issuer_certificate"
+key_file = "/run/secrets/placement_issuer_key"
+uri_san_prefix = "urn:dungeonflux:placement:"
+max_lifetime_hours = 24
+
+# The slots this host offers. Slot N's network is created by the compose file under the name df-slot-N, on 172.30.(10+N).0/24, with
+# the host-side services at fixed addresses (.2 db-gate, .3 control plane, .4 dispatcher, .5 ingestor). Adding a slot is a reviewed
+# release that changes the compose file, these tables and the proxy's max slot together.
+[[slots]]
+id = 1
+network = "df-slot-1"
+runtime_address = "172.30.11.10"
+database = "172.30.11.2:5432"
+media_gateway = "172.30.11.3:8083"
+dispatcher = "172.30.11.4:8082"
+ingestor = "172.30.11.5:4317"
+
+[[slots]]
+id = 2
+network = "df-slot-2"
+runtime_address = "172.30.12.10"
+database = "172.30.12.2:5432"
+media_gateway = "172.30.12.3:8083"
+dispatcher = "172.30.12.4:8082"
+ingestor = "172.30.12.5:4317"

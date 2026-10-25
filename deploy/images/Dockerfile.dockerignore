@@ -29,3 +29,5 @@ crates/df-launcher
 **/*.tfstate.*
 **/.terraform
 **/*.tfvars
+!deploy/docker-proxy
+deploy/docker-proxy/target

@@ -4,7 +4,7 @@
 # restore-drill.sh (plan 13.10).
 #
 # NO APPLICATION ROLES HERE (critic round 1, item 12). Terraform creates the cluster and the database only.
-# The service roles (df_migrator, df_control, df_runner, df_campaign_runtime, df_egress, df_billing, df_support)
+# The service roles (df_migrator, df_control, df_runner, df_campaign_runtime, df_egress, df_accounts, df_campaigns, df_finance, df_support)
 # are created by an operator with deploy/db/create-roles.sh from operator-generated password files, so no
 # application password ever enters Terraform state or an output. What state DOES hold: the cluster resource
 # exports the administrator's (doadmin) password, uri and private_uri, so the state bucket is a secret store

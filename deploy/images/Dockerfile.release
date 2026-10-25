@@ -1,0 +1,5 @@
+# The signed RELEASE image <prefix>-release: files only, no process (FROM scratch, no entrypoint to run). `df-deploy release <digest>`
+# verifies its cosign signature against the pinned certificate identity and OIDC issuer, copies /release out, and stages it. Build context:
+# the directory deploy/scripts/build-release.sh assembles (never the repository). STATUS: UNVERIFIED (never built).
+FROM scratch
+COPY . /release

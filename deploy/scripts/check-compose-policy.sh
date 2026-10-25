@@ -51,6 +51,7 @@ expect_members public "edge"
 expect_members ingress "control-plane,edge"
 expect_members data "bucket-init,control-plane,db-gate,ingestor,migrate,object-store,postgres"
 expect_members dispatch "control-plane,db-gate,egress,ingestor"
+expect_members monitoring "ingestor"
 expect_members slot1 "control-plane,db-gate,egress,ingestor,runtime-1"
 expect_members slot2 "control-plane,db-gate,egress,ingestor,runtime-2"
 expect_members egress-out "egress"
@@ -102,7 +103,7 @@ check_empty "runtime uids are in the slot range (>= 20000); every other uid is b
 secrets_dir="$root/artifacts/tmp/staging/secrets"
 if [ -d "$secrets_dir/runtime-1" ]; then
   for runtime in runtime-1 runtime-2; do
-    bad=$(ls "$secrets_dir/$runtime" | grep -E 'session|storage|provider|payments|workos|email|journal|media_gateway|dispatch_tls|dispatcher_client|internal_tls_control|ingestor_tls|objstore|pg_server|db_control|db_egress|db_admin|db_migrator|db_runner|db_billing|db_support' || true)
+    bad=$(ls "$secrets_dir/$runtime" | grep -E 'session|storage|provider|payments|workos|email|journal|media_gateway|dispatch_tls|dispatcher_client|internal_tls_control|ingestor_tls|objstore|pg_server|db_control|db_egress|db_admin|db_migrator|db_runner|db_billing|db_accounts|db_campaigns|db_finance|db_support' || true)
     check_empty "$runtime secrets directory holds no foreign credential" "$bad"
   done
 else

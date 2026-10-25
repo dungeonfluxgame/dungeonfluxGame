@@ -38,6 +38,7 @@
 # Behind the optional DigitalOcean load balancer, set DF_TRUSTED_PROXIES to the VPC range.
 {
 	admin unix//run/caddy/admin.sock|0600
+	order rate_limit before reverse_proxy
 	email {$DF_ACME_EMAIL}
 	servers {
 		trusted_proxies static {$DF_TRUSTED_PROXIES:private_ranges}
@@ -86,6 +87,10 @@
 {$DF_PUBLIC_HOST} {
 	encode zstd gzip
 
+	# Collapse repeated slashes BEFORE any matcher runs: //app/api/join/x must not slip past the path matchers (and so past the rate
+	# limiter and the always-dynamic routing). Checked live by deploy/scripts/check-edge-image.sh. UNVERIFIED until that runs.
+	uri path_regexp /+ /
+
 	@capability path /assets/* /media/*
 	@always_dynamic path /app /app/* /api/* /sessions/* /join/* /media/* /auth/* /webhooks/*
 	# ACCESS GATE (critic round 1e, item 3). Staging is a PUBLIC name in front of fake identity, so its edge answers 403 to
@@ -122,6 +127,27 @@
 	}
 
 	handle @always_dynamic {
+		# Per-client limits on the unauthenticated pairing and join-code endpoints (module: github.com/mholt/caddy-ratelimit, built into
+		# the edge image by xcaddy). The numbers are proposals and variables of the edge environment; the application keeps its own
+		# keyed throttle, this is the outer bound. UNVERIFIED until `caddy validate` runs against the built image.
+		rate_limit {
+			zone display_pairing {
+				match {
+					path /app/api/display/*
+				}
+				key {client_ip}
+				events {$DF_RATE_DISPLAY_EVENTS:30}
+				window {$DF_RATE_WINDOW:1m}
+			}
+			zone join_codes {
+				match {
+					path /app/api/join/*
+				}
+				key {client_ip}
+				events {$DF_RATE_JOIN_EVENTS:20}
+				window {$DF_RATE_WINDOW:1m}
+			}
+		}
 		import control_plane
 	}
 

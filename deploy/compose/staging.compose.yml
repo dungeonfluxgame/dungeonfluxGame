@@ -8,7 +8,7 @@
 #   ingress     edge <-> control-plane. The control plane binds its PUBLIC listener and a READINESS-ONLY listener
 #               here. Its internal listener (metrics, drain, full health) is on the data network, not here, so the
 #               internet-facing edge can reach neither /internal/drain nor /metrics.
-#   data        control-plane (internal listener), migrate, ingestor (metrics), postgres, object-store, db-gate.
+#   data        control-plane (internal listener), migrate, ingestor (OTLP intake), postgres, object-store, db-gate.
 #               Neither the edge nor the dispatcher nor a runtime is here.
 #   dispatch    the egress dispatcher's own network: db-gate (PostgreSQL), control-plane (the dispatcher gateway
 #               listener, mTLS, coordinator ruling a) and ingestor (telemetry, mTLS). With egress-out (providers) these
@@ -18,11 +18,12 @@
 #   slot1/2     one network per runtime. A runtime is alone on its slot network with exactly four peers (decision 23):
 #               db-gate (PostgreSQL), egress (dispatcher, mTLS), control-plane (media gateway listener, mTLS) and
 #               ingestor (telemetry, mTLS). Runtimes cannot see each other, postgres, the object store or the edge.
+#   monitoring  the ingestor's metrics listener and, in round 3, Prometheus: nothing else is ever on it, which is why a plaintext
+#               metrics endpoint is acceptable there (coordinator ruling e). The data network no longer carries any metrics.
 #   egress-out  the dispatcher's way out to providers; internal here, so staging can never reach a real provider.
 # Static addresses make per-network listener binding possible (deploy/config/staging/*.toml); no listener binds a wildcard
 # address. Every listener that is not on loopback is TLS (ruling b), the edge-to-control-plane hop included; the one plaintext
-# listener left is the ingestor's metrics endpoint on the data network, which moves to a monitoring network of its own in
-# round 2 (ruling e).
+# listener left is the ingestor's metrics endpoint, which now sits on the monitoring network that carries nothing else (ruling e).
 #
 # IDENTITY: every service runs as its own numeric uid (staging.env); each runtime slot has its own uid. A server
 # takes the CALLER's identity from the client certificate's URI SAN (urn:dungeonflux:placement:<id>,
@@ -61,6 +62,9 @@ networks:
   dispatch:
     internal: true
     ipam: { config: [{ subnet: 172.30.4.0/24 }] }
+  monitoring:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.5.0/24 }] }
   slot1:
     internal: true
     ipam: { config: [{ subnet: 172.30.11.0/24 }] }
@@ -201,6 +205,7 @@ services:
     networks:
       data: { ipv4_address: 172.30.2.8 }
       dispatch: { ipv4_address: 172.30.4.5 }
+      monitoring: { ipv4_address: 172.30.5.2 }
       slot1: { ipv4_address: 172.30.11.5 }
       slot2: { ipv4_address: 172.30.12.5 }
     mem_limit: 512m
@@ -317,7 +322,7 @@ services:
     cpus: ${DF_RUNTIME_CPUS}
     pids_limit: ${DF_RUNTIME_PIDS}
     volumes:
-      - ../config/staging/runtime-1.descriptor.toml:/etc/dungeonflux/descriptor.toml:ro
+      - ../config/staging/runtime-1.descriptor.toml:/etc/dungeonflux/runtime.toml:ro
       - ${DF_STAGING_SECRETS_DIR}/runtime-1:/run/secrets:ro
     tmpfs:
       - /tmp:size=512m,uid=20001,gid=10002
@@ -344,7 +349,7 @@ services:
     cpus: ${DF_RUNTIME_CPUS}
     pids_limit: ${DF_RUNTIME_PIDS}
     volumes:
-      - ../config/staging/runtime-2.descriptor.toml:/etc/dungeonflux/descriptor.toml:ro
+      - ../config/staging/runtime-2.descriptor.toml:/etc/dungeonflux/runtime.toml:ro
       - ${DF_STAGING_SECRETS_DIR}/runtime-2:/run/secrets:ro
     tmpfs:
       - /tmp:size=512m,uid=20002,gid=10002

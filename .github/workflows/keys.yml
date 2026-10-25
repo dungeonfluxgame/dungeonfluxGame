@@ -1,0 +1,48 @@
+# Build, push and SIGN the SSH key set (round 2b). STATUS: UNVERIFIED, never run.
+#
+# A key set grants root-equivalent access (it decides who may SSH to every host), so it is signed by its OWN workflow identity, different
+# from the release one, and the job runs in a GitHub environment named `keys` whose REQUIRED REVIEWERS are the owner:
+#   https://github.com/OWNER/REPO/.github/workflows/keys.yml@refs/heads/main        (Terraform: cosign_keys_certificate_identity)
+# The hosts refuse a key set signed by the release workflow and a release signed by this one.
+#
+# THE ENVIRONMENT IS NOT CREATED HERE. The owner creates `keys` in the repository settings (Settings > Environments), adds themselves as
+# a required reviewer, and restricts it to the main branch. Until that exists the job waits for an environment that has no protection, so
+# do not run this workflow before the owner has set it up.
+name: keys
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keys
+  cancel-in-progress: false
+
+jobs:
+  keys:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: keys
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4 # TODO-CI: pin to a commit SHA
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3 # TODO-CI: pin to a commit SHA
+      - uses: sigstore/cosign-installer@v3 # TODO-CI: pin to a commit SHA
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Validate, build, push and sign the key set (infra/keys/)
+        env:
+          DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
+        run: deploy/scripts/build-release.sh keys --push --sign | tee "$RUNNER_TEMP/keys.txt"
+      - name: Show the digest
+        run: |
+          grep "^KEYS_DIGEST=" "$RUNNER_TEMP/keys.txt"
+          grep "^KEYS_DIGEST=" "$RUNNER_TEMP/keys.txt" >> "$GITHUB_STEP_SUMMARY"

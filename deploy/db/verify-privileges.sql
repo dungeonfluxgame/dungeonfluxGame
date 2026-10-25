@@ -4,7 +4,7 @@
 -- one-shot psql path as the roles (deploy/db/run-admin-sql.sh), or locally in the staging mirror:
 --   psql -v ON_ERROR_STOP=1 -v db=dungeonflux -f verify-privileges.sql
 -- Optional variables (defaults shown; TODO(O1,B,S1,O2): the real schema and table names):
---   app_roles            df_control,df_runner,df_campaign_runtime,df_egress,df_billing,df_support
+--   app_roles            df_control,df_runner,df_campaign_runtime,df_egress,df_accounts,df_campaigns,df_finance,df_support
 --   runtime_roles        df_campaign_runtime,df_egress   (forced RLS, no views without security_invoker, no matviews)
 --   readonly_roles       df_support                      (SELECT and nothing else)
 --   migrator             df_migrator
@@ -19,6 +19,8 @@
 --                        read-only roles must hold no privilege on, whatever the table is called (invite_token, password_hash)
 --   denied_column_exceptions  (empty)                               comma list of schema.table.column exempt from that regex
 --   append_only_regex    (ledger|journal)                tables where no app role may UPDATE, DELETE or TRUNCATE
+--   feed_roles           df_control,df_runner,df_campaign_runtime,df_egress,df_accounts,df_campaigns,df_finance   roles that can bump event_seq: each must
+--                        carry a role-level transaction_timeout that is positive and at most feed_txn_timeout_ms (default 10000)
 --   check_default_acl    on|off                          DEFAULT ON: the bootstrap migration (deploy/db/bootstrap-migration.sql)
 --                        must have run as the migrator. Production verification always runs with it on; the staging smoke
 --                        passes off only until O1 ships that migration.
@@ -30,7 +32,7 @@
 -- grants) and this file (its attributes; it is the one role allowed rolbypassrls, so the attribute check must carve it out).
 
 \set ON_ERROR_STOP on
-\if :{?app_roles} \else \set app_roles df_control,df_runner,df_campaign_runtime,df_egress,df_billing,df_support \endif
+\if :{?app_roles} \else \set app_roles df_control,df_runner,df_campaign_runtime,df_egress,df_accounts,df_campaigns,df_finance,df_support \endif
 \if :{?runtime_roles} \else \set runtime_roles df_campaign_runtime,df_egress \endif
 \if :{?readonly_roles} \else \set readonly_roles df_support \endif
 \if :{?migrator} \else \set migrator df_migrator \endif
@@ -42,6 +44,8 @@
 \if :{?denied_column_exceptions} \else \set denied_column_exceptions '' \endif
 \if :{?append_only_regex} \else \set append_only_regex '(ledger|journal)' \endif
 \if :{?check_default_acl} \else \set check_default_acl on \endif
+\if :{?feed_roles} \else \set feed_roles df_control,df_runner,df_campaign_runtime,df_egress,df_accounts,df_campaigns,df_finance \endif
+\if :{?feed_txn_timeout_ms} \else \set feed_txn_timeout_ms 10000 \endif
 
 SELECT set_config('df.app_roles', :'app_roles', false),
        set_config('df.runtime_roles', :'runtime_roles', false),
@@ -55,6 +59,8 @@ SELECT set_config('df.app_roles', :'app_roles', false),
        set_config('df.denied_column_exceptions', :'denied_column_exceptions', false),
        set_config('df.append_only_regex', :'append_only_regex', false),
        set_config('df.check_default_acl', :'check_default_acl', false),
+       set_config('df.feed_roles', :'feed_roles', false),
+       set_config('df.feed_txn_timeout_ms', :'feed_txn_timeout_ms', false),
        set_config('df.db', :'db', false) \gset
 
 DO $verify$
@@ -72,6 +78,11 @@ DECLARE
   denied_roles text[] := string_to_array(current_setting('df.runtime_roles') || ',' || current_setting('df.readonly_roles'), ',');
   append_re text := current_setting('df.append_only_regex');
   db text := current_setting('df.db');
+  feed_roles text[] := string_to_array(current_setting('df.feed_roles'), ',');
+  feed_ms numeric := current_setting('df.feed_txn_timeout_ms')::numeric;
+  cfg text;
+  m text[];
+  ms numeric;
   problems text[] := ARRAY[]::text[];
   role_name text;
   rec record;
@@ -289,6 +300,35 @@ BEGIN
       problems := problems || format('no default ACL removes PUBLIC EXECUTE on functions created by %s (bootstrap migration missing)', migrator);
     END IF;
   END IF;
+
+  -- 12. transaction_timeout: every role that can bump event_seq carries a positive role-level value of at most feed_txn_timeout_ms
+  --     (planning/campaigns-and-table-research.md 5.1, D19). A role-in-database entry beats a role-wide one, as in PostgreSQL itself.
+  --     Units are normalized to milliseconds; 0 means disabled and counts as not set.
+  FOREACH role_name IN ARRAY feed_roles LOOP
+    cfg := NULL;
+    SELECT regexp_replace(s, '^transaction_timeout=', '') INTO cfg
+      FROM pg_db_role_setting d
+      JOIN pg_roles r ON r.oid = d.setrole
+      CROSS JOIN LATERAL unnest(d.setconfig) AS s
+     WHERE r.rolname = role_name
+       AND d.setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = db))
+       AND s LIKE 'transaction\_timeout=%'
+     ORDER BY d.setdatabase DESC
+     LIMIT 1;
+    IF cfg IS NULL THEN
+      problems := problems || format('%s has no role-level transaction_timeout (required: at most %s ms)', role_name, feed_ms);
+      CONTINUE;
+    END IF;
+    m := regexp_match(btrim(cfg, ' "'''), '^\s*([0-9]+(?:\.[0-9]+)?)\s*(us|ms|s|min|h|d)?\s*$');
+    IF m IS NULL THEN
+      problems := problems || format('%s has an unreadable transaction_timeout: %s', role_name, cfg);
+      CONTINUE;
+    END IF;
+    ms := m[1]::numeric * CASE coalesce(m[2], 'ms') WHEN 'us' THEN 0.001 WHEN 'ms' THEN 1 WHEN 's' THEN 1000 WHEN 'min' THEN 60000 WHEN 'h' THEN 3600000 ELSE 86400000 END;
+    IF ms <= 0 OR ms > feed_ms THEN
+      problems := problems || format('%s has transaction_timeout %s (%s ms); it must be positive and at most %s ms', role_name, cfg, ms, feed_ms);
+    END IF;
+  END LOOP;
 
   IF array_length(problems, 1) > 0 THEN
     RAISE EXCEPTION E'privilege violations:\n%', array_to_string(problems, E'\n');

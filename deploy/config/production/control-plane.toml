@@ -1,0 +1,105 @@
+# PRODUCTION (and staging-environment) configuration TEMPLATE for `df-server control-plane --config /etc/dungeonflux/control-plane.toml`.
+# STATUS: UNVERIFIED PROPOSAL, never run. TODO(O1)/TODO(B): the schema is theirs; key names follow deploy/config/staging/control-plane.toml.
+# One TOML file, no environment variables. Secrets are *_file paths; no value is in this file.
+#
+# @NAME@ tokens are the NON-SECRET per-environment values (database server name, public host, object-store endpoint, ...). They are
+# filled by `df-deploy release` from /run/dungeonflux/secrets/deploy/release_environment (manifest entry release_environment); a
+# missing or unsafe value fails the release before anything is pulled. Everything else (addresses on the internal networks) is fixed
+# by deploy/compose/production.compose.yml and checked against it by deploy/scripts/check-config-policy.sh.
+
+[instance]
+id = "@INSTANCE_ID@"
+environment = "@ENVIRONMENT@"
+
+[http]
+# TODO(B): the key name. The one public origin (decision 32); cookies are host-only for it, state-changing requests must carry it.
+public_origin = "https://@PUBLIC_HOST@"
+
+# Five listeners with different audiences, each bound to ONE network's address (see staging/control-plane.toml for the reasoning).
+[listen]
+public = "172.30.1.3:8080"
+ready = "172.30.1.3:8084"
+internal = "172.30.2.4:9090"
+dispatcher_gateway = "172.30.4.3:9093"
+media_gateway = ["172.30.11.3:8083", "172.30.12.3:8083"]
+
+[listen_tls]
+certificate_file = "/run/secrets/media_gateway_certificate"
+key_file = "/run/secrets/media_gateway_key"
+listeners = ["public", "ready", "internal"]
+
+# The database is reached ONLY through the db-gate (data network address); TLS is end to end with the managed cluster, verified
+# against DigitalOcean's CA by the name its certificate carries.
+[database]
+host = "172.30.2.7"
+port = 5432
+name = "@DB_NAME@"
+user = "df_control"
+password_file = "/run/secrets/db_control_password"
+pool_max = 8
+statement_timeout_ms = 30000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "@DB_SERVER_NAME@"
+
+# Object storage on Spaces (virtual-host addressing, public CA roots from the image). Only the control plane holds these keys.
+[objects]
+endpoint = "https://@SPACES_HOST@"
+region = "@SPACES_REGION@"
+path_style = false
+bucket_prefix = "@BUCKET_PREFIX@"
+media_access_key_id_file = "/run/secrets/storage_media_access_key_id"
+media_secret_key_file = "/run/secrets/storage_media_secret_key"
+exports_access_key_id_file = "/run/secrets/storage_exports_access_key_id"
+exports_secret_key_file = "/run/secrets/storage_exports_secret_key"
+journal_access_key_id_file = "/run/secrets/storage_journal_access_key_id"
+journal_secret_key_file = "/run/secrets/storage_journal_secret_key"
+
+[identity]
+mode = "live"
+api_key_file = "/run/secrets/workos_api_key"
+cookie_password_file = "/run/secrets/workos_cookie_password"
+
+# TEST MODE ONLY until the owner completes the payment-processor phase (manifest entry payments_api_key). Switching to "live" is a
+# reviewed change to this file in a release, never a runtime toggle.
+[payments]
+mode = "test"
+api_key_file = "/run/secrets/payments_api_key"
+webhook_secret_file = "/run/secrets/payments_webhook_secret"
+
+[email]
+mode = "live"
+api_key_file = "/run/secrets/email_api_key"
+
+[internal_tls]
+ca_file = "/run/secrets/internal_ca_certificate"
+gateway_certificate_file = "/run/secrets/media_gateway_certificate"
+gateway_key_file = "/run/secrets/media_gateway_key"
+client_certificate_file = "/run/secrets/internal_tls_control_certificate"
+client_key_file = "/run/secrets/internal_tls_control_key"
+
+# Two intermediate CAs (both CA:TRUE, pathlen:0) under the internal root: a placement identity is accepted only from a chain through the
+# PLACEMENT issuer (pinned below), a fixed identity only from a chain through the SERVICE issuer, so a runner compromise (it holds the
+# placement issuer key) cannot speak as the dispatcher. X.509 name constraints do not apply to URN SANs, so every receiver enforces this.
+[internal_tls.media_gateway]
+identity = "client_certificate_uri_san"
+uri_san_prefix = "urn:dungeonflux:placement:"
+issuer_file = "/run/secrets/placement_issuer_certificate"
+
+[internal_tls.dispatcher_gateway]
+identity = "client_certificate_uri_san"
+allowed_identities = ["urn:dungeonflux:dispatcher"]
+issuer_file = "/run/secrets/service_issuer_certificate"
+
+[sessions]
+signing_key_file = "/run/secrets/session_signing_key"
+
+[telemetry]
+ingestor = "172.30.2.8:4317"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "ingestor"
+client_certificate_file = "/run/secrets/internal_tls_control_certificate"
+client_key_file = "/run/secrets/internal_tls_control_key"
+spool_dir = "/var/lib/dungeonflux/spool"

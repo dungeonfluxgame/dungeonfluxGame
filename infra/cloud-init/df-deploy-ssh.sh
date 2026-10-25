@@ -6,7 +6,9 @@
 # operators, with their own account and hardware key). Humans never use this account.
 # The client chooses with its command line (SSH_ORIGINAL_COMMAND):
 #   secrets-install            ->  sudo df-secrets-install      (tar on stdin)
-#   deploy sha256:<64 hex>     ->  sudo df-deploy sha256:<64 hex>
+#   release sha256:<64 hex>    ->  sudo df-deploy release sha256:<64 hex>   (stage a signed, verified release)
+#   activate sha256:<64 hex>   ->  sudo df-deploy activate sha256:<64 hex>  (promote the staged release)
+#   refresh-keys sha256:<64 hex> -> sudo df-deploy refresh-keys sha256:<64 hex>   (a signed, reviewed SSH key set)
 # Everything else is refused. STATUS: UNVERIFIED (never run through sshd).
 set -euo pipefail
 
@@ -15,13 +17,23 @@ case "$cmd" in
   "secrets-install")
     exec sudo /usr/local/sbin/df-secrets-install
     ;;
-  "deploy sha256:"*)
-    digest=${cmd#deploy }
+  "release sha256:"*)
+    digest=${cmd#release }
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
-    exec sudo /usr/local/sbin/df-deploy "$digest"
+    exec sudo /usr/local/sbin/df-deploy release "$digest"
+    ;;
+  "activate sha256:"*)
+    digest=${cmd#activate }
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
+    exec sudo /usr/local/sbin/df-deploy activate "$digest"
+    ;;
+  "refresh-keys sha256:"*)
+    digest=${cmd#refresh-keys }
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
+    exec sudo /usr/local/sbin/df-deploy refresh-keys "$digest"
     ;;
   *)
-    echo "df-deploy-ssh: only 'secrets-install' and 'deploy sha256:<digest>' are allowed" >&2
+    echo "df-deploy-ssh: only 'secrets-install', 'release sha256:<digest>', 'activate sha256:<digest>' and 'refresh-keys sha256:<digest>' are allowed" >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,260 @@
+# The stack on an application Droplet in PRODUCTION and in the STAGING ENVIRONMENT (same file, different hostnames and secrets)
+# (plan 12.1, 12.5; LAUNCH.md decisions 18, 23, 32). STATUS: UNVERIFIED. `docker compose config` renders it; it has never been started
+# (no Docker daemon on the authoring machine). It is part of the signed release image; df-deploy stages it at
+# /opt/dungeonflux/current/production.compose.yml. ACTIVATION (starting it with a canary and a rollback) is the next round.
+#
+# What differs from deploy/compose/staging.compose.yml:
+#   * no PostgreSQL, no object store, no migrate job: the database is managed and reached only through the db-gate; objects are in Spaces;
+#   * campaign runtimes are NOT compose services: the trusted runner starts them through the body-checking docker-proxy, on the
+#     per-slot networks df-slot-N (named here so the proxy policy, which pins NetworkMode to df-slot-<n>, matches);
+#   * the networks that need a route out are the ONLY non-internal ones, each carrying exactly one service that needs it:
+#       public (the edge), control-out (the control plane: Spaces, the identity and payment providers), egress-out (the dispatcher:
+#       model providers), db-out (the db-gate: the managed cluster). Every other network is internal.
+#   * the runner and the docker proxy exist. The proxy is the ONLY service that mounts the Docker socket.
+# Secrets, configuration, the docs site and the edge's certificate store are host paths (the same per-consumer directories the staging stack
+# models): /run/dungeonflux/secrets/<consumer> (tmpfs, root:dfs-<consumer>), /opt/dungeonflux/current/config/<role>.toml (rendered from the release templates by df-deploy), /opt/dungeonflux/docs,
+# /var/lib/dungeonflux/caddy. deploy/scripts/check-production-policy.sh enforces the same policy as for staging (networks, exact secrets map,
+# uids, no privileged, no host namespaces) plus the production rules: one Docker socket mount (the proxy), no uid 0 and no added capability except the edge's NET_BIND_SERVICE.
+name: dungeonflux
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  restart: unless-stopped
+  logging:
+    driver: local
+    options: { max-size: "20m", max-file: "5" }
+
+networks:
+  public: {}
+  # The three networks with a route out are NAT bridges with FIXED NAMES, so the host firewall can address them
+  # (infra/cloud-init/df-net-rules.sh: DOCKER-USER drops 169.254.0.0/16, the VPC and every private range from dfctl0 and dfegr0, and lets
+  # dfdb0 reach only the cluster's address and port). check-production-policy.sh requires these names.
+  control-out:
+    driver_opts:
+      com.docker.network.bridge.name: dfctl0
+  db-out:
+    driver_opts:
+      com.docker.network.bridge.name: dfdb0
+  egress-out:
+    driver_opts:
+      com.docker.network.bridge.name: dfegr0
+  ingress:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.1.0/24 }] }
+  data:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.2.0/24 }] }
+  dispatch:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.4.0/24 }] }
+  monitoring:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.5.0/24 }] }
+  runner-net:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.6.0/24 }] }
+  slot1:
+    name: df-slot-1
+    internal: true
+    ipam: { config: [{ subnet: 172.30.11.0/24 }] }
+  slot2:
+    name: df-slot-2
+    internal: true
+    ipam: { config: [{ subnet: 172.30.12.0/24 }] }
+
+services:
+  # The only database path of every tier: a TCP forwarder on each network (TLS stays end to end, verify-full against the cluster's name).
+  # Its backend is the managed cluster's private host and port (25060), filled into the rendered config from the release environment.
+  db-gate:
+    <<: *hardened
+    image: ${DBGATE_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_DBGATE}:${DF_UID_DBGATE}"
+    networks:
+      db-out: {}
+      data: { ipv4_address: 172.30.2.7 }
+      dispatch: { ipv4_address: 172.30.4.2 }
+      runner-net: { ipv4_address: 172.30.6.2 }
+      slot1: { ipv4_address: 172.30.11.2 }
+      slot2: { ipv4_address: 172.30.12.2 }
+    mem_limit: 128m
+    pids_limit: 64
+    volumes:
+      - /opt/dungeonflux/current/config/dbgate.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+  # Per-host telemetry ingestor: the only telemetry path a runtime has, over mTLS. Prometheus (round 3) joins `monitoring` and scrapes
+  # its metrics address ONLY; that network carries nothing else, so a plaintext metrics endpoint is acceptable there (ruling e).
+  ingestor:
+    <<: *hardened
+    image: ${CONTROL_PLANE_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_INGESTOR}:${DF_GID_INGESTOR}"
+    networks:
+      data: { ipv4_address: 172.30.2.8 }
+      dispatch: { ipv4_address: 172.30.4.5 }
+      slot1: { ipv4_address: 172.30.11.5 }
+      slot2: { ipv4_address: 172.30.12.5 }
+      monitoring: { ipv4_address: 172.30.5.2 }
+    mem_limit: ${DF_INGESTOR_MEM}
+    pids_limit: 128
+    command: ["telemetry-ingestor", "--config", "/etc/dungeonflux/ingestor.toml"]
+    volumes:
+      - /opt/dungeonflux/current/config/ingestor.toml:/etc/dungeonflux/ingestor.toml:ro
+      - /run/dungeonflux/secrets/ingestor:/run/secrets:ro
+      - /var/lib/dungeonflux/telemetry:/var/lib/dungeonflux/telemetry
+    tmpfs:
+      - /tmp:uid=10008,gid=10008
+
+  # THE EGRESS DISPATCHER (decision 18): the only holder of provider credentials, from its own secrets directory. It reaches PostgreSQL
+  # through the db-gate, the control plane's dispatcher gateway (mTLS, journal submissions and delivery of provider output), the ingestor,
+  # and the model providers over egress-out. It is NOT on the data network, so it cannot reach the object store or the control plane's
+  # other listeners. It runs the same hardening as every service: read-only root, no capability, a numeric uid of its own, limits, and
+  # a loopback-only health listener (no network carries a plaintext health endpoint of the dispatcher).
+  egress:
+    <<: *hardened
+    image: ${EGRESS_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_DISPATCHER}:${DF_GID_DISPATCHER}"
+    networks:
+      dispatch: { ipv4_address: 172.30.4.4 }
+      slot1: { ipv4_address: 172.30.11.4 }
+      slot2: { ipv4_address: 172.30.12.4 }
+      egress-out: {}
+    mem_limit: ${DF_EGRESS_MEM}
+    pids_limit: 128
+    volumes:
+      - /opt/dungeonflux/current/config/egress.toml:/etc/dungeonflux/egress.toml:ro
+      - /run/dungeonflux/secrets/dispatcher:/run/secrets:ro
+    tmpfs:
+      - /tmp:uid=10003,gid=10003
+      - /var/lib/dungeonflux/spool:size=256m,uid=10003,gid=10003
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "127.0.0.1:9092", "--signal", "ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-gate: { condition: service_started }
+      ingestor: { condition: service_started }
+
+  control-plane:
+    <<: *hardened
+    image: ${CONTROL_PLANE_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_CONTROL_PLANE}:${DF_GID_CONTROL_PLANE}"
+    networks:
+      control-out: {}
+      ingress: { ipv4_address: 172.30.1.3 }
+      data: { ipv4_address: 172.30.2.4 }
+      dispatch: { ipv4_address: 172.30.4.3 }
+      slot1: { ipv4_address: 172.30.11.3 }
+      slot2: { ipv4_address: 172.30.12.3 }
+    mem_limit: ${DF_CP_MEM}
+    cpus: ${DF_CP_CPUS}
+    pids_limit: ${DF_CP_PIDS}
+    volumes:
+      - /opt/dungeonflux/current/config/control-plane.toml:/etc/dungeonflux/control-plane.toml:ro
+      - /run/dungeonflux/secrets/control-plane:/run/secrets:ro
+    tmpfs:
+      - /tmp:size=64m,uid=10001,gid=10001
+      - /var/lib/dungeonflux/spool:size=256m,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/internal_ca_certificate", "--server-name", "control-plane"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-gate: { condition: service_started }
+      egress: { condition: service_healthy }
+      ingestor: { condition: service_started }
+
+  edge:
+    <<: *hardened
+    image: ${EDGE_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_EDGE}:${DF_UID_EDGE}"
+    # Hostnames and the access gate (edge.env.production.example), written by cloud-init. required: false only so that a static render
+    # works on a machine that is not a Droplet; the Caddyfile fails closed when DF_PUBLIC_HOST is empty.
+    env_file:
+      - path: /etc/dungeonflux/edge.env
+        required: false
+    networks:
+      public: {}
+      ingress: { ipv4_address: 172.30.1.2 }
+    mem_limit: 256m
+    pids_limit: 128
+    # The upstream binary carries a file capability for binding low ports; with cap_drop ALL the kernel refuses to exec it unless
+    # the capability stays in the bounding set.
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/dungeonflux/current/edge/Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - ${DF_EDGE_EXTRA_DIR}:/etc/caddy/extra:ro
+      - /run/dungeonflux/secrets/edge:/run/secrets:ro
+      # The static docs site: a BUILD OUTPUT unpacked by the deploy, not the repository's docs/ directory.
+      - /opt/dungeonflux/docs:/srv/docs:ro
+      # The certificate store survives restarts, so a restart never re-issues certificates (rate limits).
+      - /var/lib/dungeonflux/caddy:/data
+    tmpfs:
+      - /config:uid=10010,gid=10010
+      - /run/caddy:uid=10010,gid=10010,mode=0700
+    depends_on:
+      control-plane: { condition: service_healthy }
+
+  # THE ONLY SERVICE THAT MOUNTS THE DOCKER SOCKET. It checks every request body against the policy (planning/hosted-runtime-research.md
+  # section 7: campaign runtime containers only, an allow-listed verified digest, no privilege, no host namespace, no device, a
+  # read-only root, capabilities dropped, this slot's network, uid and mounts) and forwards the rest to the daemon. It has NO network:
+  # it speaks only unix sockets. The runner reaches it through the socket in /run/dungeonflux/runner. Its source is deploy/docker-proxy
+  # (cargo test: 13 policy tests).
+  docker-proxy:
+    <<: *hardened
+    image: ${DOCKER_PROXY_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_PROXY}:${DF_UID_PROXY}"
+    # The docker group's id on THIS host: df-deploy release reads it with getent into host.env (compose --env-file host.env).
+    group_add: ["${DF_DOCKER_GID:?pass --env-file host.env (written by df-deploy release)}"]
+    network_mode: none
+    mem_limit: ${DF_PROXY_MEM}
+    pids_limit: 64
+    command: ["--listen", "/run/proxy/docker.sock", "--docker", "/var/run/docker.sock", "--allowed-images", "/etc/dungeonflux/allowed-images.d/allowed"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/dungeonflux/runner:/run/proxy
+      # The allow-list DIRECTORY, not the file: df-deploy activate replaces the file by rename, and a single-file bind mount would keep
+      # showing the old inode (a revoked digest would stay startable).
+      - /etc/dungeonflux/allowed-images.d:/etc/dungeonflux/allowed-images.d:ro
+      # Read-only, at the same path the binds use: the proxy walks each bind source here (symlink_metadata) before it lets a create through.
+      - /run/dungeonflux/runtime:/run/dungeonflux/runtime:ro
+
+  # THE TRUSTED RUNNER (one per host; plan 12.5): places campaigns, launches and supervises runtimes through the proxy, and writes the
+  # CONTENTS of each slot's descriptor and secrets files under /run/dungeonflux/runtime/slot<N>/. No game, payment or provider credential:
+  # its own database role df_runner (through the db-gate) and the shared runtime files it copies into the slots.
+  # HOW IT WRITES FILES THE RUNTIME CAN READ WITHOUT BEING ABLE TO REDIRECT A MOUNT (round 2a): the runner is NOT root and holds NO capability.
+  # A root-owned helper (infra/cloud-init/df-slot-dirs.sh: a boot unit and a step of df-deploy release) creates /run/dungeonflux/runtime and
+  # every slot<N> directory root:root 0755, and inside each: descriptor.toml (owner uid 20000+N, group 10004, 0460), secrets/ (owner 20000+N,
+  # group 10004, 0570); the runtime's spool is a sized per-container tmpfs, never a bind. The runner (gid 10004) can therefore write file contents and create or remove files
+  # inside secrets/, but it can neither create, rename nor replace an entry of runtime/ or slot<N>/, so it cannot plant a symlink where the
+  # proxy checks a bind source (deploy/docker-proxy walks every component and refuses symlinks). CHOWN and FOWNER are dropped as well:
+  # ownership is set by the helper, never by the runner. A runner compromise yields: rewriting the contents of the slot files and asking the
+  # proxy for policy-conforming runtimes. O1 must confirm the runner can work this way (it never calls chown or chmod).
+  runner:
+    <<: *hardened
+    image: ${RUNNER_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_RUNNER_GROUP}:${DF_UID_RUNNER_GROUP}"
+    networks:
+      runner-net: { ipv4_address: 172.30.6.3 }
+    mem_limit: ${DF_RUNNER_MEM}
+    pids_limit: 128
+    volumes:
+      - /opt/dungeonflux/current/config/runner.toml:/etc/dungeonflux/runner.toml:ro
+      - /run/dungeonflux/secrets/runner:/run/secrets:ro
+      # Connecting to a unix socket works through a read-only mount; the runner has no reason to write in this directory.
+      - /run/dungeonflux/runner:/run/proxy:ro
+      - /run/dungeonflux/runtime:/run/dungeonflux/runtime
+      - /etc/dungeonflux/allowed-images.d:/etc/dungeonflux/allowed-images.d:ro
+    tmpfs:
+      - /tmp:uid=10004,gid=10004
+    depends_on:
+      db-gate: { condition: service_started }
+      docker-proxy: { condition: service_started }

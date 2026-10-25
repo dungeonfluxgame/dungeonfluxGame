@@ -113,7 +113,11 @@ blocked egress 172.30.4.3 8084 "control-plane readiness listener"
 blocked egress 172.30.4.3 9090 "control-plane internal listener"
 blocked egress 172.30.4.3 8083 "control-plane media gateway"
 blocked egress 172.30.4.5 9464 "ingestor metrics listener"
-blocked egress 172.30.2.8 9464 "ingestor metrics on the data network"
+blocked egress 172.30.2.8 9464 "ingestor metrics on the data network (it is no longer there)"
+blocked control-plane 172.30.2.8 9464 "ingestor metrics on the data network (it is no longer there)"
+blocked control-plane 172.30.5.2 9464 "the monitoring network, which only the ingestor and a scraper join"
+blocked runtime-1 172.30.5.2 9464 "ingestor metrics on the monitoring network"
+blocked edge 172.30.5.2 9464 "ingestor metrics on the monitoring network"
 blocked egress 172.30.4.4 9092 "its own health listener from the network (it is loopback-only)"
 # The dispatcher reaches PostgreSQL (through the db-gate), the control plane's dispatcher gateway and the
 # ingestor; in staging it has no route to a provider. It is not on the data network.
@@ -191,6 +195,15 @@ expect_output "df_egress cannot create a table" 'permission denied' \
 verify_out=$("${compose[@]}" exec -T postgres psql -X -U df_admin -d dungeonflux -v ON_ERROR_STOP=1 -v db=dungeonflux -v check_default_acl=off \
   -f /opt/dungeonflux/db/verify-privileges.sql 2>&1 || true)
 expect_output "verify-privileges.sql: no app role is powerful, a member of another role, an owner or able to run DDL" 'privileges ok' "$verify_out"
+
+# Feed epochs (round 2): the restore step gives every campaign a fresh random epoch and two restores from one backup differ. Skipped
+# (not failed) until migration 0008 is applied in the mirror; the test rolls back, so it changes nothing.
+if "${compose[@]}" exec -T postgres psql -X -U df_admin -d dungeonflux -tA -c "select to_regproc('campaigns.restore_feed_epochs') is not null" 2>/dev/null | grep -q '^t$'; then
+  epoch_out=$("${compose[@]}" exec -T postgres psql -X -U df_admin -d dungeonflux -v ON_ERROR_STOP=1 -f /opt/dungeonflux/db/test-feed-epochs.sql 2>&1 || true)
+  expect_output "test-feed-epochs.sql: random 16-byte epochs, two restores from one backup differ" 'feed epoch tests ok' "$epoch_out"
+else
+  echo "SKIP feed epoch test (campaigns.restore_feed_epochs not migrated in the mirror yet)"
+fi
 
 # --- object store: TLS only ------------------------------------------------------------------------------
 bucket_check() { # bucket_check <endpoint>: lists buckets with the staging credentials

@@ -28,3 +28,15 @@ cors_allowed_origins   = ["https://staging.dungeonfluxdnd.com"]
 # database_node_count = 2
 
 public_hostname = "staging.dungeonfluxdnd.com"
+
+# df-deploy accepts only releases and SSH key sets signed by THIS workflow identity (exact; never a pattern).
+cosign_certificate_identity = "https://github.com/REPLACE_ME/REPLACE_ME/.github/workflows/release.yml@refs/heads/main"
+cosign_version              = "REPLACE_ME-cosign-release-tag"
+cosign_sha256               = "REPLACE_ME-64-hex-sha256-of-cosign-linux-amd64"
+release_repository_prefix   = "ghcr.io/REPLACE_ME/dungeonflux"
+
+# Key sets are signed by their own workflow (see .github/workflows/keys.yml), different from the release workflow above.
+cosign_keys_certificate_identity = "https://github.com/OWNER/REPO/.github/workflows/keys.yml@refs/heads/main"
+# Only if the image packages are private: the user that owns the pull token pushed as registry_pull_token.
+# release_registry_user = ""
+acme_email = ""

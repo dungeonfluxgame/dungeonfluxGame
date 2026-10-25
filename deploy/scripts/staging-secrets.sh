@@ -56,12 +56,14 @@ copy() { # copy <from consumer/file> <to consumer> [new name]
 }
 
 # --- passwords and keys -------------------------------------------------------------------------
-for role in migrator control runner campaign_runtime egress billing support; do
+for role in migrator control runner campaign_runtime egress accounts campaigns finance support; do
   put postgres "db_${role}_password" "$(random_value)"
 done
 put postgres db_admin_password "$(random_value)"
 copy postgres/db_migrator_password migrate
 copy postgres/db_control_password control-plane
+copy postgres/db_accounts_password control-plane
+copy postgres/db_campaigns_password control-plane
 copy postgres/db_egress_password dispatcher
 for runtime in runtime-1 runtime-2; do
   copy postgres/db_campaign_runtime_password "$runtime"
@@ -87,24 +89,39 @@ cd "$work"
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -keyout "ca.key" -out "ca.crt" \
   -subj "/CN=dungeonflux-staging-ca" >/dev/null 2>&1
 
-issue() { # issue <name> <subjectAltName list> <extendedKeyUsage>
-  local name=$1 sans=$2 usage=$3
-  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=$name" >/dev/null 2>&1
-  printf 'subjectAltName=%s\nextendedKeyUsage=%s\nbasicConstraints=CA:FALSE\n' "$sans" "$usage" > "$name.ext"
+# Two intermediate CAs under the root, as in production (manifest procedure internal-pki): the SERVICE issuer signs the fixed identities and
+# the server certificates, the PLACEMENT issuer signs only per-placement runtime client certificates. Both are CA:TRUE, pathlen:0.
+make_issuer() { # make_issuer <name>
+  local name=$1
+  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=dungeonflux-staging-$name" >/dev/null 2>&1
+  printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n' > "$name.ext"
   openssl x509 -req -in "$name.csr" -CA "ca.crt" -CAkey "ca.key" -CAcreateserial \
     -out "$name.crt" -days 30 -extfile "$name.ext" >/dev/null 2>&1
+}
+make_issuer service-issuer
+make_issuer placement-issuer
+
+issue() { # issue <name> <subjectAltName list> <extendedKeyUsage> [issuer name; default: the root]
+  local name=$1 sans=$2 usage=$3 signer=${4:-ca}
+  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=$name" >/dev/null 2>&1
+  printf 'subjectAltName=%s\nextendedKeyUsage=%s\nbasicConstraints=CA:FALSE\n' "$sans" "$usage" > "$name.ext"
+  openssl x509 -req -in "$name.csr" -CA "$signer.crt" -CAkey "$signer.key" -CAcreateserial \
+    -out "$name.crt" -days 30 -extfile "$name.ext" >/dev/null 2>&1
+  # A leaf issued by an intermediate is presented with that intermediate behind it: the receiver checks the chain passes through
+  # the issuer it pins.
+  if [ "$signer" != ca ]; then cat "$signer.crt" >> "$name.crt"; fi
 }
 issue postgres "DNS:postgres,DNS:localhost,IP:172.30.2.2" serverAuth
 issue object-store "DNS:object-store,IP:172.30.2.3" serverAuth
 # One gateway certificate for both control-plane gateway listeners (media gateway on the slot networks, dispatcher
 # gateway on the dispatch network).
-issue media-gateway "DNS:control-plane,IP:172.30.1.3,IP:172.30.2.4,IP:172.30.11.3,IP:172.30.12.3,IP:172.30.4.3" serverAuth
-issue dispatch "DNS:egress,IP:172.30.11.4,IP:172.30.12.4" serverAuth
-issue ingestor "DNS:ingestor,IP:172.30.2.8,IP:172.30.4.5,IP:172.30.11.5,IP:172.30.12.5" serverAuth
-issue control-client "URI:urn:dungeonflux:control-plane" clientAuth,serverAuth
-issue dispatcher-client "URI:urn:dungeonflux:dispatcher" clientAuth
-issue runtime-1-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000003" clientAuth,serverAuth
-issue runtime-2-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000013" clientAuth,serverAuth
+issue media-gateway "DNS:control-plane,IP:172.30.1.3,IP:172.30.2.4,IP:172.30.11.3,IP:172.30.12.3,IP:172.30.4.3" serverAuth service-issuer
+issue dispatch "DNS:egress,IP:172.30.11.4,IP:172.30.12.4" serverAuth service-issuer
+issue ingestor "DNS:ingestor,IP:172.30.2.8,IP:172.30.4.5,IP:172.30.11.5,IP:172.30.12.5" serverAuth service-issuer
+issue control-client "URI:urn:dungeonflux:control-plane" clientAuth,serverAuth service-issuer
+issue dispatcher-client "URI:urn:dungeonflux:dispatcher" clientAuth service-issuer
+issue runtime-1-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000003" clientAuth,serverAuth placement-issuer
+issue runtime-2-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000013" clientAuth,serverAuth placement-issuer
 cd "$root"
 
 put_file() { cp "$work/$1" "$dir/$2/$3"; }
@@ -119,6 +136,10 @@ put_file ca.crt control-plane object_store_ca_certificate
 put_file ca.crt bucket-init object_store_ca_certificate
 for consumer in control-plane runtime-1 runtime-2 dispatcher ingestor edge; do
   put_file ca.crt "$consumer" internal_ca_certificate
+done
+for consumer in control-plane dispatcher ingestor; do
+  put_file placement-issuer.crt "$consumer" placement_issuer_certificate
+  put_file service-issuer.crt "$consumer" service_issuer_certificate
 done
 put_file media-gateway.crt control-plane media_gateway_certificate
 put_file media-gateway.key control-plane media_gateway_key

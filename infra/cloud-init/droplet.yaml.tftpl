@@ -8,7 +8,7 @@
 # WHO CAN DO WHAT (critic rounds 1c and 1d; coordinator rulings b, c and d):
 #  * Nobody who logs in is in the docker group. Docker socket access is host root (a container can bind-mount
 #    /run/dungeonflux and read every consumer's secrets), so containers are started only by root, through
-#    df-deploy, which validates its arguments (round 2 adds cosign verification of the digest).
+#    df-deploy, which validates its arguments and verifies every release and key set with cosign against the pinned identity.
 #  * CI: one key with the forced command df-deploy-ssh on the dfdeploy account (only "secrets-install" and
 #    "deploy <digest>"), reached through the bastion's dfci account, which may only forward to the application and
 #    worker hosts' SSH port. sudo lets dfdeploy run exactly `df-secrets-install` (no arguments) and
@@ -19,9 +19,10 @@
 #    hosts their only sudo rights are `df-secrets-install` (also --audit) and `df-deploy psql ...` (database
 #    administration). They cannot start containers or release. No shared human account exists.
 #  * KEYS ARE ROOT-OWNED FILES: sshd reads /etc/ssh/authorized_keys.d/<user> (owned by root), never a file the user can
-#    edit, so a compromised account cannot add a key for itself. This template runs once. TO REVOKE OR ADD A KEY ON
-#    AN EXISTING HOST there is, until round 2 delivers `df-deploy refresh-keys` (a ROUND 2 BLOCKER), only the
-#    DigitalOcean console (edit the file as root) or replacing the host. Terraform changes do NOT reach a running host.
+#    edit, so a compromised account cannot add a key for itself. This template runs once, and Terraform changes do NOT reach
+#    a running host. TO ADD OR REVOKE A KEY ON AN EXISTING HOST (application and worker roles) CI runs
+#    `df-deploy refresh-keys <digest>`: the digest of a reviewed key-set image signed by the pinned CI identity, verified with
+#    cosign, validated and applied by df-keys-apply. The bastion has no registry access and is replaced monthly instead.
 # Keep shell variables in $NAME form here: a dollar sign followed by a brace belongs to Terraform.
 %{ if role != "bastion" }
 package_update: true
@@ -55,6 +56,7 @@ bootcmd:
   - [cloud-init-per, once, dfs-billing-worker, groupadd, -g, "10007", dfs-billing-worker]
   - [cloud-init-per, once, dfs-ingestor, groupadd, -g, "10008", dfs-ingestor]
   - [cloud-init-per, once, dfs-edge, groupadd, -g, "10010", dfs-edge]
+  - [cloud-init-per, once, dfs-deploy, groupadd, -g, "10020", dfs-deploy]
 %{ else }
   - [cloud-init-per, once, noop, true]
 %{ endif }
@@ -85,7 +87,6 @@ write_files:
       PasswordAuthentication no
       KbdInteractiveAuthentication no
       AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u
-      AllowUsers ${allowed_users}
       MaxAuthTries 3
       LoginGraceTime 20
       X11Forwarding no
@@ -95,6 +96,13 @@ write_files:
 %{ else }
       AllowTcpForwarding no
 %{ endif }
+
+  # AllowUsers lives in its own file, which df-keys-apply rewrites when the key set changes (sshd keeps the FIRST value it
+  # reads, so this file sorts before 10-dungeonflux.conf).
+  - path: /etc/ssh/sshd_config.d/05-allowusers.conf
+    permissions: "0644"
+    content: |
+      AllowUsers ${allowed_users}
 
 %{ if role == "bastion" }
   # dfci may open a tunnel ONLY to the SSH port of an application or worker host (ruling d). permitopen takes literal
@@ -149,10 +157,122 @@ write_files:
       d /run/dungeonflux 0755 root root -
       d /run/dungeonflux/secrets 0755 root root -
       d /run/dungeonflux/docker 0700 root root -
+      # The proxy (uid 10013) creates its socket here; the runner (gid 10004) connects through the group. setgid keeps the group.
+      d /run/dungeonflux/runner 2750 10013 10004 -
+      # The slot tree is built by df-slot-dirs (root); this only guarantees the top directory is root-owned before anything else runs.
+      d /run/dungeonflux/runtime 0755 root root -
 
-  # Digest-pinned images df-deploy may run for operator tasks. Releases are added after cosign verification
-  # (round 2). A change here is a change of the pinned psql client (PostgreSQL 17 or later).
-  - path: /etc/dungeonflux/allowed-images
+  # What this host is, and the CI identity that may sign what it runs. The identity is EXACT (never a pattern): the workflow
+  # of the reviewed main branch that builds and signs releases and key sets. Written once; changing it is a host replacement.
+  - path: /etc/dungeonflux/host-role
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${role}
+
+  - path: /etc/dungeonflux/cosign-identity
+    permissions: "0644"
+    owner: root:root
+    content: |
+      identity=${cosign_certificate_identity}
+      keys_identity=${cosign_keys_certificate_identity}
+      issuer=${cosign_oidc_issuer}
+
+  - path: /etc/dungeonflux/release-source
+    permissions: "0644"
+    owner: root:root
+    content: |
+      prefix=${release_repository_prefix}
+      registry_user=${release_registry_user}
+
+  - path: /usr/local/sbin/df-slot-dirs
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, slot_dirs_script)}
+
+  # Builds the per-slot tree under /run/dungeonflux/runtime at every boot (it is tmpfs), before Docker starts anything. No release is
+  # staged on a fresh host, so the condition skips the unit until the first `df-deploy release` (which also runs the helper).
+  - path: /etc/systemd/system/df-slot-dirs.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=DungeonFlux runtime slot directories
+      After=local-fs.target
+      Before=docker.service
+      ConditionPathExists=/opt/dungeonflux/current/config/runner.toml
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/df-slot-dirs --config /opt/dungeonflux/current/config/runner.toml
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/sbin/df-net-rules
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, net_rules_script)}
+
+  # This VPC's CIDR: the egress rules drop it for the control plane and the dispatcher (the database and every other VPC host are
+  # reached only through the db-gate, never from a bridge with a route out).
+  - path: /etc/dungeonflux/vpc-cidr
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${vpc_cidr}
+
+  # Installs the DOCKER-USER rules for the three bridges with a route out at every boot, before Docker. The database address comes from
+  # the active release's host.env; before the first release the db bridge reaches nothing.
+  - path: /etc/systemd/system/df-net-rules.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=DungeonFlux egress rules for the Docker bridges
+      After=network-online.target
+      Wants=network-online.target
+      Before=docker.service
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/df-net-rules --auto
+      [Install]
+      WantedBy=multi-user.target
+
+  # FAIL CLOSED: docker.service cannot start without the egress rules (Requires), and re-applies them after every start
+  # (ExecStartPost: the rules also follow a change of the managed cluster's address).
+  - path: /etc/systemd/system/docker.service.d/10-df-net-rules.conf
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Requires=df-net-rules.service
+      After=df-net-rules.service
+      [Service]
+      ExecStartPost=/usr/local/sbin/df-net-rules --auto
+
+  # The edge's non-secret environment: hostnames, the certificate contact and the access gate (deploy/config/edge.env.production.example).
+  # Terraform values; the Caddyfile fails closed when DF_PUBLIC_HOST is empty.
+  - path: /etc/dungeonflux/edge.env
+    permissions: "0644"
+    owner: root:root
+    content: |
+%{ for key, value in edge_environment }
+      ${key}=${value}
+%{ endfor }
+
+  - path: /usr/local/sbin/df-keys-apply
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, keys_apply_script)}
+
+  # The live allow-list: digest-pinned images the proxy lets the runner start, plus the pinned psql client. It lives in a DIRECTORY that
+  # containers mount, and `df-deploy activate` replaces the file by rename. A change here is a change of the pinned psql client
+  # (PostgreSQL 17 or later).
+  - path: /etc/dungeonflux/allowed-images.d/allowed
     permissions: "0644"
     owner: root:root
     content: |
@@ -190,7 +310,14 @@ write_files:
     permissions: "0440"
     owner: root:root
     content: |
-      dfdeploy ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-deploy sha256\:*
+      dfdeploy ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-deploy sha256\:*, /usr/local/sbin/df-deploy release sha256\:*, /usr/local/sbin/df-deploy activate sha256\:*, /usr/local/sbin/df-deploy refresh-keys sha256\:*
+
+  # The operators' rights live in a separate file that df-keys-apply regenerates from each signed key set.
+  - path: /etc/sudoers.d/dungeonflux-admins
+    permissions: "0440"
+    owner: root:root
+    content: |
+      # Written by cloud-init at first boot and regenerated by df-keys-apply. Do not edit.
 %{ for name, keys in admin_users }
       ${name} ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-secrets-install --audit, /usr/local/sbin/df-deploy psql *
 %{ endfor }
@@ -217,15 +344,27 @@ write_files:
       # plugin is not installed because no production tool uses it.
       DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce=${docker_version_pin} docker-ce-cli=${docker_version_pin} containerd.io=${containerd_version_pin}
       apt-mark hold docker-ce docker-ce-cli containerd.io
+      systemctl daemon-reload
+      systemctl enable df-slot-dirs.service df-net-rules.service
+      systemctl start df-net-rules.service
       systemctl enable --now docker
+
+      # cosign: a pinned release whose SHA-256 is checked before it is installed. df-deploy uses it to verify every release and
+      # key set against the pinned CI identity. (The checksum is supplied by Terraform; the owner takes it from the verified
+      # release's published checksums.)
+      curl -fsSL -o /usr/local/bin/cosign.new "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64"
+      echo "${cosign_sha256}  /usr/local/bin/cosign.new" | sha256sum -c -
+      install -m 0755 -o root -g root /usr/local/bin/cosign.new /usr/local/bin/cosign
+      rm -f /usr/local/bin/cosign.new
       # NO usermod -aG docker: nobody who logs in may talk to the Docker socket (it is host root).
 
       # Directories. Writable application state lives on the host disk and is owned by the SERVICE's own uid
       # (one uid per service: control-plane 10001, dispatcher 10003, ingestor 10008); it is working storage, never
-      # the only copy of anything (plan 12.1). Runtime spools are tmpfs created per slot by the runner with the
-      # slot's own uid (20000 + slot); the ingestor's telemetry store is never shared with a runtime.
+      # the only copy of anything (plan 12.1). Each runtime's spool and secrets live on tmpfs under /run/dungeonflux/runtime, in directories
+      # df-slot-dirs creates (root) for the slot's own uid (20000 + slot); the ingestor's telemetry store is never shared with a runtime.
       install -d -o root -g root -m 0755 /opt/dungeonflux /opt/dungeonflux/releases /var/lib/dungeonflux /var/lib/dungeonflux/spool
       install -d -o 10008 -g 10008 -m 0750 /var/lib/dungeonflux/telemetry
+      install -d -o 10010 -g 10010 -m 0750 /var/lib/dungeonflux/caddy
       install -d -o 10001 -g 10001 -m 0750 /var/lib/dungeonflux/spool/control-plane
       install -d -o 10003 -g 10003 -m 0750 /var/lib/dungeonflux/spool/dispatcher
 %{ if role == "app" }
