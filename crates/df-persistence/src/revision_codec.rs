@@ -7,15 +7,15 @@ pub(crate) enum RevisionDecodeError {
 }
 
 /// PostgreSQL NUMERIC text is mapped without signed BIGINT narrowing or permissive parsing.
-pub(crate) fn decode_unsigned_number(value: &str) -> Result<u64, RevisionDecodeError> {
-    if value.is_empty()
-        || value.len() > 20
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || (value.len() > 1 && value.starts_with('0'))
+pub(crate) fn decode_unsigned_number(numeric_text: &str) -> Result<u64, RevisionDecodeError> {
+    if numeric_text.is_empty()
+        || numeric_text.len() > 20
+        || !numeric_text.bytes().all(|byte| byte.is_ascii_digit())
+        || (numeric_text.len() > 1 && numeric_text.starts_with('0'))
     {
         return Err(RevisionDecodeError::InvalidNumeric);
     }
-    value
+    numeric_text
         .parse()
         .map_err(|_| RevisionDecodeError::InvalidNumeric)
 }
@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn malformed_or_out_of_range_database_numbers_refuse() {
-        for value in [
+        for malformed_number in [
             "",
             "-1",
             "+1",
@@ -67,11 +67,11 @@ mod tests {
             "18446744073709551616",
         ] {
             assert_eq!(
-                decode_revision(value, "0"),
+                decode_revision(malformed_number, "0"),
                 Err(RevisionDecodeError::InvalidNumeric)
             );
             assert_eq!(
-                decode_revision("1", value),
+                decode_revision("1", malformed_number),
                 Err(RevisionDecodeError::InvalidNumeric)
             );
         }

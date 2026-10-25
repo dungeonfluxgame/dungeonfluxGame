@@ -377,11 +377,11 @@ mod tests {
     fn dedicated_actor_bridge_uses_its_injected_runtime_without_detaching_work() {
         let runtime = Builder::new_current_thread().enable_all().build().unwrap();
         let completed = Cell::new(false);
-        let result = actor_block_on(runtime.handle(), async {
+        let actor_result = actor_block_on(runtime.handle(), async {
             completed.set(true);
             7
         });
-        assert_eq!(result, Ok(7));
+        assert_eq!(actor_result, Ok(7));
         assert!(completed.get());
     }
 

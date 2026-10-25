@@ -40,8 +40,8 @@ impl<A: MembershipAuthority> PostgresRepository<A> {
         context: &OperationContext,
     ) -> Result<Self, NativeSetupFailure> {
         let mut span = df_observe::begin(context, "persistence.native_connection_setup");
-        let result = Self::initialize_owned(runtime, client, connection, options).await;
-        span.finish_unmeasured(match &result {
+        let setup_result = Self::initialize_owned(runtime, client, connection, options).await;
+        span.finish_unmeasured(match &setup_result {
             Ok(_) => "native_owner_initialized",
             Err(failure) => match failure
                 .pending_cleanup
@@ -54,7 +54,7 @@ impl<A: MembershipAuthority> PostgresRepository<A> {
                 None => "native_setup_failed_driver_closed",
             },
         });
-        result
+        setup_result
     }
 
     async fn initialize_owned(
@@ -225,12 +225,17 @@ where
         let started = std::time::Instant::now();
         let mut span = df_observe::begin(context, "persistence.native_connection_recovery");
         let runtime = self.runtime.clone();
-        let result = actor_block_on(&runtime, self.reconnect_owned()).and_then(|result| result);
+        let recovery_result = actor_block_on(&runtime, self.reconnect_owned())
+            .and_then(|connection_result| connection_result);
         df_observe::record_audit_line(
             "persistence.connection",
             format!(
                 "DATABASE connection event=recovery outcome={} state={} ms={}",
-                if result.is_ok() { "ready" } else { "pending" },
+                if recovery_result.is_ok() {
+                    "ready"
+                } else {
+                    "pending"
+                },
                 if self.adapter.connection_usable() {
                     "usable"
                 } else {
@@ -239,12 +244,12 @@ where
                 started.elapsed().as_millis()
             ),
         );
-        span.finish_unmeasured(if result.is_ok() {
+        span.finish_unmeasured(if recovery_result.is_ok() {
             "connection_ready"
         } else {
             "recovery_pending"
         });
-        result
+        recovery_result
     }
 
     fn lookup_operation(

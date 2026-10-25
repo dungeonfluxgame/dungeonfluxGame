@@ -70,8 +70,8 @@ impl ActionDraft {
         if retained_bytes(request).is_none_or(|bytes| bytes > MAX_RETAINED_ACTION_BYTES) {
             return Err(ActionDraftError::RequestTooLarge);
         }
-        let key = operation.key();
-        let session = request
+        let operation_key = operation.key();
+        let session_id = request
             .session_id
             .as_ref()
             .and_then(|id| SessionId::from_bytes(id.value.as_deref()?).ok());
@@ -79,23 +79,23 @@ impl ActionDraft {
             .operation_id
             .as_ref()
             .and_then(|id| OperationId::from_bytes(id.value.as_deref()?).ok());
-        let run = request
+        let run_id = request
             .run_id
             .as_ref()
             .and_then(|id| RunId::from_bytes(id.value.as_deref()?).ok())
             .ok_or(ActionDraftError::InvalidRequest)?;
-        let observed =
+        let observed_revision =
             revision(request.observed_revision.as_ref()).ok_or(ActionDraftError::InvalidRequest)?;
-        if session != Some(key.session())
-            || operation_id != Some(key.operation())
-            || observed.epoch() != key.epoch()
+        if session_id != Some(operation_key.session())
+            || operation_id != Some(operation_key.operation())
+            || observed_revision.epoch() != operation_key.epoch()
         {
             return Err(ActionDraftError::InvalidRequest);
         }
         Ok(Self {
             operation,
-            run,
-            observed,
+            run: run_id,
+            observed: observed_revision,
         })
     }
 
@@ -419,8 +419,8 @@ mod browser {
             if draft.key() != self.key {
                 return Err(ActionDraftMountError::WrongOperation);
             }
-            let state = draft.status();
-            if matches!(state, ActionDraftStatus::Retired { .. }) {
+            let draft_status = draft.status();
+            if matches!(draft_status, ActionDraftStatus::Retired { .. }) {
                 // Check presentation scope before any destructive private-control change.
                 self.feedback
                     .update(scope, FeedbackView::Uncertain(&self.labels[3]))?;
@@ -434,7 +434,7 @@ mod browser {
                 feedback_result?;
                 return Ok(());
             }
-            let view = match state {
+            let view = match draft_status {
                 ActionDraftStatus::Pending => FeedbackView::Pending(&self.labels[2]),
                 ActionDraftStatus::Rejected(_) => FeedbackView::Refused(&self.labels[4]),
                 _ if lookup_failed => FeedbackView::Error {
@@ -445,7 +445,7 @@ mod browser {
             };
             // FeedbackScope is checked before busy/editability or confirmed text changes.
             self.feedback.update(scope, view)?;
-            let accepted = matches!(state, ActionDraftStatus::Accepted { .. });
+            let accepted = matches!(draft_status, ActionDraftStatus::Accepted { .. });
             if accepted {
                 self.feedback.root().set_attribute("hidden", "")?;
                 self.confirmed.set_text_content(Some(&self.labels[6]));
@@ -453,15 +453,15 @@ mod browser {
                 self.feedback.root().remove_attribute("hidden")?;
                 self.confirmed.set_text_content(None);
             }
-            let rejected = matches!(state, ActionDraftStatus::Rejected(_));
-            let pending = matches!(state, ActionDraftStatus::Pending);
+            let rejected = matches!(draft_status, ActionDraftStatus::Rejected(_));
+            let is_pending = matches!(draft_status, ActionDraftStatus::Pending);
             input.update(
                 TextInputView {
                     label: &self.labels[0],
                     enabled: rejected && !connection_read_only,
                     feedback: if rejected {
                         InputFeedback::Rejected(&self.labels[4])
-                    } else if pending {
+                    } else if is_pending {
                         InputFeedback::Pending(&self.labels[2])
                     } else {
                         InputFeedback::None
@@ -473,11 +473,11 @@ mod browser {
             action.update(ActionView {
                 label: &self.labels[1],
                 enabled: false,
-                pending,
+                pending: is_pending,
             })?;
             self.root.set_attribute(
                 "data-action-draft",
-                match state {
+                match draft_status {
                     ActionDraftStatus::Pending => "pending",
                     ActionDraftStatus::Accepted { .. } => "accepted",
                     ActionDraftStatus::Rejected(_) => "rejected",
