@@ -180,18 +180,25 @@ impl DiagnosticReader {
         let mut records = Vec::new();
         let mut response_bytes = 32768usize;
         while let Some(row) = rows.next().map_err(|_| TelemetryError::SinkUnavailable)? {
-            let get = |index| {
+            let get_blob = |index| {
                 row.get::<_, Vec<u8>>(index)
                     .map_err(|_| TelemetryError::Corrupt)
             };
-            let otlp = get(7)?;
+            let otlp = get_blob(7)?;
             response_bytes += otlp.len() * 2 + 256;
             if response_bytes > 1048576 {
                 break;
             }
-            let producer =
-                ProducerId::new(get(1)?.try_into().map_err(|_| TelemetryError::Corrupt)?)?;
-            let record = RecordId::new(get(2)?.try_into().map_err(|_| TelemetryError::Corrupt)?)?;
+            let producer = ProducerId::new(
+                get_blob(1)?
+                    .try_into()
+                    .map_err(|_| TelemetryError::Corrupt)?,
+            )?;
+            let record = RecordId::new(
+                get_blob(2)?
+                    .try_into()
+                    .map_err(|_| TelemetryError::Corrupt)?,
+            )?;
             records.push(RecordView {
                 position: sql_u64(row, 0).map_err(|_| TelemetryError::Corrupt)?,
                 producer,
@@ -203,7 +210,9 @@ impl DiagnosticReader {
                     _ => return Err(TelemetryError::Corrupt),
                 },
                 source_time_unix_nanos: u64::from_be_bytes(
-                    get(5)?.try_into().map_err(|_| TelemetryError::Corrupt)?,
+                    get_blob(5)?
+                        .try_into()
+                        .map_err(|_| TelemetryError::Corrupt)?,
                 ),
                 observed_time_unix_nanos: row
                     .get::<_, Option<Vec<u8>>>(6)

@@ -56,24 +56,25 @@ mod native {
                     .ok_or(TelemetryError::Malformed)?
                     .parse::<u64>()
                     .map_err(|_| TelemetryError::Malformed)?;
-                let fourth = args
+                let fourth_argument = args
                     .get(4)
                     .ok_or(TelemetryError::Malformed)?
                     .parse::<i64>()
                     .map_err(|_| TelemetryError::Malformed)?;
                 let (count, start, rate) = if command == "load" {
-                    if !matches!(count_or_rate, 100 | 1000) || !(1..=10).contains(&fourth) {
+                    if !matches!(count_or_rate, 100 | 1000) || !(1..=10).contains(&fourth_argument)
+                    {
                         return Err(TelemetryError::InvalidLimits);
                     }
                     (
                         count_or_rate
-                            .checked_mul(fourth as u64)
+                            .checked_mul(fourth_argument as u64)
                             .ok_or(TelemetryError::InvalidLimits)?,
                         1,
                         Some(count_or_rate),
                     )
                 } else {
-                    (count_or_rate, fourth, None)
+                    (count_or_rate, fourth_argument, None)
                 };
                 if count == 0 || count > 32768 {
                     return Err(TelemetryError::InvalidLimits);

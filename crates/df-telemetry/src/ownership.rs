@@ -28,7 +28,7 @@ fn is_link(metadata: &Metadata) -> bool {
 
 #[cfg(windows)]
 fn is_link(metadata: &Metadata) -> bool {
-    // Any reparse point (symlink, junction) is treated as a symlink is.
+    // Any reparse point (symlink, junction) is treated as a symlink.
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 

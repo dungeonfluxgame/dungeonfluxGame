@@ -228,8 +228,8 @@ impl Persistence {
         if self.identities.len().saturating_add(batch.records.len()) > 32768 {
             return Err(TelemetryError::Capacity);
         }
-        let size = (HEADER + batch.bytes.len()) as u64;
-        if self.spool_bytes.saturating_add(size) > self.limits.spool_bytes
+        let frame_bytes = (HEADER + batch.bytes.len()) as u64;
+        if self.spool_bytes.saturating_add(frame_bytes) > self.limits.spool_bytes
             || self.next > MAX_SPOOL_FILES as u64
         {
             return Err(TelemetryError::Capacity);
@@ -237,7 +237,7 @@ impl Persistence {
         let position = self.next;
         let path = self.frame_path(position);
         let mut file = open_file(&path, true, true)?;
-        let mut frame = Vec::with_capacity(size as usize);
+        let mut frame = Vec::with_capacity(frame_bytes as usize);
         frame.extend_from_slice(b"DFOTLP01");
         frame.push(if batch.signal == Signal::Logs { 1 } else { 2 });
         frame.extend_from_slice(&(batch.bytes.len() as u64).to_be_bytes());
@@ -256,7 +256,7 @@ impl Persistence {
                 record.key.record,
             );
         }
-        self.spool_bytes += size;
+        self.spool_bytes += frame_bytes;
         self.next += 1;
         self.backlog.push_back(position);
         Ok(position)
@@ -302,7 +302,7 @@ impl Persistence {
         let position = *self.backlog.front().ok_or(TelemetryError::Internal)?;
         let batch = read_frame(&self.frame_path(position), self.limits)?;
         self.check_conflicts(&batch.records)?;
-        let physical = [
+        let sqlite_physical_bytes = [
             "telemetry.sqlite3",
             "telemetry.sqlite3-wal",
             "telemetry.sqlite3-shm",
@@ -315,9 +315,9 @@ impl Persistence {
                 Err(_) => Err(TelemetryError::Io),
             }
         })?;
-        let reserve = (self.limits.sqlite_bytes / 2).min(4194304);
-        if physical
-            .saturating_add(reserve)
+        let sqlite_growth_reserve_bytes = (self.limits.sqlite_bytes / 2).min(4194304);
+        if sqlite_physical_bytes
+            .saturating_add(sqlite_growth_reserve_bytes)
             .saturating_add(batch.bytes.len() as u64)
             > self.limits.sqlite_bytes
         {
