@@ -72,11 +72,11 @@ impl Swap {
 
     /// Near the front clip's end, start the other clip over it. The outgoing clip stays
     /// on at full opacity; the incoming one is stacked on top and fades in.
-    pub(crate) fn begin(&mut self, current: f64, duration: f64, paused: bool) -> SwapStep {
-        if self.incoming.is_some() || paused || !duration.is_finite() {
+    pub(crate) fn begin(&mut self, current_s: f64, duration_s: f64, paused: bool) -> SwapStep {
+        if self.incoming.is_some() || paused || !duration_s.is_finite() {
             return SwapStep::Idle;
         }
-        if current < duration - SWAP_BEFORE_END {
+        if current_s < duration_s - SWAP_BEFORE_END {
             return SwapStep::Idle;
         }
         let incoming = 1 - self.front;
@@ -88,11 +88,11 @@ impl Swap {
 
     /// Once the incoming clip reports full opacity, rest the outgoing one and hand the
     /// picture over. Before that moment the outgoing clip stays on.
-    pub(crate) fn settle(&mut self, incoming_current: f64) -> SwapStep {
+    pub(crate) fn settle(&mut self, incoming_current_s: f64) -> SwapStep {
         let Some(incoming) = self.incoming else {
             return SwapStep::Idle;
         };
-        if incoming_current < FADE_SECONDS {
+        if incoming_current_s < FADE_SECONDS {
             return SwapStep::Idle;
         }
         let outgoing = self.front;

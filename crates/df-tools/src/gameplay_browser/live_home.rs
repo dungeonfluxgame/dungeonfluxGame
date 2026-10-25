@@ -39,8 +39,8 @@ pub(super) fn apply(
     }
     // The glass behind the panels is darker over a brighter painting: the grade's brightness runs
     // from 0.78 (a bright place) to 0.92 (a dim one), and the glass opacity runs the other way.
-    let shade = f64::from(mood.brightness_permille).clamp(780.0, 920.0);
-    let glass = 0.98 - (shade - 780.0) / 140.0 * 0.08;
+    let brightness_permille = f64::from(mood.brightness_permille).clamp(780.0, 920.0);
+    let glass_opacity = 0.98 - (brightness_permille - 780.0) / 140.0 * 0.08;
     let style = format!(
         "--home-accent:{};--home-tint:{};--home-vignette:{};\
          --home-brightness:{};--home-contrast:{};--home-saturation:{};--home-glass:{:.3}",
@@ -50,7 +50,7 @@ pub(super) fn apply(
         f64::from(mood.brightness_permille) / 1000.0,
         f64::from(mood.contrast_permille) / 1000.0,
         f64::from(mood.saturation_permille) / 1000.0,
-        glass,
+        glass_opacity,
     );
     stage.set_attribute("style", &style)?;
     let names: Vec<&str> = theme.atmosphere.iter().map(String::as_str).collect();
