@@ -1,0 +1,26 @@
+SUBJECT: Security change on your DungeonFlux account
+
+BODY:
+Hello {{display_name}},
+
+{{change_summary}}
+
+Time: {{event_time}}. Device: {{device_label}}.
+
+If this was you, you do not need to do anything.
+
+If this was not you, sign in at {{account_security_url}}, sign out of other devices, and change your password. If you cannot sign in, contact {{support_address}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{change_summary}}: One plain sentence describing the change, for example "A new device signed in to your account." or "Your password was changed." For an email change, the notice to the old address shows the new address masked (for example a***@e***.test), and the notice to the new address shows the old address masked.
+{{event_time}}: When the change happened, in the recipient's time zone.
+{{device_label}}: Device label from the account security history, for example "Chrome on Windows". Never an IP address or token.
+{{account_security_url}}: Plain address of the account security page. No token and no query string.
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 9.3 (new sign-in and security change notifications) and 11.
+Research: planning/account-service-research.md 7.2 (sessions carry device labels), 7.3 (password change; an email change notifies both addresses, and the old address can cancel), 7.5 (account_event device_label).
+No credential: this template carries no link with a token. Do not add a password reset link here; reset is a separate flow.
+Coordinator decision: which sign-ins count as new for this notice. The plan does not define "new sign-in".

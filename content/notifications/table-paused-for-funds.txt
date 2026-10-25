@@ -1,0 +1,22 @@
+SUBJECT: {{campaign_name}} is paused until it is funded
+
+BODY:
+Hello {{display_name}},
+
+{{campaign_name}} is paused because the table has no funding left for new paid work.
+
+Your story is saved at {{last_save_time}}. Work that was already paid for finishes first. New optional paid work stays stopped until the table is funded.
+
+To resume, open {{funding_url}} and add funding. Play resumes when the table is funded and its settings allow it.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{campaign_name}}: Campaign name.
+{{last_save_time}}: Time of the last durable save, in the recipient's time zone.
+{{funding_url}}: Plain address of the campaign funding page.
+
+NOTE:
+Plan section: 9.10 (at zero available credit, preserve the state, stop new paid requests and show Resume when funded; do not interrupt a completed paid cinematic), 11 (paused-for-funds notification) and J05 (no lost progress).
+Research: planning/account-service-research.md decision 10 (the pause applies only to tables paired with an account while the portal is on; owner and local play never pause; it stops all new optional paid work).
+Send by email only if the table is still paused after the in-app alert. Plan 11 says in-app first and email for unresolved problems. The delay is a coordinator decision.
+The message does not say which payer ran out of funds. Do not show payer balances (plan 9.10).

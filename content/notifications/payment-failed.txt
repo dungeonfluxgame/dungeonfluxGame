@@ -1,0 +1,23 @@
+SUBJECT: Your payment did not go through
+
+BODY:
+Hello {{display_name}},
+
+Your payment of {{attempted_amount}} for DungeonFlux service credit did not go through.
+
+Reason: {{failure_reason}}.
+
+No charge was made for this purchase. Check your payment details or use a different card.
+
+To try again, open {{add_credit_url}}. Each purchase is charged once, even if you submit the form twice.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{attempted_amount}}: Amount of the failed purchase, for example $20.00.
+{{failure_reason}}: Short customer-safe reason from an allowlist, for example "the card was declined". No processor codes or internal detail (plan 9.8).
+{{add_credit_url}}: Plain address of the add-credit page. No token and no query string.
+
+NOTE:
+Plan section: 9.8 (failed authentication lets the user retry the same purchase where safe, not create a duplicate), 11 (payment failed), 6.3 (an unknown outcome is not a failure).
+Send only when the processor has reported a definitive failure and no charge was captured, because the body says no charge was made. If the outcome is unknown or still pending, send nothing and show the pending status in the app (plan 11: pending, success, retryable failure, final failure and unknown-result states).
+The failure reason must come from an allowlist of customer-safe reasons. Provider request IDs stay out (plan 7.2).

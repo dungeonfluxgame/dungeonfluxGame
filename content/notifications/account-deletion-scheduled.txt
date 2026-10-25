@@ -1,0 +1,29 @@
+SUBJECT: Your DungeonFlux account is scheduled for deletion
+
+BODY:
+Hello {{display_name}},
+
+We have scheduled your DungeonFlux account for deletion on {{deletion_date}}.
+
+{{settlement_status}}
+
+Signing in before {{deletion_date}} cancels the deletion. You can also review it at {{account_url}}.
+
+After {{deletion_date}}, your personal data is removed as described in {{privacy_url}}. Billing records that the law requires us to keep are held with restricted access.
+
+If you did not ask for this, sign in and change your password at {{account_security_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{deletion_date}}: The date deletion can run, for example 24 Nov 2026.
+{{settlement_status}}: One sentence. Either "Your account has no remaining balance and no open payments or refunds." or the item that blocks deletion, for example "Your remaining balance of $12.40 must be refunded before deletion can run." or "A dispute on your 20 Oct 2026 top-up is still open."
+{{account_url}}: Plain address of the account page.
+{{privacy_url}}: Plain address of the privacy notice.
+{{account_security_url}}: Plain address of the account security page.
+
+NOTE:
+Plan section: 13.11 (deletion removes live access where feasible; encrypted backups age out on their schedule; required financial records stay in a restricted store; no promise of instant erasure of every backup), J14 and 11 (deletion schedule).
+Research: planning/account-service-research.md 7.5 (closure; logging in during the window reopens the account; deletion is blocked while money is unsettled).
+Send only after closure is recorded. The settlement_status sentence must name exactly what blocks deletion.
+The retention window and the wording about billing records are subject to the retention policy and counsel (plan 13.11; jurisdiction periods are a paid-launch gate). Check them before sending.
+Do not say that every copy of the data, including backups, is erased on the deletion date.

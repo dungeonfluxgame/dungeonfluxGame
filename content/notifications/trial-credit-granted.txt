@@ -1,0 +1,23 @@
+SUBJECT: Your trial credit is ready
+
+BODY:
+Hello {{display_name}},
+
+Your email address is verified, and your account now has {{trial_amount}} of trial credit.
+
+You can use it to try DungeonFlux before you add any money. You do not need a card for trial credit. Trial credit is used before purchased credit. It has no cash value, it cannot be refunded or withdrawn, and it cannot be moved into purchased credit. Your account page shows it as Trial credit until it is spent.
+
+See your balance at {{account_page_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{trial_amount}}: Trial grant from configuration, for example $10.00.
+{{account_page_url}}: Plain address of the account page.
+
+NOTE:
+Owner requirement (2026-10-24): "we give each new user $10 to do a quick trial". The amount is configuration, not text in this file.
+Research: planning/account-service-research.md decisions 19 to 23 (one grant per account and per verified address; separate promotional_credit entry; not refundable; spent before paid credit; shown separately as Trial credit).
+Plan section: 6.5 (promotional credit is kept separate from purchased credit and has no cash refund value) and 9.7 (promotional credit is its own balance).
+The plan's section 11 list does not include a trial notice. This template follows the owner requirement and the research decisions. The coordinator confirms it belongs in the transactional set.
+Send once, after the verification transaction commits, for the first verification of the account and address. Never send it on re-verification, or for an address that was granted before (research decision 19).
+The plan does not state a trial expiry. Research decision 20 says no expiry for now, and the terms text is a paid-launch gate (research decision 15). Add an expiry sentence only when the approved terms say so.

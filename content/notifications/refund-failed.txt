@@ -1,0 +1,24 @@
+SUBJECT: Your refund of {{refund_amount}} needs review
+
+BODY:
+Hello {{display_name}},
+
+We could not complete your refund of {{refund_amount}} for receipt {{receipt_id}}.
+
+The amount has not been refunded to your card, and it has not been added back to your service credit. Your request is now in review. You do not need to submit it again.
+
+We will email you when the review is finished. Reference: {{refund_reference}}.
+
+If you have questions, contact {{support_address}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{refund_amount}}: Cash amount that was requested, for example $12.40.
+{{receipt_id}}: Receipt number of the purchase.
+{{refund_reference}}: Refund reference for support and status pages.
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 6.7 (a failed refund returns to an unresolved or refund-review state, not immediately to both cash and credit), 9.7 (a refund that is not complete must not look complete) and 11 (refund updates).
+Send only on a definitive failure from the processor. An unknown outcome is not a failure: show pending in the app and send nothing (plan 6.3 and 11).
+The message promises neither cash nor credit. The review decides the outcome.

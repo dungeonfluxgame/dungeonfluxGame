@@ -1,0 +1,27 @@
+SUBJECT: Your contribution to {{campaign_name}} is active
+
+BODY:
+Hello {{display_name}},
+
+Your contribution to {{campaign_name}} is active for sessions hosted by {{host_display_name}}.
+
+Allocated from your service credit: {{contribution_amount}}.
+Your maximum spend per hour: {{payer_hourly_maximum}}.
+Your maximum for one session: {{payer_session_maximum}}.
+
+An allocation moves credit from your available balance to this table. It is not a card charge. You can withdraw any part that is not already reserved for work in progress at {{campaign_funding_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{campaign_name}}: Campaign name.
+{{host_display_name}}: Host's display name.
+{{contribution_amount}}: Amount allocated by the recipient, for example $10.00.
+{{payer_hourly_maximum}}: The recipient's own hourly maximum, as they approved it.
+{{payer_session_maximum}}: The recipient's own session maximum, as they approved it.
+{{campaign_funding_url}}: Plain address of the campaign funding page.
+
+NOTE:
+Plan section: 5.3 (an allocation moves available credit into an encumbered sub-balance; it is not revenue and not a transfer of ownership), 9.9 (payer panel: own maximum and consent summary), 9.7 (an allocation must not look like a card charge), 5.5 (withdrawing unreserved authorization), 11 (contribution accepted) and J03.
+Send only after funds are confirmed and the allocation is committed.
+Show only the recipient's own amounts. Other payers' amounts and balances are not in this message (plan 5.3 allows shared names and amounts only under an explicit group setting, which this template does not use).
+Consent version and timestamp are recorded in the app, not in this email.

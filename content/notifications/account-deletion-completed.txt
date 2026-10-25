@@ -1,0 +1,25 @@
+SUBJECT: Your DungeonFlux account has been deleted
+
+BODY:
+Hello {{display_name}},
+
+Your DungeonFlux account was deleted on {{deleted_at}}. You can no longer sign in to it.
+
+Your sign-in details and personal profile have been removed. Billing records that the law requires us to keep are held with restricted access until {{billing_retention_end}}.
+
+Campaigns: {{campaign_handover_summary}}
+
+Questions about this deletion: {{support_address}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name as it was when the account was deleted.
+{{deleted_at}}: When deletion completed, in the recipient's time zone.
+{{billing_retention_end}}: Date until which restricted billing records are kept, from the retention policy, for example 24 Oct 2033.
+{{campaign_handover_summary}}: One sentence on campaigns the recipient hosted, using campaign names only. For example "Your campaign Storm Keep now has a new host." or "You had no campaigns to transfer."
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 13.11 (deletion; required financial records kept in a restricted store under a documented lawful basis; no promise of unconditional erasure), J14 (a campaign is not deleted because one member leaves) and 11 (deletion notifications).
+Research: planning/account-service-research.md 7.5 (deletion clears the email address and keeps a keyed digest; billing records are kept pseudonymously).
+Send before the email address is cleared. Queue this message in the same transaction that schedules the clear, or send it first. After the clear there is no address to send to.
+Do not claim that every copy of the data, including backups, is erased on this date (plan 13.11).

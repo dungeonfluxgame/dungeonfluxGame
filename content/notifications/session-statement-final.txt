@@ -1,0 +1,36 @@
+SUBJECT: Your final statement for {{session_name}} is ready
+
+BODY:
+Hello {{display_name}},
+
+Your statement for {{session_name}} in {{campaign_name}} is final. All work from this session is settled, and nothing is still held.
+
+Summary of your contribution:
+Active table time: {{active_time}}.
+AI work used: {{ai_work_summary}}.
+Technical credits: {{technical_credits}}.
+Total consumed: {{total_consumed}}.
+Your share of charges: {{own_share}}.
+Released to your service credit: {{released_amount}}.
+
+This is a usage statement for your own contribution. It is not a tax invoice.
+
+View the statement at {{statement_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{session_name}}: Session name or number as members see it.
+{{campaign_name}}: Campaign name.
+{{active_time}}: Active table time, for example 42m 18s.
+{{ai_work_summary}}: Readable categories and quantities on one line, for example "narration 3.2 audio minutes; 1 scene image".
+{{technical_credits}}: Technical credits consumed, in dollars, for example $0.92.
+{{total_consumed}}: Total service consumed by the recipient's contribution, for example $7.10.
+{{own_share}}: The recipient's share of the session charges, for example $1.42.
+{{released_amount}}: Unused allocation released to the recipient's service credit, for example $8.00.
+{{statement_url}}: Plain address of the statement page. Sign-in is required to open it.
+
+NOTE:
+Plan section: 9.11 (finalizes the provisional label), 7.2 (usage statement; not a tax invoice), J12 and 11 (session settlement).
+Send only when no reservation for the session is unknown or open. Plan 9.11: a session is not financially final while unknown reservations remain. The settlement job checks this; the template does not.
+If final amounts differ from the provisional statement, the statement page explains the difference. This email does not.
+"Not a tax invoice" is subject to the tax specialist's review (plan 6.7).

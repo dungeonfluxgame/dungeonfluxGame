@@ -1,0 +1,34 @@
+SUBJECT: Your payment is confirmed
+
+BODY:
+Hello {{display_name}},
+
+We received your payment on {{purchase_date}}. Receipt {{receipt_id}}.
+
+Service credit added: {{credit_amount}}.
+Tax: {{tax_amount}}.
+Total charged to {{payment_method_label}}: {{total_charged}}.
+
+Your available purchased credit is now {{available_credit_after}}.
+
+Service credit cannot be transferred to another person. Refund terms are at {{terms_url}}.
+
+View this receipt and your usage at {{receipt_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{purchase_date}}: When the processor's verified webhook confirmed the payment, in the recipient's time zone.
+{{receipt_id}}: Receipt number for the purchase.
+{{credit_amount}}: Service credit granted by this purchase, for example $20.00.
+{{tax_amount}}: Tax on the purchase, for example $0.00. The tax specialist sets the rule and the wording (plan 6.7).
+{{payment_method_label}}: Card brand and last four digits only, for example "Visa ending 6411". Nothing else about the card.
+{{total_charged}}: Exact amount charged, for example $21.00.
+{{available_credit_after}}: Purchased service credit available after this purchase. Excludes promotional credit.
+{{terms_url}}: Plain address of the terms and refund page.
+{{receipt_url}}: Plain address of the receipt page.
+
+NOTE:
+Plan section: 9.8 (add-credit page; clarify nontransferability and eligible refund terms), 9.7 (receipts and purchase lines kept separate from allocations), 7.2 (a bank receipt documents a purchase), 11 (payment confirmed). Journey J01.
+Send only after the verified webhook is recorded and the purchase is credited. The redirect from Checkout alone never confirms a purchase (acceptance test PAY-01).
+Not a tax invoice: the tax line is supplied as the tax specialist decides (plan 6.7). Do not change the wording of this template without that review.
+Never include the processor's session ID, payment intent ID, billing address or any card number. The payment method label is the card suffix only.

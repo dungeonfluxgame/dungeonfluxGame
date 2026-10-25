@@ -1,0 +1,22 @@
+SUBJECT: Your account deletion is cancelled
+
+BODY:
+Hello {{display_name}},
+
+The scheduled deletion of your DungeonFlux account was cancelled on {{cancelled_time}} because {{cancel_reason}}.
+
+Your account is active. Your campaigns, characters and balances are as they were before the deletion was scheduled.
+
+If you did not do this, change your password at {{account_security_url}} and contact {{support_address}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{cancelled_time}}: When the cancellation took effect, in the recipient's time zone.
+{{cancel_reason}}: Short clause, either "you signed in" or "you asked us to cancel it".
+{{account_security_url}}: Plain address of the account security page. No token and no query string.
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 13.11 (deletion schedule) and 11 (deletion schedule notifications). The plan names the schedule only; this cancellation notice follows from the same lifecycle (research 7.5). The coordinator confirms it is wanted.
+Research: planning/account-service-research.md 7.5 (reopening by logging in during the window).
+Send after the cancellation is committed. The message carries no token or link other than plain page addresses.

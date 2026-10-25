@@ -1,0 +1,30 @@
+SUBJECT: Your data export is ready
+
+BODY:
+Hello {{display_name}},
+
+Your export of {{export_scope}} is ready. It was prepared at {{prepared_time}}. File size: {{file_size}}.
+
+Download it at {{download_link}}. The link stops working at {{link_expires_at}}.
+
+Anyone with this link can download the file until then, so do not share it. Each download is recorded.
+
+If you did not ask for this export, sign in at {{account_security_url}}, change your password, and contact {{support_address}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{export_scope}}: Either "your account" or "the campaign {{campaign_name}}", as the export requires. The caller fills in the full phrase.
+{{campaign_name}}: Campaign name, used only when the export scope is a campaign. Empty for an account export.
+{{prepared_time}}: When the export was built, in the recipient's time zone.
+{{file_size}}: Approximate size of the file, for example 3.4 MB.
+{{download_link}}: Short-lived download link. Credential-bearing (see NOTE).
+{{link_expires_at}}: Expiry time of the download link, in the recipient's time zone.
+{{account_security_url}}: Plain address of the account security page. No token and no query string.
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 13.11 (short-lived private download, access recorded, archive expires; exports are audience-filtered and exclude other people's data), J14 (request, reauthenticate, short-lived download) and 11 (export ready).
+Research: planning/account-service-research.md 7.5 (account export link valid for 24 hours). The expiry is set by configuration, not by this text.
+Short-lived link: {{download_link}} is the only credential in this template, required by plan 13.11 and J14. Render it at send time, never log the rendered body, and keep it out of analytics (plan 11).
+Plan 13.11 requires reauthentication for large or private exports before download. This email does not replace that step.
+Do not put export contents in this message.

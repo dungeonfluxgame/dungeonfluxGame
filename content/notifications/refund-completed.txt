@@ -1,0 +1,26 @@
+SUBJECT: Your refund of {{refund_amount}} is complete
+
+BODY:
+Hello {{display_name}},
+
+Your refund of {{refund_amount}} for receipt {{receipt_id}} was completed on {{completed_time}}.
+
+It went to {{payment_method_label}}, the original payment method. How quickly the money appears depends on your bank.
+
+Refund reference: {{refund_reference}}.
+
+Your available purchased credit is now {{available_credit_after}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{refund_amount}}: Cash amount refunded, for example $12.40.
+{{receipt_id}}: Receipt number of the refunded purchase.
+{{completed_time}}: When the processor reported the refund as succeeded, in the recipient's time zone.
+{{payment_method_label}}: Card brand and last four digits only, for example "Visa ending 6411".
+{{refund_reference}}: Refund reference for support and status pages.
+{{available_credit_after}}: Purchased service credit still available after the refund. Excludes promotional credit.
+
+NOTE:
+Plan section: 6.7 (the refund finalizes only after the definitive processor status), 9.7 (completed is shown only after that status), 11 (refund updates) and J13.
+Send only on the processor's definitive success, never on request creation or on acceptance alone.
+Promotional (trial) credit is never refunded (research decision 20), so it does not appear in this message.

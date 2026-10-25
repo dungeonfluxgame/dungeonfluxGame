@@ -1,0 +1,27 @@
+SUBJECT: We received your refund request
+
+BODY:
+Hello {{display_name}},
+
+We received your request to refund {{refund_amount}} from receipt {{receipt_id}}.
+
+Released from sessions and included in this refund: {{released_allocation_amount}}.
+Held by pending work and not included in this refund: {{pending_hold_amount}}.
+
+{{refund_amount}} is unavailable while the refund is processed. It goes back to {{payment_method_label}}, the original payment method.
+
+Refund reference: {{refund_reference}}. Check the status at {{refund_status_url}}. We will email you when the refund completes or fails.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{refund_amount}}: Cash amount being refunded, for example $12.40.
+{{receipt_id}}: Receipt number of the purchase being refunded.
+{{released_allocation_amount}}: Unspent session allocation released as part of this refund, for example $0.00 when none.
+{{pending_hold_amount}}: Amount excluded because it is held for pending work or a dispute, for example $0.00 when none.
+{{payment_method_label}}: Card brand and last four digits only, for example "Visa ending 6411".
+{{refund_reference}}: Refund reference for support and status pages.
+{{refund_status_url}}: Plain address of the refund status page.
+
+NOTE:
+Plan section: 6.7 (refund only to the original payment method; the preview shows lots, released allocations, pending holds and the destination card suffix; the lots lock and the amount becomes unavailable before the processor call), 9.7 (a pending refund must not look completed), 11 (refund updates) and J13 (reauthentication if required; a pending hold blocks only the affected amount).
+Send only after the refund intent is recorded with its idempotency key. The message says "requested", never "complete".

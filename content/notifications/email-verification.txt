@@ -1,0 +1,24 @@
+SUBJECT: Verify your DungeonFlux email
+
+BODY:
+Hello {{display_name}},
+
+Verify the email address {{email_address}} to finish setting up your DungeonFlux account.
+
+Open {{verification_link}} and select Verify my email. The link works once and expires at {{link_expires_at}}.
+
+Verifying your email lets you add service credit and host paid sessions.
+
+If you did not create a DungeonFlux account, you can ignore this email. Nothing happens unless you open the link.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name as entered at signup. Control characters removed.
+{{email_address}}: The address being verified, shown back to its owner.
+{{verification_link}}: Short-lived link carrying the single-use verification token. Credential-bearing (see NOTE).
+{{link_expires_at}}: Expiry time of the verification link, in the recipient's time zone.
+
+NOTE:
+Plan section: 9.3 (verified email required before funding or hosting paid sessions) and 11 (email verification is a transactional notification).
+Research: planning/account-service-research.md 7.1 (verification token lasts 24 hours; one "Verify my email" button, because link scanners cannot verify) and 7.4 (email bodies are the only place a token appears).
+Short-lived link: {{verification_link}} is the only credential in this template. Render it at send time, never log the rendered body, and keep it out of analytics (plan 11).
+Send from the mail worker after the account insert commits. Do not send it for an address that is already verified.

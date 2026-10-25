@@ -1,0 +1,28 @@
+SUBJECT: Unused credit released from {{campaign_name}}
+
+BODY:
+Hello {{display_name}},
+
+The session {{session_name}} in {{campaign_name}} ended at {{session_end_time}}.
+
+Released to your service credit: {{released_amount}}. This is an internal release, not a card refund.
+
+Still held for unfinished work: {{unresolved_amount}}. This is $0.00 when nothing is pending.
+
+You will get a final statement when everything is settled.
+
+To request a refund of unspent purchased credit, go to {{billing_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{campaign_name}}: Campaign name.
+{{session_name}}: Session name or number as members see it.
+{{session_end_time}}: When the host ended the session, in the recipient's time zone.
+{{released_amount}}: Unused allocation returned to the recipient's available service credit, for example $8.00.
+{{unresolved_amount}}: Amount still held for work with a pending or unknown outcome, for example $0.70. Use $0.00 when nothing is held.
+{{billing_url}}: Plain address of the billing page.
+
+NOTE:
+Plan section: 5.4 (on end, unused allocations return to each contributor's available service credit, not to the host; unresolved holds stay visible), J12 (end, settle, release unused allocations, show each payer's statement) and 11 (contribution released). Plan 9.11: the session is not financially final while holds remain.
+Released credit goes to the payer, never to the host. The host's unused contribution is handled the same way for each payer (plan 5.4, J07).
+Send once per payer per session end. A hold that settles later goes in the final statement (session-statement-final), not in a second release message.

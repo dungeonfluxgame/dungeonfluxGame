@@ -1,0 +1,25 @@
+SUBJECT: Funding for {{campaign_name}} is running low
+
+BODY:
+Hello {{display_name}},
+
+{{campaign_name}} has {{pot_available}} of funding left. Open holds are {{pot_held}}. The current maximum is {{hourly_maximum}} an hour.
+
+{{current_action}}
+
+You can add funding, lower the hourly maximum, or keep the current settings at {{funding_url}}.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{campaign_name}}: Campaign name.
+{{pot_available}}: Funding the table can still use for new work, for example $24.80.
+{{pot_held}}: Funding reserved for work in progress, for example $0.70.
+{{hourly_maximum}}: The table's maximum spend per hour, as the host set it, for example $8.00.
+{{current_action}}: One sentence stating what is paused or throttled now, for example "Optional new pictures are paused and existing art continues."
+{{funding_url}}: Plain address of the campaign funding page.
+
+NOTE:
+Plan section: 9.10 (budget chip; at a threshold, explain the actual action; the sample wording in the plan is an illustration), 11 (budget warnings are actionable and deduplicated; notify the host and affected payers, not spectators; in-app alerts first, email for durable receipts and unresolved problems) and J05.
+Coordinator decision needed: plan 11 puts in-app alerts first. This template is for the email case only. The default recipients are the host and the payers with an allocation.
+Deduplicate: send at most once per threshold crossing, per recipient, per session.
+Show only table totals. Do not include individual payers' balances (plan 9.9 and 9.10).

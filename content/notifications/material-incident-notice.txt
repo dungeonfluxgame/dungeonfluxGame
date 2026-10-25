@@ -1,0 +1,40 @@
+SUBJECT: Important: {{incident_title}}
+
+BODY:
+Hello {{display_name}},
+
+We are writing about an incident on {{incident_date}} that affected {{affected_scope}}.
+
+What happened: {{incident_summary}}
+
+Information involved: {{data_categories}}.
+
+What we have done: {{actions_taken}}.
+
+What you should do: {{customer_actions}}.
+
+{{financial_impact}}
+
+We will write again by {{next_update_time}}. Questions: {{support_address}}.
+
+We will never ask for your password or card details by email.
+
+PLACEHOLDERS:
+{{display_name}}: Recipient's display name.
+{{incident_title}}: Short plain title, for example "sign-in problem on 24 Oct 2026".
+{{incident_date}}: Date or date range of the incident.
+{{affected_scope}}: Plain description of who or what was affected, for example "accounts that uploaded portraits".
+{{incident_summary}}: Two or three plain sentences. Counsel reviews the wording. No internal system names and no exploit detail.
+{{data_categories}}: Categories of personal or game data involved, in plain words. Write "none" if none.
+{{actions_taken}}: Plain description of the response.
+{{customer_actions}}: Specific steps for the recipient, or "none required".
+{{financial_impact}}: One sentence on any credit, refund or hold affected, or "Your balance and purchases are not affected."
+{{next_update_time}}: When the next update will be sent, in the recipient's time zone.
+{{support_address}}: Support contact address.
+
+NOTE:
+Plan section: 11 (a material incident notice is a transactional notification) and 16 (secret compromise and storage incidents: assess notification obligations; deny missing output and provide customer credit when purchased output cannot be delivered).
+This template carries no link placeholder. If a link is needed, use a plain page address and record the reason in the incident review.
+The rendered notice must never contain secrets, tokens, provider credentials, signed URLs or payment instruments (plan 11).
+Counsel and the incident owner approve each incident's wording before it goes out. This file is a skeleton, not approved text (legal review is a paid-launch gate).
+Recipients: affected accounts only, as chosen by the incident owner.

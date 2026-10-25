@@ -1,0 +1,36 @@
+SUBJECT: {{host_display_name}} invited you to {{campaign_name}}
+
+BODY:
+Hello,
+
+{{host_display_name}} invited you to play {{campaign_name}} on DungeonFlux.
+
+{{scheduled_time_line}}
+
+Content rating: {{content_rating}}.
+
+{{funding_sentence}}
+
+To see the invitation and join, open {{invite_link}}. The link expires at {{link_expires_at}}.
+
+If the link has expired, open {{join_url}} and enter the room code {{room_code}}. The room code only finds the invitation. You still need to sign in and accept it.
+
+Sign in or create an account to accept. If you did not expect this invitation, you can ignore this email.
+
+PLACEHOLDERS:
+{{host_display_name}}: Host's display name. The only host detail shown before membership.
+{{campaign_name}}: Campaign name only. No private notes, assets or finance (plan 9.6).
+{{scheduled_time_line}}: Either "The table is scheduled for 24 Oct 2026, 19:05." or "No start time is set yet."
+{{content_rating}}: Approved content-rating label for the campaign.
+{{funding_sentence}}: Either "The host is funding this table, so you do not need to pay to join." or "You do not pay to join. Charges start only if you choose to contribute and the host starts a session."
+{{invite_link}}: Short-lived invitation link carrying a join token. Credential-bearing (see NOTE).
+{{link_expires_at}}: Expiry time of the invitation link, in the recipient's time zone.
+{{join_url}}: Plain address of the join page. No token and no query string.
+{{room_code}}: Short room code for discovery. It is not an authority by itself.
+
+NOTE:
+Plan section: 9.6 (the invite preview reveals only campaign name, host display name, scheduled time if present and approved content rating; invalid, expired, full, revoked and already-joined states), 11 (invitations are a transactional notification) and J02.
+Research: planning/account-service-research.md, S1 scope (invitations and join tokens).
+Short-lived link: {{invite_link}} is a short-lived link placeholder because the plan requires invitations to expire (9.6). It carries a join token. Render it at send time, never log it, and keep it out of analytics.
+The recipient may not have an account yet, so there is no display name in the greeting.
+Send only to addresses the host entered. Rate-limit invitations (plan 14.1).
