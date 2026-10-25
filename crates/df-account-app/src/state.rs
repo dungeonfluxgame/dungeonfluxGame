@@ -84,6 +84,7 @@ impl Submit {
 pub enum Notice {
     SignInToContinue,
     SessionEnded,
+    EmailVerified,
     /// Signing out could not be confirmed; the person may still be signed in.
     SignOutFailed,
     PasswordChanged,
@@ -736,6 +737,15 @@ impl Model {
                 self.session = Remote::Ready(session);
                 if self.screen == Screen::Booting {
                     return self.navigate(self.route.clone(), History::Keep);
+                }
+                if matches!(
+                    &self.screen,
+                    Screen::VerifyConfirm(screen)
+                        if screen.outcome == Some(crate::wire::VerifyOutcome::Verified)
+                ) && self.account().is_some()
+                {
+                    self.notice = Some(Notice::EmailVerified);
+                    return self.navigate(Route::Dashboard, History::Push);
                 }
                 if let Some(effects) = self.display_session_refreshed() {
                     return effects;

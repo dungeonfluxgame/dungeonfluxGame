@@ -46,8 +46,12 @@ html_escape() {
 }
 
 while IFS= read -r -d '' file; do
-  export DF_PILOT_STATE=$pilot_open
-  perl -0pi -e 's{<span data-df="pilot-copy" data-df-state="\Q$ENV{DF_PILOT_STATE}\E">(.*?)</span>}{$1}gs; s{<span data-df="pilot-copy" data-df-state="(?:open|closed)">.*?</span>}{}gs' "$file"
+  if [[ $pilot_open == true ]]; then
+    export DF_PILOT_STATE=open
+  else
+    export DF_PILOT_STATE=closed
+  fi
+  perl -0pi -e 's{<span data-df="pilot-copy" data-df-state="\Q$ENV{DF_PILOT_STATE}\E"(?: hidden)?>(.*?)</span>}{$1}gs; s{<span data-df="pilot-copy" data-df-state="(?:open|closed)"(?: hidden)?>(.*?)</span>}{}gs' "$file"
   case "$file" in
     "$site_dir"/de/*) sentence='wird betrieben von' ;;
     "$site_dir"/es/*) sentence='es operado por' ;;

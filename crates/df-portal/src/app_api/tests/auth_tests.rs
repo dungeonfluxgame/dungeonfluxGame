@@ -238,7 +238,8 @@ async fn verifying_revokes_a_squatters_session_and_replaces_the_sign_up_password
         )
         .await;
     assert_eq!(verified.json(), json!("verified"));
-    // The squatter's pre-verification session is revoked and the old password no longer works.
+    assert_eq!(owner.get("/app/api/overview").await.status, StatusCode::OK);
+    // Verification issues this browser a new session while revoking all earlier sessions.
     assert_eq!(squatter.get("/app/api/overview").await.code(), "signed_out");
     let mut visitor = harness.browser();
     visitor.session().await;

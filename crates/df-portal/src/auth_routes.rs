@@ -265,9 +265,8 @@ fn verify_page(csrf: &str, token: &str, errors: &[FieldError]) -> Markup {
         "Verify your email",
         Navigation::Visitor,
         markup!(
-            "<h1>Verify your email address</h1><p>Choose the password for this account. It ",
-            "replaces any password set when the account was created, and every device signed ",
-            "in before now is signed out.</p>",
+            "<h1>Verify your email address</h1><p>Set a password so only the person who owns ",
+            "this email controls the account.</p>",
             error_summary(errors),
             form_start("/verify-email", csrf, None),
             hidden("token", token),
@@ -326,13 +325,22 @@ pub async fn verify<S: AccountStore, M: EmailSender>(
         .verify_email_and_set_password(&body.token, &body.password, &body.confirmation, client)
         .await;
     let error = match outcome {
-        Ok(VerifyWithPasswordOutcome::Verified | VerifyWithPasswordOutcome::AlreadyVerified) => {
+        Ok(VerifyWithPasswordOutcome::Verified(issued)) => {
+            let token = issued.token.text();
+            let response = redirect("/app/dashboard");
+            let response = with_cookie(
+                response,
+                Some(set_cookie(SESSION_COOKIE, &token, issued.max_age_s)),
+            );
+            return with_cookie(response, Some(clear_cookie(PRESESSION_COOKIE)));
+        }
+        Ok(VerifyWithPasswordOutcome::AlreadyVerified) => {
             return ok_page(
                 "Email verified",
                 Navigation::Visitor,
                 markup!(
                     "<h1>Your email address is verified</h1><p><a class=\"button primary\" ",
-                    "href=\"/login\">Log in</a></p>"
+                    "href=\"/app/dashboard\">Go to your dashboard</a></p>"
                 ),
             );
         }

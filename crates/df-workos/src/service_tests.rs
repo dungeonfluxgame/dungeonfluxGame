@@ -95,13 +95,13 @@ impl Harness {
             .mail
             .last_token(email, MailPurpose::VerifyEmail)
             .unwrap();
-        assert_eq!(
+        assert!(matches!(
             self.service
                 .verify_email_and_set_password(&token, PASSWORD, PASSWORD, client())
                 .await
                 .unwrap(),
-            VerifyWithPasswordOutcome::Verified
-        );
+            VerifyWithPasswordOutcome::Verified(_)
+        ));
     }
 }
 

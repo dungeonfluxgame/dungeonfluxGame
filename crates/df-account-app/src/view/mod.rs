@@ -199,6 +199,7 @@ fn notice(model: &Model) -> Node {
         Notice::SessionEnded => {
             "Your session ended, so you were signed out. Sign in again to carry on.".to_owned()
         }
+        Notice::EmailVerified => "Email verified. Your $10 of free play is ready.".to_owned(),
         Notice::SignOutFailed => {
             "We could not confirm that you were signed out. Check your connection and press Sign out again."
                 .to_owned()

@@ -90,7 +90,7 @@ async fn verified_account<S: AccountStore, M: EmailSender>(
         .verify_email_and_set_password(&token, password, password, client())
         .await
     {
-        Ok(VerifyWithPasswordOutcome::Verified) => {}
+        Ok(VerifyWithPasswordOutcome::Verified(_)) => {}
         _ => return Err(failed("verification")),
     }
     let LoginOutcome::SignedIn(issued) = service

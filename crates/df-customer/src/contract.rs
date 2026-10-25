@@ -113,7 +113,7 @@ impl<S: AccountStore + Clone> Harness<S> {
             .expect("signup runs")
     }
 
-    /// Signs up, verifies through the emailed link and logs in.
+    /// Signs up and returns the session issued by email verification.
     pub async fn verified_account(&self, email: &str) -> (Authenticated, String) {
         let sent = self.mail.messages().len();
         assert_eq!(self.sign_up(email).await, SignupOutcome::CheckYourEmail);
@@ -122,14 +122,22 @@ impl<S: AccountStore + Clone> Harness<S> {
             .mail
             .last_token(email, MailPurpose::VerifyEmail)
             .expect("verification link");
-        assert_eq!(
-            self.service
-                .verify_email_and_set_password(&token, PASSWORD, PASSWORD, client(1))
-                .await
-                .unwrap(),
-            VerifyWithPasswordOutcome::Verified
-        );
-        self.log_in(email, PASSWORD).await
+        let VerifyWithPasswordOutcome::Verified(issued) = self
+            .service
+            .verify_email_and_set_password(&token, PASSWORD, PASSWORD, client(1))
+            .await
+            .unwrap()
+        else {
+            panic!("verification issues a session");
+        };
+        let cookie = issued.token.text();
+        let caller = self
+            .service
+            .authenticate(&cookie)
+            .await
+            .unwrap()
+            .expect("verification session authenticates");
+        (caller, cookie)
     }
 
     pub async fn log_in(&self, email: &str, password: &str) -> (Authenticated, String) {
@@ -158,14 +166,22 @@ impl<S: AccountStore + Clone> Harness<S> {
             .mail
             .last_token(email, MailPurpose::VerifyEmail)
             .expect("verification link");
-        assert_eq!(
-            self.service
-                .verify_email_and_set_password(&token, PASSWORD, PASSWORD, client(1))
-                .await
-                .unwrap(),
-            VerifyWithPasswordOutcome::Verified
-        );
-        self.log_in(email, PASSWORD).await
+        let VerifyWithPasswordOutcome::Verified(issued) = self
+            .service
+            .verify_email_and_set_password(&token, PASSWORD, PASSWORD, client(1))
+            .await
+            .unwrap()
+        else {
+            panic!("verification issues a session");
+        };
+        let cookie = issued.token.text();
+        let caller = self
+            .service
+            .authenticate(&cookie)
+            .await
+            .unwrap()
+            .expect("verification session authenticates");
+        (caller, cookie)
     }
 
     pub async fn is_signed_in(&self, cookie: &str) -> bool {
@@ -960,7 +976,7 @@ pub async fn password_and_email_changes_are_not_offered_while_the_provider_holds
     );
 }
 
-pub async fn verifying_replaces_the_sign_up_password_and_ends_earlier_sessions<
+pub async fn verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions<
     S: AccountStore + Clone,
 >(
     store: S,
@@ -970,13 +986,14 @@ pub async fn verifying_replaces_the_sign_up_password_and_ends_earlier_sessions<
     harness.sign_up("victim@example.test").await;
     let (attacker, attacker_cookie) = harness.log_in("victim@example.test", PASSWORD).await;
     assert!(!attacker.account.is_verified);
+    let (_, another_old_cookie) = harness.log_in("victim@example.test", PASSWORD).await;
     // The address's owner opens the emailed link and chooses their own password.
     harness.mail.wait_for(1).await;
     let token = harness
         .mail
         .last_token("victim@example.test", MailPurpose::VerifyEmail)
         .unwrap();
-    assert_eq!(
+    assert!(matches!(
         harness
             .service
             .verify_email_and_set_password(
@@ -988,19 +1005,29 @@ pub async fn verifying_replaces_the_sign_up_password_and_ends_earlier_sessions<
             .await
             .unwrap(),
         VerifyWithPasswordOutcome::Mismatch
-    );
-    assert_eq!(
-        harness
-            .service
-            .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
-            .await
-            .unwrap(),
-        VerifyWithPasswordOutcome::Verified
-    );
+    ));
+    let VerifyWithPasswordOutcome::Verified(issued) = harness
+        .service
+        .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
+        .await
+        .unwrap()
+    else {
+        panic!("the mailbox owner receives a new session");
+    };
+    let owner_cookie = issued.token.text();
+    let owner = harness
+        .service
+        .authenticate(&owner_cookie)
+        .await
+        .unwrap()
+        .expect("the verification session is live");
+    assert_eq!(owner.account.id, attacker.account.id);
+    assert!(owner.account.is_verified);
     assert!(
         !harness.is_signed_in(&attacker_cookie).await,
-        "every session made before the proof is revoked"
+        "every earlier session is revoked"
     );
+    assert!(!harness.is_signed_in(&another_old_cookie).await);
     assert!(matches!(
         harness
             .service
@@ -1010,13 +1037,15 @@ pub async fn verifying_replaces_the_sign_up_password_and_ends_earlier_sessions<
         LoginOutcome::Refused
     ));
     harness.log_in("victim@example.test", NEW_PASSWORD).await;
-    assert_eq!(
-        harness
-            .service
-            .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
-            .await
-            .unwrap(),
-        VerifyWithPasswordOutcome::AlreadyVerified,
+    assert!(
+        matches!(
+            harness
+                .service
+                .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
+                .await
+                .unwrap(),
+            VerifyWithPasswordOutcome::AlreadyVerified
+        ),
         "the link works once"
     );
 }
@@ -1034,7 +1063,7 @@ pub async fn verifying_at_the_provider_replaces_its_password_and_a_refused_passw
         .last_token("victim@example.test", MailPurpose::VerifyEmail)
         .unwrap();
     provider.reject_password("a password the provider dislikes");
-    assert_eq!(
+    assert!(matches!(
         harness
             .service
             .verify_email_and_set_password(
@@ -1046,14 +1075,16 @@ pub async fn verifying_at_the_provider_replaces_its_password_and_a_refused_passw
             .await
             .unwrap(),
         VerifyWithPasswordOutcome::ProviderRejectedPassword
-    );
-    assert_eq!(
-        harness
-            .service
-            .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
-            .await
-            .unwrap(),
-        VerifyWithPasswordOutcome::Verified,
+    ));
+    assert!(
+        matches!(
+            harness
+                .service
+                .verify_email_and_set_password(&token, NEW_PASSWORD, NEW_PASSWORD, client(5))
+                .await
+                .unwrap(),
+            VerifyWithPasswordOutcome::Verified(_)
+        ),
         "the link was not spent by the refusal"
     );
     // The password the sign-up set at the provider no longer works; the chosen one does.
@@ -1578,7 +1609,7 @@ macro_rules! store_contract_tests {
             the_provider_checks_the_password_for_sensitive_actions_and_closing_deletes_its_user,
             password_and_email_changes_are_not_offered_while_the_provider_holds_them,
             an_operator_lookup_finds_an_account_by_exact_address_or_id_only,
-            verifying_replaces_the_sign_up_password_and_ends_earlier_sessions,
+        verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions,
             verifying_at_the_provider_replaces_its_password_and_a_refused_password_leaves_the_link,
             a_login_after_the_closing_window_does_not_reopen_the_account,
             closing_needs_a_fresh_proof_within_five_minutes,

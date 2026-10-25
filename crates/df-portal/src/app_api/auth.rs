@@ -172,7 +172,17 @@ pub(super) async fn verify_email<S: AccountStore, M: EmailSender, P: Ports>(
         .verify_email_and_set_password(&body.token, &body.password, &body.confirmation, client)
         .await?
     {
-        VerifyWithPasswordOutcome::Verified => reply(VerifyOutcome::Verified),
+        VerifyWithPasswordOutcome::Verified(issued) => {
+            let token = issued.token.text();
+            Ok(Reply::new(VerifyOutcome::Verified)
+                .with_cookie(secret_cookie(
+                    SESSION_COOKIE,
+                    &token,
+                    issued.max_age_s,
+                    SameSite::Lax,
+                ))
+                .with_cookie(clear_secret_cookie(PRESESSION_COOKIE, SameSite::Lax)))
+        }
         VerifyWithPasswordOutcome::AlreadyVerified => reply(VerifyOutcome::AlreadyVerified),
         VerifyWithPasswordOutcome::InvalidLink => reply(VerifyOutcome::InvalidLink),
         VerifyWithPasswordOutcome::Mismatch => refused(Refusal::PasswordMismatch),

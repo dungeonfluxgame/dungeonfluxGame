@@ -166,7 +166,7 @@ impl Portal {
         .await
     }
 
-    /// Signs up, verifies through the emailed link, logs in; returns the session cookie.
+    /// Signs up and returns the session cookie issued by email verification.
     async fn signed_in(&self, email: &str) -> String {
         let sent = self.mail.messages().len();
         assert_eq!(self.sign_up(email).await.status, StatusCode::OK);
@@ -190,8 +190,12 @@ impl Portal {
                 ],
             )
             .await;
-        assert!(verified.body.contains("is verified"), "{}", verified.body);
-        self.log_in(email, PASSWORD).await.unwrap()
+        assert_eq!(verified.status, StatusCode::SEE_OTHER);
+        assert_eq!(verified.headers.get("location").unwrap(), "/app/dashboard");
+        let session = set_cookie_value(&verified.headers, crate::SESSION_COOKIE)
+            .filter(|value| !value.is_empty())
+            .expect("verification issues a session cookie");
+        format!("{}={session}", crate::SESSION_COOKIE)
     }
 
     async fn log_in(&self, email: &str, password: &str) -> Option<String> {

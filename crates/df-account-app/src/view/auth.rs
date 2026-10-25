@@ -324,7 +324,7 @@ pub(super) fn verify_confirm(screen: &VerifyConfirm, model: &Model) -> Node {
     match screen.outcome {
         Some(VerifyOutcome::Verified) => page(
             "Your email is verified",
-            Some("Your free play credit is on your dashboard once you sign in."),
+            Some("Your $10 of free play is ready."),
         )
         .child(el("p").class("actions").child(next))
         .into(),
@@ -342,9 +342,7 @@ pub(super) fn verify_confirm(screen: &VerifyConfirm, model: &Model) -> Node {
         .into(),
         None => page(
             "Verify your email",
-            Some(
-                "Choose the password for this account, then verify. This replaces any password chosen when the account was created, and signs out every device signed in before now.",
-            ),
+            Some("Set a password so only the person who owns this email controls the account."),
         )
         .child(
             form(Form::VerifyEmail, "Verify your email")

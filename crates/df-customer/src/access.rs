@@ -98,9 +98,8 @@ pub enum VerifyEmailOutcome {
     Throttled,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerifyWithPasswordOutcome {
-    Verified,
+    Verified(IssuedSession),
     AlreadyVerified,
     /// Unknown, expired or used link: one answer for all.
     InvalidLink,
@@ -321,23 +320,6 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
         Ok(())
     }
 
-    /// Verifies the address from its emailed link WITHOUT choosing a password. Superseded by
-    /// `verify_email_and_set_password`: whoever signed up with an address keeps the password
-    /// they chose here. Verifying does revoke every session made before it.
-    pub async fn verify_email(
-        &self,
-        token_text: &str,
-        client: Client,
-    ) -> Result<VerifyEmailOutcome, ServiceError> {
-        if !self.admit(ThrottleScope::TokenPagePerIp, Subject::Ip(client.ip)) {
-            return Ok(VerifyEmailOutcome::Throttled);
-        }
-        let Some(token) = SecretToken::parse(token_text) else {
-            return Ok(VerifyEmailOutcome::Invalid);
-        };
-        self.finish_verification(token, None).await
-    }
-
     /// The verification link's page: the owner of the mailbox proves it AND chooses the account's
     /// password in one step. Anyone who signed up with someone else's address loses the password
     /// they chose, and every session made before the proof is revoked, so the sign-up cannot be
@@ -388,7 +370,15 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
             None => Some(self.shared.hasher.hash(new_password).await?),
         };
         Ok(match self.finish_verification(token, replacement).await? {
-            VerifyEmailOutcome::Verified => VerifyWithPasswordOutcome::Verified,
+            VerifyEmailOutcome::Verified => {
+                let Some(account) = read(self.shared.store.account(target.account)).await? else {
+                    return Err(ServiceError::InvalidRecord);
+                };
+                let issued = self
+                    .issue_session(&account, client, Some(EventKind::LoggedIn))
+                    .await?;
+                VerifyWithPasswordOutcome::Verified(issued)
+            }
             VerifyEmailOutcome::AlreadyVerified => VerifyWithPasswordOutcome::AlreadyVerified,
             VerifyEmailOutcome::Invalid => VerifyWithPasswordOutcome::InvalidLink,
             VerifyEmailOutcome::Throttled => VerifyWithPasswordOutcome::Throttled,

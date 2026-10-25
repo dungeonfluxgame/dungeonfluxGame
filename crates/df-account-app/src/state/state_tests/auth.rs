@@ -282,18 +282,25 @@ fn filled_verify(model: &mut Model) {
 }
 
 #[test]
-fn verifying_while_signed_in_refreshes_the_session_so_the_trial_shows() {
-    let mut model = booted(token_route("0a1b"), signed_in(false));
+fn verifying_sets_a_session_and_lands_on_the_dashboard_with_a_notice() {
+    let mut model = booted(token_route("0a1b"), anonymous());
     filled_verify(&mut model);
     submit(&mut model, Form::VerifyEmail);
 
     let effects = deliver(&mut model, Reply::Verified(Ok(VerifyOutcome::Verified)));
 
     assert_eq!(first_call(&effects), Some(&ApiCall::Session));
-    let Screen::VerifyConfirm(screen) = &model.screen else {
-        panic!("the confirmation");
-    };
-    assert_eq!(screen.outcome, Some(VerifyOutcome::Verified));
+    assert!(matches!(model.screen, Screen::VerifyConfirm(_)));
+
+    let effects = deliver(&mut model, Reply::Session(Ok(signed_in(true))));
+
+    assert_eq!(model.route.path(), "/app/dashboard");
+    assert!(matches!(model.screen, Screen::Dashboard(_)));
+    assert_eq!(model.notice, Some(Notice::EmailVerified));
+    assert!(has_effect(
+        &effects,
+        &Effect::PushUrl("/app/dashboard".to_owned())
+    ));
 }
 
 #[test]

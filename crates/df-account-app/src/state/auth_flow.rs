@@ -327,12 +327,11 @@ impl Model {
                 Ok(outcome) => {
                     screen.submit = Submit::Idle;
                     screen.outcome = Some(outcome);
-                    // A signed-in person's session now says verified (and shows the trial).
-                    let mut effects = vec![Effect::Focus(FocusTarget::Heading)];
-                    if self.account().is_some() {
-                        effects.push(self.api(ApiCall::Session));
-                    }
-                    effects
+                    self.session = super::Remote::Loading;
+                    vec![
+                        Effect::Focus(FocusTarget::Heading),
+                        self.api(ApiCall::Session),
+                    ]
                 }
                 Err(error) => {
                     screen.submit = Submit::Refused(error);
