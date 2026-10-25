@@ -44,6 +44,7 @@ tower-http = { version = "0.6", features = ["fs"] }
 df-api = { path = "../df-api" }
 df-ai = { path = "../df-ai" }
 df-auth = { path = "../df-auth" }
+df-campaign = { path = "../df-campaign", features = ["routes"] }
 df-combat = { path = "../df-combat" }
 # The supplier tariff (price table and bill reader) the cost book shares with the money core.
 df-commerce = { path = "../df-commerce" }
@@ -93,6 +94,7 @@ df-types = { path = "../df-types" }
 prost-types = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-campaign = { path = "../df-campaign", features = ["test-fakes", "routes"] }
 tokio-tungstenite = "0.29"
 # The charge-site guard in gameplay/cost_tests.rs reads the sources as Rust, not as text.
 syn = { version = "=2.0.119", features = ["full", "visit"] }

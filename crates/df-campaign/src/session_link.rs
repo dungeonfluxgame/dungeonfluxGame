@@ -2,6 +2,9 @@
 //! The directory owns session truth; a launcher never starts a second gameplay owner.
 
 mod routes;
+mod runtime_http;
+pub mod runtime_protocol;
+pub use runtime_http::HttpRuntime;
 #[cfg(test)]
 mod tests;
 

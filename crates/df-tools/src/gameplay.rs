@@ -97,6 +97,7 @@ mod restart_qualification;
 mod room;
 mod room_code;
 mod run_restart;
+mod runtime_launch;
 mod scene_mood;
 mod session_recovery;
 mod shot;
@@ -1124,11 +1125,11 @@ fn page(
     let roots = if player {
         let join_scene_asset = join_scene_asset.map(escape_attribute).unwrap_or_default();
         format!(
-            "<section class=\"client player\" id=\"player\" data-room=\"{}\" data-join-scene-asset=\"{join_scene_asset}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
+            "<section class=\"client player\" id=\"player\" data-tunnel-path=\"/gameplay/tunnel\" data-page-path=\"/gameplay/player\" data-asset-base=\"/\" data-room=\"{}\" data-join-scene-asset=\"{join_scene_asset}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
             journey::ROOM_CODE,
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\" data-battle-splat-lod=\"{splat_lod}\"{}{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default(),if battle_grid{" data-battle-grid=\"on\""}else{""})).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-tunnel-path=\"/gameplay/tunnel\" data-page-path=\"/gameplay/display\" data-asset-base=\"/\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\" data-battle-splat-lod=\"{splat_lod}\"{}{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default(),if battle_grid{" data-battle-grid=\"on\""}else{""})).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -1273,6 +1274,7 @@ async fn serve_run(
     fresh_seed: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     df_observe::install_audit_sink(actor::record_audit_line);
+    let runtime_secret = runtime_launch::secret_from_environment()?;
     let startup_started = std::time::Instant::now();
     let mut startup = AuditStage::new("STARTUP", "hero-library");
     hero_library::configure(database.clone()).await;
@@ -2774,6 +2776,7 @@ async fn serve_run(
         splat_lod,
         battle_grid,
     };
+    let runtime_routes = runtime_launch::router(sender.clone(), state.clone(), runtime_secret)?;
     let player_page_run_identity = state.run_identity.clone();
     startup.step("http-router");
     let mut router = Router::new()
@@ -2810,6 +2813,7 @@ async fn serve_run(
         .merge(creator_portraits::router(service.clone()))
         .merge(hero_library::router())
         .merge(launcher_status::router(service.clone()))
+        .merge(runtime_routes)
         .merge(music_routes)
         .merge(home_video::router())
         .merge(speech_input::router(
@@ -2970,7 +2974,7 @@ async fn serve_run(
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
             result=grpc=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=grpc_error uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
-            result=axum::serve(listener,router)=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=http_error uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
+            result=axum::serve(listener,router.into_make_service_with_connect_info::<std::net::SocketAddr>())=>{ actor::record_audit_line("gameplay.stopping", format!("SERVER stopping reason=http_error uptime_s={}", startup_started.elapsed().as_secs())); result.map_err(Into::into) },
             _=async {
                 loop {
                     if journey::new_adventure_requested(&restart_updates.borrow()) { break; }

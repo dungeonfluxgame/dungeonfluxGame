@@ -101,7 +101,7 @@ pub(super) fn clear(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 pub(super) async fn call(
     request: rpc::ReclaimRoomRequest,
 ) -> Result<rpc::ReclaimRoomResponse, String> {
-    let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
+    let url = super::tunnel_url()?;
     let (connection, channel) = BrowserConnection::connect(&url)
         .await
         .map_err(|_| ROOM_CONNECTION_UNAVAILABLE.to_owned())?;

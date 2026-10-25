@@ -54,6 +54,7 @@ struct Client {
     root: Element,
     role: &'static str,
     credential: String,
+    campaign_entry: bool,
     room_code: String,
     session: Option<rpc::SessionId>,
     run: Option<rpc::RunId>,
@@ -416,6 +417,47 @@ thread_local! {
     static REQUEST_TIMEOUT: std::cell::Cell<std::time::Duration> =
         const { std::cell::Cell::new(std::time::Duration::from_secs(25)) };
 }
+fn tunnel_url() -> Result<String, String> {
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or("document absent")?;
+    let root = document
+        .get_element_by_id("player")
+        .or_else(|| document.get_element_by_id("display"))
+        .ok_or("gameplay root absent")?;
+    let path = root
+        .get_attribute("data-tunnel-path")
+        .unwrap_or_else(|| "/gameplay/tunnel".to_owned());
+    if !path.starts_with('/') || path.starts_with("//") || path.contains(['#', '?', '\\']) {
+        return Err("tunnel path invalid".to_owned());
+    }
+    let location = web_sys::window().ok_or("window absent")?.location();
+    let scheme = if location
+        .protocol()
+        .map_err(|_| "location protocol absent")?
+        == "https:"
+    {
+        "wss"
+    } else {
+        "ws"
+    };
+    Ok(format!(
+        "{scheme}://{}{path}",
+        location.host().map_err(|_| "location host absent")?
+    ))
+}
+fn page_path(client: &Client) -> String {
+    client
+        .root
+        .get_attribute("data-page-path")
+        .unwrap_or_else(|| {
+            if client.role == "player" {
+                "/gameplay/player".to_owned()
+            } else {
+                "/gameplay/display".to_owned()
+            }
+        })
+}
 fn request_timeout() -> std::time::Duration {
     REQUEST_TIMEOUT.with(std::cell::Cell::get)
 }
@@ -535,6 +577,21 @@ fn leave_saved_game(client: Rc<RefCell<Client>>) {
 /// Forgets this device's credential and returns to the join screen. The server keeps the
 /// hero and the room membership; nothing is deleted there.
 fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
+    if client.borrow().campaign_entry {
+        if let Some(window) = web_sys::window() {
+            if window
+                .location()
+                .replace(&page_path(&client.borrow()))
+                .is_err()
+            {
+                status(
+                    &client.borrow(),
+                    "Return to your campaign lobby to enter again.",
+                );
+            }
+        }
+        return;
+    }
     let cleared = {
         let mut state = client.borrow_mut();
         let cleared = saved_player::clear(&state.room_code);
@@ -646,7 +703,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
         if state.busy {
-            return Err("Waiting for the room…".to_owned());
+            return Err("Waiting for the roomâ€¦".to_owned());
         }
         if state.join_request.is_none() {
             state.join_request = Some(rpc::JoinRoomRequest {
@@ -661,7 +718,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
         let body = state.join_request.clone().ok_or("Room proof unavailable")?;
         retire_transport(&mut state);
         state.busy = true;
-        status(&state, "Joining your companions…");
+        status(&state, "Joining your companionsâ€¦");
         Ok((body, state.generation, state.reclaim_request.clone()))
     })();
     let (body, generation, reclaim) = match prepared {
@@ -705,7 +762,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     }
                 });
             }
-            let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
+            let url = tunnel_url()?;
             let (connection, channel) = BrowserConnection::connect(&url).await.map_err(|_| {
                 record_diagnostic(
                     &client,
@@ -947,7 +1004,7 @@ fn record_join_retry(error: &str, retries: &mut u32) -> bool {
     true
 }
 
-/// Repeats the pending join after a backoff while the page shows "Reconnecting…".
+/// Repeats the pending join after a backoff while the page shows "Reconnectingâ€¦".
 fn schedule_join_retry(client: &Rc<RefCell<Client>>, preparing: bool) {
     record_diagnostic(
         client,
@@ -1070,9 +1127,9 @@ fn connect(client: Rc<RefCell<Client>>) {
         {
             clear_view_scope(&mut state)?;
         }
-        status(&state, "Connecting to your saved game…");
+        status(&state, "Connecting to your saved gameâ€¦");
         if state.role == "display" {
-            show_notice(&state, Some("Connection lost. Reconnecting…"));
+            show_notice(&state, Some("Connection lost. Reconnectingâ€¦"));
         }
         Ok((
             state.generation,
@@ -1103,7 +1160,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                 owned.borrow().reconnect.attempt,
                 owned.borrow().reconnect.delay_ms,
             );
-            let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
+            let url = tunnel_url()?;
             let (connection, channel) = view_delivery::bounded_view_wait(
                 BrowserConnection::connect(&url),
                 gloo_timers::future::TimeoutFuture::new(view_delivery::VIEW_SILENCE_MS),
@@ -1201,7 +1258,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                         }
                     })?
                     .into_inner();
-            status(&owned.borrow(), "Connected · server owns the saved game");
+            status(&owned.borrow(), "Connected Â· server owns the saved game");
             while let Some(view) = view_delivery::wait_for_view(stream.message())
                 .await
                 .map_err(|status| {
@@ -1273,7 +1330,7 @@ fn connect(client: Rc<RefCell<Client>>) {
             // Only a connection this page retired itself (an aborted run) stays down.
             if result.is_ok() {
                 // A server that says its saved state is gone is still asked again (a restart
-                // brings it back), but the page says what is wrong instead of "Reconnecting…".
+                // brings it back), but the page says what is wrong instead of "Reconnectingâ€¦".
                 let lost = matches!(&result, Ok(Err(error)) if error == SERVER_LOST);
                 schedule_reconnect(&owned, refused, lost);
             }
@@ -1345,7 +1402,9 @@ async fn recover_adventure(
         }
         AdventureRecovery::NewGame => {
             let room = clean_room_code(&current.room_code).ok_or("New adventure room invalid")?;
-            let page = if client.borrow().role == "player" {
+            let page = if client.borrow().campaign_entry {
+                page_path(&client.borrow())
+            } else if client.borrow().role == "player" {
                 format!("/gameplay/player?room={room}")
             } else {
                 "/gameplay/display".to_owned()
@@ -1361,7 +1420,7 @@ async fn recover_adventure(
     }
 }
 
-const RECONNECTING: &str = "Reconnecting…";
+const RECONNECTING: &str = "Reconnectingâ€¦";
 
 /// Shows `text` as the page's connection notice, or removes the notice.
 fn show_notice(client: &Client, text: Option<&str>) {
@@ -1403,7 +1462,7 @@ z-index:2147483000;padding:.5em 1.4em;border-radius:999px;border:1px solid rgba(
 background:rgba(8,15,23,.88);color:#efe6ce;font:clamp(20px,1.4vw,36px) \"Iowan Old Style\",\
 \"Palatino Linotype\",Palatino,Georgia,serif;letter-spacing:.03em;pointer-events:none";
 
-/// Tries the game connection again after a backoff, with a visible "Reconnecting…". A display
+/// Tries the game connection again after a backoff, with a visible "Reconnectingâ€¦". A display
 /// whose credential the server refuses (the server restarted since the page was served) reloads
 /// itself to fetch a fresh one; a player's refused credential is handled by the caller.
 fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
@@ -1447,7 +1506,7 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
             } else if lost {
                 SERVER_LOST
             } else if state.role == "display" {
-                "Connection lost. Reconnecting…"
+                "Connection lost. Reconnectingâ€¦"
             } else {
                 RECONNECTING
             }),
@@ -1529,7 +1588,7 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
         if state.busy {
-            return Err("Waiting for the server…".to_owned());
+            return Err("Waiting for the serverâ€¦".to_owned());
         }
         let action = state
             .action
@@ -1543,7 +1602,7 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
             state.auto_confirms = 0;
         }
         state.busy = true;
-        feedback(&state, "Waiting for the game server…");
+        feedback(&state, "Waiting for the game serverâ€¦");
         Ok((action, state.credential.clone(), state.generation))
     })();
     let (mut action, credential, generation) = match prepared {
@@ -2749,7 +2808,7 @@ fn creation_group_description(group: &rpc::JourneyGroup) -> String {
     if description.is_empty() {
         label
     } else {
-        format!("{label} · {description}")
+        format!("{label} Â· {description}")
     }
 }
 fn creation_group_label(group_id: &str, label: &str) -> String {
@@ -2761,14 +2820,14 @@ fn creation_group_label(group_id: &str, label: &str) -> String {
 
 fn creation_option_label(group_id: &str, label: &str) -> String {
     if group_id == "build-package" {
-        if label.starts_with("Stalwart ·") {
-            return "Stalwart · Chain mail, greatsword, flail, 8 javelins".to_owned();
+        if label.starts_with("Stalwart Â·") {
+            return "Stalwart Â· Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
-        if label.starts_with("Vanguard ·") {
-            return "Vanguard · Chain mail, greatsword, flail, 8 javelins".to_owned();
+        if label.starts_with("Vanguard Â·") {
+            return "Vanguard Â· Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
         if label.contains("Fighter B") || label.starts_with("Longbow and Archery") {
-            return "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
+            return "Archer Â· Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
                 .to_owned();
         }
     }
@@ -3691,7 +3750,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         if role == "display" {
             "Your shared adventure"
         } else {
-            "Your story · your choices"
+            "Your story Â· your choices"
         },
     )?;
     node(
@@ -3726,7 +3785,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
             "div",
             "party-member",
             &format!(
-                "{} · {}",
+                "{} Â· {}",
                 member.name,
                 if member.character_ready {
                     "Ready"
@@ -3805,7 +3864,33 @@ fn new_client(
     role: &'static str,
 ) -> Result<Rc<RefCell<Client>>, JsValue> {
     live_theme::install(document)?;
-    let credential = root.get_attribute("data-local-binding").unwrap_or_default();
+    let campaign_scope = root.get_attribute("data-campaign-scope");
+    root.remove_attribute("data-campaign-scope")?;
+    let campaign_entry = campaign_scope.is_some()
+        || root
+            .get_attribute("data-page-path")
+            .is_some_and(|path| path.starts_with("/sessions/"));
+    let campaign_scope = campaign_scope
+        .map(|scope| {
+            saved_player::parse(&scope)
+                .ok_or_else(|| JsValue::from_str("campaign seat scope invalid"))
+        })
+        .transpose()?;
+    let credential = campaign_scope
+        .as_ref()
+        .map(|scope| scope.credential.clone())
+        .unwrap_or_else(|| root.get_attribute("data-local-binding").unwrap_or_default());
+    if let Some(asset_base) = root.get_attribute("data-asset-base") {
+        if !asset_base.starts_with('/')
+            || asset_base.starts_with("//")
+            || asset_base.contains(['#', '?', '\\'])
+        {
+            return Err(JsValue::from_str("asset base invalid"));
+        }
+        if let Some(base) = document.query_selector("base")? {
+            base.set_attribute("href", &asset_base)?;
+        }
+    }
     root.remove_attribute("data-local-binding")?;
     if let Some(milliseconds) = root
         .get_attribute("data-request-timeout-ms")
@@ -3825,6 +3910,7 @@ fn new_client(
                 .find_map(|pair| pair.strip_prefix("room=").and_then(clean_room_code))
         });
     let room_code = linked
+        .filter(|_| !campaign_entry)
         .or_else(|| {
             root.get_attribute("data-room")
                 .and_then(|code| clean_room_code(&code))
@@ -3835,15 +3921,20 @@ fn new_client(
         root: root.clone(),
         role,
         credential,
+        campaign_entry,
         room_code,
-        session: if role == "display" {
+        session: if let Some(scope) = campaign_scope.as_ref() {
+            Some(scope.session.clone())
+        } else if role == "display" {
             Some(rpc::SessionId {
                 value: Some(vec![0x41; 16]),
             })
         } else {
             None
         },
-        run: if role == "display" {
+        run: if let Some(scope) = campaign_scope.as_ref() {
+            Some(scope.run.clone())
+        } else if role == "display" {
             Some(rpc::RunId {
                 value: Some(match root.get_attribute("data-run-id") {
                     Some(value) if value.len() == 32 && value.is_ascii() => value
@@ -3864,7 +3955,9 @@ fn new_client(
         } else {
             None
         },
-        binding: if role == "display" {
+        binding: if let Some(scope) = campaign_scope.as_ref() {
+            Some(scope.binding.clone())
+        } else if role == "display" {
             Some(rpc::ClientBindingId {
                 value: Some(vec![0x72; 16]),
             })
@@ -3912,6 +4005,11 @@ fn new_client(
 
 /// Resumes a credential saved on this device through the ordinary reconnect path.
 fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    if client.borrow().campaign_entry {
+        render_resume(client)?;
+        connect(client.clone());
+        return Ok(());
+    }
     // Only the authenticated development ticket page supplies this one-use bootstrap.
     // It contains an existing owner-issued seat scope, never a new credential.
     let bootstrap = client.borrow().root.get_attribute("data-dev-player");
@@ -3933,7 +4031,7 @@ fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         web_sys::window()
             .ok_or_else(|| JsValue::from_str("window absent"))?
             .history()?
-            .replace_state_with_url(&JsValue::NULL, "", Some("/gameplay/player"))?;
+            .replace_state_with_url(&JsValue::NULL, "", Some(&page_path(&client.borrow())))?;
     }
     let saved = saved_player::load(&client.borrow().room_code);
     let stale = match (&saved, client.borrow().served_run.as_deref()) {
@@ -4238,7 +4336,7 @@ mod tests {
                 &root,
                 "div",
                 "df-reconnecting",
-                "Connection lost. Reconnecting…",
+                "Connection lost. Reconnectingâ€¦",
             )
             .unwrap();
         }
@@ -4249,7 +4347,7 @@ mod tests {
                 .length(),
             0
         );
-        show_notice(&client.borrow(), Some("Reconnecting…"));
+        show_notice(&client.borrow(), Some("Reconnectingâ€¦"));
         assert_eq!(
             root.query_selector_all(".df-reconnecting")
                 .unwrap()
@@ -4475,24 +4573,24 @@ mod tests {
     #[test]
     fn melee_creation_packages_keep_their_names_and_show_the_scores_they_are_sent() {
         assert_eq!(
-            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
-            "Stalwart · Chain mail, greatsword, flail, 8 javelins"
+            creation_option_label("build-package", "Stalwart Â· Greatsword and Defense"),
+            "Stalwart Â· Chain mail, greatsword, flail, 8 javelins"
         );
         // The scores come from the server, which owns them; the page shows them as sent.
         assert_eq!(
-            creation_option_description("build-package", "STR 17 · DEX 13 · CON 15"),
-            "STR 17 · DEX 13 · CON 15"
+            creation_option_description("build-package", "STR 17 Â· DEX 13 Â· CON 15"),
+            "STR 17 Â· DEX 13 Â· CON 15"
         );
         assert_eq!(
-            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
-            "Vanguard · Chain mail, greatsword, flail, 8 javelins"
+            creation_option_label("build-package", "Vanguard Â· Greatsword and Defense"),
+            "Vanguard Â· Chain mail, greatsword, flail, 8 javelins"
         );
         assert_eq!(
             creation_option_label(
                 "build-package",
-                "Longbow and Archery · Fighter B + Soldier B"
+                "Longbow and Archery Â· Fighter B + Soldier B"
             ),
-            "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
+            "Archer Â· Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
         );
         assert_eq!(
             creation_option_label("portrait", "Second hero"),
@@ -4524,17 +4622,17 @@ mod tests {
             equipment_label
         );
         assert_eq!(
-            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
+            creation_option_label("build-package", "Stalwart Â· Greatsword and Defense"),
             stalwart_package
         );
         assert_eq!(
-            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
+            creation_option_label("build-package", "Vanguard Â· Greatsword and Defense"),
             vanguard_package
         );
         assert_eq!(
             creation_option_label(
                 "build-package",
-                "Longbow and Archery · Fighter B + Soldier B"
+                "Longbow and Archery Â· Fighter B + Soldier B"
             ),
             archer_package
         );
@@ -4553,7 +4651,7 @@ mod tests {
         let single = super::rpc::JourneyGroup {
             group_id: "class".to_owned(),
             options: vec![super::rpc::JourneyOption {
-                label: "Fighter · level 1".to_owned(),
+                label: "Fighter Â· level 1".to_owned(),
                 description: "Choose a Fighting Style and call on Second Wind.".to_owned(),
                 ..Default::default()
             }],
@@ -4561,7 +4659,7 @@ mod tests {
         };
         assert_eq!(
             creation_group_description(&single),
-            "Fighter · level 1 · Choose a Fighting Style and call on Second Wind."
+            "Fighter Â· level 1 Â· Choose a Fighting Style and call on Second Wind."
         );
 
         let no_description = super::rpc::JourneyGroup {

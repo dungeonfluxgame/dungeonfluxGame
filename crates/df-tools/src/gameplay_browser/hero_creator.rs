@@ -2424,7 +2424,7 @@ fn library_failed(
 }
 
 async fn connect_library() -> Result<(df_rpc_bridge::BrowserConnection, LibraryClient), String> {
-    let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
+    let url = super::tunnel_url()?;
     let (connection, channel) = df_rpc_bridge::BrowserConnection::connect(&url)
         .await
         .map_err(|_| "Your heroes could not connect".to_owned())?;
