@@ -147,7 +147,7 @@ pub fn enumerate_candidates<'a, Owner: LegalOfferOwner>(
     admitted
         .try_reserve_exact(offers.len().min(limits.max_candidates))
         .map_err(|_| CandidateError::AllocationCapacity)?;
-    let mut bytes = 0_usize;
+    let mut admitted_bytes = 0_usize;
     for offer in offers {
         if !owner
             .is_current_legal(observation, current, offer)
@@ -161,7 +161,7 @@ pub fn enumerate_candidates<'a, Owner: LegalOfferOwner>(
             });
         }
         let cost = owner.offer_bytes(offer).map_err(CandidateError::Owner)?;
-        bytes = bytes
+        admitted_bytes = admitted_bytes
             .checked_add(cost)
             .filter(|total| *total <= limits.max_candidate_bytes)
             .ok_or(CandidateError::ByteCapacity {

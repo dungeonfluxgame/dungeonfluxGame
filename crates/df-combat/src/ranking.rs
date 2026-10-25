@@ -154,7 +154,7 @@ impl PerceivedKnowledge {
             KnowledgeObserver::Member(observer) => {
                 for grant in knowledge.grants {
                     if grant.observer == observer {
-                        perceived.retain(UtilityEvidence::Fact(grant.fact))?;
+                        perceived.retain_evidence(UtilityEvidence::Fact(grant.fact))?;
                     }
                 }
             }
@@ -162,7 +162,7 @@ impl PerceivedKnowledge {
                 for npc in knowledge.npcs {
                     if npc.entity == holder {
                         for fact in &npc.known_facts {
-                            perceived.retain(UtilityEvidence::Fact(*fact))?;
+                            perceived.retain_evidence(UtilityEvidence::Fact(*fact))?;
                         }
                     }
                 }
@@ -173,7 +173,7 @@ impl PerceivedKnowledge {
                             .iter()
                             .any(|npc| npc.entity == holder && npc.beliefs.contains(&belief.id))
                     {
-                        perceived.retain(UtilityEvidence::Belief(belief.id))?;
+                        perceived.retain_evidence(UtilityEvidence::Belief(belief.id))?;
                     }
                 }
             }
@@ -181,7 +181,7 @@ impl PerceivedKnowledge {
         Ok(perceived)
     }
 
-    fn retain(&mut self, evidence: UtilityEvidence) -> Result<(), UtilityRankingError> {
+    fn retain_evidence(&mut self, evidence: UtilityEvidence) -> Result<(), UtilityRankingError> {
         self.evidence
             .try_reserve(1)
             .map_err(|_| UtilityRankingError::AllocationCapacity)?;
