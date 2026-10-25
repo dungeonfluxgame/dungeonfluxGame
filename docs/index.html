@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DungeonFlux: your table's own Dungeon Master</title>
-<meta name="description" content="DungeonFlux runs a fifth-edition fantasy adventure on your TV while everyone plays from their phone. A Dungeon Master that voices every character, rolls fair dice and remembers your story. Your first $10 of play is on us.">
+<meta name="description" content="DungeonFlux runs a fifth-edition fantasy adventure on your TV while everyone plays from their phone. A Dungeon Master that voices every character, rolls fair dice and remembers your story. New accounts will get $10 of promotional credit.">
 <meta property="og:title" content="DungeonFlux: your table's own Dungeon Master">
-<meta property="og:description" content="The adventure plays on your TV. Everyone plays from their phone. Your first $10 of play is on us.">
+<meta property="og:description" content="The adventure plays on your TV. Everyone plays from their phone. New accounts will get $10 of promotional credit.">
 <link rel="canonical" href="https://dungeonfluxdnd.com/">
 <meta property="og:url" content="https://dungeonfluxdnd.com/">
 <meta property="og:image" content="https://dungeonfluxdnd.com/assets/scene-tavern-barkeep-talk-rain.webp">
@@ -16,23 +16,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="inner">
 
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="bar">
   <div class="wrap bar-inner">
     <a class="mark mark-small" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
-    <nav class="bar-nav" aria-label="Page sections">
-      <a href="#how">How a night plays</a>
-      <a href="#table">What you get</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#faq">Questions</a>
+    <nav class="bar-nav" aria-label="Main">
+      <a href="how-it-works/">How it works</a>
+      <a href="pricing/">Pricing</a>
+      <a href="rules/">Supported rules</a>
+      <a href="help/">Help</a>
     </nav>
-    <div class="bar-actions">
-      <a class="bar-login" href="/login">Log in</a>
-      <a class="btn btn-gilt btn-small" href="/signup">Start free</a>
-    </div>
   </div>
 </header>
 
@@ -50,12 +46,11 @@
       <h1 class="subtitle-line" id="hero-line">“Tonight, nobody has to be the Dungeon Master. I’ll run the game. You just play.”</h1>
       <span class="subtitle-rule" aria-hidden="true"></span>
     </div>
-    <p class="hero-lede">DungeonFlux is an AI Dungeon Master for your living room. The adventure plays on your TV, everyone plays from their own phone, and your first $10 of play is free. No card.</p>
-    <ul class="choices" aria-label="Get started">
-      <li><a class="choice is-lit" href="/signup"><span class="choice-icon" aria-hidden="true">✦</span><span>Get $10 of free play</span></a></li>
-      <li><a class="choice" href="#how"><span class="choice-icon" aria-hidden="true">❯</span><span>See how a night plays</span></a></li>
+    <p class="hero-lede">DungeonFlux is an AI Dungeon Master for your living room. The adventure plays on your TV, everyone plays from their own phone.</p>
+    <ul class="choices is-single" aria-label="Get started">
+      <li><a class="choice is-lit" href="#how"><span class="choice-icon" aria-hidden="true">❯</span><span>See how a night plays</span></a></li>
     </ul>
-    <p class="hero-fine"><span class="early">Early access</span> One $10 credit per new account.</p>
+    <p class="hero-fine"><span class="early">Early access</span> Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
   </div>
 </section>
 
@@ -87,7 +82,6 @@
       </li>
     </ol>
     <p class="fine steps-note">Screens from our early-access design. The live game may differ.</p>
-    <a class="btn btn-gilt btn-large steps-cta" href="/signup">Get $10 of free play</a>
   </div>
 </section>
 
@@ -109,8 +103,8 @@
       <figure class="feature-shot frame-flux"><img src="assets/combat-harbor-docks-wide-lanterns.webp" alt="Heroes fighting a drowned creature on lantern-lit docks" width="1672" height="941" loading="lazy"></figure>
       <div class="feature-copy">
         <p class="feature-tag tag-engine">The rules</p>
-        <h3>Real rules. Fair dice. Nobody fudges.</h3>
-        <p>Fifth-edition fantasy rules from the System Reference Document 5.2.1, run by a rules engine that rolls every die in view of the table. The storyteller describes what the dice decided and never the other way round.</p>
+        <h3>Real SRD rules, still growing. Fair dice. Nobody fudges.</h3>
+        <p>Fifth-edition fantasy rules from the System Reference Document 5.2.1, run by a rules engine on the server that draws the dice while the TV shows the roll results. The pilot supports a subset, starting with a level 1 Fighter: <a href="rules/">see what is built so far</a>. The storyteller describes what the dice decided and never the other way round.</p>
       </div>
     </div>
     <div class="feature">
@@ -138,9 +132,8 @@
     <div class="offer frame-gilt">
       <p class="offer-kicker">On the house</p>
       <p class="offer-amount" aria-label="Ten dollars">$10</p>
-      <h2 id="pricing-h">Your first $10 of play is on us</h2>
-      <p>Create an account and confirm your email, and $10 of play credit is waiting. No card, no subscription. Bring your friends; they play free on your table.</p>
-      <a class="btn btn-gilt btn-large" href="/signup">Get $10 of free play</a>
+      <h2 id="pricing-h">Your first $10 of play will be on us</h2>
+      <p>When sign-up opens, create an account and confirm your email, and $10 of promotional credit will be waiting. No card, no subscription. Bring your friends; a sponsored seat costs a player nothing.</p>
       <p class="fine">One trial credit per account. Credit is for play on DungeonFlux and has no cash value.</p>
     </div>
     <div class="pace">
@@ -162,7 +155,7 @@
         <div class="balance">
           <p class="balance-row"><span>Balance</span><b>$10.00</b></p>
           <span class="balance-bar" aria-hidden="true"><i></i></span>
-          <p class="balance-note">Your account page shows the play time your balance has left at your settings, before you start. Draft pictures, fewer new scenes and narrator-only voice make it last longest.</p>
+          <p class="balance-note">Once sign-up opens, your account page will show the play time your balance has left at your settings, before you start. Draft pictures, fewer new scenes and narrator-only voice make it last longest.</p>
         </div>
       </div>
       <p class="fine">If your balance runs out mid-session, the current moment finishes and the table pauses until you top up. Nothing you earned is lost.</p>
@@ -187,7 +180,7 @@
     <div class="faq-list">
       <details>
         <summary>Is an AI Dungeon Master any good?</summary>
-        <p>It’s early access, so judge it on your free $10. What we can promise: a rules engine, not the storyteller, rolls the dice and tracks the rules, so the AI can’t fudge a roll or forget your hit points. The storyteller handles the voices, the descriptions and what the world does next.</p>
+        <p>It’s early access, so judge it on your first $10 of promotional credit once sign-up opens. What we can promise: a rules engine, not the storyteller, rolls the dice and tracks the rules, so the AI can’t fudge a roll or forget your hit points. The storyteller handles the voices, the descriptions and what the world does next.</p>
       </details>
       <details>
         <summary>Does everyone need an account?</summary>
@@ -195,11 +188,11 @@
       </details>
       <details>
         <summary>Do we need to know the rules?</summary>
-        <p>No. Your phone offers the moves that make sense right now and shows your odds before you commit. The rules engine handles the rest, and veterans will find the fifth-edition rules they know.</p>
+        <p>No. In a fight, your phone offers only the moves that are possible right now, and the rules engine handles the rest. The game runs a growing part of the fifth-edition System Reference Document; the <a href="rules/">supported rules</a> page lists what is built so far.</p>
       </details>
       <details>
         <summary>How far does $10 go?</summary>
-        <p>It depends on how you play: picture quality, how often scenes change and whether characters speak aloud. Your account page estimates the play time left at your settings, so you always know before you start. We will publish typical costs per session once early access gives us real numbers.</p>
+        <p>It depends on how you play: picture quality, how often scenes change and whether characters speak aloud. Once sign-up opens, your account page will estimate the play time left at your chosen pace, so you will know before you start. We will publish typical costs per session once early access gives us real numbers.</p>
       </details>
       <details>
         <summary>What happens when the credit runs out?</summary>
@@ -211,7 +204,7 @@
       </details>
       <details>
         <summary>What happens to what we say and type?</summary>
-        <p>What your table says and types is sent to the AI services that run the story, the voices and the pictures, so they can answer you. Our <a href="/legal/privacy">privacy policy</a> lists those services; it is a draft until launch.</p>
+        <p>What your table says and types is sent to the AI services that run the story, the voices and the pictures, so they can answer you. Our <a href="legal/privacy/">privacy policy draft</a> will name those services before launch.</p>
       </details>
       <details>
         <summary>Is this official Dungeons &amp; Dragons?</summary>
@@ -224,9 +217,8 @@
 <section class="closing" aria-labelledby="closing-h">
   <img class="closing-art" src="assets/establishing-harbor-canal-rowboat-bridge.webp" alt="" width="1672" height="941" loading="lazy">
   <div class="wrap closing-inner">
-    <h2 id="closing-h">Pull up a chair. The story starts tonight.</h2>
-    <p>Your first $10 of play is on us.</p>
-    <a class="btn btn-gilt btn-large" href="/signup">Get $10 of free play</a>
+    <h2 id="closing-h">Pull up a chair. The story starts when the pilot opens.</h2>
+    <p>Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
   </div>
 </section>
 
@@ -235,13 +227,22 @@
 <footer class="foot">
   <div class="wrap foot-inner">
     <a class="mark mark-small" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
-    <p class="foot-links">
-      <a href="/login">Log in</a>
-      <a href="/signup">Create an account</a>
-      <a href="/legal/terms">Terms</a>
-      <a href="/legal/privacy">Privacy</a>
+    <nav class="foot-links" aria-label="Site">
+      <a href="how-it-works/">How it works</a>
+      <a href="pricing/">Pricing</a>
+      <a href="rules/">Supported rules</a>
+      <a href="help/">Help</a>
+      <a href="status/">Status</a>
       <a href="https://github.com/monstercameron/dungeonfluxGame">Source on GitHub</a>
-    </p>
+    </nav>
+    <nav class="foot-links" aria-label="Legal drafts">
+      <span class="foot-group">Drafts, not yet in effect:</span>
+      <a href="legal/terms/">Terms</a>
+      <a href="legal/privacy/">Privacy</a>
+      <a href="legal/refunds/">Refunds</a>
+      <a href="legal/credits/">Credits</a>
+      <a href="legal/content/">Content</a>
+    </nav>
     <p class="fine">Scenes shown are concept art for DungeonFlux, which is in early access. This work includes material from the System Reference Document 5.2.1 (“SRD 5.2.1”) by Wizards of the Coast LLC, available at <a href="https://www.dndbeyond.com/srd">dndbeyond.com/srd</a>, licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode">Creative Commons Attribution 4.0 International License</a>. DungeonFlux is not affiliated with Wizards of the Coast.</p>
   </div>
 </footer>

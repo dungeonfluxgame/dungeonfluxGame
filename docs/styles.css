@@ -232,3 +232,227 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 
 /* The font shorthand resets numeral style, so every money and step figure is set to lining numerals here. */
 .btn, .choice, .offer-amount, .balance-row, .step-num, .hero-fine, .fine, .faq-list summary, .offer-kicker, .dial-name { font-variant-numeric: lining-nums; }
+
+/* ==========================================================================
+   Inner pages: how-it-works, pricing, rules, help, status, legal.
+   Everything below is scoped by new class names or by body.inner, so the home page is untouched.
+   Colour rule kept: gilt is the story and the free offer, river-blue is the engine and every money
+   figure. One extra colour, --draft, is reserved for "this is not final" notices.
+   ========================================================================== */
+
+:root {
+  --draft: #f2a58e;
+  --draft-bg: rgba(242, 165, 142, 0.09);
+}
+
+/* Header on inner pages: the section links stay visible at every width by wrapping to a second row. */
+.bar-nav a[aria-current="page"] { color: var(--parchment); text-decoration: underline; text-decoration-color: var(--gilt); text-decoration-thickness: 2px; text-underline-offset: 8px; }
+@media (max-width: 1000px) {
+  .inner .bar-inner { flex-wrap: wrap; row-gap: 0; }
+  .inner .bar-nav { display: flex; order: 3; width: 100%; margin-left: 0; flex-wrap: wrap; gap: 0 22px; padding-bottom: 4px; }
+  .inner .bar-nav a { display: inline-flex; align-items: center; min-height: 44px; }
+  .inner .bar-inner { min-height: 0; padding-top: 8px; }
+}
+@media (max-width: 700px) {
+  .inner .bar { position: static; }
+}
+
+/* Page head: a plain title block, left aligned, with a soft wash and the game's gilt rule under it. */
+.page-head { padding-block: clamp(44px, 7vw, 96px) clamp(30px, 4vw, 52px); border-bottom: 1px solid rgba(241, 231, 208, 0.08);
+  background: radial-gradient(80% 140% at 88% 0%, rgba(47, 127, 174, 0.2), transparent 62%), linear-gradient(180deg, var(--night-2), var(--night)); }
+.page-head.is-story { background: radial-gradient(80% 140% at 88% 0%, rgba(230, 180, 94, 0.17), transparent 62%), linear-gradient(180deg, var(--night-2), var(--night)); }
+.page-head .wrap { display: grid; gap: 18px; justify-items: start; }
+.page-head h1 { font-size: clamp(2.5rem, 3.6vw + 1.2rem, 4.6rem); max-width: 18ch; }
+.page-head .subtitle-rule { margin: 2px 0 0; width: min(300px, 70%); }
+.page-lede { max-width: 58ch; font-size: clamp(1.1rem, 0.5vw + 1rem, 1.35rem); color: #d8d0bf; }
+.page-head .fine { max-width: 62ch; }
+
+/* Status pills. Each says its meaning in words, so colour is never the only signal. */
+.pill { display: inline-block; padding: 0.35em 0.9em; border-radius: 999px; border: 1px solid; font: 600 0.95rem/1.2 var(--serif); }
+.pill-proposed { color: var(--flux-hi); border-color: rgba(127, 208, 242, 0.55); background: rgba(47, 127, 174, 0.22); }
+.pill-draft { color: var(--draft); border-color: rgba(242, 165, 142, 0.6); background: var(--draft-bg); }
+.pill-early { color: var(--gilt-hi); border-color: rgba(230, 180, 94, 0.5); background: rgba(230, 180, 94, 0.1); }
+
+/* Draft banner for the legal pages, and the same shape for other unfinished notices. */
+.draft-banner { position: relative; display: grid; gap: 4px; padding: 18px 22px 18px 34px; border: 1px solid rgba(242, 165, 142, 0.6); border-radius: var(--r); background: var(--draft-bg); }
+.draft-banner::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 12px; border-radius: var(--r) 0 0 var(--r);
+  background: repeating-linear-gradient(135deg, var(--draft) 0 6px, transparent 6px 12px); }
+.draft-banner strong { font: 700 1.35rem/1.2 var(--head); color: #ffd9cc; }
+.draft-banner p { color: #f1dcd4; max-width: 70ch; }
+.banner-slot { padding-top: clamp(24px, 3vw, 36px); }
+
+/* Body copy. */
+.page-body { padding-block: clamp(36px, 5vw, 72px) var(--section); }
+.prose { max-width: 68ch; }
+.prose > * + * { margin-top: 1em; }
+.prose h2 { font-size: clamp(1.8rem, 1.3vw + 1.3rem, 2.5rem); margin-top: 2.2em; }
+.prose h2:first-child { margin-top: 0; }
+.prose h3 { margin-top: 1.7em; }
+.prose p, .prose li, .prose dd { color: #d8d0bf; }
+.prose ul, .prose ol { padding-left: 1.2em; display: grid; gap: 0.45em; }
+.prose strong { color: #fbf1da; font-weight: 600; }
+.prose .fine { color: var(--mist); }
+.prose dl { display: grid; gap: 1em; }
+.prose dt { font: 600 1.25rem/1.2 var(--head); color: #fbf1da; }
+.prose dd { margin: 0.2em 0 0; }
+.prose .todo { color: var(--draft); }
+.section-block { margin-top: clamp(48px, 6vw, 88px); }
+.section-block:first-child { margin-top: 0; }
+.section-block > h2 { font-size: clamp(1.9rem, 1.6vw + 1.3rem, 2.8rem); margin-bottom: 14px; }
+.section-block > .prose, .section-block > p { max-width: 68ch; }
+
+/* Notes: a short boxed aside in the engine colour. */
+.note { padding: 16px 20px; border-left: 3px solid var(--flux); background: rgba(13, 26, 46, 0.7); border-radius: 0 var(--r) var(--r) 0; max-width: 68ch; }
+.note p { color: #d8d0bf; }
+.note strong { color: var(--flux-hi); }
+.note.is-story { border-left-color: var(--gilt); }
+.note.is-draft { border-left-color: var(--draft); background: var(--draft-bg); }
+.note.is-draft strong { color: #ffd9cc; }
+
+/* Tables of figures. Wrapped so they scroll sideways inside their own box on a phone. */
+.data-wrap { overflow-x: auto; border: 1px solid rgba(127, 208, 242, 0.28); border-radius: var(--r); background: rgba(13, 26, 46, 0.6); max-width: 100%; }
+.data-wrap:focus-visible { outline-offset: 2px; }
+.data { width: 100%; min-width: 0; border-collapse: collapse; font-size: 1.02rem; line-height: 1.4; }
+.data-wide { min-width: 640px; }
+.data caption { text-align: left; padding: 18px 20px 8px; font: 600 1.25rem/1.25 var(--head); color: #fbf1da; }
+.data caption .pill { margin-left: 8px; vertical-align: 2px; }
+.data th, .data td { padding: 12px 20px; text-align: left; vertical-align: top; border-top: 1px solid rgba(127, 208, 242, 0.14); }
+.data thead th { color: var(--flux-hi); font-weight: 600; border-top: 1px solid rgba(127, 208, 242, 0.3); }
+.data tbody th { font-weight: 600; color: #eef6fb; }
+.data td { color: #d8d0bf; }
+.data .num { text-align: right; white-space: nowrap; font-variant-numeric: lining-nums tabular-nums; }
+.data tfoot td, .data tfoot th { border-top: 1px solid rgba(127, 208, 242, 0.4); font-weight: 600; color: #eef6fb; }
+.data .is-todo { color: var(--draft); font-weight: 600; }
+.data-after { margin-top: 12px; max-width: 68ch; }
+
+/* How it works: four rows in order, with a facts box beside each. */
+.flow { list-style: none; margin: 0; padding: 0; }
+.flow-step { display: grid; grid-template-columns: 72px minmax(0, 1.3fr) minmax(0, 1fr); gap: clamp(18px, 3vw, 44px); padding-block: clamp(32px, 4vw, 56px); border-top: 1px solid rgba(230, 180, 94, 0.22); }
+.flow-step:first-child { border-top: 0; padding-top: 0; }
+.flow-num { font: 600 3.4rem/0.9 var(--head); color: var(--gilt); font-variant-numeric: lining-nums; }
+.flow-main { display: grid; gap: 14px; align-content: start; }
+.flow-main h2 { font-size: clamp(1.8rem, 1.3vw + 1.3rem, 2.5rem); }
+.flow-main p { color: #d8d0bf; max-width: 60ch; }
+.flow-main .data-wrap { margin-top: 8px; }
+.facts { align-self: start; padding: 20px 22px; border: 1px solid rgba(127, 208, 242, 0.3); border-radius: var(--r); background: rgba(13, 26, 46, 0.7); }
+.facts-title { font: 600 1.1rem/1.1 var(--serif); color: var(--flux); margin-bottom: 10px; }
+.facts ul { margin: 0; padding-left: 1.1em; display: grid; gap: 8px; color: #d8d0bf; font-size: 1rem; line-height: 1.5; }
+.flow-shot { margin: 8px 0 0; border-radius: var(--r); overflow: hidden; border: 1px solid rgba(241, 231, 208, 0.14); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45); max-width: 720px; }
+.flow-shot figcaption { padding: 10px 14px; color: var(--mist); font-size: 0.88rem; line-height: 1.4; background: rgba(8, 17, 31, 0.8); }
+
+/* Pricing: the formula, set large, is the one memorable thing on the page. */
+.sum { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); gap: clamp(12px, 2.4vw, 32px); align-items: center; padding-block: clamp(8px, 2vw, 24px); }
+.sum-part { display: grid; gap: 6px; }
+.sum-big { font: 700 clamp(3.4rem, 6.4vw, 6.2rem)/0.9 var(--head); letter-spacing: -0.03em; font-variant-numeric: lining-nums;
+  -webkit-background-clip: text; background-clip: text; color: transparent; background-image: linear-gradient(180deg, #eafaff 0%, var(--flux) 50%, var(--flux-lo) 100%); }
+.sum-big.is-words { font-size: clamp(2rem, 3.4vw, 3.2rem); line-height: 1; }
+.sum-what { color: #d8d0bf; font-size: 1.02rem; line-height: 1.45; max-width: 26ch; }
+.sum-op { font: 500 clamp(2rem, 3vw, 3rem)/1 var(--head); color: var(--mist); }
+.sum-label { margin-top: 16px; }
+
+/* Pricing: the trial line in gilt, kept apart from the proposed rates. */
+.trial { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px clamp(18px, 3vw, 36px); align-items: center; padding: clamp(20px, 3vw, 32px); border: 1px solid rgba(230, 180, 94, 0.5); border-radius: var(--r); max-width: 760px;
+  background: radial-gradient(120% 120% at 0% 0%, rgba(230, 180, 94, 0.14), transparent 60%), var(--night-2); }
+.trial-amount { grid-row: span 2; font: 700 clamp(3.6rem, 6vw, 5.4rem)/0.85 var(--head); letter-spacing: -0.03em; font-variant-numeric: lining-nums;
+  -webkit-background-clip: text; background-clip: text; color: transparent; background-image: linear-gradient(180deg, #fff1c4 0%, var(--gilt) 50%, var(--gilt-lo) 100%); }
+.trial h3 { align-self: end; }
+.trial p { color: #e2d9c6; align-self: start; }
+
+/* Details used as the "How billing works" expander and other disclosures. */
+.disclose { max-width: 820px; border: 1px solid rgba(127, 208, 242, 0.3); border-radius: var(--r); background: rgba(13, 26, 46, 0.6); }
+.disclose summary { cursor: pointer; list-style: none; padding: 18px 52px 18px 22px; position: relative; font: 600 1.3rem/1.25 var(--head); color: #fbf1da; }
+.disclose summary::-webkit-details-marker { display: none; }
+.disclose summary::after { content: "+"; position: absolute; right: 20px; top: 14px; font-size: 1.6rem; color: var(--flux); }
+.disclose[open] summary::after { content: "\2212"; }
+.disclose-body { padding: 0 22px 22px; display: grid; gap: 14px; }
+.disclose-body p { color: #d8d0bf; max-width: 64ch; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.timeline li { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 12px; color: #d8d0bf; padding-bottom: 8px; border-bottom: 1px solid rgba(127, 208, 242, 0.12); }
+.timeline b { color: var(--flux-hi); font-weight: 600; font-variant-numeric: lining-nums; }
+
+/* Legal and long documents: a contents list beside the text. */
+.doc { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: clamp(28px, 5vw, 72px); align-items: start; }
+.doc-toc { position: sticky; top: 88px; padding: 18px 20px; border: 1px solid rgba(241, 231, 208, 0.16); border-radius: var(--r); }
+.doc-toc p { font: 600 1.05rem/1 var(--serif); color: var(--gilt); margin-bottom: 10px; }
+.doc-toc ol { margin: 0; padding-left: 1.2em; display: grid; gap: 2px; font-size: 0.98rem; }
+.doc-toc a { color: var(--mist); text-decoration: none; display: inline-block; padding: 4px 0; }
+.doc-toc a:hover { color: var(--parchment); text-decoration: underline; }
+.summary { padding: 20px 24px; border: 1px solid rgba(230, 180, 94, 0.4); border-radius: var(--r); background: rgba(230, 180, 94, 0.06); max-width: 68ch; }
+.summary h2 { font-size: 1.6rem; margin: 0 0 8px; }
+.summary ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; color: #e2d9c6; }
+.doc .prose h2 { scroll-margin-top: 90px; }
+.doc-meta { color: var(--mist); font-size: 0.95rem; }
+
+/* Status placeholder. */
+.status-box { display: grid; gap: 10px; padding: clamp(24px, 4vw, 40px); border: 1px dashed rgba(183, 192, 207, 0.5); border-radius: var(--r); max-width: 760px; background: rgba(13, 26, 46, 0.5); }
+.status-box h2 { font-size: clamp(1.7rem, 1.2vw + 1.2rem, 2.3rem); }
+.status-box p { color: #d8d0bf; }
+
+/* Call to action band at the end of a page. */
+.cta-band { display: grid; gap: 14px; justify-items: start; margin-top: clamp(48px, 6vw, 88px); padding: clamp(24px, 4vw, 40px); border: 1px solid rgba(230, 180, 94, 0.4); border-radius: var(--r); background: radial-gradient(120% 120% at 0% 0%, rgba(230, 180, 94, 0.12), transparent 60%), var(--night-2); max-width: 820px; }
+.cta-band h2 { font-size: clamp(1.7rem, 1.4vw + 1.2rem, 2.4rem); }
+.cta-band p { color: #e2d9c6; max-width: 56ch; }
+
+/* Footer on inner pages: product links and policy links on separate lines. */
+.foot-inner .foot-links + .foot-links { margin-top: -4px; }
+.foot-group { color: var(--mist); font-size: 0.95rem; margin-right: 4px; }
+
+@media (max-width: 900px) {
+  .flow-step { grid-template-columns: 1fr; gap: 14px; }
+  .flow-num { font-size: 2.6rem; }
+  .doc { grid-template-columns: 1fr; }
+  .doc-toc { position: static; }
+
+
+
+}
+@media (max-width: 640px) {
+  .page-head h1 { max-width: none; }
+  .trial { grid-template-columns: 1fr; }
+  .trial-amount { grid-row: auto; }
+  .timeline li { grid-template-columns: 1fr; gap: 0; }
+  .cta-band .btn { width: 100%; }
+  .data th, .data td { padding: 10px 14px; }
+  .disclose summary { font-size: 1.15rem; }
+}
+.pill, .data, .sum-big, .trial-amount, .flow-num, .timeline b { font-variant-numeric: lining-nums; }
+
+/* Inner-page body notes read at a comfortable size; finance and policy text is not fine print. */
+.page-head .fine, .page-body .fine { font-size: 1rem; line-height: 1.55; }
+@media (max-width: 640px) {
+  .sum { grid-template-columns: 1fr; justify-items: start; }
+  .sum-op { padding-left: 4px; }
+  .sum-what { max-width: 44ch; }
+}
+.data-narrow { max-width: 760px; }
+
+/* Phone: tables become one block per row, each value labelled by its column, so nothing hides off-screen. */
+@media (max-width: 640px) {
+  .data, .data tbody, .data tfoot, .data tr, .data th, .data td { display: block; }
+  .data, .data-wide { min-width: 0; }
+  .data caption { display: block; width: 100%; }
+  .data caption .pill { display: block; width: fit-content; margin: 8px 0 0; }
+  .data thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .data tr { padding: 12px 0; border-top: 1px solid rgba(127, 208, 242, 0.2); }
+  .data tbody tr:first-child { border-top: 0; }
+  .data th, .data td { border-top: 0; padding: 3px 16px; }
+  .data tbody th, .data tfoot th { font-size: 1.1rem; padding-bottom: 6px; }
+  .data td { display: grid; grid-template-columns: minmax(6.5rem, 38%) minmax(0, 1fr); gap: 4px 12px; }
+  .data td::before { content: attr(data-label); color: var(--flux-hi); font-weight: 600; }
+  .data td:empty { display: none; }
+  .data .num { text-align: left; white-space: normal; }
+  .data tfoot tr { border-top: 1px solid rgba(127, 208, 242, 0.45); }
+}
+
+/* Rules page: the supported, partial, not-yet and in-testing lists. */
+.rules-groups { display: grid; gap: clamp(28px, 4vw, 44px); margin-top: 24px; }
+.rules-group { max-width: 72ch; display: grid; gap: 12px; }
+.rules-group h3 { margin: 0; }
+.rules-group ul { margin: 0; padding-left: 1.2em; display: grid; gap: 0.6em; color: #d8d0bf; }
+.rules-group li strong { color: #fbf1da; font-weight: 600; }
+
+/* Round 1b: one hero choice, and tighter figures in the how-it-works example table. */
+.choices.is-single { grid-template-columns: minmax(0, 360px); justify-content: center; }
+@media (max-width: 640px) { .choices.is-single { grid-template-columns: 1fr; } }
+.flow-main .data th, .flow-main .data td { padding-inline: 14px; }
+.flow-main .data tbody th { white-space: nowrap; }
