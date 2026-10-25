@@ -236,3 +236,57 @@ Run a real browser against the local `account_app_preview` fake. Verify both aut
 - A fresh Google proof for closure is acceptable only if WorkOS returns verifiable freshness. If unavailable, choose a supported re-auth path before launch; keep the five-minute closure rule.
 - Migration number 0025 is free in the currently present global migration files. Recheck immediately before implementation because another lane may allocate it first.
 
+
+## Direct Google OIDC (owner decision 2026-10-25)
+
+This addendum supersedes every WorkOS-Google step and the Google-only pending-verification
+steps above. Password identities remain at WorkOS with our verify-first password replacement.
+Google uses a separate server-side df-google adapter and accounts.google_identity link keyed
+only by Google's sub. A verified new Google mailbox creates an immediately verified account,
+records the same adult attestation/current terms acceptance as password signup, and lands signed
+in on the dashboard with the $10 trial notice. An email collision never links: sign in with the
+existing password first, then explicitly link Google in Settings.
+
+Authorization is GET https://accounts.google.com/o/oauth2/v2/auth, with response_type=code,
+client_id, configured public origin plus /app/api/oauth/google/callback, scope=openid email
+profile, independent random state and nonce, PKCE S256 and prompt=select_account. Starts remain
+same-origin CSRF-protected POSTs. Fresh linking/closure re-authentication also sends max_age=0;
+returned auth_time must be no older than five minutes. An ordinary Google session alone does not
+provide fresh proof for closure. Attempts expire after ten minutes and are atomically consumed
+before exchange, including cancellation/failure; cookie binding is Secure, HttpOnly, SameSite=Lax,
+host-only, Path=/ and Max-Age=600. No arbitrary return destination is accepted.
+
+Exchange is server-only POST https://oauth2.googleapis.com/token with grant_type=
+authorization_code, code, exact redirect_uri, client_id, client_secret and code_verifier. Calls have
+connect/read/total deadlines, no redirects or retries and a bounded response. Per OpenID Connect
+Core 3.1.3.7, a token received directly from the token endpoint over authenticated TLS can use TLS
+validation in place of the token signature check. This exception is restricted to that direct
+response, never browser-supplied tokens. We still require Google issuer (https://accounts.google.com
+or accounts.google.com), our exact audience and azp when present, future exp, sane iat, matching
+nonce and email_verified=true. Fresh re-authentication additionally checks auth_time. Google access,
+refresh and ID tokens are discarded immediately after use. We retain only sub and the email shown
+on the account, never profile photos or Google API tokens. The requested profile scope can deliver
+a name; it is not persisted.
+
+Configuration names are DF_GOOGLE_CLIENT_ID and DF_GOOGLE_CLIENT_SECRET. Google is enabled only
+when both are configured; the account app hides its button otherwise. Production/staging callback
+origins remain distinct and come from configured HostConfig, never request or proxy headers.
+
+Sections 3 (adapted flow), 4 (security), 5 (fixed recovery screens) and 7 (local fakes, PostgreSQL and
+browser verification) still govern except for the overrides above. New verified Google signup
+sends no first-party verification mail and requires no password. Unknown Google sign-in does not
+create an account. Unlink refuses the final sign-in method. Google sign-out revokes our session;
+closure removes our Google link only after campaign completion and never deletes a Google account.
+WorkOS deletion remains exclusively for password-provider links.
+
+The session store retains a first-party reauthentication decision expiry, bounded by both the
+validated authentication time plus five minutes and our completion time plus five minutes.
+It does not retain Google's auth_time claim. An ordinary Google session has explicit Google
+provenance with no fresh proof; disabling the provider configuration must preserve that provenance.
+
+Migration 0029_google_oauth.sql was allocated after checking all crate migration directories;
+0025-0028 are taken/reserved (0100 is separately owned by Stripe). FakeGoogle covers preview;
+a loopback token endpoint fixture covers transport. No Google call is authorized in this lane.
+The coordinator real-account checklist is artifacts/tmp/agents/GOOGLEAUTH/live-check.md.
+The same disclosure sentence needs adding to docs/es/legal/privacy/index.html,
+docs/de/legal/privacy/index.html and docs/fr/legal/privacy/index.html in a later translation lane.
