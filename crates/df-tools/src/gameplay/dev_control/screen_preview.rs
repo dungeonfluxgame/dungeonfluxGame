@@ -19,12 +19,12 @@ const TICKET_LIFETIME: Duration = Duration::from_secs(60);
 struct Ticket {
     saved_player: String,
     run_identity: String,
-    expires: Instant,
+    expires_at: Instant,
 }
 
 impl Ticket {
-    fn belongs_to_run(&self, current: &str) -> bool {
-        self.run_identity == current
+    fn belongs_to_run(&self, current_run_identity: &str) -> bool {
+        self.run_identity == current_run_identity
     }
 }
 
@@ -33,7 +33,7 @@ pub(super) struct Tickets(HashMap<String, Ticket>);
 
 impl Tickets {
     fn insert(&mut self, token: String, ticket: Ticket, now: Instant) -> Result<(), ()> {
-        self.0.retain(|_, ticket| ticket.expires > now);
+        self.0.retain(|_, ticket| ticket.expires_at > now);
         if self.0.len() >= MAXIMUM_TICKETS || self.0.contains_key(&token) {
             return Err(());
         }
@@ -42,7 +42,9 @@ impl Tickets {
     }
 
     fn take(&mut self, token: &str, now: Instant) -> Option<Ticket> {
-        self.0.remove(token).filter(|ticket| ticket.expires > now)
+        self.0
+            .remove(token)
+            .filter(|ticket| ticket.expires_at > now)
     }
 }
 
@@ -55,11 +57,11 @@ pub(super) async fn issue(
     let seat = body["seat"]
         .as_str()
         .ok_or_else(|| bad_request("seat must be 1 to 6"))?;
-    let index = super::seat_index(seat).map_err(bad_request)?;
+    let seat_index = super::seat_index(seat).map_err(bad_request)?;
     let seats = state.seats.lock().await;
-    let credential = super::seat_credential(&seats, index)?;
+    let credential = super::seat_credential(&seats, seat_index)?;
     let (session, run) = super::scope_of(&seats)?;
-    let member = seats.seats[index]
+    let member = seats.seats[seat_index]
         .member
         .as_deref()
         .filter(|member| member.len() == 16)
@@ -89,7 +91,7 @@ pub(super) async fn issue(
             Ticket {
                 saved_player,
                 run_identity,
-                expires: now + TICKET_LIFETIME,
+                expires_at: now + TICKET_LIFETIME,
             },
             now,
         )
@@ -141,10 +143,10 @@ pub(super) async fn consume(
             Html("Preview link expired or already used. Request another link.".to_owned()),
         );
     };
-    let current_run = super::super::run_restart::identity();
-    if !current_run
+    let current_run_identity = super::super::run_restart::identity();
+    if !current_run_identity
         .as_ref()
-        .is_ok_and(|current| ticket.belongs_to_run(current))
+        .is_ok_and(|run_identity| ticket.belongs_to_run(run_identity))
     {
         return private_response(
             StatusCode::GONE,
@@ -170,7 +172,7 @@ mod tests {
         Ticket {
             saved_player: "scope".to_owned(),
             run_identity: "run".to_owned(),
-            expires: now + TICKET_LIFETIME,
+            expires_at: now + TICKET_LIFETIME,
         }
     }
     #[test]

@@ -25,7 +25,7 @@ pub(super) async fn transcript(
     let hero = match params.get("hero") {
         Some(requested) => {
             let name = canonical_hero(&state, &current, requested).await?;
-            let index = current
+            let hero_index = current
                 .state()
                 .characters
                 .iter()
@@ -35,7 +35,7 @@ pub(super) async fn transcript(
                 })
                 .and_then(|index| u32::try_from(index).ok())
                 .ok_or_else(|| bad_request("hero index unavailable"))?;
-            Some((name, index))
+            Some((name, hero_index))
         }
         None => None,
     };
@@ -45,7 +45,8 @@ pub(super) async fn transcript(
             current.basis().run.as_bytes(),
         ),
         since,
-        hero.as_ref().map(|(name, index)| (name.as_str(), *index)),
+        hero.as_ref()
+            .map(|(name, hero_index)| (name.as_str(), *hero_index)),
         params.get("npc").map(String::as_str),
     );
     Ok((StatusCode::OK, Json(entries)))
@@ -60,11 +61,11 @@ fn transcript_document(
         lines
             .into_iter()
             .filter(|line| line["seq"].as_u64().is_some_and(|seq| seq > since))
-            .filter(|line| hero.is_none_or(|(hero, index)| {
+            .filter(|line| hero.is_none_or(|(hero, hero_index)| {
                 line["speaker"]
                     .as_str()
                     .is_some_and(|speaker| speaker.eq_ignore_ascii_case(hero))
-                    || (line["hero_index"].as_u64() == Some(u64::from(index))
+                    || (line["hero_index"].as_u64() == Some(u64::from(hero_index))
                         && line["role"].as_str()
                             == Some(df_protocol::common::TableRole::Npc.as_str_name()))
             }))
@@ -94,16 +95,33 @@ pub(super) async fn trade_terms(
         bad_request("trade terms unavailable: hero must be present in a modeled place")
     })?;
     let npc = params.get("npc");
-    let document = terms.into_iter().filter_map(|term| {
-        let (direction, merchant) = match term.direction {
-            journey::living_scene::SceneTradeDirection::HeroBuys => ("buys", &term.seller_id),
-            journey::living_scene::SceneTradeDirection::HeroSells => ("sells", &term.buyer_id),
-        };
-        if npc.is_some_and(|npc| !merchant.eq_ignore_ascii_case(npc) && !term.counterparty_name.eq_ignore_ascii_case(npc)) { return None; }
-        Some(json!({"direction":direction,"item":term.item_id,"item_name":term.item_name,"merchant":merchant,
-            "merchant_name":term.counterparty_name,"min_cp":term.minimum_price_cp,"max_cp":term.maximum_price_cp,
-            "available":term.available,"stock_rev":term.stock_revision,"purse_rev":term.purse_revision}))
-    }).collect::<Vec<_>>();
+    let document = terms
+        .into_iter()
+        .filter_map(|term| {
+            let (direction, merchant) = match term.direction {
+                journey::living_scene::SceneTradeDirection::HeroBuys => ("buys", &term.seller_id),
+                journey::living_scene::SceneTradeDirection::HeroSells => ("sells", &term.buyer_id),
+            };
+            if npc.is_some_and(|npc| {
+                !merchant.eq_ignore_ascii_case(npc)
+                    && !term.counterparty_name.eq_ignore_ascii_case(npc)
+            }) {
+                return None;
+            }
+            Some(json!({
+                "direction": direction,
+                "item": term.item_id,
+                "item_name": term.item_name,
+                "merchant": merchant,
+                "merchant_name": term.counterparty_name,
+                "min_cp": term.minimum_price_cp,
+                "max_cp": term.maximum_price_cp,
+                "available": term.available,
+                "stock_rev": term.stock_revision,
+                "purse_rev": term.purse_revision,
+            }))
+        })
+        .collect::<Vec<_>>();
     Ok((StatusCode::OK, Json(json!(document))))
 }
 async fn canonical_hero(
@@ -125,18 +143,18 @@ async fn canonical_hero(
             .clone()
             .ok_or_else(|| bad_request("hero has not been created"));
     }
-    let mut found = None;
+    let mut matched_hero = None;
     for character in &current.state().characters {
         let name = journey::name(current.state(), character.entity)
             .map_err(|_| failed("hero name unavailable"))?;
         if name.eq_ignore_ascii_case(requested) {
-            if found.is_some() {
+            if matched_hero.is_some() {
                 return Err(bad_request("hero name is ambiguous"));
             }
-            found = Some(name);
+            matched_hero = Some(name);
         }
     }
-    found.ok_or_else(|| bad_request("unknown hero"))
+    matched_hero.ok_or_else(|| bad_request("unknown hero"))
 }
 pub(super) async fn npc_show(
     State(state): State<Arc<Shared>>,
@@ -157,8 +175,8 @@ pub(super) async fn npc_last(
     let current = state.service.updates.borrow().clone();
     let scene = beat_script_runtime::scene(current.state())
         .map_err(|_| failed("current scene unavailable"))?;
-    let id = super::reads::feelings_identity(&scene, npc);
-    if state.social.development_feelings(&id).is_none() {
+    let npc_id = super::reads::feelings_identity(&scene, npc);
+    if state.social.development_feelings(&npc_id).is_none() {
         return Err(bad_request("NPC has no profile here"));
     }
     if let Some(hero) = params.get("hero") {
@@ -174,10 +192,10 @@ pub(super) async fn npc_last(
                     .map(|_| character.owner)
             })
             .ok_or_else(|| bad_request("hero member unavailable"))?;
-        let recent = state.social.recent(member, &id);
+        let recent = state.social.recent(member, &npc_id);
         return Ok((
             StatusCode::OK,
-            Json(json!({"status":"unavailable","npc_id":id,"hero":hero,
+            Json(json!({"status":"unavailable","npc_id":npc_id,"hero":hero,
             "reason":"the stored global latest exchange has no hero correlation; recent is this hero's detached conversation memory",
             "recent":recent,"exchange":null,"edited":false})),
         ));
@@ -190,17 +208,22 @@ pub(super) async fn npc_last(
         StatusCode::OK,
         Json(last_document(
             &state.social,
-            &id,
+            &npc_id,
             decisions,
             params.get("hero").map(String::as_str),
         )),
     ))
 }
-fn last_document(social: &SocialLedger, id: &str, decisions: Value, hero: Option<&str>) -> Value {
+fn last_document(
+    social: &SocialLedger,
+    npc_id: &str,
+    decisions: Value,
+    hero: Option<&str>,
+) -> Value {
     let exchange = social
         .latest_exchange()
-        .filter(|exchange| exchange.npc_id == id);
-    json!({"npc_id":id,"hero_filter":hero,"exchange":exchange.map(|exchange| json!({
+        .filter(|exchange| exchange.npc_id == npc_id);
+    json!({"npc_id":npc_id,"hero_filter":hero,"exchange":exchange.map(|exchange| json!({
         "exchange_id":exchange.sequence,"approach":exchange.approach.label(),"effect":exchange.effect,
         "reaction":exchange.reaction,"emotion_after":exchange.emotional_state,"attitude":exchange.attitude.label()})),
         "decisions":decisions["decisions"],"hero_line":null,"line_route":null,"emotion_before":null,
@@ -247,24 +270,31 @@ pub(super) async fn voice(State(state): State<Arc<Shared>>, headers: HeaderMap) 
 pub(super) async fn mood(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
     authorized(&headers, &state.token)?;
     let events = super::timeline::snapshot(4096, None, None, false);
-    let mut mood = json!({"mood":null,"shot":null,"lighting":null,"reason":null,"faces":[],"scope":"last observed living-scene events; null before observation"});
+    let mut scene_diagnostics = json!({
+        "mood": null,
+        "shot": null,
+        "lighting": null,
+        "reason": null,
+        "faces": [],
+        "scope": "last observed living-scene events; null before observation",
+    });
     let mut faces = std::collections::BTreeMap::new();
     for event in events["events"].as_array().into_iter().flatten() {
-        let name = event["event"].as_str().unwrap_or("");
-        if !name.starts_with("gameplay.living_scene.") && name != "SCENE GRAPH" {
+        let event_name = event["event"].as_str().unwrap_or("");
+        if !event_name.starts_with("gameplay.living_scene.") && event_name != "SCENE GRAPH" {
             continue;
         }
         for key in ["mood", "shot", "lighting", "reason"] {
             if !event["fields"][format!("scene.{key}")].is_null() {
-                mood[key] = event["fields"][format!("scene.{key}")].clone();
+                scene_diagnostics[key] = event["fields"][format!("scene.{key}")].clone();
             }
         }
-        if name.ends_with("face_requested") {
+        if event_name.ends_with("face_requested") {
             faces.insert(event["fields"]["scene.actor"].to_string(), event.clone());
         }
     }
-    mood["faces"] = json!(faces.into_values().collect::<Vec<_>>());
-    Ok((StatusCode::OK, Json(mood)))
+    scene_diagnostics["faces"] = json!(faces.into_values().collect::<Vec<_>>());
+    Ok((StatusCode::OK, Json(scene_diagnostics)))
 }
 #[cfg(test)]
 mod tests {

@@ -60,8 +60,8 @@ pub(super) fn social_document(
     requested: &str,
     hero: Option<&str>,
 ) -> Result<Value, (StatusCode, Json<Value>)> {
-    let mut id = super::reads::feelings_identity(scene, requested);
-    let dossier = id
+    let mut npc_id = super::reads::feelings_identity(scene, requested);
+    let dossier = npc_id
         .split_once(':')
         .and_then(|(role, person)| role_of(role).and_then(|role| social.dossier_of(role, person)));
     let person = scene
@@ -88,9 +88,9 @@ pub(super) fn social_document(
                     .map(|actor| actor.id.as_str())
             })
             .ok_or_else(|| bad_request(format!("NPC {requested:?} is not present")))?;
-        id = crate::gameplay::npc_event_classifier::scene_person_binding(actor_id);
+        npc_id = crate::gameplay::npc_event_classifier::scene_person_binding(actor_id);
     }
-    let feelings = social.development_feelings(&id);
+    let feelings = social.development_feelings(&npc_id);
     let profile = feelings.as_ref().map(|(profile, _)| profile);
     let emotions = feelings
         .as_ref()
@@ -105,15 +105,15 @@ pub(super) fn social_document(
         }
         let member = character.owner;
         let standing = dossier.map(|dossier| social.standing(member, dossier));
-        let key = member_hex(member);
+        let member_key = member_hex(member);
         let emotional = emotions
             .iter()
-            .find(|(id, _, _)| *id == key)
+            .find(|(member_id, _, _)| *member_id == member_key)
             .map(|(_, _, emotional)| emotional);
         relationships.push(json!({
             "hero": name,
-            "details": social.development_relationship(member, &id),
-            "acquaintance": social.acquaintance(&name, &id),
+            "details": social.development_relationship(member, &npc_id),
+            "acquaintance": social.acquaintance(&name, &npc_id),
             "attitude": standing.map(|standing| standing.attitude.label()),
             "trust": standing.map(|standing| standing.trust),
             "emotion": emotional.map(emotional_json),
@@ -122,7 +122,7 @@ pub(super) fn social_document(
     }
     Ok(json!({
         "npc": requested,
-        "npc_id": id,
+        "npc_id": npc_id,
         "profile": profile,
         "persona": person.and_then(|person| person.persona.as_ref()),
         "dossier": dossier,

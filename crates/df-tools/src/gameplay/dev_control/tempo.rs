@@ -15,7 +15,7 @@ pub(super) async fn read(
     Query(params): Query<HashMap<String, String>>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    let last =
+    let history_limit =
         parse::parse_last(params.get("last").map_or("50", String::as_str)).map_err(bad_request)?;
     // Refresh only the owner projection. Service::view also registers voices and music jobs;
     // a diagnostic read must neither start those nor bypass the tempo owner via a cache read.
@@ -38,7 +38,9 @@ pub(super) async fn read(
         .map_err(super::owner_view_failure)?;
     Ok((
         StatusCode::OK,
-        Json(super::super::actor::tempo::diagnostic_snapshot(last)),
+        Json(super::super::actor::tempo::diagnostic_snapshot(
+            history_limit,
+        )),
     ))
 }
 
