@@ -10,76 +10,79 @@
 <link rel="canonical" href="https://dungeonfluxdnd.com/">
 <meta property="og:url" content="https://dungeonfluxdnd.com/">
 <meta property="og:image" content="https://dungeonfluxdnd.com/assets/scene-tavern-barkeep-talk-rain.webp">
-<meta name="theme-color" content="#08111f">
+<meta name="theme-color" content="#000000">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body class="inner">
+<body class="home">
 
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="bar">
   <div class="wrap bar-inner">
-    <a class="mark mark-small" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <a class="mark" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
     <nav class="bar-nav" aria-label="Main">
       <a href="how-it-works/">How it works</a>
       <a href="pricing/">Pricing</a>
-      <a href="rules/">Supported rules</a>
+      <a href="rules/">Rules</a>
       <a href="help/">Help</a>
-      <a href="changelog/">Changelog</a>
     </nav>
   </div>
 </header>
 
 <main id="main">
 
-<!-- Hero: a frame from the game. The headline is the Dungeon Master's line, set in the game's own
-     subtitle style, and the calls to action are the dialogue choices under it. -->
+<!-- Hero: a frame from the show. The header is the top letterbox bar, the Dungeon Master's line is the subtitle,
+     and the lede and the call to action sit in the bottom bar. -->
 <section class="hero" id="top" aria-labelledby="hero-line">
-  <img class="hero-art" src="assets/scene-tavern-barkeep-talk-rain.webp" alt="Two travellers lean across a rain-soaked tavern bar toward a weathered barkeep" fetchpriority="high" width="1672" height="941">
-  <div class="hero-scrim" aria-hidden="true"></div>
-  <p class="hero-place" aria-hidden="true">The Drowned Lantern</p>
-  <div class="wrap hero-inner">
+  <div class="hero-frame">
+    <img class="hero-art" src="assets/scene-tavern-barkeep-talk-rain.webp" alt="Two travellers lean across a rain-soaked tavern bar toward a weathered barkeep" fetchpriority="high" width="1672" height="941">
+    <p class="hero-place" aria-hidden="true">The Drowned Lantern</p>
     <div class="subtitle">
       <p class="subtitle-who">Your Dungeon Master</p>
       <h1 class="subtitle-line" id="hero-line">“Tonight, nobody has to be the Dungeon Master. I’ll run the game. You just play.”</h1>
-      <span class="subtitle-rule" aria-hidden="true"></span>
     </div>
+  </div>
+  <div class="wrap hero-foot">
     <p class="hero-lede">DungeonFlux is an AI Dungeon Master for your living room. The adventure plays on your TV, everyone plays from their own phone.</p>
-    <ul class="choices is-single" aria-label="Get started">
-      <li><a class="choice is-lit" href="#how"><span class="choice-icon" aria-hidden="true">❯</span><span>See how a night plays</span></a></li>
-    </ul>
-    <p class="hero-fine"><span class="early">Early access</span> Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
+    <p class="hero-cta"><a class="cta" href="#how">See how a night plays</a></p>
+    <p class="hero-fine fine"><span class="early">Early access</span> Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
   </div>
 </section>
 
-<!-- How a night plays: a real sequence, so it is numbered. -->
-<section class="how" id="how" aria-labelledby="how-h">
+<!-- How a night plays: a real sequence, so it is numbered, and laid out like an episode list. -->
+<section class="band" id="how" aria-labelledby="how-h">
   <div class="wrap">
-    <header class="section-head">
+    <header class="intro">
       <h2 id="how-h">From the couch to the crypt in three steps</h2>
       <p>No books, no prep, no one stuck behind the screen. If you can open a browser, you can run a campaign.</p>
     </header>
-    <ol class="steps">
-      <li class="step">
-        <figure class="step-shot"><img src="assets/ui-tv-title-screen-join-lobby.webp" alt="The TV title screen showing a join code over a moonlit river town" width="1672" height="941" loading="lazy"></figure>
-        <p class="step-num" aria-hidden="true">1</p>
-        <h3>Put the adventure on the TV</h3>
-        <p>Open DungeonFlux on the big screen. It shows a room code and waits for your party.</p>
+    <ol class="episodes">
+      <li class="episode">
+        <figure class="tv"><img src="assets/ui-tv-title-screen-join-lobby.webp" alt="The TV title screen showing a join code over a moonlit river town" width="1672" height="941" loading="lazy"></figure>
+        <div class="episode-copy">
+          <p class="episode-num" aria-hidden="true">1</p>
+          <h3>Put the adventure on the TV</h3>
+          <p>Open DungeonFlux on the big screen. It shows a room code and waits for your party.</p>
+        </div>
       </li>
-      <li class="step">
-        <figure class="step-shot"><img src="assets/ui-tv-character-creation-phone-picker.webp" alt="A hero's portrait on the TV beside a phone showing species and class choices" width="1672" height="941" loading="lazy"></figure>
-        <p class="step-num" aria-hidden="true">2</p>
-        <h3>Everyone joins on their phone</h3>
-        <p>Players enter the code and build a hero in a couple of minutes. Each one gets a face, a name and a past.</p>
+      <li class="episode">
+        <figure class="tv"><img src="assets/ui-tv-character-creation-phone-picker.webp" alt="A hero's portrait on the TV beside a phone showing species and class choices" width="1672" height="941" loading="lazy"></figure>
+        <div class="episode-copy">
+          <p class="episode-num" aria-hidden="true">2</p>
+          <h3>Everyone joins on their phone</h3>
+          <p>Players enter the code and build a hero in a couple of minutes. Each one gets a face, a name and a past.</p>
+        </div>
       </li>
-      <li class="step">
-        <figure class="step-shot"><img src="assets/ui-tv-tavern-barkeep-dialogue-choices.webp" alt="The party at the bar as the barkeep answers, with persuasion and other choices below" width="1672" height="941" loading="lazy"></figure>
-        <p class="step-num" aria-hidden="true">3</p>
-        <h3>Talk, roll and play</h3>
-        <p>Say what your hero says. The Dungeon Master answers out loud, the dice land on the TV, and the story goes where your table takes it.</p>
+      <li class="episode">
+        <figure class="tv"><img src="assets/ui-tv-sunken-halls-exploration-hud.webp" alt="The TV during exploration: four hero portraits, the current objective, a small map and the Dungeon Master's narration over a flooded stone hall, with Explore, Talk and Search actions along the bottom" width="1672" height="941" loading="lazy"></figure>
+        <div class="episode-copy">
+          <p class="episode-num" aria-hidden="true">3</p>
+          <h3>Talk, roll and play</h3>
+          <p>Say what your hero says. The Dungeon Master answers out loud, the dice land on the TV, and the story goes where your table takes it.</p>
+        </div>
       </li>
     </ol>
     <p class="fine steps-note">Screens from our early-access design. The live game may differ.</p>
@@ -87,39 +90,45 @@
 </section>
 
 <!-- What you get: four promises, each shown with the moment that proves it. -->
-<section class="table" id="table" aria-labelledby="table-h">
+<section class="band band-tight" id="table" aria-labelledby="table-h">
+  <div class="wrap features-head">
+    <h2 id="table-h">What your Dungeon Master does all night</h2>
+  </div>
   <div class="wrap">
-    <header class="section-head">
-      <h2 id="table-h">What your Dungeon Master does all night</h2>
-    </header>
     <div class="feature">
-      <figure class="feature-shot frame-gilt"><img src="assets/scene-barkeep-vell.webp" alt="Mother Vell, the barkeep, leans across the tavern bar" width="1536" height="1024" loading="lazy"></figure>
+      <figure class="feature-shot"><img src="assets/scene-barkeep-vell.webp" alt="Mother Vell, the barkeep, leans across the tavern bar" width="1536" height="1024" loading="lazy"></figure>
       <div class="feature-copy">
         <p class="feature-tag tag-story">The story</p>
         <h3>Characters with voices and secrets</h3>
         <p>Every innkeeper, merchant and villain speaks in a voice of their own, with a personality, a past and things they would rather not say. Charm them, haggle with them, threaten them. They remember how you treated them.</p>
       </div>
     </div>
-    <div class="feature">
-      <figure class="feature-shot frame-flux"><img src="assets/combat-harbor-docks-wide-lanterns.webp" alt="Heroes fighting a drowned creature on lantern-lit docks" width="1672" height="941" loading="lazy"></figure>
+    <div class="feature is-right">
+      <figure class="feature-shot is-phones"><img src="assets/ui-phone-tavern-persuasion-sheet-screens.webp" alt="Four phone screens: a barkeep with dialogue choices, a persuasion roll that succeeds, a list of things to investigate, and a hero's character sheet with combat actions" width="1672" height="941" loading="lazy"><figcaption>Player phone screens from our early-access design. The live game may differ.</figcaption></figure>
       <div class="feature-copy">
         <p class="feature-tag tag-engine">The rules</p>
         <h3>Real SRD rules, still growing. Fair dice. Nobody fudges.</h3>
         <p>Fifth-edition fantasy rules from the System Reference Document 5.2.1, run by a rules engine on the server that draws the dice while the TV shows the roll results. The pilot supports a subset, starting with a level 1 Fighter: <a href="rules/">see what is built so far</a>. The storyteller describes what the dice decided and never the other way round.</p>
       </div>
     </div>
-    <div class="feature">
-      <figure class="feature-shot frame-gilt"><img src="assets/scene-crypt-lich-king-confrontation.webp" alt="Heroes confronting a lich king in a candlelit crypt" width="1672" height="941" loading="lazy"></figure>
-      <div class="feature-copy">
-        <p class="feature-tag tag-story">The look</p>
-        <h3>Every scene, shot like a fantasy drama</h3>
-        <p>Places, people and the things you pick up are pictured as you reach them, in a cinematic, photographic style, with music underneath. It plays like an episode your friends are starring in.</p>
+  </div>
+  <div class="wide-band">
+    <img class="wide-band-art" src="assets/scene-crypt-lich-king-confrontation.webp" alt="Heroes confronting a lich king in a candlelit crypt" width="1672" height="941" loading="lazy">
+    <div class="wide-band-copy">
+      <div class="wrap">
+        <div class="feature-copy">
+          <p class="feature-tag tag-story">The look</p>
+          <h3>Every scene, shot like a fantasy drama</h3>
+          <p>Places, people and the things you pick up are pictured as you reach them, in a cinematic, photographic style, with music underneath. It plays like an episode your friends are starring in.</p>
+        </div>
       </div>
     </div>
+  </div>
+  <div class="wrap">
     <div class="feature">
-      <figure class="feature-shot frame-flux"><img src="assets/scene-campfire-under-stars.webp" alt="A party resting around a campfire under the stars" width="1672" height="941" loading="lazy"></figure>
+      <figure class="feature-shot"><img src="assets/scene-campfire-under-stars.webp" alt="A party resting around a campfire under the stars" width="1672" height="941" loading="lazy"></figure>
       <div class="feature-copy">
-        <p class="feature-tag tag-engine">The campaign</p>
+        <p class="feature-tag tag-story">The campaign</p>
         <h3>A world that remembers</h3>
         <p>Who you met, what you promised and what you broke all stay true from one night to the next. Wander off the path and the story follows you.</p>
       </div>
@@ -128,9 +137,9 @@
 </section>
 
 <!-- Pricing: the trial is the offer; paying for what you play is the model; the pace is yours. -->
-<section class="pricing" id="pricing" aria-labelledby="pricing-h">
+<section class="band band-tight" id="pricing" aria-labelledby="pricing-h">
   <div class="wrap pricing-grid">
-    <div class="offer frame-gilt">
+    <div class="offer">
       <p class="offer-kicker">On the house</p>
       <p class="offer-amount" aria-label="Ten dollars">$10</p>
       <h2 id="pricing-h">Your first $10 of play will be on us</h2>
@@ -140,31 +149,32 @@
     <div class="pace">
       <h3>After that, pay only for what you play</h3>
       <p>Top up when you want to. There is no subscription and nothing renews. Your table spends credit as the Dungeon Master talks, pictures and voices the night, and you decide how fast.</p>
-      <div class="dials" aria-label="An example of the spending settings on your account page">
+      <figure class="dials">
+        <figcaption>Example: your account page once sign-up opens</figcaption>
         <div class="dial">
           <p class="dial-name">Picture quality</p>
-          <p class="dial-options"><span>Draft</span><span class="is-on">Standard</span><span>Cinematic</span></p>
+          <p class="dial-options"><span>Draft</span><span class="is-on">Standard<span class="visually-hidden"> (chosen)</span></span><span>Cinematic</span></p>
         </div>
         <div class="dial">
           <p class="dial-name">New scene pictures</p>
-          <p class="dial-options"><span>Only when it changes</span><span>Every minute</span><span class="is-on">Every 30 seconds</span></p>
+          <p class="dial-options"><span>Only when it changes</span><span>Every minute</span><span class="is-on">Every 30 seconds<span class="visually-hidden"> (chosen)</span></span></p>
         </div>
         <div class="dial">
           <p class="dial-name">Character voices</p>
-          <p class="dial-options"><span class="is-on">On</span><span>Narrator only</span></p>
+          <p class="dial-options"><span class="is-on">On<span class="visually-hidden"> (chosen)</span></span><span>Narrator only</span></p>
         </div>
         <div class="balance">
           <p class="balance-row"><span>Balance</span><b>$10.00</b></p>
           <span class="balance-bar" aria-hidden="true"><i></i></span>
           <p class="balance-note">Once sign-up opens, your account page will show the play time your balance has left at your settings, before you start. Draft pictures, fewer new scenes and narrator-only voice make it last longest.</p>
         </div>
-      </div>
+      </figure>
       <p class="fine">If your balance runs out mid-session, the current moment finishes and the table pauses until you top up. Nothing you earned is lost.</p>
     </div>
   </div>
 </section>
 
-<section class="faq" id="faq" aria-labelledby="faq-h">
+<section class="band band-tight" id="faq" aria-labelledby="faq-h">
   <div class="wrap faq-grid">
     <div class="faq-side">
       <h2 id="faq-h">Questions</h2>
@@ -217,9 +227,12 @@
 
 <section class="closing" aria-labelledby="closing-h">
   <img class="closing-art" src="assets/establishing-harbor-canal-rowboat-bridge.webp" alt="" width="1672" height="941" loading="lazy">
-  <div class="wrap closing-inner">
-    <h2 id="closing-h">Pull up a chair. The story starts when the pilot opens.</h2>
-    <p>Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
+  <div class="closing-inner">
+    <div class="wrap">
+      <h2 id="closing-h">Pull up a chair. The story starts when the pilot opens.</h2>
+      <p>Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
+      <p class="cta-after"><a class="cta" href="news/2026-10-24-what-to-expect-from-the-pilot/">What to expect from the pilot</a></p>
+    </div>
   </div>
 </section>
 
@@ -227,7 +240,7 @@
 
 <footer class="foot">
   <div class="wrap foot-inner">
-    <a class="mark mark-small" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <a class="mark" href="#top" aria-label="DungeonFlux, back to top"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
     <nav class="foot-links" aria-label="Site">
       <a href="how-it-works/">How it works</a>
       <a href="pricing/">Pricing</a>

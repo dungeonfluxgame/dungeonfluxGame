@@ -10,10 +10,10 @@
 <meta property="og:title" content="DungeonFlux pricing (proposed pilot pricing)">
 <meta property="og:description" content="Proposed pilot pricing, subject to change: pick a pace of up to $3, $8 or $20 per table-hour. One price for the whole table, and you are charged only for what is used.">
 <meta property="og:url" content="https://dungeonfluxdnd.com/pricing/">
-<meta name="theme-color" content="#08111f">
+<meta name="theme-color" content="#000000">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../styles.css">
 </head>
 <body class="inner">
@@ -26,17 +26,16 @@
     <nav class="bar-nav" aria-label="Main">
       <a href="../how-it-works/">How it works</a>
       <a href="../pricing/" aria-current="page">Pricing</a>
-      <a href="../rules/">Supported rules</a>
+      <a href="../rules/">Rules</a>
       <a href="../help/">Help</a>
-      <a href="../changelog/">Changelog</a>
     </nav>
   </div>
 </header>
 
 <section class="page-head" aria-labelledby="page-h">
+  <img class="page-head-art" src="../assets/battlemap-crypt-sarcophagus-vault.webp" alt="" width="1672" height="941" fetchpriority="high" decoding="async">
   <div class="wrap">
     <h1 id="page-h">Pricing</h1>
-    <span class="subtitle-rule" aria-hidden="true"></span>
     <p class="page-lede">One price for the whole table, not one per player. You pick a pace, and you are charged only for what your table uses, never more than that pace per hour.</p>
     <p><span class="pill pill-proposed">Proposed pilot pricing, subject to change</span></p>
     <p class="fine">These prices have not been approved, you cannot buy credit yet, and nothing on this page is a contract. Paces, limits and allowances may change before launch.</p>
@@ -55,6 +54,7 @@
         <div class="pace-item" role="listitem"><p class="pace-name">Immersive</p><p class="sum-big">$8</p><p class="pace-per">per table-hour, at most</p><p class="sum-what">Voice and periodic pictures.</p></div>
         <div class="pace-item" role="listitem"><p class="pace-name">Cinematic</p><p class="sum-big">$20</p><p class="pace-per">per table-hour, at most</p><p class="sum-what">More frequent visual updates. Expensive video still needs explicit approval.</p></div>
       </div>
+      <p class="paces-example">Three hours at Immersive costs at most $24. Split four ways, at most $6 each.</p>
       <p class="paces-custom"><strong>Custom.</strong> Set your own limits: category controls, a per-request threshold and a total for the session.</p>
       <p class="sum-label"><span class="pill pill-proposed">Proposed pilot pricing, subject to change</span></p>
     </section>
@@ -103,16 +103,20 @@
       </div>
     </section>
 
-    <section class="section-block" aria-labelledby="three-h">
-      <h2 id="three-h">Estimated, maximum authorised and actually charged</h2>
-      <div class="prose">
-        <p>These are three different numbers, and the product shows them separately.</p>
-        <dl>
-          <div><dt>Estimated</dt><dd>Our forecast for your settings, shown as a range from recent use and the funding available. Because a limit allows bursts, a balance divided by a rate is not a promise of how many hours remain.</dd></div>
-          <div><dt>Maximum authorised</dt><dd>The most you and the table have allowed: the hourly limit, the session limit, your own limit and any request you approved. Spending is held below it, and work in progress counts against it.</dd></div>
-          <div><dt>Actually charged</dt><dd>What the usage statement shows once work has settled: exact time and delivered results, never above the quote, with failures credited.</dd></div>
-        </dl>
-      </div>
+    <section class="section-block is-fold" aria-labelledby="three-h">
+      <details class="disclose">
+        <summary><h2 id="three-h">Estimated, maximum authorised and actually charged</h2></summary>
+        <div class="disclose-body">
+          <div class="prose">
+            <p>These are three different numbers, and the product shows them separately.</p>
+            <dl>
+              <div><dt>Estimated</dt><dd>Our forecast for your settings, shown as a range from recent use and the funding available. Because a limit allows bursts, a balance divided by a rate is not a promise of how many hours remain.</dd></div>
+              <div><dt>Maximum authorised</dt><dd>The most you and the table have allowed: the hourly limit, the session limit, your own limit and any request you approved. Spending is held below it, and work in progress counts against it.</dd></div>
+              <div><dt>Actually charged</dt><dd>What the usage statement shows once work has settled: exact time and delivered results, never above the quote, with failures credited.</dd></div>
+            </dl>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="section-block" aria-labelledby="ex-h">
@@ -196,12 +200,14 @@
       </div>
     </section>
 
-    <section class="section-block" id="storage" aria-labelledby="storage-h">
-      <h2 id="storage-h">Storage</h2>
-      <div class="prose">
-        <p>Progress is kept while your account and campaign stay within the disclosed limits. A balance of zero never deletes a campaign. These are starting limits and not a promise of unlimited storage.</p>
-      </div>
-      <div style="height:18px"></div>
+    <section class="section-block is-fold" id="storage" aria-labelledby="storage-h">
+      <details class="disclose">
+        <summary><h2 id="storage-h">Storage</h2></summary>
+        <div class="disclose-body">
+          <div class="prose">
+            <p>Progress is kept while your account and campaign stay within the disclosed limits. A balance of zero never deletes a campaign. These are starting limits and not a promise of unlimited storage.</p>
+          </div>
+          <div style="height:18px"></div>
     <div class="data-wrap" role="region" aria-label="Proposed storage allowances" tabindex="0">
       <table class="data data-wide">
         <caption>Storage allowances <span class="pill pill-proposed">Proposed pilot pricing, subject to change</span></caption>
@@ -217,6 +223,8 @@
         </tbody>
       </table>
     </div>
+        </div>
+      </details>
     </section>
 
     <section class="section-block" aria-labelledby="add-h">
@@ -232,21 +240,26 @@
       </div>
     </section>
 
-    <section class="section-block" aria-labelledby="ver-h">
-      <h2 id="ver-h">Price version</h2>
-      <div class="prose">
-        <dl>
-          <div><dt>Version</dt><dd>Pilot draft. No numbered version has been published, because the owner has not approved these prices.</dd></div>
-          <div><dt>Effective date</dt><dd>None yet. Drafted 24 October 2026. When prices are approved, this page will show the version and the date it takes effect, and each session will show the version it was started under.</dd></div>
-          <div><dt>Currency</dt><dd>US dollars.</dd></div>
-        </dl>
-        <!-- TODO(owner): replace with the approved price-version id and effective date from the price schedule configuration. -->
-      </div>
+    <section class="section-block is-fold" aria-labelledby="ver-h">
+      <details class="disclose">
+        <summary><h2 id="ver-h">Price version</h2></summary>
+        <div class="disclose-body">
+          <div class="prose">
+            <dl>
+              <div><dt>Version</dt><dd>Pilot draft. No numbered version has been published, because the owner has not approved these prices.</dd></div>
+              <div><dt>Effective date</dt><dd>None yet. Drafted 24 October 2026. When prices are approved, this page will show the version and the date it takes effect, and each session will show the version it was started under.</dd></div>
+              <div><dt>Currency</dt><dd>US dollars.</dd></div>
+            </dl>
+            <!-- TODO(owner): replace with the approved price-version id and effective date from the price schedule configuration. -->
+          </div>
+        </div>
+      </details>
     </section>
 
     <div class="cta-band">
       <h2>Try it before you pay anything</h2>
       <p>Sign-up opens with the early-access pilot. New accounts will get $10 of promotional credit, with no card needed to start.</p>
+      <p class="cta-after"><a class="cta" href="../news/2026-10-24-what-to-expect-from-the-pilot/">What to expect from the pilot</a></p>
     </div>
   </div>
 </div>
