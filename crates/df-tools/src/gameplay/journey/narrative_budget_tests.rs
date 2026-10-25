@@ -22,7 +22,7 @@ fn policy() -> NarrativeBudgetPolicy<ContentReference> {
     }
 }
 
-fn source(current: &Checkpoint, entry: &str) -> FactId {
+fn source_fact_id(current: &Checkpoint, entry: &str) -> FactId {
     let event = model::content(entry).unwrap();
     current.state().facts.iter().find(|fact|
         matches!(&fact.value, FactValue::ContentEvent { definition, .. } if *definition == event)
@@ -83,7 +83,7 @@ pub(super) fn design_pending_budget(
             units: 8,
         }],
     };
-    let id = source(
+    let id = source_fact_id(
         candidate,
         if credit {
             "escort-courier"
@@ -162,7 +162,7 @@ fn design_strong_event_receipt_debits_persisted_units_without_new_facts_or_rules
     let current = prepared_story();
     let original = current.clone();
     let policy = policy();
-    let id = source(&current, "create-character");
+    let id = source_fact_id(&current, "create-character");
     let proposed = budget(
         &current,
         NarrativeBudgetChange::StrongIntervention(id),
@@ -216,7 +216,7 @@ fn design_approved_free_play_credits_only_exact_unconsumed_source_event_and_caps
         &input(&opening, first(), 91, "escort-courier", vec![]),
     );
     let policy = policy();
-    let id = source(&earned, "courier-escort-contact");
+    let id = source_fact_id(&earned, "courier-escort-contact");
     let credited = budget(
         &earned,
         NarrativeBudgetChange::ApprovedFreePlay(id),
@@ -277,7 +277,7 @@ fn design_approved_free_play_credits_only_exact_unconsumed_source_event_and_caps
 fn design_budget_source_policy_capacity_and_exhaustion_fail_without_partial_mutation() {
     let current = prepared_story();
     let policy = policy();
-    let id = source(&current, "create-character");
+    let id = source_fact_id(&current, "create-character");
     let unchanged = current.clone();
     assert_eq!(
         budget(
@@ -416,7 +416,7 @@ fn native_earned_routes_validate_convergence_without_spending_or_replenishing_un
     assert_eq!(
         budget(
             &current,
-            NarrativeBudgetChange::ApprovedFreePlay(source(&current, "create-character")),
+            NarrativeBudgetChange::ApprovedFreePlay(source_fact_id(&current, "create-character")),
             &policy,
             &policy,
             limits()
@@ -433,7 +433,7 @@ fn design_convergence_retains_valid_causal_alternatives_and_rejects_missing_stro
     let room = model::content("room").unwrap();
     let opening = model::content("opening").unwrap();
     let cause = [BeatCause {
-        fact: source(&current, "create-character"),
+        fact: source_fact_id(&current, "create-character"),
         event: &create,
         consumed_by_narrative: false,
     }];
@@ -517,7 +517,7 @@ fn design_npc_delivery_requires_current_place_motivation_known_source_and_past_w
         &opening,
         &input(&opening, first(), 93, "escort-courier", vec![]),
     );
-    let id = source(&earned, "courier-escort-contact");
+    let id = source_fact_id(&earned, "courier-escort-contact");
     let courier = super::super::super::courier_reaction::courier().unwrap();
     let hero = super::super::super::player_entity(first(), &earned).unwrap();
     let location = super::super::super::player_entity(second(), &earned).unwrap();

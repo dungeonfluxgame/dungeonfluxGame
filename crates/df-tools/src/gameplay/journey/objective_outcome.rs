@@ -64,22 +64,22 @@ pub(super) fn cause_id(
     )
 }
 
-fn actors(state: &GameState) -> Result<Vec<EntityId>, RepositoryError> {
-    let actors = state
+fn party_entities(state: &GameState) -> Result<Vec<EntityId>, RepositoryError> {
+    let party_entities = state
         .members
         .iter()
         .filter(|link| link.member.as_bytes() != &super::PLAYER)
         .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
         .collect::<Result<Vec<_>, _>>()?;
-    if !(1..=super::MAXIMUM_PARTY).contains(&actors.len())
-        || actors
+    if !(1..=super::MAXIMUM_PARTY).contains(&party_entities.len())
+        || party_entities
             .iter()
             .enumerate()
-            .any(|(index, actor)| actors[..index].contains(actor))
+            .any(|(index, actor)| party_entities[..index].contains(actor))
     {
         return invalid();
     }
-    Ok(actors)
+    Ok(party_entities)
 }
 
 pub(super) fn pending(
@@ -127,7 +127,7 @@ pub(super) fn pending(
             *actor,
         )));
     }
-    let party = actors(state)?;
+    let party = party_entities(state)?;
     let party_down = party
         .iter()
         .map(|actor| value(state, *actor, "unconscious"))
@@ -163,7 +163,7 @@ fn terminal(
     if state.facts.len() > 512 || state.decisions.len() > 512 {
         return Err(RepositoryError::Capacity);
     }
-    let party = actors(state)?;
+    let party = party_entities(state)?;
     let [encounter] = state.encounters.as_slice() else {
         return invalid();
     };
@@ -312,13 +312,13 @@ pub(super) fn outcome(state: &GameState) -> Result<bool, RepositoryError> {
     let defend = model::content("defend-courier")?;
     let assault = model::content("scene-npc-assault")?;
     for (entry, victory) in [("combat-victory", true), ("combat-defeat", false)] {
-        let result = model::content(entry)?;
-        if encounter.objectives == [defend.clone(), result.clone()]
-            || encounter.objectives == [assault.clone(), result.clone()]
+        let terminal_objective = model::content(entry)?;
+        if encounter.objectives == [defend.clone(), terminal_objective.clone()]
+            || encounter.objectives == [assault.clone(), terminal_objective.clone()]
         {
             return Ok(victory);
         }
-        if encounter.objectives == [result] {
+        if encounter.objectives == [terminal_objective] {
             terminal(state, victory, true)?;
             return Ok(victory);
         }

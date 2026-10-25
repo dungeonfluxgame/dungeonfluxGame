@@ -32,7 +32,7 @@ fn native_sources<'a>(
 ) -> Result<Vec<(&'a GameFact, rpc::AcceptedAction)>, RepositoryError> {
     let state = current.state();
     let mut sources = Vec::new();
-    for (index, source) in state.facts.iter().enumerate() {
+    for (fact_index, source) in state.facts.iter().enumerate() {
         if !matches!(&source.value, FactValue::ContentEvent { definition, .. } if definition == event)
         {
             continue;
@@ -48,7 +48,7 @@ fn native_sources<'a>(
             })
             .ok_or_else(|| refusal("SourceDecisionMissing"))?;
         let receipt = accepted(decision)?;
-        let prior = index
+        let prior = fact_index
             .checked_sub(1)
             .and_then(|index| state.facts.get(index));
         if source.audience != AudienceScope::Shared
@@ -108,12 +108,12 @@ pub(super) fn story_permitted(
     // Offer probing is not a refused command: preserve only the caller's diagnostic.
     let diagnostic = df_session::submission::take_refusal_diagnostic();
     let step = crate::gameplay::refusal_detail::take();
-    let result = match select_for(current, member, &model::content("begin-story")?) {
+    let permission_result = match select_for(current, member, &model::content("begin-story")?) {
         Ok(_) => Ok(true),
         Err(RepositoryError::InvalidCandidate | RepositoryError::InvalidReceipt) => Ok(false),
         Err(error) => Err(error),
     };
-    if matches!(result, Ok(false)) {
+    if matches!(permission_result, Ok(false)) {
         let _ = df_session::submission::take_refusal_diagnostic();
         let _ = crate::gameplay::refusal_detail::take();
     }
@@ -123,7 +123,7 @@ pub(super) fn story_permitted(
     if let Some(step) = step {
         crate::gameplay::refusal_detail::note(step);
     }
-    result
+    permission_result
 }
 
 /// The active source profile authorizes earned routes only. Its configured balance is
@@ -182,11 +182,11 @@ fn select_for(
                 .character
                 .ok_or_else(|| refusal("MemberCharacterMissing"))?;
             let sheet = super::receipt_character_sheet(current.state(), who)?;
-            let index = remaining
+            let character_sheet_index = remaining
                 .iter()
                 .position(|candidate| *candidate == Some(&sheet))
                 .ok_or_else(|| refusal("CreationSheetReceiptMismatch"))?;
-            remaining.remove(index);
+            remaining.remove(character_sheet_index);
         }
         for (source, _) in sources {
             causes.push(BeatCause {

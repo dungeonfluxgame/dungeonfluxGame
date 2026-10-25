@@ -22,8 +22,8 @@ pub(in crate::gameplay) fn encounter_experience(
     {
         return Ok(None);
     }
-    let battle = tactical::read(state)?;
-    battle
+    let tactical_battle = tactical::read(state)?;
+    tactical_battle
         .experience_award()
         .map(|award| award.map(|award| award.total_xp))
         .map_err(|_| {
@@ -52,21 +52,21 @@ pub(super) fn pay(state: &mut GameState) -> Result<Option<Vec<EntityId>>, Reposi
     if (!tactical::present(state) && state.encounters.is_empty()) || !combat_victory(state)? {
         return Ok(None);
     }
-    let heroes = state
+    let hero_entities = state
         .characters
         .iter()
         .map(|character| character.entity)
         .collect::<Vec<_>>();
-    for hero in &heroes {
-        let coin = state
+    for hero_entity in &hero_entities {
+        let gold_piece_item = state
             .inventory
             .iter_mut()
-            .find(|item| item.owner == *hero && item.origin.entry.as_str() == "gold-piece")
+            .find(|item| item.owner == *hero_entity && item.origin.entry.as_str() == "gold-piece")
             .ok_or_else(|| {
                 refusal_detail::note("reward-purse");
                 RepositoryError::InvalidCandidate
             })?;
-        coin.quantity = coin
+        gold_piece_item.quantity = gold_piece_item
             .quantity
             .checked_add(u64::from(reward.gold_per_hero))
             .ok_or_else(|| {
@@ -74,5 +74,5 @@ pub(super) fn pay(state: &mut GameState) -> Result<Option<Vec<EntityId>>, Reposi
                 RepositoryError::InvalidCandidate
             })?;
     }
-    Ok(Some(heroes))
+    Ok(Some(hero_entities))
 }

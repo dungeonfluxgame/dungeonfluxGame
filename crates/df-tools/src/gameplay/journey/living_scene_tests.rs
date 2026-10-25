@@ -173,7 +173,7 @@ fn stage_barter(
     .unwrap_or_else(|error| panic!("{error:?}; {:?}", refusal_detail::take()))
 }
 
-fn hero_copper(current: &Checkpoint, member: MemberId) -> u64 {
+fn hero_copper_balance_cp(current: &Checkpoint, member: MemberId) -> u64 {
     living_scene::balance_cp(current.state(), player_entity(member, current).unwrap()).unwrap()
 }
 
@@ -181,7 +181,7 @@ fn hero_copper(current: &Checkpoint, member: MemberId) -> u64 {
 fn merchant_barter_settles_exact_custody_coin_and_revisions_and_replays() {
     barter_market(|| {
         let (current, member, judgement) = barter_inventory();
-        let before_balance = hero_copper(&current, member);
+        let before_balance = hero_copper_balance_cp(&current, member);
         let merchant_id = judgement.merchant_id.clone();
         let before_terms = living_scene::merchant_trade_terms(&current, "Brynn").unwrap();
         let after = stage_barter(&current, 82, judgement.clone());
@@ -193,7 +193,7 @@ fn merchant_barter_settles_exact_custody_coin_and_revisions_and_replays() {
             after.state().decisions.len(),
             current.state().decisions.len() + 1
         );
-        assert_eq!(hero_copper(&after, member), before_balance - 350);
+        assert_eq!(hero_copper_balance_cp(&after, member), before_balance - 350);
         let scene = crate::gameplay::beat_script_runtime::scene(after.state()).unwrap();
         let now = living_scene::snapshot(after.state(), &scene)
             .unwrap()
@@ -283,7 +283,7 @@ fn merchant_barter_settles_exact_custody_coin_and_revisions_and_replays() {
 fn merchant_barter_counter_selects_goods_without_moving_them_then_acceptance_settles() {
     barter_market(|| {
         let (current, member, mut judgement) = barter_inventory();
-        let before = hero_copper(&current, member);
+        let before = hero_copper_balance_cp(&current, member);
         judgement.offer.hero_cp = 0;
         judgement.counter = Some(merchant_bargaining::ExchangeOffer {
             hero_items: judgement.offer.hero_items[..1].to_vec(),
@@ -299,13 +299,13 @@ fn merchant_barter_counter_selects_goods_without_moving_them_then_acceptance_set
             pending.outcome,
             living_scene::MerchantExchangeOutcome::Countered
         );
-        assert_eq!(hero_copper(&countered, member), before);
+        assert_eq!(hero_copper_balance_cp(&countered, member), before);
         assert_eq!(pending.judgement.offer.hero_items.len(), 1);
         let mut acceptance = pending.judgement;
         acceptance.choice = merchant_bargaining::ExchangeChoice::Accept;
         acceptance.hero_commits_now = true;
         let settled = stage_barter(&countered, 83, acceptance);
-        assert_eq!(hero_copper(&settled, member), before - 400);
+        assert_eq!(hero_copper_balance_cp(&settled, member), before - 400);
         let scene = crate::gameplay::beat_script_runtime::scene(settled.state()).unwrap();
         let now = living_scene::snapshot(settled.state(), &scene)
             .unwrap()
@@ -355,7 +355,10 @@ fn merchant_barter_refusal_and_unowned_goods_leave_every_purse_and_item_unchange
                     .model,
                 before
             );
-            assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+            assert_eq!(
+                hero_copper_balance_cp(&after, member),
+                hero_copper_balance_cp(&current, member)
+            );
             assert!(
                 !living_scene::line(after.state(), OperationId::from_bytes(&[op; 16]).unwrap())
                     .unwrap()
@@ -377,15 +380,18 @@ fn merchant_barter_sale_without_enough_purse_counters_and_srd_half_price_is_exac
             .unwrap()
             .unwrap();
         assert_eq!(pending.judgement.offer.merchant_cp, 150);
-        assert_eq!(hero_copper(&counter, member), hero_copper(&current, member));
+        assert_eq!(
+            hero_copper_balance_cp(&counter, member),
+            hero_copper_balance_cp(&current, member)
+        );
         let merchant_id = pending.judgement.merchant_id.clone();
         let mut sale = pending.judgement;
         sale.offer.merchant_cp = 150;
         sale.choice = merchant_bargaining::ExchangeChoice::Accept;
         let after = stage_barter(&counter, 83, sale);
         assert_eq!(
-            hero_copper(&after, member),
-            hero_copper(&current, member) + 150
+            hero_copper_balance_cp(&after, member),
+            hero_copper_balance_cp(&current, member) + 150
         );
         let scene = crate::gameplay::beat_script_runtime::scene(after.state()).unwrap();
         assert_eq!(
@@ -414,7 +420,10 @@ fn merchant_barter_goods_for_goods_needs_no_coin_and_preserves_other_items() {
         }];
         judgement.offer.hero_cp = 0;
         let after = stage_barter(&current, 82, judgement);
-        assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+        assert_eq!(
+            hero_copper_balance_cp(&after, member),
+            hero_copper_balance_cp(&current, member)
+        );
         let record = living_scene::exchange_record(
             after.state(),
             OperationId::from_bytes(&[82; 16]).unwrap(),
@@ -516,7 +525,10 @@ fn merchant_barter_empty_purse_counters_for_stock_without_taking_the_heros_goods
                 .model,
             before
         );
-        assert_eq!(hero_copper(&after, member), hero_copper(&current, member));
+        assert_eq!(
+            hero_copper_balance_cp(&after, member),
+            hero_copper_balance_cp(&current, member)
+        );
         assert!(
             living_scene::line(after.state(), OperationId::from_bytes(&[82; 16]).unwrap())
                 .unwrap()
@@ -565,8 +577,8 @@ fn merchant_barter_judged_stance_moves_the_margin_without_changing_source_values
             assert_eq!(record.outcome, expected_outcome);
             assert_eq!(record.judgement.offer.hero_cp, expected_coin);
             assert_eq!(
-                hero_copper(&after, member),
-                hero_copper(&current, member)
+                hero_copper_balance_cp(&after, member),
+                hero_copper_balance_cp(&current, member)
                     - if expected_outcome == living_scene::MerchantExchangeOutcome::Settled {
                         300
                     } else {
@@ -2663,7 +2675,10 @@ fn hs39_living_scene_trade_unheld_goods_get_a_spoken_refusal_and_held_question_g
             quote.judgement.offer.merchant_cp, 150,
             "SRD half price, no eager inflation"
         );
-        assert_eq!(hero_copper(&held, member), hero_copper(&current, member));
+        assert_eq!(
+            hero_copper_balance_cp(&held, member),
+            hero_copper_balance_cp(&current, member)
+        );
 
         let mut plan = serde_json::to_value(judgement).unwrap();
         plan["offer"]["hero_items"] = serde_json::json!([{"item_id":null,"catalog_id":null}]);
@@ -2711,7 +2726,10 @@ fn hs39_living_scene_trade_unheld_goods_get_a_spoken_refusal_and_held_question_g
         )
         .unwrap();
         assert!(line.contains("Show me the goods first"), "{line}");
-        assert_eq!(hero_copper(&refused, member), hero_copper(&current, member));
+        assert_eq!(
+            hero_copper_balance_cp(&refused, member),
+            hero_copper_balance_cp(&current, member)
+        );
         let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
         assert_eq!(
             living_scene::snapshot(current.state(), &scene).unwrap(),
@@ -2757,8 +2775,8 @@ fn hs39_living_scene_trade_srd_sale_quote_can_be_accepted_for_every_merchant_sta
                 living_scene::MerchantExchangeOutcome::Settled
             );
             assert_eq!(
-                hero_copper(&settled, member),
-                hero_copper(&current, member) + 150
+                hero_copper_balance_cp(&settled, member),
+                hero_copper_balance_cp(&current, member) + 150
             );
         }
     });
@@ -3307,8 +3325,8 @@ fn hs50_living_scene_trade_item_details_are_first_write_and_replay_without_chang
             living_scene::merchant_trade_terms(&current, "Brynn").unwrap()
         );
         assert_eq!(
-            hero_copper(&candidate, member),
-            hero_copper(&current, member)
+            hero_copper_balance_cp(&candidate, member),
+            hero_copper_balance_cp(&current, member)
         );
         assert!(
             living_scene::commit_offer_details(

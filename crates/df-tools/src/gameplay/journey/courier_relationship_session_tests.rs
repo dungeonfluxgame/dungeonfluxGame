@@ -507,7 +507,9 @@ fn assert_trigger_occurrence(
     assert_exact_committed_change(before, after);
 }
 
-fn counts(database: &Rc<RefCell<Database>>) -> (usize, usize, usize, usize, usize) {
+fn database_activity_counts(
+    database: &Rc<RefCell<Database>>,
+) -> (usize, usize, usize, usize, usize) {
     let db = database.borrow();
     (
         db.decisions,
@@ -518,7 +520,7 @@ fn counts(database: &Rc<RefCell<Database>>) -> (usize, usize, usize, usize, usiz
     )
 }
 
-fn confirmed(outcome: SubmissionOutcome) -> DecisionReceipt {
+fn confirmed_receipt(outcome: SubmissionOutcome) -> DecisionReceipt {
     let SubmissionOutcome::Confirmed(receipt) = outcome else {
         panic!("actual durable acknowledgement required")
     };
@@ -549,14 +551,14 @@ fn encounter_trigger_occurrence_commits_one_canonical_source() {
     let (mut owner, database, scope) = setup(Failure::None);
     let before = owner.checkpoint().clone();
     assert!(before.state().encounters.is_empty());
-    let receipt = confirmed(submit(&mut owner, &scope, true).unwrap());
+    let receipt = confirmed_receipt(submit(&mut owner, &scope, true).unwrap());
     let db = database.borrow();
     assert_eq!(owner.checkpoint(), &db.checkpoint);
     assert!(db.ledger[0].0 == scope);
     assert_eq!(db.ledger[0].1, receipt);
     assert_trigger_occurrence(&before, &db.checkpoint, &scope, &receipt);
     drop(db);
-    assert_eq!(counts(&database), (1, 1, 1, 3, 1));
+    assert_eq!(database_activity_counts(&database), (1, 1, 1, 3, 1));
 }
 
 #[test]
@@ -582,7 +584,7 @@ fn encounter_trigger_occurrence_exact_old_basis_retry_is_receipt_only() {
         assert_eq!(owner.checkpoint(), &committed);
         assert_eq!(database.borrow().checkpoint, committed);
         assert_trigger_occurrence(&before, &committed, &scope, &retained);
-        assert_eq!(counts(&database), (1, 1, 1, 3, 1));
+        assert_eq!(database_activity_counts(&database), (1, 1, 1, 3, 1));
     }
 }
 
@@ -590,7 +592,7 @@ fn encounter_trigger_occurrence_exact_old_basis_retry_is_receipt_only() {
 fn encounter_trigger_occurrence_fresh_operation_is_refused() {
     let (mut owner, database, scope) = setup(Failure::None);
     let before = owner.checkpoint().clone();
-    let receipt = confirmed(submit(&mut owner, &scope, true).unwrap());
+    let receipt = confirmed_receipt(submit(&mut owner, &scope, true).unwrap());
     let committed = owner.checkpoint().clone();
     let fresh = Scope {
         input: defend_input(&committed, 0, 8),
@@ -604,7 +606,7 @@ fn encounter_trigger_occurrence_fresh_operation_is_refused() {
     assert_eq!(owner.checkpoint(), &committed);
     assert_eq!(database.borrow().checkpoint, committed);
     assert_trigger_occurrence(&before, &committed, &scope, &receipt);
-    assert_eq!(counts(&database), (2, 1, 1, 3, 1));
+    assert_eq!(database_activity_counts(&database), (2, 1, 1, 3, 1));
     // Direct stale input is illegal at the source caller even though the Session
     // can truthfully return the original committed receipt for the exact key.
     assert_eq!(
@@ -654,7 +656,7 @@ fn encounter_trigger_occurrence_lost_ack_reloads_same_receipt() {
     );
     assert!(owner.is_current());
     assert_eq!(owner.checkpoint(), &committed);
-    assert_eq!(counts(&database), (1, 1, 0, 3, 1));
+    assert_eq!(database_activity_counts(&database), (1, 1, 0, 3, 1));
 }
 
 #[test]
@@ -667,9 +669,9 @@ fn encounter_trigger_occurrence_known_rollback_allows_one_commit() {
     );
     assert_eq!(owner.checkpoint(), &before);
     assert_eq!(database.borrow().checkpoint, before);
-    assert_eq!(counts(&database), (1, 1, 0, 3, 0));
+    assert_eq!(database_activity_counts(&database), (1, 1, 0, 3, 0));
     database.borrow_mut().failure = Failure::None;
-    let receipt = confirmed(submit(&mut owner, &scope, true).unwrap());
+    let receipt = confirmed_receipt(submit(&mut owner, &scope, true).unwrap());
     assert_trigger_occurrence(&before, owner.checkpoint(), &scope, &receipt);
     let committed = owner.checkpoint().clone();
     assert_eq!(
@@ -678,7 +680,7 @@ fn encounter_trigger_occurrence_known_rollback_allows_one_commit() {
     );
     assert_eq!(owner.checkpoint(), &committed);
     // Two known transaction attempts/samplings, exactly one retained commit.
-    assert_eq!(counts(&database), (2, 2, 1, 6, 1));
+    assert_eq!(database_activity_counts(&database), (2, 2, 1, 6, 1));
 }
 
 #[test]
@@ -704,14 +706,14 @@ fn encounter_trigger_occurrence_unknown_not_recorded_never_reexecutes() {
         |fact| matches!(&fact.value, FactValue::ContentEvent { definition, .. }
             if definition.entry.as_str() == "defend-courier")
     ));
-    assert_eq!(counts(&database), (1, 1, 0, 3, 0));
+    assert_eq!(database_activity_counts(&database), (1, 1, 0, 3, 0));
 }
 
 #[test]
 fn encounter_trigger_occurrence_canonical_restore_and_source_refusals() {
     let (mut owner, database, scope) = setup(Failure::None);
     let before = owner.checkpoint().clone();
-    let receipt = confirmed(submit(&mut owner, &scope, true).unwrap());
+    let receipt = confirmed_receipt(submit(&mut owner, &scope, true).unwrap());
     let committed = owner.checkpoint().clone();
     drop(owner);
     let restored = model::checkpoint(committed.basis(), committed.state().clone()).unwrap();
@@ -721,7 +723,7 @@ fn encounter_trigger_occurrence_canonical_restore_and_source_refusals() {
         Some(SubmissionOutcome::Confirmed(receipt.clone()))
     );
     assert_trigger_occurrence(&before, recovered.checkpoint(), &scope, &receipt);
-    assert_eq!(counts(&database), (1, 1, 1, 3, 1));
+    assert_eq!(database_activity_counts(&database), (1, 1, 1, 3, 1));
     for damage in 0..3 {
         let mut state = committed.state().clone();
         match damage {
@@ -750,7 +752,7 @@ fn encounter_trigger_occurrence_canonical_restore_and_source_refusals() {
             Err(RepositoryError::InvalidCandidate)
         );
         assert_eq!(database.borrow().checkpoint, committed);
-        assert_eq!(counts(&database), (1, 1, 1, 3, 1));
+        assert_eq!(database_activity_counts(&database), (1, 1, 1, 3, 1));
     }
     // The actual prerequisite event cannot be an orphan, wrong-policy, wrong-
     // revision, incorrectly caused or unconsumed source occurrence.
@@ -819,7 +821,7 @@ fn encounter_trigger_occurrence_canonical_restore_and_source_refusals() {
             }),
             Err(RepositoryError::InvalidCandidate)
         );
-        assert_eq!(counts(&database), (1, 1, 1, 3, 1));
+        assert_eq!(database_activity_counts(&database), (1, 1, 1, 3, 1));
     }
 }
 
@@ -839,9 +841,9 @@ fn encounter_trigger_occurrence_changed_payload_conflicts() {
         submit(&mut owner, &wrong_actor, true),
         Some(SubmissionOutcome::Refused(RepositoryError::Unauthorized))
     );
-    assert_eq!(counts(&database), (1, 0, 0, 0, 0));
+    assert_eq!(database_activity_counts(&database), (1, 0, 0, 0, 0));
     assert_eq!(owner.checkpoint(), &before);
-    let receipt = confirmed(submit(&mut owner, &scope, true).unwrap());
+    let receipt = confirmed_receipt(submit(&mut owner, &scope, true).unwrap());
     let committed = owner.checkpoint().clone();
     let mut changed = scope.clone();
     let GameInput::Game(command) = &mut changed.input else {
@@ -858,5 +860,5 @@ fn encounter_trigger_occurrence_changed_payload_conflicts() {
     );
     assert_eq!(owner.checkpoint(), &committed);
     assert_trigger_occurrence(&before, &committed, &scope, &receipt);
-    assert_eq!(counts(&database), (2, 1, 1, 3, 1));
+    assert_eq!(database_activity_counts(&database), (2, 1, 1, 3, 1));
 }
