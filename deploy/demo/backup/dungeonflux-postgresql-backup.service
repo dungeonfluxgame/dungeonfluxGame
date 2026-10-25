@@ -1,0 +1,21 @@
+[Unit]
+Description=Back up local DungeonFlux PostgreSQL databases
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=PGHOST=127.0.0.1
+Environment=PGUSER=postgres
+Environment=PGPASSFILE=/etc/dungeonflux/backup.pgpass
+EnvironmentFile=-/etc/dungeonflux/backup.env
+ExecStart=/opt/dungeonflux/demo/backup/backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/dungeonflux/postgresql
+

@@ -27,12 +27,13 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 endpoint=""; region=""; bucket=""; identity=""; backup_image=""; pg_image=""; object=""; dry=0
-local_bundle=""; local_pg_uri=""
+local_bundle=""; local_dump_dir=""; local_pg_uri=""
 python_bin=$(command -v python3 || command -v python || true)
 target_seconds=3600
 while [ $# -gt 0 ]; do
   case "$1" in
     --local-bundle) local_bundle=$2; shift 2 ;;
+    --local-dump-dir) local_dump_dir=$2; shift 2 ;;
     --local-pg-uri) local_pg_uri=$2; shift 2 ;;
     --endpoint) endpoint=$2; shift 2 ;;
     --region) region=$2; shift 2 ;;
@@ -46,6 +47,35 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$local_dump_dir" ]; then
+  [ -n "$local_pg_uri" ] || { echo "--local-pg-uri is required with --local-dump-dir" >&2; exit 2; }
+  [[ "$local_pg_uri" =~ ^postgres(ql)?://[^@/]+@127\.0\.0\.1:55911/[^?]+$ ]] || { echo "local rehearsal must use the scratch PostgreSQL at 127.0.0.1:55911" >&2; exit 2; }
+  [ -d "$local_dump_dir" ] || { echo "backup directory is missing" >&2; exit 1; }
+  command -v createdb >/dev/null 2>&1 && command -v pg_restore >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 || {
+    echo "missing local PostgreSQL tools: createdb, pg_restore, psql and dropdb are required" >&2; exit 1;
+  }
+  latest_dump=$(find "$local_dump_dir" -type f -name 'database-dungeonflux*.dump' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)
+  [ -n "$latest_dump" ] || { echo "no DungeonFlux custom-format dump found" >&2; exit 1; }
+  stamp=$(date -u +%Y%m%d%H%M%S)
+  target_db="df_restore_drill_${stamp}_$$"
+  [[ "$target_db" =~ ^df_restore_drill_[A-Za-z0-9_]+$ ]] || { echo "invalid isolated database name" >&2; exit 2; }
+  target_uri="${local_pg_uri%/*}/$target_db"
+  createdb --maintenance-db="$local_pg_uri" "$target_db"
+  cleanup_local_dump() {
+    if ! dropdb --maintenance-db="$local_pg_uri" --if-exists "$target_db" >/dev/null 2>&1; then
+      echo "CLEANUP FAILURE: could not drop restore-drill database $target_db" >&2
+      return 1
+    fi
+  }
+  trap cleanup_local_dump EXIT
+  pg_restore --no-owner --no-privileges --exit-on-error --dbname="$target_uri" "$latest_dump"
+  actual_database=$(psql "$target_uri" -XAt -v ON_ERROR_STOP=1 -c 'SELECT current_database()')
+  [ "$actual_database" = "$target_db" ] || { echo "SANITY FAILURE: restore target database name does not match" >&2; exit 1; }
+  object_count=$(psql "$target_uri" -XAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_catalog.pg_class WHERE relkind IN ('r','p','S')")
+  [[ "$object_count" =~ ^[0-9]+$ ]] && [ "$object_count" -gt 0 ] || { echo "SANITY FAILURE: restored database has no tables or sequences" >&2; exit 1; }
+  echo "restore drill passed: $latest_dump restored into $target_db; $object_count tables and sequences found"
+  exit 0
+fi
 if [ -n "$local_bundle" ]; then
   [ -n "$python_bin" ] || { echo "missing tool: python 3" >&2; exit 1; }
   [ -n "$local_pg_uri" ] || { echo "--local-pg-uri is required with --local-bundle" >&2; exit 2; }

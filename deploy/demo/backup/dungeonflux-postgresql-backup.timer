@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DungeonFlux PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 America/New_York
+Persistent=true
+Unit=dungeonflux-postgresql-backup.service
+
+[Install]
+WantedBy=timers.target
+
