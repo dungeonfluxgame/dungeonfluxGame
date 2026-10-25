@@ -21,6 +21,10 @@ machine, and `demo` only for the separately managed DungeonFlux demo host. The
 guard accepts a profile file or a directory of `*.env` files; it never evaluates
 shell syntax or prints environment values.
 
+Production also requires the owner-managed `/etc/dungeonflux/business.env` file
+with the business identity variables. The repository contains placeholders only;
+`DF_SELLER_PUBLISHED` stays `false` until the owner confirms good standing.
+
 ```sh
 deploy/profiles/check-profile.sh production deploy/profiles/production.env
 # Build and inspect the demo image using the named demo exception:

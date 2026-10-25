@@ -73,6 +73,7 @@ fi
 run_token="$(date -u +%Y%m%d%H%M%S)-$$"
 if [[ "$mode" == deploy ]]; then
   scp -i "$ssh_key" "$script_dir/compose.yml" "$host:/tmp/df-demo-$run_token-compose.yml"
+  scp -i "$ssh_key" "$script_dir/../scripts/render-site.sh" "$host:/tmp/df-demo-$run_token-render-site.sh"
   scp -i "$ssh_key" "$temporary_dir/site.tar.gz" "$host:/tmp/df-demo-$run_token-site.tar.gz"
   scp -i "$ssh_key" "$temporary_dir/app.tar.gz" "$host:/tmp/df-demo-$run_token-app.tar.gz"
 fi
@@ -92,8 +93,10 @@ staging="/tmp/df-demo-deploy-$run_token"
 incoming_compose="/tmp/df-demo-$run_token-compose.yml"
 incoming_site="/tmp/df-demo-$run_token-site.tar.gz"
 incoming_app="/tmp/df-demo-$run_token-app.tar.gz"
+incoming_renderer="/tmp/df-demo-$run_token-render-site.sh"
 
 [[ -f /etc/dungeonflux/demo.env ]] || { echo 'Missing owner-managed /etc/dungeonflux/demo.env.' >&2; exit 1; }
+[[ -r /etc/dungeonflux/business.env ]] || { echo 'Missing owner-managed /etc/dungeonflux/business.env.' >&2; exit 1; }
 install -d -m 0755 "$directory" /opt/dungeonflux
 mkdir -m 0700 "$staging"
 if [[ "$mode" == rollback ]]; then
@@ -104,7 +107,7 @@ if [[ "$mode" == rollback ]]; then
 else
   target_digest=$requested_digest
   [[ "$target_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Invalid image digest.' >&2; exit 1; }
-  [[ -s "$incoming_compose" && -s "$incoming_site" && -s "$incoming_app" ]] || {
+  [[ -s "$incoming_compose" && -s "$incoming_renderer" && -s "$incoming_site" && -s "$incoming_app" ]] || {
     echo 'Uploaded public site or compose files are missing.' >&2; exit 1;
   }
   cp "$incoming_compose" "$staging/compose.next.yml"
@@ -112,6 +115,7 @@ else
   tar -xzf "$incoming_site" -C "$staging/site.next"
   tar -xzf "$incoming_app" -C "$staging/app.next"
   [[ -s "$staging/site.next/index.html" && -s "$staging/app.next/index.html" ]]
+  bash "$incoming_renderer" "$staging/site.next" /etc/dungeonflux/business.env
   if grep -RIEq 'dev@example\.test|test-fakes|Development:' "$staging/site.next" "$staging/app.next"; then
     echo 'Refusing to deploy public files containing development-only content.' >&2
     exit 1
@@ -145,7 +149,7 @@ rollback_on_error() {
     DEMO_DIGEST="$target_digest" docker compose --project-directory "$directory" -f "$staging/compose.next.yml" down
   fi
   if [[ -n "$old_previous" ]]; then printf '%s\n' "$old_previous" > "$previous_file"; else rm -f "$previous_file"; fi
-  rm -f "$incoming_compose" "$incoming_site" "$incoming_app"
+  rm -f "$incoming_compose" "$incoming_renderer" "$incoming_site" "$incoming_app"
   rm -rf "$staging"
   exit "$result"
 }
@@ -178,7 +182,7 @@ fi
 nginx -t
 systemctl reload nginx
 if [[ -f "$staging/compose.old.yml" ]]; then install -m 0644 "$staging/compose.old.yml" "$directory/compose.previous.yml"; else rm -f "$directory/compose.previous.yml"; fi
-rm -f "$incoming_compose" "$incoming_site" "$incoming_app"
+rm -f "$incoming_compose" "$incoming_renderer" "$incoming_site" "$incoming_app"
 rm -rf "$staging"
 trap - ERR
 printf 'Deployment complete: %s@%s\n' "$image" "$target_digest"

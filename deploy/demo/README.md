@@ -24,3 +24,14 @@ into the game container.
 Create `/etc/dungeonflux/db_password` with that same password as its first line.
 Set the file owner to `root:root` and permissions to `0600`. Compose mounts it
 read-only into the game container.
+
+Configure the Resend credential and any mail overrides in a root-owned file under
+`/etc/dungeonflux/*.env`. Set `DF_RESEND_API_KEY` from the Resend dashboard; optionally set
+`DF_MAIL_FROM`, `DF_MAIL_REPLY_TO`, and `DF_MAIL_DAILY_CAP` there. Keep the human support mailbox
+in Google Workspace.
+
+In the Resend dashboard, copy the DNS records for the `mail.dungeonfluxdnd.com` sending domain
+into the DNS provider. Add the SPF TXT value using the dashboard-provided `include:` target, the
+DKIM CNAME records using the dashboard-provided names and targets, and the return-path record
+using the dashboard-provided name and target under `mail.dungeonfluxdnd.com`. These values are
+account-specific; do not substitute sample values. Wait for Resend to verify the records.

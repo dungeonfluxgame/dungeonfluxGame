@@ -1,0 +1,17 @@
+# Host-only business identity settings. Production values are provided by
+# /etc/dungeonflux/business.env and must never be copied into this repository.
+legal_entity_name = "EXAMPLE LLC"
+legal_entity_kind = "limited liability company"
+trading_name = "DungeonFlux"
+support_email = "support@example.test"
+billing_email = "billing@example.test"
+privacy_email = "privacy@example.test"
+security_email = "security@example.test"
+statement_descriptor = "DUNGEONFLUX"
+seller_published = false
+
+# Runtime environment variable names:
+# DF_LEGAL_ENTITY_NAME, DF_LEGAL_ENTITY_KIND, DF_TRADING_NAME,
+# DF_SUPPORT_EMAIL, DF_BILLING_EMAIL, DF_PRIVACY_EMAIL, DF_SECURITY_EMAIL,
+# DF_STATEMENT_DESCRIPTOR (5-22 uppercase ASCII letters, digits, spaces, hyphens),
+# DF_SELLER_PUBLISHED (true only after the owner confirms good standing).

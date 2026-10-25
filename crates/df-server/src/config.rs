@@ -1,7 +1,8 @@
 //! The hosted server's TOML configuration contract: one file per role, every section typed and
 //! closed (unknown keys are refused), secrets named by `*_file` path and never inline, every
 //! tunable defaulted to the value the hosted runtime design proposes and validated at load.
-//! Staging and production reject every local-only key. Loading never reads the environment.
+//! Staging and production reject every local-only key. Server TOML loading never reads the
+//! environment; the separate business identity loader reads only its named host variables.
 
 use std::{
     fs,
@@ -13,9 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::deployment::{InstanceId, InstanceIdRefusal};
 
+mod business;
 mod listing;
 mod validation;
 
+pub use business::{BusinessConfig, BusinessConfigError};
 pub use listing::flatten;
 #[cfg(test)]
 pub(crate) use listing::redact_owned_sections;

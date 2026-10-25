@@ -30,6 +30,25 @@ else
   read_env_file "$settings"
 fi
 
+if [[ "$profile" == production ]]; then
+  business_env="${values[DF_SECRET_ENV_DIR]:-/etc/dungeonflux}/business.env"
+  [[ -r "$business_env" ]] || fail 'production business.env is missing or unreadable'
+  read_env_file "$business_env"
+  for key in DF_LEGAL_ENTITY_NAME DF_LEGAL_ENTITY_KIND DF_TRADING_NAME DF_SUPPORT_EMAIL DF_BILLING_EMAIL DF_PRIVACY_EMAIL DF_SECURITY_EMAIL DF_STATEMENT_DESCRIPTOR DF_SELLER_PUBLISHED; do
+    [[ -n ${values[$key]-} ]] || fail "$key is missing from production settings"
+  done
+  [[ ${values[DF_SELLER_PUBLISHED]} == true || ${values[DF_SELLER_PUBLISHED]} == false ]] || fail 'DF_SELLER_PUBLISHED must be true or false'
+  descriptor=${values[DF_STATEMENT_DESCRIPTOR]}
+  [[ ${#descriptor} -ge 5 && ${#descriptor} -le 22 && "$descriptor" =~ ^[A-Z0-9\ -]+$ ]] || fail 'DF_STATEMENT_DESCRIPTOR must be 5-22 uppercase letters, digits, spaces or hyphens'
+  email_pattern='^[^[:space:]<>@]+@[^[:space:]<>@]+\.[^[:space:]<>@]+$'
+  for key in DF_SUPPORT_EMAIL DF_BILLING_EMAIL DF_PRIVACY_EMAIL DF_SECURITY_EMAIL; do
+    [[ ${values[$key]} =~ $email_pattern ]] || fail "$key is invalid"
+  done
+  for key in DF_LEGAL_ENTITY_NAME DF_LEGAL_ENTITY_KIND DF_TRADING_NAME; do
+    [[ ${values[$key]} != *$'\n'* && ${values[$key]} != *$'\r'* && -n ${values[$key]//[[:space:]]/} ]] || fail "$key is invalid"
+  done
+fi
+
 is_on() { [[ ${values[$1]-} == on || ${values[$1]-} == true || ${values[$1]-} == 1 ]]; }
 is_off() { [[ ${values[$1]-} == off || ${values[$1]-} == false || ${values[$1]-} == 0 ]]; }
 if [[ "$profile" == production ]]; then
