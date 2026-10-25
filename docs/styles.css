@@ -66,14 +66,19 @@ strong, b { font-weight: 600; }
 .mark-dungeon { color: var(--lantern); }
 .mark-flux { color: var(--tide); }
 .mark:hover .mark-dungeon { color: var(--parchment); }
-.bar-nav { display: flex; flex-wrap: wrap; gap: 4px 26px; font-family: var(--sans); font-weight: 500; font-size: 17px; }
+.bar-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 26px; font-family: var(--sans); font-weight: 500; font-size: 17px; }
+.bar-nav-links { display: flex; flex-wrap: wrap; gap: 4px 26px; }
 .bar-nav a { color: var(--tallow); text-decoration: none; padding: 6px 0; border-bottom: 2px solid transparent; }
 .bar-nav a:hover { color: var(--parchment); }
 .bar-nav a[aria-current="page"] { color: var(--parchment); border-bottom-color: var(--lantern); }
+.bar-nav a.cta { color: #1d1206; background: var(--lantern); padding: 9px 14px; font-size: 16px; border: 0; border-radius: 6px; }
+.bar-nav a.cta:hover { color: #1d1206; background: #f3bd6c; }
 @media (max-width: 640px) {
   .bar-inner { min-height: 0; padding-top: 14px; padding-bottom: 4px; row-gap: 0; }
-  .bar-nav { width: 100%; gap: 2px 18px; font-size: 16px; flex-wrap: nowrap; }
+  .bar-nav { width: 100%; justify-content: flex-end; gap: 2px 18px; font-size: 16px; }
+  .bar-nav-links { flex-basis: 100%; justify-content: space-between; gap: 2px 12px; }
   .bar-nav a { min-height: 44px; display: inline-flex; align-items: center; padding: 0; }
+  .bar-nav a.cta { padding: 0 12px; font-size: 15px; }
 }
 
 /* ---------------------------------------------------------------- home hero: a frame from the show */
@@ -98,7 +103,7 @@ strong, b { font-weight: 600; }
 .hero-foot { display: grid; gap: 18px 48px; padding-top: 28px; padding-bottom: 34px; }
 .hero-lede { font-size: clamp(19px, 1.6vw, 23px); line-height: 1.45; max-width: 36em; margin: 0; }
 .hero-fine { margin: 0; }
-.hero-cta { margin: 0; }
+.hero-cta { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
 @media (min-width: 900px) {
   .hero-foot { grid-template-columns: 1fr auto; align-items: center; }
   .hero-fine { grid-column: 1 / -1; }
