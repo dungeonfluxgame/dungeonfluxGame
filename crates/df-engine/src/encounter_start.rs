@@ -74,8 +74,12 @@ pub fn local_journey_turn_order(
     if staged.resources.len() > context.inventory.resources.len() {
         return Err(EncounterStartError::InvalidDexterity);
     }
-    let mut supplied = vec![(0, 0); actors.len()];
-    for (ordinal, ((values, actor), draw)) in supplied.iter_mut().zip(actors).zip(draws).enumerate()
+    let mut initiative_inputs = vec![(0, 0); actors.len()];
+    for (ordinal, ((roll_and_dexterity, actor), draw)) in initiative_inputs
+        .iter_mut()
+        .zip(actors)
+        .zip(draws)
+        .enumerate()
     {
         if draw.operation != command.operation
             || draw.ordinal != ordinal as u32
@@ -115,24 +119,26 @@ pub fn local_journey_turn_order(
         }
         let dexterity =
             u8::try_from(resource.value).map_err(|_| EncounterStartError::InvalidDexterity)?;
-        *values = (draw.value, dexterity);
+        *roll_and_dexterity = (draw.value, dexterity);
     }
     // Keep initiative mechanics and the existing authored-order tie decision in df-rules.
-    fn order<const N: usize>(values: &[(u32, u8)]) -> Result<Vec<usize>, EncounterStartError> {
-        let values = values
+    fn order<const N: usize>(
+        initiative_inputs: &[(u32, u8)],
+    ) -> Result<Vec<usize>, EncounterStartError> {
+        let initiative_inputs = initiative_inputs
             .try_into()
             .map_err(|_| EncounterStartError::InvalidParticipants)?;
-        initiative_order::<N>(values)
+        initiative_order::<N>(initiative_inputs)
             .map(|indices| indices.to_vec())
             .map_err(EncounterStartError::Rules)
     }
-    let indices = match supplied.len() {
-        2 => order::<2>(&supplied),
-        3 => order::<3>(&supplied),
-        4 => order::<4>(&supplied),
-        5 => order::<5>(&supplied),
-        6 => order::<6>(&supplied),
-        7 => order::<7>(&supplied),
+    let indices = match initiative_inputs.len() {
+        2 => order::<2>(&initiative_inputs),
+        3 => order::<3>(&initiative_inputs),
+        4 => order::<4>(&initiative_inputs),
+        5 => order::<5>(&initiative_inputs),
+        6 => order::<6>(&initiative_inputs),
+        7 => order::<7>(&initiative_inputs),
         _ => return Err(EncounterStartError::InvalidParticipants),
     }?;
     Ok(indices.into_iter().map(|index| actors[index]).collect())

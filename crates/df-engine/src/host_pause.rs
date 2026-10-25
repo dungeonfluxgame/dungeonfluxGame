@@ -91,7 +91,7 @@ pub fn committed_pause(
         else {
             continue;
         };
-        let desired = if definition == policy.paused_event {
+        let desired_pause = if definition == policy.paused_event {
             true
         } else if definition == policy.resumed_event {
             false
@@ -113,7 +113,7 @@ pub fn committed_pause(
         {
             return Err(HostPauseError::MalformedPauseRecord);
         }
-        paused = desired;
+        paused = desired_pause;
     }
     Ok(paused)
 }
@@ -155,8 +155,8 @@ pub fn stage_host_pause(
     {
         return Err(HostPauseError::DuplicateOperation);
     }
-    let mut next = current.basis();
-    next.revision = next
+    let mut next_basis = current.basis();
+    next_basis.revision = next_basis
         .revision
         .next_sequence()
         .map_err(|_| HostPauseError::Capacity)?;
@@ -170,11 +170,11 @@ pub fn stage_host_pause(
         .try_reserve(1)
         .map_err(|_| HostPauseError::Capacity)?;
     for pending in &mut state.pending {
-        pending.basis = next;
+        pending.basis = next_basis;
     }
     state.facts.push(GameFact {
         id: fact_id,
-        revision: next.revision,
+        revision: next_basis.revision,
         operation: host.operation,
         ordinal: 0,
         cause: None,
@@ -190,7 +190,7 @@ pub fn stage_host_pause(
     });
     state.decisions.push(AcceptedDecision {
         operation: host.operation,
-        revision: next.revision,
+        revision: next_basis.revision,
         facts: vec![fact_id],
         draws: vec![],
         effects: vec![],
@@ -199,7 +199,7 @@ pub fn stage_host_pause(
     });
     Checkpoint::new(
         current.schema(),
-        next,
+        next_basis,
         current.pins().clone(),
         state,
         context.inventory,
@@ -218,14 +218,14 @@ pub fn guard_pause_time_transition(
     context: &HostPauseContext<'_>,
 ) -> Result<(), HostPauseError> {
     let paused = committed_pause(current, context)?;
-    let mut next = current.basis();
-    next.revision = next
+    let mut next_basis = current.basis();
+    next_basis.revision = next_basis
         .revision
         .next_sequence()
         .map_err(|_| HostPauseError::CandidateLineage)?;
     candidate
         .validate_admitted(
-            next,
+            next_basis,
             context.admitted_pins,
             context.inventory,
             context.checkpoint_limits,

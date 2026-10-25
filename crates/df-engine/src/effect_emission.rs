@@ -234,10 +234,12 @@ pub fn declare_accepted_effects(
                     .ok_or(EffectEmissionError::Capacity)?,
             )
             .ok_or(EffectEmissionError::Capacity)?,
-        |count, intent| {
-            count
+        |retained_bytes, intent| {
+            retained_bytes
                 .checked_add(intent.definition.package.retained_heap_bytes())
-                .and_then(|count| count.checked_add(intent.definition.entry.retained_heap_bytes()))
+                .and_then(|retained_bytes| {
+                    retained_bytes.checked_add(intent.definition.entry.retained_heap_bytes())
+                })
                 .ok_or(EffectEmissionError::Capacity)
         },
     )?;
