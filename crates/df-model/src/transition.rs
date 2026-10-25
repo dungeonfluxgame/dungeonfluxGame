@@ -49,40 +49,40 @@ pub enum TransitionError {
 }
 
 fn pending_identity(
-    current: &Checkpoint,
-    candidate: &Checkpoint,
-    operation: OperationId,
+    source_checkpoint: &Checkpoint,
+    staged_checkpoint: &Checkpoint,
+    operation_id: OperationId,
 ) -> Result<Option<(ResolutionId, WindowId, PendingInput)>, TransitionError> {
-    let previous = current.basis();
-    let next = candidate.basis();
+    let previous = source_checkpoint.basis();
+    let next = staged_checkpoint.basis();
     if previous.session != next.session
         || previous.run != next.run
         || previous.revision.next_sequence().ok() != Some(next.revision)
-        || current.pins() != candidate.pins()
+        || source_checkpoint.pins() != staged_checkpoint.pins()
     {
         return Err(TransitionError::Basis);
     }
-    let earlier = &current.state().decisions;
-    let decisions = &candidate.state().decisions;
+    let earlier = &source_checkpoint.state().decisions;
+    let decisions = &staged_checkpoint.state().decisions;
     let Some([decision]) = decisions.get(earlier.len()..) else {
         return Err(TransitionError::Decision);
     };
     if !decisions.starts_with(earlier)
-        || decision.operation != operation
+        || decision.operation != operation_id
         || decision.revision != next.revision
     {
         return Err(TransitionError::Decision);
     }
-    let mut matching = candidate.state().pending.iter().filter(|pending| {
+    let mut matching = staged_checkpoint.state().pending.iter().filter(|pending| {
         if pending.basis != next {
             return false;
         }
-        let new_resolution = !current
+        let new_resolution = !source_checkpoint
             .state()
             .pending
             .iter()
             .any(|previous| previous.id == pending.id)
-            && current
+            && source_checkpoint
                 .state()
                 .facts
                 .iter()
@@ -90,7 +90,7 @@ fn pending_identity(
         if decision.facts.contains(&pending.window.causal_fact) || new_resolution {
             return true;
         }
-        current.state().pending.iter().any(|previous| {
+        source_checkpoint.state().pending.iter().any(|previous| {
             previous.id == pending.id
                 && (previous.continuation != pending.continuation
                     || previous.window != pending.window

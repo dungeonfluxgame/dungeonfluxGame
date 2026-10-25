@@ -78,22 +78,26 @@ fn pending_candidate(cause_operation: OperationId) -> Checkpoint {
 
 #[test]
 fn accepted_pending_and_rejected_remain_disjoint() {
-    let current = checkpoint(state()).unwrap();
+    let source_checkpoint = checkpoint(state()).unwrap();
     assert!(matches!(action(), GameInput::Game(command) if command.operation == operation()));
     let accepted: TransitionResult<&str> =
-        TransitionResult::classify(&current, accepted(), operation()).unwrap();
+        TransitionResult::classify(&source_checkpoint, accepted(), operation()).unwrap();
     assert!(matches!(accepted, TransitionResult::Accepted(_)));
-    accepted.validate(&current, operation()).unwrap();
+    accepted.validate(&source_checkpoint, operation()).unwrap();
 
-    let pending: TransitionResult<&str> =
-        TransitionResult::classify(&current, pending_candidate(operation()), operation()).unwrap();
+    let pending: TransitionResult<&str> = TransitionResult::classify(
+        &source_checkpoint,
+        pending_candidate(operation()),
+        operation(),
+    )
+    .unwrap();
     assert!(matches!(
         &pending,
         TransitionResult::Pending { resolution, window, next: PendingInput::Choice { .. }, .. }
             if *resolution == ResolutionId::from_bytes(&[82; 16]).unwrap()
                 && *window == WindowId::from_bytes(&[83; 16]).unwrap()
     ));
-    pending.validate(&current, operation()).unwrap();
+    pending.validate(&source_checkpoint, operation()).unwrap();
     let mut wrong_next = pending.clone();
     if let TransitionResult::Pending { next, .. } = &mut wrong_next {
         *next = PendingInput::Roll {
@@ -103,32 +107,33 @@ fn accepted_pending_and_rejected_remain_disjoint() {
         };
     }
     assert_eq!(
-        wrong_next.validate(&current, operation()),
+        wrong_next.validate(&source_checkpoint, operation()),
         Err(TransitionError::Disposition)
     );
 
     let rejected: TransitionResult<&str> = TransitionResult::Rejected("source refused");
     assert_eq!(rejected, TransitionResult::Rejected("source refused"));
-    assert_eq!(current, checkpoint(state()).unwrap());
+    assert_eq!(source_checkpoint, checkpoint(state()).unwrap());
 }
 
 #[test]
 fn new_unowned_fact_cannot_classify_another_operation_and_variant_is_rechecked() {
-    let current = checkpoint(state()).unwrap();
+    let source_checkpoint = checkpoint(state()).unwrap();
     let unrelated = OperationId::from_bytes(&[84; 16]).unwrap();
-    let candidate = pending_candidate(unrelated);
+    let staged_checkpoint = pending_candidate(unrelated);
     let classified: TransitionResult<&str> =
-        TransitionResult::classify(&current, candidate.clone(), operation()).unwrap();
+        TransitionResult::classify(&source_checkpoint, staged_checkpoint.clone(), operation())
+            .unwrap();
     assert!(matches!(classified, TransitionResult::Accepted(_)));
-    let next = candidate.state().pending[0].next.clone();
+    let next = staged_checkpoint.state().pending[0].next.clone();
     let forged: TransitionResult<&str> = TransitionResult::Pending {
-        candidate,
+        candidate: staged_checkpoint,
         resolution: ResolutionId::from_bytes(&[82; 16]).unwrap(),
         window: WindowId::from_bytes(&[83; 16]).unwrap(),
         next,
     };
     assert_eq!(
-        forged.validate(&current, operation()),
+        forged.validate(&source_checkpoint, operation()),
         Err(TransitionError::Disposition)
     );
 }
@@ -138,7 +143,7 @@ fn new_resolution_from_retained_causal_fact_is_pending_for_current_operation() {
     let earlier = pending_candidate(operation());
     let mut source_state = earlier.state().clone();
     let mut new_resolution = source_state.pending.pop().unwrap();
-    let current = Checkpoint::new(
+    let source_checkpoint = Checkpoint::new(
         CHECKPOINT_SCHEMA,
         earlier.basis(),
         pins(),
@@ -152,7 +157,7 @@ fn new_resolution_from_retained_causal_fact_is_pending_for_current_operation() {
         limits(),
     )
     .unwrap();
-    let mut next = current.basis();
+    let mut next = source_checkpoint.basis();
     next.revision = next.revision.next_sequence().unwrap();
     let current_operation = OperationId::from_bytes(&[89; 16]).unwrap();
     source_state.decisions.push(AcceptedDecision {
@@ -168,7 +173,7 @@ fn new_resolution_from_retained_causal_fact_is_pending_for_current_operation() {
     new_resolution.window.id = WindowId::from_bytes(&[91; 16]).unwrap();
     new_resolution.basis = next;
     source_state.pending.push(new_resolution);
-    let candidate = Checkpoint::new(
+    let staged_checkpoint = Checkpoint::new(
         CHECKPOINT_SCHEMA,
         next,
         pins(),
@@ -182,10 +187,11 @@ fn new_resolution_from_retained_causal_fact_is_pending_for_current_operation() {
         limits(),
     )
     .unwrap();
-    let result: TransitionResult<&str> =
-        TransitionResult::classify(&current, candidate, current_operation).unwrap();
+    let transition: TransitionResult<&str> =
+        TransitionResult::classify(&source_checkpoint, staged_checkpoint, current_operation)
+            .unwrap();
     assert!(matches!(
-        &result,
+        &transition,
         TransitionResult::Pending {
             resolution,
             window,
@@ -195,16 +201,18 @@ fn new_resolution_from_retained_causal_fact_is_pending_for_current_operation() {
             && *window == WindowId::from_bytes(&[91; 16]).unwrap()
             && remaining.len() == 1
     ));
-    result.validate(&current, current_operation).unwrap();
+    transition
+        .validate(&source_checkpoint, current_operation)
+        .unwrap();
 }
 
 #[test]
 fn advanced_window_is_pending_but_basis_only_historical_carriage_is_accepted() {
-    let current = pending_candidate(operation());
-    let mut next = current.basis();
+    let source_checkpoint = pending_candidate(operation());
+    let mut next = source_checkpoint.basis();
     next.revision = next.revision.next_sequence().unwrap();
     let resumed_operation = OperationId::from_bytes(&[86; 16]).unwrap();
-    let mut state = current.state().clone();
+    let mut state = source_checkpoint.state().clone();
     state.pending[0].basis = next;
     state.decisions.push(AcceptedDecision {
         operation: resumed_operation,
@@ -230,12 +238,12 @@ fn advanced_window_is_pending_but_basis_only_historical_carriage_is_accepted() {
     )
     .unwrap();
     let classified: TransitionResult<&str> =
-        TransitionResult::classify(&current, carried, resumed_operation).unwrap();
+        TransitionResult::classify(&source_checkpoint, carried, resumed_operation).unwrap();
     assert!(matches!(classified, TransitionResult::Accepted(_)));
 
     let advanced_window = WindowId::from_bytes(&[87; 16]).unwrap();
     state.pending[0].window.id = advanced_window;
-    let candidate = Checkpoint::new(
+    let staged_checkpoint = Checkpoint::new(
         CHECKPOINT_SCHEMA,
         next,
         pins(),
@@ -250,21 +258,24 @@ fn advanced_window_is_pending_but_basis_only_historical_carriage_is_accepted() {
     )
     .unwrap();
     let classified: TransitionResult<&str> =
-        TransitionResult::classify(&current, candidate, resumed_operation).unwrap();
+        TransitionResult::classify(&source_checkpoint, staged_checkpoint, resumed_operation)
+            .unwrap();
     assert!(matches!(
         &classified,
         TransitionResult::Pending { window, .. } if *window == advanced_window
     ));
-    classified.validate(&current, resumed_operation).unwrap();
+    classified
+        .validate(&source_checkpoint, resumed_operation)
+        .unwrap();
 }
 
 #[test]
 fn old_epoch_and_wrong_operation_refuse_without_candidate() {
-    let current = checkpoint(state()).unwrap();
+    let source_checkpoint = checkpoint(state()).unwrap();
     let wrong = OperationId::from_bytes(&[85; 16]).unwrap();
-    let result: Result<TransitionResult<&str>, _> =
-        TransitionResult::classify(&current, accepted(), wrong);
-    assert_eq!(result, Err(TransitionError::Decision));
+    let transition: Result<TransitionResult<&str>, _> =
+        TransitionResult::classify(&source_checkpoint, accepted(), wrong);
+    assert_eq!(transition, Err(TransitionError::Decision));
     let mut restored_basis = basis();
     restored_basis.revision = revision(3, 8);
     let restored = Checkpoint::new(
@@ -284,5 +295,5 @@ fn old_epoch_and_wrong_operation_refuse_without_candidate() {
     let stale: Result<TransitionResult<&str>, _> =
         TransitionResult::classify(&restored, accepted(), operation());
     assert_eq!(stale, Err(TransitionError::Basis));
-    assert_eq!(current, checkpoint(state()).unwrap());
+    assert_eq!(source_checkpoint, checkpoint(state()).unwrap());
 }

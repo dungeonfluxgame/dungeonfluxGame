@@ -1678,13 +1678,13 @@ fn retrieved_memory_matches_request_provenance_and_exact_byte_item_bounds() {
     assert!(checkpoint(retrieved_state()).is_ok());
     for change in 0..5 {
         let mut supplied = retrieved_state();
-        let result = &mut supplied.continuity.retrieved[0];
+        let retrieved_memory = &mut supplied.continuity.retrieved[0];
         match change {
-            0 => result.access_generation = 3,
-            1 => result.index_generation = 7,
-            2 => result.source_revision = revision(1, 8),
-            3 => result.snippets[0].push('!'),
-            4 => result.snippets.push(String::new()),
+            0 => retrieved_memory.access_generation = 3,
+            1 => retrieved_memory.index_generation = 7,
+            2 => retrieved_memory.source_revision = revision(1, 8),
+            3 => retrieved_memory.snippets[0].push('!'),
+            4 => retrieved_memory.snippets.push(String::new()),
             _ => unreachable!(),
         }
         assert_eq!(

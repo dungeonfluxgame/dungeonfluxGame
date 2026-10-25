@@ -288,17 +288,17 @@ fn host(command: HostCommand) -> GameInput {
         command,
     })
 }
-fn admit(input: &GameInput, current: &Checkpoint) -> Result<(), CommandError> {
-    admit_with_limits(input, current, command_limits())
+fn admit(input: &GameInput, current_checkpoint: &Checkpoint) -> Result<(), CommandError> {
+    admit_with_limits(input, current_checkpoint, command_limits())
 }
 fn admit_with_limits(
     input: &GameInput,
-    current: &Checkpoint,
+    current_checkpoint: &Checkpoint,
     bounds: CommandLimits,
 ) -> Result<(), CommandError> {
     validate_client_command(
         input,
-        current,
+        current_checkpoint,
         ReferenceInventory {
             rules: &[rule()],
             content: &[content()],
@@ -396,8 +396,8 @@ fn draft() -> GameInput {
 
 #[test]
 fn incomplete_character_draft_remains_editable_and_accepted_character_cannot_be_resubmitted() {
-    let current = checkpoint(state()).unwrap();
-    let before = current.clone();
+    let current_checkpoint = checkpoint(state()).unwrap();
+    let before = current_checkpoint.clone();
     let mut incomplete = draft();
     let GameInput::Game(input) = &mut incomplete else {
         unreachable!()
@@ -411,7 +411,7 @@ fn incomplete_character_draft_remains_editable_and_accepted_character_cannot_be_
     draft.choices.clear();
     draft.phase = CreationPhase::Selecting;
 
-    assert_eq!(admit(&incomplete, &current), Ok(()));
+    assert_eq!(admit(&incomplete, &current_checkpoint), Ok(()));
     let mut edited = incomplete.clone();
     let GameInput::Game(input) = &mut edited else {
         unreachable!()
@@ -422,8 +422,8 @@ fn incomplete_character_draft_remains_editable_and_accepted_character_cannot_be_
     draft.background = Some(content());
     draft.classes.push(content());
     draft.phase = CreationPhase::AwaitingValidation;
-    assert_eq!(admit(&edited, &current), Ok(()));
-    assert_eq!(current, before);
+    assert_eq!(admit(&edited, &current_checkpoint), Ok(()));
+    assert_eq!(current_checkpoint, before);
 
     let mut accepted_state = state();
     accepted_state.continuity.creation.push(CharacterDraft {
@@ -446,16 +446,16 @@ fn incomplete_character_draft_remains_editable_and_accepted_character_cannot_be_
 #[test]
 fn accepts_each_closed_command_family_without_producing_state_or_draws() {
     for kind in 0..4 {
-        let current = waiting(kind);
-        let before = current.clone();
+        let current_checkpoint = waiting(kind);
+        let before = current_checkpoint.clone();
         let input = response(kind);
         let original = input.clone();
-        assert_eq!(admit(&input, &current), Ok(()));
+        assert_eq!(admit(&input, &current_checkpoint), Ok(()));
         assert_eq!(input, original);
-        assert_eq!(current, before);
-        assert!(current.state().draws.is_empty());
+        assert_eq!(current_checkpoint, before);
+        assert!(current_checkpoint.state().draws.is_empty());
     }
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     for input in [
         proposal(),
         draft(),
@@ -470,13 +470,13 @@ fn accepts_each_closed_command_family_without_producing_state_or_draws() {
         }),
         host(HostCommand::RequestCheckpoint),
     ] {
-        assert_eq!(admit(&input, &current), Ok(()));
+        assert_eq!(admit(&input, &current_checkpoint), Ok(()));
     }
 }
 
 #[test]
 fn rejects_native_success_failure_cancellation_and_timer_at_client_command_boundary() {
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     for outcome in [
         JobOutcome::Ai {
             semantic_output: "arbitrary invented outcome".to_owned(),
@@ -508,20 +508,26 @@ fn rejects_native_success_failure_cancellation_and_timer_at_client_command_bound
             generation: 1,
             outcome,
         });
-        assert_eq!(admit(&input, &current), Err(CommandError::InternalInput));
+        assert_eq!(
+            admit(&input, &current_checkpoint),
+            Err(CommandError::InternalInput)
+        );
     }
     let input = GameInput::Timer(TimerExpiry {
         basis: basis(),
         timer: TimerId::from_bytes(&[23; 16]).unwrap(),
         generation: 1,
-        observed_time: current.state().logical_time,
+        observed_time: current_checkpoint.state().logical_time,
     });
-    assert_eq!(admit(&input, &current), Err(CommandError::InternalInput));
+    assert_eq!(
+        admit(&input, &current_checkpoint),
+        Err(CommandError::InternalInput)
+    );
 }
 
 #[test]
 fn routes_presentation_observations_to_the_separate_delivery_boundary() {
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     let input = GameInput::Presentation(PresentationReport {
         basis: basis(),
         binding: ClientBindingId::from_bytes(&[24; 16]).unwrap(),
@@ -530,7 +536,7 @@ fn routes_presentation_observations_to_the_separate_delivery_boundary() {
         presentation_ticks: 10,
     });
     assert_eq!(
-        admit(&input, &current),
+        admit(&input, &current_checkpoint),
         Err(CommandError::PresentationReport)
     );
 }
@@ -538,17 +544,17 @@ fn routes_presentation_observations_to_the_separate_delivery_boundary() {
 #[test]
 fn rejects_every_cross_kind_pending_response_and_replaced_window() {
     for pending_kind in 0..4 {
-        let current = waiting(pending_kind);
+        let current_checkpoint = waiting(pending_kind);
         for command_kind in 0..4 {
             if command_kind != pending_kind {
                 assert_eq!(
-                    admit(&response(command_kind), &current),
+                    admit(&response(command_kind), &current_checkpoint),
                     Err(CommandError::WrongPendingKind)
                 );
             }
         }
     }
-    let current = waiting(1);
+    let current_checkpoint = waiting(1);
     let GameInput::Game(mut input) = response(1) else {
         unreachable!()
     };
@@ -556,7 +562,7 @@ fn rejects_every_cross_kind_pending_response_and_replaced_window() {
         *window = WindowId::from_bytes(&[99; 16]).unwrap();
     }
     assert_eq!(
-        admit(&GameInput::Game(input), &current),
+        admit(&GameInput::Game(input), &current_checkpoint),
         Err(CommandError::StaleWindow)
     );
 }
@@ -565,7 +571,7 @@ fn rejects_every_cross_kind_pending_response_and_replaced_window() {
 fn rejects_unknown_offers_options_and_ineligible_remaining_participants() {
     for kind in [0, 1, 3] {
         for changed in 0..3 {
-            let current = waiting(kind);
+            let current_checkpoint = waiting(kind);
             let mut input = response(kind);
             match &mut input {
                 GameInput::Game(input) => match &mut input.command {
@@ -595,7 +601,7 @@ fn rejects_unknown_offers_options_and_ineligible_remaining_participants() {
             } else {
                 CommandError::UnofferedResponse
             };
-            assert_eq!(admit(&input, &current), Err(expected));
+            assert_eq!(admit(&input, &current_checkpoint), Err(expected));
         }
     }
     let mut supplied = waiting(2).state().clone();
@@ -603,56 +609,59 @@ fn rejects_unknown_offers_options_and_ineligible_remaining_participants() {
         member: member(5),
         character: None,
     });
-    let current = checkpoint(supplied).unwrap();
+    let current_checkpoint = checkpoint(supplied).unwrap();
     let GameInput::Game(mut input) = response(2) else {
         unreachable!()
     };
     input.member = member(5);
     assert_eq!(
-        admit(&GameInput::Game(input), &current),
+        admit(&GameInput::Game(input), &current_checkpoint),
         Err(CommandError::UnofferedResponse)
     );
 }
 
 #[test]
 fn permits_unrelated_sequence_advances_but_refuses_retired_epochs_future_and_other_runs() {
-    let current = waiting(1);
+    let current_checkpoint = waiting(1);
     let GameInput::Game(mut input) = response(1) else {
         unreachable!()
     };
     input.basis.revision = revision(2, 7);
     input.observed_revision = revision(2, 7);
-    assert_eq!(admit(&GameInput::Game(input.clone()), &current), Ok(()));
+    assert_eq!(
+        admit(&GameInput::Game(input.clone()), &current_checkpoint),
+        Ok(())
+    );
     for revision in [revision(1, 7), revision(3, 7), revision(2, 9)] {
         let mut changed = input.clone();
         changed.observed_revision = revision;
         assert_eq!(
-            admit(&GameInput::Game(changed), &current),
+            admit(&GameInput::Game(changed), &current_checkpoint),
             Err(CommandError::StaleRevision)
         );
         let mut changed = input.clone();
         changed.basis.revision = revision;
         assert_eq!(
-            admit(&GameInput::Game(changed), &current),
+            admit(&GameInput::Game(changed), &current_checkpoint),
             Err(CommandError::StaleRevision)
         );
     }
     let mut changed = input.clone();
     changed.basis.session = SessionId::from_bytes(&[99; 16]).unwrap();
     assert_eq!(
-        admit(&GameInput::Game(changed), &current),
+        admit(&GameInput::Game(changed), &current_checkpoint),
         Err(CommandError::WrongSession)
     );
     input.basis.run = RunId::from_bytes(&[99; 16]).unwrap();
     assert_eq!(
-        admit(&GameInput::Game(input), &current),
+        admit(&GameInput::Game(input), &current_checkpoint),
         Err(CommandError::WrongRun)
     );
 }
 
 #[test]
 fn rejects_unadmitted_content_unknown_entities_and_duplicate_selections() {
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     for changed in 0..5 {
         let GameInput::Game(mut input) = proposal() else {
             unreachable!()
@@ -678,7 +687,10 @@ fn rejects_unadmitted_content_unknown_entities_and_duplicate_selections() {
         } else {
             CommandError::DuplicateSelection
         };
-        assert_eq!(admit(&GameInput::Game(input), &current), Err(expected));
+        assert_eq!(
+            admit(&GameInput::Game(input), &current_checkpoint),
+            Err(expected)
+        );
     }
     let pause = host(HostCommand::SetPause {
         paused: true,
@@ -687,12 +699,15 @@ fn rejects_unadmitted_content_unknown_entities_and_duplicate_selections() {
             entry: label("unadmitted"),
         },
     });
-    assert_eq!(admit(&pause, &current), Err(CommandError::InvalidReference));
+    assert_eq!(
+        admit(&pause, &current_checkpoint),
+        Err(CommandError::InvalidReference)
+    );
 }
 
 #[test]
 fn rejects_client_claimed_accepted_build_foreign_member_and_unadmitted_build_sources() {
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     for changed in 0..4 {
         let GameInput::Game(mut input) = draft() else {
             unreachable!()
@@ -707,7 +722,7 @@ fn rejects_client_claimed_accepted_build_foreign_member_and_unadmitted_build_sou
             }
         }
         assert_eq!(
-            admit(&GameInput::Game(input), &current),
+            admit(&GameInput::Game(input), &current_checkpoint),
             Err(CommandError::InvalidDraft)
         );
     }
@@ -715,17 +730,20 @@ fn rejects_client_claimed_accepted_build_foreign_member_and_unadmitted_build_sou
 
 #[test]
 fn bounds_utf8_text_collections_and_spare_capacity_without_input_mutation() {
-    let current = checkpoint(state()).unwrap();
+    let current_checkpoint = checkpoint(state()).unwrap();
     let input = game(GameCommand::Speak {
         speaker: entity(4),
         text: "é".repeat(17),
         conversation: None,
     });
-    assert_eq!(admit(&input, &current), Err(CommandError::Capacity));
+    assert_eq!(
+        admit(&input, &current_checkpoint),
+        Err(CommandError::Capacity)
+    );
     let mut bounds = command_limits();
     bounds.maximum_records = 1;
     assert_eq!(
-        admit_with_limits(&proposal(), &current, bounds),
+        admit_with_limits(&proposal(), &current_checkpoint, bounds),
         Err(CommandError::Capacity)
     );
     let input = game(GameCommand::ProposeAction {
@@ -736,7 +754,10 @@ fn bounds_utf8_text_collections_and_spare_capacity_without_input_mutation() {
     });
     let retained = input.retained_bytes();
     let original = input.clone();
-    assert_eq!(admit(&input, &current), Err(CommandError::Capacity));
+    assert_eq!(
+        admit(&input, &current_checkpoint),
+        Err(CommandError::Capacity)
+    );
     assert_eq!(input, original);
     assert_eq!(input.retained_bytes(), retained);
     let mut text = String::with_capacity(16_384);
@@ -746,7 +767,10 @@ fn bounds_utf8_text_collections_and_spare_capacity_without_input_mutation() {
         text,
         conversation: None,
     });
-    assert_eq!(admit(&input, &current), Err(CommandError::Capacity));
+    assert_eq!(
+        admit(&input, &current_checkpoint),
+        Err(CommandError::Capacity)
+    );
     for bounds in [
         CommandLimits {
             maximum_records: 0,
@@ -762,7 +786,7 @@ fn bounds_utf8_text_collections_and_spare_capacity_without_input_mutation() {
         },
     ] {
         assert_eq!(
-            admit_with_limits(&proposal(), &current, bounds),
+            admit_with_limits(&proposal(), &current_checkpoint, bounds),
             Err(CommandError::Capacity)
         );
     }
@@ -778,20 +802,23 @@ fn checks_conversation_reference_and_speaker_without_interpreting_speech_as_game
         topic: content(),
         accepted_facts: vec![],
     });
-    let current = checkpoint(supplied).unwrap();
-    let before = current.clone();
+    let current_checkpoint = checkpoint(supplied).unwrap();
+    let before = current_checkpoint.clone();
     let input = game(GameCommand::Speak {
         speaker: entity(4),
         text: "I declare an invented outcome".to_owned(),
         conversation: Some(conversation_id),
     });
-    assert_eq!(admit(&input, &current), Ok(()));
-    assert_eq!(current, before);
-    assert!(current.state().facts.is_empty());
+    assert_eq!(admit(&input, &current_checkpoint), Ok(()));
+    assert_eq!(current_checkpoint, before);
+    assert!(current_checkpoint.state().facts.is_empty());
     let input = game(GameCommand::Speak {
         speaker: entity(4),
         text: "hello".to_owned(),
         conversation: Some(RecordId::from_bytes(&[99; 16]).unwrap()),
     });
-    assert_eq!(admit(&input, &current), Err(CommandError::InvalidReference));
+    assert_eq!(
+        admit(&input, &current_checkpoint),
+        Err(CommandError::InvalidReference)
+    );
 }

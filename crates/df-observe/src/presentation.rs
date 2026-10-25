@@ -783,13 +783,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
         let mut component_phase = None;
         let mut visibility = None;
         for field in &record.attributes {
-            let value = field
+            let attribute_value = field
                 .value
                 .as_ref()
-                .and_then(|value| value.value.as_ref())
+                .and_then(|attribute_value| attribute_value.value.as_ref())
                 .ok_or(TimingError::Invalid)?;
             if field.key == "reason" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if reason.is_some() {
@@ -800,7 +800,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "requested_source" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if requested_source.is_some() {
@@ -811,7 +811,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "effective_source" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if effective_source.is_some() {
@@ -822,7 +822,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "plate_state" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if plate_state.is_some() {
@@ -833,7 +833,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "shot" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if shot.is_some() {
@@ -844,7 +844,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "component" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if component.is_some() {
@@ -855,7 +855,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "component_phase" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if component_phase.is_some() {
@@ -866,7 +866,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else if field.key == "visibility" {
-                let Value::StringValue(text) = value else {
+                let Value::StringValue(text) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if visibility.is_some() {
@@ -877,12 +877,14 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                     return Err(TimingError::Invalid);
                 }
             } else {
-                let Value::IntValue(value) = value else {
+                let Value::IntValue(measurement) = attribute_value else {
                     return Err(TimingError::Invalid);
                 };
                 if !NUMERIC_FIELDS.contains(&field.key.as_str())
-                    || *value < 0
-                    || values.insert(field.key.as_str(), *value as u64).is_some()
+                    || *measurement < 0
+                    || values
+                        .insert(field.key.as_str(), *measurement as u64)
+                        .is_some()
                 {
                     return Err(TimingError::Invalid);
                 }
