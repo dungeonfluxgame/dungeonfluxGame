@@ -1,7 +1,8 @@
 //! The campaign service (`planning/campaigns-and-table-research.md`): campaigns, membership and
 //! the role matrix, invitations and room codes, display pairing, the event feed and account
 //! closure. Owns the rules and the ports; the PostgreSQL adapter lives in `df-persistence`
-//! (`campaign_store`) and serves JSON through the route module. It never serves HTML, never runs
+//! (`campaign_store`) and serves JSON through the route module. Session entry proxies runtime
+//! pages or serves an explicit waiting page. It never runs
 //! on a game owner thread and never calls a provider.
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
@@ -41,5 +42,7 @@ pub mod records;
 pub mod routes;
 pub mod secrets;
 pub mod service;
+#[cfg(feature = "routes")]
+pub mod session_link;
 pub mod store;
 pub mod throttles;
