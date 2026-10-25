@@ -362,12 +362,13 @@ heroes, dev `/say`, same pack), compared against the section 3 baseline.
   checking monotonic revision delivery.
 - Not planned: per-room actors (c) and locking (d).
 
-## 6. Open decisions for the owner
+## 6. Owner decisions (2026-10-24)
 
-1. Stage 3a key: per NPC, or per place for shared canon (REF-069 scope).
-2. Stage 4c: may the owner cache grants with explicit invalidation, or must every call hit Postgres?
-3. Whether a faster reply model or lower reasoning effort for `npc_reply` is acceptable (a quality
-   trade-off, outside this document).
+1. Stage 3a key: per NPC (the store's atomic append arbitrates across NPCs).
+2. Stage 4c: the owner caches grants briefly with explicit invalidation on issue, revoke and expiry;
+   every write still re-checks.
+3. Faster reply model: deferred until stage 0 measures what remains after stages 1-3.
+4. Stages 0 and 1 are approved to start as a server-core worker round.
 
 ## 7. Sources
 
