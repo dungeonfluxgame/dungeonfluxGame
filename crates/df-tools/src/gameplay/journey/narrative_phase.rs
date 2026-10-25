@@ -120,7 +120,7 @@ pub(super) fn validate_terminal_cause(
     Ok(())
 }
 
-fn shared_empty(fact: &GameFact) -> bool {
+fn is_shared_empty(fact: &GameFact) -> bool {
     fact.audience == AudienceScope::Shared
         && matches!(&fact.value, FactValue::ContentEvent { subjects, .. } if subjects.is_empty())
 }
@@ -130,7 +130,7 @@ fn shared_empty(fact: &GameFact) -> bool {
 pub(super) fn courier_encounter_permitted(current: &Checkpoint) -> Result<bool, RepositoryError> {
     let state = current.state();
     if state.narrative.active_beats == [model::content("courier-answer-escort")?] {
-        return Ok(shared_empty(source(
+        return Ok(is_shared_empty(source(
             state,
             "escort-courier",
             rpc::JourneyPhase::Dialogue,
@@ -351,7 +351,7 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         return invalid();
     }
     let opening = source(state, "begin-story", rpc::JourneyPhase::Opening)?;
-    if !shared_empty(opening)
+    if !is_shared_empty(opening)
         || !state
             .narrative
             .open_threads
@@ -391,7 +391,7 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
     )?;
     // Current private disclosure selection may be revoked or replaced. Its accepted
     // story outcome remains; wire and encounter admission validate current disclosure.
-    let permitted = answer == "courier-answer-seal" || shared_empty(dialogue);
+    let permitted = answer == "courier-answer-seal" || is_shared_empty(dialogue);
     if !permitted || dialogue.revision <= opening.revision {
         return invalid();
     }
@@ -416,7 +416,7 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
     let monster = entity(BANDIT)?;
     let expected = actors.iter().copied().chain([monster]).collect::<Vec<_>>();
     if !super::tactical::present(state)
-        && (!shared_empty(start)
+        && (!is_shared_empty(start)
             || start.revision <= dialogue.revision
             || encounter.id
                 != RecordId::from_bytes(&ENCOUNTER)
@@ -600,7 +600,7 @@ fn accepted_rest(
             crate::gameplay::refusal_detail::note("rest-time-advance");
             RepositoryError::InvalidCandidate
         })?;
-        if !shared_empty(event) {
+        if !is_shared_empty(event) {
             return invalid();
         }
         let receipt = accepted(decision).map_err(|_| {
@@ -720,7 +720,7 @@ pub(super) fn completion_source<'a>(
         else {
             continue;
         };
-        if !shared_empty(event)
+        if !is_shared_empty(event)
             || (require_narrative && !state.narrative.accepted_facts.contains(&event.id))
             || !matches!(&event.value, FactValue::ContentEvent { definition, .. }
                 if *definition == model::content("greatsword-attack")? || *definition == model::content("end-turn")?)

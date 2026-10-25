@@ -80,7 +80,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
         let [encounter] = self.staged.encounters.as_slice() else {
             return Err(RepositoryError::InvalidCandidate);
         };
-        let scene_assault = encounter
+        let is_scene_assault = encounter
             .objectives
             .contains(&model::content("scene-npc-assault")?);
         let party = super::participants(self.current)
@@ -100,7 +100,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
                     elapsed != 0 && elapsed != u64::from(super::pack::combat().round_ticks)
                 })
             || observation.policy
-                != model::content(if scene_assault {
+                != model::content(if is_scene_assault {
                     "tactical-srd521-cover-policy"
                 } else {
                     "normal-nonlethal-melee"
@@ -145,13 +145,13 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             .iter()
             .find(|actor| actor.id == monster)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        if (!scene_assault && actor.definition != model::content("bandit")?)
-            || (!scene_assault && actor.identity_revision != model::label("srd521-bandit-1")?)
-            || (scene_assault
+        if (!is_scene_assault && actor.definition != model::content("bandit")?)
+            || (!is_scene_assault && actor.identity_revision != model::label("srd521-bandit-1")?)
+            || (is_scene_assault
                 && (actor.definition != model::content("lantern-wharf-courier")?
                     || actor.identity_revision != model::label("lantern-wharf-courier-1")?))
             || actor.location != Some(room_entity()?)
-            || (if scene_assault {
+            || (if is_scene_assault {
                 actor.position.is_none()
             } else {
                 actor.position != Some(Position { x: 0, y: 0, z: 0 })
@@ -222,30 +222,30 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             .iter()
             .find(|weapon| weapon.id == offer.weapon)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        let item = self
+        let inventory_item = self
             .staged
             .inventory
             .iter()
-            .find(|item| item.item == offer.weapon)
+            .find(|inventory_item| inventory_item.item == offer.weapon)
             .ok_or(RepositoryError::InvalidCandidate)?;
         if weapon.definition != offer.action
             || weapon.identity_revision != model::label("source-held-scimitar-1")?
-            || item.owner != offer.actor
-            || item.quantity != 1
-            || item.source != offer.source
-            || item.origin != offer.action
-            || item.attunement_owner.is_some()
+            || inventory_item.owner != offer.actor
+            || inventory_item.quantity != 1
+            || inventory_item.source != offer.source
+            || inventory_item.origin != offer.action
+            || inventory_item.attunement_owner.is_some()
         {
             return Err(RepositoryError::InvalidCandidate);
         }
-        let held = weapon.location == Some(offer.actor) && weapon.position.is_none();
+        let is_held = weapon.location == Some(offer.actor) && weapon.position.is_none();
         let economy = rules::ActionEconomy {
             action_used: self.resource(offer.actor, "action-used")? != 0,
             bonus_action_used: self.resource(offer.actor, "bonus-used")? != 0,
         };
         // These exact authored five-foot cells are the selected adjacent profile;
         // this adapter does not infer general reach, movement, cover or advantage.
-        Ok(held
+        Ok(is_held
             && self.resource(offer.actor, "held-weapon")? == 1
             && economy.attack().is_ok()
             && target.location == Some(room_entity()?)
@@ -312,13 +312,13 @@ pub(super) fn select(
         basis: &basis,
         pins: current.pins(),
     };
-    let scene_assault = staged.encounters.first().is_some_and(|encounter| {
+    let is_scene_assault = staged.encounters.first().is_some_and(|encounter| {
         encounter
             .objectives
             .iter()
             .any(|objective| objective.entry.as_str() == "scene-npc-assault")
     });
-    let policy = model::content(if scene_assault {
+    let policy = model::content(if is_scene_assault {
         "tactical-srd521-cover-policy"
     } else {
         "normal-nonlethal-melee"
