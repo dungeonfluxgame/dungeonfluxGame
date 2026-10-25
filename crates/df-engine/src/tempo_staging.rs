@@ -35,14 +35,16 @@ pub fn stage_tempo_candidate(
     limits: (ImpulseLimits, CheckpointLimits),
     inventory: ReferenceInventory<'_>,
 ) -> Result<(Checkpoint, ImpulseAdvance), TempoStageError> {
+    let (elapsed_policy, impulse_policy) = policies;
+    let (impulse_limits, checkpoint_limits) = limits;
     let advance = advance_impulse(
         current,
         admitted_pins,
         request,
-        policies.0,
-        policies.1,
+        elapsed_policy,
+        impulse_policy,
         input,
-        limits.0,
+        impulse_limits,
     )
     .map_err(TempoStageError::Impulse)?;
     let mut state = current.state().clone();
@@ -53,7 +55,7 @@ pub fn stage_tempo_candidate(
         admitted_pins.clone(),
         state,
         inventory,
-        limits.1,
+        checkpoint_limits,
     )
     .map_err(TempoStageError::InvalidCandidate)?;
     Ok((candidate, advance))

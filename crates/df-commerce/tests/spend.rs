@@ -13,8 +13,8 @@ const SCOPES: [SpendScope; 6] = [
     SpendScope::Job,
 ];
 
-fn money(micros: u128) -> Money {
-    Money::new(Currency::parse("USD").unwrap(), micros)
+fn money(micro_dollars: u128) -> Money {
+    Money::new(Currency::parse("USD").unwrap(), micro_dollars)
 }
 
 fn snapshot() -> SpendSnapshot {

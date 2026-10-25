@@ -106,7 +106,7 @@ pub fn validate_plan_steps<'a>(
     if comparisons > limits.maximum_comparisons {
         return Err(PlanError::Capacity);
     }
-    let mut retained = 0_usize;
+    let mut retained_bytes = 0_usize;
     for (index, input) in steps.iter().enumerate() {
         let command = response(input).ok_or(PlanError::UnsupportedStep { index })?;
         if command.member != owner.member {
@@ -126,10 +126,10 @@ pub fn validate_plan_steps<'a>(
         }) {
             return Err(PlanError::DuplicateOperation);
         }
-        retained = retained
+        retained_bytes = retained_bytes
             .checked_add(input.retained_bytes().ok_or(PlanError::Capacity)?)
             .ok_or(PlanError::Capacity)?;
-        if retained > limits.maximum_total_input_bytes {
+        if retained_bytes > limits.maximum_total_input_bytes {
             return Err(PlanError::Capacity);
         }
         if current
