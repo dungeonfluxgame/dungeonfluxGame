@@ -57,8 +57,8 @@
         <a href="/de/rules/">Regeln</a>
         <a href="/de/help/">Hilfe</a>
       </span>
-      <a href="/app/sign-in">Anmelden</a>
-      <a class="cta" href="/app/sign-up">Kostenloses Konto erstellen</a>
+      <span data-df="accounts-cta" data-df-state="open" hidden><a href="/app/sign-in">Anmelden</a></span><span data-df="accounts-cta" data-df-state="closed" class="account-closed" aria-disabled="true">Anmelden<small>Demn&auml;chst</small></span>
+      <span data-df="accounts-cta" data-df-state="open" hidden><a class="cta" href="/app/sign-up">Kostenloses Konto erstellen</a></span><span data-df="accounts-cta" data-df-state="closed" class="cta account-closed account-closed-cta" aria-disabled="true">Registrieren<small>Demn&auml;chst</small></span>
       <details class="language-switcher"><summary aria-label="Sprache: Deutsch">Deutsch</summary><div class="language-options"><ul><li><a href="/legal/terms/" lang="en">English</a></li><li><a href="/es/legal/terms/" lang="es">Español</a></li><li><a href="/de/legal/terms/" lang="de" aria-current="page">Deutsch</a></li><li><a href="/fr/legal/terms/" lang="fr">Français</a></li></ul></div></details>
     </nav>
   </div>
@@ -102,7 +102,7 @@
         <ul><li>DungeonFlux ist ein Pilotdienst ausschließlich für Erwachsene.</li><li>Spielleitung, Spielende und Zahlende haben getrennte Rollen. Die Spielleitung erhält oder kontrolliert niemals das Guthaben anderer Personen.</li><li>Die Preise richten sich nach einer veröffentlichten Preisliste und bleiben für eine Spielsitzung fest.</li><li>Die Geschichte wird von KI erzeugt und kann dich überraschen. Die Würfel wirft eine Regel-Engine.</li><li>Einige Teile dieser Bedingungen müssen noch mit der Rechtsberatung ausgearbeitet werden. Sie sind am Ende aufgeführt.</li></ul>
       </div>
       <h2 id="who">Wer DungeonFlux nutzen kann</h2>
-<p>Der Pilot ist für Erwachsene. Neue Nutzerinnen und Nutzer bestätigen bei der Kontoerstellung ihr Alter und stimmen den Nutzungsbedingungen sowie der Datenschutzerklärung zu. Separat können sie dem Erhalt von Werbung zustimmen. Die Anmeldung läuft über einen gehosteten Identitätsdienst. Eine bestätigte E-Mail-Adresse ist erforderlich, bevor du Guthaben beisteuern oder eine kostenpflichtige Spielsitzung leiten kannst. Du bist dafür verantwortlich, dein Konto zu schätzen.</p>
+<p><span data-df="entity-copy" data-df-state="named" hidden>Diese Bedingungen sind eine Vereinbarung zwischen dir und {{entity}}, {{kind}}. </span>Der Pilot ist für Erwachsene. Neue Nutzerinnen und Nutzer bestätigen bei der Kontoerstellung ihr Alter und stimmen den Nutzungsbedingungen sowie der Datenschutzerklärung zu. Separat können sie dem Erhalt von Werbung zustimmen. Die Anmeldung läuft über einen gehosteten Identitätsdienst. Eine bestätigte E-Mail-Adresse ist erforderlich, bevor du Guthaben beisteuern oder eine kostenpflichtige Spielsitzung leiten kannst. Du bist dafür verantwortlich, dein Konto zu schätzen.</p>
       <h2 id="roles">Spielleitung, Spielende und Zahlende</h2>
 <p>Eine Spielrunde zu leiten und sie zu bezahlen sind getrennte Aufgaben. Jemand kann eine Spielsitzung finanzieren, ohne sie zu leiten, und Spielende können kostenlos auf einem gesponserten Platz mitspielen. Die Spielleitung kann Personen einladen oder entfernen und die Sitzung starten oder pausieren. Sie kann weder Gesamtguthaben noch Rechnungsadresse anderer Personen sehen und auch keine Beiträge anderer abheben.</p>
       <h2 id="money">Guthaben und Preise</h2>
@@ -116,7 +116,7 @@
       <h2 id="enforce">Sperrungen und Einsprüche</h2>
 <p>Konten können bei Missbrauch gesperrt werden. Das Verfahren für Meldungen, Sperrungen, Einsprüche, Inhaltsentfernungen und Anfragen von Strafverfolgungsbehörden muss noch mit der Rechtsberatung festgelegt werden.</p>
       <h2 id="open">Noch juristisch zu klären</h2>
-<ul><li>Verkäufer, Anschrift und Kontaktdaten.</li><li>Anwendbares Recht, Streitbeilegung und Haftungsgrenzen.</li><li>Wem Figuren, Geschichten und erzeugte Medien gehören und welche Lizenz DungeonFlux für deren Betrieb benötigt.</li><li>In welchen Regionen der Pilot angeboten wird sowie Alters- und Inhaltsgrenzen.</li><li>Verfahren für Sperrungen, Einsprüche, Entfernungen und Anfragen von Strafverfolgungsbehörden.</li><li>Änderungen der Bedingungen und die Benachrichtigung der Nutzenden.</li></ul>
+<ul><li><span data-df="entity-copy" data-df-state="unnamed">Verkäufer, Anschrift und Kontaktdaten.</span><span data-df="entity-copy" data-df-state="named" hidden>Anschrift und Kontaktdaten von {{entity}}.</span></li><li>Anwendbares Recht, Streitbeilegung und Haftungsgrenzen.</li><li>Wem Figuren, Geschichten und erzeugte Medien gehören und welche Lizenz DungeonFlux für deren Betrieb benötigt.</li><li>In welchen Regionen der Pilot angeboten wird sowie Alters- und Inhaltsgrenzen.</li><li>Verfahren für Sperrungen, Einsprüche, Entfernungen und Anfragen von Strafverfolgungsbehörden.</li><li>Änderungen der Bedingungen und die Benachrichtigung der Nutzenden.</li></ul>
     </div>
   </div>
 </div>
@@ -135,7 +135,7 @@
       <a href="/de/changelog/">Änderungsprotokoll</a>
       <a href="/de/status/">Status</a>
       <a href="mailto:support@dungeonfluxdnd.com">Kontakt</a>
-      <a href="https://github.com/monstercameron/dungeonfluxGame">Quellcode auf GitHub</a>
+      <a href="https://github.com/dungeonfluxgame/dungeonfluxGame">Quellcode auf GitHub</a>
     </nav>
     <nav class="foot-links" aria-label="Rechtliche Entwürfe">
       <span class="foot-group">Entwürfe, noch nicht in Kraft:</span>

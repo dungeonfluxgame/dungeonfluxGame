@@ -57,8 +57,8 @@
         <a href="rules/">Rules</a>
         <a href="help/">Help</a>
       </span>
-      <a href="/app/sign-in">Sign in</a>
-      <a class="cta" href="/app/sign-up">Create a free account</a>
+      <span data-df="accounts-cta" data-df-state="open" hidden><a href="/app/sign-in">Sign in</a></span><span data-df="accounts-cta" data-df-state="closed" class="account-closed" aria-disabled="true">Sign in<small>Coming soon</small></span>
+      <span data-df="accounts-cta" data-df-state="open" hidden><a class="cta" href="/app/sign-up">Create a free account</a></span><span data-df="accounts-cta" data-df-state="closed" class="cta account-closed account-closed-cta" aria-disabled="true">Sign up<small>Coming soon</small></span>
       <details class="language-switcher"><summary aria-label="Language: English">English</summary><div class="language-options"><ul><li><a href="/" lang="en" aria-current="page">English</a></li><li><a href="/es/" lang="es">Español</a></li><li><a href="/de/" lang="de">Deutsch</a></li><li><a href="/fr/" lang="fr">Français</a></li></ul></div></details>
     </nav>
   </div>
@@ -79,7 +79,8 @@
   </div>
   <div class="wrap hero-foot">
     <p class="hero-lede">DungeonFlux is an AI Dungeon Master for your living room. The adventure plays on your TV, everyone plays from their own phone.</p>
-    <p class="hero-cta"><a class="cta" href="/app/sign-up">Create a free account</a><a class="hero-secondary" href="#how">See how a night plays</a></p>
+    <p class="hero-cta"><span data-df="accounts-cta" data-df-state="open" hidden><a class="cta" href="/app/sign-up">Create a free account</a></span><span data-df="accounts-cta" data-df-state="closed" class="cta account-closed account-closed-hero" aria-disabled="true">Sign-up coming soon<small>Coming soon</small></span><a class="hero-secondary" href="#how">See how a night plays</a></p>
+    <p class="account-follow" data-df="accounts-follow" data-df-state="closed"><a href="https://x.com/DungeonFluxGame">Follow @DungeonFluxGame for the launch</a></p>
     <p class="hero-fine fine"><span class="early">Early access</span><span data-df="pilot-copy" data-df-state="closed"> When the early-access pilot opens, new accounts will get $10 of promotional credit, subject to the final terms.</span><span data-df="pilot-copy" data-df-state="open" hidden>New accounts get $10 of promotional credit, subject to the final terms.</span> No card is needed to start.</p>
   </div>
 </section>
@@ -263,7 +264,7 @@
     <div class="wrap">
       <h2 id="closing-h"><span data-df="pilot-copy" data-df-state="closed">Pull up a chair. The story starts when the pilot opens.</span><span data-df="pilot-copy" data-df-state="open" hidden>Pull up a chair. The story starts now.</span></h2>
       <p><span data-df="pilot-copy" data-df-state="closed">When the early-access pilot opens, new accounts will get $10 of promotional credit, subject to the final terms.</span><span data-df="pilot-copy" data-df-state="open" hidden>New accounts get $10 of promotional credit, subject to the final terms.</span> No card is needed to start.</p>
-      <p class="cta-after"><a class="cta" href="/app/sign-up">Create a free account</a></p>
+      <p class="cta-after"><span data-df="accounts-cta" data-df-state="open" hidden><a class="cta" href="/app/sign-up">Create a free account</a></span><span data-df="accounts-cta" data-df-state="closed" class="cta account-closed account-closed-hero" aria-disabled="true">Sign-up coming soon<small>Coming soon</small></span></p>
     </div>
   </div>
 </section>
@@ -283,7 +284,7 @@
       <a href="changelog/">Changelog</a>
       <a href="status/">Status</a>
       <a href="mailto:support@dungeonfluxdnd.com">Contact</a>
-      <a href="https://github.com/monstercameron/dungeonfluxGame">Source on GitHub</a>
+      <a href="https://github.com/dungeonfluxgame/dungeonfluxGame">Source on GitHub</a>
     </nav>
     <nav class="foot-links" aria-label="Legal drafts">
       <span class="foot-group">Drafts, not yet in effect:</span>
