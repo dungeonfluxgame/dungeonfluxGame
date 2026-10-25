@@ -52,6 +52,8 @@ struct Entry {
     appearance: String,
     sequence: usize,
     progress: Arc<Mutex<String>>,
+    /// The capability that opens this draft's image; only the owning seat's answer carries it.
+    grant: [u8; 32],
 }
 impl Portraits {
     #[cfg(test)]
@@ -794,6 +796,7 @@ async fn handle_inner(
                 df_render::art_contract::Neutral::Nothing,
             );
             let resource = ResourceKey::of(&spec);
+            let grant = new_grant()?;
             let progress = Arc::new(Mutex::new(PREPARING_PORTRAIT.to_owned()));
             let job_progress = progress.clone();
             imagery.hub().get_or_request(
@@ -894,6 +897,7 @@ async fn handle_inner(
                     progress,
                     revision: body.draft_revision,
                     resource,
+                    grant,
                 },
             );
         }
@@ -902,7 +906,10 @@ async fn handle_inner(
     let (state, uri, message) = match imagery.hub().status(&entry.resource) {
         ResourceStatus::Ready(generated) => (
             "ready",
-            format!("/gameplay/creator-portrait/{}", generated.handle),
+            format!(
+                "/gameplay/creator-portrait/{}",
+                super::journey::hex(&entry.grant)
+            ),
             generated.note,
         ),
         ResourceStatus::Pending(_) => (
@@ -930,6 +937,14 @@ async fn handle_inner(
         image_uri: uri,
         message,
     })
+}
+
+/// A 256-bit capability for one draft. Random, never derived from the image or the seat.
+fn new_grant() -> Result<[u8; 32], Status> {
+    let mut grant = [0; 32];
+    super::model::fill_os_entropy(&mut grant)
+        .map_err(|_| Status::unavailable("Portrait status unavailable"))?;
+    Ok(grant)
 }
 
 fn reuse_design(
@@ -1011,34 +1026,7 @@ async fn serve(
     RoutePath(key): RoutePath<String>,
 ) -> Response {
     let audit = super::service_audit_context(&service, None);
-    if key.len() != 64
-        || !key
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        let _scope = df_observe::audit_scope(audit.clone());
-        super::actor::record_audit_line("gameplay.creator_portrait_image", "CREATOR_PORTRAIT event=image-served outcome=not_found reason=invalid-key operation_hash=none".to_owned());
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let operation_hash = service
-        .portraits
-        .requests
-        .lock()
-        .ok()
-        .and_then(|requests| {
-            requests.iter().find_map(|(_operation, entry)| {
-                service.portraits.imagery.as_ref().and_then(|imagery| {
-                    match imagery.hub().status(&entry.resource) {
-                        ResourceStatus::Ready(generated) if generated.handle == key => {
-                            Some(entry.diagnostic_operation.to_string())
-                        }
-                        _ => None,
-                    }
-                })
-            })
-        })
-        .unwrap_or_else(|| "committed-asset".to_owned());
-    let accepted = service
+    let approved = service
         .updates
         .borrow()
         .state()
@@ -1049,36 +1037,52 @@ async fn serve(
         .flat_map(|identity| &identity.appearances)
         .find(|asset| asset.key.as_str() == key)
         .cloned();
-    let Some(asset) = accepted else {
-        if let imagery::Lookup::Image { bytes, format: _ } = service.portraits.image(&key).await {
-            portrait_event_scoped(
-                &audit,
-                &operation_hash,
-                "image-served",
-                "ready",
-                0,
-                bytes.len(),
-                "image-bytes",
-            );
-            return (
-                [
-                    (header::CONTENT_TYPE, "image/jpeg"),
-                    (header::CACHE_CONTROL, "private, max-age=86400, immutable"),
-                ],
-                bytes,
-            )
-                .into_response();
-        }
+    respond(&service.portraits, &audit, &key, approved).await
+}
+
+/// Answers one portrait request. An approved appearance is public to the room (the shared display
+/// loads it by its content key). Anything else is a draft, served only to its capability.
+async fn respond(
+    portraits: &Portraits,
+    audit: &df_observe::AuditContext,
+    key: &str,
+    approved: Option<df_model::checkpoint::AssetReference>,
+) -> Response {
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
         let _scope = df_observe::audit_scope(audit.clone());
-        super::actor::record_audit_line("gameplay.creator_portrait_image", "CREATOR_PORTRAIT event=image-served outcome=not_found reason=cache-miss operation_hash=none".to_owned());
+        super::actor::record_audit_line("gameplay.creator_portrait_image", "CREATOR_PORTRAIT event=image-served outcome=not_found reason=invalid-key operation_hash=none".to_owned());
         return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(asset) = approved else {
+        return serve_draft(portraits, audit, key).await;
     };
+    let operation_hash = portraits
+        .requests
+        .lock()
+        .ok()
+        .and_then(|requests| {
+            requests.iter().find_map(|(_operation, entry)| {
+                portraits.imagery.as_ref().and_then(|imagery| {
+                    match imagery.hub().status(&entry.resource) {
+                        ResourceStatus::Ready(generated) if generated.handle == key => {
+                            Some(entry.diagnostic_operation.to_string())
+                        }
+                        _ => None,
+                    }
+                })
+            })
+        })
+        .unwrap_or_else(|| "committed-asset".to_owned());
     if asset.byte_length > 6 * 1024 * 1024 {
         let _scope = df_observe::audit_scope(audit.clone());
         super::actor::record_audit_line("gameplay.creator_portrait_image", "CREATOR_PORTRAIT event=image-served outcome=not_found reason=oversize operation_hash=none".to_owned());
         return StatusCode::NOT_FOUND.into_response();
     }
-    let path = service.portraits.cache.join(format!("{key}.jpg"));
+    let path = portraits.cache.join(format!("{key}.jpg"));
     match tokio::task::spawn_blocking(move || {
         use std::io::Read;
         let file = std::fs::File::open(path)?;
@@ -1096,7 +1100,7 @@ async fn serve(
                 && <[u8; 32]>::from(Sha256::digest(&bytes)) == asset.digest.0 =>
         {
             portrait_event_scoped(
-                &audit,
+                audit,
                 &operation_hash,
                 "image-served",
                 "ready",
@@ -1104,14 +1108,7 @@ async fn serve(
                 bytes.len(),
                 "image-bytes",
             );
-            (
-                [
-                    (header::CONTENT_TYPE, "image/jpeg"),
-                    (header::CACHE_CONTROL, "private, max-age=86400, immutable"),
-                ],
-                bytes,
-            )
-                .into_response()
+            portrait_image(bytes)
         }
         _ => {
             let _scope = df_observe::audit_scope(audit.clone());
@@ -1124,6 +1121,68 @@ async fn serve(
             StatusCode::NOT_FOUND.into_response()
         }
     }
+}
+
+/// A draft is private to the seat it was issued to. Its content key is never a way in: the
+/// capability in the path is the only one, because a browser image request cannot carry the
+/// seat credential.
+async fn serve_draft(
+    portraits: &Portraits,
+    audit: &df_observe::AuditContext,
+    grant: &str,
+) -> Response {
+    let issued = portraits.requests.lock().ok().and_then(|requests| {
+        let entry = requests
+            .values()
+            .find(|entry| super::journey::hex(&entry.grant) == grant)?;
+        match portraits.imagery.as_ref()?.hub().status(&entry.resource) {
+            ResourceStatus::Ready(generated) => {
+                Some((generated.handle, entry.diagnostic_operation))
+            }
+            _ => None,
+        }
+    });
+    let Some((handle, operation)) = issued else {
+        return refuse_image(audit, "unknown-capability", "none");
+    };
+    let operation_hash = operation.to_string();
+    match portraits.image(&handle).await {
+        imagery::Lookup::Image { bytes, format: _ } => {
+            portrait_event_scoped(
+                audit,
+                &operation_hash,
+                "image-served",
+                "ready",
+                0,
+                bytes.len(),
+                "image-bytes",
+            );
+            portrait_image(bytes)
+        }
+        _ => refuse_image(audit, "cache-miss", &operation_hash),
+    }
+}
+
+fn refuse_image(audit: &df_observe::AuditContext, reason: &str, operation_hash: &str) -> Response {
+    let _scope = df_observe::audit_scope(audit.clone());
+    super::actor::record_audit_line(
+        "gameplay.creator_portrait_image",
+        format!(
+            "CREATOR_PORTRAIT event=image-served outcome=not_found reason={reason} operation_hash={operation_hash}"
+        ),
+    );
+    StatusCode::NOT_FOUND.into_response()
+}
+
+fn portrait_image(bytes: impl IntoResponse) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "private, max-age=86400, immutable"),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -1233,6 +1292,7 @@ mod catalog_tests {
                 resource: ResourceKey::of(&spec),
                 sequence: 0,
                 progress: Arc::new(Mutex::new(CREATING_PORTRAIT.to_owned())),
+                grant: [3; 32],
             },
         );
         let mut selection = rpc::CharacterSelection {
@@ -1349,6 +1409,7 @@ mod catalog_tests {
                     appearance: "unchanged-design".to_owned(),
                     sequence: 0,
                     progress: Arc::new(Mutex::new(PREPARING_PORTRAIT.to_owned())),
+                    grant: [4; 32],
                 },
             )]);
             reuse_design(&mut requests, "reloaded", [1; 32], &[8; 32], true);
@@ -1711,5 +1772,247 @@ mod catalog_tests {
                 assert!(!note.contains(internal));
             }
         }
+    }
+
+    /// A draft whose image is ready in the creator cache: owned by `owner`, opened by `grant`.
+    /// Returns the content key the cache knows the image by.
+    async fn ready_draft(
+        portraits: &Portraits,
+        fixture: &super::super::imagery::tests::DirectionFixture,
+        label: &str,
+        owner: [u8; 32],
+        grant: [u8; 32],
+    ) -> String {
+        let identity = super::super::hero_identity::Identity::from_menus(&[])
+            .unwrap()
+            .to_rpc();
+        let body = rpc::HeroPortraitRequest {
+            identity: Some(identity),
+            species: "dwarf".to_owned(),
+            character_class: "fighter-1".to_owned(),
+            background: "soldier".to_owned(),
+            draft_revision: 7,
+            ..Default::default()
+        };
+        let prepared = prepare_portrait(&body).unwrap();
+        let prompt = imagery::creator_portrait(
+            config::ContentRating::Restrained,
+            imagery::HeroVisualIdentity {
+                identity: &prepared.identity,
+                species: &body.species,
+                held_gear: &[],
+            },
+            label,
+            &prepared.design,
+        )
+        .unwrap();
+        let key = fixture
+            .imagery
+            .render_creator(ImageRequest {
+                kind: ImageKind::CanonicalCharacter,
+                references: vec![],
+                prompt,
+                output: OutputSpec {
+                    width: 1024,
+                    height: 1536,
+                    transparent: false,
+                },
+            })
+            .await
+            .unwrap();
+        let spec = CreatorPortraitSpec::new(
+            &format!("draft:{label}"),
+            label,
+            df_render::art_contract::Neutral::Nothing,
+        );
+        let handle = key.as_str().to_owned();
+        fixture.imagery.hub().get_or_request(
+            &spec,
+            Arc::new(move || {
+                let handle = handle.clone();
+                Box::pin(async move { Ok(Generated::new(handle)) })
+            }),
+        );
+        for job in fixture.imagery.hub().take_jobs(1) {
+            fixture.imagery.hub().complete(job.execute().await);
+        }
+        let mut requests = portraits.requests.lock().unwrap();
+        let sequence = requests.len();
+        requests.insert(
+            label.to_owned(),
+            Entry {
+                diagnostic_operation: 1,
+                fingerprint: vec![9; 32],
+                revision: 7,
+                resource: ResourceKey::of(&spec),
+                binding: owner,
+                appearance: prepared.public,
+                sequence,
+                progress: Arc::new(Mutex::new(READY_PORTRAIT.to_owned())),
+                grant,
+            },
+        );
+        key.as_str().to_owned()
+    }
+
+    async fn served_bytes(response: Response) -> Vec<u8> {
+        assert_eq!(response.status(), StatusCode::OK);
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn a_draft_portrait_is_not_served_by_its_content_key_or_an_unissued_capability() {
+        let root = std::env::temp_dir().join(format!("df-draft-by-key-{}", std::process::id()));
+        let _removed = std::fs::remove_dir_all(&root);
+        let fixture = super::super::imagery::tests::DirectionFixture::new(&root);
+        let mut portraits = Portraits::disabled();
+        portraits.imagery = Some(fixture.imagery.clone());
+        let content_key = ready_draft(&portraits, &fixture, "draft-a", [1; 32], [0x11; 32]).await;
+        let audit = df_observe::AuditContext::default();
+        assert_eq!(
+            respond(&portraits, &audit, &content_key, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            respond(&portraits, &audit, &"0".repeat(64), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let _removed = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn each_draft_opens_only_for_the_capability_issued_to_its_own_seat() {
+        let root = std::env::temp_dir().join(format!("df-draft-by-grant-{}", std::process::id()));
+        let _removed = std::fs::remove_dir_all(&root);
+        let fixture = super::super::imagery::tests::DirectionFixture::new(&root);
+        let mut portraits = Portraits::disabled();
+        portraits.imagery = Some(fixture.imagery.clone());
+        let first_grant = [0x11; 32];
+        let second_grant = [0x22; 32];
+        let first_key = ready_draft(&portraits, &fixture, "draft-a", [1; 32], first_grant).await;
+        let second_key = ready_draft(&portraits, &fixture, "draft-b", [2; 32], second_grant).await;
+        // The fake provider answers every prompt with one picture; give the second draft its own.
+        std::fs::write(
+            root.join(format!("{second_key}.jpg")),
+            b"second draft picture",
+        )
+        .unwrap();
+        let audit = df_observe::AuditContext::default();
+        let first = served_bytes(
+            respond(
+                &portraits,
+                &audit,
+                &super::super::journey::hex(&first_grant),
+                None,
+            )
+            .await,
+        )
+        .await;
+        let second = served_bytes(
+            respond(
+                &portraits,
+                &audit,
+                &super::super::journey::hex(&second_grant),
+                None,
+            )
+            .await,
+        )
+        .await;
+        let cached = |key: String| {
+            let imagery = fixture.imagery.clone();
+            async move {
+                match imagery.image(&key).await {
+                    imagery::Lookup::Image { bytes, .. } => bytes.to_vec(),
+                    _ => panic!("the draft image is cached"),
+                }
+            }
+        };
+        assert_eq!(first, cached(first_key).await);
+        assert_eq!(second, cached(second_key).await);
+        assert_ne!(first, second);
+        assert_eq!(
+            respond(
+                &portraits,
+                &audit,
+                &super::super::journey::hex(&[0x33; 32]),
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let _removed = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn an_approved_portrait_stays_public_by_its_content_key() {
+        let root = std::env::temp_dir().join(format!("df-approved-by-key-{}", std::process::id()));
+        let _removed = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let key = "5".repeat(64);
+        let bytes: &[u8] = b"approved portrait fixture";
+        std::fs::write(root.join(format!("{key}.jpg")), bytes).unwrap();
+        let asset = df_model::checkpoint::AssetReference {
+            key: super::super::model::label(&key).unwrap(),
+            digest: df_model::checkpoint::ContentDigest(Sha256::digest(bytes).into()),
+            byte_length: bytes.len() as u64,
+            kind: df_model::checkpoint::AssetKind::Image,
+        };
+        let mut portraits = Portraits::disabled();
+        portraits.cache = root.clone();
+        let audit = df_observe::AuditContext::default();
+        assert_eq!(
+            served_bytes(respond(&portraits, &audit, &key, Some(asset)).await).await,
+            bytes
+        );
+        let _removed = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_public_imagery_route_does_not_serve_a_draft_from_the_shared_cache() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tonic::codegen::Service as _;
+        let root =
+            std::env::temp_dir().join(format!("df-draft-public-route-{}", std::process::id()));
+        let _removed = std::fs::remove_dir_all(&root);
+        let creator = super::super::imagery::tests::DirectionFixture::new(&root);
+        let mut portraits = Portraits::disabled();
+        portraits.imagery = Some(creator.imagery.clone());
+        let content_key = ready_draft(&portraits, &creator, "draft-a", [1; 32], [0x11; 32]).await;
+        let request = |key: &str| {
+            Request::builder()
+                .uri(format!("/gameplay/imagery/{key}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        // The display's own image service reads the same cache directory with its own registry.
+        let display = super::super::imagery::tests::DirectionFixture::photographic(&root);
+        let mut creator_route = super::super::imagery::router(creator.imagery.clone());
+        assert_eq!(
+            creator_route
+                .call(request(&content_key))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let mut display_route = super::super::imagery::router(display.imagery.clone());
+        assert_eq!(
+            display_route
+                .call(request(&content_key))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let _removed = std::fs::remove_dir_all(&root);
     }
 }
