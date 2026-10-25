@@ -64,7 +64,7 @@ pub(crate) fn advance_recovery(
         request.preference,
     )
     .map_err(RecoveryError::Fatigue)?;
-    let Some(pressure) = request.pressure_units else {
+    let Some(pressure_units) = request.pressure_units else {
         return Ok(RecoveryProposal {
             advance,
             rotation: RotationDisposition::RecoveryOnly,
@@ -88,7 +88,7 @@ pub(crate) fn advance_recovery(
             policy.effects.iter().any(|rule| {
                 rule.definition == *definition
                     && counter
-                        .checked_add(pressure)
+                        .checked_add(pressure_units)
                         .is_some_and(|next| next <= rule.maximum_counter_units)
             })
         })
@@ -104,7 +104,7 @@ pub(crate) fn advance_recovery(
         // The index comes from this same bounded, unmodified vector, not caller input.
         let (definition, counter) = &mut advance.state.fatigue[index];
         *counter = counter
-            .checked_add(pressure)
+            .checked_add(pressure_units)
             .ok_or(RecoveryError::Fatigue(FatigueAdvanceError::CounterLimit))?;
         RotationDisposition::Selected(definition.clone())
     } else {

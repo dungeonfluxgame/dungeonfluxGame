@@ -21,7 +21,7 @@ fn hidden_world(
     mode: ExecutionMode,
     audience: AudienceScope,
     progress: u64,
-    due: u64,
+    due_ticks: u64,
 ) -> Checkpoint {
     let mut state = checkpoint_for(mode, vec![(content(), 7)], 40)
         .state()
@@ -51,7 +51,7 @@ fn hidden_world(
         id: RecordId::from_bytes(&[22; 16]).unwrap(),
         entity,
         due: LogicalTime {
-            ticks: due,
+            ticks: due_ticks,
             ticks_per_second: 10,
         },
         definition: content(),
@@ -84,10 +84,14 @@ fn impulse_policy(current: &Checkpoint) -> ImpulsePolicy {
     }
 }
 
-fn permitted(current: &Checkpoint, target: i64, fact: Option<FactId>) -> PermittedTempoInput {
+fn permitted(
+    current: &Checkpoint,
+    target_intensity: i64,
+    fact: Option<FactId>,
+) -> PermittedTempoInput {
     PermittedTempoInput {
         expected_basis: current.basis(),
-        target_intensity: target,
+        target_intensity,
         impulse: fact.map(|fact| ImpulseEvent {
             fact,
             at_presentation_ticks: current.state().tempo.presentation_ticks,
