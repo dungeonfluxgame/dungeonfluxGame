@@ -302,19 +302,21 @@ impl<Owner: EnvironmentalSourceOwner> EnvironmentalChangeHandler<'_, Owner> {
                 .checked_mul(std::mem::size_of::<FactId>())
                 .ok_or(WorldStagingError::Capacity)?)?;
         }
-        let records = [
+        let inventory_records = [
             self.inventory.rules.len(),
             self.inventory.content.len(),
             self.inventory.resources.len(),
             self.inventory.assets.len(),
         ]
         .into_iter()
-        .try_fold(0usize, |count, next| count.checked_add(next))
+        .try_fold(0usize, |record_count, next_collection_records| {
+            record_count.checked_add(next_collection_records)
+        })
         .ok_or(WorldStagingError::Capacity)?;
         let current_bytes = current
             .retained_bytes()
             .ok_or(WorldStagingError::Capacity)?;
-        let total = limits
+        let total_bytes = limits
             .maximum_checkpoint_bytes
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(current_bytes))
@@ -322,9 +324,9 @@ impl<Owner: EnvironmentalSourceOwner> EnvironmentalChangeHandler<'_, Owner> {
             .and_then(|bytes| bytes.checked_add(request_bytes))
             .and_then(|bytes| bytes.checked_add(input.retained_bytes()?))
             .ok_or(WorldStagingError::Capacity)?;
-        if records > limits.maximum_inventory_records
+        if inventory_records > limits.maximum_inventory_records
             || current_bytes > limits.maximum_checkpoint_bytes
-            || total > limits.maximum_pass_bytes
+            || total_bytes > limits.maximum_pass_bytes
         {
             return Err(WorldStagingError::Capacity);
         }
@@ -407,9 +409,11 @@ impl<Handler: RulesCommandHandler> RulesCommandHandler
             self.inventory.assets.len(),
         ]
         .into_iter()
-        .try_fold(0usize, |total, count| total.checked_add(count))
+        .try_fold(0usize, |record_count, next_collection_records| {
+            record_count.checked_add(next_collection_records)
+        })
         .ok_or(TimeScheduleError::Capacity)?;
-        let budget = bounds
+        let staged_pass_bytes = bounds
             .maximum_checkpoint_bytes
             .checked_mul(5)
             .and_then(|bytes| bytes.checked_add(self.limits.schedule.output_bytes))
@@ -421,7 +425,7 @@ impl<Handler: RulesCommandHandler> RulesCommandHandler
             || self.limits.checkpoint.maximum_retained_bytes > bounds.maximum_checkpoint_bytes
             || self.destinations.len() > self.limits.schedule.destinations
             || self.destinations.len() > 4096
-            || budget > bounds.maximum_pass_bytes
+            || staged_pass_bytes > bounds.maximum_pass_bytes
             || current
                 .retained_bytes()
                 .is_none_or(|bytes| bytes > bounds.maximum_checkpoint_bytes)
@@ -431,12 +435,12 @@ impl<Handler: RulesCommandHandler> RulesCommandHandler
         current
             .validate_resume(self.current_basis, self.pins())
             .map_err(TimeScheduleError::Snapshot)?;
-        let (basis, observed) = match input.command {
+        let (command_basis, observed_revision) = match input.command {
             GameInput::Game(command) => (command.basis, command.observed_revision),
             GameInput::Host(command) => (command.basis, command.basis.revision),
             _ => return Err(TimeScheduleError::UnsupportedInput),
         };
-        if basis != self.current_basis || observed != self.current_basis.revision {
+        if command_basis != self.current_basis || observed_revision != self.current_basis.revision {
             return Err(TimeScheduleError::StaleCommand);
         }
         if self.paused {
@@ -458,17 +462,18 @@ impl<Handler: RulesCommandHandler> RulesCommandHandler
         if !candidate.state().pending.is_empty() {
             return Err(TimeScheduleError::PendingResolution);
         }
-        let appended = candidate
+        let appended_facts = candidate
             .state()
             .facts
             .get(current.state().facts.len()..)
             .ok_or(TimeScheduleError::InvalidTimeFact)?;
-        let mut times = appended.iter().filter_map(|fact| match fact.value {
+        let mut time_advancements = appended_facts.iter().filter_map(|fact| match fact.value {
             FactValue::TimeAdvanced { before, after } => Some((before, after)),
             _ => None,
         });
-        if times.next() != Some((current.state().logical_time, candidate.state().logical_time))
-            || times.next().is_some()
+        if time_advancements.next()
+            != Some((current.state().logical_time, candidate.state().logical_time))
+            || time_advancements.next().is_some()
         {
             return Err(TimeScheduleError::InvalidTimeFact);
         }
@@ -512,7 +517,7 @@ impl<Handler: RulesCommandHandler> RulesCommandHandler
         if candidate.state().entities != staged.candidate().state().entities {
             return Err(TimeScheduleError::SourceWorldConflict);
         }
-        let mut movement_facts = appended.iter().filter_map(|fact| match &fact.value {
+        let mut movement_facts = appended_facts.iter().filter_map(|fact| match &fact.value {
             FactValue::EntityMoved {
                 entity,
                 destination,

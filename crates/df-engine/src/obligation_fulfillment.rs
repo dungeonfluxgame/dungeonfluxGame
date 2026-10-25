@@ -357,7 +357,7 @@ impl<Owner: FulfillmentSourceOwner> ObligationFulfillmentHandler<'_, Owner> {
         }
         let current_bytes = current.retained_bytes().ok_or(FulfillmentError::Capacity)?;
         let registration = self.registration;
-        let mut bytes = std::mem::size_of::<FulfillmentRegistration>();
+        let mut registration_bytes = std::mem::size_of::<FulfillmentRegistration>();
         for label in [
             &registration.obligation_definition.package,
             &registration.obligation_definition.entry,
@@ -373,7 +373,7 @@ impl<Owner: FulfillmentSourceOwner> ObligationFulfillmentHandler<'_, Owner> {
             &self.action_definition.package,
             &self.action_definition.entry,
         ] {
-            bytes = bytes
+            registration_bytes = registration_bytes
                 .checked_add(label.retained_heap_bytes())
                 .ok_or(FulfillmentError::Capacity)?;
         }
@@ -382,20 +382,22 @@ impl<Owner: FulfillmentSourceOwner> ObligationFulfillmentHandler<'_, Owner> {
             .checked_mul(2)
             .and_then(|scratch| scratch.checked_add(current_bytes))
             .and_then(|total| total.checked_add(input.retained_bytes()?))
-            .and_then(|total| total.checked_add(bytes))
+            .and_then(|total| total.checked_add(registration_bytes))
             .ok_or(FulfillmentError::Capacity)?;
-        let records = [
+        let inventory_records = [
             self.inventory.rules.len(),
             self.inventory.content.len(),
             self.inventory.resources.len(),
             self.inventory.assets.len(),
         ]
         .into_iter()
-        .try_fold(0usize, |count, next| count.checked_add(next))
+        .try_fold(0usize, |record_count, next_collection_records| {
+            record_count.checked_add(next_collection_records)
+        })
         .ok_or(FulfillmentError::Capacity)?;
         if current_bytes > limits.maximum_checkpoint_bytes
             || pass_bytes > limits.maximum_pass_bytes
-            || records > limits.maximum_inventory_records
+            || inventory_records > limits.maximum_inventory_records
         {
             return Err(FulfillmentError::Capacity);
         }
