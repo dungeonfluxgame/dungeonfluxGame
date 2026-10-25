@@ -138,6 +138,15 @@ async fn actual_pg_reclaim_revokes_grant_replays_and_survives_issuer_restart() {
         saved.get::<_, String>("in_epoch_sequence"),
         basis.revision.sequence().to_string()
     );
+    // The session lease and every grant lapse while the server is down; restore must reissue them.
+    client
+        .execute(
+            "UPDATE df_local_demo.grants SET expires_at=clock_timestamp() WHERE tenant_id=$1::bytea AND session_id=$2::bytea",
+            &[&local::TENANT.as_slice(), &session.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    let counts_before = grant_seat_and_join_counts(&client, session.as_bytes().as_slice()).await;
     let startup = local::admit_startup(
         &mut client,
         &checkpoint,
@@ -154,6 +163,27 @@ async fn actual_pg_reclaim_revokes_grant_replays_and_survives_issuer_restart() {
     .unwrap();
     assert!(startup.restored);
     assert_eq!(startup.checkpoint, checkpoint);
+    assert_eq!(
+        grant_seat_and_join_counts(&client, session.as_bytes().as_slice()).await,
+        counts_before
+    );
+    let active = client
+        .query_one(
+            "SELECT count(*) FILTER (WHERE active), count(*) FILTER (WHERE active AND expires_at > clock_timestamp()) FROM df_local_demo.grants WHERE session_id=$1::bytea",
+            &[&session.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.get::<_, i64>(0), 3);
+    assert_eq!(active.get::<_, i64>(1), 3);
+    let reclaimed = client
+        .query_one(
+            "SELECT active FROM df_local_demo.grants WHERE credential=$1::bytea",
+            &[&[1_u8; 32].as_slice()],
+        )
+        .await
+        .unwrap();
+    assert!(!reclaimed.get::<_, bool>(0));
     let checkpoint = startup.checkpoint;
     let mut restored = LocalDemoScopeIssuer::new(runtime, client, session, [10; 16]).unwrap();
     let mut restored = tokio::task::spawn_blocking(move || {
@@ -180,5 +210,103 @@ async fn actual_pg_reclaim_revokes_grant_replays_and_survives_issuer_restart() {
     .await
     .unwrap();
     restored.close_owned().await.unwrap();
+    assert!(driver.await.unwrap().is_ok());
+}
+
+/// Grant, seat and join-grant row counts for one session; a restore must leave them unchanged.
+async fn grant_seat_and_join_counts(
+    client: &tokio_postgres::Client,
+    session: &[u8],
+) -> (i64, i64, i64) {
+    let row = client
+        .query_one(
+            "SELECT (SELECT count(*) FROM df_local_demo.grants WHERE session_id=$1::bytea), (SELECT count(*) FROM df_local_demo.room_seats WHERE session_id=$1::bytea), (SELECT count(*) FROM df_local_demo.room_grants)",
+            &[&session],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1), row.get(2))
+}
+
+/// The coordinator-created loopback database named by `DF_SEAT_RECLAIM_TEST_DATABASE`. The ignored
+/// test below needs its own empty database, because the seed migration refuses a reused one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an explicitly registered empty coordinator-owned PostgreSQL database"]
+async fn actual_pg_restore_refuses_a_revoked_player_grant_after_lapse() {
+    use df_persistence::{NativeCodecLimits, local_demo_scope as local};
+    use tokio_postgres::{Config, NoTls, config::Host};
+    let configuration: Config = std::env::var("DF_SEAT_RECLAIM_TEST_DATABASE")
+        .expect("coordinator supplies its empty loopback database")
+        .parse()
+        .unwrap();
+    assert_eq!(configuration.get_hosts().len(), 1);
+    assert!(matches!(&configuration.get_hosts()[0], Host::Tcp(host) if host == "127.0.0.1"));
+    assert!(
+        configuration
+            .get_dbname()
+            .unwrap()
+            .starts_with("df_gameplay_demo_")
+    );
+    let (checkpoint, _fixture) = fixture();
+    let session = checkpoint.basis().session;
+    let (mut client, connection) = configuration.connect(NoTls).await.unwrap();
+    let driver = tokio::spawn(connection);
+    let codec = NativeCodecLimits {
+        maximum_document_bytes: 1_048_576,
+        maximum_allocated_bytes: 4_194_304,
+        maximum_collection_items: 4096,
+        maximum_text_bytes: 65536,
+    };
+    local::initialize(&mut client, &checkpoint, [7; 16], [8; 32], [9; 32], codec)
+        .await
+        .unwrap();
+    client
+        .execute(
+            "UPDATE df_game.sessions SET lease_until=clock_timestamp() WHERE tenant_id=$1::bytea AND session_id=$2::bytea",
+            &[&local::TENANT.as_slice(), &session.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "UPDATE df_local_demo.grants SET expires_at=clock_timestamp() WHERE tenant_id=$1::bytea AND session_id=$2::bytea",
+            &[&local::TENANT.as_slice(), &session.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    client
+        .execute(
+            "UPDATE df_local_demo.grants SET active=false WHERE credential=$1::bytea",
+            &[&[8_u8; 32].as_slice()],
+        )
+        .await
+        .unwrap();
+    let Err(refusal) = local::admit_startup(
+        &mut client,
+        &checkpoint,
+        local::DemoStartupIdentity {
+            fence: [10; 16],
+            player_credential: [11; 32],
+            display_credential: [12; 32],
+        },
+        codec,
+        &model::recovery().unwrap(),
+        |current| model::checkpoint(current.basis(), current.state().clone()).map(|_| ()),
+    )
+    .await
+    else {
+        panic!("a revoked player grant must refuse the restore");
+    };
+    assert_eq!(refusal.stage, "retained_access_unavailable");
+    assert_eq!(refusal.class, RepositoryError::Unauthorized);
+    let fence = client
+        .query_one(
+            "SELECT owner_fence FROM df_game.sessions WHERE tenant_id=$1::bytea AND session_id=$2::bytea",
+            &[&local::TENANT.as_slice(), &session.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(fence.get::<_, Vec<u8>>(0), [7_u8; 16].to_vec());
+    drop(client);
     assert!(driver.await.unwrap().is_ok());
 }

@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{ImageFailure, ImageKey, Imagery, Mode, locked, read_cache_file, vision_picture};
-use crate::gameplay::resources::{Generated, ResourceFailure, ResourceKind, ResourceSpec, Unit};
+use crate::gameplay::{
+    cost,
+    resources::{Generated, ResourceFailure, ResourceKind, ResourceSpec, Unit},
+};
 
 const DEADLINE: Duration = Duration::from_secs(20);
 const REVISION: u32 = 1;
@@ -271,8 +274,22 @@ impl FigureMaskCache {
         .await
         .map_err(|_| ImageFailure::Interrupted)?
         .map_err(|_| ImageFailure::Provider)?;
-        let price = provider.model().price_micro_dollars();
+        // The price is the cost book's: the rate in the price file, not a number kept here.
+        let quantities = [(cost::Category::Calls, 1)];
+        let price = engine
+            .ledger
+            .costs()
+            .quote(
+                cost::Provider::Fal,
+                provider.model().endpoint(),
+                &quantities,
+            )
+            .unwrap_or(0);
         engine.ledger.reserve(Unit::SegmentCall, 1).commit(1);
+        let billed = engine.ledger.begin_call(
+            cost::segment_call(provider.model().endpoint(), "figure_masks"),
+            &quantities,
+        );
         // The request below is locally validated here. Charge at dispatch so cancellation does
         // not refund an unknown provider outcome. There is no cost cap.
         engine
@@ -295,6 +312,12 @@ impl FigureMaskCache {
                 DEADLINE,
             )
             .await;
+        match &result {
+            Ok(_) => cost::settle_counted(billed, quantities.to_vec()),
+            Err(error) => {
+                cost::settle_failure(billed, cost::segment_error_may_be_billed(*error));
+            }
+        }
         match result {
             Ok(answer) => {
                 scan.outcome = "complete".to_owned();
@@ -1132,6 +1155,19 @@ mod tests {
         let Mode::On { engine, .. } = &imagery.inner.mode else {
             panic!("enabled fixture");
         };
+        // The segmentation price is the cost book's: one row of the price file.
+        let prices = cost::PriceTable::parse(
+            r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+                {"provider": "fal", "model": "fal-ai/sam-3-1/image-rle", "category": "calls",
+                 "usd": "0.01", "per": 1, "as_of": "2026-10-24",
+                 "source": "https://fal.ai/models/fal-ai/sam-3-1/image-rle"}]}"#,
+        )
+        .unwrap();
+        engine
+            .ledger
+            .costs()
+            .open("fixture", None, prices, cost::PricingStatus::NotLoaded, 1)
+            .unwrap();
         engine
             .figure_masks
             .provider
@@ -1216,10 +1252,14 @@ mod tests {
         assert!(imagery.focus_mask("../invalid", 0).await.is_none());
         assert_eq!(submits.load(Ordering::SeqCst), 1);
         assert_eq!(engine.ledger.snapshot(Unit::SegmentCall).committed, 1);
+        assert_eq!(engine.micro_dollars.load(Ordering::SeqCst), 10_000);
+        let book = engine.ledger.costs().report(2);
         assert_eq!(
-            engine.micro_dollars.load(Ordering::SeqCst),
-            SegmentModel::Sam31.price_micro_dollars()
+            book["run"]["events"], 1,
+            "one segmentation call is one event"
         );
+        assert_eq!(book["run"]["micro_usd"], 10_000);
+        assert_eq!(book["run"]["by_cause"][0]["cause"], "segmentation");
         // A fresh process-equivalent service has no provider configured and still reads masks.
         let restarted = self::imagery(directory.clone());
         let restarted_key = register(&restarted).await;

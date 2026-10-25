@@ -17,7 +17,7 @@ struct TestOwner {
     table: Arc<crate::gameplay::table_log::TableLog>,
     notebook: Arc<crate::gameplay::notebook::NotebookLedger>,
     published: std::collections::BTreeSet<String>,
-    calls: Arc<AtomicUsize>,
+    completion_calls: Arc<AtomicUsize>,
     entered: Option<oneshot::Sender<()>>,
     release: Option<std::sync::mpsc::Receiver<()>>,
     refuse: bool,
@@ -35,7 +35,7 @@ impl Reducer<actor::Call> for TestOwner {
         else {
             panic!("only observation completions enter this fake owner");
         };
-        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.completion_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(entered) = self.entered.take() {
             let _ = entered.send(());
         }
@@ -143,14 +143,14 @@ fn service(
     let (sender, inbox) = bounded_inbox();
     let table = crate::gameplay::table_log::TableLog::new();
     let notebook = crate::gameplay::notebook::NotebookLedger::none();
-    let calls = Arc::new(AtomicUsize::new(0));
+    let completion_calls = Arc::new(AtomicUsize::new(0));
     let mut owner = TestOwner {
         checkpoint: checked,
         updates,
         table: table.clone(),
         notebook: notebook.clone(),
         published: Default::default(),
-        calls: calls.clone(),
+        completion_calls: completion_calls.clone(),
         entered,
         release,
         refuse,
@@ -180,7 +180,14 @@ fn service(
         social: crate::gameplay::social::SocialLedger::none(),
         living: crate::gameplay::living_scenes::LivingScenes::disabled(),
     });
-    (service, owner_thread, request, response, calls, notebook)
+    (
+        service,
+        owner_thread,
+        request,
+        response,
+        completion_calls,
+        notebook,
+    )
 }
 
 fn loaded() -> pack::LoadedPack {
@@ -218,7 +225,7 @@ fn service_observation_duplicate_and_lost_waiter_share_one_judgement_and_owner_r
             );
             let (entered, ready) = oneshot::channel();
             let (release, gate) = std::sync::mpsc::channel();
-            let (service, owner, request, response, calls, notebook) =
+            let (service, owner, request, response, completion_calls, notebook) =
                 service(loaded, 0x91, voice, Some(entered), Some(gate), false);
             let first = {
                 let service = service.clone();
@@ -244,7 +251,7 @@ fn service_observation_duplicate_and_lost_waiter_share_one_judgement_and_owner_r
             release.send(()).unwrap();
             let stored = second.await.unwrap().unwrap();
             assert_eq!(stored.text, line);
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(completion_calls.load(Ordering::SeqCst), 1);
             assert_eq!(jev.connections(), 1);
             assert_eq!(expression.connections(), 1);
             let replay = service
@@ -298,7 +305,7 @@ fn service_observation_failed_owner_delivery_retries_prepared_record_without_pro
                 )))
                 .with_approach_model(jev_model(&jev)),
             );
-            let (service, owner, request, response, calls, _) =
+            let (service, owner, request, response, completion_calls, _) =
                 service(loaded, 0x92, voice, None, None, true);
             assert_eq!(
                 service
@@ -316,7 +323,7 @@ fn service_observation_failed_owner_delivery_retries_prepared_record_without_pro
             assert_eq!(stored.text, "Brynn notices the courier's fear.");
             assert_eq!(jev.connections(), 1);
             assert_eq!(expression.connections(), 1);
-            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(completion_calls.load(Ordering::SeqCst), 2);
             assert_eq!(service.table_log.lines().last().unwrap().text, stored.text);
             drop(owner);
         });
@@ -347,7 +354,7 @@ fn service_question_observation_carries_the_actual_question_through_owner_commit
                 )))
                 .with_approach_model(jev_model(&jev)),
             );
-            let (service, owner, request, response, calls, _) =
+            let (service, owner, request, response, completion_calls, _) =
                 service(loaded, 0x96, voice, None, None, false);
             let question = "Who is the courier looking back at?";
             let result = service
@@ -356,7 +363,7 @@ fn service_question_observation_carries_the_actual_question_through_owner_commit
                 .unwrap()
                 .unwrap();
             assert_eq!(result.text, text);
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(completion_calls.load(Ordering::SeqCst), 1);
             assert!(
                 expression.bodies()[0]["input"]
                     .as_str()

@@ -16,6 +16,7 @@ df-provider-api = { path = "../df-provider-api" }
 
 [dev-dependencies]
 df-session = { path = "../df-session" }
+df-campaign = { path = "../df-campaign", features = ["routes", "test-fakes"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 df-assets = { path = "../df-assets" }

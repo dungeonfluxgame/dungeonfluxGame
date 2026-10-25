@@ -300,10 +300,19 @@ pub(crate) fn reload(
         );
         return Err(RecordError::Invalid("document size"));
     }
-    let mut loaded =
-        pack::load_from_bytes(&documents.pack, &documents.tuning).map_err(RecordError::Pack)?;
     let mut record: AdventureRecord = serde_json::from_slice(&documents.record)
         .map_err(|_| RecordError::Invalid("adventure.json schema"))?;
+    // The record names the exact stored bytes it was written for. Check that before the pack load,
+    // which may migrate legacy references in memory; the stored documents themselves never change.
+    if record.pack_sha256 != hash(&documents.pack)
+        || record.tuning_sha256 != hash(&documents.tuning)
+    {
+        return Err(RecordError::Invalid(
+            "schema, version, seed or byte revisions",
+        ));
+    }
+    let mut loaded =
+        pack::load_from_bytes(&documents.pack, &documents.tuning).map_err(RecordError::Pack)?;
     match (loaded.pack.is_freeplay(), record.freeplay_setting.as_ref()) {
         (true, Some(setting)) if record.settings.is_none() => {
             record.settings = Some(super::setting::ChapterSettings {
@@ -332,8 +341,6 @@ pub(crate) fn reload(
         )
         || !valid_hash(&record.tables_revision)
         || (!record.fact_sheet.is_empty() && !valid_hash(&record.expression.fact_sheet_sha256))
-        || record.pack_sha256 != hash(&documents.pack)
-        || record.tuning_sha256 != hash(&documents.tuning)
         || loaded.pack.id != format!("adv-{seed:016x}")
         || record.campaign != loaded.pack.campaign
     {

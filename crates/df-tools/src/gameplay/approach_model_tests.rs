@@ -638,10 +638,26 @@ async fn an_answer_after_the_deadline_times_out_without_retrying() {
             .await,
         Some(neutral_reading())
     );
+    let line = logged.clone();
+    let fields: Vec<&str> = line.split_ascii_whitespace().collect();
     assert_eq!(
-        logged,
-        "APPROACH source=unavailable label=other subject=other reason=timeout"
+        &fields[..6],
+        [
+            "APPROACH",
+            "source=unavailable",
+            "label=other",
+            "subject=other",
+            "reason=timeout",
+            "deadline_hit=true",
+        ],
+        "{line}"
     );
+    // A timeout reports the time it spent: at least the four-second deadline.
+    let elapsed: u128 = fields[6]
+        .strip_prefix("ms=")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_default();
+    assert!(elapsed >= DEADLINE.as_millis(), "{line}");
     assert_eq!(endpoint.connections(), 1);
 }
 
@@ -666,6 +682,157 @@ async fn a_jev_answer_slower_than_the_old_800_ms_deadline_is_still_accepted() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_failed_jev_call_logs_its_elapsed_time_and_that_the_deadline_was_not_hit() {
+    // Before: the unavailable line had neither `ms=` nor `deadline_hit=`, so a 503 looked the
+    // same as a call that never ran.
+    let endpoint = FakeEndpoint::start(vec![Reply::Status(503, json!({}))]);
+    let mut logged = String::new();
+
+    let approach = model(&endpoint)
+        .classify_logged("A coin for you", "Perrin", "Tavern", "", |line| {
+            logged = line
+        })
+        .await;
+
+    assert_eq!(approach, Some(neutral_reading()));
+    assert!(
+        logged.starts_with(
+            "APPROACH source=unavailable label=other subject=other reason=error deadline_hit=false ms="
+        ),
+        "{logged}"
+    );
+    let elapsed = logged.rsplit("ms=").next().unwrap_or_default();
+    assert!(elapsed.parse::<u128>().is_ok(), "{logged}");
+    assert!(
+        elapsed
+            .parse::<u128>()
+            .is_ok_and(|ms| ms < DEADLINE.as_millis()),
+        "{logged}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_jev_line_reading_inside_a_timing_line_records_one_classify_stage() {
+    use super::super::actor::line_timing::{LineTiming, within};
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let line = LineTiming::begin();
+    let observed = line.clone();
+
+    let reading = within(line, async {
+        model(&endpoint)
+            .classify_input("I say hello.", "A guardhouse.", &[])
+            .await
+    })
+    .await;
+
+    assert_eq!(reading.source, "jev");
+    let spans = observed.spans();
+    assert_eq!(spans.len(), 1, "{spans:?}");
+    assert_eq!(spans[0].stage, LineStage::Classify);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_line_judgement_that_times_out_is_logged_unavailable_with_its_deadline_flag() {
+    // Before: the LINE line had no deadline flag, so a timeout read like a provider error.
+    let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
+        past_deadline(),
+        200,
+        json!({"answers": {"q1": {"type": "choice", "choice": "o1"}}}),
+    )]);
+
+    let reading = model(&endpoint)
+        .classify_input("I say hello.", "A guardhouse.", &[])
+        .await;
+
+    assert_eq!(reading.source, "unavailable");
+    let lines = super::super::actor::audit_lines_containing(
+        "LINE source=unavailable intent=character-speech reason=timeout deadline_hit=true ms=",
+    );
+    assert!(!lines.is_empty(), "no timeout LINE was logged");
+}
+
+/// Serializes the tests that count router lines in the shared audit tap: a parallel router failure
+/// would otherwise add to the count.
+static ROUTER_TAP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn router_lines(needle: &str) -> usize {
+    super::super::actor::audit_lines_containing(needle).len()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_router_timeout_is_recorded_once_as_an_addressee_line() {
+    use super::super::npc_target::Target;
+    let _serial = ROUTER_TAP.lock().await;
+    let cast = routing_cast();
+    let needle = "ADDRESSEE source=unavailable reason=timeout deadline_hit=true ms=";
+    let before = router_lines(needle);
+
+    let timed_out = model(&FakeEndpoint::start(vec![Reply::DelayedStatus(
+        past_deadline(),
+        200,
+        json!({"answers": {"q1": {"type": "choice", "choice": "o4"}}}),
+    )]))
+    .resolve_addressee("Courier, who sent you?", &cast, "Courier")
+    .await;
+
+    // The Decision keeps the neutral route and the consumers' reason; the line is the one record.
+    assert_eq!(timed_out.reason, "provider_failure");
+    assert_eq!(timed_out.target, Target::Actor("courier".into()));
+    assert_eq!(router_lines(needle), before + 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_router_error_is_recorded_once_with_the_deadline_flag_clear() {
+    use super::super::npc_target::Target;
+    let _serial = ROUTER_TAP.lock().await;
+    let cast = routing_cast();
+    let needle = "ADDRESSEE source=unavailable reason=error deadline_hit=false ms=";
+    let before = router_lines(needle);
+
+    let failed = model(&FakeEndpoint::start(vec![Reply::Status(503, json!({}))]))
+        .resolve_addressee("Courier, who sent you?", &cast, "Courier")
+        .await;
+
+    assert_eq!(failed.reason, "provider_failure");
+    assert_eq!(failed.target, Target::Actor("courier".into()));
+    assert_eq!(router_lines(needle), before + 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_addressee_judgement_records_an_addressee_stage_in_its_line() {
+    use super::super::actor::line_timing::{LineStage, LineTiming, within};
+    let line = LineTiming::begin();
+    let observed = line.clone();
+
+    within(line, async {
+        model(&FakeEndpoint::start(vec![answer("o3")]))
+            .resolve_addressee("Courier, who sent you?", &routing_cast(), "Courier")
+            .await
+    })
+    .await;
+
+    let stages: Vec<LineStage> = observed.spans().iter().map(|span| span.stage).collect();
+    assert_eq!(stages, [LineStage::Addressee]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_reason_judgement_records_a_reason_stage_in_its_line() {
+    use super::super::actor::line_timing::{LineStage, LineTiming, within};
+    let line = LineTiming::begin();
+    let observed = line.clone();
+
+    within(line, async {
+        model(&FakeEndpoint::start(vec![answer("o1"), answer("o1")]))
+            .classify("A coin for you", "Perrin", "Tavern", "")
+            .await
+    })
+    .await;
+
+    let stages: Vec<LineStage> = observed.spans().iter().map(|span| span.stage).collect();
+    assert_eq!(stages, [LineStage::Reason]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn no_key_makes_no_request_and_logs_the_neutral_reading() {
     let endpoint = FakeEndpoint::start(vec![]);
     let settings = crate::gameplay::startup_configuration::approach_settings(
@@ -687,9 +854,11 @@ async fn no_key_makes_no_request_and_logs_the_neutral_reading() {
             .await,
         Some(neutral_reading())
     );
-    assert_eq!(
-        logged,
-        "APPROACH source=unavailable label=other subject=other reason=off"
+    assert!(
+        logged.starts_with(
+            "APPROACH source=unavailable label=other subject=other reason=off deadline_hit=false ms="
+        ),
+        "{logged}"
     );
     assert_eq!(endpoint.connections(), 0);
 }
@@ -867,6 +1036,7 @@ async fn jev_addressee_decides_over_exact_ambiguous_and_named_matches() {
 #[tokio::test(flavor = "current_thread")]
 async fn no_jev_answer_routes_to_the_focus_and_never_to_an_exact_match() {
     use super::super::npc_target::Target;
+    let _serial = ROUTER_TAP.lock().await;
     let cast = routing_cast();
     let words = "Bandit and Courier, who sent you?";
     let off = ApproachModel::default()
@@ -1070,6 +1240,7 @@ async fn without_jev_a_party_hero_line_routes_to_the_focus_with_no_hero() {
 #[tokio::test(flavor = "current_thread")]
 async fn jev_failure_or_unknown_option_routes_to_the_focus_with_no_hero() {
     use super::super::npc_target::Target;
+    let _serial = ROUTER_TAP.lock().await;
     let words = "I hand the traveler's clothes to Sigrun.";
     let failed = model(&FakeEndpoint::start(vec![Reply::Status(503, json!({}))]))
         .resolve_addressee_with_party(words, &routing_cast(), &party_heroes(), "Courier")

@@ -52,10 +52,10 @@ pub(super) fn parse_limit(text: Option<&String>) -> Result<usize, String> {
     }
 }
 
-fn parse_id(text: Option<&String>, what: &str) -> Result<i64, String> {
+fn parse_id(text: Option<&String>, field_name: &str) -> Result<i64, String> {
     text.and_then(|text| text.trim().parse::<i64>().ok())
         .filter(|id| *id > 0)
-        .ok_or_else(|| format!("{what} must be an event id (a positive number)"))
+        .ok_or_else(|| format!("{field_name} must be an event id (a positive number)"))
 }
 
 fn json_ok(value: Value) -> Outcome {
@@ -117,11 +117,16 @@ pub(super) async fn entity(
         .filter(|id| !id.trim().is_empty())
         .ok_or_else(|| bad_request("memory entity needs ?id=<entity id>"))?;
     let audience = parse_audience(params.get("audience")).map_err(bad_request)?;
-    let flag = |name: &str| params.get(name).is_some_and(|value| value == "true");
+    let is_requested = |name: &str| params.get(name).is_some_and(|value| value == "true");
     match current() {
         Ok(memory) => json_ok(
             memory
-                .entity_json(id, audience, flag("superseded"), flag("refresh"))
+                .entity_json(
+                    id,
+                    audience,
+                    is_requested("superseded"),
+                    is_requested("refresh"),
+                )
                 .await,
         ),
         Err(unavailable) => unavailable,

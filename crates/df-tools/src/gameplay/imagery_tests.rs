@@ -7,6 +7,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
+    time::Instant,
 };
 
 use axum::http::{Method, Request, StatusCode, header};
@@ -15,6 +16,8 @@ use df_providers::{
     ImageQuality, ReferenceImage as EditReferenceImage,
 };
 use tonic::codegen::Service;
+
+use super::quota_breaker::{QuotaAnswer, QuotaState};
 
 use super::{
     super::{
@@ -536,6 +539,9 @@ enum Reply {
     Oversize,
     RateLimitedOnce,
     BlockedBackground,
+    QuotaExhausted,
+    /// A quota answer, then a plain rate limit, then an image: the probe-retry sequence.
+    QuotaThenRateLimit,
 }
 
 type Fields = BTreeMap<String, String>;
@@ -715,13 +721,14 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
         }
     }
     state.active.fetch_sub(1, Ordering::SeqCst);
-    let (status, payload) = if reply == Reply::RateLimitedOnce && attempt == 0 {
-        (
+    let (status, payload) = match (reply, attempt) {
+        (Reply::RateLimitedOnce, 0) | (Reply::QuotaThenRateLimit, 1) => (
             "429 Too Many Requests",
             r#"{"error":{"message":"rate limited"}}"#.to_owned(),
-        )
-    } else {
-        payload_for(reply, &fields)
+        ),
+        (Reply::QuotaThenRateLimit, 0) => payload_for(Reply::QuotaExhausted, &fields),
+        (Reply::QuotaThenRateLimit, _) => payload_for(Reply::Image, &fields),
+        _ => payload_for(reply, &fields),
     };
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -756,9 +763,14 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
             else { image::DynamicImage::ImageRgb8(picture.to_rgb8()).write_to(&mut bytes, format).unwrap(); }
             ("200 OK", image(bytes.into_inner()))
         }
+        Reply::QuotaExhausted => (
+            "429 Too Many Requests",
+            r#"{"error":{"code":"insufficient_quota","message":"You exceeded your current quota."}}"#
+                .to_owned(),
+        ),
         Reply::Image if png => ("200 OK", image(fake_png(width, height, transparent))),
         Reply::Image if webp => ("200 OK", image(fake_webp(width, height, transparent))),
-        Reply::Image | Reply::RateLimitedOnce | Reply::BlockedBackground => ("200 OK", image(fake_jpeg(width, height, 0))),
+        Reply::Image | Reply::RateLimitedOnce | Reply::BlockedBackground | Reply::QuotaThenRateLimit => ("200 OK", image(fake_jpeg(width, height, 0))),
         Reply::WrongSize if png => ("200 OK", image(fake_png(width + 16, height, transparent))),
         Reply::WrongSize if webp => (
             "200 OK",
@@ -1241,6 +1253,7 @@ async fn a_plate_generated_through_the_hub_yields_its_heads_to_locate_heads() {
         HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
         "fake-private",
         HEAD_LOCATE_DEADLINE,
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     assert!(engine.locator.set(locator).is_ok());
@@ -2653,6 +2666,7 @@ async fn hs54_image_provider_permit_is_released_while_photo_judge_waits() {
         df_providers::PlateJudgeConfig::loopback_fixture(judge_endpoint.address).unwrap(),
         "fake-private",
         Duration::from_secs(2),
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     let Mode::On { engine, .. } = &service.inner.mode else {
@@ -2777,6 +2791,7 @@ async fn hs58_head_location_completes_under_background_saturation() {
         HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
         "fake-private",
         HEAD_LOCATE_DEADLINE,
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     assert!(engine.locator.set(locator).is_ok());
@@ -2870,4 +2885,327 @@ async fn hs58_rate_limited_image_retries_after_backoff() {
     assert!(started.elapsed() >= RATE_LIMIT_BACKOFF);
     assert_eq!(fake.calls(), 2);
     assert_eq!(service.stats().calls, 2);
+}
+
+/// The quota tests read and write the shared audit ring, so they run one at a time.
+static QUOTA_TESTS: Mutex<()> = Mutex::new(());
+
+fn quota_lock() -> std::sync::MutexGuard<'static, ()> {
+    QUOTA_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn engine_of(service: &Imagery) -> Arc<Engine> {
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("enabled fixture");
+    };
+    engine.clone()
+}
+
+fn audit_count(needle: &str) -> usize {
+    super::super::actor::audit_lines_containing(needle).len()
+}
+
+#[tokio::test]
+async fn quota_exhaustion_is_not_retried_and_fails_fast_while_the_breaker_is_open() {
+    let _quota = quota_lock();
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
+    let (service, _dir) = imagery(&fake, "quota-open");
+    let opened_before = audit_count("IMAGERY provider_quota status=open");
+    let first = service
+        .generate("plate:quota-first", refresh(Mood::Calm))
+        .await;
+    assert_eq!(first.err(), Some(ImageFailure::QuotaExhausted));
+    assert_eq!(fake.calls(), 1, "a quota answer is never retried");
+    let second = service
+        .generate("plate:quota-second", refresh(Mood::Calm))
+        .await;
+    assert_eq!(second.err(), Some(ImageFailure::QuotaExhausted));
+    assert_eq!(
+        fake.calls(),
+        1,
+        "an open breaker fails fast without reaching the provider"
+    );
+    assert_eq!(
+        service.stats().calls,
+        1,
+        "a fast-failed call is never charged"
+    );
+    assert_eq!(
+        audit_count("IMAGERY provider_quota status=open") - opened_before,
+        1,
+        "the opening is audited exactly once"
+    );
+}
+
+#[tokio::test]
+async fn a_rate_limited_probe_keeps_its_probe_and_its_retry_success_closes_the_breaker() {
+    let _quota = quota_lock();
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaThenRateLimit);
+    let (service, _dir) = imagery(&fake, "quota-probe-retry");
+    let engine = engine_of(&service);
+    let opened_before = audit_count("IMAGERY provider_quota status=open");
+    let closed_before = audit_count("IMAGERY provider_quota status=closed");
+    let opening = service
+        .generate("plate:probe-open", refresh(Mood::Calm))
+        .await;
+    assert_eq!(opening.err(), Some(ImageFailure::QuotaExhausted));
+    engine.quota.expire_for_test();
+    service
+        .generate("plate:probe-retry", refresh(Mood::Calm))
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.calls(),
+        3,
+        "the opening, the probe's rate limit, and the same call's retry"
+    );
+    assert_eq!(engine.quota.state(), QuotaState::Closed);
+    assert_eq!(
+        audit_count("IMAGERY provider_quota status=open") - opened_before,
+        1
+    );
+    assert_eq!(
+        audit_count("IMAGERY provider_quota status=closed") - closed_before,
+        1,
+        "the recovery is audited exactly once"
+    );
+}
+
+#[tokio::test]
+async fn record_quota_answer_opens_on_quota_closes_on_success_and_ignores_other_failures() {
+    let _quota = quota_lock();
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, _dir) = imagery(&fake, "record-quota");
+    let engine = engine_of(&service);
+    engine.record_quota_answer::<()>(None, &Err(ImageFailure::RateLimited));
+    assert_eq!(engine.quota.state(), QuotaState::Closed);
+    engine.record_quota_answer::<()>(None, &Err(ImageFailure::QuotaExhausted));
+    assert!(matches!(engine.quota.state(), QuotaState::Open { .. }));
+    engine.quota.expire_for_test();
+    engine.record_quota_answer::<()>(None, &Ok(()));
+    assert_eq!(engine.quota.state(), QuotaState::Closed);
+}
+
+#[test]
+fn quota_breaker_opens_once_and_refuses_until_its_cooldown() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    assert_eq!(breaker.admit(start), Admission::Closed);
+    assert_eq!(
+        breaker.observe(QuotaAnswer::Exhausted, start),
+        Some(Transition::Opened)
+    );
+    assert_eq!(
+        breaker.observe(QuotaAnswer::Exhausted, start + Duration::from_secs(1)),
+        None,
+        "an already open breaker is not opened again"
+    );
+    assert_eq!(
+        breaker.admit(start + Duration::from_secs(30)),
+        Admission::Refused
+    );
+    assert_eq!(
+        breaker.admit(start + Duration::from_secs(61)),
+        Admission::MayProbe
+    );
+}
+
+#[test]
+fn the_probe_closes_the_breaker_on_success() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    breaker.observe(QuotaAnswer::Exhausted, start);
+    let later = start + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
+        panic!("the cooldown has passed");
+    };
+    assert_eq!(
+        probe.settle(QuotaAnswer::Succeeded, later),
+        Some(Transition::Recovered)
+    );
+    assert_eq!(breaker.state(), QuotaState::Closed);
+    assert_eq!(breaker.admit(later), Admission::Closed);
+}
+
+#[test]
+fn a_probe_answered_by_quota_reopens_for_a_new_cooldown_without_a_new_opening() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    breaker.observe(QuotaAnswer::Exhausted, start);
+    let later = start + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
+        panic!("the cooldown has passed");
+    };
+    assert_eq!(
+        probe.settle(QuotaAnswer::Exhausted, later),
+        None,
+        "a probe that fails again is not a new opening"
+    );
+    assert_eq!(
+        breaker.state(),
+        QuotaState::Open {
+            until: later + Duration::from_secs(60)
+        }
+    );
+    assert_eq!(
+        breaker.admit(later + Duration::from_secs(30)),
+        Admission::Refused
+    );
+}
+
+#[test]
+fn a_probe_with_an_unrelated_provider_error_is_rearmed_after_the_cooldown() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    breaker.observe(QuotaAnswer::Exhausted, start);
+    let later = start + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
+        panic!("the cooldown has passed");
+    };
+    let provider_error = quota_answer_of::<()>(&Err(ImageFailure::Provider));
+    assert_eq!(probe.settle(provider_error, later), None);
+    assert_eq!(
+        breaker.state(),
+        QuotaState::Open {
+            until: later + Duration::from_secs(60)
+        }
+    );
+    assert_eq!(breaker.admit(later), Admission::Refused);
+    assert_eq!(
+        breaker.admit(later + Duration::from_secs(60)),
+        Admission::MayProbe
+    );
+}
+
+#[test]
+fn a_probe_dropped_without_an_answer_is_rearmed() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    breaker.observe(QuotaAnswer::Exhausted, start);
+    let later = start + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
+        panic!("the cooldown has passed");
+    };
+    assert_eq!(
+        breaker.admit(later),
+        Admission::Refused,
+        "the probe is held"
+    );
+    drop(probe);
+    assert_eq!(
+        breaker.admit(Instant::now()),
+        Admission::Refused,
+        "an inconclusive probe waits through the full cooldown"
+    );
+    assert_eq!(
+        breaker.admit(Instant::now() + Duration::from_secs(60)),
+        Admission::MayProbe,
+        "a cancelled probe leaves the next call free to probe"
+    );
+}
+
+#[test]
+fn a_second_call_cannot_claim_the_probe_while_it_is_held() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    breaker.observe(QuotaAnswer::Exhausted, start);
+    let later = start + Duration::from_secs(61);
+    let Claim::Claimed(_probe) = breaker.claim_admission(Admission::MayProbe, later) else {
+        panic!("the cooldown has passed");
+    };
+    assert!(matches!(
+        breaker.claim_admission(Admission::MayProbe, later),
+        Claim::Busy
+    ));
+    assert_eq!(breaker.admit(later), Admission::Refused);
+}
+
+#[test]
+fn a_call_whose_breaker_closed_while_it_waited_claims_no_probe() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    assert!(matches!(
+        breaker.claim_admission(Admission::Closed, Instant::now()),
+        Claim::NotNeeded
+    ));
+}
+
+#[test]
+fn a_closed_admission_is_refused_if_quota_opens_while_waiting_for_a_permit() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    let admission = breaker.admit(start);
+    assert_eq!(admission, Admission::Closed);
+    breaker.observe(QuotaAnswer::Exhausted, start + Duration::from_secs(1));
+    assert!(matches!(
+        breaker.claim_admission(admission, start + Duration::from_secs(2)),
+        Claim::Busy
+    ));
+    assert!(matches!(breaker.state(), QuotaState::Open { .. }));
+}
+
+#[test]
+fn a_non_quota_failure_never_opens_the_breaker() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let now = Instant::now();
+    for failure in [
+        ImageFailure::RateLimited,
+        ImageFailure::Provider,
+        ImageFailure::BadOutput,
+        ImageFailure::DeadlineExceeded,
+    ] {
+        assert_eq!(
+            breaker.observe(quota_answer_of::<()>(&Err(failure)), now),
+            None
+        );
+    }
+    assert_eq!(breaker.state(), QuotaState::Closed);
+}
+
+#[test]
+fn each_episode_produces_exactly_one_opening_and_one_recovery() {
+    let breaker = QuotaBreaker::new(Duration::from_secs(60));
+    let start = Instant::now();
+    let mut transitions = Vec::new();
+    transitions.extend(breaker.observe(QuotaAnswer::Exhausted, start));
+    transitions.extend(breaker.observe(QuotaAnswer::Exhausted, start));
+    transitions.extend(breaker.observe(QuotaAnswer::Inconclusive, start));
+    let first_probe = start + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, first_probe) else {
+        panic!("the cooldown has passed");
+    };
+    transitions.extend(probe.settle(QuotaAnswer::Exhausted, first_probe));
+    let second_probe = first_probe + Duration::from_secs(61);
+    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, second_probe) else {
+        panic!("the cooldown has passed");
+    };
+    transitions.extend(probe.settle(QuotaAnswer::Succeeded, second_probe));
+    transitions.extend(breaker.observe(
+        QuotaAnswer::Exhausted,
+        second_probe + Duration::from_secs(200),
+    ));
+    assert_eq!(
+        transitions,
+        vec![
+            Transition::Opened,
+            Transition::Recovered,
+            Transition::Opened
+        ]
+    );
+}
+
+#[test]
+fn quota_breaker_notice_appears_once_open_and_clears_on_recovery() {
+    set_quota_notice(Transition::Recovered);
+    assert_eq!(operational_notice(), None);
+
+    set_quota_notice(Transition::Opened);
+    assert_eq!(
+        operational_notice(),
+        Some("Narration provider unavailable; no new charge")
+    );
+
+    set_quota_notice(Transition::Recovered);
+    assert_eq!(operational_notice(), None);
 }

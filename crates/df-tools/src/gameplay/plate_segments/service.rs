@@ -38,6 +38,7 @@ use super::{
 };
 use crate::gameplay::{
     actor::record_audit_line,
+    cost,
     resource_adapters::{Eraser, Flights, Kit, Outcome, Produced, hex, slug, write_atomic},
     resources::{
         Chrome, Generated, Invalidate, Limits, ResourceFailure, ResourceKey, ResourceKind,
@@ -345,10 +346,9 @@ impl Segmentation {
                 .map(|found| found.instance(width, height))
                 .collect()
         };
-        let (Some(person_instances), Some(head_instances)) = (
-            to_instances(&segments.person),
-            to_instances(&segments.head),
-        ) else {
+        let (Some(person_instances), Some(head_instances)) =
+            (to_instances(&segments.person), to_instances(&segments.head))
+        else {
             return Err(AnalysisFailure("bad_note"));
         };
         let people = people_from_segments(&person_instances, &head_instances);
@@ -484,12 +484,29 @@ impl Segmentation {
             max_masks: MAXIMUM_MASKS,
         };
         let (person_request, head_request) = (request(PROMPTS[0]), request(PROMPTS[1]));
-        // Both calls are recorded as spend before they are sent and kept whatever the outcome.
+        // Both calls are recorded as spend before they are sent and kept whatever the outcome;
+        // each is metered in dollars on the cost book and settled by its own result.
         self.inner.kit.charge(Unit::SegmentCall, 2);
+        let ledger = self.inner.kit.hub().ledger();
+        let person_billed =
+            ledger.begin_call(cost::segment_call(model.endpoint(), PROMPTS[0]), &[]);
+        let head_billed = ledger.begin_call(cost::segment_call(model.endpoint(), PROMPTS[1]), &[]);
         let (person, head) = tokio::join!(
-            self.inner.segmenter.segment(&person_request, SEGMENT_DEADLINE),
-            self.inner.segmenter.segment(&head_request, SEGMENT_DEADLINE)
+            self.inner
+                .segmenter
+                .segment(&person_request, SEGMENT_DEADLINE),
+            self.inner
+                .segmenter
+                .segment(&head_request, SEGMENT_DEADLINE)
         );
+        for (billed, outcome) in [(person_billed, &person), (head_billed, &head)] {
+            match outcome {
+                Ok(_) => cost::settle_counted(billed, vec![(cost::Category::Calls, 1)]),
+                Err(error) => {
+                    cost::settle_failure(billed, cost::segment_error_may_be_billed(*error));
+                }
+            }
+        }
         let mut sent = 2i64;
         for outcome in [&person, &head] {
             if outcome.as_ref().is_err_and(|failure| !failure.was_sent()) {
@@ -504,7 +521,14 @@ impl Segmentation {
         let note = SegmentsNote {
             picture: [prepared.width, prepared.height],
             model: model.label().to_owned(),
-            micro_dollars: 2 * model.price_micro_dollars(),
+            micro_dollars: ledger
+                .costs()
+                .quote(
+                    cost::Provider::Fal,
+                    model.endpoint(),
+                    &[(cost::Category::Calls, 2)],
+                )
+                .unwrap_or(0),
             person_ms: person.elapsed.as_millis() as u64,
             head_ms: head.elapsed.as_millis() as u64,
             person: person.instances.iter().map(StoredInstance::of).collect(),
@@ -653,7 +677,10 @@ impl Segmentation {
                 }
                 Err(failure) => {
                     identity_error = Some(judge_failure(failure).to_owned());
-                    if matches!(failure, PlateJudgeError::Transport(_) | PlateJudgeError::Provider(_)) {
+                    if matches!(
+                        failure,
+                        PlateJudgeError::Transport(_) | PlateJudgeError::Provider(_)
+                    ) {
                         // A transient fault: ask again later rather than keep a plate whose
                         // people were never identified.
                         return Err(ResourceFailure::Transient(judge_failure(failure)));
@@ -680,7 +707,8 @@ impl Segmentation {
         let mut facings: Vec<StoredFacing> = Vec::new();
         let mut facing_ms = 0;
         let mut facing_error = None;
-        if let (Some(judge), Some(request)) = (self.inner.judge.as_ref(), facing_request(&numbers)) {
+        if let (Some(judge), Some(request)) = (self.inner.judge.as_ref(), facing_request(&numbers))
+        {
             let pictures: Vec<JudgePicture<'_>> = crops
                 .iter()
                 .map(|(label, jpeg)| JudgePicture { label, jpeg })
@@ -715,7 +743,10 @@ impl Segmentation {
                 }
                 Err(failure) => {
                     facing_error = Some(judge_failure(failure).to_owned());
-                    if matches!(failure, PlateJudgeError::Transport(_) | PlateJudgeError::Provider(_)) {
+                    if matches!(
+                        failure,
+                        PlateJudgeError::Transport(_) | PlateJudgeError::Provider(_)
+                    ) {
                         return Err(ResourceFailure::Transient(judge_failure(failure)));
                     }
                 }
@@ -772,7 +803,14 @@ impl Segmentation {
         let tokens = ledger.snapshot(Unit::TextToken);
         json!({
             "segment_calls": calls.committed,
-            "segment_micro_dollars": calls.committed * self.model().price_micro_dollars(),
+            "segment_micro_dollars": ledger
+                .costs()
+                .quote(
+                    cost::Provider::Fal,
+                    self.model().endpoint(),
+                    &[(cost::Category::Calls, calls.committed)],
+                )
+                .unwrap_or(0),
             "judge_tokens": tokens.committed,
             "model": self.model().label(),
         })
@@ -781,13 +819,18 @@ impl Segmentation {
     /// Drops this service's entries for the plate `image_key` and erases their notes, so the next
     /// need asks again. Returns how many entries were dropped.
     pub(in crate::gameplay) fn invalidate_plate(&self, image_key: &str) -> usize {
-        self.inner
-            .kit
-            .invalidate(Invalidate::Subject(&format!("plate:{}", slug(image_key, 64))))
+        self.inner.kit.invalidate(Invalidate::Subject(&format!(
+            "plate:{}",
+            slug(image_key, 64)
+        )))
     }
 
     /// The stored note of a plate's segments, for the dev tools: the SAM answer as it was kept.
-    pub(in crate::gameplay) fn segments_report(&self, image_key: &str, model: SegmentModel) -> Value {
+    pub(in crate::gameplay) fn segments_report(
+        &self,
+        image_key: &str,
+        model: SegmentModel,
+    ) -> Value {
         let key = ResourceKey::of(&PlateSegmentsSpec {
             image_key: image_key.to_owned(),
             model,

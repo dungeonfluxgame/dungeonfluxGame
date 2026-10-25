@@ -124,6 +124,7 @@ mod photo_gate_tests {
                 PlateJudgeConfig::loopback_fixture(address).unwrap(),
                 "fake-mural-judge",
                 Duration::from_secs(5),
+                crate::gameplay::cost::test_meter(),
             )
             .unwrap();
             let Mode::On { engine, .. } = &fixture.imagery.inner.mode else {

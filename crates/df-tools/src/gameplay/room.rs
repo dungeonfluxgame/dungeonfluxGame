@@ -18,7 +18,7 @@ pub(super) async fn actor_view(
     credential: [u8; 32],
     request: rpc::WatchViewRequest,
 ) -> Result<(super::LocalDemoRole, rpc::ViewMessage), Status> {
-    let started = std::time::Instant::now();
+    let admission_started = std::time::Instant::now();
     let (reply, wait) = tokio::sync::oneshot::channel();
     let reply_deadline = tokio::time::Instant::now() + super::timing::active().reply;
     let mut pending = actor::Call::View {
@@ -27,7 +27,7 @@ pub(super) async fn actor_view(
         reply,
     };
     let wait = loop {
-        match actor.try_submit(pending) {
+        match actor.try_submit_since(pending, admission_started) {
             Ok(_) => break wait,
             Err(refused)
                 if matches!(
@@ -42,7 +42,7 @@ pub(super) async fn actor_view(
                         "gameplay.view_admission",
                         format!(
                             "VIEW admission_refused reason=queue-full waited_ms={}",
-                            started.elapsed().as_millis()
+                            admission_started.elapsed().as_millis()
                         ),
                     );
                     return Err(Status::resource_exhausted(
@@ -58,7 +58,7 @@ pub(super) async fn actor_view(
                         "gameplay.view_admission",
                         format!(
                             "VIEW admission_refused reason=queue-full waited_ms={}",
-                            started.elapsed().as_millis()
+                            admission_started.elapsed().as_millis()
                         ),
                     );
                     return Err(Status::resource_exhausted(
@@ -72,7 +72,7 @@ pub(super) async fn actor_view(
                     format!(
                         "VIEW admission_refused reason={:?} waited_ms={}",
                         refused.reason,
-                        started.elapsed().as_millis()
+                        admission_started.elapsed().as_millis()
                     ),
                 );
                 return Err(match refused.reason {
@@ -286,25 +286,25 @@ impl actor::Actor {
         &mut self,
         request: rpc::JoinRoomRequest,
     ) -> Result<rpc::JoinRoomResponse, Status> {
-        let started = std::time::Instant::now();
+        let join_started = std::time::Instant::now();
         let op = request
             .operation_id
             .as_ref()
             .and_then(|id| id.value.as_deref())
             .map(crate::client_diagnostics::operation_hash);
-        let result = self.join_inner(request);
-        if let Err(status) = &result {
+        let join_result = self.join_inner(request);
+        if let Err(status) = &join_result {
             actor::record_audit_line(
                 "seat.join_refused",
                 format!(
                     "SEAT join_refused code={:?} step=admission op={} ms={}",
                     status.code(),
                     op.map_or_else(|| "none".to_owned(), |value| value.to_string()),
-                    started.elapsed().as_millis()
+                    join_started.elapsed().as_millis()
                 ),
             );
         }
-        result
+        join_result
     }
     fn join_inner(
         &mut self,
@@ -746,9 +746,9 @@ mod audit_tests {
     use super::*;
     #[test]
     fn capacity_refusal_keeps_the_response_and_records_its_admission_step() {
-        let result = refused(rpc::RejectionCode::ResourceMissing);
+        let refusal_response = refused(rpc::RejectionCode::ResourceMissing);
         assert!(
-            matches!(result.outcome, Some(rpc::join_room_response::Outcome::Refused(rpc::JoinRefusal { code })) if code == rpc::RejectionCode::ResourceMissing as i32)
+            matches!(refusal_response.outcome, Some(rpc::join_room_response::Outcome::Refused(rpc::JoinRefusal { code })) if code == rpc::RejectionCode::ResourceMissing as i32)
         );
         assert!(
             !actor::audit_lines_containing("SEAT join_refused code=ResourceMissing step=capacity")

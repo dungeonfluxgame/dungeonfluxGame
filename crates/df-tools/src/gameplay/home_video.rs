@@ -54,6 +54,7 @@ use df_types::{
 };
 use sha2::{Digest, Sha256};
 
+use super::cost;
 use super::home_theme;
 use super::living_scenes::LivingScenes;
 use super::resource_adapters::{Flights, Kit, KitSlot, Produced, write_atomic};
@@ -94,13 +95,12 @@ const MAXIMUM_CLIP_MILLISECONDS: u128 = 5_500;
 const POLL_INTERVAL: Duration = Duration::from_secs(4);
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(15 * 60);
 const REQUEST_DEADLINE: Duration = Duration::from_secs(170);
-const PRICE_DEADLINE: Duration = Duration::from_secs(20);
 const ROUTE: &str = "/gameplay/home-video";
 /// A paid clip is made once per key. A failure stays failed until the dev tools invalidate the
 /// key: a clip that failed in an unknown way may already have been billed, so nothing retries it.
 const CLIP_ATTEMPTS: u8 = 1;
-/// What the hub's timeout allows beyond the engine's own deadline: the price read, the still and
-/// the cache write, so the engine's labelled `Timeout` fires first.
+/// What the hub's timeout allows beyond the engine's own deadline: the still and the cache write,
+/// so the engine's labelled `Timeout` fires first.
 const HUB_SLACK: Duration = Duration::from_secs(60);
 
 #[path = "scene_video_prompt.rs"]
@@ -354,7 +354,6 @@ impl SceneClipView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Failure {
     Still(&'static str),
-    Price(&'static str),
     Provider(String),
     Timeout,
     Clip(&'static str),
@@ -364,7 +363,6 @@ impl Failure {
     fn label(&self) -> String {
         match self {
             Self::Still(reason) => format!("still: {reason}"),
-            Self::Price(reason) => format!("price: {reason}"),
             Self::Provider(reason) => format!("provider: {reason}"),
             Self::Timeout => "timeout".to_owned(),
             Self::Clip(reason) => format!("clip: {reason}"),
@@ -470,7 +468,6 @@ pub(crate) struct Engine {
     /// Clips whose run has been started and has not ended. This is not a failure memory: it only
     /// tells a view that a run is on the way before the hub has heard of it.
     launching: Mutex<BTreeSet<ResourceKey>>,
-    price: tokio::sync::Mutex<Option<f64>>,
     living: Option<LivingScenes>,
 }
 
@@ -764,9 +761,10 @@ struct ClipDone {
     bytes: u64,
 }
 
-/// A provider call that was made: its price and how long it took.
+/// A provider call that was made: its price per second of video in micro-dollars, from the cost
+/// book (`None` when the price file has no rate), and how long it took.
 struct PaidCall {
-    price: f64,
+    micro_per_second: Option<u64>,
     elapsed: Duration,
 }
 
@@ -834,7 +832,6 @@ impl Engine {
             latest_kill: Mutex::new(None),
             kill_shown_audited: Mutex::new(BTreeSet::new()),
             launching: Mutex::new(BTreeSet::new()),
-            price: tokio::sync::Mutex::new(None),
             living: setup.living,
         };
         engine.configure();
@@ -850,7 +847,7 @@ impl Engine {
         kit.tune(
             ResourceKind::VideoClip,
             Limits {
-                timeout: self.deadline + PRICE_DEADLINE + HUB_SLACK,
+                timeout: self.deadline + HUB_SLACK,
                 attempts: CLIP_ATTEMPTS,
             },
             Arc::new(move |generated: &Generated| {
@@ -1224,15 +1221,43 @@ impl Engine {
             StillBytes::Plate(plate) => prepare_scene_still(plate.clone()).await?,
         };
         let provider = self.provider()?;
-        let price = self.price(&provider).await?;
+        let ledger = Arc::clone(self.kit.get().hub().ledger());
+        let micro_per_second = ledger.costs().quote(
+            cost::Provider::Fal,
+            MODEL,
+            &[(cost::Category::VideoSeconds, 1)],
+        );
         // The request is checked before anything is charged, so a request refused locally costs
         // nothing.
         let (request, reference) = clip_request(job.variant, &still, &job.file, prompt)?;
         // The call is about to be sent: the clip is paid for whatever its outcome, and a call of
         // unknown outcome may have been billed, so it is never given back.
         self.kit.get().charge(Unit::VideoClip, 1);
+        let billed = ledger.begin_call(
+            cost::video_call(
+                MODEL,
+                cost::Cause::HomeVideo,
+                match job.variant {
+                    Variant::Home => "home",
+                    Variant::Scene => "scene",
+                    Variant::KillShot => "kill_shot",
+                },
+                u64::from(DURATION_SECONDS),
+            ),
+            &[],
+        );
         let started = Instant::now();
         let fetched = self.fetch(&provider, &request, &reference).await;
+        // A clip that came back was billed; a failure is not classified by this client (a refusal
+        // at submit and a clip that never finished look alike), so it is of unknown outcome and
+        // booked at the clip's length.
+        match &fetched {
+            Ok(_) => cost::settle_counted(
+                billed,
+                vec![(cost::Category::VideoSeconds, u64::from(DURATION_SECONDS))],
+            ),
+            Err(_) => drop(billed),
+        }
         let stored = match fetched {
             Ok(bytes) => match LoopFinish::CURRENT.apply(bytes) {
                 Ok(finished) => {
@@ -1246,7 +1271,7 @@ impl Engine {
             Err(failure) => Err(failure),
         };
         *paid = Some(PaidCall {
-            price,
+            micro_per_second,
             elapsed: started.elapsed(),
         });
         stored.map(|bytes| ClipDone {
@@ -1277,21 +1302,6 @@ impl Engine {
             .map_err(|_| Failure::Provider("model refused".to_owned()))?;
         registered_fal_media_provider(config, credential, limits())
             .map_err(|error| Failure::Provider(format!("{:?}", error.reason)))
-    }
-
-    /// The live per-second price, read once per run before its first submit and logged.
-    async fn price(&self, provider: &NativeFalMediaProvider) -> Result<f64, Failure> {
-        let mut known = self.price.lock().await;
-        if let Some(price) = *known {
-            return Ok(price);
-        }
-        let price = provider
-            .video_price_per_second(PRICE_DEADLINE, std::future::pending())
-            .await
-            .map_err(|_| Failure::Price("live price unavailable"))?;
-        record_event("price", MODEL, Some(price));
-        *known = Some(price);
-        Ok(price)
     }
 
     /// Submits the request, waits for the clip and checks it, within the engine's deadline.
@@ -1867,7 +1877,7 @@ fn context() -> OperationContext {
 /// One paid call, with its time, model, price and outcome, through the shared span path.
 fn record_paid(
     key: &str,
-    price: f64,
+    micro_per_second: Option<u64>,
     elapsed: Duration,
     request_elapsed_ms: u128,
     outcome: &str,
@@ -1881,7 +1891,7 @@ fn record_paid(
             ("gameplay.home_video.key", key[..16].to_owned()),
             (
                 "gameplay.home_video.price_usd_per_second",
-                format!("{price:.4}"),
+                micro_per_second.map_or_else(|| "unpriced".to_owned(), cost::usd),
             ),
             (
                 "gameplay.home_video.seconds",
@@ -1897,7 +1907,10 @@ fn record_paid(
             ),
             (
                 "gameplay.home_video.estimated_usd",
-                format!("{:.3}", price * f64::from(DURATION_SECONDS)),
+                micro_per_second.map_or_else(
+                    || "unpriced".to_owned(),
+                    |micro| cost::usd(micro.saturating_mul(u64::from(DURATION_SECONDS))),
+                ),
             ),
         ],
     );
@@ -1917,7 +1930,6 @@ fn classify(failure: &Failure) -> ResourceFailure {
             ResourceFailure::Transient("still task interrupted")
         }
         Failure::Still(reason) | Failure::Clip(reason) => ResourceFailure::Permanent(*reason),
-        Failure::Price(reason) => ResourceFailure::Transient(*reason),
         Failure::Timeout => ResourceFailure::TimedOut,
         Failure::Provider(detail) => provider_class(detail),
     }
@@ -1993,7 +2005,7 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
     {
         record_paid(
             &job.file,
-            paid.price,
+            paid.micro_per_second,
             paid.elapsed,
             request_ms,
             "ready",
@@ -2002,7 +2014,7 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
     }
     match (job.variant, done.cached) {
         (Variant::Home, true) => {
-            record_event("cached", &job.file, None);
+            record_event("cached", &job.file);
             record_video_resource(
                 "gameplay.home_video.ready",
                 &job.file,
@@ -2086,7 +2098,7 @@ fn log_failed(job: &ClipJob, failure: &Failure, paid: Option<&PaidCall>, elapsed
     if let Some(paid) = paid {
         record_paid(
             &job.file,
-            paid.price,
+            paid.micro_per_second,
             paid.elapsed,
             request_ms,
             "failed",
@@ -2180,21 +2192,15 @@ fn record_failure_detail(job: &ClipJob, failure: &Failure) {
     span.finish_unmeasured("failed");
 }
 
-fn record_event(kind: &str, subject: &str, price: Option<f64>) {
+fn record_event(kind: &str, subject: &str) {
     let mut span = df_observe::begin(&context(), "gameplay.home_video_event");
-    let mut fields = vec![
+    let fields = vec![
         ("gameplay.home_video.event", kind.to_owned()),
         (
             "gameplay.home_video.subject",
             subject.chars().take(16).collect(),
         ),
     ];
-    if let Some(price) = price {
-        fields.push((
-            "gameplay.home_video.price_usd_per_second",
-            format!("{price:.4}"),
-        ));
-    }
     span.event("gameplay.home_video.event", &fields);
     span.finish_unmeasured("recorded");
 }
@@ -2269,7 +2275,6 @@ fn safe_video_resource_id(key: &str) -> String {
 fn video_failure_category(failure: &Failure) -> &'static str {
     match failure {
         Failure::Still(_) => "still_failure",
-        Failure::Price(_) => "price_unavailable",
         Failure::Provider(_) => "provider_failure",
         Failure::Timeout => "deadline",
         Failure::Clip(_) => "clip_failure",
@@ -2279,7 +2284,6 @@ fn video_failure_category(failure: &Failure) -> &'static str {
 fn video_failure_reason_category(reason: &str) -> &'static str {
     match reason {
         "still: invalid" | "still: unavailable" => "still_failure",
-        "price: live price unavailable" => "price_unavailable",
         "timeout" => "deadline",
         value if value.starts_with("provider:") => "provider_failure",
         value if value.starts_with("clip:") => "clip_failure",

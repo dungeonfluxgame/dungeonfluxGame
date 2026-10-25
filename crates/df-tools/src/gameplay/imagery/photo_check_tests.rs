@@ -354,7 +354,13 @@ async fn fake_judgments(
     });
     let config = PlateJudgeConfig::loopback_fixture(address).unwrap();
     (
-        NativePlateJudge::new(config, "test-token", Duration::from_secs(5)).unwrap(),
+        NativePlateJudge::new(
+            config,
+            "test-token",
+            Duration::from_secs(5),
+            crate::gameplay::cost::test_meter(),
+        )
+        .unwrap(),
         request_receiver,
     )
 }

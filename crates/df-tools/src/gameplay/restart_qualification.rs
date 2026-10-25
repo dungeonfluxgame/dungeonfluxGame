@@ -43,7 +43,7 @@ fn required(value: bool) -> Result<(), io::Error> {
         )))
     }
 }
-fn now() -> Result<u64, io::Error> {
+fn now_ms() -> Result<u64, io::Error> {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -52,9 +52,9 @@ fn now() -> Result<u64, io::Error> {
     )
     .map_err(io::Error::other)
 }
-fn elapsed(start: u64) -> Result<u64, io::Error> {
-    now()?
-        .checked_sub(start)
+fn elapsed_ms(start_ms: u64) -> Result<u64, io::Error> {
+    now_ms()?
+        .checked_sub(start_ms)
         .ok_or_else(|| io::Error::other("restart clock regressed"))
 }
 fn path(name: &str) -> std::path::PathBuf {
@@ -104,10 +104,10 @@ pub(super) fn call_budget(phase: Phase) -> Result<u16, io::Error> {
     if phase != Phase::B {
         return Ok(20);
     }
-    let (start, calls, index) = metadata()?;
-    required(calls == 12 && index < 2 && elapsed(start)? <= 45_000)?;
+    let (started_ms, admitted_calls, index) = metadata()?;
+    required(admitted_calls == 12 && index < 2 && elapsed_ms(started_ms)? <= 45_000)?;
     required(read("restart-private-build-01.bin", 96)? == crate::BUILD_ID.as_bytes())?;
-    Ok(20 - calls as u16)
+    Ok(20 - admitted_calls as u16)
 }
 pub(super) fn record_owner(phase: Phase, fence: [u8; 16]) -> Result<(), io::Error> {
     if phase == Phase::A {
@@ -138,13 +138,13 @@ pub(super) fn refusal(error: &DemoInitializationError) -> Result<(), io::Error> 
     )
 }
 struct Calls {
-    count: usize,
-    started_milliseconds: u64,
+    admitted_calls: usize,
+    started_ms: u64,
 }
 fn admit(calls: &mut Calls) -> Result<(), Error> {
-    required(calls.count < 20 && elapsed(calls.started_milliseconds)? <= 45_000)?;
-    calls.count = calls
-        .count
+    required(calls.admitted_calls < 20 && elapsed_ms(calls.started_ms)? <= 45_000)?;
+    calls.admitted_calls = calls
+        .admitted_calls
         .checked_add(1)
         .ok_or_else(|| io::Error::other("fixture call overflow"))?;
     Ok(())
@@ -418,8 +418,8 @@ async fn phase_a(
     codec: df_persistence::NativeCodecLimits,
 ) -> Result<(), Error> {
     let mut calls = Calls {
-        count: 0,
-        started_milliseconds: now()?,
+        admitted_calls: 0,
+        started_ms: now_ms()?,
     };
     let first = join(service, 0xa1, &mut calls).await?;
     let second = join(service, 0xa2, &mut calls).await?;
@@ -475,7 +475,9 @@ async fn phase_a(
     let receipt = committed(submit(service, &body, [first, second][active], &mut calls).await?)?;
     required(!receipt.replayed)?;
     let snapshot = snapshot(service, &mut calls).await?;
-    required(snapshot.calls_remaining == 20 - calls.count as u16 && snapshot.joins.len() == 2)?;
+    required(
+        snapshot.calls_remaining == 20 - calls.admitted_calls as u16 && snapshot.joins.len() == 2,
+    )?;
     required(
         snapshot
             .checkpoint
@@ -485,7 +487,7 @@ async fn phase_a(
             .is_some_and(|decision| !decision.draws.is_empty()),
     )?;
     let views = three_views(service, [first, second], members, display, &mut calls).await?;
-    required(calls.count == 12)?;
+    required(calls.admitted_calls == 12)?;
     let (state, rows) = physical(client, 0xa8).await?;
     required(
         local_demo_scope::encode_owned_demo_checkpoint(&snapshot.checkpoint, codec)
@@ -496,8 +498,8 @@ async fn phase_a(
     grants.extend_from_slice(&second);
     grants.extend_from_slice(&members[0]);
     grants.extend_from_slice(&members[1]);
-    let mut metadata = Vec::from(calls.started_milliseconds.to_be_bytes());
-    metadata.extend_from_slice(&(calls.count as u16).to_be_bytes());
+    let mut metadata = Vec::from(calls.started_ms.to_be_bytes());
+    metadata.extend_from_slice(&(calls.admitted_calls as u16).to_be_bytes());
     metadata.push(active as u8);
     for (name, bytes) in [
         ("restart-private-grants-01.bin", grants),
@@ -520,7 +522,7 @@ async fn phase_a(
         "restart-a-ready-body-01.bin",
         format!(
             "{{\"pass\":true,\"actor_calls\":12,\"rpc_calls\":11,\"exercise_milliseconds\":{},\"canonical_persisted\":true,\"private_views_correct\":true,\"watches_closed\":true,\"normal_second_wind_committed\":true}}",
-            elapsed(calls.started_milliseconds)?
+            elapsed_ms(calls.started_ms)?
         ).as_bytes(),
     )?;
     Ok(())
@@ -531,12 +533,12 @@ async fn phase_b(
     display: [u8; 32],
     codec: df_persistence::NativeCodecLimits,
 ) -> Result<(), Error> {
-    let (start, count, active) = metadata()?;
+    let (started_ms, admitted_calls, active) = metadata()?;
     let restored = service.updates.borrow().clone();
     stale_release(client, &restored).await?;
     let mut calls = Calls {
-        count,
-        started_milliseconds: start,
+        admitted_calls,
+        started_ms,
     };
     let (credentials, members) = private_grants()?;
     let views = three_views(service, credentials, members, display, &mut calls).await?;
@@ -544,7 +546,7 @@ async fn phase_b(
         required(*view == read(&format!("restart-private-view-{index}-01.bin"), 8192)?)?;
     }
     let snapshot = snapshot(service, &mut calls).await?;
-    required(snapshot.calls_remaining == 20 - calls.count as u16)?;
+    required(snapshot.calls_remaining == 20 - calls.admitted_calls as u16)?;
     let envelope = local_demo_scope::encode_owned_demo_checkpoint(&snapshot.checkpoint, codec)
         .map_err(|_| io::Error::other("restart envelope encoding"))?;
     required(envelope == read("restart-private-envelope-01.bin", 1048576)?)?;
@@ -556,8 +558,8 @@ async fn phase_b(
         "restart-b-restored-01.json",
         &format!(
             "{{\"pass\":true,\"actor_calls\":{},\"canonical_equal\":true,\"four_families_equal\":true,\"private_views_equal\":true,\"watches_closed\":true,\"exercise_milliseconds\":{}}}",
-            calls.count,
-            elapsed(start)?
+            calls.admitted_calls,
+            elapsed_ms(started_ms)?
         ),
     )?;
     let original =
@@ -588,12 +590,14 @@ async fn phase_b(
     again.replayed = false;
     required(again == accepted)?;
     let (retried, retried_rows) = physical(client, 0xa9).await?;
-    required(retried == committed_state && retried_rows == committed_rows && calls.count == 19)?;
+    required(
+        retried == committed_state && retried_rows == committed_rows && calls.admitted_calls == 19,
+    )?;
     save(
         "restart-b-proof-body-01.bin",
         format!(
             "{{\"pass\":true,\"actor_calls\":19,\"rpc_calls\":17,\"exercise_milliseconds\":{},\"original_receipt_equal\":true,\"no_reroll_or_duplicate\":true,\"later_action_once\":true,\"later_retry_equal\":true,\"stale_release_refused\":true,\"inspector_driver_joined\":true}}",
-            elapsed(start)?
+            elapsed_ms(started_ms)?
         ).as_bytes(),
     )?;
     Ok(())
@@ -636,24 +640,24 @@ pub(super) async fn run(
     report(name, std::str::from_utf8(&bytes).map_err(io::Error::other)?)
 }
 pub(super) fn closed(phase: Phase, remaining: u16) -> Result<(), io::Error> {
-    let (start, expected, name) = match phase {
+    let (started_ms, expected, name) = match phase {
         Phase::A => {
-            let (start, _, _) = metadata()?;
-            (start, 8, "restart-a-closed-01.json")
+            let (started_ms, _, _) = metadata()?;
+            (started_ms, 8, "restart-a-closed-01.json")
         }
         Phase::B => {
-            let (start, _, _) = metadata()?;
-            (start, 1, "restart-b-closed-01.json")
+            let (started_ms, _, _) = metadata()?;
+            (started_ms, 1, "restart-b-closed-01.json")
         }
         Phase::Contender => return Err(io::Error::other("contender close cannot qualify")),
     };
-    required(remaining == expected && elapsed(start)? <= 45_000)?;
+    required(remaining == expected && elapsed_ms(started_ms)? <= 45_000)?;
     report(
         name,
         &format!(
             "{{\"pass\":true,\"actor_calls\":{},\"exercise_milliseconds\":{},\"admission_stopped\":true,\"actor_drained\":true,\"exact_fence_released\":true,\"actor_joined\":true,\"repository_driver_joined\":true,\"grant_driver_joined\":true}}",
             20 - remaining,
-            elapsed(start)?
+            elapsed_ms(started_ms)?
         ),
     )
 }

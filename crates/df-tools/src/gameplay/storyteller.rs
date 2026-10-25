@@ -78,11 +78,12 @@ use super::{
 };
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
-const PROMPT_VERSION: &str = "storyteller-4";
+const PROMPT_VERSION: &str = "storyteller-5";
 const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 8000;
 const MAXIMUM_MUST_MENTION: usize = 8;
 const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
+const MAXIMUM_SLOT_ENUM_VALUES: usize = 256;
 const MAXIMUM_WITHHELD: usize = 160;
 const MAXIMUM_WITHHELD_CHARACTERS: usize = 240;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
@@ -112,6 +113,9 @@ RULES\n\
 beyond them. Only describe a character as present when the FACTS for this scene explicitly say \
 they are present; a character appearing in the global cast is not enough. Only claim an injury or \
 outcome when the FACTS explicitly state it; omit claims not in the FACTS.\n\
+1a. Rules entities (creatures, spells, items, classes and conditions) must come from \
+FACTS.srd_catalog and use its ids; when no matching id is supplied, omit the entity. Settings and \
+characters must be original to this campaign; never use a published setting or character.\n\
 2. Never write game numbers, dice, hit points, difficulty classes, rolls or outcomes unless \
 that exact figure appears in the FACTS. Never promise or imply mechanical results.\n\
 3. Narration is plain second person (\"you\"). A character who speaks uses first person and \
@@ -196,6 +200,8 @@ pub(super) struct Slot {
     pub(super) withheld: Vec<String>,
     /// Rules about how the line is spoken, checked after generation.
     pub(super) spoken: Vec<SpokenRule>,
+    /// Closed values for slots that carry identifiers rather than prose.
+    pub(super) allowed_values: Option<Vec<String>>,
 }
 
 impl Slot {
@@ -207,6 +213,7 @@ impl Slot {
             forbidden: Vec::new(),
             withheld: Vec::new(),
             spoken: Vec::new(),
+            allowed_values: None,
         }
     }
 
@@ -224,6 +231,11 @@ impl Slot {
     /// invalid text, with the rule named in the retry's complaint.
     pub(super) fn speaking(mut self, rules: Vec<SpokenRule>) -> Self {
         self.spoken = rules;
+        self
+    }
+
+    pub(super) fn enumerating(mut self, values: Vec<String>) -> Self {
+        self.allowed_values = Some(values);
         self
     }
 
@@ -314,6 +326,12 @@ pub(super) enum ValidationFailure {
     RepeatedSentence {
         slot: String,
     },
+    PublishedNonSrdMaterial {
+        slot: String,
+    },
+    InvalidEntityId {
+        slot: String,
+    },
     NotTheRequestedShape,
 }
 
@@ -331,6 +349,8 @@ impl ValidationFailure {
             Self::ControlCharacter { .. } => "control_character",
             Self::SpokenRule { .. } => "spoken_rule",
             Self::RepeatedSentence { .. } => "repeated_sentence",
+            Self::PublishedNonSrdMaterial { .. } => "published_non_srd_material",
+            Self::InvalidEntityId { .. } => "invalid_entity_id",
             Self::NotTheRequestedShape => "shape",
         }
     }
@@ -367,6 +387,12 @@ impl ValidationFailure {
             Self::RepeatedSentence { slot } => format!(
                 "slot \"{slot}\" repeated a sentence already spoken in this scene; write a new sentence"
             ),
+            Self::PublishedNonSrdMaterial { slot } => format!(
+                "slot \"{slot}\" appears to reproduce published non-SRD material; replace it with original campaign material or SRD material"
+            ),
+            Self::InvalidEntityId { slot } => {
+                format!("slot \"{slot}\" must use one of its listed SRD catalog ids")
+            }
             Self::NotTheRequestedShape => {
                 "the answer was not the requested JSON object of string fields".to_owned()
             }
@@ -385,6 +411,7 @@ impl ValidationFailure {
             | Self::ControlCharacter { slot }
             | Self::SpokenRule { slot, .. }
             | Self::RepeatedSentence { slot } => Some(slot),
+            Self::PublishedNonSrdMaterial { slot } | Self::InvalidEntityId { slot } => Some(slot),
             Self::NotTheRequestedShape => None,
         }
     }
@@ -813,9 +840,37 @@ impl Storyteller {
         let rules = slot_rules(request);
         let file = online.cache_directory.join(format!("{}.json", hex(key)));
         let cached = read_cache(file.clone()).await;
+        let started = Instant::now();
+        let mut tokens = 0_u64;
+        let mut cached_flags = BTreeMap::new();
         let (mut accepted, mut rejected) = match cached {
             Some(cached) => {
-                let (accepted, rejected) = sort_slots(&rules, request.slots, &cached);
+                let (mut accepted, mut rejected) = sort_slots(&rules, request.slots, &cached);
+                for (slot, text) in &accepted.clone() {
+                    let (judgement, spent) =
+                        judge_srd_material(online, request, slot, text, started).await?;
+                    tokens = tokens.saturating_add(spent);
+                    if let Some(flagged_span) = judgement {
+                        cached_flags.insert(slot.clone(), flagged_span);
+                    }
+                }
+                for slot in cached_flags.keys() {
+                    accepted.remove(slot);
+                    rejected.insert(
+                        slot.clone(),
+                        ValidationFailure::PublishedNonSrdMaterial { slot: slot.clone() },
+                    );
+                }
+                if !cached_flags.is_empty() {
+                    if let Err(error) = tokio::fs::remove_file(&file).await
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        span.event(
+                            "storyteller.cache_write_failed",
+                            &[("storyteller.io_error", format!("{:?}", error.kind()))],
+                        );
+                    }
+                }
                 if !accepted.is_empty() {
                     span.event("storyteller.cache_hit", &[]);
                     record_text_resource(
@@ -834,10 +889,15 @@ impl Storyteller {
             }
             None => (BTreeMap::new(), BTreeMap::new()),
         };
-        let started = Instant::now();
-        let mut tokens = 0_u64;
         let mut fresh = false;
-        let mut complaint: Option<String> = None;
+        let mut complaint: Option<String> = cached_flags
+            .values()
+            .next()
+            .map(|flagged_span| format!(
+                "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
+            ));
+        let mut rewritten_slots: std::collections::BTreeSet<String> =
+            cached_flags.keys().cloned().collect();
         let mut last = StorytellerError::Rejected {
             failure: ValidationFailure::NotTheRequestedShape,
             words: None,
@@ -873,7 +933,35 @@ impl Storyteller {
                 Ok(Attempt::Text(values, spent)) => {
                     tokens = tokens.saturating_add(spent);
                     fresh = true;
-                    let (now_accepted, now_rejected) = sort_slots(&rules, &pending, &values);
+                    let (mut now_accepted, mut now_rejected) =
+                        sort_slots(&rules, &pending, &values);
+                    let candidates: Vec<(String, String)> = now_accepted
+                        .iter()
+                        .map(|(slot, text)| (slot.clone(), text.clone()))
+                        .collect();
+                    let mut rewrite_was_still_flagged = false;
+                    for (slot, text) in candidates {
+                        let (judgement, spent) =
+                            judge_srd_material(online, request, &slot, &text, started).await?;
+                        tokens = tokens.saturating_add(spent);
+                        if let Some(flagged_span) = judgement {
+                            now_accepted.remove(&slot);
+                            now_rejected.insert(
+                                slot.clone(),
+                                ValidationFailure::PublishedNonSrdMaterial { slot: slot.clone() },
+                            );
+                            complaint = Some(format!(
+                                "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
+                            ));
+                            if rewritten_slots.contains(&slot) || attempt == 2 {
+                                rewrite_was_still_flagged = true;
+                                record_srd_guard_degraded(online, request, key, started.elapsed());
+                            } else {
+                                rewritten_slots.insert(slot);
+                                span.event("storyteller.srd_guard_rewrite", &[]);
+                            }
+                        }
+                    }
                     accepted.extend(now_accepted);
                     rejected = now_rejected;
                     span.event(
@@ -884,6 +972,9 @@ impl Storyteller {
                             ("storyteller.rejected", rejected.len().to_string()),
                         ],
                     );
+                    if rewrite_was_still_flagged {
+                        break;
+                    }
                     let chosen = rejected
                         .iter()
                         .find(|(slot, _)| slot.as_str() == "reply")
@@ -958,29 +1049,46 @@ impl Storyteller {
     ) -> Result<BTreeMap<String, String>, StorytellerError> {
         let file = online.cache_directory.join(format!("{}.json", hex(key)));
         let cached = read_cache(file.clone()).await;
+        let mut cached_flag = None;
         if let Some(values) = cached
             && validate(request, &values).is_ok()
         {
-            span.event("storyteller.cache_hit", &[]);
-            record_text_resource(
-                "gameplay.storyteller.cache_hit",
-                online,
-                request,
-                key,
-                "ready",
-                "cached",
-                None,
-                None,
-                Some((request.slots.len(), 0)),
-            );
-            return Ok(values);
+            (cached_flag, _) = judge_values(online, request, &values, Instant::now()).await?;
+            if cached_flag.is_none() {
+                span.event("storyteller.cache_hit", &[]);
+                record_text_resource(
+                    "gameplay.storyteller.cache_hit",
+                    online,
+                    request,
+                    key,
+                    "ready",
+                    "cached",
+                    None,
+                    None,
+                    Some((request.slots.len(), 0)),
+                );
+                return Ok(values);
+            }
+            if let Err(error) = tokio::fs::remove_file(&file).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                span.event(
+                    "storyteller.cache_write_failed",
+                    &[("storyteller.io_error", format!("{:?}", error.kind()))],
+                );
+            }
         }
         let started = Instant::now();
-        let mut complaint: Option<String> = None;
+        let mut complaint: Option<String> = cached_flag
+            .as_ref()
+            .map(|(_, flagged_span)| format!(
+                "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
+            ));
         let mut last = StorytellerError::Rejected {
             failure: ValidationFailure::NotTheRequestedShape,
             words: None,
         };
+        let mut srd_rewritten = cached_flag.is_some();
         for attempt in 1_u64..=2 {
             let prompt = build_prompt(request, complaint.as_deref());
             let reserved = online.estimate(&prompt, request);
@@ -1010,6 +1118,29 @@ impl Storyteller {
                             .map_err(|_| failure)
                     }) {
                     Ok(values) => {
+                        let (flagged, _) = judge_values(online, request, &values, started).await?;
+                        match flagged {
+                            None => {}
+                            Some((slot, flagged_span)) if !srd_rewritten && attempt < 2 => {
+                                srd_rewritten = true;
+                                complaint = Some(format!(
+                                    "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
+                                ));
+                                last = StorytellerError::Rejected {
+                                    failure: ValidationFailure::PublishedNonSrdMaterial { slot },
+                                    words: None,
+                                };
+                                span.event("storyteller.srd_guard_rewrite", &[]);
+                                continue;
+                            }
+                            Some((slot, _)) => {
+                                record_srd_guard_degraded(online, request, key, started.elapsed());
+                                return Err(StorytellerError::Rejected {
+                                    failure: ValidationFailure::PublishedNonSrdMaterial { slot },
+                                    words: None,
+                                });
+                            }
+                        }
                         if let Err(error) = write_cache(file, &values).await {
                             span.event(
                                 "storyteller.cache_write_failed",
@@ -1054,6 +1185,129 @@ impl Storyteller {
         }
         Err(last)
     }
+}
+
+async fn judge_srd_material(
+    online: &Online,
+    request: &Expression<'_>,
+    slot: &str,
+    narration: &str,
+    started: Instant,
+) -> Result<(Option<String>, u64), StorytellerError> {
+    let facts = json!({
+        "candidate": narration,
+        "srd_catalog": request.facts.get("srd_catalog"),
+    });
+    let slots = [
+        Slot::new("decision", 32).enumerating(vec![
+            "campaign_or_srd".to_owned(),
+            "published_non_srd".to_owned(),
+        ]),
+        Slot::new("flagged_span", 320),
+    ];
+    let review = Expression {
+        purpose: "srd_content_judgement",
+        facts: &facts,
+        slots: &slots,
+        style: "Classify whether the candidate appears to reproduce published non-SRD material.",
+        profile: CallProfile {
+            guidance: "Judge meaning and resemblance, not keywords. Choose campaign_or_srd only when the candidate uses original campaign material or material supported by the supplied SRD catalog. Choose published_non_srd when it appears to reproduce a published non-SRD creature, spell, subclass, setting, character, or text. Return the shortest exact span that supports a positive judgement; return an empty span when clear.",
+            ..CallProfile::default()
+        },
+    };
+    let key = cache_key(&online.model, &review);
+    check_request(&review).map_err(|error| refuse(online, &review, &key, error))?;
+    let prompt = build_prompt(&review, None);
+    let reserved = online.estimate(&prompt, &review);
+    match online
+        .attempt(&review, &key, 1, &prompt, reserved, started)
+        .await?
+    {
+        Attempt::Text(values, spent)
+            if values.len() == 2
+                && values
+                    .get("flagged_span")
+                    .is_some_and(|span| span.chars().count() <= 320) =>
+        {
+            match (values.get("decision"), values.get("flagged_span")) {
+                (Some(decision), Some(span))
+                    if decision == "campaign_or_srd" && span.is_empty() =>
+                {
+                    Ok((None, spent))
+                }
+                (Some(decision), Some(span)) if decision == "published_non_srd" => Ok((
+                    Some(if span.is_empty() {
+                        "the candidate narration".to_owned()
+                    } else {
+                        span.clone()
+                    }),
+                    spent,
+                )),
+                _ => Err(StorytellerError::Rejected {
+                    failure: ValidationFailure::PublishedNonSrdMaterial {
+                        slot: slot.to_owned(),
+                    },
+                    words: None,
+                }),
+            }
+        }
+        Attempt::Text(_, _) => Err(StorytellerError::Rejected {
+            failure: ValidationFailure::PublishedNonSrdMaterial {
+                slot: slot.to_owned(),
+            },
+            words: None,
+        }),
+        Attempt::BadShape => Err(StorytellerError::Rejected {
+            failure: ValidationFailure::PublishedNonSrdMaterial {
+                slot: slot.to_owned(),
+            },
+            words: None,
+        }),
+    }
+}
+
+async fn judge_values(
+    online: &Online,
+    request: &Expression<'_>,
+    values: &BTreeMap<String, String>,
+    started: Instant,
+) -> Result<(Option<(String, String)>, u64), StorytellerError> {
+    let mut tokens = 0_u64;
+    for (slot, text) in values {
+        let (judgement, spent) = judge_srd_material(online, request, slot, text, started).await?;
+        tokens = tokens.saturating_add(spent);
+        if let Some(flagged_span) = judgement {
+            return Ok((Some((slot.clone(), flagged_span)), tokens));
+        }
+    }
+    Ok((None, tokens))
+}
+
+fn record_srd_guard_degraded(
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    elapsed: Duration,
+) {
+    TEXT.line(
+        "srd_guard_degraded",
+        &hex(key),
+        &TextSpec::of(&online.model, request).subject(),
+        elapsed,
+        "published_non_srd_material",
+        "",
+    );
+    record_text_resource(
+        "gameplay.storyteller.srd_guard_degraded",
+        online,
+        request,
+        key,
+        "failed",
+        "degraded",
+        Some("published_non_srd_material"),
+        Some(elapsed.as_millis()),
+        None,
+    );
 }
 
 impl Online {
@@ -1104,7 +1358,7 @@ impl Online {
         self.kit.get().charge(Unit::TextToken, reserved);
         let billed = self.kit.get().hub().ledger().begin_call(
             super::cost::text_call(&self.model, request.purpose),
-            &[(super::cost::Category::TextInput, reserved)],
+            &booking_estimate(prompt, request),
         );
         let owner = || RequestOwnerState {
             current: Some(&call.current),
@@ -1326,7 +1580,11 @@ fn output_schema(slots: &[Slot]) -> Result<TextOutputSchema, &'static str> {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for slot in slots {
-        properties.insert(slot.name.clone(), json!({"type": "string"}));
+        let value_schema = match &slot.allowed_values {
+            Some(values) => json!({"type": "string", "enum": values}),
+            None => json!({"type": "string"}),
+        };
+        properties.insert(slot.name.clone(), value_schema);
         required.push(Value::String(slot.name.clone()));
     }
     let schema = json!({
@@ -1356,6 +1614,22 @@ fn output_token_limit(request: &Expression<'_>) -> usize {
     }
     let characters: usize = request.slots.iter().map(|slot| slot.max_chars).sum();
     (characters / 3 + 40 + REASONING_ALLOWANCE_TOKENS).clamp(128, 8000)
+}
+
+/// What a call of unknown outcome is booked at on the cost book, in the categories it is priced
+/// in: the prompt at two bytes per token as input, and the most the reply may write as output.
+/// (The unit account counts the two together, see [`estimate_tokens`].)
+fn booking_estimate(prompt: &str, request: &Expression<'_>) -> [(super::cost::Category, u64); 2] {
+    [
+        (
+            super::cost::Category::TextInput,
+            u64::try_from(prompt.len().div_ceil(2)).unwrap_or(u64::MAX),
+        ),
+        (
+            super::cost::Category::TextOutput,
+            u64::try_from(output_token_limit(request)).unwrap_or(u64::MAX),
+        ),
+    ]
 }
 
 /// Two bytes per token is deliberately pessimistic; the supplier total replaces it afterwards.
@@ -1408,6 +1682,18 @@ pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerE
         }
         if slot.max_chars == 0 || slot.max_chars > MAXIMUM_SLOT_CHARACTERS {
             return Err(invalid("slot_length"));
+        }
+        if slot.allowed_values.as_ref().is_some_and(|values| {
+            values.is_empty()
+                || values.len() > MAXIMUM_SLOT_ENUM_VALUES
+                || values.iter().any(String::is_empty)
+                || values
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != values.len()
+        }) {
+            return Err(invalid("slot_values"));
         }
         if slot.must_mention.len() > MAXIMUM_MUST_MENTION
             || slot
@@ -1484,6 +1770,7 @@ impl TextSpec {
                     "name": slot.name,
                     "max_chars": slot.max_chars,
                     "must_mention": slot.must_mention,
+                    "allowed_values": slot.allowed_values,
                     "forbidden": slot.forbidden,
                     "withheld": slot.withheld,
                     "spoken": slot.spoken.iter().map(|rule| format!("{rule:?}")).collect::<Vec<_>>(),
@@ -1751,6 +2038,9 @@ pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) ->
                 "max_characters": slot.max_chars,
                 "must_mention": slot.must_mention,
             });
+            if let Some(values) = &slot.allowed_values {
+                described["allowed_values"] = json!(values);
+            }
             if !slot.forbidden.is_empty() {
                 described["forbidden"] = json!(slot.forbidden);
             }
@@ -1863,6 +2153,15 @@ fn validate_slot(
         .ok_or_else(|| ValidationFailure::MissingSlot(slot.name.clone()))?;
     if text.trim().is_empty() {
         return Err(ValidationFailure::EmptySlot(slot.name.clone()));
+    }
+    if slot
+        .allowed_values
+        .as_ref()
+        .is_some_and(|values| !values.iter().any(|value| value == text))
+    {
+        return Err(ValidationFailure::InvalidEntityId {
+            slot: slot.name.clone(),
+        });
     }
     if text.chars().any(char::is_control) {
         return Err(ValidationFailure::ControlCharacter {

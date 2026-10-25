@@ -40,6 +40,9 @@ pub(super) struct Decision {
     pub(super) hero: Option<HeroAddressee>,
     pub(super) source: &'static str,
     pub(super) reason: &'static str,
+    pub(super) called: bool,
+    pub(super) deadline_hit: bool,
+    pub(super) failure: Option<&'static str>,
     pub(super) elapsed_ms: u128,
 }
 

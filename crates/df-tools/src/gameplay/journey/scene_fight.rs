@@ -2887,6 +2887,8 @@ mod tests {
 
     #[test]
     fn a_won_fight_closes_with_only_current_scene_outcomes() {
+        let _process_state =
+            crate::gameplay::journey::tactical::development_tests::process_state_test_scope();
         with_shop(|| {
             let story = opening();
             let fight = start(

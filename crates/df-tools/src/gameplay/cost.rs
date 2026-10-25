@@ -14,13 +14,15 @@
 //!   cause is a required part of every [`CallSpec`]. The run and the session belong to the
 //!   ledger (one per server run), so a call site cannot attach a call to the wrong run.
 //! * **Exact money.** Every amount is whole micro-dollars (`u64`). One rounding rule: each
-//!   priced line is `quantity * usd / per`, computed exactly in nano-dollars with `u128`, then
-//!   rounded half up to a whole micro-dollar ([`Price::micro_usd`]). An event's total is the sum
-//!   of its rounded lines and every total is a sum of event lines, so each breakdown sums to its
-//!   total exactly.
+//!   priced line is `quantity * usd / per`, computed exactly (`df_commerce::tariff`), added to
+//!   the line's carried remainder and rounded half up to a whole micro-dollar; what is left
+//!   over is carried to the next call of the same provider, model and category
+//!   ([`prices::price_carrying`]), so a run of sub-micro calls is off by under half a
+//!   micro-dollar in all, not per call. An event's total is the sum of its rounded lines and
+//!   every total is a sum of event lines, so each breakdown sums to its total exactly.
 //! * **Prices are data.** `content/pricing.json` (schema `dungeonflux.pricing/1`), or the file
-//!   `DF_GAMEPLAY_PRICING` names, holds one dated, sourced rate per provider, model and
-//!   category. A malformed file is refused whole and loudly (the `COST pricing` startup line);
+//!   `DF_GAMEPLAY_PRICING` names, holds one dated, sourced rate per provider, model, category
+//!   and context tier. A malformed file is refused whole and loudly (the `COST pricing` startup line);
 //!   a missing file or a missing entry leaves those lines unpriced. Pricing never blocks a call:
 //!   there is no spend cap of any kind.
 //! * **Counted once.** A [`BilledCall`] is consumed when it is settled, so a live call is
@@ -47,7 +49,7 @@
 //! (one line; wrapped here). Words never contain a space.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
@@ -61,8 +63,8 @@ use std::{
 };
 
 use df_providers::{
-    GeneratedImage, ImageEdit, ImageEditModel, ImageQuality, ImageUsage, NativeHttpRefusal,
-    ProviderFailureClass, SpeechAdapterReason, TextTokenUsage,
+    GeneratedImage, ImageBackground, ImageEdit, ImageEditModel, ImageQuality, ImageUsage,
+    NativeHttpRefusal, ProviderFailureClass, SpeechAdapterReason, TextTokenUsage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -71,8 +73,25 @@ use super::imagery::{ImageFailure, ImageKind, ImagePriority, ImageRoute};
 use super::resources::SpendLedger;
 use crate::voice_line::{NARRATOR_ROLE, VoiceLine};
 
-/// The price table's schema name; a file with any other is refused.
-pub(in crate::gameplay) const PRICING_SCHEMA: &str = "dungeonflux.pricing/1";
+pub mod port;
+mod prices;
+mod provider_meter;
+mod specs;
+
+use port::{MeterObserver, MeterStart, MeteredCall, RECENT_LIMIT};
+#[cfg(test)]
+use prices::PricingError;
+use prices::{Carry, price_carrying};
+pub(in crate::gameplay) use prices::{PriceTable, PricingStatus, load_prices};
+pub(in crate::gameplay) use provider_meter::LedgerMeter;
+#[cfg(test)]
+pub(in crate::gameplay) use provider_meter::test_meter;
+pub(in crate::gameplay) use specs::{
+    ambience_call, embedding_call, music_error_may_be_billed, music_layer_call, segment_call,
+    segment_error_may_be_billed, settle_counted, settle_failure, stt_call, video_call, world_call,
+    world_error_may_be_billed,
+};
+
 /// Events recorded before the book is opened are held up to this many; more are counted lost.
 const PENDING_LIMIT: usize = 4096;
 /// Lines queued for the writer thread; a full queue keeps the totals and counts a write failure.
@@ -240,9 +259,60 @@ pub(in crate::gameplay) enum Cause {
     /// A named speaker's line (an NPC reply, a hero's cry); the detail is the actor id, else
     /// the name.
     CharacterVoice,
+    /// A player's recorded clip turned into words.
+    Transcription,
+    /// A story-memory text embedded for recall.
+    Embedding,
+    /// A Jev judgement of a moment, an investigation or a creator's appearance.
+    Judgement,
+    /// A person found in a scene plate or a figure mask cut.
+    Segmentation,
+    /// A vision check of a generated picture, or of who stands where in a plate.
+    PictureJudgement,
+    /// A speaker's head found in a scene plate.
+    HeadLocation,
+    /// One music layer of a place's set.
+    PlaceMusic,
+    /// A place's ambience bed.
+    PlaceAmbience,
+    /// A looping home video clip.
+    HomeVideo,
+    /// A fighter's character clip.
+    CharacterClip,
+    /// A place's explorable 3D world.
+    SplatWorld,
 }
 
 impl Cause {
+    pub(in crate::gameplay) const ALL: [Self; 22] = [
+        Self::ScenePlate,
+        Self::PlateEdit,
+        Self::SceneRefresh,
+        Self::CharacterPortrait,
+        Self::PlacePortrait,
+        Self::CastExpression,
+        Self::ItemCloseUp,
+        Self::ClipFrame,
+        Self::Storyteller,
+        Self::NarrationVoice,
+        Self::CharacterVoice,
+        Self::Transcription,
+        Self::Embedding,
+        Self::Judgement,
+        Self::Segmentation,
+        Self::PictureJudgement,
+        Self::HeadLocation,
+        Self::PlaceMusic,
+        Self::PlaceAmbience,
+        Self::HomeVideo,
+        Self::CharacterClip,
+        Self::SplatWorld,
+    ];
+
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.label() == text)
+    }
+
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
             Self::ScenePlate => "scene_plate",
@@ -256,6 +326,17 @@ impl Cause {
             Self::Storyteller => "storyteller",
             Self::NarrationVoice => "narration_voice",
             Self::CharacterVoice => "character_voice",
+            Self::Transcription => "transcription",
+            Self::Embedding => "embedding",
+            Self::Judgement => "judgement",
+            Self::Segmentation => "segmentation",
+            Self::PictureJudgement => "picture_judgement",
+            Self::HeadLocation => "head_location",
+            Self::PlaceMusic => "place_music",
+            Self::PlaceAmbience => "place_ambience",
+            Self::HomeVideo => "home_video",
+            Self::CharacterClip => "character_clip",
+            Self::SplatWorld => "splat_world",
         }
     }
 }
@@ -287,6 +368,10 @@ impl UsageSource {
 pub(in crate::gameplay) struct Usage {
     source: UsageSource,
     quantities: Vec<(Category, u64)>,
+    /// Whether the call produced anything the game could use. A call billed for an answer that
+    /// was no use (a reply that did not parse) is a loss, not a purchase; the money core keeps
+    /// the customer out of it.
+    usable: bool,
 }
 
 impl Usage {
@@ -295,6 +380,7 @@ impl Usage {
         Self {
             source: UsageSource::Reported,
             quantities,
+            usable: true,
         }
     }
 
@@ -303,7 +389,15 @@ impl Usage {
         Self {
             source: UsageSource::Estimated,
             quantities,
+            usable: true,
         }
+    }
+
+    /// The same usage for a call whose output was no use.
+    #[must_use]
+    pub(in crate::gameplay) fn unusable(mut self) -> Self {
+        self.usable = false;
+        self
     }
 }
 
@@ -315,9 +409,47 @@ pub(in crate::gameplay) struct CallSpec {
     pub(in crate::gameplay) cause: Cause,
     /// A short label narrowing the cause; reduced to `[a-z0-9_.:/-]` when recorded.
     pub(in crate::gameplay) detail: String,
+    /// The most the call can use, a conservative figure for every category its route declares.
+    /// When set it is the estimate recorded for a call of unknown outcome, and the units a
+    /// prepaid admission holds; empty, the estimate is the caller's own.
+    pub(in crate::gameplay) maxima: Vec<(Category, u64)>,
+    /// Calls made after this one succeeds, each recorded as an event of its own when this one
+    /// settles (a picture's background removal). Not recorded for a call of unknown outcome.
+    pub(in crate::gameplay) follow_ons: Vec<FollowOn>,
+}
+
+/// A call made after another one, with the units it used.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct FollowOn {
+    pub(in crate::gameplay) spec: CallSpec,
+    pub(in crate::gameplay) quantities: Vec<(Category, u64)>,
 }
 
 impl CallSpec {
+    /// A call with no stated maxima.
+    pub(in crate::gameplay) fn new(
+        provider: Provider,
+        model: impl Into<String>,
+        cause: Cause,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider,
+            model: model.into(),
+            cause,
+            detail: detail.into(),
+            maxima: Vec::new(),
+            follow_ons: Vec::new(),
+        }
+    }
+
+    /// The same call with `maxima` as its conservative per-category figures.
+    #[must_use]
+    pub(in crate::gameplay) fn with_maxima(mut self, maxima: Vec<(Category, u64)>) -> Self {
+        self.maxima = maxima;
+        self
+    }
+
     /// The same call made again for `reason` (a corrected regeneration): the detail says so.
     pub(in crate::gameplay) fn again(&self, reason: &str) -> Self {
         Self {
@@ -353,6 +485,18 @@ pub(in crate::gameplay) struct CostEvent {
     pub(in crate::gameplay) lines: Vec<CostLine>,
     /// The sum of the priced lines.
     pub(in crate::gameplay) micro_usd: u64,
+    /// False for a call that was billed and produced nothing the game could use. Absent in the
+    /// log (and read as true) for every other call.
+    #[serde(default = "usable_by_default", skip_serializing_if = "is_usable")]
+    pub(in crate::gameplay) usable: bool,
+}
+
+const fn usable_by_default() -> bool {
+    true
+}
+
+const fn is_usable(usable: &bool) -> bool {
+    *usable
 }
 
 impl CostEvent {
@@ -414,7 +558,7 @@ pub(in crate::gameplay) fn cost_line(
         })
         .collect();
     format!(
-        "COST call={} provider={} model={} cause={} detail={} source={} usd={} lines={} \
+        "COST call={} provider={} model={} cause={} detail={} source={}{} usd={} lines={} \
          run_usd={} session_usd={}",
         word(&event.call_id),
         event.provider.label(),
@@ -422,6 +566,7 @@ pub(in crate::gameplay) fn cost_line(
         event.cause.label(),
         word(&event.detail),
         event.source.label(),
+        if event.usable { "" } else { " usable=no" },
         usd(event.micro_usd),
         if lines.is_empty() {
             "-".to_owned()
@@ -431,313 +576,6 @@ pub(in crate::gameplay) fn cost_line(
         usd(run_micro),
         usd(session_micro),
     )
-}
-
-// ------------------------------------------------------------------------------------------------
-// The price table.
-
-/// One dated, sourced rate: `usd` for every `per` units.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::gameplay) struct Price {
-    nano_usd: u64,
-    per: u64,
-    as_of: String,
-    source: String,
-}
-
-impl Price {
-    /// The price of `quantity` units in whole micro-dollars: `quantity * usd / per`, exact in
-    /// nano-dollars, rounded half up. Saturates at `u64::MAX`.
-    pub(in crate::gameplay) fn micro_usd(&self, quantity: u64) -> u64 {
-        let nanos = u128::from(quantity) * u128::from(self.nano_usd);
-        let divisor = u128::from(self.per) * 1_000;
-        u64::try_from((nanos + divisor / 2) / divisor).unwrap_or(u64::MAX)
-    }
-}
-
-/// Why a price file was refused. It names the entry, never the file's other contents.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::gameplay) enum PricingError {
-    Unreadable,
-    Json(String),
-    Schema,
-    Currency,
-    Entry { index: usize, reason: &'static str },
-    Duplicate { index: usize },
-}
-
-impl PricingError {
-    pub(in crate::gameplay) fn reason(&self) -> String {
-        match self {
-            Self::Unreadable => "unreadable".to_owned(),
-            Self::Json(detail) => format!("json:{}", word(detail)),
-            Self::Schema => format!("schema_not_{PRICING_SCHEMA}"),
-            Self::Currency => "currency_not_usd".to_owned(),
-            Self::Entry { index, reason } => format!("entry_{index}_{reason}"),
-            Self::Duplicate { index } => format!("entry_{index}_duplicate"),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PriceFile {
-    schema: String,
-    currency: String,
-    prices: Vec<PriceEntry>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PriceEntry {
-    provider: String,
-    model: String,
-    category: String,
-    usd: String,
-    per: u64,
-    as_of: String,
-    source: String,
-    #[serde(default)]
-    #[allow(
-        dead_code,
-        reason = "a note for the owner who edits the file; never read"
-    )]
-    note: String,
-}
-
-/// `text` as whole nano-dollars: digits, optionally a point and at most nine decimals.
-fn parse_nano_usd(text: &str) -> Option<u64> {
-    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
-    if whole.is_empty()
-        || fraction.len() > 9
-        || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-        || (text.contains('.') && fraction.is_empty())
-    {
-        return None;
-    }
-    let whole: u64 = whole.parse().ok()?;
-    let fraction: u64 = if fraction.is_empty() {
-        0
-    } else {
-        format!("{fraction:0<9}").parse().ok()?
-    };
-    whole.checked_mul(1_000_000_000)?.checked_add(fraction)
-}
-
-/// Whole nano-dollars as the shortest exact dollar text (`0.042`, `5`).
-fn nano_usd_text(nanos: u64) -> String {
-    let fraction = format!("{:09}", nanos % 1_000_000_000);
-    let fraction = fraction.trim_end_matches('0');
-    if fraction.is_empty() {
-        (nanos / 1_000_000_000).to_string()
-    } else {
-        format!("{}.{fraction}", nanos / 1_000_000_000)
-    }
-}
-
-fn is_date(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
-}
-
-/// The dated prices, by provider, model and category. A lookup is a pure read.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::gameplay) struct PriceTable {
-    entries: BTreeMap<(Provider, String, Category), Price>,
-}
-
-impl PriceTable {
-    /// Parses and validates a whole price file; any malformed entry refuses the whole file.
-    pub(in crate::gameplay) fn parse(text: &str) -> Result<Self, PricingError> {
-        let file: PriceFile = serde_json::from_str(text).map_err(|error| {
-            PricingError::Json(format!("line_{}_column_{}", error.line(), error.column()))
-        })?;
-        if file.schema != PRICING_SCHEMA {
-            return Err(PricingError::Schema);
-        }
-        if file.currency != "USD" {
-            return Err(PricingError::Currency);
-        }
-        let mut entries = BTreeMap::new();
-        for (index, entry) in file.prices.into_iter().enumerate() {
-            let refuse = |reason| PricingError::Entry { index, reason };
-            let provider = Provider::parse(&entry.provider).ok_or(refuse("provider"))?;
-            let category = Category::parse(&entry.category).ok_or(refuse("category"))?;
-            if entry.model.is_empty()
-                || entry.model.len() > 120
-                || !entry.model.bytes().all(|byte| byte.is_ascii_graphic())
-            {
-                return Err(refuse("model"));
-            }
-            let nano_usd = parse_nano_usd(&entry.usd).ok_or(refuse("usd"))?;
-            if entry.per == 0 {
-                return Err(refuse("per"));
-            }
-            if !is_date(&entry.as_of) {
-                return Err(refuse("as_of"));
-            }
-            if !entry.source.starts_with("https://") || entry.source.len() > 400 {
-                return Err(refuse("source"));
-            }
-            let price = Price {
-                nano_usd,
-                per: entry.per,
-                as_of: entry.as_of,
-                source: entry.source,
-            };
-            if entries
-                .insert((provider, entry.model, category), price)
-                .is_some()
-            {
-                return Err(PricingError::Duplicate { index });
-            }
-        }
-        Ok(Self { entries })
-    }
-
-    /// The rate of one line, if the table has it.
-    pub(in crate::gameplay) fn lookup(
-        &self,
-        provider: Provider,
-        model: &str,
-        category: Category,
-    ) -> Option<&Price> {
-        self.entries.get(&(provider, model.to_owned(), category))
-    }
-
-    pub(in crate::gameplay) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Every rate with its date and source, for `dev cost`.
-    fn json(&self) -> Value {
-        self.entries
-            .iter()
-            .map(|((provider, model, category), price)| {
-                json!({
-                    "provider": provider.label(),
-                    "model": model,
-                    "category": category.label(),
-                    "usd": nano_usd_text(price.nano_usd),
-                    "per": price.per,
-                    "as_of": price.as_of,
-                    "source": price.source,
-                })
-            })
-            .collect()
-    }
-
-    /// Prices `quantities` for one call: the lines of a [`CostEvent`] and their sum.
-    pub(in crate::gameplay) fn price(
-        &self,
-        provider: Provider,
-        model: &str,
-        quantities: &[(Category, u64)],
-    ) -> (Vec<CostLine>, u64) {
-        let lines: Vec<CostLine> = quantities
-            .iter()
-            .map(|(category, quantity)| CostLine {
-                category: *category,
-                quantity: *quantity,
-                micro_usd: self
-                    .lookup(provider, model, *category)
-                    .map(|price| price.micro_usd(*quantity)),
-            })
-            .collect();
-        let total = lines.iter().fold(0_u64, |sum, line| {
-            sum.saturating_add(line.micro_usd.unwrap_or(0))
-        });
-        (lines, total)
-    }
-}
-
-/// How the price file was read at startup.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::gameplay) enum PricingStatus {
-    /// No book has been opened yet.
-    NotLoaded,
-    Loaded {
-        path: PathBuf,
-        entries: usize,
-    },
-    /// No file: every line is unpriced.
-    Missing {
-        path: PathBuf,
-    },
-    /// A malformed file is refused whole: every line is unpriced.
-    Refused {
-        path: PathBuf,
-        reason: String,
-    },
-}
-
-impl PricingStatus {
-    fn json(&self) -> Value {
-        match self {
-            Self::NotLoaded => json!({"status": "not_loaded"}),
-            Self::Loaded { path, entries } => {
-                json!({"status": "loaded", "path": path.display().to_string(), "entries": entries})
-            }
-            Self::Missing { path } => {
-                json!({"status": "missing", "path": path.display().to_string()})
-            }
-            Self::Refused { path, reason } => json!({
-                "status": "refused",
-                "path": path.display().to_string(),
-                "reason": reason,
-            }),
-        }
-    }
-}
-
-/// Reads the price file at `path`. Never fails: a missing or refused file gives an empty table.
-pub(in crate::gameplay) fn load_prices(path: &Path) -> (PriceTable, PricingStatus) {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return (
-                PriceTable::default(),
-                PricingStatus::Missing {
-                    path: path.to_owned(),
-                },
-            );
-        }
-        Err(_) => {
-            return (
-                PriceTable::default(),
-                PricingStatus::Refused {
-                    path: path.to_owned(),
-                    reason: PricingError::Unreadable.reason(),
-                },
-            );
-        }
-    };
-    match PriceTable::parse(&text) {
-        Ok(table) => {
-            let entries = table.len();
-            (
-                table,
-                PricingStatus::Loaded {
-                    path: path.to_owned(),
-                    entries,
-                },
-            )
-        }
-        Err(error) => (
-            PriceTable::default(),
-            PricingStatus::Refused {
-                path: path.to_owned(),
-                reason: error.reason(),
-            },
-        ),
-    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -758,17 +596,48 @@ impl BilledCall {
         spec: CallSpec,
         estimate: &[(Category, u64)],
     ) -> Self {
+        // A spec that states its maxima is estimated by them, whatever estimate the caller sent.
+        let estimate = if spec.maxima.is_empty() {
+            estimate.to_vec()
+        } else {
+            spec.maxima.clone()
+        };
+        ledger.costs().notify_started(&spec, &estimate);
         Self {
             ledger,
             spec: Some(spec),
-            estimate: estimate.to_vec(),
+            estimate,
         }
     }
 
-    /// Records what the call used.
-    pub(in crate::gameplay) fn settle(mut self, usage: Usage) {
-        if let Some(spec) = self.spec.take() {
-            self.ledger.costs().meter(spec, usage, now_ms());
+    /// Records what the call used. A usage with no quantities (a call that reported none) stands
+    /// for the call's own estimate, flagged as the usage's source says. The calls that follow it
+    /// (see [`CallSpec::follow_ons`]) are recorded as events of their own, estimated.
+    pub(in crate::gameplay) fn settle(self, usage: Usage) {
+        self.settle_at(usage, now_ms());
+    }
+
+    /// As [`Self::settle`], recorded at `at_ms`: the caller's clock.
+    pub(in crate::gameplay) fn settle_at(mut self, usage: Usage, at_ms: u64) {
+        if let Some(mut spec) = self.spec.take() {
+            let usage = if usage.quantities.is_empty() {
+                Usage {
+                    source: usage.source,
+                    quantities: std::mem::take(&mut self.estimate),
+                    usable: usage.usable,
+                }
+            } else {
+                usage
+            };
+            let follow_ons = std::mem::take(&mut spec.follow_ons);
+            self.ledger.costs().meter(spec, usage, at_ms);
+            for follow_on in follow_ons {
+                self.ledger.costs().meter(
+                    follow_on.spec,
+                    Usage::estimated(follow_on.quantities),
+                    at_ms,
+                );
+            }
         }
     }
 
@@ -785,6 +654,7 @@ impl Drop for BilledCall {
             let usage = Usage {
                 source: UsageSource::Unknown,
                 quantities: std::mem::take(&mut self.estimate),
+                usable: true,
             };
             self.ledger.costs().meter(spec, usage, now_ms());
         }
@@ -812,10 +682,12 @@ const fn quality_label(quality: ImageQuality) -> &'static str {
     }
 }
 
-/// The provider and the billed model of an image route.
+/// The provider and the billed model of an image route. A FLUX edit is billed under the fal
+/// endpoint that made it: text to image without references, the multi-reference edit with them.
 pub(in crate::gameplay) fn image_route_model(
     route: &ImageRoute,
     model: ImageEditModel,
+    has_references: bool,
 ) -> (Provider, &'static str) {
     match route {
         ImageRoute::OpenAi(_) => (
@@ -825,14 +697,11 @@ pub(in crate::gameplay) fn image_route_model(
                 ImageEditModel::Gpt25Sunburst => ImageEditModel::Gpt25Sunburst.model_id(),
             },
         ),
-        ImageRoute::Flux(_) => (Provider::Fal, FLUX_COMPOSITE_ROUTE),
+        ImageRoute::Flux(_) if has_references => (Provider::Fal, df_providers::FLUX_KONTEXT_MULTI),
+        ImageRoute::Flux(_) => (Provider::Fal, df_providers::FLUX_ULTRA),
         ImageRoute::Bfl(_) => (Provider::Bfl, df_providers::BFL_FLUX3_IMAGE),
     }
 }
-
-/// The FLUX route's several fal calls per edit, recorded as one unpriced call until each sub-call
-/// is metered (C-B4 in the cost engine backlog, `planning/issue-triage.md`).
-const FLUX_COMPOSITE_ROUTE: &str = "flux-1.1-ultra-raw+kontext-max";
 
 /// Which pool a picture waited in: `background` is look-ahead work.
 const fn priority_label(priority: ImagePriority) -> &'static str {
@@ -843,9 +712,45 @@ const fn priority_label(priority: ImagePriority) -> &'static str {
     }
 }
 
+/// Output tokens of a gpt-image picture per 1024 by 1024 pixels at each quality: the published
+/// token table (272, 1056 and 4160 for a square), which scales with the drawn area.
+const fn image_output_tokens_per_square(quality: ImageQuality) -> u64 {
+    match quality {
+        ImageQuality::Low => 272,
+        ImageQuality::Medium => 1056,
+        ImageQuality::High => 4160,
+    }
+}
+
+/// The most input tokens one reference picture can add: the vision patch cap.
+const IMAGE_INPUT_TOKENS_PER_REFERENCE: u64 = 1_536;
+
+/// The most prompt tokens of a clip frame edit.
+const CLIP_FRAME_PROMPT_TOKENS: u64 = 1_000;
+
+/// The conservative per-category maxima of one gpt-image edit: the prompt at two bytes per token,
+/// every reference at the cap, the output by area and quality.
+fn openai_image_maxima(edit: &ImageEdit<'_>) -> Vec<(Category, u64)> {
+    let area = u64::from(edit.width) * u64::from(edit.height);
+    let output = (area * image_output_tokens_per_square(edit.quality)).div_ceil(1024 * 1024);
+    let references = u64::try_from(edit.references.len()).unwrap_or(u64::MAX);
+    vec![
+        (
+            Category::TextInput,
+            u64::try_from(edit.prompt.len().div_ceil(2)).unwrap_or(u64::MAX),
+        ),
+        (
+            Category::ImageInput,
+            references.saturating_mul(IMAGE_INPUT_TOKENS_PER_REFERENCE),
+        ),
+        (Category::ImageOutput, output),
+    ]
+}
+
 /// The spec of one picture call: the cause from its kind, and a detail naming the pool (look-ahead
 /// work is `background`), the imagery profile, the quality, the drawn size and the reference
-/// count (what drives its cost).
+/// count (what drives its cost). The maxima are in the route's own priced categories, so a call
+/// of unknown outcome is booked at what it could have cost, never at zero.
 pub(in crate::gameplay) fn image_call(
     route: &ImageRoute,
     model: ImageEditModel,
@@ -854,26 +759,53 @@ pub(in crate::gameplay) fn image_call(
     profile: &str,
     edit: &ImageEdit<'_>,
 ) -> CallSpec {
-    let (provider, model) = image_route_model(route, model);
-    CallSpec {
-        provider,
-        model: model.to_owned(),
-        cause: image_cause(kind),
-        detail: format!(
-            "{}/{}/{profile}/{}/{}x{}/refs{}",
-            kind.label(),
-            priority_label(priority),
-            quality_label(edit.quality),
-            edit.width,
-            edit.height,
-            edit.references.len()
+    let (provider, billed_model) = image_route_model(route, model, !edit.references.is_empty());
+    let (maxima, follow_ons) = match route {
+        ImageRoute::OpenAi(_) => (openai_image_maxima(edit), Vec::new()),
+        // The supplier reports the credits after the call: the table's per-call ceiling stands
+        // until it does.
+        ImageRoute::Bfl(_) => (vec![(Category::Calls, 1)], Vec::new()),
+        ImageRoute::Flux(_) => (
+            vec![(Category::Images, 1)],
+            // A transparent picture is cut out by a second fal call once the first one is made.
+            if edit.background == ImageBackground::Transparent {
+                vec![FollowOn {
+                    spec: CallSpec::new(
+                        Provider::Fal,
+                        df_providers::BACKGROUND_REMOVAL,
+                        image_cause(kind),
+                        "background_removal",
+                    ),
+                    quantities: vec![(Category::Images, 1)],
+                }]
+            } else {
+                Vec::new()
+            },
         ),
+    };
+    CallSpec {
+        follow_ons,
+        ..CallSpec::new(
+            provider,
+            billed_model,
+            image_cause(kind),
+            format!(
+                "{}/{}/{profile}/{}/{}x{}/refs{}",
+                kind.label(),
+                priority_label(priority),
+                quality_label(edit.quality),
+                edit.width,
+                edit.height,
+                edit.references.len()
+            ),
+        )
+        .with_maxima(maxima)
     }
 }
 
 /// Settles one picture call from its provider result: the reported tokens (OpenAI), the reported
-/// credits (BFL) or one estimated call (FLUX); a rate limit or a rejected request was not billed;
-/// any other failure is of unknown outcome.
+/// credits (BFL) or one estimated image (FLUX); a rate limit, an exhausted quota or a rejected
+/// request was not billed; any other failure is of unknown outcome.
 pub(in crate::gameplay) fn settle_image_call(
     call: BilledCall,
     route: &ImageRoute,
@@ -881,15 +813,19 @@ pub(in crate::gameplay) fn settle_image_call(
 ) {
     match result {
         Ok((generated, credits)) => call.settle(image_usage(route, generated, credits.as_deref())),
-        Err(ImageFailure::RateLimited | ImageFailure::InvalidRequest) => call.not_billed(),
+        // A quota 429 is refused outright by the supplier, like a rate limit: nothing is booked.
+        Err(
+            ImageFailure::RateLimited | ImageFailure::InvalidRequest | ImageFailure::QuotaExhausted,
+        ) => call.not_billed(),
         Err(_) => drop(call),
     }
 }
 
-/// The tokens an OpenAI image call reported; a call that reported none is one estimated call.
+/// The tokens an OpenAI image call reported; a call that reported none is booked at the call's
+/// own maxima, flagged estimated (an empty estimate stands for them, see [`BilledCall::settle`]).
 pub(in crate::gameplay) fn image_token_usage(usage: ImageUsage) -> Usage {
     if usage == ImageUsage::default() {
-        return Usage::estimated(vec![(Category::Calls, 1)]);
+        return Usage::estimated(Vec::new());
     }
     Usage::reported(vec![
         (Category::TextInput, usage.text_input_tokens),
@@ -898,14 +834,23 @@ pub(in crate::gameplay) fn image_token_usage(usage: ImageUsage) -> Usage {
     ])
 }
 
-/// The spec of one character-clip frame edit (`fallen` or `guard`) by `model`.
+/// The spec of one character-clip frame edit (`fallen` or `guard`) by `model`. The frame is a
+/// square picture at medium quality from one reference.
 pub(in crate::gameplay) fn clip_frame_call(model: ImageEditModel, fallen: bool) -> CallSpec {
-    CallSpec {
-        provider: Provider::OpenAi,
-        model: model.model_id().to_owned(),
-        cause: Cause::ClipFrame,
-        detail: if fallen { "fallen" } else { "guard" }.to_owned(),
-    }
+    CallSpec::new(
+        Provider::OpenAi,
+        model.model_id(),
+        Cause::ClipFrame,
+        if fallen { "fallen" } else { "guard" },
+    )
+    .with_maxima(vec![
+        (Category::TextInput, CLIP_FRAME_PROMPT_TOKENS),
+        (Category::ImageInput, IMAGE_INPUT_TOKENS_PER_REFERENCE),
+        (
+            Category::ImageOutput,
+            image_output_tokens_per_square(ImageQuality::Medium),
+        ),
+    ])
 }
 
 fn image_usage(route: &ImageRoute, generated: &GeneratedImage, credits: Option<&str>) -> Usage {
@@ -914,21 +859,16 @@ fn image_usage(route: &ImageRoute, generated: &GeneratedImage, credits: Option<&
         ImageRoute::Bfl(_) => {
             match credits.and_then(|credits| credits.trim().parse::<u64>().ok()) {
                 Some(credits) => Usage::reported(vec![(Category::Credits, credits)]),
-                None => Usage::estimated(vec![(Category::Calls, 1)]),
+                None => Usage::estimated(Vec::new()),
             }
         }
-        ImageRoute::Flux(_) => Usage::estimated(vec![(Category::Calls, 1)]),
+        ImageRoute::Flux(_) => Usage::estimated(vec![(Category::Images, 1)]),
     }
 }
 
 /// The spec of one storyteller text call of `purpose`.
 pub(in crate::gameplay) fn text_call(model: &str, purpose: &str) -> CallSpec {
-    CallSpec {
-        provider: Provider::OpenAi,
-        model: model.to_owned(),
-        cause: Cause::Storyteller,
-        detail: purpose.to_owned(),
-    }
+    CallSpec::new(Provider::OpenAi, model, Cause::Storyteller, purpose)
 }
 
 /// A text call's supplier-reported tokens. Cached and cache-written tokens are part of the
@@ -960,12 +900,8 @@ pub(in crate::gameplay) fn voice_call(model: &str, line: &VoiceLine) -> CallSpec
         (None, Some(name)) => (Cause::CharacterVoice, name),
         (None, None) => (Cause::NarrationVoice, NARRATOR_ROLE),
     };
-    CallSpec {
-        provider: Provider::ElevenLabs,
-        model: model.to_owned(),
-        cause,
-        detail: detail.to_owned(),
-    }
+    // The characters of the line are known exactly: the caller's estimate is its maxima.
+    CallSpec::new(Provider::ElevenLabs, model, cause, detail)
 }
 
 /// Whether a failed speech request may have been billed: a request refused before it was sent,
@@ -1032,6 +968,8 @@ struct Totals {
     estimated_events: u64,
     unknown_events: u64,
     unpriced_events: u64,
+    /// Calls billed whose output was no use.
+    unusable_events: u64,
     by_line: BTreeMap<(Provider, String, Category), LineTotal>,
     by_cause: BTreeMap<Cause, CauseTotal>,
     by_detail: BTreeMap<(Cause, String), CauseTotal>,
@@ -1048,6 +986,9 @@ impl Totals {
         }
         if event.unpriced() {
             self.unpriced_events += 1;
+        }
+        if !event.usable {
+            self.unusable_events += 1;
         }
         for line in &event.lines {
             let total = self
@@ -1086,6 +1027,7 @@ impl Totals {
             "estimated_events": self.estimated_events,
             "unknown_events": self.unknown_events,
             "unpriced_events": self.unpriced_events,
+            "unusable_events": self.unusable_events,
             "by_line": self.by_line.iter().map(|((provider, model, category), total)| json!({
                 "provider": provider.label(),
                 "model": model,
@@ -1195,6 +1137,9 @@ struct BookState {
     opened_at_ms: Option<u64>,
     next_call: u64,
     prices: PriceTable,
+    /// The sub-micro-dollar remainder carried per line, see [`prices::price_carrying`]. One entry
+    /// per provider, model and category the run has priced.
+    carries: BTreeMap<(Provider, String, Category), Carry>,
     pricing: PricingStatus,
     /// The highest event number counted per session: the whole replay dedupe state.
     high_water: BTreeMap<String, u64>,
@@ -1209,6 +1154,10 @@ struct BookState {
     pending_lost: u64,
     malformed_lines: u64,
     duplicate_calls: u64,
+    /// Who is told of every call, see [`port::MeterObserver`].
+    observers: Vec<Arc<dyn MeterObserver>>,
+    /// The last [`RECENT_LIMIT`] calls, oldest first.
+    recent: VecDeque<MeteredCall>,
 }
 
 /// The cost book a [`SpendLedger`] keeps: prices, totals and the run's log.
@@ -1249,6 +1198,7 @@ impl CostBook {
                 opened_at_ms: None,
                 next_call: 0,
                 prices: PriceTable::default(),
+                carries: BTreeMap::new(),
                 pricing: PricingStatus::NotLoaded,
                 high_water: BTreeMap::new(),
                 run_totals: Totals::default(),
@@ -1259,6 +1209,8 @@ impl CostBook {
                 pending_lost: 0,
                 malformed_lines: 0,
                 duplicate_calls: 0,
+                observers: Vec::new(),
+                recent: VecDeque::new(),
             }),
         }
     }
@@ -1324,6 +1276,7 @@ impl CostBook {
             state.run = run.to_owned();
             state.opened_at_ms = Some(at_ms);
             state.prices = prices;
+            state.carries.clear();
             state.pricing = pricing;
             state.log = log;
             state.log_note = log_error.clone();
@@ -1346,9 +1299,17 @@ impl CostBook {
             let own = state.high_water.get(&state.session).copied().unwrap_or(0);
             state.next_call = state.next_call.max(own);
             let pending = std::mem::take(&mut state.pending);
-            let lines: Vec<String> = pending
+            let recorded: Vec<(String, MeteredCall)> = pending
                 .into_iter()
                 .map(|(spec, usage, at)| Self::record_locked(&mut state, spec, usage, at))
+                .collect();
+            let observers = state.observers.clone();
+            let lines: Vec<String> = recorded
+                .into_iter()
+                .map(|(line, call)| {
+                    notify_settled(&observers, &call);
+                    line
+                })
                 .collect();
             let opened = Opened {
                 replayed,
@@ -1366,7 +1327,7 @@ impl CostBook {
 
     /// Records one settled call under the next event number; never refused.
     fn meter(&self, spec: CallSpec, usage: Usage, at_ms: u64) {
-        let line = {
+        let (line, call, observers) = {
             let mut state = locked(&self.state);
             if state.opened_at_ms.is_none() {
                 if state.pending.len() < PENDING_LIMIT {
@@ -1376,20 +1337,64 @@ impl CostBook {
                 }
                 return;
             }
-            Self::record_locked(&mut state, spec, usage, at_ms)
+            let (line, call) = Self::record_locked(&mut state, spec, usage, at_ms);
+            (line, call, state.observers.clone())
         };
         super::actor::record_audit_line("gameplay.cost", line);
+        notify_settled(&observers, &call);
     }
 
-    /// Numbers, prices, counts and queues one event; returns its `COST` line.
-    fn record_locked(state: &mut BookState, spec: CallSpec, usage: Usage, at_ms: u64) -> String {
+    /// Registers an observer of every call recorded from now on.
+    pub(in crate::gameplay) fn observe(&self, observer: Arc<dyn MeterObserver>) {
+        locked(&self.state).observers.push(observer);
+    }
+
+    /// Tells the observers a call is about to be sent.
+    fn notify_started(&self, spec: &CallSpec, estimate: &[(Category, u64)]) {
+        let observers = locked(&self.state).observers.clone();
+        if observers.is_empty() {
+            return;
+        }
+        let start = MeterStart::of(spec, estimate);
+        for observer in &observers {
+            observer.started(&start);
+        }
+    }
+
+    /// The last calls recorded, oldest first.
+    pub(in crate::gameplay) fn recent(&self) -> Vec<MeteredCall> {
+        locked(&self.state).recent.iter().cloned().collect()
+    }
+
+    /// The run's call count, price and calls with an unpriced line.
+    pub(in crate::gameplay) fn totals(&self) -> port::MeterTotals {
+        let state = locked(&self.state);
+        port::MeterTotals {
+            calls: state.run_totals.events,
+            micro_usd: state.run_totals.micro_usd,
+            unpriced_calls: state.run_totals.unpriced_events,
+        }
+    }
+
+    /// Numbers, prices, counts and queues one event; returns its `COST` line and the call as the
+    /// port shows it.
+    fn record_locked(
+        state: &mut BookState,
+        spec: CallSpec,
+        usage: Usage,
+        at_ms: u64,
+    ) -> (String, MeteredCall) {
         state.next_call += 1;
         let number = state.next_call;
         let call_id = format!("{}-{number}", state.session);
         state.high_water.insert(state.session.clone(), number);
-        let (lines, micro_usd) = state
-            .prices
-            .price(spec.provider, &spec.model, &usage.quantities);
+        let (lines, micro_usd) = price_carrying(
+            &state.prices,
+            &mut state.carries,
+            spec.provider,
+            &spec.model,
+            &usage.quantities,
+        );
         let event = CostEvent {
             call_id,
             at_ms,
@@ -1402,6 +1407,7 @@ impl CostBook {
             source: usage.source,
             lines,
             micro_usd,
+            usable: usage.usable,
         };
         state.run_totals.add(&event);
         state.session_totals.add(&event);
@@ -1416,11 +1422,17 @@ impl CostBook {
                 }
             }
         }
-        cost_line(
+        let call = MeteredCall::of(&event);
+        if state.recent.len() == RECENT_LIMIT {
+            state.recent.pop_front();
+        }
+        state.recent.push_back(call.clone());
+        let line = cost_line(
             &event,
             state.run_totals.micro_usd,
             state.session_totals.micro_usd,
-        )
+        );
+        (line, call)
     }
 
     /// Writes every queued line, stops the writer and keeps counting in memory: the server's
@@ -1520,6 +1532,33 @@ impl CostBook {
             .collect()
     }
 
+    /// The price of `quantities` of one model at the book's current rates, rounded once: what a
+    /// call is expected to cost before it is made. `None` when any line has no rate.
+    pub(in crate::gameplay) fn quote(
+        &self,
+        provider: Provider,
+        model: &str,
+        quantities: &[(Category, u64)],
+    ) -> Option<u64> {
+        locked(&self.state)
+            .prices
+            .quote(provider, model, quantities)
+    }
+
+    /// The price of one OpenAI picture call's reported tokens at the book's rates; `None` when
+    /// the call reported none or the file does not price them.
+    pub(in crate::gameplay) fn quote_image_usage(
+        &self,
+        model: &str,
+        usage: ImageUsage,
+    ) -> Option<u64> {
+        let Usage { quantities, .. } = image_token_usage(usage);
+        if quantities.is_empty() {
+            return None;
+        }
+        self.quote(Provider::OpenAi, model, &quantities)
+    }
+
     /// Compares the run's spend with a provider bill (see [`parse_bill`]).
     pub(in crate::gameplay) fn compare_bill(&self, csv: &str) -> Result<Value, String> {
         let bill = parse_bill(csv)?;
@@ -1555,6 +1594,13 @@ impl CostBook {
     }
 }
 
+/// Tells each observer of a recorded call; run after the book's lock is released.
+fn notify_settled(observers: &[Arc<dyn MeterObserver>], call: &MeteredCall) {
+    for observer in observers {
+        observer.settled(call);
+    }
+}
+
 /// Parses a bill in the documented comparison form: a `provider,model,category,usd` header, then
 /// one row per line item, amounts in dollars (at most six decimals; repeated rows add up).
 ///
@@ -1565,31 +1611,14 @@ impl CostBook {
 pub(in crate::gameplay) fn parse_bill(
     csv: &str,
 ) -> Result<BTreeMap<(Provider, String, Category), u64>, String> {
-    let mut lines = csv.lines().filter(|line| !line.trim().is_empty());
-    match lines.next().map(str::trim) {
-        Some("provider,model,category,usd") => {}
-        _ => return Err("the bill must start with the header provider,model,category,usd".into()),
-    }
     let mut rows = BTreeMap::new();
-    for (index, line) in lines.enumerate() {
-        let row = index + 2;
-        let fields: Vec<&str> = line.split(',').map(str::trim).collect();
-        let [provider, model, category, amount] = fields[..] else {
-            return Err(format!("bill row {row} must have four fields"));
-        };
-        let provider =
-            Provider::parse(provider).ok_or_else(|| format!("bill row {row}: unknown provider"))?;
-        let category =
-            Category::parse(category).ok_or_else(|| format!("bill row {row}: unknown category"))?;
-        let nanos = parse_nano_usd(amount)
-            .filter(|nanos| nanos % 1_000 == 0)
-            .ok_or_else(|| {
-                format!("bill row {row}: usd must be dollars with at most six decimals")
-            })?;
-        let total: &mut u64 = rows
-            .entry((provider, model.to_owned(), category))
-            .or_default();
-        *total = total.saturating_add(nanos / 1_000);
+    for ((provider, model, category), micro) in df_commerce::tariff::parse_bill(csv)? {
+        let provider = Provider::parse(&provider)
+            .ok_or_else(|| format!("bill names an unknown provider {}", word(&provider)))?;
+        let category = Category::parse(&category)
+            .ok_or_else(|| format!("bill names an unknown category {}", word(&category)))?;
+        let total: &mut u64 = rows.entry((provider, model, category)).or_default();
+        *total = total.saturating_add(micro);
     }
     Ok(rows)
 }
@@ -1694,8 +1723,6 @@ pub(in crate::gameplay) fn open_run(
 pub(in crate::gameplay) enum Metering {
     /// Metered and priced from the table.
     Priced,
-    /// Metered; recorded unpriced for the stated reason.
-    Unpriced(&'static str),
     /// Not metered yet; the reason names the backlog item.
     Pending(&'static str),
 }
@@ -1716,6 +1743,12 @@ const IMAGE_TOKENS: &[Category] = &[
     Category::ImageInput,
     Category::ImageOutput,
 ];
+/// A vision judgement's declared categories: the instruction, the pictures and the answer.
+const VISION_TOKENS: &[Category] = &[
+    Category::TextInput,
+    Category::ImageInput,
+    Category::TextOutput,
+];
 const TEXT_TOKENS: &[Category] = &[
     Category::TextInput,
     Category::TextCachedInput,
@@ -1723,11 +1756,18 @@ const TEXT_TOKENS: &[Category] = &[
     Category::TextOutput,
 ];
 
+/// The categories the route of `provider` and `model` declares; none for a model no route names.
+fn declared_categories(provider: Provider, model: &str) -> &'static [Category] {
+    ROUTES
+        .iter()
+        .find(|route| route.provider == provider && route.model == model)
+        .map_or(&[], |route| route.categories)
+}
+
 impl BilledRoute {
     fn json(&self) -> Value {
         let (metering, reason) = match self.metering {
             Metering::Priced => ("priced", ""),
-            Metering::Unpriced(reason) => ("unpriced", reason),
             Metering::Pending(reason) => ("pending", reason),
         };
         json!({
@@ -1767,15 +1807,29 @@ pub(in crate::gameplay) const ROUTES: &[BilledRoute] = &[
         client: "NativeBflImageProvider",
         provider: Provider::Bfl,
         model: df_providers::BFL_FLUX3_IMAGE,
-        categories: &[Category::Credits],
+        categories: &[Category::Credits, Category::Calls],
         metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeFalImageProvider",
         provider: Provider::Fal,
-        model: FLUX_COMPOSITE_ROUTE,
-        categories: &[Category::Calls],
-        metering: Metering::Unpriced("several fal calls per edit; C-B4 meters each"),
+        model: df_providers::FLUX_ULTRA,
+        categories: &[Category::Images],
+        metering: Metering::Priced,
+    },
+    BilledRoute {
+        client: "NativeFalImageProvider",
+        provider: Provider::Fal,
+        model: df_providers::FLUX_KONTEXT_MULTI,
+        categories: &[Category::Images],
+        metering: Metering::Priced,
+    },
+    BilledRoute {
+        client: "NativeFalImageProvider",
+        provider: Provider::Fal,
+        model: df_providers::BACKGROUND_REMOVAL,
+        categories: &[Category::Images],
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeTextProvider",
@@ -1796,71 +1850,70 @@ pub(in crate::gameplay) const ROUTES: &[BilledRoute] = &[
         provider: Provider::ElevenLabs,
         model: df_providers::ELEVEN_STT_MODEL,
         categories: &[Category::AudioSeconds],
-        metering: Metering::Pending("C-B1: speech_input.rs SttSecond charge"),
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeEmbeddingProvider",
         provider: Provider::OpenAi,
         model: df_providers::EMBEDDING_MODEL_SMALL,
         categories: &[Category::TextInput],
-        metering: Metering::Pending("C-B1: memory/embedder.rs embed_charged"),
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeFalSegmenter",
         provider: Provider::Fal,
         model: "fal-ai/sam-3-1/image-rle",
         categories: &[Category::Calls],
-        metering: Metering::Pending("C-B1: figure_masks.rs and plate_segments SegmentCall"),
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeHeadLocator",
         provider: Provider::OpenAi,
         model: "gpt-5.5",
-        categories: &[
-            Category::TextInput,
-            Category::ImageInput,
-            Category::TextOutput,
-        ],
-        metering: Metering::Pending("C-B2: head locator calls are not charged at all today"),
+        categories: VISION_TOKENS,
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativePlateJudge",
         provider: Provider::OpenAi,
         model: "gpt-5.5",
-        categories: &[
-            Category::TextInput,
-            Category::ImageInput,
-            Category::TextOutput,
-        ],
-        metering: Metering::Pending("C-B2: photo checks are not charged at all today"),
+        categories: VISION_TOKENS,
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeElevenMusicProvider",
         provider: Provider::ElevenLabs,
-        model: "music_v2",
+        model: df_providers::MUSIC_MODEL,
         categories: &[Category::AudioSeconds],
-        metering: Metering::Pending("C-B1: place_music MusicCall"),
+        metering: Metering::Priced,
+    },
+    BilledRoute {
+        client: "NativeElevenMusicProvider",
+        provider: Provider::ElevenLabs,
+        model: df_providers::SOUND_MODEL,
+        categories: &[Category::AudioSeconds],
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeFalMediaProvider",
         provider: Provider::Fal,
         model: df_providers::KLING_O1_IMAGE_TO_VIDEO,
         categories: &[Category::VideoSeconds],
-        metering: Metering::Pending("C-B1: home_video and character_clips VideoClip"),
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "NativeWorldLabs",
         provider: Provider::WorldLabs,
         model: "marble-1.1",
         categories: &[Category::Credits],
-        metering: Metering::Pending("C-B1: splat_world SplatCredit"),
+        metering: Metering::Priced,
     },
     BilledRoute {
         client: "SystemOneChoiceProvider",
         provider: Provider::TypeSafe,
         model: "jev-latest",
         categories: &[Category::TextInput],
-        metering: Metering::Pending("C-B5: Jev calls report no usage; needs a df-providers hook"),
+        metering: Metering::Priced,
     },
 ];
 

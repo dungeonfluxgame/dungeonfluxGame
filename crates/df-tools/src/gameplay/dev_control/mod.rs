@@ -48,6 +48,7 @@ mod fx;
 mod heroes;
 pub(crate) mod history;
 mod jumps;
+mod latency;
 pub(super) mod layout;
 mod lore;
 mod memory;
@@ -256,6 +257,7 @@ pub(super) fn setup(
         )
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
+        .route("/dev/latency", get(latency::latency))
         .route("/dev/camera", get(camera::read).post(camera::edit))
         .route("/dev/fx", get(fx::read))
         .route("/dev/fx/edit", post(fx::edit))

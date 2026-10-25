@@ -357,14 +357,6 @@ impl SpeechInput {
     }
 }
 
-impl Active {
-    /// Records `seconds` of audio as spent, when the call is about to be sent. Kept whatever the
-    /// outcome: a call whose result is unknown may still have been billed.
-    fn charge(&self, seconds: u64) {
-        self.kit.get().charge(Unit::SttSecond, seconds);
-    }
-}
-
 impl Admission {
     /// The words of one clip. The clip and the words live only in this call.
     async fn hear(
@@ -510,20 +502,37 @@ async fn transcribe(
     )
     .map_err(failed)?;
     // The request is formed and checked, so the call is about to be sent: the seconds are spent
-    // from here, whatever the outcome. A request that never got this far costs nothing.
-    active.charge(seconds);
+    // from here, whatever the outcome. A request that never got this far costs nothing. The
+    // metered call is settled below: not billed when the supplier refused the request, of unknown
+    // outcome (booked at its maximum) when it timed out, billed once the supplier answered.
+    let kit = active.kit.get();
+    kit.charge(Unit::SttSecond, seconds);
+    let billed = kit
+        .hub()
+        .ledger()
+        .begin_call(super::cost::stt_call(seconds), &[]);
     let call = active
         .provider
         .transcribe(&request, owner(&binding), async move {
             let _cancelled = cancellation.await;
         });
-    let prepared = tokio::time::timeout(active.deadline + Duration::from_secs(1), call)
-        .await
-        .map_err(|_| SpeechOutcome::TimedOut)?
-        .map_err(|error| match error.reason() {
-            SpeechAdapterReason::Transport(NativeHttpRefusal::Deadline) => SpeechOutcome::TimedOut,
-            _ => SpeechOutcome::ProviderFailed,
-        })?;
+    let prepared = match tokio::time::timeout(active.deadline + Duration::from_secs(1), call).await
+    {
+        Err(_) => return Err(SpeechOutcome::TimedOut),
+        Ok(Err(error)) => {
+            let reason = error.reason();
+            super::cost::settle_speech_failure(billed, reason);
+            return Err(match reason {
+                SpeechAdapterReason::Transport(NativeHttpRefusal::Deadline) => {
+                    SpeechOutcome::TimedOut
+                }
+                _ => SpeechOutcome::ProviderFailed,
+            });
+        }
+        Ok(Ok(prepared)) => prepared,
+    };
+    // The supplier answered: the clip is billed whatever its words turn out to be.
+    super::cost::settle_counted(billed, vec![(super::cost::Category::AudioSeconds, seconds)]);
     let events = prepared
         .complete(owner(&binding))
         .map_err(|_| SpeechOutcome::ProviderFailed)?;
@@ -1314,7 +1323,45 @@ mod tests {
         .unwrap()
         .for_loopback_fixture(fake.address)
         .unwrap();
-        SpeechInput::with_provider(provider, REGISTERED_MODEL, deadline)
+        let input = SpeechInput::with_provider(provider, REGISTERED_MODEL, deadline);
+        // The cost book is open with the Scribe rate, so the metered calls can be read back.
+        let prices = crate::gameplay::cost::PriceTable::parse(
+            r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+                {"provider": "elevenlabs", "model": "scribe_v2", "category": "audio_seconds",
+                 "usd": "0.22", "per": 3600, "as_of": "2026-10-24",
+                 "source": "https://elevenlabs.io/pricing/api"}]}"#,
+        )
+        .unwrap();
+        ledger(&input)
+            .costs()
+            .open(
+                "stt",
+                None,
+                prices,
+                crate::gameplay::cost::PricingStatus::NotLoaded,
+                1,
+            )
+            .unwrap();
+        input
+    }
+
+    fn ledger(input: &SpeechInput) -> Arc<crate::gameplay::resources::SpendLedger> {
+        match &*input.mode {
+            Mode::On(active) => Arc::clone(active.kit.get().hub().ledger()),
+            Mode::Off(_) => panic!("speech input should be on"),
+        }
+    }
+
+    /// The run's metered calls so far: (events, micro-dollars, estimated events, unknown events).
+    fn metered(input: &SpeechInput) -> (u64, u64, u64, u64) {
+        let run = &ledger(input).costs().report(2)["run"];
+        let number = |name: &str| run[name].as_u64().unwrap();
+        (
+            number("events"),
+            number("micro_usd"),
+            number("estimated_events"),
+            number("unknown_events"),
+        )
     }
 
     fn app(input: &SpeechInput) -> Router {
@@ -1436,6 +1483,9 @@ mod tests {
         let spend = ledger_spend(&input);
         assert_eq!(spend.committed, 3, "2.1 s is charged as 3 whole seconds");
         assert_eq!(charged(&input), 3);
+        // The same clip is one metered call of 3 seconds at 0.22 an hour: 183.3 micro-dollars,
+        // counted by the server, so estimated.
+        assert_eq!(metered(&input), (1, 183, 1, 0));
         let key = hex(&TRANSCRIPTION.digest(&resource));
         let lines = crate::gameplay::actor::audit_lines_containing(&key[..32]);
         assert!(
@@ -1468,6 +1518,11 @@ mod tests {
         assert_eq!(charged(&input), 0);
         assert_eq!(ledger_spend(&input).committed, 0);
         assert_eq!(fake.calls(), 0);
+        assert_eq!(
+            metered(&input).0,
+            0,
+            "a clip that was never sent is not metered"
+        );
     }
 
     #[tokio::test]
@@ -1945,6 +2000,9 @@ mod tests {
         assert_eq!(outcome, SpeechOutcome::ProviderFailed);
         assert_eq!(text, "");
         assert_eq!(charged(&input), 3);
+        // The supplier answered 500 with an error it does not classify: the sent clip may have
+        // been billed, so the metered call is of unknown outcome, booked at the clip's 3 seconds.
+        assert_eq!(metered(&input), (1, 183, 0, 1));
     }
 
     #[tokio::test]

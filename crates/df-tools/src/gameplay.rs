@@ -2537,6 +2537,7 @@ async fn serve_run(
         intent_notifications,
         calls_remaining: call_budget.unwrap_or(u16::MAX),
         calls_unbounded: call_budget.is_none(),
+        queued_wait: None,
         qualification_joins: if npc_phase.is_some()
             || inn_phase.is_some()
             || courier_phase.is_some()

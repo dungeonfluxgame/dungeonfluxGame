@@ -17,6 +17,7 @@ use super::*;
 use crate::gameplay::imagery::{ImageFailure, ImageKind, ImagePriority, ImageRoute};
 use crate::gameplay::resources::SpendLedger;
 use crate::voice_line::{VoiceLine, display_lines, fight_voice_line};
+use df_commerce::tariff;
 
 const TABLE: &str = r#"{
   "schema": "dungeonflux.pricing/1",
@@ -156,39 +157,35 @@ fn state_of(book: &CostBook) -> MutexGuard<'_, BookState> {
 
 #[test]
 fn a_priced_line_is_exact_nano_dollars_rounded_half_up_to_a_micro_dollar() {
-    let jev = Price {
-        nano_usd: parse_nano_usd("0.042").expect("rate"),
-        per: 1_000_000,
+    let price = |usd: &str, per: u64| tariff::Price {
+        nano_usd: tariff::parse_nano_usd(usd).expect("rate"),
+        per,
         as_of: String::new(),
         source: String::new(),
     };
-    assert_eq!(jev.micro_usd(1_500), 63);
-    assert_eq!(jev.micro_usd(11), 0, "0.462 rounds down");
-    assert_eq!(jev.micro_usd(12), 1, "0.504 rounds up");
-    let half = Price {
+    let jev = price("0.042", 1_000_000);
+    assert_eq!(jev.micro_dollars_half_up(1_500), 63);
+    assert_eq!(jev.micro_dollars_half_up(11), 0, "0.462 rounds down");
+    assert_eq!(jev.micro_dollars_half_up(12), 1, "0.504 rounds up");
+    let half = tariff::Price {
         nano_usd: 500,
-        per: 1,
-        as_of: String::new(),
-        source: String::new(),
-    };
-    assert_eq!(half.micro_usd(1), 1, "exactly one half rounds up");
-    assert_eq!(half.micro_usd(0), 0);
-    let scribe = Price {
-        nano_usd: parse_nano_usd("0.22").expect("rate"),
-        per: 3_600,
-        as_of: String::new(),
-        source: String::new(),
-    };
-    assert_eq!(scribe.micro_usd(3_600), 220_000);
-    assert_eq!(scribe.micro_usd(10), 611, "611.1 micro-dollars");
-    let huge = Price {
-        nano_usd: u64::MAX,
-        per: 1,
-        as_of: String::new(),
-        source: String::new(),
+        ..price("0", 1)
     };
     assert_eq!(
-        huge.micro_usd(u64::MAX),
+        half.micro_dollars_half_up(1),
+        1,
+        "exactly one half rounds up"
+    );
+    assert_eq!(half.micro_dollars_half_up(0), 0);
+    let scribe = price("0.22", 3_600);
+    assert_eq!(scribe.micro_dollars_half_up(3_600), 220_000);
+    assert_eq!(scribe.micro_dollars_half_up(10), 611, "611.1 micro-dollars");
+    let huge = tariff::Price {
+        nano_usd: u64::MAX,
+        ..price("0", 1)
+    };
+    assert_eq!(
+        huge.micro_dollars_half_up(u64::MAX),
         u64::MAX,
         "saturates instead of wrapping"
     );
@@ -196,6 +193,7 @@ fn a_priced_line_is_exact_nano_dollars_rounded_half_up_to_a_micro_dollar() {
 
 #[test]
 fn dollar_text_parses_exactly_or_not_at_all() {
+    let parse_nano_usd = tariff::parse_nano_usd;
     assert_eq!(parse_nano_usd("5"), Some(5_000_000_000));
     assert_eq!(parse_nano_usd("0.000000001"), Some(1));
     assert_eq!(parse_nano_usd("30.00"), Some(30_000_000_000));
@@ -214,8 +212,8 @@ fn dollar_text_parses_exactly_or_not_at_all() {
     }
     assert_eq!(usd(1), "0.000001");
     assert_eq!(usd(12_345_678), "12.345678");
-    assert_eq!(nano_usd_text(42_000_000), "0.042");
-    assert_eq!(nano_usd_text(5_000_000_000), "5");
+    assert_eq!(prices::nano_usd_text(42_000_000), "0.042");
+    assert_eq!(prices::nano_usd_text(5_000_000_000), "5");
 }
 
 #[test]
@@ -228,20 +226,9 @@ fn every_enum_label_is_its_serialized_name() {
         assert_eq!(json!(category), json!(category.label()));
         assert_eq!(Category::parse(category.label()), Some(category));
     }
-    for cause in [
-        Cause::ScenePlate,
-        Cause::PlateEdit,
-        Cause::SceneRefresh,
-        Cause::CharacterPortrait,
-        Cause::PlacePortrait,
-        Cause::CastExpression,
-        Cause::ItemCloseUp,
-        Cause::ClipFrame,
-        Cause::Storyteller,
-        Cause::NarrationVoice,
-        Cause::CharacterVoice,
-    ] {
+    for cause in Cause::ALL {
         assert_eq!(json!(cause), json!(cause.label()));
+        assert_eq!(Cause::parse(cause.label()), Some(cause));
     }
     for source in [
         UsageSource::Reported,
@@ -330,7 +317,7 @@ fn the_checked_in_price_file_loads_and_prices_every_priced_route() {
         for category in route.categories {
             assert!(
                 table
-                    .lookup(route.provider, route.model, *category)
+                    .lookup(route.provider, route.model, *category, 0)
                     .is_some(),
                 "{} {} has no {} price",
                 route.provider.label(),
@@ -379,29 +366,15 @@ fn every_provider_client_has_a_billed_route() {
 }
 
 #[test]
-fn the_routes_not_metered_yet_are_exactly_the_tracked_backlog() {
+fn the_client_metered_routes_have_no_pending_admission_entry() {
     let pending: Vec<(&str, &str)> = ROUTES
         .iter()
         .filter(|route| matches!(route.metering, Metering::Pending(_)))
         .map(|route| (route.client, route.model))
         .collect();
-    assert_eq!(
-        pending,
-        [
-            ("NativeSpeechProvider", "scribe_v2"),
-            ("NativeEmbeddingProvider", "text-embedding-3-small"),
-            ("NativeFalSegmenter", "fal-ai/sam-3-1/image-rle"),
-            ("NativeHeadLocator", "gpt-5.5"),
-            ("NativePlateJudge", "gpt-5.5"),
-            ("NativeElevenMusicProvider", "music_v2"),
-            (
-                "NativeFalMediaProvider",
-                "fal-ai/kling-video/o1/image-to-video"
-            ),
-            ("NativeWorldLabs", "marble-1.1"),
-            ("SystemOneChoiceProvider", "jev-latest"),
-        ],
-        "metering a route moves it out of this list (and out of the notes backlog)"
+    assert!(
+        pending.is_empty(),
+        "all declared routes are metered: {pending:?}"
     );
 }
 
@@ -427,7 +400,11 @@ fn an_image_call_is_priced_from_the_reported_tokens_like_the_provider_formula() 
     let call = ledger.begin_call(spec.clone(), &[(Category::Calls, 1)]);
     settle_image_call(call, &route, &Ok((image(usage), None)));
     let state = state_of(ledger.costs());
-    assert_eq!(state.session_totals.micro_usd, usage.micro_dollars());
+    // 1,000 text tokens at 5, 2,000 image tokens at 8 and 3,000 output tokens at 30 micro-dollars.
+    assert_eq!(
+        state.session_totals.micro_usd,
+        1_000 * 5 + 2_000 * 8 + 3_000 * 30
+    );
     assert_eq!(state.session_totals.estimated_events, 0);
     assert_eq!(
         state.by_line_micro(
@@ -460,7 +437,11 @@ fn a_rate_limited_image_call_is_not_billed_and_a_failed_one_is_of_unknown_outcom
         "production",
         &plate_edit(),
     );
-    for failure in [ImageFailure::RateLimited, ImageFailure::InvalidRequest] {
+    for failure in [
+        ImageFailure::RateLimited,
+        ImageFailure::InvalidRequest,
+        ImageFailure::QuotaExhausted,
+    ] {
         let call = ledger.begin_call(spec.clone(), &[(Category::Calls, 1)]);
         settle_image_call(call, &route, &Err(failure));
     }
@@ -471,9 +452,12 @@ fn a_rate_limited_image_call_is_not_billed_and_a_failed_one_is_of_unknown_outcom
     assert_eq!(state.session_totals.events, 1);
     assert_eq!(state.session_totals.unknown_events, 1);
     assert_eq!(
-        state.session_totals.unpriced_events, 1,
-        "no price for a bare call"
+        state.session_totals.unpriced_events, 0,
+        "the dropped call is booked in the route's own priced categories"
     );
+    // The prompt "a plate" at two bytes per token, no references, and a low 1024 by 640 picture:
+    // 4 text tokens at 5, 170 output tokens at 30 micro-dollars.
+    assert_eq!(state.session_totals.micro_usd, 4 * 5 + 170 * 30);
     assert_eq!(
         state
             .session_totals
@@ -505,7 +489,13 @@ fn a_text_call_splits_cached_and_written_input_from_plain_input() {
             (Category::TextOutput, 200),
         ]
     );
-    let (lines, total) = table().price(Provider::OpenAi, "gpt-6-luna", &reported.quantities);
+    let (lines, total) = price_carrying(
+        &table(),
+        &mut BTreeMap::new(),
+        Provider::OpenAi,
+        "gpt-6-luna",
+        &reported.quantities,
+    );
     assert_eq!(
         lines.iter().map(|line| line.micro_usd).collect::<Vec<_>>(),
         [Some(50), Some(4), Some(13), Some(100)],
@@ -866,7 +856,9 @@ fn the_cost_line_has_one_documented_shape() {
         ]),
         2_000,
     );
-    let (lines, micro_usd) = table().price(
+    let (lines, micro_usd) = price_carrying(
+        &table(),
+        &mut BTreeMap::new(),
         Provider::ElevenLabs,
         "eleven_flash_v2_5",
         &[(Category::Characters, 250), (Category::Calls, 1)],
@@ -883,6 +875,7 @@ fn the_cost_line_has_one_documented_shape() {
         source: UsageSource::Estimated,
         lines,
         micro_usd,
+        usable: true,
     };
     assert_eq!(
         cost_line(&event, 10_200, 10_200),
@@ -942,6 +935,7 @@ fn the_dev_cost_report_has_a_pinned_shape() {
     let price = |model: &str, category: &str, usd: &str, per: u64| {
         json!({"provider": if model == "eleven_flash_v2_5" { "elevenlabs" } else { "openai" },
             "model": model, "category": category, "usd": usd, "per": per,
+            "context_max_tokens": 0,
             "as_of": "2026-10-24", "source": "https://example.test/p"})
     };
     let line = |provider: &str, model: &str, category: &str, quantity: u64, micro: u64| {
@@ -955,6 +949,7 @@ fn the_dev_cost_report_has_a_pinned_shape() {
         "estimated_events": 1,
         "unknown_events": 0,
         "unpriced_events": 0,
+        "unusable_events": 0,
         "by_line": [
             line("openai", "gpt-6-luna", "text_input", 1_000, 100),
             line("openai", "gpt-6-luna", "text_output", 200, 100),
@@ -981,12 +976,13 @@ fn the_dev_cost_report_has_a_pinned_shape() {
         report,
         json!({
             "pricing": {"status": "loaded", "path": "pricing.json", "entries": 5},
+            // By provider, model, category and tier, as text.
             "prices": [
-                price("gpt-6-luna", "text_input", "0.1", 1_000_000),
-                price("gpt-6-luna", "text_cached_input", "0.01", 1_000_000),
-                price("gpt-6-luna", "text_cache_write", "0.125", 1_000_000),
-                price("gpt-6-luna", "text_output", "0.5", 1_000_000),
                 price("eleven_flash_v2_5", "characters", "0.04", 1_000),
+                price("gpt-6-luna", "text_cache_write", "0.125", 1_000_000),
+                price("gpt-6-luna", "text_cached_input", "0.01", 1_000_000),
+                price("gpt-6-luna", "text_input", "0.1", 1_000_000),
+                price("gpt-6-luna", "text_output", "0.5", 1_000_000),
             ],
             "log": {"path": null, "status": "off", "write_failures": 0, "malformed_lines": 0,
                 "duplicate_calls": 0, "pending_lost": 0},
@@ -1205,7 +1201,7 @@ fn a_speech_request_refused_before_billable_work_is_not_billed() {
 }
 
 #[test]
-fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_is_one_estimated_call() {
+fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_stands_for_its_maxima() {
     let spec = clip_frame_call(ImageEditModel::Gpt25Sunburst, true);
     assert_eq!(
         (
@@ -1223,7 +1219,8 @@ fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_is_one_estimated_ca
     );
     assert_eq!(
         image_token_usage(ImageUsage::default()),
-        Usage::estimated(vec![(Category::Calls, 1)])
+        Usage::estimated(Vec::new()),
+        "a silent usage is empty: the call's own maxima stand for it"
     );
     assert_eq!(
         image_token_usage(ImageUsage {
@@ -1242,6 +1239,10 @@ fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_is_one_estimated_ca
 // The charge-site guard, its fixtures and the pinned list of unmetered charges.
 #[path = "cost_charge_guard_tests.rs"]
 mod charge_guard;
+
+// Tiers, carried remainders, maxima, the provider meter and the metering port.
+#[path = "cost_metering_tests.rs"]
+mod metering;
 
 /// The ids of the rows of the "Cost engine backlog" section of the triage file.
 fn backlog_rows(triage: &str) -> BTreeSet<&str> {
@@ -1361,12 +1362,6 @@ fn every_cited_backlog_id_is_a_row_of_the_cost_engine_backlog() {
     ))
     .expect("planning/issue-triage.md");
     let sources = workspace_sources();
-    assert!(
-        sources
-            .iter()
-            .any(|(_, text)| backlog_mentions(text).contains(&"C-B5")),
-        "the Jev route cites C-B5"
-    );
     assert_eq!(
         unknown_citations(&triage, &sources),
         Vec::<(&str, &str)>::new(),

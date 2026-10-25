@@ -4,50 +4,12 @@
 
 use std::{collections::BTreeSet, path::PathBuf};
 
-/// The charge sites that do not meter dollars yet, by file and first argument: each is an item of
-/// the cost engine backlog in `planning/issue-triage.md`.
-pub(super) const UNMETERED_CHARGES: [(&str, &str, &str); 12] = [
-    ("gameplay/character_clips.rs", "Unit::VideoClip", "C-B1"),
-    (
-        "gameplay/creator_classification.rs",
-        "Unit::CreatorClassificationCall",
-        "C-B5",
-    ),
-    ("gameplay/home_video.rs", "Unit::VideoClip", "C-B1"),
-    (
-        "gameplay/imagery/figure_masks.rs",
-        "Unit::SegmentCall",
-        "C-B1",
-    ),
-    (
-        "gameplay/memory/embedder.rs",
-        "Unit::EmbeddingToken",
-        "C-B1",
-    ),
-    (
-        "gameplay/place_music/resource.rs",
-        "Unit::MusicCall",
-        "C-B1",
-    ),
-    (
-        "gameplay/place_music/resource.rs",
-        "Unit::MusicCall",
-        "C-B1",
-    ),
-    (
-        "gameplay/plate_segments/service.rs",
-        "Unit::SegmentCall",
-        "C-B1",
-    ),
-    (
-        "gameplay/plate_segments/service.rs",
-        "Unit::TextToken",
-        "C-B2",
-    ),
-    ("gameplay/speech_input.rs", "Unit::SttSecond", "C-B1"),
-    ("gameplay/speech_input.rs", "seconds", "C-B1"),
-    ("gameplay/splat_world.rs", "Unit::SplatCredit", "C-B1"),
-];
+/// Charge sites still lacking dollar metering, each tracked in `planning/issue-triage.md`.
+pub(super) const UNMETERED_CHARGES: [(&str, &str, &str); 1] = [(
+    "gameplay/plate_segments/service.rs",
+    "Unit::TextToken",
+    "C-B2",
+)];
 
 /// One `reserve` or `charge` call, as the guard sees it.
 #[derive(Debug, Eq, PartialEq)]
@@ -636,8 +598,16 @@ fn every_spend_charge_meters_its_dollars_or_is_a_tracked_backlog_item() {
     );
     for (file, argument) in [
         ("gameplay/character_clips.rs", "Unit::ImageCall"),
+        ("gameplay/character_clips.rs", "Unit::VideoClip"),
+        ("gameplay/home_video.rs", "Unit::VideoClip"),
         ("gameplay/imagery.rs", "IMAGE_UNIT"),
         ("gameplay/imagery.rs", "call"),
+        ("gameplay/imagery/figure_masks.rs", "Unit::SegmentCall"),
+        ("gameplay/memory/embedder.rs", "Unit::EmbeddingToken"),
+        ("gameplay/place_music/generator.rs", "Unit::MusicCall"),
+        ("gameplay/plate_segments/service.rs", "Unit::SegmentCall"),
+        ("gameplay/speech_input.rs", "Unit::SttSecond"),
+        ("gameplay/splat_world.rs", "Unit::SplatCredit"),
         ("gameplay/storyteller.rs", "Unit::TextToken"),
         ("gameplay/voice.rs", "Unit::VoiceCharacter"),
     ] {

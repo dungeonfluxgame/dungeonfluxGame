@@ -165,19 +165,22 @@ fn with_ahead<T>(run: impl FnOnce(&mut Ahead) -> T) -> T {
 }
 
 pub(crate) fn prepared(current: &df_model::checkpoint::Checkpoint) -> Vec<PreparedPlace> {
-    let Some(world) = world() else {
-        return Vec::new();
-    };
     let scope = format!("{:?}|{:?}", current.basis().session, current.basis().run);
-    with_ahead(|ahead| {
-        if ahead.scope != scope || ahead.world.as_ref() != Some(&world) {
-            ahead.scope = scope;
-            ahead.places = world.ahead.clone();
-            ahead.world = Some(world);
-            crate::gameplay::journey::living_scene::invalidate_projection_memos();
-        }
-        ahead.places.clone()
+    // Compare the active world by reference and clone it only on a cache miss: this runs on every
+    // scene projection, so a clone per call would copy the city, gate and prepared places each time.
+    pack::with_content(|content| {
+        let world = content.beat_script.as_ref()?.free_roam.as_ref()?;
+        Some(with_ahead(|ahead| {
+            if ahead.scope != scope || ahead.world.as_ref() != Some(world) {
+                ahead.scope = scope;
+                ahead.places = world.ahead.clone();
+                ahead.world = Some(world.clone());
+                crate::gameplay::journey::living_scene::invalidate_projection_memos();
+            }
+            ahead.places.clone()
+        }))
     })
+    .unwrap_or_default()
 }
 
 /// Atomically rejects clashes between concurrently generated speculative places.

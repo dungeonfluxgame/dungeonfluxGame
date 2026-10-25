@@ -302,6 +302,9 @@ impl FakeEleven {
             )
             .unwrap(),
             Codec::Raw,
+            // A generator run on its own records on a ledger of its own; `HubMusic::for_tests`
+            // rebinds it to the hub's.
+            Arc::clone(Hub::new().ledger()),
         )
     }
 }
@@ -705,4 +708,76 @@ async fn music_has_no_budget_and_the_ledger_records_every_set() {
     assert_eq!(spent.committed, 4 * u64::from(PROVIDER_CALLS));
     assert_eq!(spent.reserved, 0);
     let _removed = std::fs::remove_dir_all(root);
+}
+
+/// A ledger whose cost book is open with the checked-in price file.
+fn metered_ledger() -> Arc<crate::gameplay::resources::SpendLedger> {
+    use crate::gameplay::cost::load_prices;
+    let path = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../content/pricing.json"
+    ));
+    let (prices, status) = load_prices(&path);
+    let ledger = Arc::new(crate::gameplay::resources::SpendLedger::default());
+    ledger
+        .costs()
+        .open("music", None, prices, status, 1)
+        .expect("the book opens");
+    ledger
+}
+
+fn cause_events(report: &serde_json::Value, cause: &str) -> u64 {
+    report["run"]["by_cause"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["cause"] == cause))
+        .map_or(0, |row| row["events"].as_u64().unwrap())
+}
+
+#[tokio::test]
+async fn a_music_set_is_metered_as_four_layers_and_one_ambience_in_seconds() {
+    use crate::gameplay::resources::Unit;
+    let fake = FakeEleven::start(Duration::ZERO, None);
+    let ledger = metered_ledger();
+    let generator = fake.generator().bound_to(Arc::clone(&ledger));
+    generator
+        .generate(&shop_set(), Duration::from_secs(60))
+        .await
+        .expect("a set");
+    let report = ledger.costs().report(2);
+    assert_eq!(report["run"]["events"], u64::from(PROVIDER_CALLS));
+    assert_eq!(cause_events(&report, "place_music"), 4);
+    assert_eq!(cause_events(&report, "place_ambience"), 1);
+    assert_eq!(report["run"]["unpriced_events"], 0);
+    assert_eq!(report["run"]["unknown_events"], 0);
+    // Each layer asks for 48 seconds of music_v2 at 0.15 a minute, the bed 27 seconds of sound
+    // generation at 0.12 a minute.
+    assert_eq!(report["run"]["micro_usd"], 4 * 48 * 2_500 + 27 * 2_000);
+    let spent = ledger.snapshot(Unit::MusicCall);
+    assert_eq!(spent.committed, u64::from(PROVIDER_CALLS));
+    assert_eq!(spent.reserved, 0);
+}
+
+#[tokio::test]
+async fn a_rate_limited_ambience_is_not_billed_and_not_counted() {
+    use crate::gameplay::resources::Unit;
+    let fake = FakeEleven::start(Duration::ZERO, Some(("/v1/sound-generation", "", 429)));
+    let ledger = metered_ledger();
+    let generator = fake.generator().bound_to(Arc::clone(&ledger));
+    let made = generator
+        .generate(&shop_set(), Duration::from_secs(60))
+        .await
+        .expect("the layers are made without the bed");
+    assert!(made.ambience.is_none());
+    let report = ledger.costs().report(2);
+    assert_eq!(cause_events(&report, "place_music"), 4);
+    assert_eq!(
+        cause_events(&report, "place_ambience"),
+        0,
+        "a 429 is not billed"
+    );
+    assert_eq!(
+        ledger.snapshot(Unit::MusicCall).committed,
+        u64::from(PROVIDER_CALLS) - 1,
+        "and its unit is given back"
+    );
 }

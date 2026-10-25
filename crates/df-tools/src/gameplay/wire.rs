@@ -1925,6 +1925,11 @@ pub(super) fn project_journey(
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
             narration: narration.clone(),
             scene_asset: scene.scene_asset.clone(),
+            // Local gameplay has no customer budget ledger; supplier cost is never a display amount.
+            spend: None,
+            operational_notice: super::imagery::operational_notice()
+                .unwrap_or_default()
+                .to_owned(),
             scene: Some(scene),
             journey: Some(journey),
             scene_graph: None,
@@ -1942,6 +1947,11 @@ pub(super) fn project_journey(
             offers,
             scene: Some(scene),
             journey: Some(journey),
+            // Local gameplay has no customer budget ledger; supplier cost is never a player amount.
+            spend: None,
+            operational_notice: super::imagery::operational_notice()
+                .unwrap_or_default()
+                .to_owned(),
         }),
     };
     let view = rpc::ViewMessage {

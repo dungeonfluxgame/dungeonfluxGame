@@ -5,10 +5,15 @@
 //! selected pacing band's BPM, one key and a common loop duration, plus one ambience bed from
 //! `POST /v1/sound-generation`. Each is cut to the exact loop, made seamless with a tail
 //! crossfade and set to the shipped loudness (see `master`). The generator makes the calls and
-//! returns the mastered files; it keeps no cache, no in-flight registry, no retry and no spend
-//! ledger. The hub that invokes it owns all of those and charges [`PROVIDER_CALLS`] per set.
+//! returns the mastered files; it keeps no cache, no in-flight registry and no retry. The hub that
+//! invokes it owns those. Each provider call is recorded on the hub's spend ledger
+//! ([`Unit::MusicCall`], [`PROVIDER_CALLS`] per set) and metered in dollars on its cost book
+//! (`music_v2` seconds per layer, `eleven_text_to_sound_v2` seconds for the ambience).
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use df_providers::{
     ElevenMusicConfig, ElevenMusicError, NativeElevenMusicProvider, NativeHttpRefusal,
@@ -16,6 +21,13 @@ use df_providers::{
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+use crate::gameplay::{
+    cost::{
+        BilledCall, Category, ambience_call, music_error_may_be_billed, music_layer_call,
+        settle_counted, settle_failure,
+    },
+    resources::{SpendLedger, Unit},
+};
 use crate::music_score::{LAYER_LUFS, LOOP_SAMPLES, PacingBand, SAMPLE_RATE};
 
 use super::master::{Codec, Frame, MasterFailure, loop_cut, normalise};
@@ -198,6 +210,8 @@ pub(in crate::gameplay) struct MusicGenerator {
     provider: NativeElevenMusicProvider,
     codec: Codec,
     permits: Semaphore,
+    /// Where every provider call is recorded and metered.
+    ledger: Arc<SpendLedger>,
 }
 
 impl MusicGenerator {
@@ -213,7 +227,8 @@ impl MusicGenerator {
             .acquire()
             .await
             .map_err(|_| FailureReason::Interrupted)?;
-        let audio = self
+        let billed = self.begin(ambience_call("ambient", u64::from(AMBIENCE_SECONDS)));
+        let audio = match self
             .provider
             .ambience(
                 &spec.prompt(),
@@ -221,7 +236,14 @@ impl MusicGenerator {
                 Self::remaining(started, deadline),
             )
             .await
-            .map_err(provider_reason)?;
+        {
+            Ok(audio) => audio,
+            Err(error) => {
+                self.failed(billed, error);
+                return Err(provider_reason(error));
+            }
+        };
+        Self::billed(billed, u64::from(AMBIENCE_SECONDS));
         self.master(
             audio.bytes,
             (AMBIENCE_LOOP_SECONDS * SAMPLE_RATE) as usize,
@@ -234,11 +256,16 @@ impl MusicGenerator {
         .map(|(bytes, _)| bytes)
         .map_err(FailureReason::Master)
     }
-    pub(in crate::gameplay) fn new(provider: NativeElevenMusicProvider, codec: Codec) -> Self {
+    pub(in crate::gameplay) fn new(
+        provider: NativeElevenMusicProvider,
+        codec: Codec,
+        ledger: Arc<SpendLedger>,
+    ) -> Self {
         Self {
             provider,
             codec,
             permits: Semaphore::new(SET_CONCURRENCY),
+            ledger,
         }
     }
 
@@ -247,11 +274,42 @@ impl MusicGenerator {
         credential: &str,
         call_deadline: Duration,
         codec: Codec,
+        ledger: Arc<SpendLedger>,
     ) -> Result<Self, ElevenMusicError> {
         Ok(Self::new(
             NativeElevenMusicProvider::new(ElevenMusicConfig::live(), credential, call_deadline)?,
             codec,
+            ledger,
         ))
+    }
+
+    /// The same generator recording on `ledger` (tests bind it to the hub under test).
+    #[cfg(test)]
+    pub(super) fn bound_to(mut self, ledger: Arc<SpendLedger>) -> Self {
+        self.ledger = ledger;
+        self
+    }
+
+    /// Records one provider call about to be sent: a unit of [`Unit::MusicCall`], kept whatever
+    /// the outcome (a call of unknown outcome may have been billed), and the metered call.
+    fn begin(&self, spec: crate::gameplay::cost::CallSpec) -> BilledCall {
+        self.ledger.reserve(Unit::MusicCall, 1).commit(1);
+        self.ledger.begin_call(spec, &[])
+    }
+
+    /// Settles a call that returned audio: billed at the seconds asked for.
+    fn billed(billed: BilledCall, seconds: u64) {
+        settle_counted(billed, vec![(Category::AudioSeconds, seconds)]);
+    }
+
+    /// Settles a call that failed: given back when the supplier cannot have billed it, else of
+    /// unknown outcome.
+    fn failed(&self, billed: BilledCall, error: ElevenMusicError) {
+        let may_be_billed = music_error_may_be_billed(error);
+        if !may_be_billed {
+            self.ledger.reconcile(Unit::MusicCall, -1);
+        }
+        settle_failure(billed, may_be_billed);
     }
 
     /// Makes every file of `set` within `deadline` in total. Any failed music layer fails the
@@ -349,7 +407,9 @@ impl MusicGenerator {
             .await
             .map_err(|_| FailureReason::Interrupted)?;
         let call_started = Instant::now();
-        let audio = self
+        let seconds = u64::from(LAYER_REQUEST_MILLIS).div_ceil(1_000);
+        let billed = self.begin(music_layer_call(layer.name(), seconds));
+        let audio = match self
             .provider
             .compose(
                 &prompt,
@@ -357,7 +417,14 @@ impl MusicGenerator {
                 Self::remaining(started, deadline),
             )
             .await
-            .map_err(provider_reason)?;
+        {
+            Ok(audio) => audio,
+            Err(error) => {
+                self.failed(billed, error);
+                return Err(provider_reason(error));
+            }
+        };
+        Self::billed(billed, seconds);
         let provider_ms = call_started.elapsed().as_millis();
         let detail = self
             .master(
@@ -396,7 +463,8 @@ impl MusicGenerator {
             .await
             .map_err(|_| FailureReason::Interrupted)?;
         let call_started = Instant::now();
-        let audio = self
+        let billed = self.begin(ambience_call("set", u64::from(AMBIENCE_SECONDS)));
+        let audio = match self
             .provider
             .ambience(
                 &prompt,
@@ -404,7 +472,14 @@ impl MusicGenerator {
                 Self::remaining(started, deadline),
             )
             .await
-            .map_err(provider_reason)?;
+        {
+            Ok(audio) => audio,
+            Err(error) => {
+                self.failed(billed, error);
+                return Err(provider_reason(error));
+            }
+        };
+        Self::billed(billed, u64::from(AMBIENCE_SECONDS));
         let provider_ms = call_started.elapsed().as_millis();
         let loop_frames = (AMBIENCE_LOOP_SECONDS * SAMPLE_RATE) as usize;
         let detail = self

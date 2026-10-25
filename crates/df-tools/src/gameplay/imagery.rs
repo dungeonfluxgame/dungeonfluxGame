@@ -27,6 +27,7 @@ mod photo_check;
 mod photo_edit;
 mod plate_prompt;
 mod prompt;
+mod quota_breaker;
 mod references;
 mod scene_prompt;
 #[cfg(test)]
@@ -103,6 +104,7 @@ pub(super) use plate_prompt::{
     reason = "T02 stage rendering must pass each checked hero identity into these prompts"
 )]
 pub(super) use plate_prompt::{hero_locator_phrase_for_identity, scene_plate_for_heroes};
+use quota_breaker::{Admission, Claim, ProbeClaim, QuotaBreaker, Transition, quota_answer_of};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
 use super::startup_configuration::{
@@ -133,6 +135,7 @@ pub(super) const NON_PHOTOGRAPHIC_WORDS: &[&str] = &[
 
 const ROUTE: &str = "/gameplay/imagery";
 const MANIFEST_NAME: &str = "imagery.jsonl";
+static QUOTA_NOTICE_OPEN: AtomicBool = AtomicBool::new(false);
 /// Most recent registered keys kept; older ones can no longer be requested.
 const MAXIMUM_REGISTERED: usize = 512;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
@@ -421,6 +424,9 @@ pub(super) enum ImageFailure {
     /// The provider failed, rejected the credential or was rate limited.
     Provider,
     RateLimited,
+    /// The provider's account has no credit or quota left (a structured 429). Waiting does not
+    /// clear it, so it is never retried, and it is not remembered as a permanent failure.
+    QuotaExhausted,
     BflSubmit,
     BflPoll,
     BflDelivery,
@@ -440,6 +446,7 @@ impl ImageFailure {
             Self::Refused => "refused",
             Self::Provider => "provider_failed",
             Self::RateLimited => "rate_limited",
+            Self::QuotaExhausted => "quota_exhausted",
             Self::BflSubmit => "bfl_submit_failed",
             Self::BflPoll => "bfl_poll_failed",
             Self::BflDelivery => "bfl_delivery_failed",
@@ -459,6 +466,7 @@ impl ImageFailure {
             Self::Refused,
             Self::Provider,
             Self::RateLimited,
+            Self::QuotaExhausted,
             Self::BflSubmit,
             Self::BflPoll,
             Self::BflDelivery,
@@ -624,6 +632,21 @@ struct Engine {
     /// ART-01: judges each new plate and empty room before it is stored; absent in tests and
     /// when the production judge could not be built.
     judge: std::sync::OnceLock<NativePlateJudge>,
+    /// Holds this provider's calls back while its account has no quota; see `QuotaBreaker`.
+    quota: QuotaBreaker,
+}
+
+/// How long an exhausted account is left alone before one call probes it again.
+const QUOTA_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+
+pub(super) fn operational_notice() -> Option<&'static str> {
+    QUOTA_NOTICE_OPEN
+        .load(Ordering::SeqCst)
+        .then_some("Narration provider unavailable; no new charge")
+}
+
+pub(super) fn set_quota_notice(transition: Transition) {
+    QUOTA_NOTICE_OPEN.store(transition == Transition::Opened, Ordering::SeqCst);
 }
 
 /// Bounds one photo-quality judgement of a finished image.
@@ -770,6 +793,7 @@ impl ImageRoute {
                     ImageEditError::Refused => ("moderation_refused", None),
                     ImageEditError::Unauthorized => ("unauthorized", None),
                     ImageEditError::Provider(status) => ("http_status", Some(status)),
+                    ImageEditError::QuotaExhausted => ("quota_exhausted", None),
                     ImageEditError::Transport(_) => ("transport", None),
                     ImageEditError::Output => ("output_contract", None),
                 };
@@ -797,6 +821,7 @@ impl ImageRoute {
                                 ImageFailure::RateLimited
                             }
                             ImageEditError::Refused
+                            | ImageEditError::QuotaExhausted
                             | ImageEditError::Transport(
                                 NativeHttpRefusal::Deadline | NativeHttpRefusal::Cancelled,
                             ) => failure_of(failure.error),
@@ -839,19 +864,23 @@ impl Imagery {
             ImagerySettings::On(configuration) => configuration,
         };
         let provider = ImageRoute::configured(&configuration)?;
+        let hub = super::resources::Hub::new();
+        let ledger = Arc::clone(hub.ledger());
         let locator = NativeHeadLocator::new(
             HeadLocateConfig::live(),
             configuration.credential.expose(),
             configuration.deadline,
+            super::cost::LedgerMeter::shared(&ledger, "head_locator"),
         )
         .ok();
         let judge = NativePlateJudge::new(
             PlateJudgeConfig::live(),
             configuration.credential.expose(),
             PHOTO_CHECK_DEADLINE,
+            super::cost::LedgerMeter::shared(&ledger, "photo_check"),
         )
         .ok();
-        let imagery = Self::new(configuration, provider, manifest_directory)?;
+        let imagery = Self::new_in_hub(configuration, provider, manifest_directory, hub, false)?;
         if let Mode::On { engine, .. } = &imagery.inner.mode {
             engine.figure_masks.configure();
             // Set once, here; a second call cannot happen.
@@ -1117,6 +1146,7 @@ impl Imagery {
             locator: std::sync::OnceLock::new(),
             figure_masks: figure_masks::FigureMaskCache::default(),
             judge: std::sync::OnceLock::new(),
+            quota: QuotaBreaker::new(QUOTA_COOLDOWN),
         };
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);
@@ -1846,6 +1876,46 @@ impl Engine {
         stored.then_some(()).ok_or(ImageFailure::Provider)
     }
 
+    /// Settles the breaker with one provider answer. A call that holds the probe settles it with
+    /// its answer; any other call only tells the breaker about the account. A transition is
+    /// audited once.
+    fn record_quota_answer<T>(
+        &self,
+        probe: Option<ProbeClaim<'_>>,
+        result: &Result<T, ImageFailure>,
+    ) {
+        let answer = quota_answer_of(result);
+        let now = std::time::Instant::now();
+        let transition = match probe {
+            Some(probe) => probe.settle(answer, now),
+            None => self.quota.observe(answer, now),
+        };
+        if let Some(transition) = transition {
+            self.audit_quota(transition);
+        }
+    }
+
+    /// The operational notice follows the same breaker transitions as the audit line. The
+    /// screen keeps its last picture while paid imagery is unavailable.
+    fn audit_quota(&self, transition: Transition) {
+        set_quota_notice(transition);
+        let provider = self.provider.label(self.model);
+        let (status, cooldown) = match transition {
+            Transition::Opened => ("open", Some(QUOTA_COOLDOWN.as_secs())),
+            Transition::Recovered => ("closed", None),
+        };
+        let mut line = format!("IMAGERY provider_quota status={status} provider={provider}");
+        let mut fields = serde_json::Map::from_iter([
+            ("status".to_owned(), serde_json::json!(status)),
+            ("provider".to_owned(), serde_json::json!(provider)),
+        ]);
+        if let Some(cooldown) = cooldown {
+            line = format!("{line} cooldown_s={cooldown}");
+            fields.insert("cooldown_s".to_owned(), serde_json::json!(cooldown));
+        }
+        super::actor::record_audit_diagnostic("gameplay.imagery.provider_quota", line, fields, &[]);
+    }
+
     /// One provider call for `edit`: the bytes in a format the request accepts and their cost.
     async fn generate(
         &self,
@@ -1856,6 +1926,14 @@ impl Engine {
         call: &super::cost::CallSpec,
         timing: &mut RequestTiming,
     ) -> Result<(ImageFormat, Bytes, u64, Option<String>), ImageFailure> {
+        // The breaker is consulted once per call, before any permit or charge. An open breaker
+        // fails fast; a call that may probe claims the probe only after it holds its permit.
+        let admission = self.quota.admit(std::time::Instant::now());
+        if admission == Admission::Refused {
+            return Err(ImageFailure::QuotaExhausted);
+        }
+        let mut admission_due = true;
+        let mut probe: Option<ProbeClaim<'_>> = None;
         let mut retries = 0;
         let (mut generated, supplier_credits) = loop {
             let queued = std::time::Instant::now();
@@ -1866,6 +1944,16 @@ impl Engine {
             let permit = permit
                 .map_err(|_| ImageFailure::DeadlineExceeded)?
                 .map_err(|_| ImageFailure::Interrupted)?;
+            if std::mem::take(&mut admission_due) {
+                match self
+                    .quota
+                    .claim_admission(admission, std::time::Instant::now())
+                {
+                    Claim::Claimed(claim) => probe = Some(claim),
+                    Claim::NotNeeded => {}
+                    Claim::Busy => return Err(ImageFailure::QuotaExhausted),
+                }
+            }
             let billed = self.charge(call);
             let started = std::time::Instant::now();
             let result = self.provider.edit(edit, self.deadline).await;
@@ -1875,11 +1963,16 @@ impl Engine {
             drop(permit);
             record_provider_timing("image", key, wait, elapsed, result.as_ref().err().copied());
             match result {
+                // A rate limit is inconclusive, but the retry belongs to this call: the probe
+                // stays claimed until the call's final answer settles it.
                 Err(ImageFailure::RateLimited) if retries < MAXIMUM_RATE_LIMIT_RETRIES => {
                     tokio::time::sleep(RATE_LIMIT_BACKOFF * (1 << retries)).await;
                     retries += 1;
                 }
-                result => break result?,
+                result => {
+                    self.record_quota_answer(probe.take(), &result);
+                    break result?;
+                }
             }
         };
         if matches!(self.provider, ImageRoute::Bfl(_)) && format == ImageFormat::Jpeg {
@@ -2337,6 +2430,7 @@ fn failure_of(error: ImageEditError) -> ImageFailure {
         ImageEditError::InvalidRequest => ImageFailure::InvalidRequest,
         ImageEditError::Refused => ImageFailure::Refused,
         ImageEditError::Provider(429) => ImageFailure::RateLimited,
+        ImageEditError::QuotaExhausted => ImageFailure::QuotaExhausted,
         ImageEditError::Unauthorized | ImageEditError::Provider(_) => ImageFailure::Provider,
         ImageEditError::Transport(NativeHttpRefusal::Deadline) => ImageFailure::DeadlineExceeded,
         ImageEditError::Transport(NativeHttpRefusal::Unknown | NativeHttpRefusal::Cancelled) => {

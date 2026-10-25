@@ -1261,6 +1261,18 @@ impl NpcReplyContext {
         names
     }
 
+    fn unknown_hero_labels(&self) -> UnknownHeroLabels {
+        let heroes = self
+            .party_names
+            .iter()
+            .filter(|hero| {
+                self.name_knowledge(hero).state == super::social::AcquaintanceState::Unknown
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        UnknownHeroLabels::new(&heroes, self.unknown_hero_names())
+    }
+
     /// The context for a line typed to whoever on stage it addresses: an NPC with a dossier
     /// when the adventure has them, otherwise (and for packs without dossiers) the scene's
     /// single speaker as before. `scene` names the current scene for the attitude bounds.
@@ -2287,6 +2299,9 @@ impl NpcVoice {
             hero,
             source: "jev",
             reason,
+            called: initial.called,
+            deadline_hit: initial.deadline_hit,
+            failure: initial.failure,
             elapsed_ms: initial.elapsed_ms + started.elapsed().as_millis(),
         }
     }
@@ -3911,7 +3926,7 @@ impl NpcVoice {
         facts["reply_focus"] = json!(
             "Answer the actual question concretely before any follow-on. Do not repeat your role or self-introduction from recent replies. Add no unrelated directions or stock invitation instead of the answer."
         );
-        redact_unknown_names(&mut facts, &context.unknown_hero_names());
+        redact_unknown_names(&mut facts, &context.unknown_hero_labels());
         let values = self
             .storyteller
             .express(&Expression {
@@ -4099,7 +4114,10 @@ impl NpcVoice {
 
     async fn guard_name_reply_inner(&self, context: &mut NpcReplyContext, reply: String) -> String {
         let unknown = context.unknown_hero_names();
-        let violates = |text: &str| unknown.iter().any(|name| mentions_term(text, name));
+        let labels = context.unknown_hero_labels();
+        let violates = |text: &str| {
+            unknown.iter().any(|name| mentions_term(text, name)) || labels.names_a_label(text)
+        };
         if !violates(&reply) {
             return reply;
         }
@@ -4107,7 +4125,7 @@ impl NpcVoice {
             "gameplay.npc_acquaintance",
             format!("NPC NAME reply_rejected npc={} retry=1", context.npc_id),
         );
-        let correction = json!({"reason": "You used a hero name you have not learned. Use a neutral address or the visible appearance; only known_heroes may be named."});
+        let correction = json!({"reason": "You used a hero name you have not learned or a placeholder label such as 'unnamed hero 1'. Use a neutral address or the visible appearance; only known_heroes may be named."});
         let retry = self
             .model_public_corrected(context, Some(&correction))
             .await;
@@ -4292,7 +4310,7 @@ impl NpcVoice {
         } else {
             json!(speaker_decision_guidance(context))
         };
-        redact_unknown_names(&mut facts, &context.unknown_hero_names());
+        redact_unknown_names(&mut facts, &context.unknown_hero_labels());
         let values = self
             .storyteller
             .express(&Expression {
@@ -4398,7 +4416,7 @@ fn wording_facts(context: &NpcReplyContext) -> Value {
         let visible = people.iter().map(|person|json!({"id":person["id"],"name":person["name"],"role":person["role"],"description":person["description"],"position":person["position"]})).collect::<Vec<_>>();
         facts["now"]["room"]["people"] = json!(visible);
     }
-    let unknown = context.unknown_hero_names();
+    let labels = context.unknown_hero_labels();
     if let Some(player) = facts.get_mut("player").and_then(Value::as_object_mut) {
         player.remove("hero_name");
         player.remove("hero");
@@ -4423,24 +4441,114 @@ fn wording_facts(context: &NpcReplyContext) -> Value {
     facts["name_guidance"] = json!(
         "Address heroes by name only when listed in known_heroes. Otherwise use a neutral address such as friend or traveller, or their visible appearance. You may naturally ask their name. Engine speaker labels and hidden identity metadata do not grant knowledge."
     );
-    redact_unknown_names(&mut facts, &unknown);
+    redact_unknown_names(&mut facts, &labels);
     facts
 }
 
-fn redact_unknown_names(value: &mut Value, unknown: &[String]) {
+/// Keeps schema keys (snake_case) and redacts unknown names from values. Other keys that name a
+/// hero become that hero's label, so the model sees one stable label per hero per call.
+fn redact_unknown_names(value: &mut Value, labels: &UnknownHeroLabels) {
     match value {
-        Value::String(text) => *text = npc_dossier::redact_terms(text, unknown),
+        Value::String(text) => *text = npc_dossier::redact_terms(text, &labels.terms),
         Value::Array(values) => values
             .iter_mut()
-            .for_each(|value| redact_unknown_names(value, unknown)),
+            .for_each(|value| redact_unknown_names(value, labels)),
         Value::Object(fields) => {
-            let old = std::mem::take(fields);
-            for (key, mut value) in old {
-                redact_unknown_names(&mut value, unknown);
-                fields.insert(npc_dossier::redact_terms(&key, unknown), value);
+            let mut redacted = serde_json::Map::new();
+            for (key, mut value) in std::mem::take(fields) {
+                redact_unknown_names(&mut value, labels);
+                let key = match labels.placeholder_key(&key) {
+                    Some(label) => unique_key(label, &redacted),
+                    None => key,
+                };
+                redacted.insert(key, value);
             }
+            *fields = redacted;
         }
         _ => {}
+    }
+}
+
+/// One label per unknown hero for a whole reply call. `terms` are the lowercased name forms to
+/// redact from text, with their possessives; `labeled` pairs each name form with its hero's label.
+struct UnknownHeroLabels {
+    terms: Vec<String>,
+    labeled: Vec<HeroNameLabel>,
+}
+
+/// A lowercased name form (a full name or a name part) and the label of the hero it identifies.
+struct HeroNameLabel {
+    term: String,
+    label: String,
+}
+
+impl UnknownHeroLabels {
+    fn new(heroes: &[String], terms: Vec<String>) -> Self {
+        let terms = terms
+            .into_iter()
+            .map(|term| term.to_lowercase())
+            .collect::<Vec<_>>();
+        let labeled = terms
+            .iter()
+            .filter_map(|term| {
+                heroes
+                    .iter()
+                    .position(|hero| mentions_term(hero, term))
+                    .map(|index| HeroNameLabel {
+                        term: term.clone(),
+                        label: format!("unnamed hero {}", index + 1),
+                    })
+            })
+            .collect();
+        let possessives = terms
+            .iter()
+            .flat_map(|term| [format!("{term}'s"), format!("{term}\u{2019}s")]);
+        let terms = terms.iter().cloned().chain(possessives).collect();
+        Self { terms, labeled }
+    }
+
+    /// `None` keeps the key: snake_case keys are schema identifiers, and a key that names no hero
+    /// stays as authored. Among the name forms a key names, the longest decides the hero.
+    fn placeholder_key(&self, key: &str) -> Option<&str> {
+        if is_snake_case_identifier(key) {
+            return None;
+        }
+        let lowered = key.to_lowercase();
+        self.labeled
+            .iter()
+            .filter(|name| contains_whole_word(&lowered, &name.term))
+            .max_by_key(|name| name.term.len())
+            .map(|name| name.label.as_str())
+    }
+
+    /// Whether `text` names any hero's label, which must never reach the player.
+    fn names_a_label(&self, text: &str) -> bool {
+        let lowered = text.to_lowercase();
+        self.labeled
+            .iter()
+            .any(|name| contains_whole_word(&lowered, &name.label))
+    }
+}
+
+fn is_snake_case_identifier(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// `label`, or `label (n)` for the first `n` the object does not already hold.
+fn unique_key(label: &str, taken: &serde_json::Map<String, Value>) -> String {
+    if !taken.contains_key(label) {
+        return label.to_owned();
+    }
+    let mut suffix = 2;
+    loop {
+        let key = format!("{label} ({suffix})");
+        if !taken.contains_key(&key) {
+            return key;
+        }
+        suffix += 1;
     }
 }
 
@@ -4664,6 +4772,127 @@ pub(super) mod tests {
             wording_facts(&context)["known_heroes"][0]["name"],
             "Orla Stonehide"
         );
+    }
+
+    fn unknown_labels(heroes: &[&str]) -> UnknownHeroLabels {
+        let heroes = heroes
+            .iter()
+            .map(|hero| (*hero).to_owned())
+            .collect::<Vec<_>>();
+        let terms = heroes
+            .iter()
+            .flat_map(|hero| {
+                std::iter::once(hero.clone()).chain(hero.split_whitespace().map(str::to_owned))
+            })
+            .collect();
+        UnknownHeroLabels::new(&heroes, terms)
+    }
+
+    #[test]
+    fn redaction_keeps_schema_keys_and_redacts_only_values() {
+        let mut facts = json!({"stock": [{"item": "onion", "owner": "Ren Stock"}]});
+        redact_unknown_names(&mut facts, &unknown_labels(&["Ren Stock"]));
+        assert_eq!(facts["stock"][0]["item"], "onion");
+        assert_eq!(facts["stock"][0]["owner"], "\u{2026}");
+        assert!(!facts.to_string().contains("Ren"));
+    }
+
+    #[test]
+    fn identity_keyed_map_keeps_every_unknown_hero_under_distinct_keys() {
+        let mut facts = json!({
+            "attitudes": {
+                "Bram Weller": {"mood": "wary"},
+                "Orla Stonehide": {"mood": "warm"},
+            },
+            "history": {"Bram Weller": {"last": "met at the mill"}},
+        });
+        redact_unknown_names(
+            &mut facts,
+            &unknown_labels(&["Bram Weller", "Orla Stonehide"]),
+        );
+        assert_eq!(facts["attitudes"].as_object().unwrap().len(), 2);
+        assert_eq!(facts["attitudes"]["unnamed hero 1"]["mood"], "wary");
+        assert_eq!(facts["attitudes"]["unnamed hero 2"]["mood"], "warm");
+        // One label per hero for the whole call: the same hero in a sibling object keeps its label.
+        assert_eq!(
+            facts["history"]["unnamed hero 1"]["last"],
+            "met at the mill"
+        );
+        let text = facts.to_string();
+        assert!(!text.contains("Bram") && !text.contains("Orla") && !text.contains("Stonehide"));
+    }
+
+    #[test]
+    fn redaction_replaces_non_schema_keys_that_name_a_hero() {
+        let mut facts = json!({"notes": {
+            "orla stonehide": {"mood": "wary"},
+            "Orla's satchel": {"contents": "a letter"},
+        }});
+        redact_unknown_names(&mut facts, &unknown_labels(&["Orla Stonehide"]));
+        let notes = facts["notes"].as_object().unwrap();
+        assert_eq!(notes.len(), 2);
+        assert!(notes.values().any(|note| note["mood"] == "wary"));
+        assert!(notes.values().any(|note| note["contents"] == "a letter"));
+        assert!(notes.keys().all(|key| key.starts_with("unnamed hero 1")));
+        assert!(!facts.to_string().contains("Orla"));
+    }
+
+    #[tokio::test]
+    async fn hs68_npc_reply_placeholder_label_in_reply_regenerates_once() {
+        let endpoint = FakeEndpoint::start(vec![
+            Reply::Output(json!({"reply":"They're each one copper piece, unnamed hero 1."})),
+            Reply::Output(json!({"reply":"They're each one copper piece, traveller."})),
+        ]);
+        let voice = hs68_voice(&endpoint, "placeholder-reply");
+        let mut context = hs68_stranger();
+        let generated = voice.model_public(&context).await.unwrap();
+        let reply = voice.guard_name_reply(&mut context, generated).await;
+        assert_eq!(reply, "They're each one copper piece, traveller.");
+        assert_eq!(endpoint.connections(), 2);
+    }
+
+    #[test]
+    fn redaction_masks_possessive_names_in_values() {
+        let mut facts = json!({"owner": "Orla's satchel", "cart": "Orla\u{2019}s cart"});
+        redact_unknown_names(&mut facts, &unknown_labels(&["Orla Stonehide"]));
+        assert_eq!(facts["owner"], "\u{2026} satchel");
+        assert_eq!(facts["cart"], "\u{2026} cart");
+        assert!(!facts.to_string().contains("Orla"));
+    }
+
+    #[test]
+    fn identity_keys_take_the_longest_name_when_heroes_share_a_first_name() {
+        let mut context = hs68_stranger();
+        context.party_names = vec!["Orla Stonehide".into(), "Orla Vance".into()];
+        let mut facts = json!({"notes": {
+            "Orla Stonehide": {"state": "warm"},
+            "Orla Vance's cart": {"state": "cracked"},
+        }});
+        redact_unknown_names(&mut facts, &context.unknown_hero_labels());
+        assert_eq!(facts["notes"]["unnamed hero 1"]["state"], "warm");
+        assert_eq!(facts["notes"]["unnamed hero 2"]["state"], "cracked");
+        assert!(!facts.to_string().contains("Orla"));
+    }
+
+    #[test]
+    fn placeholder_label_match_is_whole_word_and_accepts_a_possessive() {
+        let labels = unknown_labels(&["Orla Stonehide"]);
+        assert!(labels.names_a_label("Unnamed hero 1's coin is one copper."));
+        assert!(!labels.names_a_label("Unnamed hero 10 is here."));
+    }
+
+    #[tokio::test]
+    async fn hs68_npc_reply_placeholder_label_with_possessive_regenerates_once() {
+        let endpoint = FakeEndpoint::start(vec![
+            Reply::Output(json!({"reply":"Unnamed hero 1's coin is one copper piece."})),
+            Reply::Output(json!({"reply":"That coin is one copper piece, traveller."})),
+        ]);
+        let voice = hs68_voice(&endpoint, "placeholder-possessive-reply");
+        let mut context = hs68_stranger();
+        let generated = voice.model_public(&context).await.unwrap();
+        let reply = voice.guard_name_reply(&mut context, generated).await;
+        assert_eq!(reply, "That coin is one copper piece, traveller.");
+        assert_eq!(endpoint.connections(), 2);
     }
 
     #[tokio::test]

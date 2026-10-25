@@ -2378,6 +2378,9 @@ fn record_target_route(
     reason: &str,
     elapsed_ms: u128,
     validation: &str,
+    model_called: bool,
+    deadline_hit: bool,
+    failure: Option<&str>,
 ) {
     let input_id = request
         .input_id
@@ -2386,9 +2389,8 @@ fn record_target_route(
         .filter(|value| value.len() == 16)
         .map(|value| journey::hex(value))
         .unwrap_or_default();
-    let model_call = source == "jev" || reason == "provider_failure";
-    let resource_type = if model_call { "text_model" } else { "state" };
-    let attributes = [
+    let resource_type = if model_called { "text_model" } else { "state" };
+    let mut attributes = vec![
         ("gameplay.resource.type", resource_type.to_owned()),
         ("routing.input_id", input_id.clone()),
         ("routing.actor_id", actor_id.unwrap_or_default().to_owned()),
@@ -2398,9 +2400,10 @@ fn record_target_route(
         ("routing.elapsed_ms", elapsed_ms.to_string()),
         (
             "routing.model",
-            if model_call { "jev-latest" } else { "none" }.to_owned(),
+            if model_called { "jev-latest" } else { "none" }.to_owned(),
         ),
     ];
+    attributes.extend(target_route_failure_attributes(failure, deadline_hit));
     actor::record_audit_diagnostic(
         "gameplay.npc_target",
         format!(
@@ -2415,15 +2418,20 @@ fn record_target_route(
             ("actor_id".to_owned(), serde_json::json!(actor_id)),
             ("source".to_owned(), serde_json::json!(source)),
             ("reason".to_owned(), serde_json::json!(reason)),
+            (
+                "failure".to_owned(),
+                serde_json::json!(failure.unwrap_or("none")),
+            ),
+            ("deadline_hit".to_owned(), serde_json::json!(deadline_hit)),
             ("validation".to_owned(), serde_json::json!(validation)),
             ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
             (
                 "model".to_owned(),
-                serde_json::json!(if model_call { "jev-latest" } else { "none" }),
+                serde_json::json!(if model_called { "jev-latest" } else { "none" }),
             ),
             (
                 "provider".to_owned(),
-                serde_json::json!(if model_call {
+                serde_json::json!(if model_called {
                     "system_one_choice"
                 } else {
                     "none"
@@ -2432,6 +2440,16 @@ fn record_target_route(
         ]),
         &attributes,
     );
+}
+
+pub(super) fn target_route_failure_attributes(
+    failure: Option<&str>,
+    deadline_hit: bool,
+) -> [(&'static str, String); 2] {
+    [
+        ("routing.failure", failure.unwrap_or("none").to_owned()),
+        ("routing.deadline_hit", deadline_hit.to_string()),
+    ]
 }
 
 fn record_social_exchange(
@@ -6040,6 +6058,9 @@ impl Service {
                 decision.reason,
                 decision.elapsed_ms,
                 route.validation(),
+                decision.called,
+                decision.deadline_hit,
+                decision.failure,
             );
             match route {
                 AddresseeRoute::Npc(selected) => target = selected,
@@ -9057,15 +9078,24 @@ impl rpc::dialogue_service_server::DialogueService for Service {
         request: Request<rpc::RawDialogueRequest>,
     ) -> Result<Response<rpc::DialogueResponse>, Status> {
         let credential = credential(&request)?;
-        match self.submit_line(credential, request.into_inner()).await? {
-            DialogueReply::Raw(response, npc) => {
-                let completed = self
-                    .complete_dialogue_response(credential, response, npc)
-                    .await?;
-                Ok(Response::new(completed.response))
+        // One timing record per hero line, matched to the request by its input id.
+        let input_id = request
+            .get_ref()
+            .input_id
+            .as_ref()
+            .and_then(|id| id.value.clone());
+        super::actor::line_timing::submit_timed_line(input_id.as_deref(), async {
+            match self.submit_line(credential, request.into_inner()).await? {
+                DialogueReply::Raw(response, npc) => {
+                    let completed = self
+                        .complete_dialogue_response(credential, response, npc)
+                        .await?;
+                    Ok(Response::new(completed.response))
+                }
+                _ => Err(Status::internal("dialogue response binding invalid")),
             }
-            _ => Err(Status::internal("dialogue response binding invalid")),
-        }
+        })
+        .await
     }
 
     async fn compose(
@@ -10069,6 +10099,9 @@ impl actor::Actor {
                 },
                 0,
                 if present { "validated" } else { "stale" },
+                false,
+                false,
+                None,
             );
             if !present {
                 return Err(Status::failed_precondition(

@@ -417,6 +417,92 @@ async fn embeddings_are_recorded_on_the_hub_ledger() {
     );
 }
 
+/// A price table with the fake embedder's model: 0.02 a million tokens, as the real one.
+fn embedding_prices() -> crate::gameplay::cost::PriceTable {
+    crate::gameplay::cost::PriceTable::parse(
+        r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+            {"provider": "openai", "model": "fake-1", "category": "text_input", "usd": "0.02",
+             "per": 1000000, "as_of": "2026-10-24", "source": "https://example.test/p"}]}"#,
+    )
+    .unwrap()
+}
+
+fn open_book(ledger: &SpendLedger) {
+    ledger
+        .costs()
+        .open(
+            "memory",
+            None,
+            embedding_prices(),
+            crate::gameplay::cost::PricingStatus::NotLoaded,
+            1,
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_embedding_call_is_metered_in_dollars_at_the_tokens_the_supplier_reported() {
+    let (memory, _fake) = hybrid();
+    open_book(&memory.ledger);
+    add(
+        &memory,
+        say("Marek owns the warehouse beside the salt quay."),
+    )
+    .await;
+    let run = &memory.ledger.costs().report(2)["run"];
+    assert_eq!(run["events"], 1);
+    assert_eq!(run["estimated_events"], 0, "the fake reports its tokens");
+    assert_eq!(run["by_cause"][0]["cause"], "embedding");
+    let tokens = memory.ledger.snapshot(Unit::EmbeddingToken).committed;
+    assert_eq!(
+        run["by_line"][0]["quantity"], tokens,
+        "the metered tokens are the unit account's tokens"
+    );
+}
+
+/// An embedder that answers nothing: it refuses before sending, or fails after.
+struct Refusing(super::embedder::EmbedFailure);
+
+impl Embedder for Refusing {
+    fn model(&self) -> &str {
+        "fake-1"
+    }
+
+    fn embed<'a>(
+        &'a self,
+        _texts: &'a [String],
+    ) -> BoxFuture<'a, Result<super::embedder::Embedded, super::embedder::EmbedFailure>> {
+        let failure = self.0;
+        Box::pin(async move { Err(failure) })
+    }
+}
+
+#[tokio::test]
+async fn an_embedding_that_never_left_is_not_billed_and_one_that_failed_after_sending_is_unknown() {
+    use super::embedder::{EmbedFailure, embed_charged};
+    let ledger = Arc::new(SpendLedger::default());
+    open_book(&ledger);
+    let texts = vec!["the carter promised cheese".to_owned()];
+    let unsent = Refusing(EmbedFailure::NotSent("refused"));
+    assert!(embed_charged(&unsent, &ledger, &texts).await.is_err());
+    assert_eq!(ledger.costs().report(2)["run"]["events"], 0);
+    assert_eq!(
+        ledger.snapshot(Unit::EmbeddingToken).committed,
+        0,
+        "refunded"
+    );
+    let sent = Refusing(EmbedFailure::Failed("timeout"));
+    assert!(embed_charged(&sent, &ledger, &texts).await.is_err());
+    let run = &ledger.costs().report(2)["run"];
+    assert_eq!(run["events"], 1);
+    assert_eq!(run["unknown_events"], 1);
+    assert_eq!(
+        run["by_line"][0]["quantity"],
+        super::embedder::estimate_tokens(&texts),
+        "booked at the estimate"
+    );
+}
+
 #[tokio::test]
 async fn a_failing_provider_leaves_events_stored_and_recall_working_by_text() {
     let (memory, fake) = hybrid();

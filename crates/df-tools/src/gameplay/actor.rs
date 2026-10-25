@@ -1,9 +1,11 @@
 #[path = "npc_voice_confrontation.rs"]
 pub(in crate::gameplay) mod confrontation_voice;
+pub(super) mod line_timing;
 #[path = "place_actor.rs"]
 pub(super) mod place_actor;
 #[path = "tempo.rs"]
 pub(super) mod tempo;
+pub(super) mod timing_ledger;
 
 use df_model::checkpoint::{
     Checkpoint, CommandInput, EffectId, GameCommand, GameInput, ReferenceInventory,
@@ -1144,6 +1146,9 @@ pub(super) struct Actor {
     pub calls_remaining: u16,
     /// Plain play without `DF_GAMEPLAY_CALL_BUDGET`: calls are neither refused nor counted down.
     pub calls_unbounded: bool,
+    /// How long the next call waited in the inbox, from its first admission attempt. The inbox sets
+    /// it just before each reduce; reduce takes it, so a call never inherits another's wait.
+    pub queued_wait: Option<Duration>,
     pub qualification_inputs: Option<Vec<QualificationInput>>,
     pub qualification_joins: Option<Vec<QualificationJoin>>,
     pub completion_retry: Option<CompletionRetry>,
@@ -1377,6 +1382,20 @@ pub(super) fn audit_lines_containing(needle: &str) -> Vec<String> {
         .collect()
 }
 
+/// The launcher-log form of one audit line: the stored text with the wall-clock stamp as its last
+/// field. The stored line (timeline, tests, grep-based tools) never carries the stamp.
+fn stamped(line: &str, at_ms: u128) -> String {
+    format!("{line} at_ms={at_ms}")
+}
+
+/// Prints one audit line to the launcher log, stamped with the wall-clock time.
+fn print_audit_line(line: &str) {
+    let at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_millis());
+    println!("{}", stamped(line, at_ms));
+}
+
 pub(super) fn record_audit_line(event: &'static str, line: String) {
     let line = df_observe::audit_line(line);
     #[cfg(test)]
@@ -1385,7 +1404,7 @@ pub(super) fn record_audit_line(event: &'static str, line: String) {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push(line.clone());
     super::dev_control::timeline::record(event, &line);
-    println!("{line}");
+    print_audit_line(&line);
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -1408,7 +1427,7 @@ pub(super) fn record_audit_diagnostic(
 ) {
     let line = df_observe::audit_line(line);
     super::dev_control::timeline::record_structured(event, &line, fields);
-    println!("{line}");
+    print_audit_line(&line);
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -5489,7 +5508,66 @@ fn audit_reply<T>(
     delivered
 }
 
+/// A call at or above this reduce time also prints a `CALL slow` audit line. Every call is counted in
+/// the owner's histograms whatever its time.
+pub(super) const SLOW_CALL_US: u64 = 50_000;
+
+/// The `CALL slow` line for a call at or above `SLOW_CALL_US`, or `None` for a faster call. An
+/// unmeasured queue wait is named as such.
+fn slow_call_line(call: &str, queue_us: Option<u64>, reduce_us: u64) -> Option<String> {
+    if reduce_us < SLOW_CALL_US {
+        return None;
+    }
+    let queue = queue_us.map_or_else(|| "unmeasured".to_owned(), |queue| queue.to_string());
+    Some(format!(
+        "CALL slow call={call} queue_us={queue} reduce_us={reduce_us}"
+    ))
+}
+
+/// Arms the timing of one reduce. It takes the queue wait the inbox reported for this call, so a call
+/// that was not preceded by `queued_for` (or any call after the first) records no queue wait.
+fn arm_reduce_timing(
+    queued_wait: &mut Option<Duration>,
+    call: &'static str,
+    started: Instant,
+) -> ReduceTiming {
+    ReduceTiming {
+        call,
+        started,
+        queued: queued_wait.take(),
+    }
+}
+
+fn elapsed_us(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+/// Counts one owner call in the timing histograms, for every call whichever path its reduce takes.
+/// The reduce time runs from the call's start to the end of its reduce, so it includes the heartbeat
+/// and committed-intent passes around the call. The queue wait is `None` when the inbox did not
+/// report one.
+struct ReduceTiming {
+    call: &'static str,
+    started: Instant,
+    queued: Option<Duration>,
+}
+
+impl Drop for ReduceTiming {
+    fn drop(&mut self) {
+        let queue_us = self.queued.map(elapsed_us);
+        let reduce_us = elapsed_us(self.started.elapsed());
+        timing_ledger::record_call(self.call, queue_us, reduce_us);
+        if let Some(line) = slow_call_line(self.call, queue_us, reduce_us) {
+            record_audit_line("gameplay.call_timing", line);
+        }
+    }
+}
+
 impl Reducer<Call> for Actor {
+    fn queued_for(&mut self, wait: Duration) {
+        self.queued_wait = Some(wait);
+    }
+
     fn reduce(&mut self, _: AdmissionSequence, call: Call) {
         // One command's refusal detail must never be printed for another: every call
         // this owner reduces starts from a cleared slot (see `refusal_detail`).
@@ -5592,6 +5670,7 @@ impl Reducer<Call> for Actor {
             )),
         });
         df_observe::install_audit_sink(record_audit_line);
+        let _reduce_timing = arm_reduce_timing(&mut self.queued_wait, call_name, call_started);
 
         let call = match call {
             Call::PictureFeatures {
@@ -6996,3 +7075,84 @@ mod hs28_opening_social_tests {
 #[cfg(test)]
 #[path = "actor_media_latency_tests.rs"]
 mod media_latency_tests;
+
+#[cfg(test)]
+mod call_timing_tests {
+    use super::*;
+
+    fn count(call: &str) -> u64 {
+        timing_ledger::snapshot()
+            .calls
+            .get(call)
+            .map_or(0, |histograms| histograms.reduce_us.count())
+    }
+
+    #[test]
+    fn every_reduce_is_counted_and_only_a_slow_one_prints_a_line() {
+        // Before the owner histograms, a reduce left no count and no line behind.
+        let counted = count("TelemetryIdentity");
+        let slow_lines = audit_lines_containing("CALL slow call=TelemetryIdentity").len();
+
+        drop(ReduceTiming {
+            call: "TelemetryIdentity",
+            started: Instant::now(),
+            queued: Some(Duration::from_micros(300)),
+        });
+        assert_eq!(count("TelemetryIdentity"), counted + 1);
+        assert_eq!(
+            audit_lines_containing("CALL slow call=TelemetryIdentity").len(),
+            slow_lines,
+            "a fast call prints no line"
+        );
+
+        // A reduce that took 60 ms is slow; its queue wait was never reported.
+        drop(ReduceTiming {
+            call: "TelemetryIdentity",
+            started: Instant::now() - Duration::from_millis(60),
+            queued: None,
+        });
+        assert_eq!(count("TelemetryIdentity"), counted + 2);
+        let lines = audit_lines_containing("CALL slow call=TelemetryIdentity");
+        assert_eq!(lines.len(), slow_lines + 1, "{lines:?}");
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.contains("queue_us=unmeasured reduce_us=")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_second_arming_without_a_reported_wait_records_no_queue_time() {
+        // The inbox reports one wait per reduce. The first arming takes it; the next has none.
+        let mut queued_wait = Some(Duration::from_micros(300));
+        let first = arm_reduce_timing(&mut queued_wait, "View", Instant::now());
+        assert_eq!(first.queued, Some(Duration::from_micros(300)));
+        assert_eq!(queued_wait, None);
+        let second = arm_reduce_timing(&mut queued_wait, "View", Instant::now());
+        assert_eq!(second.queued, None);
+        // Dropping them counts two View reduces, and neither is slow.
+        drop(first);
+        drop(second);
+    }
+
+    #[test]
+    fn the_stamp_is_the_last_field_and_leaves_the_stored_text_alone() {
+        assert_eq!(
+            stamped(
+                "CALL slow call=View queue_us=5 reduce_us=50000",
+                1_761_000_000_123
+            ),
+            "CALL slow call=View queue_us=5 reduce_us=50000 at_ms=1761000000123"
+        );
+    }
+
+    #[test]
+    fn the_slow_threshold_is_inclusive_at_fifty_milliseconds() {
+        assert_eq!(slow_call_line("View", Some(5), SLOW_CALL_US - 1), None);
+        assert_eq!(
+            slow_call_line("View", Some(5), SLOW_CALL_US).as_deref(),
+            Some("CALL slow call=View queue_us=5 reduce_us=50000")
+        );
+    }
+}

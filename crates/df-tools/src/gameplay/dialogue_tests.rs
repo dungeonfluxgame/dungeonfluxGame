@@ -215,6 +215,7 @@ impl RunningActor {
             intent_notifications,
             calls_remaining,
             calls_unbounded: false,
+            queued_wait: None,
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,
@@ -2327,8 +2328,78 @@ fn addressed(
         }),
         source: "jev",
         reason: "test",
+        called: false,
+        deadline_hit: false,
+        failure: None,
         elapsed_ms: 0,
     }
+}
+
+fn configured_jev_model(
+    endpoint: &crate::gameplay::storyteller::tests::FakeEndpoint,
+) -> super::approach_model::ApproachModel {
+    super::approach_model::ApproachModel::configured(Some(
+        super::startup_configuration::ApproachSettings {
+            credential: "jev-fixture-sentinel".to_owned(),
+            base_url: format!("http://{}", endpoint.address),
+        },
+    ))
+}
+
+#[test]
+fn a_router_failure_and_deadline_are_forwarded_to_route_attributes() {
+    let attributes = super::dialogue::target_route_failure_attributes(Some("timeout"), true);
+
+    assert_eq!(
+        attributes,
+        [
+            ("routing.failure", "timeout".to_owned()),
+            ("routing.deadline_hit", "true".to_owned()),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_missing_router_provider_is_not_reported_as_a_model_call_or_deadline() {
+    let decision = super::approach_model::ApproachModel::default()
+        .resolve_addressee("Courier, who sent you?", &courier_cast(), "Courier")
+        .await;
+
+    assert!(!decision.called);
+    assert!(!decision.deadline_hit);
+    assert_eq!(decision.failure, None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_router_timeout_returns_its_typed_failure_and_deadline_fact() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
+
+    let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
+        Duration::from_secs(5),
+        200,
+        json!({"answers": {"q1": {"type": "choice", "choice": "o4"}}}),
+    )]);
+    let decision = configured_jev_model(&endpoint)
+        .resolve_addressee("Courier, who sent you?", &courier_cast(), "Courier")
+        .await;
+
+    assert!(decision.called);
+    assert!(decision.deadline_hit);
+    assert_eq!(decision.failure, Some("timeout"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_router_error_returns_its_typed_failure_without_a_deadline() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
+
+    let endpoint = FakeEndpoint::start(vec![Reply::Status(503, json!({}))]);
+    let decision = configured_jev_model(&endpoint)
+        .resolve_addressee("Courier, who sent you?", &courier_cast(), "Courier")
+        .await;
+
+    assert!(decision.called);
+    assert!(!decision.deadline_hit);
+    assert_eq!(decision.failure, Some("error"));
 }
 
 #[test]

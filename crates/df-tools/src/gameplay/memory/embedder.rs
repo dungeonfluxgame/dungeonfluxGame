@@ -5,13 +5,17 @@
 //! and tests use a deterministic fake. Every call is charged to the generation hub's spend
 //! ledger as [`Unit::EmbeddingToken`] by [`embed_charged`]: it reserves an estimate, makes the
 //! call, then commits the supplier-reported tokens (or the estimate when none were reported).
-//! A call that was refused locally, or never left this machine, refunds its reservation.
+//! A call that was refused locally, or never left this machine, refunds its reservation. The call
+//! is also metered in dollars on the cost book, as `text-embedding-3-small` input tokens.
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use df_providers::{EMBEDDING_MAXIMUM_INPUT_CHARACTERS, EmbeddingConfig, NativeEmbeddingProvider};
 
-use crate::gameplay::resources::{SpendLedger, Unit};
+use crate::gameplay::{
+    cost::{Category, Usage, embedding_call},
+    resources::{SpendLedger, Unit},
+};
 
 pub(in crate::gameplay) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -110,7 +114,10 @@ pub(in crate::gameplay) fn estimate_tokens(texts: &[String]) -> u64 {
         .sum()
 }
 
-/// One embedding call under the hub's spend contract: reserve, call, commit or refund.
+/// One embedding call under the hub's spend contract: reserve, meter, call, then commit and bill
+/// or refund. A call the supplier answered is billed at the tokens it reported (the estimate when
+/// it reported none); one that never left this machine is not billed; one that was sent and
+/// failed is of unknown outcome and is booked at the estimate.
 pub(in crate::gameplay) async fn embed_charged(
     embedder: &dyn Embedder,
     ledger: &Arc<SpendLedger>,
@@ -122,22 +129,30 @@ pub(in crate::gameplay) async fn embed_charged(
     let estimate = estimate_tokens(texts);
     // The ledger never refuses (owner decision: no spend caps); it records and audits the spend.
     let reservation = ledger.reserve(Unit::EmbeddingToken, estimate);
+    let billed = ledger.begin_call(embedding_call(embedder.model(), estimate), &[]);
     match embedder.embed(texts).await {
         Ok(answer) if answer.vectors.len() == texts.len() => {
             reservation.commit(answer.tokens.unwrap_or(estimate));
+            billed.settle(match answer.tokens {
+                Some(tokens) => Usage::reported(vec![(Category::TextInput, tokens)]),
+                None => Usage::estimated(Vec::new()),
+            });
             Ok(answer)
         }
         Ok(_) => {
             // The call was made and billed; its answer is unusable.
             reservation.commit(estimate);
+            billed.settle(Usage::estimated(Vec::new()).unusable());
             Err(EmbedFailure::Failed("bad_output"))
         }
         Err(EmbedFailure::NotSent(label)) => {
             reservation.refund();
+            billed.not_billed();
             Err(EmbedFailure::NotSent(label))
         }
         Err(other) => {
             reservation.commit(estimate);
+            drop(billed);
             Err(other)
         }
     }

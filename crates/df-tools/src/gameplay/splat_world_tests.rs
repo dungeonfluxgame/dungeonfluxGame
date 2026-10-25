@@ -188,10 +188,7 @@ impl WorldMaker for FakeMaker {
         *self.prompt.lock().unwrap() = request.text_prompt.clone();
         Box::pin(async move {
             if let Some(error) = &self.submit_error {
-                return Err(WorldMakerError {
-                    label: error.label,
-                    permanent: error.permanent,
-                });
+                return Err(error.clone());
             }
             assert_eq!(request.model, MarbleModel::Marble11);
             assert!(!request.image_jpeg.is_empty());
@@ -232,10 +229,44 @@ impl WorldMaker for FakeMaker {
     }
 }
 
+/// A hub whose cost book is open with the World Labs rate: 1.00 for every 1,250 credits.
+fn priced_hub() -> Hub {
+    let prices = crate::gameplay::cost::PriceTable::parse(
+        r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+            {"provider": "worldlabs", "model": "marble-1.1", "category": "credits", "usd": "1.00",
+             "per": 1250, "as_of": "2026-10-24", "source": "https://docs.worldlabs.ai/api/pricing"}
+        ]}"#,
+    )
+    .unwrap();
+    let hub = Hub::new();
+    hub.ledger()
+        .costs()
+        .open(
+            "worlds",
+            None,
+            prices,
+            crate::gameplay::cost::PricingStatus::NotLoaded,
+            1,
+        )
+        .unwrap();
+    hub
+}
+
+/// The run's metered calls: (events, micro-dollars, unknown events).
+fn metered(worlds: &SplatWorlds) -> (u64, u64, u64) {
+    let run = &worlds.hub().ledger().costs().report(2)["run"];
+    let number = |name: &str| run[name].as_u64().unwrap();
+    (
+        number("events"),
+        number("micro_usd"),
+        number("unknown_events"),
+    )
+}
+
 fn service(maker: Arc<FakeMaker>, cache_dir: PathBuf) -> SplatWorlds {
     let photograph: RoomPhotograph = Arc::new(|_place| Box::pin(async { Some(jpeg_fixture()) }));
     SplatWorlds::with_timing(
-        Hub::new(),
+        priced_hub(),
         maker,
         photograph,
         cache_dir,
@@ -305,6 +336,14 @@ async fn generator_submits_polls_stores_and_reuses_by_key() {
         worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
         1580
     );
+    // One metered call at the credits the operation reported: 1,580 at 800 micro-dollars.
+    assert_eq!(metered(&worlds), (1, 1_264_000, 0));
+    let report = worlds.hub().ledger().costs().report(2);
+    assert_eq!(
+        report["run"]["estimated_events"], 0,
+        "the credits are reported"
+    );
+    assert_eq!(report["run"]["by_cause"][0]["cause"], "splat_world");
 
     let directory = world_directory(&cache_dir, &key);
     let stored: StoredWorld =
@@ -344,6 +383,30 @@ async fn generator_maps_failures_and_never_stores_them() {
     let rows = worlds.hub().list(None);
     assert_eq!(rows[0].state, "failed");
     assert_eq!(rows[0].last_error, "generation_failed");
+    // A generation that failed after it was accepted may have been billed: it is of unknown
+    // outcome, booked at the most a world costs (1,500 credits and the panorama step's 80).
+    assert_eq!(metered(&worlds), (1, 1_264_000, 1));
+    assert_eq!(
+        worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
+        1580
+    );
+    std::fs::remove_dir_all(cache_dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_world_the_supplier_refused_is_not_billed_and_its_credits_are_given_back() {
+    let cache_dir = scratch("refused");
+    let mut maker = FakeMaker::succeeding(0);
+    Arc::get_mut(&mut maker).unwrap().submit_error =
+        Some(WorldMakerError::permanent("insufficient_credits").refused());
+    let worlds = service(maker, cache_dir.clone());
+    worlds.request_world(&cloth_shop());
+    worlds.run_queued().await;
+    assert_eq!(metered(&worlds).0, 0, "a refusal is not billed");
+    assert_eq!(
+        worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
+        0
+    );
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 

@@ -1,5 +1,5 @@
 //! One contextual Jev choice per owned creator operation. Public appearance only.
-use super::resources::{SpendLedger, Unit};
+use super::{cost::LedgerMeter, resources::SpendLedger};
 use df_providers::SystemOneChoiceProvider;
 use serde_json::json;
 use std::{io, sync::Arc, time::Instant};
@@ -73,7 +73,6 @@ impl Assessment {
 }
 pub(super) struct Classifier {
     provider: SystemOneChoiceProvider,
-    ledger: Arc<SpendLedger>,
 }
 impl Classifier {
     pub(super) fn new(
@@ -81,9 +80,14 @@ impl Classifier {
         base_url: &str,
         ledger: Arc<SpendLedger>,
     ) -> Result<Self, io::Error> {
-        let provider = SystemOneChoiceProvider::new(credential.to_owned(), base_url)
-            .map_err(|_| io::Error::other("Creator Jev configuration refused"))?;
-        Ok(Self { provider, ledger })
+        // Every attempt is metered on the cost book by the client itself.
+        let provider = SystemOneChoiceProvider::new(
+            credential.to_owned(),
+            base_url,
+            LedgerMeter::shared(&ledger, "creator_classification"),
+        )
+        .map_err(|_| io::Error::other("Creator Jev configuration refused"))?;
+        Ok(Self { provider })
     }
     /// The existing System One adapter owns its 800 ms deadline and never retries.
     pub(super) async fn classify(&self, public: &str, operation: &str) -> Result<Assessment, ()> {
@@ -96,10 +100,6 @@ impl Classifier {
             .map(|text| (*text).to_owned())
             .collect::<Vec<_>>();
         let started = Instant::now();
-        // This unit counts attempts, not tokens, money or a fabricated free Jev call.
-        self.ledger
-            .reserve(Unit::CreatorClassificationCall, 1)
-            .commit(1);
         let result = self
             .provider
             .choose(&state, INSTRUCTIONS, &criteria)
@@ -119,7 +119,7 @@ impl Classifier {
                 ("provider".into(), json!("jev-latest")),
                 ("category".into(), json!(category)),
                 ("elapsed_ms".into(), json!(started.elapsed().as_millis())),
-                ("cost_status".into(), json!("unreported")),
+                ("cost_status".into(), json!("metered")),
             ]),
             &[],
         );

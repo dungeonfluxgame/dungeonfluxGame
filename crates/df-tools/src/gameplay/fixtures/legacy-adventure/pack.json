@@ -214,7 +214,7 @@
       "narration_rested": null,
       "speaker": "",
       "dialogue": "",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
       "setting": {
         "place_id": "rookhill-gate",
         "name": "the Rookhill Gate",
@@ -234,8 +234,8 @@
           "id": "lamp-warden",
           "name": "Eldric",
           "role": "patron",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
           "voice": "weary middle-aged man",
           "gender": "he",
           "age": "adult"
@@ -244,7 +244,7 @@
       "narration_rested": null,
       "speaker": "Eldric",
       "dialogue": "A child I know is ill, and only a rare white fever-herb will help. Liora holds it, but I daren't go alone.",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
       "setting": {
         "place_id": "place-lamp-room",
         "name": "the lamp room near the Rookhill Gate",
@@ -253,7 +253,7 @@
         "exterior": false,
         "art_key": "place-lamp-room"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
     },
     {
       "key": "dialogue-seal",
@@ -264,8 +264,8 @@
           "id": "lamp-warden",
           "name": "Eldric",
           "role": "patron",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
           "voice": "weary middle-aged man",
           "gender": "he",
           "age": "adult"
@@ -274,8 +274,8 @@
           "id": "giant-rat",
           "name": "Bristling Giant Rat",
           "role": "antagonist",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
           "voice": "",
           "gender": "it",
           "age": "adult"
@@ -284,7 +284,7 @@
       "narration_rested": null,
       "speaker": "Eldric",
       "dialogue": "I was told Liora would give it freely, if I can only reach her in one piece.",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
       "setting": {
         "place_id": "place-lamp-room",
         "name": "the lamp room near the Rookhill Gate",
@@ -293,7 +293,7 @@
         "exterior": false,
         "art_key": "place-lamp-room"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
     },
     {
       "key": "dialogue-escort",
@@ -304,8 +304,8 @@
           "id": "lamp-warden",
           "name": "Eldric",
           "role": "patron",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
           "voice": "weary middle-aged man",
           "gender": "he",
           "age": "adult"
@@ -314,8 +314,8 @@
           "id": "giant-rat",
           "name": "Bristling Giant Rat",
           "role": "antagonist",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
           "voice": "",
           "gender": "it",
           "age": "adult"
@@ -324,7 +324,7 @@
       "narration_rested": null,
       "speaker": "Eldric",
       "dialogue": "The Caretaker's Lodge. Hurry, if you can. Every hour counts, and I will not forget your kindness.",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
       "setting": {
         "place_id": "place-lamp-room",
         "name": "the lamp room near the Rookhill Gate",
@@ -333,7 +333,7 @@
         "exterior": false,
         "art_key": "place-lamp-room"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
     },
     {
       "key": "combat",
@@ -345,8 +345,8 @@
           "id": "giant-rat",
           "name": "Bristling Giant Rat",
           "role": "antagonist",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
           "voice": "",
           "gender": "it",
           "age": "adult"
@@ -355,7 +355,7 @@
       "narration_rested": null,
       "speaker": "",
       "dialogue": "",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
       "setting": {
         "place_id": "rookhill-gate",
         "name": "the Rookhill Gate",
@@ -364,7 +364,7 @@
         "exterior": true,
         "art_key": "loc-rookhill-gate-arrival"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-ant-giant-rat"
     },
     {
       "key": "inn",
@@ -375,8 +375,8 @@
           "id": "river-healer",
           "name": "Liora",
           "role": "contact",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-contact-river-healer",
+          "portrait": "assets/ui/generated/portrait-contact-river-healer",
           "voice": "gentle middle-aged woman",
           "gender": "she",
           "age": "adult"
@@ -385,7 +385,7 @@
       "narration_rested": null,
       "speaker": "Liora",
       "dialogue": "Yes, I owe Eldric an old kindness. Consider it paid. Now, then. Ask for me by name in any town along this route, and doors will open.",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-dest-caretakers-lodge",
       "setting": {
         "place_id": "caretakers-lodge",
         "name": "the Caretaker's Lodge",
@@ -394,7 +394,7 @@
         "exterior": false,
         "art_key": "dest-caretakers-lodge"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-contact-river-healer"
     },
     {
       "key": "victory",
@@ -406,8 +406,8 @@
           "id": "lamp-warden",
           "name": "Eldric",
           "role": "patron",
-          "sprite": "live-canonical-photo",
-          "portrait": "live-canonical-photo",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
           "voice": "weary middle-aged man",
           "gender": "he",
           "age": "adult"
@@ -416,7 +416,7 @@
       "narration_rested": "The Bristling Giant Rat was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and Eldric's unresolved journey remain.",
       "speaker": "Eldric",
       "dialogue": "We are safe here. Thank you for seeing me through.",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-dest-caretakers-lodge",
       "setting": {
         "place_id": "caretakers-lodge",
         "name": "the Caretaker's Lodge",
@@ -425,7 +425,7 @@
         "exterior": false,
         "art_key": "dest-caretakers-lodge"
       },
-      "speaker_portrait": "live-canonical-photo"
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
     },
     {
       "key": "defeat",
@@ -435,7 +435,7 @@
       "narration_rested": "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat.",
       "speaker": "",
       "dialogue": "",
-      "asset": "live-room-photo",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
       "setting": {
         "place_id": "rookhill-gate",
         "name": "the Rookhill Gate",

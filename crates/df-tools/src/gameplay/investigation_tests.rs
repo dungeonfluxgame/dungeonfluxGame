@@ -788,6 +788,7 @@ async fn jev_target_choice_uses_scene_names_and_resolves_a_description() {
     let provider = SystemOneChoiceProvider::new(
         "jev-fixture-sentinel".into(),
         &format!("http://{}", endpoint.address),
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     let selected =
@@ -1424,6 +1425,7 @@ async fn jev_absent_answer_is_not_replaced_by_an_alias_match() {
     let provider = SystemOneChoiceProvider::new(
         "jev-fixture-sentinel".into(),
         &format!("http://{}", endpoint.address),
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     // "tankards" is a scene alias, so only Jev's absent answer keeps it out of the scene.

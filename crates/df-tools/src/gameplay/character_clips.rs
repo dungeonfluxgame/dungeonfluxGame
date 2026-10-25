@@ -29,6 +29,8 @@ const CAMERA: &str = "Camera: locked tripod at the battle camera home angle, loo
 const LOOK: &str = "A real photograph from a live-action fantasy television drama: practical costume and worn real props, natural skin and fabric texture, restrained colour, soft key light from the upper left, fine film grain. Not an illustration, not a game render.";
 const FRAMING: &str = "Portrait 2:3 frame. Keep the complete body and entire weapon inside the canvas throughout, including the strike or fall. Leave broad clear margins. Keep the same identity, costume, proportions, weapon, scale and camera as the reference.";
 const DEADLINE: Duration = Duration::from_secs(900);
+/// The length of every clip, in seconds.
+const CLIP_SECONDS: u32 = 5;
 /// An image edit's whole request; the shared native HTTP client refuses anything over 180 s.
 const IMAGE_EDIT_TIMEOUT: Duration = Duration::from_secs(180);
 const MAXIMUM_CLIP_BYTES: usize = 16 * 1024 * 1024;
@@ -51,6 +53,15 @@ impl ClipKind {
             "attack" => Some(Self::Attack),
             "last-hit" => Some(Self::LastHit),
             _ => None,
+        }
+    }
+
+    /// The clip's name in cost events.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Attack => "attack",
+            Self::LastHit => "last_hit",
         }
     }
 }
@@ -186,8 +197,6 @@ pub(super) struct Video {
 }
 
 pub(super) trait VideoProvider: Send + Sync {
-    fn price(&self) -> ProviderFuture<'_, u64>;
-
     fn video<'a>(
         &'a self,
         key: &'a ResourceKey,
@@ -386,21 +395,28 @@ impl Generation {
                     service.hub.ledger().reserve(Unit::ImageCall, 1).commit(1);
                     // The frame provider reports every failure alike, so a failed frame is
                     // recorded as of unknown outcome with its one-call estimate.
-                    let billed = service.hub.ledger().begin_call(
-                        super::cost::clip_frame_call(CLIP_FRAME_MODEL, fallen),
-                        &[(super::cost::Category::Calls, 1)],
-                    );
+                    let billed = service
+                        .hub
+                        .ledger()
+                        .begin_call(super::cost::clip_frame_call(CLIP_FRAME_MODEL, fallen), &[]);
                     let image = provider
                         .frame(&source, &frame_prompt(&fighter, fallen))
                         .await?;
                     billed.settle(super::cost::image_token_usage(image.usage));
-                    cost.image_micro_dollars = if image.usage == df_providers::ImageUsage::default()
-                    {
-                        None
-                    } else {
-                        known_previous
-                            .map(|previous| previous.saturating_add(image.usage.micro_dollars()))
-                    };
+                    // The cost file prices the reported tokens at the price file's rates, once.
+                    cost.image_micro_dollars =
+                        if image.usage == df_providers::ImageUsage::default() {
+                            None
+                        } else {
+                            known_previous
+                                .zip(
+                                    service.hub.ledger().costs().quote_image_usage(
+                                        CLIP_FRAME_MODEL.model_id(),
+                                        image.usage,
+                                    ),
+                                )
+                                .map(|(previous, price)| previous.saturating_add(price))
+                        };
                     store_json(&directory.join("cost.json"), &cost)?;
                     let alpha = image.bytes;
                     let green = tokio::task::spawn_blocking(move || {
@@ -476,18 +492,45 @@ impl Generation {
         let end = std::fs::read(self.directory.join(end_key.as_str()).join("frame.png"))
             .map_err(|_| failure("clip_end_frame_unavailable"))?;
         std::fs::create_dir_all(&directory).map_err(|_| failure("clip_store_failed"))?;
-        let price = provider.price().await?;
         let mut cost = read_cost(&directory)?;
+        let known_previous = if cost.video_calls == 0 {
+            Some(0)
+        } else {
+            cost.video_micro_dollars
+        };
         cost.video_calls = cost.video_calls.saturating_add(1);
-        cost.video_micro_dollars =
-            Some(cost.video_micro_dollars.unwrap_or(0).saturating_add(price));
-        cost.video_cost_basis = Some("provider_list_price_at_submit".to_owned());
+        // The clip's price is the price file's rate for its seconds, in whole micro-dollars; a
+        // model the file does not price leaves the amount unknown.
+        let price = self.hub.ledger().costs().quote(
+            super::cost::Provider::Fal,
+            df_providers::KLING_O1_IMAGE_TO_VIDEO,
+            &[(super::cost::Category::VideoSeconds, u64::from(CLIP_SECONDS))],
+        );
+        cost.video_micro_dollars = known_previous
+            .zip(price)
+            .map(|(previous, price)| previous.saturating_add(price));
+        cost.video_cost_basis = Some("price_file".to_owned());
         store_json(&directory.join("cost.json"), &cost)?;
         self.hub.ledger().reserve(Unit::VideoClip, 1).commit(1);
+        let billed = self.hub.ledger().begin_call(
+            super::cost::video_call(
+                df_providers::KLING_O1_IMAGE_TO_VIDEO,
+                super::cost::Cause::CharacterClip,
+                spec.kind.label(),
+                u64::from(CLIP_SECONDS),
+            ),
+            &[],
+        );
         let prompt = motion_prompt(&spec);
+        // A timeout or a failure is of unknown outcome: the dropped call is booked at the clip's
+        // length. A clip that came back was billed.
         let video = tokio::time::timeout(DEADLINE, provider.video(&key, &start, &end, &prompt))
             .await
             .map_err(|_| ResourceFailure::TimedOut)??;
+        super::cost::settle_counted(
+            billed,
+            vec![(super::cost::Category::VideoSeconds, u64::from(CLIP_SECONDS))],
+        );
         if video.bytes.is_empty() || video.bytes.len() > MAXIMUM_CLIP_BYTES {
             return Err(failure("clip_size_invalid"));
         }
@@ -1284,7 +1327,7 @@ fn video_binding(
                 reference_frames: vec![frame(start, "guard-frame")?, frame(end, "end-frame")?],
                 output_profile: df_providers::FalVideoProfile {
                     model: df_providers::KLING_O1_IMAGE_TO_VIDEO.to_owned(),
-                    duration_seconds: 5,
+                    duration_seconds: CLIP_SECONDS,
                     resolution: "1080p".to_owned(),
                     width: 1080,
                     height: 1620,
@@ -1302,17 +1345,6 @@ fn video_binding(
 }
 
 impl VideoProvider for NativeVideo {
-    fn price(&self) -> ProviderFuture<'_, u64> {
-        Box::pin(async move {
-            let price = self
-                .provider
-                .video_price_per_second(Duration::from_secs(20), std::future::pending())
-                .await
-                .map_err(|_| failure("clip_price_unavailable"))?;
-            Ok((price * 5.0 * 1_000_000.0).round() as u64)
-        })
-    }
-
     fn video<'a>(
         &'a self,
         key: &'a ResourceKey,

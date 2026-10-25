@@ -15,9 +15,9 @@
 //!   reports ready.
 //!
 //! Spend: there is no budget, cap or limit on place music (the owner's decision). The hub's
-//! `SpendLedger` still records every set (unit `MusicCall`, five provider calls), reserved
-//! before the calls and committed once they may have gone out, and the hub's `RESOURCE` lines
-//! record every request. One attempt per set is not a cap on spending but on blind repeats: a
+//! `SpendLedger` still records every provider call (unit `MusicCall`, five per set), committed as
+//! each call is sent and given back when the supplier cannot have billed it, and the hub's
+//! `RESOURCE` lines record every request. The generator also meters each call in dollars. One attempt per set is not a cap on spending but on blind repeats: a
 //! failed set stays failed until `regenerate` asks again.
 
 use std::{
@@ -40,18 +40,15 @@ use df_render::art_contract::Neutral;
 use serde_json::json;
 
 use super::{
-    generator::{
-        FailureReason, GENERATOR_VERSION, GeneratedMusicSet, MusicGenerator, MusicSetSpec,
-        PROVIDER_CALLS,
-    },
+    generator::{GENERATOR_VERSION, GeneratedMusicSet, MusicGenerator, MusicSetSpec},
     hub::{MusicHub, MusicStatus, ReadyMusicSet},
     master::{Codec, Ffmpeg},
     spec::Layer,
 };
 use crate::gameplay::resource_adapters::{slug, write_atomic};
 use crate::gameplay::resources::{
-    Chrome, Generated, Hub, Invalidate, Limits, Maker, Reservation, ResourceFailure, ResourceKey,
-    ResourceKind, ResourceSpec, ResourceStatus, Unit,
+    Chrome, Generated, Hub, Invalidate, Limits, Maker, ResourceFailure, ResourceKey, ResourceKind,
+    ResourceSpec, ResourceStatus,
 };
 
 /// Where the display loads a set's files from.
@@ -280,7 +277,12 @@ impl HubMusic {
             }
             (None, Some(credential)) => {
                 let codec = Codec::Ffmpeg(Ffmpeg::new(ffmpeg, cache.join("scratch")));
-                match MusicGenerator::live(&credential, CALL_DEADLINE, codec) {
+                match MusicGenerator::live(
+                    &credential,
+                    CALL_DEADLINE,
+                    codec,
+                    Arc::clone(hub.ledger()),
+                ) {
                     Ok(generator) => (Some(Arc::new(generator)), String::new()),
                     Err(_) => (None, "music provider configuration refused".to_owned()),
                 }
@@ -390,13 +392,11 @@ impl HubMusic {
     fn maker(&self, generator: Arc<MusicGenerator>, set: MusicSetSpec) -> Maker {
         let store = Arc::clone(&self.store);
         let errors = Arc::clone(&self.last_errors);
-        let ledger = Arc::clone(self.hub.ledger());
         Arc::new(move || {
-            let (generator, store, errors, ledger, set) = (
+            let (generator, store, errors, set) = (
                 Arc::clone(&generator),
                 Arc::clone(&store),
                 Arc::clone(&errors),
-                Arc::clone(&ledger),
                 set.clone(),
             );
             Box::pin(async move {
@@ -411,16 +411,11 @@ impl HubMusic {
                         note: note.to_owned(),
                     });
                 }
-                // The ledger records the charge and never refuses it: music has no budget.
-                let reservation = ledger.reserve(Unit::MusicCall, u64::from(PROVIDER_CALLS));
+                // Each provider call is recorded on the ledger and metered by the generator, which
+                // never refuses one: music has no budget.
                 let generated = match generator.generate(&set, SET_DEADLINE).await {
-                    Ok(generated) => {
-                        settle(reservation, true);
-                        generated
-                    }
+                    Ok(generated) => generated,
                     Err(failure) => {
-                        // Calls may have gone out unless the request was rejected locally.
-                        settle(reservation, failure.reason != FailureReason::InvalidRequest);
                         locked(&errors).insert(key, failure.to_string());
                         return Err(if failure.reason.is_permanent() {
                             ResourceFailure::Permanent(failure.reason.label())
@@ -477,19 +472,10 @@ impl MusicHub for HubMusic {
             return AmbientStatus::Fallback(self.off_reason.clone());
         };
         let resource = AmbientResource(spec.clone());
-        let (generator, store, ledger, layer_spec) = (
-            Arc::clone(generator),
-            Arc::clone(&self.store),
-            Arc::clone(self.hub.ledger()),
-            spec.clone(),
-        );
+        let (generator, store, layer_spec) =
+            (Arc::clone(generator), Arc::clone(&self.store), spec.clone());
         let maker: Maker = Arc::new(move || {
-            let (generator, store, ledger, spec) = (
-                generator.clone(),
-                store.clone(),
-                ledger.clone(),
-                layer_spec.clone(),
-            );
+            let (generator, store, spec) = (generator.clone(), store.clone(), layer_spec.clone());
             Box::pin(async move {
                 let key = spec.key();
                 let directory = store.set_directory(&key);
@@ -499,18 +485,9 @@ impl MusicHub for HubMusic {
                         note: "ambient".into(),
                     });
                 }
-                let reservation = ledger.reserve(Unit::MusicCall, 1);
                 let bytes = match generator.ambient_layer(&spec, CALL_DEADLINE).await {
-                    Ok(bytes) => {
-                        reservation.commit(1);
-                        bytes
-                    }
+                    Ok(bytes) => bytes,
                     Err(reason) => {
-                        if reason == FailureReason::InvalidRequest {
-                            reservation.refund();
-                        } else {
-                            reservation.commit(1);
-                        }
                         return Err(if reason.is_permanent() {
                             ResourceFailure::Permanent(reason.label())
                         } else {
@@ -653,23 +630,13 @@ impl HubMusic {
         let store = Arc::new(MusicStore::new(root).expect("test store"));
         Self::tune(&hub, &store);
         Arc::new(Self {
-            hub,
             store,
-            generator: Some(Arc::new(generator)),
+            generator: Some(Arc::new(generator.bound_to(Arc::clone(hub.ledger())))),
+            hub,
             off_reason: String::new(),
             summary: String::new(),
             last_errors: Arc::default(),
             worker: Mutex::new(None),
         })
-    }
-}
-
-/// Settles a set's five provider calls on the hub's ledger: committed when they may have gone
-/// out, refunded when the request never left.
-fn settle(reservation: Reservation, sent: bool) {
-    if sent {
-        reservation.commit(u64::from(PROVIDER_CALLS));
-    } else {
-        reservation.refund();
     }
 }

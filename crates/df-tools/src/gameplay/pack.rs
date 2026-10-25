@@ -1115,6 +1115,16 @@ pub(super) fn load_from_bytes(
     require_schema(SourceFile::Pack, &pack.schema, PACK_SCHEMA)?;
     migrate_scene_inventory_models(&mut pack)?;
     migrate_retained_harbor_cast(&mut pack, Revision::of(pack_bytes));
+    let moved = migrate_legacy_painted_art(&mut pack);
+    if moved > 0 {
+        super::actor::record_audit_line(
+            "gameplay.pack",
+            format!(
+                "PACK legacy_art migrated={moved} pack={}",
+                &Revision::of(pack_bytes).to_hex()[..16]
+            ),
+        );
+    }
     let tuning: TuningFile = parse(SourceFile::Tuning, tuning_bytes)?;
     require_schema(SourceFile::Tuning, &tuning.schema, TUNING_SCHEMA)?;
     validate_pack(&pack)?;
@@ -2487,6 +2497,62 @@ fn migrate_retained_harbor_cast(pack: &mut PackFile, revision: Revision) {
             }
         }
     }
+}
+
+/// Painted depictions stored before the photographic art contract (613839eb). A stored adventure
+/// keeps its document bytes and revision pins; at this load boundary its painted references move to
+/// the token the art manifest gives the same art key. A reference no manifest row answers stays as
+/// written, so validation still refuses it. Returns how many references moved.
+fn migrate_legacy_painted_art(pack: &mut PackFile) -> usize {
+    let scenes = pack.scenes.iter_mut().chain(
+        pack.beat_script
+            .iter_mut()
+            .flat_map(|script| script.scenes.values_mut()),
+    );
+    let mut moved = 0;
+    for scene in scenes {
+        if let Some(key) = scene
+            .setting
+            .as_ref()
+            .map(|setting| setting.art_key.clone())
+        {
+            moved += move_painted_art(&mut scene.asset, &key, "scene");
+        }
+        moved += move_painted_portrait(&mut scene.speaker_portrait, "portrait-");
+        for actor in &mut scene.cast {
+            moved += move_painted_portrait(&mut actor.sprite, "sprite-");
+            moved += move_painted_portrait(&mut actor.portrait, "portrait-");
+        }
+    }
+    moved
+}
+
+const LEGACY_PAINTED_ART: &str = "assets/ui/generated/";
+
+/// Moves one painted reference to the manifest's token for `art_key`; returns 1 when it moved.
+fn move_painted_art(reference: &mut String, art_key: &str, kind: &str) -> usize {
+    if !reference.starts_with(LEGACY_PAINTED_ART) {
+        return 0;
+    }
+    match super::adventure::setting::art_asset(art_key, kind) {
+        Some(asset) if asset != *reference => {
+            *reference = asset;
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// A painted `sprite-` or `portrait-` reference names its art key after the role prefix.
+fn move_painted_portrait(reference: &mut String, role: &str) -> usize {
+    let Some(key) = reference
+        .strip_prefix(LEGACY_PAINTED_ART)
+        .and_then(|name| name.strip_prefix(role))
+        .map(str::to_owned)
+    else {
+        return 0;
+    };
+    move_painted_art(reference, &key, "portrait")
 }
 
 fn migrate_scene_inventory_models(pack: &mut PackFile) -> Result<(), PackError> {

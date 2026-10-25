@@ -15,15 +15,15 @@ struct Direction {
 
 #[derive(Default)]
 pub(in crate::gameplay) struct Directions {
-    scene: String,
+    scene_identity: String,
     targets: BTreeMap<Target, Direction>,
 }
 
 impl Directions {
     pub(in crate::gameplay) fn enter(&mut self, scene: &str) {
-        if self.scene != scene {
+        if self.scene_identity != scene {
             self.targets.clear();
-            self.scene = scene.to_owned();
+            self.scene_identity = scene.to_owned();
         }
     }
 

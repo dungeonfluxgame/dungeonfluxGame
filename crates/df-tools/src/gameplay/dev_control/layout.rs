@@ -38,7 +38,7 @@ struct LayoutInner {
 }
 struct ClientReadback {
     report: LayoutReadback,
-    seen: Instant,
+    last_readback_at: Instant,
 }
 const ASSEMBLY_LIFETIME: Duration = Duration::from_secs(10);
 struct Assembly {
@@ -128,7 +128,7 @@ impl LayoutState {
         let state = self.state.lock().await;
         let clients:Vec<Value>=state.clients.iter().map(|(instance,client)| {
             let elements:Vec<_>=client.report.elements.iter().filter(|element|id.is_none_or(|id|id==element.id)).collect();
-            let status=if client.report.revision!=state.document.revision||client.seen.elapsed()>INVENTORY_LIFETIME { "stale" }
+            let status=if client.report.revision!=state.document.revision||client.last_readback_at.elapsed()>INVENTORY_LIFETIME { "stale" }
                 else if id.is_some()&&elements.is_empty()||elements.iter().any(|e|e.status==ElementStatus::Absent) { "absent" } else { "applied" };
             json!({"display_instance":instance,"status":status,"reported_revision":client.report.revision,"sample":client.report.sample,"viewport":client.report.viewport,"overflow":client.report.overflow,"elements":elements})
         }).collect();
@@ -177,7 +177,7 @@ impl LayoutState {
                 .retain(|_, a| a.started.elapsed() <= ASSEMBLY_LIFETIME);
             state
                 .clients
-                .retain(|_, c| c.seen.elapsed() <= INVENTORY_LIFETIME);
+                .retain(|_, c| c.last_readback_at.elapsed() <= INVENTORY_LIFETIME);
             if page.revision > state.document.revision {
                 return Err(LayoutError::Revision);
             }
@@ -315,7 +315,7 @@ impl LayoutState {
         }
         state
             .clients
-            .retain(|_, client| client.seen.elapsed() <= INVENTORY_LIFETIME);
+            .retain(|_, client| client.last_readback_at.elapsed() <= INVENTORY_LIFETIME);
         if !state.clients.contains_key(&instance) && state.clients.len() >= MAX_CLIENTS {
             return Err(LayoutError::Limit);
         }
@@ -371,7 +371,7 @@ impl LayoutState {
             instance,
             ClientReadback {
                 report,
-                seen: Instant::now(),
+                last_readback_at: Instant::now(),
             },
         );
         drop(state);
@@ -408,7 +408,7 @@ impl LayoutState {
         patch.validate()?;
         let mut state = self.state.lock().await;
         let admitted = state.clients.values().any(|client| {
-            client.seen.elapsed() <= INVENTORY_LIFETIME
+            client.last_readback_at.elapsed() <= INVENTORY_LIFETIME
                 && client
                     .report
                     .elements
@@ -449,7 +449,7 @@ impl LayoutState {
             && !state.document.overrides.contains_key(id)
             && !state.document.visibility.contains_key(id)
             && !state.clients.values().any(|c| {
-                c.seen.elapsed() <= INVENTORY_LIFETIME
+                c.last_readback_at.elapsed() <= INVENTORY_LIFETIME
                     && c.report.elements.iter().any(|e| e.id == id)
             })
         {
@@ -477,7 +477,7 @@ impl LayoutState {
         contract::validate_id(&body.id)?;
         let mut state = self.state.lock().await;
         let admitted = state.clients.values().any(|client| {
-            client.seen.elapsed() <= INVENTORY_LIFETIME
+            client.last_readback_at.elapsed() <= INVENTORY_LIFETIME
                 && client
                     .report
                     .elements
@@ -853,8 +853,14 @@ mod tests {
             .await
             .unwrap();
 
-        state.state.lock().await.clients.get_mut(&1).unwrap().seen =
-            Instant::now() - INVENTORY_LIFETIME - Duration::from_secs(1);
+        state
+            .state
+            .lock()
+            .await
+            .clients
+            .get_mut(&1)
+            .unwrap()
+            .last_readback_at = Instant::now() - INVENTORY_LIFETIME - Duration::from_secs(1);
 
         let stale = state.snapshot(Some("dm-overlay")).await.unwrap();
         assert_eq!(stale["clients"][0]["status"], "stale");

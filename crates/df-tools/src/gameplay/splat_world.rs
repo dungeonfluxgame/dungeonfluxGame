@@ -45,6 +45,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use super::cost;
 use super::resources::{
     Generated, Hub, ResourceFailure, ResourceKey, SplatWorldFormat, SplatWorldSpec, Unit,
 };
@@ -76,6 +77,9 @@ pub(in crate::gameplay) enum MarbleModel {
     Marble11,
 }
 
+/// The credits the panorama step adds for an image that is not itself a panorama.
+const NON_PANORAMA_IMAGE_CREDITS: u64 = 80;
+
 impl MarbleModel {
     pub(in crate::gameplay) const fn api_name(self) -> &'static str {
         match self {
@@ -83,6 +87,21 @@ impl MarbleModel {
             Self::Marble11 => "marble-1.1",
         }
     }
+
+    /// The most credits one world from a photograph costs: the model's world step and the
+    /// panorama step. The operation reports the credits it really used.
+    const fn maximum_credits(self) -> u64 {
+        NON_PANORAMA_IMAGE_CREDITS
+            + match self {
+                Self::Draft => 150,
+                Self::Marble11 => 1_500,
+            }
+    }
+}
+
+/// `amount` as a signed delta for the spend ledger.
+fn signed(amount: u64) -> i64 {
+    i64::try_from(amount).unwrap_or(i64::MAX)
 }
 
 /// A PLY export resolution. Only the 500k export is requested by the generator.
@@ -138,6 +157,9 @@ pub(in crate::gameplay) enum WorldPoll {
 pub(in crate::gameplay) struct WorldMakerError {
     pub(in crate::gameplay) label: &'static str,
     pub(in crate::gameplay) permanent: bool,
+    /// Whether the supplier may have billed the call that failed: false only for a request it
+    /// refused, so a call that failed in an unknown way is booked at its maximum.
+    pub(in crate::gameplay) may_be_billed: bool,
 }
 
 impl WorldMakerError {
@@ -145,6 +167,7 @@ impl WorldMakerError {
         Self {
             label,
             permanent: false,
+            may_be_billed: true,
         }
     }
 
@@ -152,6 +175,16 @@ impl WorldMakerError {
         Self {
             label,
             permanent: true,
+            may_be_billed: true,
+        }
+    }
+
+    /// The same error for a call the supplier refused, which it did not bill.
+    #[must_use]
+    pub(in crate::gameplay) const fn refused(self) -> Self {
+        Self {
+            may_be_billed: false,
+            ..self
         }
     }
 
@@ -258,10 +291,15 @@ impl WorldMaker for df_providers::NativeWorldLabs {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn map_provider_error(error: df_providers::WorldLabsError) -> WorldMakerError {
-    if error.is_transient() {
+    let mapped = if error.is_transient() {
         WorldMakerError::transient(error.label())
     } else {
         WorldMakerError::permanent(error.label())
+    };
+    if cost::world_error_may_be_billed(error) {
+        mapped
+    } else {
+        mapped.refused()
     }
 }
 
@@ -773,10 +811,24 @@ impl ServiceHandle {
             model: MarbleModel::Marble11,
             display_name: format!("dungeonflux-{}", &key.as_str()[..16]),
         };
-        let operation = maker
-            .submit(&request)
-            .await
-            .map_err(|error| error.failure())?;
+        // The generation is about to be sent: its credits are spent from here, at the most it can
+        // cost, and corrected to what the operation reports. The metered call is billed once the
+        // operation is done, given back when the supplier refused it, and of unknown outcome (booked
+        // at the maximum) when it failed any other way.
+        let ledger = self.hub.ledger();
+        let maximum = request.model.maximum_credits();
+        ledger.reserve(Unit::SplatCredit, maximum).commit(maximum);
+        let billed = ledger.begin_call(cost::world_call(request.model.api_name(), maximum), &[]);
+        let operation = match maker.submit(&request).await {
+            Ok(operation) => operation,
+            Err(error) => {
+                if !error.may_be_billed {
+                    ledger.reconcile(Unit::SplatCredit, -signed(maximum));
+                }
+                cost::settle_failure(billed, error.may_be_billed);
+                return Err(error.failure());
+            }
+        };
         audit(
             place_id,
             key,
@@ -786,10 +838,11 @@ impl ServiceHandle {
         );
         let result = self.poll_until_done(&operation).await?;
         // The call was sent and finished: its credits are spent whatever happens next.
-        self.hub
-            .ledger()
-            .reserve(Unit::SplatCredit, result.credits)
-            .commit(result.credits);
+        ledger.reconcile(Unit::SplatCredit, signed(result.credits) - signed(maximum));
+        billed.settle(cost::Usage::reported(vec![(
+            cost::Category::Credits,
+            result.credits,
+        )]));
         let ply_url = maker
             .export_ply(&result.world_id, PlyResolution::FiveHundredK)
             .await

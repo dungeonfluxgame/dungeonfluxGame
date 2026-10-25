@@ -174,6 +174,7 @@ impl RunningActor {
             intent_notifications,
             calls_remaining,
             calls_unbounded: false,
+            queued_wait: None,
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,
@@ -263,13 +264,13 @@ impl RunningActor {
     }
 }
 struct Calls {
-    count: usize,
+    admitted_calls: usize,
     deadline: Instant,
 }
 fn admit(calls: &mut Calls) -> Result<(), Error> {
-    required(calls.count < 20 && Instant::now() < calls.deadline)?;
-    calls.count = calls
-        .count
+    required(calls.admitted_calls < 20 && Instant::now() < calls.deadline)?;
+    calls.admitted_calls = calls
+        .admitted_calls
         .checked_add(1)
         .ok_or_else(|| io::Error::other("fixture call overflow"))?;
     Ok(())
@@ -522,7 +523,7 @@ async fn exercise_grant_recovery(recover_grant: bool) -> Result<(), Error> {
         }
     }
     let mut calls = Calls {
-        count: 0,
+        admitted_calls: 0,
         deadline: started + Duration::from_secs(45),
     };
     let prep_counter = Arc::new(AtomicUsize::new(0));
@@ -870,7 +871,11 @@ async fn exercise_grant_recovery(recover_grant: bool) -> Result<(), Error> {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await??;
-        required(remaining == 0 && calls.count <= 20 && started.elapsed() <= Duration::from_secs(45))?;
+        required(
+            remaining == 0
+                && calls.admitted_calls <= 20
+                && started.elapsed() <= Duration::from_secs(45),
+        )?;
         Ok::<_, Error>((observation, remaining))
     }.await;
     let released = if recover_grant {
@@ -883,7 +888,7 @@ async fn exercise_grant_recovery(recover_grant: bool) -> Result<(), Error> {
     released.map_err(repository_error)?;
     inspector_joined?;
     let (observation, remaining) = verified?;
-    let calls = calls.count;
+    let admitted_calls = calls.admitted_calls;
     let grant_drivers = if recover_grant { 3 } else { 2 };
     std::fs::write(
         if recover_grant {
@@ -892,7 +897,7 @@ async fn exercise_grant_recovery(recover_grant: bool) -> Result<(), Error> {
             REPORT
         },
         format!(
-            "{{\"pass\":true,\"actor_calls\":{calls},\"actor_calls_limit\":20,\"exercise_milliseconds\":{},\"exercise_milliseconds_limit\":45000,\"original_engine_reductions\":1,\"total_fault_engine_reductions\":5,\"stale_cas_reductions\":1,\"courier_action_reductions\":1,\"courier_completion_reductions\":1,\"completed_courier_intents\":1,\"courier_exact_replay_unchanged\":true,\"exact_retry_stored_receipt\":true,\"physical_operation_rows_unchanged\":true,\"physical_fact_rows_unchanged\":true,\"physical_intent_rows_unchanged\":true,\"observed_intent_rows\":0,\"checkpoint_reload_byte_equality\":true,\"later_action_once\":true,\"known_reload_resumed\":true,\"proxy_commit_complete\":true,\"proxy_ready_idle\":true,\"proxy_suppressed_bytes\":{},\"proxy_task_joined\":true,\"actor_threads_joined\":3,\"native_repository_drivers_joined\":4,\"auxiliary_grant_drivers_joined\":{grant_drivers},\"grant_reconnect_while_uncertain\":{recover_grant},\"inspector_driver_joined\":true,\"remaining_owned_backends\":{remaining},\"owned_backend_application_prefix\":\"df-engine-recovery-\"}}\n",
+            "{{\"pass\":true,\"actor_calls\":{admitted_calls},\"actor_calls_limit\":20,\"exercise_milliseconds\":{},\"exercise_milliseconds_limit\":45000,\"original_engine_reductions\":1,\"total_fault_engine_reductions\":5,\"stale_cas_reductions\":1,\"courier_action_reductions\":1,\"courier_completion_reductions\":1,\"completed_courier_intents\":1,\"courier_exact_replay_unchanged\":true,\"exact_retry_stored_receipt\":true,\"physical_operation_rows_unchanged\":true,\"physical_fact_rows_unchanged\":true,\"physical_intent_rows_unchanged\":true,\"observed_intent_rows\":0,\"checkpoint_reload_byte_equality\":true,\"later_action_once\":true,\"known_reload_resumed\":true,\"proxy_commit_complete\":true,\"proxy_ready_idle\":true,\"proxy_suppressed_bytes\":{},\"proxy_task_joined\":true,\"actor_threads_joined\":3,\"native_repository_drivers_joined\":4,\"auxiliary_grant_drivers_joined\":{grant_drivers},\"grant_reconnect_while_uncertain\":{recover_grant},\"inspector_driver_joined\":true,\"remaining_owned_backends\":{remaining},\"owned_backend_application_prefix\":\"df-engine-recovery-\"}}\n",
             started.elapsed().as_millis(),
             observation.suppressed_response_bytes
         ),
@@ -1045,7 +1050,7 @@ async fn courier_pending_actor_restart(idle_recovery: Option<bool>) -> Result<()
     )
     .await?;
     let mut calls = Calls {
-        count: 0,
+        admitted_calls: 0,
         deadline: started + Duration::from_secs(45),
     };
     let preparation = async {
@@ -1122,7 +1127,7 @@ async fn courier_pending_actor_restart(idle_recovery: Option<bool>) -> Result<()
         required(unchanged.checkpoint == resumed.checkpoint && reductions.load(Ordering::SeqCst) == 7)?;
         required(durable(&inspector, 0x96).await? == accepted)?;
         required(Instant::now() < calls.deadline)?;
-        std::fs::write(COURIER_REPORT, format!("{{\"pass\":true,\"actor_calls\":{},\"actor_calls_limit\":20,\"engine_reductions\":7,\"source_commit_then_real_wake\":true,\"pending_durable_intent_on_actor_restart\":true,\"native_startup_completed_once\":true,\"second_actor_restart_unchanged\":true,\"immutable_declaration_unchanged\":true,\"process_restart_verified\":false}}\n", calls.count))?;
+        std::fs::write(COURIER_REPORT, format!("{{\"pass\":true,\"actor_calls\":{},\"actor_calls_limit\":20,\"engine_reductions\":7,\"source_commit_then_real_wake\":true,\"pending_durable_intent_on_actor_restart\":true,\"native_startup_completed_once\":true,\"second_actor_restart_unchanged\":true,\"immutable_declaration_unchanged\":true,\"process_restart_verified\":false}}\n", calls.admitted_calls))?;
         Ok(())
     } else {
         let issuer = prepared.issuer;
@@ -1241,7 +1246,7 @@ async fn courier_idle_recovery(
         20,
     )
     .await?;
-    let before_calls = calls.count;
+    let before_calls = calls.admitted_calls;
     let mut observed_completion = None;
     let flow = async {
         let (outcomes, first) = tokio::task::spawn_blocking(move || {
@@ -1255,7 +1260,7 @@ async fn courier_idle_recovery(
         required(
             running.service.updates.borrow().state().intents[0].status == DurableStatus::Pending
                 && reductions.load(Ordering::SeqCst) == 6
-                && calls.count == before_calls,
+                && calls.admitted_calls == before_calls,
         )?;
         if revoked {
             transaction
@@ -1290,7 +1295,7 @@ async fn courier_idle_recovery(
             required(
                 *running.service.updates.borrow() == pending.checkpoint
                     && reductions.load(Ordering::SeqCst) == 6
-                    && calls.count == before_calls,
+                    && calls.admitted_calls == before_calls,
             )?;
             for member in journey::participants(&pending.checkpoint)
                 .iter()
@@ -1330,7 +1335,9 @@ async fn courier_idle_recovery(
                 }
             })
             .await??;
-            required(calls.count == before_calls && reductions.load(Ordering::SeqCst) == 7)?;
+            required(
+                calls.admitted_calls == before_calls && reductions.load(Ordering::SeqCst) == 7,
+            )?;
             let completed = updates.borrow().clone();
             observed_completion = Some(completed.clone());
             required(
@@ -1470,7 +1477,7 @@ async fn courier_idle_recovery(
         format!(
             "{{\"pass\":true,\"pid\":{},\"actor_calls_before_restoration\":{before_calls},\"actor_calls_after_proof\":{},\"failed_completion_call_budget\":20,\"engine_reductions\":{},\"ordinary_idle_completed_publication\":{},\"revoked_recipient_refused\":{revoked},\"actor_joined\":true,\"original_and_replacement_grant_drivers_joined\":true,\"repository_driver_joined\":true}}\n",
             std::process::id(),
-            calls.count,
+            calls.admitted_calls,
             reductions.load(Ordering::SeqCst),
             !revoked
         ),
@@ -1723,8 +1730,15 @@ async fn ordinary_grant_recovery() -> Result<(), Error> {
             }
         };
         let reductions = Arc::new(AtomicUsize::new(0));
-        let mut running = RunningActor::start(native_repository, issuer, initial.clone(), codec, reductions.clone()).await?;
-        let mut calls = Calls { count: 0, deadline: started + Duration::from_secs(45) };
+        let mut running = RunningActor::start(
+            native_repository,
+            issuer,
+            initial.clone(),
+            codec,
+            reductions.clone(),
+        )
+        .await?;
+        let mut calls = Calls { admitted_calls: 0, deadline: started + Duration::from_secs(45) };
         let flow = async {
             let credential = join(&running.service, 0x91, &mut calls).await?;
             let joined = running.service.updates.borrow().clone();
@@ -1878,10 +1892,10 @@ async fn ordinary_grant_recovery() -> Result<(), Error> {
         let mut exited = exhausted.close().await?;
         exited.issuer.close_owned().await.map_err(repository_error)?;
         exhausted_flow?;
-        required(exited.checkpoint == current && calls.count == 18 && Instant::now() < calls.deadline)?;
+        required(exited.checkpoint == current && calls.admitted_calls == 18 && Instant::now() < calls.deadline)?;
         let remaining: i64 = inspector.query_one("SELECT count(*)::bigint FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND application_name LIKE 'df-ordinary-grant-%'", &[]).await?.try_get(0)?;
         required(remaining == 0)?;
-        Ok::<_, Error>(calls.count)
+        Ok::<_, Error>(calls.admitted_calls)
     }.await;
     let released =
         local_demo_scope::release_owner(&inspector, initial.basis().session, fence).await;
@@ -1889,11 +1903,11 @@ async fn ordinary_grant_recovery() -> Result<(), Error> {
     let joined = join_driver(inspector_driver).await;
     released.map_err(repository_error)?;
     joined?;
-    let calls = result?;
+    let admitted_calls = result?;
     std::fs::write(
         "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave28-grant-recovery-20261006/ordinary-grant-recovery-report-02.json",
         format!(
-            "{{\"pass\":true,\"pid\":{},\"actor_calls\":{calls},\"engine_reductions\":2,\"pending_ai\":0,\"ordinary_view_recovered\":true,\"exact_submit_and_join_replayed\":true,\"revoked_denied\":true,\"failed_reconnect_three_calls_refused\":true,\"canonical_rows_unchanged\":true,\"original_and_replacement_drivers_joined\":true,\"actor_threads_joined\":5,\"zero_budget_three_calls_refused_without_reconnect\":true,\"exact_fence_released\":true,\"inspector_joined\":true}}\n",
+            "{{\"pass\":true,\"pid\":{},\"actor_calls\":{admitted_calls},\"engine_reductions\":2,\"pending_ai\":0,\"ordinary_view_recovered\":true,\"exact_submit_and_join_replayed\":true,\"revoked_denied\":true,\"failed_reconnect_three_calls_refused\":true,\"canonical_rows_unchanged\":true,\"original_and_replacement_drivers_joined\":true,\"actor_threads_joined\":5,\"zero_budget_three_calls_refused_without_reconnect\":true,\"exact_fence_released\":true,\"inspector_joined\":true}}\n",
             std::process::id()
         ),
     )?;
@@ -1982,7 +1996,7 @@ async fn owned_pg_story_structure() -> Result<(), Error> {
     )
     .await?;
     let mut calls = Calls {
-        count: 0,
+        admitted_calls: 0,
         deadline: started + Duration::from_secs(45),
     };
     let first_flow = async {
@@ -2132,6 +2146,6 @@ async fn owned_pg_story_structure() -> Result<(), Error> {
     inspector_join?;
     let exited = second_closed?;
     retry?;
-    required(exited.checkpoint == committed_checkpoint && calls.count <= 20)?;
+    required(exited.checkpoint == committed_checkpoint && calls.admitted_calls <= 20)?;
     Ok(())
 }

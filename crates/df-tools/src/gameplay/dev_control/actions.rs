@@ -1506,19 +1506,23 @@ pub(super) async fn say(
         offer_id: String::new(),
     };
     let started = std::time::Instant::now();
-    let answer = state
-        .service
-        .submit_line(credential, request)
-        .await
-        .map_err(|status| failed(status.message()))?;
-    let super::super::dialogue::DialogueReply::Raw(response, npc) = answer else {
-        return Err(failed("dialogue response binding invalid"));
-    };
-    let completion = state
-        .service
-        .complete_dialogue_response(credential, response, npc)
-        .await
-        .map_err(|status| failed(status.message()))?;
+    // The same timed line as a player's hero line, matched to this request by its input id.
+    let completion = super::super::actor::line_timing::submit_timed_line(Some(&input[..]), async {
+        let answer = state
+            .service
+            .submit_line(credential, request)
+            .await
+            .map_err(|status| failed(status.message()))?;
+        let super::super::dialogue::DialogueReply::Raw(response, npc) = answer else {
+            return Err(failed("dialogue response binding invalid"));
+        };
+        state
+            .service
+            .complete_dialogue_response(credential, response, npc)
+            .await
+            .map_err(|status| failed(status.message()))
+    })
+    .await?;
     let response = completion.response;
     let npc_outcome = completion.npc_outcome;
     let npc_reply = response.npc_reply.clone();

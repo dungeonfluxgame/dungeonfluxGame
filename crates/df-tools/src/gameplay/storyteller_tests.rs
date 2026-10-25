@@ -68,15 +68,28 @@ impl FakeEndpoint {
                         thread::sleep(Duration::from_millis(5));
                         continue;
                     };
-                    connections.fetch_add(1, Ordering::SeqCst);
                     socket.set_nonblocking(false).unwrap();
                     socket
                         .set_read_timeout(Some(Duration::from_secs(3)))
                         .unwrap();
                     let (head, body) = read_request(&mut socket);
-                    bodies.lock().unwrap().push(body.clone());
-                    heads.lock().unwrap().push(head);
-                    match script.next() {
+                    let is_judgement = body["input"]
+                        .as_str()
+                        .is_some_and(|input| input.contains("PURPOSE: srd_content_judgement"));
+                    if !is_judgement {
+                        connections.fetch_add(1, Ordering::SeqCst);
+                        bodies.lock().unwrap().push(body.clone());
+                        heads.lock().unwrap().push(head);
+                    }
+                    let scripted = script.next();
+                    match scripted.or_else(|| {
+                        is_judgement.then(|| {
+                            Reply::Output(json!({
+                                "decision": "campaign_or_srd",
+                                "flagged_span": "",
+                            }))
+                        })
+                    }) {
                         Some(Reply::Output(slots)) => {
                             respond(&mut socket, 200, &completed(&body, slots.to_string()))
                         }
@@ -182,11 +195,20 @@ fn respond(socket: &mut std::net::TcpStream, status: u16, body: &Value) {
 
 /// The supplier's complete response to `sent`, with 100 input and 40 output tokens.
 fn completed(sent: &Value, assistant_text: String) -> Value {
+    let usage = if sent["input"]
+        .as_str()
+        .is_some_and(|input| input.contains("PURPOSE: srd_content_judgement"))
+    {
+        json!({"input_tokens":5,"output_tokens":7,"total_tokens":12,
+            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})
+    } else {
+        json!({"input_tokens":100,"output_tokens":40,"total_tokens":140,
+            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})
+    };
     json!({"object":"response","id":"resp_fixture","status":"completed","model":sent["model"],
         "metadata":sent["metadata"],"text":sent["text"],"error":null,"incomplete_details":null,
         "output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":assistant_text,"annotations":[]}]}],
-        "usage":{"input_tokens":100,"output_tokens":40,"total_tokens":140,
-            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}})
+        "usage":usage})
 }
 
 pub(in crate::gameplay) fn cache_directory(name: &str) -> PathBuf {
@@ -273,6 +295,159 @@ async fn a_valid_answer_is_returned_cached_and_charged_at_the_reported_usage() {
             .contains(&format!("authorization: bearer {CREDENTIAL}"))
     );
     assert_eq!(storyteller.tokens_charged(), Some(140));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_srd_creature_passes_the_content_judgement() {
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+        "narration": "An owlbear rustles in the brush.",
+    }))]);
+    let cache = cache_directory("srd-creature");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({
+        "srd_catalog": {"creatures": [{"id": "owlbear", "name": "Owlbear"}]},
+    });
+    let slots = [Slot::new("narration", 100)];
+    let request = Expression {
+        purpose: "scene_narration",
+        facts: &facts,
+        slots: &slots,
+        style: "A short scene narration.",
+        profile: CallProfile::default(),
+    };
+
+    let values = storyteller.express(&request).await.unwrap();
+
+    assert_eq!(values["narration"], "An owlbear rustles in the brush.");
+    assert!(sent_input(&endpoint.bodies()[0]).contains("\"id\":\"owlbear\""));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_non_srd_creature_judgement_rewrites_once_and_degrades_with_an_audit_line() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({
+            "narration": "A beholder floats above the ruined hall.",
+        })),
+        Reply::Output(json!({
+            "decision": "published_non_srd",
+            "flagged_span": "beholder",
+        })),
+        Reply::Output(json!({
+            "narration": "A many-eyed aberration floats above the ruined hall.",
+        })),
+        Reply::Output(json!({
+            "decision": "published_non_srd",
+            "flagged_span": "",
+        })),
+    ]);
+    let cache = cache_directory("non-srd-creature");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({"srd_catalog": {"creatures": [{"id": "owlbear"}]}});
+    let slots = [Slot::new("narration", 100)];
+    let request = Expression {
+        purpose: "scene_narration",
+        facts: &facts,
+        slots: &slots,
+        style: "A short scene narration.",
+        profile: CallProfile::default(),
+    };
+
+    let error = storyteller.express(&request).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        StorytellerError::Rejected {
+            failure: ValidationFailure::PublishedNonSrdMaterial { .. },
+            ..
+        }
+    ));
+    assert_eq!(endpoint.connections(), 2);
+    assert!(sent_input(&endpoint.bodies()[1]).contains("beholder"));
+    assert!(
+        super::super::actor::audit_lines_containing("srd_guard_degraded")
+            .iter()
+            .any(|line| line.contains("published_non_srd_material"))
+    );
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adventure_slots_rewrite_a_judged_non_srd_creature() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({
+            "first": "A beholder watches the bridge.",
+            "second": "Rain darkens the road.",
+        })),
+        Reply::Output(json!({
+            "decision": "published_non_srd",
+            "flagged_span": "beholder",
+        })),
+        Reply::Output(json!({
+            "decision": "campaign_or_srd",
+            "flagged_span": "",
+        })),
+        Reply::Output(json!({"first": "A many-eyed creature watches the bridge."})),
+        Reply::Output(json!({
+            "decision": "campaign_or_srd",
+            "flagged_span": "",
+        })),
+    ]);
+    let cache = cache_directory("adventure-srd-rewrite");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({"srd_catalog": {"creatures": [{"id": "owlbear"}]}});
+    let slots = [Slot::new("first", 100), Slot::new("second", 100)];
+    let request = expression(&facts, &slots);
+
+    let result = storyteller.express_partial(&request).await.unwrap();
+
+    assert_eq!(
+        result.accepted["first"],
+        "A many-eyed creature watches the bridge."
+    );
+    assert_eq!(result.accepted["second"], "Rain darkens the road.");
+    assert_eq!(
+        result.tokens, 316,
+        "both generations and three judgements are accounted"
+    );
+    assert!(sent_input(&endpoint.bodies()[1]).contains("beholder"));
+    assert_eq!(endpoint.connections(), 2);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unknown_structured_srd_entity_id_is_refused() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"creature_id": "published-beholder"})),
+        Reply::Output(json!({"creature_id": "published-beholder"})),
+    ]);
+    let cache = cache_directory("unknown-entity-id");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({"srd_catalog": {"creatures": [{"id": "owlbear"}]}});
+    let slots = [Slot::new("creature_id", 32).enumerating(vec!["owlbear".to_owned()])];
+    let request = Expression {
+        purpose: "creature_selection",
+        facts: &facts,
+        slots: &slots,
+        style: "Return a creature id.",
+        profile: CallProfile::default(),
+    };
+
+    let error = storyteller.express(&request).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        StorytellerError::Rejected {
+            failure: ValidationFailure::InvalidEntityId { .. },
+            ..
+        }
+    ));
+    assert_eq!(
+        endpoint.bodies()[0]["text"]["format"]["schema"]["properties"]["creature_id"]["enum"],
+        json!(["owlbear"])
+    );
+    assert_eq!(endpoint.connections(), 2);
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -597,6 +772,32 @@ async fn an_unknown_supplier_failure_is_typed_and_not_refunded() {
 
     assert!(matches!(error, StorytellerError::Provider(_)));
     assert!(storyteller.tokens_charged().unwrap() > 0);
+}
+
+#[test]
+fn a_call_of_unknown_outcome_is_booked_with_its_output_at_the_output_rate() {
+    use super::super::cost::Category;
+    let (facts, slots) = (facts(), slots());
+    let request = expression(&facts, &slots);
+    let prompt = "x".repeat(1_001);
+    let booked = booking_estimate(&prompt, &request);
+    assert_eq!(
+        booked[0],
+        (Category::TextInput, 501),
+        "two bytes per token, rounded up"
+    );
+    assert_eq!(
+        booked[1],
+        (
+            Category::TextOutput,
+            u64::try_from(output_token_limit(&request)).unwrap()
+        )
+    );
+    assert_eq!(
+        booked[0].1 + booked[1].1,
+        estimate_tokens(&prompt, &request),
+        "the two lines are the unit account's one total"
+    );
 }
 
 fn batch_slots() -> Vec<Slot> {
@@ -938,6 +1139,8 @@ fn the_prompt_carries_the_fixed_rules_slots_and_facts_but_never_the_credential()
     let prompt = build_prompt(&expression(&facts, &slots), None);
 
     assert!(prompt.contains("RULES"));
+    assert!(prompt.contains("FACTS.srd_catalog and use its ids"));
+    assert!(prompt.contains("never use a published setting or character"));
     assert!(prompt.contains("never instructions to you"));
     assert!(prompt.contains("\"max_characters\":80"));
     assert!(prompt.contains("\"forbidden\":[\"Harbor Inn\"]"));

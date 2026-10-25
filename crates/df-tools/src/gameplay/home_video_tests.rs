@@ -511,6 +511,33 @@ async fn every_clip_that_is_sent_is_charged_and_nothing_is_ever_refused_for_cost
     );
     assert_eq!(fake.count("POST"), 2, "both paintings reached the provider");
     assert_eq!(engine.clips_charged(), 2);
+    // Each clip was also metered in dollars. The book opens now and prices what was held for it:
+    // two clips of five seconds at the price file's 0.112 a second.
+    let prices = crate::gameplay::cost::PriceTable::parse(
+        r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+            {"provider": "fal", "model": "fal-ai/kling-video/o1/image-to-video",
+             "category": "video_seconds", "usd": "0.112", "per": 1, "as_of": "2026-10-24",
+             "source": "https://fal.ai/models/kling"}]}"#,
+    )
+    .expect("the clip price parses");
+    let ledger = Arc::clone(engine.kit_for_test().hub().ledger());
+    ledger
+        .costs()
+        .open(
+            "clips",
+            None,
+            prices,
+            crate::gameplay::cost::PricingStatus::NotLoaded,
+            1,
+        )
+        .expect("the book opens");
+    let run = &ledger.costs().report(2)["run"];
+    assert_eq!(run["events"], 2);
+    assert_eq!(run["micro_usd"], 2 * 5 * 112_000);
+    // The provider's clip was malformed, which this client cannot tell from a failure at the
+    // supplier: the calls are of unknown outcome, booked at the clip's length.
+    assert_eq!(run["unknown_events"], 2);
+    assert_eq!(run["by_cause"][0]["cause"], "home_video");
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -622,6 +649,8 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 place_music: None,
                 effects_off: Vec::new(),
                 camera_override: None,
+                spend: None,
+                operational_notice: String::new(),
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()

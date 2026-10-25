@@ -44,6 +44,8 @@ df-api = { path = "../df-api" }
 df-ai = { path = "../df-ai" }
 df-auth = { path = "../df-auth" }
 df-combat = { path = "../df-combat" }
+# The supplier tariff (price table and bill reader) the cost book shares with the money core.
+df-commerce = { path = "../df-commerce" }
 df-content = { path = "../df-content" }
 df-encounter = { path = "../df-encounter" }
 df-engine = { path = "../df-engine" }

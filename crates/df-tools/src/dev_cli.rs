@@ -243,6 +243,7 @@ fn print_help() {
          economy purse|coin <name> --cp <n> | offer add|remove|restock <offer>  unsupported here\n\
          audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
+         latency [--buckets 1]        owner call queue and reduce times and hero-line stage times: p50/p95 estimates, max and counts; buckets are opt-in\n\
          art [list <prefix>]          generated depictions on the hub; art regenerate|clear character:<id>|place:<id>\n\
          heroes list|show <id>|revisions <id>|delete <id>  inspect or delete local library heroes\n\
          fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
@@ -543,6 +544,10 @@ async fn dispatch(
             }
             get(client, &path).await
         }
+        "latency" => match flag("--buckets") {
+            Some(value) => get(client, &format!("/dev/latency?buckets={}", url_escape(&value))).await,
+            None => get(client, "/dev/latency").await,
+        },
         "audit" => {
             let mut path = format!(
                 "/dev/audit?last={}",

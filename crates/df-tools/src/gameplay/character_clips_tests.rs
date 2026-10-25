@@ -102,10 +102,6 @@ struct FakeVideos {
 }
 
 impl VideoProvider for FakeVideos {
-    fn price(&self) -> ProviderFuture<'_, u64> {
-        Box::pin(async { Ok(560_000) })
-    }
-
     fn video<'a>(
         &'a self,
         _key: &'a ResourceKey,
@@ -134,6 +130,37 @@ impl VideoProvider for FakeVideos {
             })
         })
     }
+}
+
+/// A hub whose cost book is open with the two rates a clip uses: the Kling second and the
+/// gpt-image tokens of a frame.
+fn priced_hub() -> Hub {
+    let prices = crate::gameplay::cost::PriceTable::parse(
+        r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
+            {"provider": "fal", "model": "fal-ai/kling-video/o1/image-to-video",
+             "category": "video_seconds", "usd": "0.112", "per": 1,
+             "as_of": "2026-10-24", "source": "https://fal.ai/models/kling"},
+            {"provider": "openai", "model": "gpt-image-2.5-sunburst", "category": "text_input",
+             "usd": "5", "per": 1000000, "as_of": "2026-10-24", "source": "https://example.test/p"},
+            {"provider": "openai", "model": "gpt-image-2.5-sunburst", "category": "image_input",
+             "usd": "8", "per": 1000000, "as_of": "2026-10-24", "source": "https://example.test/p"},
+            {"provider": "openai", "model": "gpt-image-2.5-sunburst", "category": "image_output",
+             "usd": "30", "per": 1000000, "as_of": "2026-10-24", "source": "https://example.test/p"}
+        ]}"#,
+    )
+    .expect("the clip prices parse");
+    let hub = Hub::new();
+    hub.ledger()
+        .costs()
+        .open(
+            "clips",
+            None,
+            prices,
+            crate::gameplay::cost::PricingStatus::NotLoaded,
+            1,
+        )
+        .expect("the book opens");
+    hub
 }
 
 fn setup(
@@ -169,7 +196,7 @@ fn setup_with_rendezvous(
         })
     });
     let service = CharacterClips::new(
-        Hub::new(),
+        priced_hub(),
         Some(frames.clone()),
         Some(videos.clone()),
         source,
@@ -537,6 +564,27 @@ async fn character_clips_explicit_request_regenerates_only_selected_clip_and_ret
     assert_eq!(clip["state"], "ready");
     assert_eq!(clip["cost"]["video_calls"], 2);
     assert_eq!(clip["cost"]["video_micro_dollars"], 1_120_000);
+    assert_eq!(clip["cost"]["video_cost_basis"], "price_file");
+    // The cost book metered the same calls: two clips of five seconds at 0.112 a second and the
+    // one shared frame, at the tokens the frame reported (10 + 20 + 30 tokens).
+    let book = service.generation.hub.ledger().costs().report(2);
+    let by_cause = |cause: &str| {
+        book["run"]["by_cause"]
+            .as_array()
+            .and_then(|causes| causes.iter().find(|row| row["cause"] == cause))
+            .map(|row| (row["events"].clone(), row["micro_usd"].clone()))
+    };
+    assert_eq!(
+        by_cause("character_clip"),
+        Some((serde_json::json!(2), serde_json::json!(1_120_000)))
+    );
+    assert_eq!(
+        by_cause("clip_frame"),
+        Some((
+            serde_json::json!(1),
+            serde_json::json!(10 * 5 + 20 * 8 + 30 * 30)
+        ))
+    );
     assert!(clip["timings"]["contact_ms"].as_u64().is_some());
 }
 

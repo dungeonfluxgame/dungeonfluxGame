@@ -514,13 +514,26 @@ fn table_errors_name_the_source_and_json_path() {
 }
 
 #[test]
-fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
+fn every_rollable_compiled_creature_has_table_parity_and_loader_disclosure() {
+    // The CR 2-5 foes were compiled for level-5 test fights only (commit 2ed94f3d); the adventure
+    // antagonist table deliberately does not roll them. Parity covers every other compiled creature,
+    // and the exclusion is named here instead of being skipped silently.
+    const LEVEL_FIVE_TEST_ONLY: [&str; 5] = ["ogre", "owlbear", "wight", "hill-giant", "troll"];
     let tables = tables();
-    assert_eq!(
-        tables.antagonists.entries.len(),
-        df_rules::SRD_521_CREATURES.len()
-    );
-    for creature in &df_rules::SRD_521_CREATURES {
+    for id in LEVEL_FIVE_TEST_ONLY {
+        assert!(
+            df_rules::SRD_521_CREATURES
+                .iter()
+                .any(|creature| creature.id == id),
+            "level-five test-only creature {id} is no longer compiled; update the exclusion list"
+        );
+    }
+    let rollable: Vec<_> = df_rules::SRD_521_CREATURES
+        .iter()
+        .filter(|creature| !LEVEL_FIVE_TEST_ONLY.contains(&creature.id))
+        .collect();
+    assert_eq!(tables.antagonists.entries.len(), rollable.len());
+    for creature in rollable {
         let archetype = tables
             .antagonists
             .entries
@@ -577,6 +590,7 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
                 "tactical.cover-representative-height",
                 "tactical.initiative-ties-input-order",
                 "tactical.dead-space-passable",
+                "tactical.area-cell-centres-eight-directions",
             ]
         );
         let mut tampered = generated.tuning.clone();

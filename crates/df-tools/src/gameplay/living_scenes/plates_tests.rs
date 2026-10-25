@@ -4597,6 +4597,7 @@ async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
         HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
         "fixture",
         Duration::from_secs(2),
+        crate::gameplay::cost::test_meter(),
     )
     .unwrap();
     let mut scene = scene(SceneKey::Opening, "The Wharf", Some("Kestrel"));
@@ -6088,6 +6089,7 @@ async fn photo_check_provider_failure_still_measures_and_projects_narrator_arriv
             df_providers::PlateJudgeConfig::loopback_fixture(endpoint.address).unwrap(),
             "fake-private",
             Duration::from_secs(2),
+            crate::gameplay::cost::test_meter(),
         )
         .unwrap(),
     );

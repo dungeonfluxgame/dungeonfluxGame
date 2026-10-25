@@ -216,6 +216,53 @@ fn typed_table_refuses_missing_unknown_types_scenes_labels_handlers_patterns_and
         .is_err()
     );
 }
+/// Drops explicit `null` members: an absent optional field and a `null` one carry the same value,
+/// and the loader serializes some optionals as `null` and others as absent.
+fn without_null_members(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => items.iter_mut().for_each(without_null_members),
+        serde_json::Value::Object(map) => {
+            map.retain(|_, child| !child.is_null());
+            map.values_mut().for_each(without_null_members);
+        }
+        _ => {}
+    }
+}
+
+/// The stored pack as the loader should hold it: each painted reference replaced by the token the
+/// art manifest gives it (painted scene assets name the room photograph, painted figures the
+/// canonical photograph), with explicit nulls treated as absent.
+fn art_contract_tokens(pack: &[u8]) -> serde_json::Value {
+    fn tokens(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Array(items) => items.iter_mut().for_each(tokens),
+            serde_json::Value::Object(map) => {
+                for (key, child) in map.iter_mut() {
+                    let token = match key.as_str() {
+                        "asset" => "live-room-photo",
+                        "portrait" | "sprite" | "speaker_portrait" => "live-canonical-photo",
+                        _ => {
+                            tokens(child);
+                            continue;
+                        }
+                    };
+                    if child
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("assets/ui/generated/"))
+                    {
+                        *child = serde_json::Value::String(token.to_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(pack).unwrap();
+    without_null_members(&mut value);
+    tokens(&mut value);
+    value
+}
+
 #[test]
 fn old_generated_adventure_and_actual_opening_resume_without_current_table_reinterpretation() {
     let docs = df_persistence::local_demo_scope::DemoAdventure {
@@ -227,7 +274,12 @@ fn old_generated_adventure_and_actual_opening_resume_without_current_table_reint
     let (loaded, record) = super::record::reload(&docs).unwrap();
     assert!(loaded.pack.beat_script.is_none());
     assert_ne!(record.tables_revision(), tables().chapter.revision);
-    assert_eq!(serde_json::to_vec_pretty(&loaded.pack).unwrap(), docs.pack);
+    // Painted art migrates at the load boundary (after the stored bytes were verified); the rest of
+    // the pack is what the stored document says, byte for byte.
+    let mut loaded_pack: serde_json::Value =
+        serde_json::from_slice(&serde_json::to_vec(&loaded.pack).unwrap()).unwrap();
+    without_null_members(&mut loaded_pack);
+    assert_eq!(loaded_pack, art_contract_tokens(&docs.pack));
     assert_eq!(
         serde_json::to_vec_pretty(&loaded.tuning).unwrap(),
         docs.tuning
@@ -272,6 +324,19 @@ fn old_generated_adventure_and_actual_opening_resume_without_current_table_reint
         (docs.pack, docs.tuning, docs.record),
         (frozen.pack, frozen.tuning, frozen.record)
     );
+}
+
+#[test]
+fn painted_legacy_art_without_a_manifest_row_is_still_refused_at_the_load_boundary() {
+    // The migration moves only a painted reference that the art manifest answers. The control
+    // loads the untouched fixture; the same fixture with a painted figure no row names must fail.
+    let tuning = include_bytes!("../fixtures/legacy-adventure/tuning.json");
+    let stored = include_bytes!("../fixtures/legacy-adventure/pack.json");
+    assert!(pack::load_from_bytes(stored, tuning).is_ok());
+    let mut document: serde_json::Value = serde_json::from_slice(stored).unwrap();
+    document["scenes"][1]["cast"][0]["sprite"] = "assets/ui/generated/sprite-unknown-figure".into();
+    let edited = serde_json::to_vec(&document).unwrap();
+    assert!(pack::load_from_bytes(&edited, tuning).is_err());
 }
 
 #[test]

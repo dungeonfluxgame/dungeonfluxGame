@@ -390,15 +390,21 @@ pub(super) fn roll_settings(
     settings.facts(context)?;
     Ok(settings)
 }
-/// Validate declared art against the compiled manifest at the pack loading boundary.
-pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
+/// The compiled art manifest, parsed once. An error is a build defect, reported by the caller.
+fn art_manifest() -> Result<&'static [Art], &'static serde_json::Error> {
     static ART: std::sync::OnceLock<Result<Vec<Art>, serde_json::Error>> =
         std::sync::OnceLock::new();
-    let art = ART.get_or_init(|| {
+    ART.get_or_init(|| {
         serde_json::from_slice(include_bytes!(
             "../../../../../content/adventure-tables/art-manifest.json"
         ))
-    });
+    })
+    .as_ref()
+    .map(Vec::as_slice)
+}
+
+/// Validate declared art against the compiled manifest at the pack loading boundary.
+pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
     !scene.place_id.is_empty()
         && !scene.name.is_empty()
         && !scene.short.is_empty()
@@ -407,7 +413,7 @@ pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
             .model
             .as_ref()
             .is_none_or(|model| model.validate_structure().is_ok())
-        && art.as_ref().is_ok_and(|entries| {
+        && art_manifest().is_ok_and(|entries| {
             entries.iter().any(|a| {
                 a.art_key == scene.art_key
                     && a.kind == "scene"
@@ -415,4 +421,14 @@ pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
                     && asset == a.asset()
             })
         })
+}
+
+/// The asset string the manifest assigns to an art key of the given kind (`scene` or `portrait`):
+/// the art-contract token or the reviewed photograph's path. `None` when no row answers the key.
+pub(crate) fn art_asset(art_key: &str, kind: &str) -> Option<String> {
+    art_manifest()
+        .ok()?
+        .iter()
+        .find(|a| a.art_key == art_key && a.kind == kind)
+        .map(Art::asset)
 }
