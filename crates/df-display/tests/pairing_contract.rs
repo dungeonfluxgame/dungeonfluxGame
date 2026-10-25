@@ -229,10 +229,10 @@ fn member_private_audience_is_rejected() {
 #[test]
 fn scope_mismatch_and_replacement_refuse() {
     let changes: [fn(&mut Authority); 4] = [
-        |a| a.scope.session = SessionId::from_bytes(&[6; 16]).unwrap(),
-        |a| a.scope.binding = ClientBindingId::from_bytes(&[6; 16]).unwrap(),
-        |a| a.scope.principal += 1,
-        |a| a.scope.credential += 1,
+        |authority| authority.scope.session = SessionId::from_bytes(&[6; 16]).unwrap(),
+        |authority| authority.scope.binding = ClientBindingId::from_bytes(&[6; 16]).unwrap(),
+        |authority| authority.scope.principal += 1,
+        |authority| authority.scope.credential += 1,
     ];
     for change in changes {
         let mut source = authority(AudienceScope::Host);
@@ -255,23 +255,23 @@ fn revocation_rotation_and_expiry_refuse() {
     type RefusalCase = (fn(&mut Authority), PublicationRefusal);
     let cases: [RefusalCase; 5] = [
         (
-            |a| a.credential.revoke(),
+            |authority| authority.credential.revoke(),
             PublicationRefusal::CredentialRevoked,
         ),
         (
-            |a| a.credential.rotate(4).unwrap(),
+            |authority| authority.credential.rotate(4).unwrap(),
             PublicationRefusal::CredentialRotated,
         ),
         (
-            |a| a.credential_unexpired = false,
+            |authority| authority.credential_unexpired = false,
             PublicationRefusal::CredentialExpired,
         ),
         (
-            |a| a.binding_active = false,
+            |authority| authority.binding_active = false,
             PublicationRefusal::BindingRevoked,
         ),
         (
-            |a| a.binding_unexpired = false,
+            |authority| authority.binding_unexpired = false,
             PublicationRefusal::BindingExpired,
         ),
     ];

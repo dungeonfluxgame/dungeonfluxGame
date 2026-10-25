@@ -128,7 +128,7 @@ pub fn resolve(
     };
     let mut keys = BTreeMap::new();
     for credential in Credential::ALL {
-        if let Some(value) = configured.get(&credential).filter(|v| valid_key(v)) {
+        if let Some(value) = configured.get(&credential).filter(|value| valid_key(value)) {
             keys.insert(credential, (value.clone(), Source::Config));
             continue;
         }
@@ -152,7 +152,7 @@ fn env_value(text: &str, name: &str) -> Option<String> {
         let value = line.strip_prefix(name)?.strip_prefix('=')?;
         let value: String = value
             .chars()
-            .filter(|c| !matches!(c, '"' | '\'' | '\r'))
+            .filter(|character| !matches!(character, '"' | '\'' | '\r'))
             .collect();
         valid_key(&value).then_some(value)
     })
