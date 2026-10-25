@@ -820,10 +820,10 @@ mod tests {
             "ground-salt-quay",
             "",
         ] {
-            let backdrop = plan(Role::BattleBackdrop, request);
-            assert_eq!(backdrop.reviewed, None, "{request}");
+            let battle_plan = plan(Role::BattleBackdrop, request);
+            assert_eq!(battle_plan.reviewed, None, "{request}");
             assert_eq!(
-                backdrop.walk().collect::<Vec<_>>(),
+                battle_plan.walk().collect::<Vec<_>>(),
                 vec![
                     Step::LiveCached(LiveSource::RoomPhoto),
                     Step::RequestLive(LiveSource::RoomPhoto),

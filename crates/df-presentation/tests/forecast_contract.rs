@@ -19,7 +19,7 @@ fn policy(fixture: &Fixture) -> PrefetchPolicy {
     }
 }
 
-fn bounds() -> ForecastLimits {
+fn forecast_limits() -> ForecastLimits {
     ForecastLimits {
         maximum_candidates: 8,
         maximum_items: 1024,
@@ -29,12 +29,12 @@ fn bounds() -> ForecastLimits {
     }
 }
 
-fn candidate(fixture: &Fixture, rank: u32) -> ForecastCandidate<'_> {
+fn build_candidate(fixture: &Fixture, heuristic_rank: u32) -> ForecastCandidate<'_> {
     ForecastCandidate {
         demand: &fixture.demands[0],
         branch: 0,
         duration_ticks: 5,
-        rank: HeuristicRank(rank),
+        rank: HeuristicRank(heuristic_rank),
     }
 }
 
@@ -47,10 +47,10 @@ fn ordinal_extremes_ties_and_unavailable_calibration_preserve_borrowed_order() {
     for rank in [0, 1, u32::MAX] {
         for calibration in [Calibration::Uncalibrated, Calibration::Unavailable] {
             let candidates = [
-                candidate(&fixture, rank),
+                build_candidate(&fixture, rank),
                 ForecastCandidate {
                     demand: &other,
-                    ..candidate(&fixture, rank)
+                    ..build_candidate(&fixture, rank)
                 },
             ];
             let result = qualify_forecast(
@@ -60,7 +60,7 @@ fn ordinal_extremes_ties_and_unavailable_calibration_preserve_borrowed_order() {
                 &policy(&fixture),
                 &candidates,
                 calibration,
-                bounds(),
+                forecast_limits(),
             )
             .unwrap();
             assert!(std::ptr::eq(result.candidates(), candidates.as_slice()));
@@ -100,7 +100,7 @@ fn canonical_policy_and_current_demand_bindings_refuse_stale_inputs() {
             }
             _ => fixture.presentation.audience = AudienceScope::Host,
         }
-        let candidates = [candidate(&fixture, u32::MAX)];
+        let candidates = [build_candidate(&fixture, u32::MAX)];
         assert!(
             matches!(
                 qualify_forecast(
@@ -110,7 +110,7 @@ fn canonical_policy_and_current_demand_bindings_refuse_stale_inputs() {
                     &selected_policy,
                     &candidates,
                     Calibration::Uncalibrated,
-                    bounds(),
+                    forecast_limits(),
                 ),
                 Err(ForecastError::StaleContext)
             ),
@@ -120,7 +120,7 @@ fn canonical_policy_and_current_demand_bindings_refuse_stale_inputs() {
     let fixture = Fixture::new();
     let mut old = Fixture::new();
     old.pins.content.package_digest = ContentDigest([99; 32]);
-    let candidates = [candidate(&fixture, 0)];
+    let candidates = [build_candidate(&fixture, 0)];
     assert!(matches!(
         qualify_forecast(
             fixture.context(),
@@ -129,7 +129,7 @@ fn canonical_policy_and_current_demand_bindings_refuse_stale_inputs() {
             &policy(&fixture),
             &candidates,
             Calibration::Uncalibrated,
-            bounds(),
+            forecast_limits(),
         ),
         Err(ForecastError::StaleContext)
     ));
@@ -150,7 +150,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
         maximum_demand_bytes: 64,
         maximum_duration_ticks: 5,
     };
-    let candidates = [candidate(&fixture, 0)];
+    let candidates = [build_candidate(&fixture, 0)];
     assert!(
         qualify_forecast(
             fixture.context(),
@@ -185,7 +185,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
             Err(ForecastError::Capacity)
         ));
     }
-    let duplicate = [candidate(&fixture, 0), candidate(&fixture, 1)];
+    let duplicate = [build_candidate(&fixture, 0), build_candidate(&fixture, 1)];
     assert!(matches!(
         qualify_forecast(
             fixture.context(),
@@ -194,7 +194,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
             &policy(&fixture),
             &duplicate,
             Calibration::Uncalibrated,
-            bounds(),
+            forecast_limits(),
         ),
         Err(ForecastError::DuplicateDemand)
     ));
@@ -211,11 +211,11 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
             ForecastCandidate {
                 demand: &huge,
                 duration_ticks: if dimension == 2 { u64::MAX } else { 5 },
-                ..candidate(&fixture, 0)
+                ..build_candidate(&fixture, 0)
             },
-            candidate(&fixture, 0),
+            build_candidate(&fixture, 0),
         ];
-        let mut unlimited = bounds();
+        let mut unlimited = forecast_limits();
         unlimited.maximum_demand_bytes = u64::MAX;
         unlimited.maximum_reference_bytes = u64::MAX;
         unlimited.maximum_duration_ticks = u64::MAX;
@@ -238,7 +238,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
             "dimension {dimension}"
         );
     }
-    let mut branch = candidate(&fixture, 0);
+    let mut branch = build_candidate(&fixture, 0);
     branch.branch = policy(&fixture).maximum_branches;
     assert!(matches!(
         qualify_forecast(
@@ -248,7 +248,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
             &policy(&fixture),
             &[branch],
             Calibration::Uncalibrated,
-            bounds(),
+            forecast_limits(),
         ),
         Err(ForecastError::InvalidDemand)
     ));
@@ -257,7 +257,7 @@ fn exact_caps_fit_and_excess_duplicate_and_checked_overflow_refuse_whole_input()
 #[test]
 fn expiration_is_inclusive_and_tick_units_are_explicit() {
     let fixture = Fixture::new();
-    let candidates = [candidate(&fixture, 0)];
+    let candidates = [build_candidate(&fixture, 0)];
     for ticks in [10, 11, u64::MAX] {
         assert!(matches!(
             qualify_forecast(
@@ -270,7 +270,7 @@ fn expiration_is_inclusive_and_tick_units_are_explicit() {
                 &policy(&fixture),
                 &candidates,
                 Calibration::Uncalibrated,
-                bounds(),
+                forecast_limits(),
             ),
             Err(ForecastError::Expired)
         ));
@@ -287,7 +287,7 @@ fn expiration_is_inclusive_and_tick_units_are_explicit() {
                 &policy(&fixture),
                 &candidates,
                 Calibration::Uncalibrated,
-                bounds(),
+                forecast_limits(),
             ),
             Err(ForecastError::InvalidTimebase)
         ));
@@ -302,10 +302,10 @@ fn nested_capacity_precedes_missing_inventory_stale_comparison_and_ready_prefix(
     oversized.key.references = vec![fixture.assets[0].clone(); 4097];
     oversized.key.identity = label("stale");
     let candidates = [
-        candidate(&fixture, 0),
+        build_candidate(&fixture, 0),
         ForecastCandidate {
             demand: &oversized,
-            ..candidate(&fixture, 0)
+            ..build_candidate(&fixture, 0)
         },
     ];
     for permitted in [None, Some(fixture.permitted())] {
@@ -317,7 +317,7 @@ fn nested_capacity_precedes_missing_inventory_stale_comparison_and_ready_prefix(
                 &policy(&fixture),
                 &candidates,
                 Calibration::Unavailable,
-                bounds(),
+                forecast_limits(),
             ),
             Err(ForecastError::Capacity)
         ));
@@ -328,7 +328,7 @@ fn nested_capacity_precedes_missing_inventory_stale_comparison_and_ready_prefix(
             .unwrap();
         4097
     ]);
-    let hidden_candidates = [candidate(&hidden, u32::MAX)];
+    let hidden_candidates = [build_candidate(&hidden, u32::MAX)];
     assert!(matches!(
         qualify_forecast(
             hidden.context(),
@@ -337,11 +337,11 @@ fn nested_capacity_precedes_missing_inventory_stale_comparison_and_ready_prefix(
             &policy(&hidden),
             &hidden_candidates,
             Calibration::Unavailable,
-            bounds(),
+            forecast_limits(),
         ),
         Err(ForecastError::Capacity)
     ));
-    let mut invalid = bounds();
+    let mut invalid = forecast_limits();
     invalid.maximum_items = 0;
     assert!(matches!(
         qualify_forecast(
@@ -382,7 +382,7 @@ fn actual_permitted_fallback_is_identical_across_rank_missing_failed_and_expired
             }
             let candidates = [ForecastCandidate {
                 demand: &forecast,
-                ..candidate(&fixture, if scenario == 0 { 0 } else { u32::MAX })
+                ..build_candidate(&fixture, if scenario == 0 { 0 } else { u32::MAX })
             }];
             let result = qualify_forecast(
                 fixture.context(),
@@ -399,7 +399,7 @@ fn actual_permitted_fallback_is_identical_across_rank_missing_failed_and_expired
                 } else {
                     Calibration::Uncalibrated
                 },
-                bounds(),
+                forecast_limits(),
             );
             match scenario {
                 0 | 1 => assert!(result.is_ok()),
@@ -442,7 +442,7 @@ fn high_rank_cannot_admit_hidden_or_substituted_assets_and_never_changes_history
         }
         let candidates = [ForecastCandidate {
             demand: &demand,
-            ..candidate(&fixture, u32::MAX)
+            ..build_candidate(&fixture, u32::MAX)
         }];
         assert!(matches!(
             qualify_forecast(
@@ -452,7 +452,7 @@ fn high_rank_cannot_admit_hidden_or_substituted_assets_and_never_changes_history
                 &policy(&fixture),
                 &candidates,
                 Calibration::Unavailable,
-                bounds(),
+                forecast_limits(),
             ),
             Err(ForecastError::Unpermitted | ForecastError::StaleContext)
         ));

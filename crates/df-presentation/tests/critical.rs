@@ -4,7 +4,7 @@ pub mod fixture_model;
 use df_model::checkpoint::*;
 use df_presentation::critical::*;
 
-fn record(value: u8) -> RecordId {
+fn record_id(value: u8) -> RecordId {
     RecordId::from_bytes(&[value; 16]).unwrap()
 }
 fn resolution() -> ResolutionId {
@@ -57,7 +57,7 @@ impl Consumer {
             semantic_output: Some("source-owner admitted committed outcome".to_owned()),
         });
         state.continuity.critical_cues.push(CriticalCueEligibility {
-            id: record(32),
+            id: record_id(32),
             fact: state.facts[0].id,
             resolution: resolution(),
             audience: AudienceScope::Shared,

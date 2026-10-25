@@ -153,8 +153,8 @@ impl CameraPose {
 struct Pan {
     from: CameraPose,
     to: CameraPose,
-    elapsed: f32,
-    duration: f32,
+    elapsed_s: f32,
+    duration_s: f32,
     /// A snappy move: overshoots a little and ends with a zoom punch.
     whip: bool,
 }
@@ -162,7 +162,7 @@ struct Pan {
 /// How far a whip overshoots its target before settling (as a share of the travel).
 const WHIP_OVERSHOOT: f32 = 1.45;
 /// How long the zoom punch after a whip lasts, and how much the lens tightens at its peak.
-const PUNCH: f32 = 0.2;
+const PUNCH_S: f32 = 0.2;
 const PUNCH_FOV_SHARE: f32 = 0.09;
 
 /// Ease out with a slight overshoot (the standard "back" curve): reaches 1 at `t = 1`.
@@ -173,15 +173,15 @@ fn ease_out_back(t: f32) -> f32 {
 
 #[derive(Clone, Copy, Debug)]
 struct Shake {
-    elapsed: f32,
-    duration: f32,
+    elapsed_s: f32,
+    duration_s: f32,
     amplitude_px: f32,
 }
 
 #[derive(Clone, Debug)]
 pub struct CameraRig {
     pose: CameraPose,
-    punch: f32,
+    punch_s: f32,
     pan: Option<Pan>,
     shake: Option<Shake>,
 }
@@ -190,7 +190,7 @@ impl CameraRig {
     pub fn new(pose: CameraPose) -> Self {
         Self {
             pose,
-            punch: 0.0,
+            punch_s: 0.0,
             pan: None,
             shake: None,
         }
@@ -198,10 +198,10 @@ impl CameraRig {
 
     /// The current pose, with the lens tightened while a whip's zoom punch plays.
     pub fn pose(&self) -> CameraPose {
-        if self.punch <= 0.0 {
+        if self.punch_s <= 0.0 {
             return self.pose;
         }
-        let progress = 1.0 - self.punch / PUNCH;
+        let progress = 1.0 - self.punch_s / PUNCH_S;
         CameraPose {
             fov_deg: self.pose.fov_deg
                 * (1.0 - PUNCH_FOV_SHARE * (std::f32::consts::PI * progress).sin()),
@@ -218,7 +218,7 @@ impl CameraRig {
         self.pose = pose;
         self.pan = None;
         self.shake = None;
-        self.punch = 0.0;
+        self.punch_s = 0.0;
     }
 
     /// A fast, snappy move to `pose`: `duration` of travel with a slight overshoot and settle,
@@ -230,12 +230,12 @@ impl CameraRig {
             return;
         }
         self.shake = None;
-        self.punch = 0.0;
+        self.punch_s = 0.0;
         self.pan = Some(Pan {
             from: self.pose,
             to: pose,
-            elapsed: 0.0,
-            duration: duration.as_secs_f32(),
+            elapsed_s: 0.0,
+            duration_s: duration.as_secs_f32(),
             whip: true,
         });
     }
@@ -251,27 +251,27 @@ impl CameraRig {
         self.pan = Some(Pan {
             from: self.pose,
             to: pose,
-            elapsed: 0.0,
-            duration: duration.as_secs_f32(),
+            elapsed_s: 0.0,
+            duration_s: duration.as_secs_f32(),
             whip: false,
         });
     }
 
     /// Starts an impact shake. Amplitude and duration are clamped.
     pub fn shake(&mut self, amplitude_px: f32, duration: Duration) {
-        let amplitude = if amplitude_px.is_finite() {
+        let amplitude_px = if amplitude_px.is_finite() {
             amplitude_px.clamp(0.0, MAX_SHAKE_PX)
         } else {
             0.0
         };
         let duration = duration.min(MAX_SHAKE);
-        if amplitude == 0.0 || duration.is_zero() {
+        if amplitude_px == 0.0 || duration.is_zero() {
             return;
         }
         self.shake = Some(Shake {
-            elapsed: 0.0,
-            duration: duration.as_secs_f32(),
-            amplitude_px: amplitude,
+            elapsed_s: 0.0,
+            duration_s: duration.as_secs_f32(),
+            amplitude_px,
         });
     }
 
@@ -280,8 +280,8 @@ impl CameraRig {
         let Some(shake) = self.shake else {
             return (0.0, 0.0);
         };
-        let phase = shake.elapsed * 77.0;
-        let fade = (1.0 - shake.elapsed / shake.duration).max(0.0);
+        let phase = shake.elapsed_s * 77.0;
+        let fade = (1.0 - shake.elapsed_s / shake.duration_s).max(0.0);
         (
             phase.sin() * shake.amplitude_px * fade,
             (phase * 1.37 + 0.7).cos() * shake.amplitude_px * 0.72 * fade,
@@ -289,31 +289,31 @@ impl CameraRig {
     }
 
     pub fn update(&mut self, elapsed: Duration) {
-        let dt = elapsed.as_secs_f32().min(1.0);
+        let elapsed_s = elapsed.as_secs_f32().min(1.0);
         if let Some(mut pan) = self.pan.take() {
-            pan.elapsed = (pan.elapsed + dt).min(pan.duration);
-            let progress = pan.elapsed / pan.duration;
+            pan.elapsed_s = (pan.elapsed_s + elapsed_s).min(pan.duration_s);
+            let progress = pan.elapsed_s / pan.duration_s;
             let eased = if pan.whip {
                 ease_out_back(progress)
             } else {
                 ease_in_out(progress)
             };
             self.pose = pan.from.lerp(&pan.to, eased);
-            if pan.elapsed < pan.duration {
+            if pan.elapsed_s < pan.duration_s {
                 self.pan = Some(pan);
             } else {
                 // Land exactly on the validated destination; interpolation roundoff must not
                 // start another home refit or leave a 360-degree equivalent heading in state.
                 self.pose = pan.to;
                 if pan.whip {
-                    self.punch = PUNCH + dt;
+                    self.punch_s = PUNCH_S + elapsed_s;
                 }
             }
         }
-        self.punch = (self.punch - dt).max(0.0);
+        self.punch_s = (self.punch_s - elapsed_s).max(0.0);
         if let Some(mut shake) = self.shake.take() {
-            shake.elapsed += dt;
-            if shake.elapsed < shake.duration {
+            shake.elapsed_s += elapsed_s;
+            if shake.elapsed_s < shake.duration_s {
                 self.shake = Some(shake);
             }
         }

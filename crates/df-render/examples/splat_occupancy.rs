@@ -43,17 +43,17 @@ mod native {
             .parse()
             .map_err(|_| "level")?;
         let out: PathBuf = args.next().ok_or("output json required")?.into();
-        let (mut cell, mut half, mut top) = (0.8f32, 24.0f32, 14.0f32);
-        let (mut min_splats, mut min_opacity) = (6u32, 0.3f32);
+        let (mut cell_m, mut half_extent_m, mut top_m) = (0.8f32, 24.0f32, 14.0f32);
+        let (mut min_splats, mut minimum_opacity_share) = (6u32, 0.3f32);
         while let Some(flag) = args.next() {
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
             let number = |text: &str| text.parse::<f32>().map_err(|_| flag.clone());
             match flag.as_str() {
-                "--cell" => cell = number(&value)?,
-                "--half" => half = number(&value)?,
-                "--top" => top = number(&value)?,
+                "--cell" => cell_m = number(&value)?,
+                "--half" => half_extent_m = number(&value)?,
+                "--top" => top_m = number(&value)?,
                 "--min-splats" => min_splats = number(&value)? as u32,
-                "--min-opacity" => min_opacity = number(&value)?,
+                "--min-opacity" => minimum_opacity_share = number(&value)?,
                 other => return Err(format!("unknown flag {other}")),
             }
         }
@@ -114,12 +114,13 @@ mod native {
             }
         });
         let dims = [
-            (2.0 * half / cell).ceil() as u32,
-            ((top + 1.0) / cell).ceil() as u32,
-            (2.0 * half / cell).ceil() as u32,
+            (2.0 * half_extent_m / cell_m).ceil() as u32,
+            ((top_m + 1.0) / cell_m).ceil() as u32,
+            (2.0 * half_extent_m / cell_m).ceil() as u32,
         ];
-        let origin = Vec3::new(centre.x - half, -1.0, centre.z - half);
-        let mut occupancy = Occupancy::empty(origin, cell, dims).map_err(|e| format!("{e:?}"))?;
+        let origin_m = Vec3::new(centre.x - half_extent_m, -1.0, centre.z - half_extent_m);
+        let mut occupancy =
+            Occupancy::empty(origin_m, cell_m, dims).map_err(|e| format!("{e:?}"))?;
         let mut counts = vec![0u32; (dims[0] * dims[1] * dims[2]) as usize];
         for pick in &selection.picks {
             let Some(Some(chunk)) = chunks.get(&pick.range.file) else {
@@ -134,7 +135,7 @@ mod native {
             }
             let (cloud, _) = SplatCloud::bake(&chunk[from..to], transform);
             for splat in cloud.splats() {
-                if (splat.colour[3] as f32 / 255.0) < min_opacity {
+                if (splat.colour[3] as f32 / 255.0) < minimum_opacity_share {
                     continue;
                 }
                 // What the scene's ceiling cut removes is never drawn, so it never obstructs.
@@ -170,8 +171,10 @@ mod native {
                 .step_by(1)
                 .map(|x| {
                     let lowest = (0..dims[1])
-                        .find(|y| origin.y + *y as f32 * cell >= 1.0 && occupancy.is_set(x, *y, z))
-                        .map(|y| origin.y + y as f32 * cell);
+                        .find(|y| {
+                            origin_m.y + *y as f32 * cell_m >= 1.0 && occupancy.is_set(x, *y, z)
+                        })
+                        .map(|y| origin_m.y + y as f32 * cell_m);
                     match lowest {
                         None => '.',
                         Some(h) if h < 2.0 => '1',
@@ -184,8 +187,8 @@ mod native {
             eprintln!("{row}");
         }
         let json = serde_json::json!({
-            "origin": [origin.x, origin.y, origin.z],
-            "cell_m": cell,
+            "origin": [origin_m.x, origin_m.y, origin_m.z],
+            "cell_m": cell_m,
             "dims": dims,
             "hex": occupancy.to_hex(),
         });

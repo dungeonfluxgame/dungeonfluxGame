@@ -170,13 +170,13 @@ mod native {
             })
             .collect();
         centres.sort_by(f32::total_cmp);
-        let mean = centres[centres.len() / 2];
+        let median_m = centres[centres.len() / 2];
         eprintln!(
-            "ground height at the cell centres: min {:.2} median {mean:.2} max {:.2} (offset_y {:.2} -> suggest {:.2})",
+            "ground height at the cell centres: min {:.2} median {median_m:.2} max {:.2} (offset_y {:.2} -> suggest {:.2})",
             centres[0],
             centres[centres.len() - 1],
             transform.offset_y,
-            transform.offset_y - mean
+            transform.offset_y - median_m
         );
         let density = blocker_density(&field, &points, [ox, oz], cell, cols, rows, &walk);
         eprintln!(
@@ -219,7 +219,7 @@ mod native {
                 "heights_cm": heights_cm,
             },
             "blocked": blocked,
-            "ground_mean_m": mean,
+            "ground_mean_m": median_m,
         });
         std::fs::write(
             &out,
