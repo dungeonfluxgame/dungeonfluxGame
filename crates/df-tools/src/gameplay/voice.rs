@@ -1032,7 +1032,14 @@ impl Synthesis {
         // The call is about to be sent: spend is kept whatever the outcome, since a call whose
         // result is unknown may still have been billed.
         self.kit.get().charge(Unit::VoiceCharacter, characters);
-        let audio = self.send(&request, &current).await?;
+        let counted = [(super::cost::Category::Characters, characters)];
+        let billed = self
+            .kit
+            .get()
+            .hub()
+            .ledger()
+            .begin_call(super::cost::voice_call(ELEVEN_TTS_MODEL, line), &counted);
+        let audio = self.send(&request, &current, billed, &counted).await?;
         if audio.is_empty() || audio.len() > MAXIMUM_AUDIO_BYTES {
             return Err(Failure::Provider);
         }
@@ -1041,16 +1048,27 @@ impl Synthesis {
         Ok((audio, stored))
     }
 
+    /// Sends one synthesis and settles its cost: a request refused before any billable work is
+    /// not billed, any other failure is of unknown outcome, and an answer bills the characters.
     async fn send(
         &self,
         request: &ElevenSpeechRequest,
         current: &RequestBinding<ElevenSpeechBasis>,
+        billed: super::cost::BilledCall,
+        counted: &[(super::cost::Category, u64)],
     ) -> Result<Vec<u8>, Failure> {
-        let prepared = self
+        let prepared = match self
             .provider
             .speak(request, owner(current), std::future::pending())
             .await
-            .map_err(|_| Failure::Provider)?;
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                super::cost::settle_speech_failure(billed, error.reason());
+                return Err(Failure::Provider);
+            }
+        };
+        billed.settle(super::cost::Usage::estimated(counted.to_vec()));
         let events = prepared
             .complete(owner(current))
             .map_err(|_| Failure::Provider)?;

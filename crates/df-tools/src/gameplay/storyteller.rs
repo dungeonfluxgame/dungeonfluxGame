@@ -1102,6 +1102,10 @@ impl Online {
         // the call outlives its deadline or its outcome is unknown, and is corrected below when
         // the supplier reports what the call used (or refuses it outright).
         self.kit.get().charge(Unit::TextToken, reserved);
+        let billed = self.kit.get().hub().ledger().begin_call(
+            super::cost::text_call(&self.model, request.purpose),
+            &[(super::cost::Category::TextInput, reserved)],
+        );
         let owner = || RequestOwnerState {
             current: Some(&call.current),
             elapsed: Duration::ZERO,
@@ -1117,9 +1121,10 @@ impl Online {
         .await;
         let response = match submitted {
             Err(_) => return Err(StorytellerError::DeadlineExceeded),
-            Ok(Err(error)) => return self.settle_failure(request, key, error, reserved),
+            Ok(Err(error)) => return self.settle_failure(request, key, error, reserved, billed),
             Ok(Ok(response)) => response,
         };
+        billed.settle(super::cost::text_usage(&response.supplier_usage()));
         let tokens = response.supplier_usage().total_tokens;
         #[cfg(test)]
         self.usage_log
@@ -1150,6 +1155,7 @@ impl Online {
         key: &[u8; 32],
         error: TextResponseError,
         reserved: u64,
+        billed: super::cost::BilledCall,
     ) -> Result<Attempt, StorytellerError> {
         let reason = error.reason();
         let never_sent = matches!(
@@ -1170,8 +1176,13 @@ impl Online {
         );
         if let Some(usage) = error.supplier_usage() {
             self.reconcile(reserved, usage.total_tokens);
+            billed.settle(super::cost::text_usage(&usage));
         } else if never_sent || refused_by_supplier {
             self.release(reserved);
+            billed.not_billed();
+        } else {
+            // Unknown outcome: the call is recorded with its estimate.
+            drop(billed);
         }
         match reason {
             TextResponseError::Contract {

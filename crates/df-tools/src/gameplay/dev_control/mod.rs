@@ -31,16 +31,17 @@ use super::{actor, timing};
 use crate::BUILD_ID;
 
 mod actions;
+mod art;
 mod audit_log;
 mod camera;
 pub(super) mod candidate;
 mod clips;
 pub(crate) mod commands;
 pub(super) mod config;
+mod cost;
 mod dice;
 pub(super) mod direct;
 pub(super) mod directions;
-mod art;
 mod economy;
 pub(crate) mod fight;
 mod fx;
@@ -271,13 +272,18 @@ pub(super) fn setup(
         .route("/dev/tempo", get(tempo::read))
         .route("/dev/music", get(music::read))
         .route("/dev/music/edit", post(music::edit))
+        .route("/dev/cost", get(cost::read))
+        .route("/dev/cost/compare", post(cost::compare))
         .route("/dev/memory", get(memory::status))
         .route("/dev/memory/search", get(memory::search))
         .route("/dev/memory/entity", get(memory::entity))
         .route("/dev/memory/event", get(memory::event))
         .route("/dev/memory/supersede", post(memory::supersede))
         .route("/dev/memory/reindex", post(memory::reindex))
-        .route("/dev/memory/delete-run-index", post(memory::delete_run_index))
+        .route(
+            "/dev/memory/delete-run-index",
+            post(memory::delete_run_index),
+        )
         .route("/dev/memory/erase", post(memory::erase))
         .route("/dev/layout", get(layout::list))
         .route(
@@ -310,7 +316,10 @@ pub(super) fn setup(
     if listen.ip().is_loopback() {
         router = router
             .route("/dev/screens/ticket", post(screen_preview::issue))
-            .route("/gameplay/dev/screens/{ticket}", get(screen_preview::consume));
+            .route(
+                "/gameplay/dev/screens/{ticket}",
+                get(screen_preview::consume),
+            );
     }
     let router = router
         .layer(axum::middleware::from_fn(audit_command))

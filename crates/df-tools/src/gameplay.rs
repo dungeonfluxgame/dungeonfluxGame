@@ -14,6 +14,7 @@ mod character_clips;
 mod connection_tests;
 #[cfg(test)]
 mod content_rating_live_tests;
+mod cost;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
@@ -2421,6 +2422,17 @@ async fn serve_run(
     speech.attach_kit(&resource_kit);
     storyteller.attach_kit(&resource_kit);
     home_video::attach_kit(&resource_kit)?;
+    // The cost engine: every billed call on the hub's ledger is priced and kept per run.
+    if interactive {
+        println!(
+            "{}",
+            cost::open_run(
+                imagery.hub().ledger(),
+                &std::env::current_dir()?,
+                database.get_dbname().unwrap_or_default(),
+            )
+        );
+    }
     // The story memory: what the Dungeon Master remembers of this run, so the story stays
     // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
     startup.step("memory");
@@ -3130,6 +3142,8 @@ async fn serve_run(
         tokio::task::spawn_blocking(move || drop(worker)).await?;
     }
     shutdown.step("actor-drain");
+    // The cost log: every queued line is written before the run ends.
+    tokio::task::spawn_blocking(cost::close_run).await?;
     drained.map_err(|_| io::Error::other("gameplay actor drain failed"))?;
     released.map_err(|_| io::Error::other("gameplay exact-fence release failed"))?;
     if interactive {

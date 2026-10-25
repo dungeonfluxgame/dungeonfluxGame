@@ -249,6 +249,7 @@ fn print_help() {
          place [list|go <exit|place>]  where the party stands, its exits and the places the run knows; go moves the whole party (an exit to a new place creates it)\n\
          dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
          music                        place spec and cache status; explicit regenerate|clear|request|override\n\
+         cost [--compare <bill.csv>]  what the run and this session cost: by provider, model and category, by cause, top spenders; --compare lines a provider,model,category,usd bill up against the run\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
          memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
          memory entity <id> [refresh] [--audience <a>] [--superseded true]  every event naming it, and its dossier\n\
@@ -517,6 +518,7 @@ async fn dispatch(
             get(client, &format!("/dev/tempo?last={}", url_escape(&last))).await
         }
         "memory" => memory(client, positional, options).await,
+        "cost" => cost(client, options).await,
         "scene-changes" => {
             let last = flag("--last")
                 .or_else(|| positional.get(1).cloned())
@@ -861,6 +863,17 @@ async fn lore(
             _ => client.print_error("lore delete needs <scene> <name>"),
         },
         Some(_) => client.print_error("lore takes no word to read, or add|edit|delete"),
+    }
+}
+
+/// `dev cost [--compare <bill.csv>]`: the run's and session's cost, or the run beside a bill.
+async fn cost(client: &Client, options: &[(String, String)]) -> CommandResult {
+    match option_value(options, "--compare") {
+        None => get(client, "/dev/cost").await,
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(csv) => post(client, "/dev/cost/compare", &json!({"csv": csv})).await,
+            Err(_) => client.print_error("cost --compare needs a readable bill file"),
+        },
     }
 }
 

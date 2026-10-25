@@ -254,19 +254,39 @@ mod drawn_tests {
         let size = |spec: OutputSpec| (spec.width, spec.height);
         let (quality, plate) = dev(ImageKind::ScenePlate, OutputSpec::PLATE);
         assert_eq!((quality, size(plate)), (ImageQuality::Low, (1088, 608)));
-        assert_eq!(size(dev(ImageKind::CanonicalRoom, OutputSpec::BACKDROP).1), (1088, 608));
-        assert_eq!(size(dev(ImageKind::ArtifactCloseUp, OutputSpec::CLOSE_UP).1), (944, 704));
+        assert_eq!(
+            size(dev(ImageKind::CanonicalRoom, OutputSpec::BACKDROP).1),
+            (1088, 608)
+        );
+        assert_eq!(
+            size(dev(ImageKind::ArtifactCloseUp, OutputSpec::CLOSE_UP).1),
+            (944, 704)
+        );
         let (quality, cutout) = dev(ImageKind::CanonicalCharacter, OutputSpec::CUTOUT);
         assert_eq!((quality, size(cutout)), (ImageQuality::Low, (672, 992)));
         assert!(cutout.transparent);
-        for spec in [OutputSpec::PLATE, OutputSpec::BACKDROP, OutputSpec::CLOSE_UP, OutputSpec::CUTOUT] {
+        for spec in [
+            OutputSpec::PLATE,
+            OutputSpec::BACKDROP,
+            OutputSpec::CLOSE_UP,
+            OutputSpec::CUTOUT,
+        ] {
             let small = smallest_like(spec);
             assert!(u64::from(small.width) * u64::from(small.height) >= PROVIDER_MINIMUM_PIXELS);
             assert!(small.width % 16 == 0 && small.height % 16 == 0);
         }
-        for kind in [ImageKind::ScenePlate, ImageKind::CanonicalRoom, ImageKind::ArtifactCloseUp] {
+        for kind in [
+            ImageKind::ScenePlate,
+            ImageKind::CanonicalRoom,
+            ImageKind::ArtifactCloseUp,
+        ] {
             assert_eq!(
-                drawn_for(ImageryProfile::Production, ImageQuality::High, kind, OutputSpec::PLATE),
+                drawn_for(
+                    ImageryProfile::Production,
+                    ImageQuality::High,
+                    kind,
+                    OutputSpec::PLATE
+                ),
                 (ImageQuality::High, OutputSpec::PLATE),
                 "production draws every kind as configured"
             );
@@ -1590,8 +1610,17 @@ impl Engine {
         };
         edit.validate().map_err(|_| ImageFailure::InvalidRequest)?;
         let started = std::time::Instant::now();
-        let (mut stored_format, mut bytes, mut micro_dollars, supplier_credits) =
-            self.generate(&edit, format, key, priority, timing).await?;
+        let call = super::cost::image_call(
+            &self.provider,
+            self.model,
+            request.kind,
+            priority,
+            self.profile.label(),
+            &edit,
+        );
+        let (mut stored_format, mut bytes, mut micro_dollars, supplier_credits) = self
+            .generate(&edit, format, key, priority, &call, timing)
+            .await?;
         // ART-01: a plate or empty room is judged before it is stored; one that fails is made
         // once more with the defect named, and a second failure stores nothing.
         let gate = match request.kind {
@@ -1637,8 +1666,10 @@ impl Engine {
                     ..edit
                 };
                 retry.validate().map_err(|_| ImageFailure::BadOutput)?;
-                let (retry_format, retry_bytes, retry_cost, _) =
-                    self.generate(&retry, format, key, priority, timing).await?;
+                let retry_call = call.again("photo_retry");
+                let (retry_format, retry_bytes, retry_cost, _) = self
+                    .generate(&retry, format, key, priority, &retry_call, timing)
+                    .await?;
                 micro_dollars = micro_dollars.saturating_add(retry_cost);
                 let (failure, features) = scheduled_photo_failure(
                     self,
@@ -1729,6 +1760,7 @@ impl Engine {
         format: ImageFormat,
         key: &ImageKey,
         priority: ImagePriority,
+        call: &super::cost::CallSpec,
         timing: &mut RequestTiming,
     ) -> Result<(ImageFormat, Bytes, u64, Option<String>), ImageFailure> {
         let mut retries = 0;
@@ -1741,9 +1773,10 @@ impl Engine {
             let permit = permit
                 .map_err(|_| ImageFailure::DeadlineExceeded)?
                 .map_err(|_| ImageFailure::Interrupted)?;
-            self.charge();
+            let billed = self.charge(call);
             let started = std::time::Instant::now();
             let result = self.provider.edit(edit, self.deadline).await;
+            super::cost::settle_image_call(billed, &self.provider, &result);
             let elapsed = started.elapsed();
             timing.provider += elapsed;
             drop(permit);
@@ -1801,10 +1834,13 @@ impl Engine {
     }
 
     /// Spend is committed before the call and kept whatever the outcome: a call whose result is
-    /// unknown may still have been billed.
-    fn charge(&self) {
+    /// unknown may still have been billed. The returned call meters its dollars and must be
+    /// settled with the provider's result.
+    fn charge(&self, call: &super::cost::CallSpec) -> super::cost::BilledCall {
         self.ledger.reserve(IMAGE_UNIT, 1).commit(1);
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.ledger
+            .begin_call(call.clone(), &[(super::cost::Category::Calls, 1)])
     }
 
     /// Whether an image of `key` is on disk in any format, without waiting: the hub's

@@ -384,9 +384,16 @@ impl Generation {
                     cost.image_calls = cost.image_calls.saturating_add(1);
                     store_json(&directory.join("cost.json"), &cost)?;
                     service.hub.ledger().reserve(Unit::ImageCall, 1).commit(1);
+                    // The frame provider reports every failure alike, so a failed frame is
+                    // recorded as of unknown outcome with its one-call estimate.
+                    let billed = service.hub.ledger().begin_call(
+                        super::cost::clip_frame_call(CLIP_FRAME_MODEL, fallen),
+                        &[(super::cost::Category::Calls, 1)],
+                    );
                     let image = provider
                         .frame(&source, &frame_prompt(&fighter, fallen))
                         .await?;
+                    billed.settle(super::cost::image_token_usage(image.usage));
                     cost.image_micro_dollars = if image.usage == df_providers::ImageUsage::default()
                     {
                         None
@@ -1171,6 +1178,9 @@ fn weapon_by_id(id: &str) -> Option<df_rules::tactical::Weapon> {
     .find(|weapon| weapon.id() == id)
 }
 
+/// The model the clip frames are edited with; the cost engine prices the frames by it.
+const CLIP_FRAME_MODEL: df_providers::ImageEditModel = df_providers::ImageEditModel::Gpt25Sunburst;
+
 impl FrameProvider for df_providers::NativeImageEditProvider {
     fn frame<'a>(
         &'a self,
@@ -1183,7 +1193,7 @@ impl FrameProvider for df_providers::NativeImageEditProvider {
                 bytes: &source.bytes,
             }];
             let edit = df_providers::ImageEdit {
-                model: df_providers::ImageEditModel::Gpt25Sunburst,
+                model: CLIP_FRAME_MODEL,
                 prompt,
                 references: &references,
                 width: 1024,

@@ -329,9 +329,12 @@ pub(in crate::gameplay) struct Spend {
 ///   actual amount may differ from the reservation (a provider-reported usage).
 /// * Dropping a [`Reservation`], or [`Reservation::refund`], returns it (the call was not sent).
 /// * [`SpendLedger::reconcile`] corrects the committed total later from usage evidence.
+/// * [`SpendLedger::begin_call`] meters one billed call in dollars (see [`super::cost`]): the
+///   ledger's cost book prices it, attributes it and keeps it per run.
 #[derive(Default)]
 pub(in crate::gameplay) struct SpendLedger {
     accounts: Mutex<BTreeMap<Unit, Spend>>,
+    costs: super::cost::CostBook,
 }
 
 fn spend_audit(event: &str, unit: Unit, amount: u64, account: Spend) {
@@ -387,6 +390,22 @@ impl SpendLedger {
             .iter()
             .map(|(unit, spend)| (*unit, *spend))
             .collect()
+    }
+
+    /// Starts metering one billed provider call, right before it is sent: the one way a call's
+    /// dollar cost reaches the books. `estimate` is what is recorded if the call is dropped
+    /// unsettled (an unknown outcome). Never refused.
+    pub(in crate::gameplay) fn begin_call(
+        self: &Arc<Self>,
+        spec: super::cost::CallSpec,
+        estimate: &[(super::cost::Category, u64)],
+    ) -> super::cost::BilledCall {
+        super::cost::BilledCall::new(Arc::clone(self), spec, estimate)
+    }
+
+    /// The cost book: prices, the run and session totals and the run's log.
+    pub(in crate::gameplay) fn costs(&self) -> &super::cost::CostBook {
+        &self.costs
     }
 }
 
