@@ -1,0 +1,25 @@
+{
+  "schema": "dungeonflux.portal/1",
+  "sessions": {
+    "idle_hours": 336,
+    "absolute_hours": 720,
+    "touch_minutes": 5
+  },
+  "closure_window_days": 30,
+  "terms_version": "terms-2026-10",
+  "sign_in_failure_floor_ms": 750,
+  "limits": {
+    "login_failures_per_email": {"limit": 5, "window_minutes": 15},
+    "login_per_ip": {"limit": 20, "window_minutes": 15},
+    "signup_per_ip": {"limit": 5, "window_minutes": 60},
+    "signup_per_email": {"limit": 3, "window_minutes": 60},
+    "reset_per_email": {"limit": 3, "window_minutes": 60},
+    "reset_per_ip": {"limit": 10, "window_minutes": 1},
+    "verification_resend_per_account": {"limit": 3, "window_minutes": 60},
+    "token_page_per_ip": {"limit": 10, "window_minutes": 1},
+    "password_change_per_account": {"limit": 5, "window_minutes": 15},
+    "email_change_per_account": {"limit": 3, "window_minutes": 60},
+    "profile_per_account": {"limit": 30, "window_minutes": 60},
+    "data_per_account": {"limit": 3, "window_minutes": 1440}
+  }
+}

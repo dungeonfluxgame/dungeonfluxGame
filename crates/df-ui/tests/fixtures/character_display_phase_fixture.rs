@@ -30,7 +30,7 @@ mod browser {
             max_text_bytes: 4096,
         }
     }
-    fn view() -> CharacterDisplayView {
+    fn synthetic_view() -> CharacterDisplayView {
         CharacterDisplayView { generation: 1, public_scope_key: "synthetic-public-party".into(), revision: 1,
             chapter: "Prologue · A party takes shape".into(), title: "Every story needs its heroes".into(),
             description: "A lantern in the darkness. A promise waiting to be kept. Together, your stories will become an adventure.".into(),
@@ -66,12 +66,12 @@ mod browser {
         parent.append_child(&node)?;
         Ok(node)
     }
-    fn retain(node: &Node, all: &mut Vec<Node>) {
-        all.push(node.clone());
+    fn retain(node: &Node, retained_nodes: &mut Vec<Node>) {
+        retained_nodes.push(node.clone());
         let mut child = node.first_child();
         while let Some(node) = child {
             child = node.next_sibling();
-            retain(&node, all);
+            retain(&node, retained_nodes);
         }
     }
     fn public_nodes(root: &Element) -> Result<Vec<Node>, JsValue> {
@@ -88,15 +88,16 @@ mod browser {
         }
         Ok(nodes)
     }
-    fn check_disposal(document: &Document, implicit: bool) -> Result<(), JsValue> {
-        let mut data = view();
-        data.host_offers.push(host_offer());
+    fn check_disposal(document: &Document, drop_without_dispose: bool) -> Result<(), JsValue> {
+        let mut display_view = synthetic_view();
+        display_view.host_offers.push(host_offer());
         let deliveries = Rc::new(Cell::new(0));
         let captured = Rc::clone(&deliveries);
-        let surface = CharacterDisplaySurface::create(document, &data, limits(), move |_| {
-            captured.set(captured.get() + 1)
-        })
-        .map_err(error)?;
+        let surface =
+            CharacterDisplaySurface::create(document, &display_view, limits(), move |_| {
+                captured.set(captured.get() + 1)
+            })
+            .map_err(error)?;
         document
             .body()
             .ok_or_else(|| JsValue::from_str("body unavailable"))?
@@ -109,7 +110,7 @@ mod browser {
         let image = root
             .query_selector(".portrait-bitmap")?
             .ok_or_else(|| JsValue::from_str("portrait missing"))?;
-        if implicit {
+        if drop_without_dispose {
             drop(surface);
         } else {
             surface.dispose().map_err(error)?;
@@ -133,14 +134,15 @@ mod browser {
         Ok(())
     }
     fn check_updates_and_offers(document: &Document) -> Result<(), JsValue> {
-        let mut data = view();
-        data.host_offers.push(host_offer());
+        let mut display_view = synthetic_view();
+        display_view.host_offers.push(host_offer());
         let deliveries = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&deliveries);
-        let surface = CharacterDisplaySurface::create(document, &data, limits(), move |input| {
-            captured.borrow_mut().push(input)
-        })
-        .map_err(error)?;
+        let surface =
+            CharacterDisplaySurface::create(document, &display_view, limits(), move |input| {
+                captured.borrow_mut().push(input)
+            })
+            .map_err(error)?;
         document
             .body()
             .ok_or_else(|| JsValue::from_str("body unavailable"))?
@@ -157,7 +159,7 @@ mod browser {
         let member = root
             .query_selector(".display-member")?
             .ok_or_else(|| JsValue::from_str("member missing"))?;
-        let old_text = member
+        let member_text_node = member
             .query_selector("h2")?
             .and_then(|node| node.first_child())
             .ok_or_else(|| JsValue::from_str("member text missing"))?;
@@ -169,8 +171,8 @@ mod browser {
             .ok_or_else(|| JsValue::from_str("focusable button missing"))?
             .focus()?;
         for _ in 0..64 {
-            data.revision += 1;
-            surface.update(&data).map_err(error)?;
+            display_view.revision += 1;
+            surface.update(&display_view).map_err(error)?;
         }
         if !root
             .query_selector(".display-member")?
@@ -180,7 +182,9 @@ mod browser {
                 .active_element()
                 .as_ref()
                 .is_some_and(|node| node.is_same_node(Some(&button)))
-            || old_text.node_value().is_some_and(|text| !text.is_empty())
+            || member_text_node
+                .node_value()
+                .is_some_and(|text| !text.is_empty())
         {
             return Err(JsValue::from_str("keyed member/focus/text cleanup changed"));
         }
@@ -192,41 +196,41 @@ mod browser {
                 "host callback did not preserve reported readiness",
             ));
         }
-        let mut conflict = data.clone();
+        let mut conflict = display_view.clone();
         conflict.readiness = CharacterPublicReadiness::Locked;
         if surface.update(&conflict).is_ok() {
             return Err(JsValue::from_str("conflicting equal revision accepted"));
         }
-        data.revision += 1;
-        data.connection = CharacterDisplayConnection::Offline;
-        surface.update(&data).map_err(error)?;
+        display_view.revision += 1;
+        display_view.connection = CharacterDisplayConnection::Offline;
+        surface.update(&display_view).map_err(error)?;
         button.dispatch_event(&Event::new("click")?)?;
         if deliveries.borrow().len() != 1 {
             return Err(JsValue::from_str("offline host input admitted"));
         }
-        data.revision += 1;
-        data.connection = CharacterDisplayConnection::Connected;
-        data.host_offers.clear();
-        surface.update(&data).map_err(error)?;
+        display_view.revision += 1;
+        display_view.connection = CharacterDisplayConnection::Connected;
+        display_view.host_offers.clear();
+        surface.update(&display_view).map_err(error)?;
         button.dispatch_event(&Event::new("click")?)?;
         if deliveries.borrow().len() != 1 {
             return Err(JsValue::from_str("withdrawn host input admitted"));
         }
-        data.revision += 1;
-        data.host_offers.push(host_offer());
-        surface.update(&data).map_err(error)?;
-        let old_generation = root
+        display_view.revision += 1;
+        display_view.host_offers.push(host_offer());
+        surface.update(&display_view).map_err(error)?;
+        let stale_offer_button = root
             .query_selector(".display-host-offers button")?
             .ok_or_else(|| JsValue::from_str("replacement offer missing"))?;
-        let retained = public_nodes(&root)?;
-        data.generation += 1;
-        data.public_scope_key = "new-synthetic-public-party".into();
-        data.revision = 1;
-        data.members.clear();
-        surface.update(&data).map_err(error)?;
-        old_generation.dispatch_event(&Event::new("click")?)?;
+        let retained_nodes = public_nodes(&root)?;
+        display_view.generation += 1;
+        display_view.public_scope_key = "new-synthetic-public-party".into();
+        display_view.revision = 1;
+        display_view.members.clear();
+        surface.update(&display_view).map_err(error)?;
+        stale_offer_button.dispatch_event(&Event::new("click")?)?;
         if deliveries.borrow().len() != 1
-            || retained
+            || retained_nodes
                 .iter()
                 .filter(|node| node.node_type() == Node::TEXT_NODE)
                 .any(|node| node.node_value().is_some_and(|text| !text.is_empty()))
@@ -235,12 +239,12 @@ mod browser {
                 "old generation host target or retained Text survived",
             ));
         }
-        let current = root
+        let current_offer_button = root
             .query_selector(".display-host-offers button")?
             .ok_or_else(|| JsValue::from_str("current offer missing"))?;
-        current.dispatch_event(&Event::new("click")?)?;
+        current_offer_button.dispatch_event(&Event::new("click")?)?;
         if !deliveries.borrow().last().is_some_and(|input| {
-            input.generation == 2 && input.public_scope_key == data.public_scope_key
+            input.generation == 2 && input.public_scope_key == display_view.public_scope_key
         }) {
             return Err(JsValue::from_str("host callback used wrong generation"));
         }
@@ -248,9 +252,9 @@ mod browser {
         Ok(())
     }
     fn check_portraits(document: &Document) -> Result<(), JsValue> {
-        let mut data = view();
-        let surface =
-            CharacterDisplaySurface::create(document, &data, limits(), |_| {}).map_err(error)?;
+        let mut display_view = synthetic_view();
+        let surface = CharacterDisplaySurface::create(document, &display_view, limits(), |_| {})
+            .map_err(error)?;
         document
             .body()
             .ok_or_else(|| JsValue::from_str("body unavailable"))?
@@ -259,44 +263,44 @@ mod browser {
             .root()
             .query_selector(".display-portrait")?
             .ok_or_else(|| JsValue::from_str("portrait frame missing"))?;
-        let old = frame
+        let previous_image = frame
             .query_selector(".portrait-bitmap")?
             .ok_or_else(|| JsValue::from_str("portrait bitmap missing"))?;
-        let flat = frame
+        let portrait_fallback = frame
             .query_selector(".portrait-fallback")?
             .ok_or_else(|| JsValue::from_str("portrait fallback missing"))?;
-        old.dispatch_event(&Event::new("error")?)?;
+        previous_image.dispatch_event(&Event::new("error")?)?;
         for _ in 0..64 {
-            data.revision += 1;
-            surface.update(&data).map_err(error)?;
+            display_view.revision += 1;
+            surface.update(&display_view).map_err(error)?;
         }
-        if !old.has_attribute("hidden")
-            || flat.has_attribute("hidden")
+        if !previous_image.has_attribute("hidden")
+            || portrait_fallback.has_attribute("hidden")
             || !frame
                 .query_selector(".portrait-bitmap")?
                 .as_ref()
-                .is_some_and(|image| image.is_same_node(Some(&old)))
+                .is_some_and(|image| image.is_same_node(Some(&previous_image)))
         {
             return Err(JsValue::from_str(
                 "shared portrait failed source retried/unhidden",
             ));
         }
-        data.revision += 1;
-        if let Some(member) = data.members.first_mut() {
+        display_view.revision += 1;
+        if let Some(member) = display_view.members.first_mut() {
             member.portrait = Some(CharacterPortrait::Vell);
         }
-        surface.update(&data).map_err(error)?;
-        let current = frame
+        surface.update(&display_view).map_err(error)?;
+        let current_image = frame
             .query_selector(".portrait-bitmap")?
             .ok_or_else(|| JsValue::from_str("replacement image missing"))?;
-        current.dispatch_event(&Event::new("load")?)?;
-        old.dispatch_event(&Event::new("error")?)?;
-        if current.has_attribute("hidden") || !flat.has_attribute("hidden") {
+        current_image.dispatch_event(&Event::new("load")?)?;
+        previous_image.dispatch_event(&Event::new("error")?)?;
+        if current_image.has_attribute("hidden") || !portrait_fallback.has_attribute("hidden") {
             return Err(JsValue::from_str("retired shared portrait event published"));
         }
         surface.dispose().map_err(error)?;
-        current.dispatch_event(&Event::new("load")?)?;
-        if !current.has_attribute("hidden") {
+        current_image.dispatch_event(&Event::new("load")?)?;
+        if !current_image.has_attribute("hidden") {
             return Err(JsValue::from_str("disposed shared portrait published"));
         }
         Ok(())
@@ -319,7 +323,7 @@ mod browser {
         output.set_attribute("role", "status")?;
         output.set_attribute("aria-live", "polite")?;
         output.set_text_content(Some("Public roster fixture only. The player character form is a separate Rust component; no production adapters or client shells are connected."));
-        let model = Rc::new(RefCell::new(view()));
+        let model = Rc::new(RefCell::new(synthetic_view()));
         let submitted = output.clone();
         let surface = Rc::new(CharacterDisplaySurface::create(&document, &model.borrow(), limits(), move |offer| {
             submitted.set_text_content(Some(&format!("Local synthetic host input received advertised offer {} at revision {}. Reported public readiness remains server-owned.", offer.host_offer_id, offer.revision)));
@@ -368,10 +372,19 @@ mod browser {
                     2 => { next.readiness = CharacterPublicReadiness::Locked; next.public_notice = "Synthetic server reports public party locked.".into(); },
                     3 => { next.connection = CharacterDisplayConnection::Offline; next.connection_label = "Synthetic offline view · showing the last supplied public roster".into(); next.public_notice = "Connection unavailable · advertised input is temporarily unavailable.".into(); },
                     4 => next.public_notice = "Synthetic public service error · character editing details remain on permitted player clients.".into(),
-                    5 => { next.connection = CharacterDisplayConnection::Connected; next.connection_label = view().connection_label; next.public_notice = view().public_notice; },
+                    5 => {
+                        next.connection = CharacterDisplayConnection::Connected;
+                        next.connection_label = synthetic_view().connection_label;
+                        next.public_notice = synthetic_view().public_notice;
+                    }
                     6 => next.host_offers = vec![host_offer()],
                     7 => next.host_offers.clear(),
-                    8 => { let generation = next.generation + 1; next = view(); next.generation = generation; next.public_scope_key = format!("synthetic-public-party-{generation}"); },
+                    8 => {
+                        let generation = next.generation + 1;
+                        next = synthetic_view();
+                        next.generation = generation;
+                        next.public_scope_key = format!("synthetic-public-party-{generation}");
+                    }
                     11 => { next.connection = CharacterDisplayConnection::Reconnecting; next.connection_label = "Synthetic reconnecting view · recovering public roster".into(); next.public_notice = "Connection recovery pending · host input is temporarily unavailable.".into(); },
                     _ => for member in &mut next.members { member.portrait = Some(if case == 9 { CharacterPortrait::Vell } else { CharacterPortrait::Narrator }); },
                 }

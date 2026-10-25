@@ -22,9 +22,48 @@ message TableSettingChange { oneof value { bool choice_hints_hidden = 1; } }
 message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32 proficiency_bonus = 3; sint32 total = 4; uint32 difficulty_class = 5; bool succeeded = 6; string source_revision = 7; repeated uint32 faces = 8; sint32 roll_mode = 9; }
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
-message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; }
-message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; PlaceMusicPlan place_music = 11; repeated string effects_off = 12; BattleCameraOverride camera_override = 13; }
+message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; SessionSpendView spend = 9; string operational_notice = 10; }
+message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; PlaceMusicPlan place_music = 11; repeated string effects_off = 12; BattleCameraOverride camera_override = 13; SessionSpendView spend = 14; string operational_notice = 15; }
 message ViewMessage { SessionRevision revision = 1; oneof audience { PlayerGameplayView player = 2; DisplayGameplayView display = 3; } }
+
+// Customer-safe amounts only. Values are integer micro-dollars. No fee, multiplier,
+// provider price, other payer, or payment instrument data belongs in these projections.
+enum SessionSpendStatus { SESSION_SPEND_STATUS_UNSPECIFIED = 0; FUNDED = 1; LOW_BALANCE = 2; EXHAUSTED = 3; }
+message SessionSpendView {
+  oneof role { HostSpendView host = 1; PayerSpendView payer = 2; NonPayingSpendView non_paying_player = 3; DisplaySpendView display = 4; }
+}
+message HostSpendView {
+  uint64 ceiling_micro_dollars = 1;
+  uint64 held_micro_dollars = 2;
+  uint64 spent_micro_dollars = 3;
+  uint64 remaining_micro_dollars = 4;
+  uint64 pace_micro_dollars_per_hour = 5;
+  uint64 consented_minimum_pace_micro_dollars_per_hour = 6;
+  uint64 consented_maximum_pace_micro_dollars_per_hour = 7;
+  SessionSpendStatus status = 8;
+  bool may_pause_expensive_media = 9;
+  bool may_change_pace = 10;
+  bool may_stop_session = 11;
+  bool paid_work_stopped = 12;
+  ExpensiveWorkQuote quote = 13;
+}
+message PayerSpendView {
+  uint64 own_remaining_authorization_micro_dollars = 1;
+  uint64 own_share_micro_dollars = 2;
+  SessionSpendStatus status = 3;
+}
+message NonPayingSpendView { SessionSpendStatus status = 1; }
+message DisplaySpendView { SessionSpendStatus status = 1; bool paid_work_stopped = 2; }
+message ExpensiveWorkQuote {
+  string output_description = 1;
+  uint64 quoted_cost_micro_dollars = 2;
+  uint64 maximum_cost_micro_dollars = 3;
+  enum PayerScope { PAYER_SCOPE_UNSPECIFIED = 0; HOST_ONLY = 1; CONSENTED_CONTRIBUTORS = 2; }
+  PayerScope payer_scope = 4;
+  uint64 expires_at_unix_millis = 5;
+  bool host_confirmation_required = 6;
+  bool payer_approval_required = 7;
+}
 message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }
 

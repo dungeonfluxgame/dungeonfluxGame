@@ -37,6 +37,12 @@ impl Drop for AuditScope {
         AUDIT_CONTEXT.with_borrow_mut(|context| *context = std::mem::take(&mut self.0));
     }
 }
+/// The correlation in force on this thread, owned, so asynchronous work can capture it at dispatch
+/// and re-enter it with `audit_scope` when it later emits its audit lines.
+pub fn current_audit_context() -> AuditContext {
+    AUDIT_CONTEXT.with_borrow(Clone::clone)
+}
+
 /// Set correlation for synchronous work on the current thread only.
 /// Never hold this guard across `.await`, including local browser futures: another task
 /// may run on the same thread. Capture owned AuditContext for asynchronous dispatch instead.

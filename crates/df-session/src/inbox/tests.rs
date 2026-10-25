@@ -600,3 +600,71 @@ fn input_admitted_in_the_post_wake_gap_is_reduced_without_a_pause() {
     assert_eq!(reducer.events, vec!["wake", "reduce"]);
     assert_eq!(outcome.reduced_inputs, 1);
 }
+
+struct WaitReducer {
+    waits: Vec<std::time::Duration>,
+    reduced: usize,
+}
+
+impl Reducer<GameInput> for WaitReducer {
+    fn queued_for(&mut self, wait: std::time::Duration) {
+        self.waits.push(wait);
+    }
+
+    fn reduce(&mut self, _sequence: AdmissionSequence, _input: GameInput) {
+        self.reduced += 1;
+    }
+}
+
+#[test]
+fn queue_wait_is_measured_from_admission_to_dequeue() {
+    // Before the enqueue stamp, the reducer was never told how long an input waited.
+    let (handle, actor) = bounded_inbox();
+    submit(&handle, input(1, 0));
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    submit(&handle, input(2, 0));
+    handle.stop().unwrap();
+    let mut reducer = WaitReducer {
+        waits: Vec::new(),
+        reduced: 0,
+    };
+
+    actor.run(&mut reducer).unwrap();
+
+    assert_eq!(reducer.reduced, 2);
+    assert_eq!(reducer.waits.len(), 2, "{:?}", reducer.waits);
+    // The first input was admitted before the sleep, so it waited at least that long. The second
+    // was admitted after the sleep and was dequeued straight away.
+    assert!(
+        reducer.waits[0] >= std::time::Duration::from_millis(30),
+        "{:?}",
+        reducer.waits
+    );
+    assert!(reducer.waits[1] < reducer.waits[0], "{:?}", reducer.waits);
+}
+
+#[test]
+fn queue_wait_counts_admission_retries_from_the_first_attempt() {
+    // A caller whose first attempt was 40 ms ago, then retried and was admitted now. The owner must
+    // see the whole 40 ms as queue wait, not only the time since the last retry. The first attempt
+    // is an instant in the past, so no test sleeps.
+    let (handle, actor) = bounded_inbox();
+    let first_attempt = std::time::Instant::now() - std::time::Duration::from_millis(40);
+    if let Err(refused) = handle.try_submit_since(input(1, 0), first_attempt) {
+        panic!("{:?}", refused.reason);
+    }
+    handle.stop().unwrap();
+    let mut reducer = WaitReducer {
+        waits: Vec::new(),
+        reduced: 0,
+    };
+
+    actor.run(&mut reducer).unwrap();
+
+    assert_eq!(reducer.waits.len(), 1, "{:?}", reducer.waits);
+    assert!(
+        reducer.waits[0] >= std::time::Duration::from_millis(40),
+        "{:?}",
+        reducer.waits
+    );
+}

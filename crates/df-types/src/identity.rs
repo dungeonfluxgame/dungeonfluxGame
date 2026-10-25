@@ -41,7 +41,7 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
-// The five distinct contracts share canonical byte validation, not interchangeability.
+// The distinct contracts share canonical byte validation, not interchangeability.
 macro_rules! identity {
     ($name:ident) => {
         /// An opaque, caller-supplied nonzero 128-bit identity in canonical byte order.
@@ -82,3 +82,9 @@ identity!(OperationId);
 identity!(SubscriptionId);
 identity!(PaidInvoiceId);
 identity!(PriceVersion);
+identity!(AccountId);
+identity!(TenantId);
+identity!(CampaignId);
+identity!(WebSessionId);
+identity!(CheckoutId);
+identity!(OperatorId);

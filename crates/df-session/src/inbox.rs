@@ -2,7 +2,7 @@ use df_model::checkpoint::GameInput;
 use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const MAX_INBOX_ITEMS: usize = 256;
 pub const MAX_INBOX_BYTES: usize = 2 * 1024 * 1024;
@@ -33,6 +33,11 @@ impl ActorInput for GameInput {
 /// A reducer must complete each call with a bounded lifetime and explicit input
 /// outcome. This queue does not supply a replacement engine or commit authority.
 pub trait Reducer<I: ActorInput> {
+    /// Called just before `reduce` with how long the input waited, from its first admission attempt
+    /// (`try_submit_since`) to its dequeue, so admission retries are counted. Reducers that do not
+    /// time their queue ignore it.
+    fn queued_for(&mut self, _wait: Duration) {}
+
     fn reduce(&mut self, sequence: AdmissionSequence, input: I);
 }
 
@@ -78,6 +83,7 @@ struct QueuedInput<I> {
     input: I,
     sequence: AdmissionSequence,
     retained_bytes: usize,
+    waiting_since: Instant,
 }
 
 struct Queue<I> {
@@ -146,6 +152,17 @@ impl<I> Clone for InboxHandle<I> {
 
 impl<I: ActorInput> InboxHandle<I> {
     pub fn try_submit(&self, input: I) -> Result<AdmissionSequence, RefusedInput<I>> {
+        self.try_submit_since(input, Instant::now())
+    }
+
+    /// Admits `input` as waiting since `since`, the first moment its caller tried to admit it. A caller
+    /// that retries after a full queue passes its first attempt, so the queue wait it reports includes
+    /// the time spent retrying.
+    pub fn try_submit_since(
+        &self,
+        input: I,
+        since: Instant,
+    ) -> Result<AdmissionSequence, RefusedInput<I>> {
         let Some(bytes) = input
             .retained_heap_bytes()
             .and_then(|heap| heap.checked_add(size_of::<I>()))
@@ -188,6 +205,7 @@ impl<I: ActorInput> InboxHandle<I> {
             input,
             sequence,
             retained_bytes: bytes,
+            waiting_since: since,
         });
         queue.usage.retained_items += 1;
         queue.usage.retained_bytes += bytes;
@@ -306,6 +324,7 @@ impl<I: ActorInput> ActorLoop<I> {
                 continue;
             };
             drop(queue);
+            reducer.queued_for(Instant::now().saturating_duration_since(queued.waiting_since));
             // Neither queue lock nor mutable state reference escapes to producers.
             // Capacity remains charged while the owner reduces this input.
             reducer.reduce(queued.sequence, queued.input);
