@@ -18,9 +18,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-const WAIT: Duration = Duration::from_secs(5);
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn root(name: &str) -> PathBuf {
+fn fixture_root(case_name: &str) -> PathBuf {
     assert!(
         [
             "ingress-normal",
@@ -32,7 +32,7 @@ fn root(name: &str) -> PathBuf {
             "ingress-queue-cost",
             "ingress-queue-rollback",
         ]
-        .contains(&name)
+        .contains(&case_name)
     );
     let namespace = std::env::var("DF_TELEMETRY_FIXTURE_NAMESPACE").unwrap_or_else(|_| {
         format!(
@@ -52,7 +52,7 @@ fn root(name: &str) -> PathBuf {
     );
     let path =
         PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-            .join(format!("ownedfixture-{namespace}-{name}"));
+            .join(format!("ownedfixture-{namespace}-{case_name}"));
     assert!(path.file_name().unwrap().len() <= 100);
     assert!(
         !path.exists(),
@@ -111,20 +111,22 @@ fn spans(span: Span) -> ExportTraceServiceRequest {
     }
 }
 
-fn accepted(store: &Store, signal: Signal, bytes: &[u8], records: usize) {
+fn accepted(store: &Store, signal: Signal, bytes: &[u8], expected_record_count: usize) {
     let receipt = store
         .ingress()
         .submit(signal, bytes)
         .unwrap()
-        .wait(WAIT)
+        .wait(COMPLETION_TIMEOUT)
         .unwrap();
     assert_eq!(receipt.durability, Durability::Committed);
-    assert_eq!(receipt.records, records);
+    assert_eq!(receipt.records, expected_record_count);
 }
 
-fn refused(store: &Store, signal: Signal, bytes: &[u8], error: TelemetryError) {
+fn refused(store: &Store, signal: Signal, bytes: &[u8], expected_error: TelemetryError) {
     let before = store.health();
-    assert!(matches!(store.ingress().submit(signal, bytes), Err(actual) if actual == error));
+    assert!(
+        matches!(store.ingress().submit(signal, bytes), Err(actual) if actual == expected_error)
+    );
     let after = store.health();
     assert_eq!(after.admitted, before.admitted);
     assert_eq!(after.pending_items, before.pending_items);
@@ -135,7 +137,7 @@ fn refused(store: &Store, signal: Signal, bytes: &[u8], error: TelemetryError) {
     assert_eq!(after.unconfirmed_gaps, before.unconfirmed_gaps + 1);
     assert_eq!(
         after.capacity,
-        before.capacity + u64::from(error == TelemetryError::Capacity)
+        before.capacity + u64::from(expected_error == TelemetryError::Capacity)
     );
 }
 
@@ -147,9 +149,9 @@ fn varint(mut value: u64, bytes: &mut Vec<u8>) {
     bytes.push(value as u8);
 }
 
-fn nested(field: u64, payload: &[u8]) -> Vec<u8> {
+fn nested(field_number: u64, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    varint(field << 3 | 2, &mut bytes);
+    varint(field_number << 3 | 2, &mut bytes);
     varint(payload.len() as u64, &mut bytes);
     bytes.extend(payload);
     bytes
@@ -157,7 +159,7 @@ fn nested(field: u64, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn ordinary_logs_and_spans_preserve_typed_events_links_and_maximum_sequence() {
-    let path = root("ingress-normal");
+    let path = fixture_root("ingress-normal");
     let mut store = Store::open(&path, TelemetryLimits::default(), None).unwrap();
     let mut log = record(1);
     log.attributes[2] = attribute("df.source_sequence", Value::IntValue(i64::MAX));
@@ -193,13 +195,13 @@ fn ordinary_logs_and_spans_preserve_typed_events_links_and_maximum_sequence() {
     assert_eq!(page.records.len(), 2);
     assert_eq!(page.records[0].otlp, bytes);
     assert_eq!(page.records[1].otlp, span_bytes);
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
 fn byte_and_record_caps_accept_the_edge_and_refuse_the_next_byte_or_record() {
     let mut store = Store::open(
-        &root("ingress-byte-boundaries"),
+        &fixture_root("ingress-byte-boundaries"),
         TelemetryLimits::default(),
         None,
     )
@@ -264,13 +266,13 @@ fn byte_and_record_caps_accept_the_edge_and_refuse_the_next_byte_or_record() {
         &logs((35..68).map(record).collect()).encode_to_vec(),
         TelemetryError::Oversized,
     );
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
 fn message_event_and_aggregate_fields_share_the_existing_structural_budgets() {
     let mut store = Store::open(
-        &root("ingress-field-boundaries"),
+        &fixture_root("ingress-field-boundaries"),
         TelemetryLimits::default(),
         None,
     )
@@ -326,13 +328,13 @@ fn message_event_and_aggregate_fields_share_the_existing_structural_budgets() {
         &nested(1, &nested(2, &scope)),
         TelemetryError::Oversized,
     );
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
 fn nested_values_accept_depth_twelve_and_refuse_deeper_allocations() {
     let mut store = Store::open(
-        &root("ingress-depth-boundaries"),
+        &fixture_root("ingress-depth-boundaries"),
         TelemetryLimits::default(),
         None,
     )
@@ -366,13 +368,13 @@ fn nested_values_accept_depth_twelve_and_refuse_deeper_allocations() {
         &logs(vec![log]).encode_to_vec(),
         TelemetryError::Oversized,
     );
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
 fn required_capture_identities_refuse_missing_duplicate_mistyped_and_invalid_values() {
     let mut store = Store::open(
-        &root("ingress-identity-boundaries"),
+        &fixture_root("ingress-identity-boundaries"),
         TelemetryLimits::default(),
         None,
     )
@@ -454,13 +456,13 @@ fn required_capture_identities_refuse_missing_duplicate_mistyped_and_invalid_val
         1,
     );
     assert_eq!(store.health().admitted, 1);
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
 fn malformed_wire_and_bad_correlation_lengths_refuse_without_reserving_the_queue() {
     let mut store = Store::open(
-        &root("ingress-malformed-boundaries"),
+        &fixture_root("ingress-malformed-boundaries"),
         TelemetryLimits::default(),
         None,
     )
@@ -493,17 +495,17 @@ fn malformed_wire_and_bad_correlation_lengths_refuse_without_reserving_the_queue
     let mut bytes = logs(vec![record(1)]).encode_to_vec();
     bytes.extend(nested(100, &[0, 255, 128]));
     accepted(&store, Signal::Logs, &bytes, 1);
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 fn gated_store(
-    name: &str,
+    case_name: &str,
     limits: TelemetryLimits,
 ) -> (Store, mpsc::Receiver<BarrierStage>, mpsc::Sender<()>) {
     let (reached, receiver) = mpsc::sync_channel(1);
     let (release, gate) = mpsc::channel();
     let store = Store::open(
-        &root(name),
+        &fixture_root(case_name),
         limits,
         Some(FailureBarrier {
             stage: BarrierStage::BeforeSpool,
@@ -538,16 +540,16 @@ fn retained_projection_bytes_are_charged_and_byte_refusal_rolls_back_items() {
     };
     let (mut store, reached, release) = gated_store("ingress-queue-cost", limits);
     let pending = store.ingress().submit(Signal::Logs, &bytes).unwrap();
-    reached.recv_timeout(WAIT).unwrap();
+    reached.recv_timeout(COMPLETION_TIMEOUT).unwrap();
     assert_eq!(store.health().pending_bytes, cost);
     assert_eq!(store.health().pending_items, 1);
     refused(&store, Signal::Logs, &bytes, TelemetryError::Capacity);
     release.send(()).unwrap();
-    pending.wait(WAIT).unwrap();
-    store.flush(WAIT).unwrap();
+    pending.wait(COMPLETION_TIMEOUT).unwrap();
+    store.flush(COMPLETION_TIMEOUT).unwrap();
     assert_eq!(store.health().pending_bytes, 0);
     assert_eq!(store.health().pending_items, 0);
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }
 
 #[test]
@@ -571,12 +573,12 @@ fn capacity_refusal_leaves_space_for_a_smaller_valid_admission() {
     assert_eq!(store.health().pending_items, 0);
     let bytes = logs(vec![record(2)]).encode_to_vec();
     let pending = store.ingress().submit(Signal::Logs, &bytes).unwrap();
-    reached.recv_timeout(WAIT).unwrap();
+    reached.recv_timeout(COMPLETION_TIMEOUT).unwrap();
     refused(&store, Signal::Logs, &bytes, TelemetryError::Capacity);
     release.send(()).unwrap();
-    pending.wait(WAIT).unwrap();
-    store.flush(WAIT).unwrap();
+    pending.wait(COMPLETION_TIMEOUT).unwrap();
+    store.flush(COMPLETION_TIMEOUT).unwrap();
     assert_eq!(store.health().pending_items, 0);
     assert_eq!(store.health().pending_bytes, 0);
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(COMPLETION_TIMEOUT).unwrap();
 }

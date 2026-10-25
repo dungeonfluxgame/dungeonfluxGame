@@ -159,7 +159,7 @@ pub fn inspect_evidence(
     handles: &[OwnedHandle<'_>],
     limits: EvidenceLimits,
 ) -> Result<EvidenceSummary, EvidenceError> {
-    let records = required
+    let total_record_count = required
         .len()
         .checked_add(report.criteria.len())
         .and_then(|count| count.checked_add(outputs.len()))
@@ -168,7 +168,7 @@ pub fn inspect_evidence(
     if limits.maximum_records == 0
         || limits.maximum_text_bytes == 0
         || required.is_empty()
-        || records > limits.maximum_records
+        || total_record_count > limits.maximum_records
     {
         return Err(EvidenceError::Capacity);
     }
@@ -208,7 +208,7 @@ pub fn inspect_evidence(
             return Err(EvidenceError::UnterminatedHandle);
         }
     }
-    let mut bytes = 0usize;
+    let mut total_text_bytes = 0usize;
     let mut summary = EvidenceSummary::default();
     for (index, evidence) in report.criteria.iter().enumerate() {
         if report
@@ -224,7 +224,7 @@ pub fn inspect_evidence(
             .find(|criterion| criterion.id == evidence.criterion)
             .ok_or(EvidenceError::InvalidCriterionMap)?;
         for text in [evidence.procedure, evidence.input, evidence.expected] {
-            count_text(&mut bytes, text, limits.maximum_text_bytes)?;
+            count_text(&mut total_text_bytes, text, limits.maximum_text_bytes)?;
         }
         match evidence.state {
             CriterionState::Observed {
@@ -232,15 +232,15 @@ pub fn inspect_evidence(
                 observed,
                 output,
             } => {
-                count_text(&mut bytes, observed, limits.maximum_text_bytes)?;
-                let capable = match criterion.observation {
+                count_text(&mut total_text_bytes, observed, limits.maximum_text_bytes)?;
+                let has_required_capability = match criterion.observation {
                     ObservationKind::NativeBoundary => true,
                     ObservationKind::BrowserInteractionAndVision => {
                         context.computer_use && context.vision
                     }
                     ObservationKind::AudioPlayback => context.audio,
                 };
-                if !capable {
+                if !has_required_capability {
                     return Err(EvidenceError::MissingCapability);
                 }
                 let mut matches = outputs
@@ -265,11 +265,15 @@ pub fn inspect_evidence(
             | CriterionState::Unsupported { reason }
             | CriterionState::Inconclusive { reason }
             | CriterionState::Unperformed { reason } => {
-                count_text(&mut bytes, reason, limits.maximum_text_bytes)?;
+                count_text(&mut total_text_bytes, reason, limits.maximum_text_bytes)?;
                 summary.unobserved += 1;
             }
             CriterionState::WorkerSupportingClaim { reference } => {
-                count_text(&mut bytes, reference.as_str(), limits.maximum_text_bytes)?;
+                count_text(
+                    &mut total_text_bytes,
+                    reference.as_str(),
+                    limits.maximum_text_bytes,
+                )?;
                 summary.unobserved += 1;
             }
         }
@@ -277,11 +281,15 @@ pub fn inspect_evidence(
     Ok(summary)
 }
 
-fn count_text(bytes: &mut usize, text: &str, maximum: usize) -> Result<(), EvidenceError> {
-    *bytes = bytes
+fn count_text(
+    total_text_bytes: &mut usize,
+    text: &str,
+    maximum: usize,
+) -> Result<(), EvidenceError> {
+    *total_text_bytes = total_text_bytes
         .checked_add(text.len())
         .ok_or(EvidenceError::Capacity)?;
-    if *bytes > maximum {
+    if *total_text_bytes > maximum {
         return Err(EvidenceError::Capacity);
     }
     if text.trim().is_empty() {

@@ -18,10 +18,10 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-const WAIT: Duration = Duration::from_secs(5);
-const OUTPUT_LIMIT: usize = 8192;
-const READY: &[u8] = b"durability-ready\n";
-const CASES: [&str; 6] = [
+const FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAXIMUM_OUTPUT_BYTES: usize = 8192;
+const READY_MARKER: &[u8] = b"durability-ready\n";
+const DURABILITY_CASES: [&str; 6] = [
     "durable-preaccept",
     "durable-spooled",
     "durable-committed",
@@ -31,7 +31,7 @@ const CASES: [&str; 6] = [
 ];
 
 fn fixture_root(namespace: &str, case: &str) -> PathBuf {
-    assert!(CASES.contains(&case));
+    assert!(DURABILITY_CASES.contains(&case));
     assert!(!namespace.is_empty());
     assert!(
         namespace
@@ -52,7 +52,7 @@ fn attribute(name: &str, value: Value) -> KeyValue {
     }
 }
 
-fn record(id: u8, sequence: i64) -> LogRecord {
+fn record(record_id_byte: u8, sequence: i64) -> LogRecord {
     LogRecord {
         time_unix_nano: 123,
         body: Some(AnyValue {
@@ -62,7 +62,7 @@ fn record(id: u8, sequence: i64) -> LogRecord {
             attribute("df.producer_id", Value::StringValue("07".repeat(16))),
             attribute(
                 "df.record_id",
-                Value::StringValue(format!("{id:02x}").repeat(16)),
+                Value::StringValue(format!("{record_id_byte:02x}").repeat(16)),
             ),
             attribute("df.source_sequence", Value::IntValue(sequence)),
         ],
@@ -83,7 +83,7 @@ fn request(records: Vec<LogRecord>) -> Vec<u8> {
     .encode_to_vec()
 }
 
-fn batch() -> Vec<u8> {
+fn durability_batch() -> Vec<u8> {
     request(vec![record(8, 1), record(9, 2)])
 }
 
@@ -97,12 +97,12 @@ fn query(path: &Path) -> QueryPage {
 fn assert_corpus(page: &QueryPage) {
     assert_eq!(page.records.len(), 2);
     assert_eq!(page.committed_watermark, 2);
-    for (view, (id, sequence)) in page.records.iter().zip([(8, 1), (9, 2)]) {
+    for (view, (record_id_byte, sequence)) in page.records.iter().zip([(8, 1), (9, 2)]) {
         assert_eq!(view.position, sequence as u64);
         assert_eq!(view.producer.bytes(), [7; 16]);
-        assert_eq!(view.record.bytes(), [id; 16]);
+        assert_eq!(view.record.bytes(), [record_id_byte; 16]);
         assert_eq!(view.source_sequence, sequence);
-        assert_eq!(view.otlp, request(vec![record(id, sequence)]));
+        assert_eq!(view.otlp, request(vec![record(record_id_byte, sequence)]));
     }
     assert!(page.unconfirmed_capture_gaps);
 }
@@ -117,9 +117,11 @@ fn drain(mut pipe: impl Read, ready: Option<mpsc::SyncSender<()>>) -> io::Result
         if count == 0 {
             return Ok(output);
         }
-        let retained = count.min(OUTPUT_LIMIT.saturating_sub(output.len()));
+        let retained = count.min(MAXIMUM_OUTPUT_BYTES.saturating_sub(output.len()));
         output.extend_from_slice(&buffer[..retained]);
-        if output.windows(READY.len()).any(|bytes| bytes == READY)
+        if output
+            .windows(READY_MARKER.len())
+            .any(|bytes| bytes == READY_MARKER)
             && let Some(sender) = ready.take()
         {
             sender.try_send(()).map_err(io::Error::other)?;
@@ -168,14 +170,14 @@ impl FixtureProcess {
     }
 
     fn wait_ready(&self) {
-        self.ready.recv_timeout(WAIT).unwrap();
+        self.ready.recv_timeout(FIXTURE_TIMEOUT).unwrap();
     }
 
     fn finish(mut self, crash: bool) {
         if crash {
             self.child.kill().unwrap();
         }
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + FIXTURE_TIMEOUT;
         let status: ExitStatus = loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 break status;
@@ -241,8 +243,11 @@ fn crash_at_barrier(path: &Path, stage: BarrierStage) {
         }),
     )
     .unwrap();
-    let pending = store.ingress().submit(Signal::Logs, &batch()).unwrap();
-    assert_eq!(receiver.recv_timeout(WAIT).unwrap(), stage);
+    let pending = store
+        .ingress()
+        .submit(Signal::Logs, &durability_batch())
+        .unwrap();
+    assert_eq!(receiver.recv_timeout(FIXTURE_TIMEOUT).unwrap(), stage);
     assert_eq!(pending.try_receive().unwrap(), None);
     let health = store.health();
     assert_eq!(health.checkpoint, 0);
@@ -273,9 +278,9 @@ fn crash_after_receipt(path: &Path, durability: Durability) {
     }
     let receipt = store
         .ingress()
-        .submit(Signal::Logs, &batch())
+        .submit(Signal::Logs, &durability_batch())
         .unwrap()
-        .wait(WAIT)
+        .wait(FIXTURE_TIMEOUT)
         .unwrap();
     assert_eq!(receipt.durability, durability);
     assert_eq!(receipt.records, 2);
@@ -304,7 +309,7 @@ fn recover_and_retry(path: &Path, case: &str) {
         u64::from(case == "durable-committed-receipt")
     );
     let mut store = Store::open(path, TelemetryLimits::default(), None).unwrap();
-    store.flush(WAIT).unwrap();
+    store.flush(FIXTURE_TIMEOUT).unwrap();
     let recovered = query(path);
     if preaccept {
         assert!(recovered.records.is_empty());
@@ -316,9 +321,9 @@ fn recover_and_retry(path: &Path, case: &str) {
     }
     let receipt = store
         .ingress()
-        .submit(Signal::Logs, &batch())
+        .submit(Signal::Logs, &durability_batch())
         .unwrap()
-        .wait(WAIT)
+        .wait(FIXTURE_TIMEOUT)
         .unwrap();
     assert_eq!(receipt.durability, Durability::Committed);
     assert_eq!(receipt.records, 2);
@@ -340,7 +345,7 @@ fn recover_and_retry(path: &Path, case: &str) {
             assert_eq!(original.otlp, retry.otlp);
         }
     }
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(FIXTURE_TIMEOUT).unwrap();
 }
 
 fn physical_spool_refusal(path: &Path) {
@@ -356,16 +361,19 @@ fn physical_spool_refusal(path: &Path) {
         }),
     )
     .unwrap();
-    let pending = store.ingress().submit(Signal::Logs, &batch()).unwrap();
+    let pending = store
+        .ingress()
+        .submit(Signal::Logs, &durability_batch())
+        .unwrap();
     assert_eq!(
-        receiver.recv_timeout(WAIT).unwrap(),
+        receiver.recv_timeout(FIXTURE_TIMEOUT).unwrap(),
         BarrierStage::BeforeSpool
     );
     assert_eq!(pending.try_receive().unwrap(), None);
     let collision = path.join("spool").join("00000000000000000001.spool");
     fs::create_dir(&collision).unwrap();
     release.send(()).unwrap();
-    assert_eq!(pending.wait(WAIT), Err(TelemetryError::Io));
+    assert_eq!(pending.wait(FIXTURE_TIMEOUT), Err(TelemetryError::Io));
     let health = store.health();
     assert_eq!(health.spooled, 0);
     assert_eq!(health.committed, 0);
@@ -376,15 +384,15 @@ fn physical_spool_refusal(path: &Path) {
     fs::remove_dir(collision).unwrap();
     let receipt = store
         .ingress()
-        .submit(Signal::Logs, &batch())
+        .submit(Signal::Logs, &durability_batch())
         .unwrap()
-        .wait(WAIT)
+        .wait(FIXTURE_TIMEOUT)
         .unwrap();
     assert_eq!(receipt.durability, Durability::Committed);
     assert_eq!(receipt.spool_position, 1);
     assert_eq!(receipt.records, 2);
     assert_corpus(&query(path));
-    store.shutdown(WAIT).unwrap();
+    store.shutdown(FIXTURE_TIMEOUT).unwrap();
 }
 
 #[test]
@@ -424,7 +432,7 @@ fn recoverable_receipts_follow_disk_success_across_process_death_and_retry() {
         )
     });
     // One parent test owns all six cases, so even default parallel libtest has one child.
-    for case in CASES {
+    for case in DURABILITY_CASES {
         let path = fixture_root(&namespace, case);
         assert!(!path.exists(), "fixture must be fresh: {}", path.display());
         let child = FixtureProcess::spawn(&namespace, case, "initial");
