@@ -168,22 +168,22 @@ impl Particles {
 
     /// Advances by `dt_s` real seconds: moves, ages, retires, and tops up the motes.
     pub fn advance(&mut self, dt_s: f32) {
-        let dt = dt_s.clamp(0.0, 0.25);
+        let delta_time_s = dt_s.clamp(0.0, 0.25);
         for particle in &mut self.list {
-            particle.age_s += dt;
+            particle.age_s += delta_time_s;
             match particle.kind {
                 Kind::Spark => {
-                    particle.velocity.y -= GRAVITY * dt;
+                    particle.velocity.y -= GRAVITY * delta_time_s;
                     // Drag, so a spark's flight arcs over rather than flying straight.
-                    let drag = (1.0 - 2.2 * dt).max(0.0);
+                    let drag = (1.0 - 2.2 * delta_time_s).max(0.0);
                     particle.velocity = particle.velocity * drag;
                 }
                 Kind::Dust => {
-                    particle.velocity = particle.velocity * (1.0 - 1.4 * dt).max(0.0);
+                    particle.velocity = particle.velocity * (1.0 - 1.4 * delta_time_s).max(0.0);
                 }
                 Kind::Mote => {}
             }
-            particle.position = particle.position + particle.velocity * dt;
+            particle.position = particle.position + particle.velocity * delta_time_s;
         }
         self.list
             .retain(|particle| particle.age_s < particle.life_s);
@@ -222,7 +222,7 @@ impl Particles {
     /// Instance data for the renderer: [`INSTANCE_FLOATS`] floats per particle, sparks and motes
     /// adding light and dust blending over.
     pub fn instances(&self) -> Vec<f32> {
-        let mut data = Vec::with_capacity(self.list.len() * INSTANCE_FLOATS);
+        let mut instance_data = Vec::with_capacity(self.list.len() * INSTANCE_FLOATS);
         for particle in &self.list {
             let t = (particle.age_s / particle.life_s).clamp(0.0, 1.0);
             let (size, alpha, additive) = match particle.kind {
@@ -238,7 +238,7 @@ impl Particles {
                     1.0,
                 ),
             };
-            data.extend_from_slice(&[
+            instance_data.extend_from_slice(&[
                 particle.position.x,
                 particle.position.y,
                 particle.position.z,
@@ -249,7 +249,7 @@ impl Particles {
                 additive,
             ]);
         }
-        data
+        instance_data
     }
 }
 
@@ -278,10 +278,10 @@ mod tests {
         let mut particles = Particles::new(7);
         particles.sparks(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0);
         run(&mut particles, 0.25);
-        let data = particles.instances();
-        assert!(!data.is_empty());
-        let mean_x: f32 = data.chunks(INSTANCE_FLOATS).map(|p| p[0]).sum::<f32>()
-            / (data.len() / INSTANCE_FLOATS) as f32;
+        let instances = particles.instances();
+        assert!(!instances.is_empty());
+        let mean_x: f32 = instances.chunks(INSTANCE_FLOATS).map(|p| p[0]).sum::<f32>()
+            / (instances.len() / INSTANCE_FLOATS) as f32;
         assert!(mean_x > 0.1, "thrown away from the attacker: {mean_x}");
         run(&mut particles, SPARK_LIFE_S.1 + 0.1);
         assert_eq!(particles.count_of(Kind::Spark), 0);
@@ -302,9 +302,9 @@ mod tests {
         particles.set_motes(Vec3::ZERO, 6.0, [1.0, 0.6, 0.3]);
         run(&mut particles, 30.0);
         assert_eq!(particles.count_of(Kind::Mote), MOTES_ALIVE);
-        let data = particles.instances();
+        let instances = particles.instances();
         assert!(
-            data.chunks(INSTANCE_FLOATS).all(|p| p[4] >= p[6]),
+            instances.chunks(INSTANCE_FLOATS).all(|p| p[4] >= p[6]),
             "warm: red at least blue"
         );
         for _ in 0..40 {
@@ -336,9 +336,9 @@ mod tests {
             for _ in 0..(frames_per_second / 6) {
                 particles.advance(1.0 / frames_per_second as f32);
             }
-            let data = particles.instances();
-            data.chunks(INSTANCE_FLOATS).map(|p| p[0]).sum::<f32>()
-                / (data.len() / INSTANCE_FLOATS) as f32
+            let instances = particles.instances();
+            instances.chunks(INSTANCE_FLOATS).map(|p| p[0]).sum::<f32>()
+                / (instances.len() / INSTANCE_FLOATS) as f32
         };
         // A sixth of a second at 24 and at 30 frames per second lands in nearly the same place
         // (the integrator differs by a hair; the clock does not).

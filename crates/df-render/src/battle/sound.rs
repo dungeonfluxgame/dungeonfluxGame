@@ -308,15 +308,15 @@ impl VariationPicker {
             .iter()
             .find(|(key, _)| *key == first)
             .map(|(_, index)| *index);
-        let mut index = self.next() as usize % group.len();
-        if Some(index) == previous {
-            index = (index + 1 + self.next() as usize % (group.len() - 1)) % group.len();
+        let mut clip_index = self.next() as usize % group.len();
+        if Some(clip_index) == previous {
+            clip_index = (clip_index + 1 + self.next() as usize % (group.len() - 1)) % group.len();
         }
         match self.last.iter_mut().find(|(key, _)| *key == first) {
-            Some(entry) => entry.1 = index,
-            None => self.last.push((first, index)),
+            Some(entry) => entry.1 = clip_index,
+            None => self.last.push((first, clip_index)),
         }
-        group.get(index).copied()
+        group.get(clip_index).copied()
     }
 }
 

@@ -148,9 +148,9 @@ impl SpeechBubble {
 }
 
 fn obstacles(container: &Element, area: &web_sys::DomRect) -> Result<Vec<Rect>, JsValue> {
-    let mut rects = Vec::new();
+    let mut obstacle_rects = Vec::new();
     if area.width() < 1.0 || area.height() < 1.0 {
-        return Ok(rects);
+        return Ok(obstacle_rects);
     }
     let nodes = container.query_selector_all(AVOID)?;
     for index in 0..nodes.length() {
@@ -164,12 +164,12 @@ fn obstacles(container: &Element, area: &web_sys::DomRect) -> Result<Vec<Rect>, 
         if rect.width() < 1.0 || rect.height() < 1.0 {
             continue;
         }
-        rects.push(Rect {
+        obstacle_rects.push(Rect {
             left: ((rect.left() - area.left()) / area.width()) as f32,
             top: ((rect.top() - area.top()) / area.height()) as f32,
             right: ((rect.right() - area.left()) / area.width()) as f32,
             bottom: ((rect.bottom() - area.top()) / area.height()) as f32,
         });
     }
-    Ok(rects)
+    Ok(obstacle_rects)
 }
