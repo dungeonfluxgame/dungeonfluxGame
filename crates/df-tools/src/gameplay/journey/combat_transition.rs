@@ -24,7 +24,7 @@ struct GreatswordAttack {
 }
 
 struct CurrentPlayerAttack<'a> {
-    current: &'a Checkpoint,
+    checkpoint: &'a Checkpoint,
     state: &'a GameState,
 }
 
@@ -53,13 +53,13 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
         actor: &EntityId,
         context: CandidateContext<'_>,
     ) -> Result<(), RepositoryError> {
-        if *context.basis != self.current.basis() {
+        if *context.basis != self.checkpoint.basis() {
             return Err(RepositoryError::RevisionConflict);
         }
-        if context.pins != self.current.pins() || context.pins != &model::pins()? {
+        if context.pins != self.checkpoint.pins() || context.pins != &model::pins()? {
             return Err(RepositoryError::InvalidCandidate);
         }
-        if phase(self.current)? != rpc::JourneyPhase::Combat {
+        if phase(self.checkpoint)? != rpc::JourneyPhase::Combat {
             return Err(RepositoryError::InvalidCandidate);
         }
         let [encounter] = self.state.encounters.as_slice() else {
@@ -229,7 +229,10 @@ fn admit(
         basis: &basis,
         pins: current.pins(),
     };
-    let owner = CurrentPlayerAttack { current, state };
+    let owner = CurrentPlayerAttack {
+        checkpoint: current,
+        state,
+    };
     let offered = [candidate];
     let admitted = enumerate_candidates(
         &owner,

@@ -218,9 +218,9 @@ pub(in crate::gameplay) async fn judge(
     }
     let facts =
         json!({"observation": observation, "witness_id": witness_id, "witness_dossier": dossier});
-    let index = jev.reaction(&facts, &choices).await?;
+    let reaction_choice_index = jev.reaction(&facts, &choices).await?;
     let (reaction, grievance_victim) = options
-        .get(index)
+        .get(reaction_choice_index)
         .cloned()
         .ok_or(JevUnavailable::UnknownChoice)?;
     Ok(WitnessRecord {

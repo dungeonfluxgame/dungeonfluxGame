@@ -138,14 +138,14 @@ pub(super) fn completion_fingerprint(completion: &JobCompletion) -> Result<[u8; 
     hash.update(completion.operation.as_bytes());
     hash.update(completion.job.as_bytes());
     hash.update(completion.generation.to_be_bytes());
-    for value in [
+    for field_value in [
         semantic_output.as_str(),
         policy.package.as_str(),
         policy.entry.as_str(),
         model.as_str(),
     ] {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
+        hash.update((field_value.len() as u64).to_be_bytes());
+        hash.update(field_value.as_bytes());
     }
     Ok(hash.finalize().into())
 }

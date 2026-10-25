@@ -152,8 +152,8 @@ impl FightForesight {
         let Some(prepare) = prepare else {
             return;
         };
-        let result = prepare(checkpoint.clone()).await;
-        let reason = match &result {
+        let preparation_result = prepare(checkpoint.clone()).await;
+        let reason = match &preparation_result {
             Ok(()) => "ready".to_owned(),
             Err(super::place_move::MoveError::Refused(reason)) => reason.label().to_owned(),
             Err(super::place_move::MoveError::Status(status)) => status.code().to_string(),
