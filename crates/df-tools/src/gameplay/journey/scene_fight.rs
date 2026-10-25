@@ -331,10 +331,6 @@ pub(in crate::gameplay) fn hero_dead(state: &GameState, who: EntityId) -> bool {
     flag(state, who, DEAD)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Who is still in the scene
-// ---------------------------------------------------------------------------------------------
-
 /// Where a scene person stands once fights have touched the scene.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum Presence {
@@ -464,10 +460,6 @@ pub(in crate::gameplay) fn attackable<'a>(
         .then_some(member))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Offers
-// ---------------------------------------------------------------------------------------------
-
 /// The opaque id of the scene-assault offer at this revision.
 pub(in crate::gameplay) fn offer_id(current: &Checkpoint) -> String {
     format!(
@@ -543,10 +535,6 @@ pub(in crate::gameplay) fn target_group(
             .collect(),
     })
 }
-
-// ---------------------------------------------------------------------------------------------
-// The bystander rule
-// ---------------------------------------------------------------------------------------------
 
 /// What a person who is not the target does when a fight starts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -845,10 +833,6 @@ pub(in crate::gameplay) fn announce(hero: &str, plan: &Plan) -> (Vec<String>, St
     );
     (lines, audit)
 }
-
-// ---------------------------------------------------------------------------------------------
-// Staging a fight
-// ---------------------------------------------------------------------------------------------
 
 /// One person who fights.
 pub(super) struct Foe {
@@ -1344,10 +1328,6 @@ pub(in crate::gameplay) fn arena_narration(
     Ok(opening_move(state)?.map(|entry| entry.line))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Ending a fight
-// ---------------------------------------------------------------------------------------------
-
 /// Ends a freeplay scene fight: the encounter closes and the scene returns to the same freeplay
 /// beat. It is called once the battle is finished, which the tactical rules decide: one side has
 /// no conscious combatant.
@@ -1749,10 +1729,6 @@ pub(in crate::gameplay) fn opening_narration(state: &GameState) -> Result<String
     }
     Ok(lines.join("\n"))
 }
-
-// ---------------------------------------------------------------------------------------------
-// Replay validation
-// ---------------------------------------------------------------------------------------------
 
 /// How one recorded decision takes part in a fight, when it does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
