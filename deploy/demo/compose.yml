@@ -1,0 +1,35 @@
+services:
+  game:
+    image: ghcr.io/monstercameron/dungeonflux-demo@${DEMO_DIGEST:?Set DEMO_DIGEST to a sha256 image digest}
+    container_name: dungeonflux-demo-game
+    restart: unless-stopped
+    init: true
+    read_only: true
+    network_mode: host
+    mem_limit: 300m
+    memswap_limit: 700m
+    cpus: 1.0
+    pids_limit: 128
+    env_file:
+      - /etc/dungeonflux/demo.env
+    environment:
+      DF_GAMEPLAY_LISTEN: 127.0.0.1:63309
+      DF_GAMEPLAY_PUBLIC_URL: https://dungeonfluxdnd.com
+      DF_GAMEPLAY_ALLOWED_ORIGINS: https://dungeonfluxdnd.com,https://www.dungeonfluxdnd.com
+      DF_GAMEPLAY_DATABASE_PORT: "5432"
+      DF_GAMEPLAY_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      DF_GAMEPLAY_LOAD_DOTENV: "off"
+    secrets:
+      - db_password
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=96m,mode=1777
+    healthcheck:
+      test: [CMD, /usr/bin/curl, --fail, --silent, --show-error, http://127.0.0.1:63309/gameplay]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+secrets:
+  db_password:
+    file: /etc/dungeonflux/db_password

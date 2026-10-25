@@ -60,6 +60,9 @@ or complete server validation.
 | `DF_GAMEPLAY_DATABASE_PORT` | Canonical PostgreSQL port, default 55517. Decimal digits, 1024–65535. |
 | `DF_GAMEPLAY_DEMO_DATABASE_PORT` | Legacy alias only; valid when canonical absent. If both exist, both must be valid and numerically equal, otherwise startup refuses. |
 | `DF_GAMEPLAY_DEMO_DATABASE` | Native server database name. The shell launcher supplies its selected `--database`/campaign/generated name; direct native execution defaults to the historical local demo name. |
+| `DF_GAMEPLAY_DATABASE_HOST` | PostgreSQL hostname or IP; default `127.0.0.1`. |
+| `DF_GAMEPLAY_DATABASE_USER` | PostgreSQL role; default `df_gameplay_demo_admin_20261004`. |
+| `DF_GAMEPLAY_DATABASE_PASSWORD_FILE` | Optional path to a UTF-8 file; the first line is the password. Unset means no password. Its contents are never logged. |
 | `DF_GAMEPLAY_LISTEN` | `127.0.0.1:63309`; explicit environment takes precedence over LAN's proposed wildcard default. |
 | `DF_GAMEPLAY_PUBLIC_URL` | Optional exact public browser origin for joining; no path/query/userinfo. |
 | `DF_GAMEPLAY_ALLOWED_ORIGINS` | Optional comma-separated exact origins. Native validation requires explicit origin policy for non-loopback listening. |

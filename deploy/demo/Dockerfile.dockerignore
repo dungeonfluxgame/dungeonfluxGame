@@ -1,0 +1,10 @@
+.git
+.github
+artifacts
+target
+**/target
+**/.env
+**/.env.*
+*.log
+development/evidence
+development/workflow.sqlite3

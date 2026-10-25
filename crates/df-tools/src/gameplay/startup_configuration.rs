@@ -885,13 +885,92 @@ pub(super) fn database_config(
     {
         return Err(io::Error::other("local demonstration database invalid"));
     }
+    let connection = database_connection_settings(
+        std::env::var("DF_GAMEPLAY_DATABASE_HOST"),
+        std::env::var("DF_GAMEPLAY_DATABASE_USER"),
+        std::env::var("DF_GAMEPLAY_DATABASE_PASSWORD_FILE"),
+    )?;
     let mut configuration = tokio_postgres::Config::new();
     configuration
-        .host("127.0.0.1")
+        .host(&connection.host)
         .port(database_port()?)
-        .user("df_gameplay_demo_admin_20261004")
+        .user(&connection.user)
         .dbname(&name);
+    if let Some(password) = &connection.password {
+        configuration.password(password);
+    }
     Ok(configuration)
+}
+
+struct DatabaseConnectionSettings {
+    host: String,
+    user: String,
+    password: Option<String>,
+}
+
+impl std::fmt::Debug for DatabaseConnectionSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseConnectionSettings")
+            .field("host", &self.host)
+            .field("user", &self.user)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
+fn database_connection_settings(
+    host: Result<String, VarError>,
+    user: Result<String, VarError>,
+    password_file: Result<String, VarError>,
+) -> Result<DatabaseConnectionSettings, io::Error> {
+    let host = optional(host)?.unwrap_or_else(|| "127.0.0.1".to_owned());
+    if !valid_database_host(&host) {
+        return Err(refused("DF_GAMEPLAY_DATABASE_HOST"));
+    }
+    let user = optional(user)?.unwrap_or_else(|| "df_gameplay_demo_admin_20261004".to_owned());
+    if user.is_empty() || user.chars().any(char::is_control) {
+        return Err(refused("DF_GAMEPLAY_DATABASE_USER"));
+    }
+    let password = optional(password_file)?
+        .map(|path| {
+            if path.is_empty() {
+                return Err(refused("DF_GAMEPLAY_DATABASE_PASSWORD_FILE"));
+            }
+            let contents = std::fs::read_to_string(path)
+                .map_err(|_| refused("DF_GAMEPLAY_DATABASE_PASSWORD_FILE"))?;
+            Ok(contents.lines().next().unwrap_or_default().to_owned())
+        })
+        .transpose()?;
+    Ok(DatabaseConnectionSettings {
+        host,
+        user,
+        password,
+    })
+}
+
+fn valid_database_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 || host.chars().any(char::is_control) {
+        return false;
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+    })
 }
 
 /// PostgreSQL port, default 55517. `DF_GAMEPLAY_DATABASE_PORT` is canonical;
@@ -1451,6 +1530,105 @@ pub(super) fn choice_hints_hidden(input: Result<String, VarError>) -> Result<boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn database_connection_defaults_preserve_local_configuration() {
+        let unset = || Err(VarError::NotPresent);
+        let settings = database_connection_settings(unset(), unset(), unset()).unwrap();
+        assert_eq!(settings.host, "127.0.0.1");
+        assert_eq!(settings.user, "df_gameplay_demo_admin_20261004");
+        assert_eq!(settings.password, None);
+    }
+
+    #[test]
+    fn database_connection_overrides_accept_hosts_users_and_first_password_line() {
+        static NEXT_PASSWORD_FILE: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "df-database-password-{}-{}.txt",
+            std::process::id(),
+            NEXT_PASSWORD_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, "secret-line\nignored-line\n").unwrap();
+        let settings = database_connection_settings(
+            Ok("db.example.test".into()),
+            Ok("demo_role".into()),
+            Ok(path.to_string_lossy().into_owned()),
+        );
+        std::fs::remove_file(path).unwrap();
+        let settings = settings.unwrap();
+        assert_eq!(settings.host, "db.example.test");
+        assert_eq!(settings.user, "demo_role");
+        assert_eq!(settings.password.as_deref(), Some("secret-line"));
+    }
+
+    #[test]
+    fn invalid_database_connection_overrides_are_refused_without_echoing_values() {
+        let unset = || Err(VarError::NotPresent);
+        for host in [
+            "",
+            "bad host",
+            "-invalid.test",
+            "invalid-.test",
+            "bad..test",
+        ] {
+            let error = database_connection_settings(Ok(host.into()), unset(), unset())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("DF_GAMEPLAY_DATABASE_HOST"));
+            if !host.is_empty() {
+                assert!(!error.contains(host));
+            }
+        }
+        for user in ["", "bad\nuser"] {
+            let error = database_connection_settings(unset(), Ok(user.into()), unset())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("DF_GAMEPLAY_DATABASE_USER"));
+            if !user.is_empty() {
+                assert!(!error.contains(user));
+            }
+        }
+        let error =
+            database_connection_settings(unset(), unset(), Ok("missing-password-file".into()))
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("DF_GAMEPLAY_DATABASE_PASSWORD_FILE"));
+        assert!(!error.contains("missing-password-file"));
+    }
+
+    #[test]
+    fn database_password_is_redacted_from_debug_and_refusal_output() {
+        let path = std::env::temp_dir().join(format!(
+            "df-database-password-redaction-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "private-password\n").unwrap();
+        let settings = database_connection_settings(
+            Err(VarError::NotPresent),
+            Err(VarError::NotPresent),
+            Ok(path.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let debug = format!("{settings:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("private-password"));
+        let mut configuration = tokio_postgres::Config::new();
+        configuration
+            .host(&settings.host)
+            .user(&settings.user)
+            .password(settings.password.as_deref().unwrap_or_default());
+        assert!(!format!("{configuration:?}").contains("private-password"));
+        let refusal = database_connection_settings(
+            Ok("invalid host private-password".into()),
+            Err(VarError::NotPresent),
+            Err(VarError::NotPresent),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!refusal.contains("private-password"));
+    }
 
     #[test]
     fn database_port_defaults_aliases_and_conflicts_are_explicit() {

@@ -1,0 +1,96 @@
+name: demo-release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - crates/**
+      - content/**
+      - docs/**
+      - deploy/demo/**
+      - .github/workflows/demo-release.yml
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: demo-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push the demo image
+        id: image
+        env:
+          IMAGE: ghcr.io/monstercameron/dungeonflux-demo
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          short_sha="${SHORT_SHA:0:12}"
+          docker buildx build \
+            --file deploy/demo/Dockerfile \
+            --platform linux/amd64 \
+            --target runtime \
+            --tag "$IMAGE:sha-$short_sha" \
+            --tag "$IMAGE:main" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --push \
+            --metadata-file "$RUNNER_TEMP/demo-image-metadata.json" \
+            .
+          digest="$(jq -r '.["containerimage.digest"]' "$RUNNER_TEMP/demo-image-metadata.json")"
+          case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo 'Build did not return a SHA-256 image digest.' >&2; exit 1 ;; esac
+          docker pull "$IMAGE@$digest"
+          bash deploy/profiles/check-profile.sh demo deploy/profiles/demo.env "$IMAGE@$digest"
+          printf '%s\n' "$digest" > "$RUNNER_TEMP/demo-digest.txt"
+          printf 'Image: `%s@%s`\n\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Export the site and account app bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/demo-web"
+          docker buildx build \
+            --file deploy/demo/Dockerfile \
+            --platform linux/amd64 \
+            --target web-export \
+            --output "type=local,dest=$RUNNER_TEMP/demo-web" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            .
+          tar -C "$RUNNER_TEMP/demo-web" -czf "$RUNNER_TEMP/demo-web.tar.gz" site app
+
+      - name: Upload the image digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: demo-digest
+          path: ${{ runner.temp }}/demo-digest.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the site and account app bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: demo-web
+          path: ${{ runner.temp }}/demo-web.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
