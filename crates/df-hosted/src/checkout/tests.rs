@@ -1,6 +1,14 @@
 //! Loopback Stripe and scratch PostgreSQL exercise the real payment boundary.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -20,7 +28,7 @@ use tower::ServiceExt;
 use super::*;
 
 const ORIGIN: &str = "http://127.0.0.1:8099";
-const SECRET: &str = "whsec_stripetest_fixture";
+const SECRET: &str = "whsec_stripelock_fixture";
 fn account() -> AccountId {
     AccountId::from_bytes(&[51; 16]).unwrap()
 }
@@ -34,12 +42,30 @@ enum Reply {
     ForeignUrl,
     Live,
     Large,
+    Held,
+}
+
+struct Control {
+    is_blocked: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl Default for Control {
+    fn default() -> Self {
+        Self {
+            is_blocked: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
 }
 
 #[derive(Default)]
 struct Requests {
     rows: tokio::sync::Mutex<Vec<BTreeMap<String, String>>>,
     reply: Reply,
+    control: Option<Arc<Control>>,
 }
 
 struct FakeStripe {
@@ -60,6 +86,14 @@ impl FakeStripe {
     }
 
     async fn with_reply(reply: Reply) -> Self {
+        Self::build(reply, None).await
+    }
+
+    async fn controlled() -> Self {
+        Self::build(Reply::Held, Some(Arc::new(Control::default()))).await
+    }
+
+    async fn build(reply: Reply, control: Option<Arc<Control>>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!(
             "http://{}/v1/checkout/sessions",
@@ -67,6 +101,7 @@ impl FakeStripe {
         );
         let requests = Arc::new(Requests {
             reply,
+            control,
             ..Requests::default()
         });
         let app = Router::new()
@@ -84,7 +119,7 @@ impl FakeStripe {
 
     fn settings(&self) -> Settings {
         let mut settings = Settings::parse(&|key| match key {
-            "DF_STRIPE_SECRET_KEY" => Some("sk_test_stripetest_fixture".to_owned()),
+            "DF_STRIPE_SECRET_KEY" => Some("sk_test_stripelock_fixture".to_owned()),
             "DF_STRIPE_WEBHOOK_SECRET" => Some(SECRET.to_owned()),
             _ => None,
         })
@@ -92,6 +127,10 @@ impl FakeStripe {
         .unwrap();
         settings.endpoint = Some(self.endpoint.clone());
         settings
+    }
+
+    fn control(&self) -> &Arc<Control> {
+        self.requests.control.as_ref().unwrap()
     }
 }
 
@@ -122,6 +161,16 @@ async fn create_session(
     );
     assert!(!form.keys().any(|key| key.contains("email")));
     requests.rows.lock().await.push(form);
+    if matches!(requests.reply, Reply::Held)
+        && requests
+            .control
+            .as_ref()
+            .is_some_and(|control| control.is_blocked.load(Ordering::SeqCst))
+    {
+        let control = requests.control.as_ref().unwrap();
+        control.entered.add_permits(1);
+        control.release.acquire().await.unwrap().forget();
+    }
     match requests.reply {
         Reply::Redirect => {
             return (
@@ -162,7 +211,7 @@ impl Fixture {
         .await
         .unwrap();
         let token = df_customer::SecretToken::generate().unwrap().text();
-        let name = format!("stripetest_{}", &token[..16]);
+        let name = format!("stripelock_{}", &token[..16]);
         admin
             .client
             .batch_execute(&format!("CREATE DATABASE {name}"))
@@ -172,7 +221,7 @@ impl Fixture {
             .parse()
             .unwrap();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/agents/STRIPETEST")
+            .join("../../artifacts/tmp/agents/STRIPELOCK")
             .join(&name);
         Self {
             admin,
@@ -202,7 +251,7 @@ impl Fixture {
         crate::database::migrate(&mut connection).await.unwrap();
         connection.client.execute(
             "INSERT INTO accounts.account(account_id,email_normalized,email_display,email_verified_at_ms,status,credential_generation,created_at_ms) \
-             VALUES($1,'stripetest@example.test','stripetest@example.test',1,'active',1,1) ON CONFLICT DO NOTHING", &[&&account().as_bytes()[..]],
+             VALUES($1,'stripelock@example.test','stripelock@example.test',1,'active',1,1) ON CONFLICT DO NOTHING", &[&&account().as_bytes()[..]],
         ).await.unwrap();
         let finance = Finance::new(connection, accounts, [33; 32]).unwrap();
         Checkout::configured(
@@ -268,7 +317,7 @@ impl Fixture {
 
     async fn finish(self) {
         assert!(
-            self.name.starts_with("stripetest_")
+            self.name.starts_with("stripelock_")
                 && self
                     .name
                     .bytes()
@@ -282,7 +331,7 @@ impl Fixture {
         if self.root.exists() {
             let root = self.root.canonicalize().unwrap();
             let permitted = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../artifacts/tmp/agents/STRIPETEST")
+                .join("../../artifacts/tmp/agents/STRIPELOCK")
                 .canonicalize()
                 .unwrap();
             assert!(root.starts_with(permitted));
@@ -294,6 +343,19 @@ impl Fixture {
 async fn with_fixture(test: impl for<'a> AsyncFnOnce(&'a Fixture, &'a FakeStripe)) {
     let fixture = Fixture::new().await;
     let fake = FakeStripe::new().await;
+    let outcome = std::panic::AssertUnwindSafe(test(&fixture, &fake))
+        .catch_unwind()
+        .await;
+    fake.task.abort();
+    fixture.finish().await;
+    if let Err(payload) = outcome {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+async fn with_controlled_fixture(test: impl for<'a> AsyncFnOnce(&'a Fixture, &'a FakeStripe)) {
+    let fixture = Fixture::new().await;
+    let fake = FakeStripe::controlled().await;
     let outcome = std::panic::AssertUnwindSafe(test(&fixture, &fake))
         .catch_unwind()
         .await;
@@ -398,13 +460,13 @@ async fn paid_webhooks_credit_once_across_replays_duplicate_events_and_restart()
             format!("/app/credit/return?checkout={}", created.checkout_id).as_str()
         );
         assert_eq!(fixture.balance().await, (0, 0));
-        let paid = event(&created.checkout_id, "evt_stripetest_paid");
+        let paid = event(&created.checkout_id, "evt_stripelock_paid");
         assert_eq!(deliver(&app, &paid, SECRET).await, StatusCode::OK);
         assert_eq!(deliver(&app, &paid, SECRET).await, StatusCode::OK);
         assert_eq!(
             deliver(
                 &app,
-                &event(&created.checkout_id, "evt_stripetest_duplicate"),
+                &event(&created.checkout_id, "evt_stripelock_duplicate"),
                 SECRET
             )
             .await,
@@ -441,7 +503,7 @@ async fn bad_signatures_and_wrong_receipt_fields_never_credit() {
             .await
             .unwrap();
         let app = router(checkout.clone());
-        let paid = event(&created.checkout_id, "evt_stripetest_refused");
+        let paid = event(&created.checkout_id, "evt_stripelock_refused");
         assert_eq!(
             deliver(&app, &paid, "whsec_wrong_fixture").await,
             StatusCode::BAD_REQUEST
@@ -509,7 +571,7 @@ async fn finance_commit_before_receipt_acknowledgement_is_repaired_without_secon
         assert_eq!(
             deliver(
                 &router(checkout.clone()),
-                &event(&created.checkout_id, "evt_stripetest_recovery"),
+                &event(&created.checkout_id, "evt_stripelock_recovery"),
                 SECRET
             )
             .await,
@@ -591,8 +653,8 @@ async fn concurrent_deliveries_and_an_event_rebound_to_another_operation_cannot_
         let other_instance = fixture.checkout(fake).await;
         let first_app = router(checkout);
         let second_app = router(other_instance);
-        let original = event(&first.checkout_id, "evt_stripetest_concurrent");
-        let duplicate = event(&first.checkout_id, "evt_stripetest_concurrent_duplicate");
+        let original = event(&first.checkout_id, "evt_stripelock_concurrent");
+        let duplicate = event(&first.checkout_id, "evt_stripelock_concurrent_duplicate");
         let results = tokio::join!(
             deliver(&first_app, &original, SECRET),
             deliver(&second_app, &duplicate, SECRET)
@@ -602,7 +664,7 @@ async fn concurrent_deliveries_and_an_event_rebound_to_another_operation_cannot_
         assert_eq!(
             deliver(
                 &second_app,
-                &event(&second.checkout_id, "evt_stripetest_concurrent"),
+                &event(&second.checkout_id, "evt_stripelock_concurrent"),
                 SECRET
             )
             .await,
@@ -624,4 +686,137 @@ async fn uncertain_creation_older_than_the_processor_idempotency_window_is_never
         assert_eq!(fake.requests.rows.lock().await.len(),1);
         assert_eq!(checkout.status(account(),CheckoutId::from_hex(&created.checkout_id).unwrap()).await.unwrap().status,CheckoutStatus::Pending);
     }).await;
+}
+
+#[tokio::test]
+async fn slow_stripe_creation_does_not_block_status_or_webhook_credit() {
+    with_controlled_fixture(async |fixture, fake| {
+        let checkout = fixture.checkout(fake).await;
+        let existing = checkout
+            .create(account(), 2000, OperationId::from_bytes(&[31; 16]).unwrap())
+            .await
+            .unwrap();
+        fake.control().is_blocked.store(true, Ordering::SeqCst);
+        let creating = {
+            let checkout = checkout.clone();
+            tokio::spawn(async move {
+                checkout
+                    .create(account(), 2000, OperationId::from_bytes(&[32; 16]).unwrap())
+                    .await
+            })
+        };
+        fake.control().entered.acquire().await.unwrap().forget();
+
+        let app = router(checkout.clone());
+        let status_id = CheckoutId::from_hex(&existing.checkout_id).unwrap();
+        let credit_event = event(&existing.checkout_id, "evt_stripelock_unblocked");
+        let unrelated = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                checkout.status(account(), status_id),
+                deliver(&app, &credit_event, SECRET)
+            )
+        })
+        .await;
+        fake.control().release.add_permits(1);
+        assert!(creating.await.unwrap().is_ok());
+        let (status, webhook) = unrelated.expect("status and webhook must not wait for Stripe");
+        assert_eq!(status.unwrap().amount_cents, 2000);
+        assert_eq!(webhook, StatusCode::OK);
+        assert_eq!(
+            checkout.status(account(), status_id).await.unwrap().status,
+            CheckoutStatus::Paid
+        );
+        assert_eq!(fixture.balance().await, (1, 20_000_000));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn concurrent_same_operation_refuses_second_dispatch_as_busy() {
+    with_controlled_fixture(async |fixture, fake| {
+        let checkout = fixture.checkout(fake).await;
+        fake.control().is_blocked.store(true, Ordering::SeqCst);
+        let request = OperationId::from_bytes(&[33; 16]).unwrap();
+        let first = {
+            let checkout = checkout.clone();
+            tokio::spawn(async move { checkout.create(account(), 2000, request).await })
+        };
+        fake.control().entered.acquire().await.unwrap().forget();
+
+        assert!(matches!(
+            checkout.create(account(), 2000, request).await,
+            Err(PortError::Busy)
+        ));
+        fake.control().release.add_permits(1);
+        assert!(first.await.unwrap().is_ok());
+        assert_eq!(fake.requests.rows.lock().await.len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn per_account_pending_create_limit_refuses_then_admits_after_release() {
+    with_controlled_fixture(async |fixture, fake| {
+        let checkout = fixture.checkout(fake).await;
+        fake.control().is_blocked.store(true, Ordering::SeqCst);
+        let mut first = {
+            let checkout = checkout.clone();
+            tokio::spawn(async move {
+                checkout
+                    .create(account(), 2000, OperationId::from_bytes(&[34; 16]).unwrap())
+                    .await
+            })
+        };
+        let mut second = {
+            let checkout = checkout.clone();
+            tokio::spawn(async move {
+                checkout
+                    .create(account(), 2000, OperationId::from_bytes(&[35; 16]).unwrap())
+                    .await
+            })
+        };
+        fake.control()
+            .entered
+            .acquire_many(2)
+            .await
+            .unwrap()
+            .forget();
+        assert!(matches!(
+            checkout
+                .create(account(), 2000, OperationId::from_bytes(&[36; 16]).unwrap())
+                .await,
+            Err(PortError::Throttled)
+        ));
+
+        fake.control().release.add_permits(1);
+        let first_finished = tokio::select! {
+            result = &mut first => {
+                assert!(result.unwrap().is_ok());
+                true
+            }
+            result = &mut second => {
+                assert!(result.unwrap().is_ok());
+                false
+            }
+        };
+        let third = {
+            let checkout = checkout.clone();
+            tokio::spawn(async move {
+                checkout
+                    .create(account(), 2000, OperationId::from_bytes(&[37; 16]).unwrap())
+                    .await
+            })
+        };
+        fake.control().entered.acquire().await.unwrap().forget();
+        fake.control().release.add_permits(2);
+        if first_finished {
+            assert!(second.await.unwrap().is_ok());
+        } else {
+            assert!(first.await.unwrap().is_ok());
+        }
+        assert!(third.await.unwrap().is_ok());
+        assert_eq!(fake.requests.rows.lock().await.len(), 3);
+        assert_eq!(fixture.balance().await, (0, 0));
+    })
+    .await;
 }

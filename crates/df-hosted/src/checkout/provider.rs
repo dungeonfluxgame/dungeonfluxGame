@@ -22,6 +22,8 @@ pub(super) enum Error {
     Database(tokio_postgres::Error),
     Finance(df_portal::app_api::ports::PortError),
     Mismatch,
+    InProgress,
+    AtCapacity,
 }
 
 impl Error {
@@ -43,6 +45,8 @@ impl Error {
                 _ => "finance",
             },
             Self::Mismatch => "receipt_mismatch",
+            Self::InProgress => "creation_in_progress",
+            Self::AtCapacity => "creation_limit",
         };
         df_observe::record_audit_line(
             "hosted.stripe_failed",

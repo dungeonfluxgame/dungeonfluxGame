@@ -1,5 +1,8 @@
 //! Durable checkout receipts bridge Stripe acknowledgements and idempotent finance posting.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+
 use df_account_app::wire::{CheckoutCreated, CheckoutStatus, CheckoutView};
 use df_portal::app_api::ports::{PortError, PortResult};
 use df_types::{AccountId, CheckoutId, OperationId};
@@ -13,6 +16,39 @@ use crate::{database::Connection, finance::Finance};
 pub(super) struct Stripe {
     pub(super) connection: tokio::sync::Mutex<Connection>,
     pub(super) provider: Provider,
+    pub(super) creations: Mutex<CreationState>,
+}
+
+/// Maximum number of provider calls one account can have in flight.
+const MAXIMUM_PENDING_CREATES_PER_ACCOUNT: usize = 2;
+
+/// Tracks the in-process operation claims and per-account pending provider calls.
+#[derive(Default)]
+pub(super) struct CreationState {
+    operations: HashSet<([u8; 16], [u8; 16])>,
+    accounts: HashMap<[u8; 16], usize>,
+}
+
+struct CreationClaim<'a> {
+    creations: &'a Mutex<CreationState>,
+    account: [u8; 16],
+    operation: [u8; 16],
+}
+
+impl Drop for CreationClaim<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .creations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.operations.remove(&(self.account, self.operation));
+        if let Some(count) = state.accounts.get_mut(&self.account) {
+            *count -= 1;
+            if *count == 0 {
+                state.accounts.remove(&self.account);
+            }
+        }
+    }
 }
 
 impl Stripe {
@@ -28,6 +64,8 @@ impl Stripe {
                 error.audit();
                 match error {
                     Error::Mismatch => PortError::Forbidden,
+                    Error::InProgress => PortError::Busy,
+                    Error::AtCapacity => PortError::Throttled,
                     _ => PortError::UnknownOutcome,
                 }
             })
@@ -39,45 +77,65 @@ impl Stripe {
         amount_cents: u32,
         request: OperationId,
     ) -> Result<CheckoutCreated, Error> {
-        let connection = self.connection.lock().await;
         let token = df_customer::SecretToken::generate().map_err(|_| Error::Configuration)?;
         let id = df_commerce::finance_ids::unhex(&token.text()).ok_or(Error::Configuration)?;
         let id = id.get(..16).ok_or(Error::Configuration)?;
         let cents = i32::try_from(amount_cents).map_err(|_| Error::Mismatch)?;
-        let row = connection.client.query_one(
-            "INSERT INTO hosted.stripe_checkout(operation_id,account_id,request_id,amount_cents,currency,is_test_mode) \
-             VALUES($1,$2,$3,$4,'usd',$5) ON CONFLICT(account_id,request_id) DO UPDATE SET request_id=excluded.request_id \
-             RETURNING operation_id,amount_cents,redirect_url,is_test_mode,created_at > clock_timestamp() - interval '23 hours'",
-            &[&id, &&account.as_bytes()[..], &&request.as_bytes()[..], &cents, &self.provider.settings.is_test_mode],
-        ).await.map_err(Error::Database)?;
-        let original: i32 = row.try_get(1).map_err(Error::Database)?;
-        let test_mode: bool = row.try_get(3).map_err(Error::Database)?;
-        if original != cents || test_mode != self.provider.settings.is_test_mode {
-            return Err(Error::Mismatch);
-        }
-        let operation: Vec<u8> = row.try_get(0).map_err(Error::Database)?;
-        let operation = df_commerce::finance_ids::hex(&operation);
-        if let Some(redirect_url) = row.try_get(2).map_err(Error::Database)? {
+        let (operation, account_id, request_id, within_idempotency_window, existing_url) = {
+            let connection = self.connection.lock().await;
+            let row = connection.client.query_one(
+                "INSERT INTO hosted.stripe_checkout(operation_id,account_id,request_id,amount_cents,currency,is_test_mode) \
+                 VALUES($1,$2,$3,$4,'usd',$5) ON CONFLICT(account_id,request_id) DO UPDATE SET request_id=excluded.request_id \
+                 RETURNING operation_id,amount_cents,redirect_url,is_test_mode,created_at > clock_timestamp() - interval '23 hours'",
+                &[&id, &&account.as_bytes()[..], &&request.as_bytes()[..], &cents, &self.provider.settings.is_test_mode],
+            ).await.map_err(Error::Database)?;
+            let original: i32 = row.try_get(1).map_err(Error::Database)?;
+            let test_mode: bool = row.try_get(3).map_err(Error::Database)?;
+            if original != cents || test_mode != self.provider.settings.is_test_mode {
+                return Err(Error::Mismatch);
+            }
+            let operation: Vec<u8> = row.try_get(0).map_err(Error::Database)?;
+            let operation: [u8; 16] = operation.try_into().map_err(|_| Error::Mismatch)?;
+            let existing_url: Option<String> = row.try_get(2).map_err(Error::Database)?;
+            let within_idempotency_window: bool = row.try_get(4).map_err(Error::Database)?;
+            (
+                operation,
+                *account.as_bytes(),
+                *request.as_bytes(),
+                within_idempotency_window,
+                existing_url,
+            )
+        };
+        let operation_hex = df_commerce::finance_ids::hex(&operation);
+        if let Some(redirect_url) = existing_url {
             return Ok(CheckoutCreated {
-                checkout_id: operation,
+                checkout_id: operation_hex,
                 redirect_url,
             });
         }
-        let within_idempotency_window: bool = row.try_get(4).map_err(Error::Database)?;
         // Stripe may prune keys after 24 hours. An uncertain older dispatch requires reconciliation.
         if !within_idempotency_window {
             return Err(Error::Mismatch);
         }
-        let session = self.provider.create(&operation, amount_cents).await?;
+        // Same-operation callers receive Busy while one request dispatches.
+        // Stripe's idempotency key covers duplicate sends from other processes.
+        let _claim = self.claim_creation(account_id, operation)?;
+        let session = self.provider.create(&operation_hex, amount_cents).await?;
+        let connection = self.connection.lock().await;
         let updated = connection
             .client
             .execute(
                 "UPDATE hosted.stripe_checkout SET stripe_session_id=$2,redirect_url=$3 \
-             WHERE operation_id=$1 AND (stripe_session_id IS NULL OR stripe_session_id=$2)",
+             WHERE operation_id=$1 AND account_id=$4 AND request_id=$5 AND amount_cents=$6 \
+               AND is_test_mode=$7 AND stripe_session_id IS NULL",
                 &[
-                    &df_commerce::finance_ids::unhex(&operation).ok_or(Error::Configuration)?,
+                    &&operation[..],
                     &session.id,
                     &session.url,
+                    &&account_id[..],
+                    &&request_id[..],
+                    &cents,
+                    &self.provider.settings.is_test_mode,
                 ],
             )
             .await
@@ -87,11 +145,36 @@ impl Stripe {
         }
         df_observe::record_audit_line(
             "hosted.stripe_created",
-            format!("SPEND stripe_created operation={operation} amount_cents={amount_cents}"),
+            format!("SPEND stripe_created operation={operation_hex} amount_cents={amount_cents}"),
         );
         Ok(CheckoutCreated {
-            checkout_id: operation,
+            checkout_id: operation_hex,
             redirect_url: session.url,
+        })
+    }
+
+    fn claim_creation(
+        &self,
+        account: [u8; 16],
+        operation: [u8; 16],
+    ) -> Result<CreationClaim<'_>, Error> {
+        let mut state = self
+            .creations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.operations.contains(&(account, operation)) {
+            return Err(Error::InProgress);
+        }
+        let count = state.accounts.get(&account).copied().unwrap_or_default();
+        if count >= MAXIMUM_PENDING_CREATES_PER_ACCOUNT {
+            return Err(Error::AtCapacity);
+        }
+        state.operations.insert((account, operation));
+        state.accounts.insert(account, count + 1);
+        Ok(CreationClaim {
+            creations: &self.creations,
+            account,
+            operation,
         })
     }
 

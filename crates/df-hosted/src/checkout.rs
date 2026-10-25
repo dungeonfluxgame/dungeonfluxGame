@@ -41,6 +41,7 @@ impl Checkout {
                 stripe: Some(Arc::new(stripe::Stripe {
                     connection: tokio::sync::Mutex::new(connection),
                     provider,
+                    creations: std::sync::Mutex::new(stripe::CreationState::default()),
                 })),
                 finance,
             });
