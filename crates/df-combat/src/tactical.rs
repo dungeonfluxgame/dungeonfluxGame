@@ -8,8 +8,8 @@ use crate::ranking::{
     UtilityRankingError, rank_tactics,
 };
 use df_rules::tactical::{
-    Action, AttackSpend, AttackUse, Battle, Cell, CreatureKind, DrawBinding, RuleError, Side,
-    Weapon, resolve,
+    Action, AttackSpend, AttackUse, Battle, Cell, Combatant, CreatureKind, DrawBinding, RuleError,
+    Side, Weapon, resolve,
 };
 
 /// Current canonical source/basis/policy and actor perception, supplied by engine/session.
@@ -256,6 +256,18 @@ fn propose_with_shield_policy(
             let (normal, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
             let mut destinations = Vec::new();
             for cell in battle.reachable_cells(id)? {
+                let safety = opponents
+                    .iter()
+                    .map(|enemy| cell.distance(enemy.cell()))
+                    .min()
+                    .unwrap_or(0);
+                // A cell within melee reach of an enemy is never a destination, whatever the target.
+                if safety <= 5 {
+                    continue;
+                }
+                // The route and its cost depend only on the destination, so they are searched
+                // at most once per cell, when the first target passes the checks below.
+                let mut route: Option<(Vec<Cell>, u16)> = None;
                 for target in &opponents {
                     let distance = cell.distance(target.cell());
                     if distance <= 5 || distance > u32::from(normal) {
@@ -264,21 +276,23 @@ fn propose_with_shield_policy(
                     if battle.attack_from(id, cell, target.id(), usage).is_err() {
                         continue;
                     }
-                    let safety = opponents
-                        .iter()
-                        .map(|enemy| cell.distance(enemy.cell()))
-                        .min()
-                        .unwrap_or(0);
-                    if safety <= 5 {
-                        continue;
-                    }
                     let protection = battle.map().cover_between(target.cell(), cell, &[])?;
-                    let path =
-                        battle.shortest_path(id, cell, Some(actor.movement_remaining_ft()))?;
-                    let cost = if path.is_empty() {
-                        0
-                    } else {
-                        battle.validate_path(id, &path)?
+                    let (path, cost) = match &route {
+                        Some(known) => known.clone(),
+                        None => {
+                            let path = battle.shortest_path(
+                                id,
+                                cell,
+                                Some(actor.movement_remaining_ft()),
+                            )?;
+                            let cost = if path.is_empty() {
+                                0
+                            } else {
+                                battle.validate_path(id, &path)?
+                            };
+                            route = Some((path.clone(), cost));
+                            (path, cost)
+                        }
                     };
                     destinations.push((
                         std::cmp::Reverse(protection),
@@ -500,20 +514,40 @@ fn approach_target(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError
     }
 
     let (cols, rows) = battle.map().dimensions();
+    let actor_cell = actor.cell();
+    // Each target's distance from the actor is fixed, so it is measured once for all cells.
+    let from_actor: Vec<(&Combatant, u32)> = targets
+        .iter()
+        .map(|target| (*target, actor_cell.distance(target.cell())))
+        .collect();
+    // A cell qualifies for a target when it lies closer to that target than the actor does.
+    let closer = |cell: Cell, target: &Combatant, from: u32| cell.distance(target.cell()) < from;
     let mut paths = Vec::new();
-    for target in targets {
-        let current_distance = actor.cell().distance(target.cell());
-        for col in 0..cols {
-            for row in 0..rows {
-                let cell = Cell(col, row);
-                if cell == actor.cell() || cell.distance(target.cell()) >= current_distance {
-                    continue;
+    // A route depends only on its destination, so each cell is searched once and shared by
+    // every target that the cell lies closer to than the actor does.
+    for col in 0..cols {
+        for row in 0..rows {
+            let cell = Cell(col, row);
+            if cell == actor_cell
+                || !from_actor
+                    .iter()
+                    .any(|&(target, from)| closer(cell, target, from))
+            {
+                continue;
+            }
+            let Ok(path) = battle.shortest_path(id, cell, None) else {
+                continue;
+            };
+            let cost = battle.path_cost(id, &path)?;
+            for &(target, from) in &from_actor {
+                if closer(cell, target, from) {
+                    paths.push((
+                        cell.distance(target.cell()),
+                        cost,
+                        target.id(),
+                        path.clone(),
+                    ));
                 }
-                let Ok(path) = battle.shortest_path(id, cell, None) else {
-                    continue;
-                };
-                let cost = battle.path_cost(id, &path)?;
-                paths.push((cell.distance(target.cell()), cost, target.id(), path));
             }
         }
     }

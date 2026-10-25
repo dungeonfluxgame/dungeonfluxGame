@@ -1590,6 +1590,55 @@ fn wolf_moves_toward_the_standing_hero_when_no_attack_square_is_reachable() {
     assert!(moved.actor(10).unwrap().cell().distance(Cell(15, 2)) < 75);
 }
 
+/// Neither hero has an attack square, so the wolf's melee search finds nothing and the policy
+/// falls through to approach_target. Each hero's neighbours are blocked except one, which an
+/// enemy wolf occupies: attack_from rejects an occupied origin, and the map keeps every spawn
+/// connected. The wolf then walks toward the nearer hero along its approach route.
+#[test]
+fn wolf_walks_toward_the_nearer_walled_in_hero_when_no_attack_square_exists() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":12,"rows":7,"blocked":[[9,2],[10,2],[11,2],[11,3],[9,4],[10,4],[11,4],[3,2],[4,2],[5,2],[3,3],[3,4],[4,4],[5,4]]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[10,3],[4,3]],"enemies":[[0,3],[9,3],[5,3]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(10, 3), false),
+        hero(2, Cell(4, 3), false),
+        CombatantSpec::creature(10, "wolf", Cell(0, 3), 0).unwrap(),
+        CombatantSpec::creature(11, "wolf", Cell(9, 3), 0).unwrap(),
+        CombatantSpec::creature(12, "wolf", Cell(5, 3), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(47);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [1, 2, 20].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(10));
+    // The attack-square policy finds no square and falls back to Dodge, which hands the turn to
+    // approach_target. Asserting the fallback shows the Move below comes from that search.
+    assert_eq!(
+        df_combat::tactical::propose(&battle, 10).unwrap(),
+        Some(Action::Dodge)
+    );
+    let Action::Move(path) = df_combat::tactical::propose_latest(&battle, 10)
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("the wolf should walk toward the nearer walled-in hero");
+    };
+    // Recorded from the pre-refactor approach_target (HEAD); the route must not change.
+    assert_eq!(path, vec![Cell(1, 2), Cell(2, 1)]);
+    let moved = resolve_dice(&battle, 10, &Action::Move(path), &mut rng)
+        .unwrap()
+        .battle;
+    let wolf = moved.actor(10).unwrap().cell();
+    assert!(wolf.distance(Cell(4, 3)) < 20);
+    assert!(wolf.distance(Cell(4, 3)) < wolf.distance(Cell(10, 3)));
+}
+
 /// SRD 5.2.1 p. 290: the Goblin Warrior has AC 15 and lists both Scimitar and Shortbow actions.
 #[test]
 fn goblin_latest_policy_keeps_its_stat_block_shield_equipped() {

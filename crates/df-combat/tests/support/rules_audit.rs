@@ -200,6 +200,7 @@ fn target_height_dm(size: Size) -> u16 {
         Size::Small => 12,
         Size::Medium => 18,
         Size::Large => 30,
+        Size::Huge => 45,
     }
 }
 fn covers_when_standing_or_large_enough(creature: Coverer, target_size: Size) -> bool {
@@ -1013,7 +1014,10 @@ impl<'g> FightAudit<'g> {
             Action::ShortRest { elapsed_seconds } => {
                 self.audit_short_rest(before, actor, *elapsed_seconds, res)
             }
-            Action::RecoverAmmunition { .. } | Action::PickUpWeapon(_) => {}
+            Action::RecoverAmmunition { .. }
+            | Action::PickUpWeapon(_)
+            | Action::ActionSurge
+            | Action::LongRest { .. } => {}
         }
         self.audit_untouched(before, after, actor, action);
     }
