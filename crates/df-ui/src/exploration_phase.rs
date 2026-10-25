@@ -104,7 +104,7 @@ impl ExplorationView<'_> {
         if self.pending.is_some() && self.rejection.is_some() {
             return Err(ExplorationValidationError::ConflictingFeedback);
         }
-        let text = |value: &str, maximum: usize| {
+        let validate_text = |value: &str, maximum: usize| {
             if value.trim().is_empty() {
                 Err(ExplorationValidationError::EmptyText)
             } else if value.len() > maximum {
@@ -114,31 +114,31 @@ impl ExplorationView<'_> {
             }
         };
         for value in [self.heading, self.draft_label, self.submit_label] {
-            text(value, limits.max_text_bytes)?;
+            validate_text(value, limits.max_text_bytes)?;
         }
         for value in [self.pending, self.rejection].into_iter().flatten() {
-            text(value, limits.max_text_bytes)?;
+            validate_text(value, limits.max_text_bytes)?;
         }
         if let Some(npc) = &self.npc {
             for value in [npc.name, npc.context, npc.dialogue] {
-                text(value, limits.max_text_bytes)?;
+                validate_text(value, limits.max_text_bytes)?;
             }
         }
-        let mut ids = BTreeSet::new();
+        let mut offer_ids = BTreeSet::new();
         for choice in self.choices {
-            text(choice.id, limits.max_identifier_bytes)?;
-            text(choice.label, limits.max_text_bytes)?;
-            text(choice.detail, limits.max_text_bytes)?;
+            validate_text(choice.id, limits.max_identifier_bytes)?;
+            validate_text(choice.label, limits.max_text_bytes)?;
+            validate_text(choice.detail, limits.max_text_bytes)?;
             if let Some(reason) = choice.disabled_reason {
-                text(reason, limits.max_text_bytes)?;
+                validate_text(reason, limits.max_text_bytes)?;
             }
-            if !ids.insert(choice.id) {
+            if !offer_ids.insert(choice.id) {
                 return Err(ExplorationValidationError::DuplicateOffer);
             }
         }
         if let Some(id) = self.draft_offer_id {
-            text(id, limits.max_identifier_bytes)?;
-            if !ids.insert(id) {
+            validate_text(id, limits.max_identifier_bytes)?;
+            if !offer_ids.insert(id) {
                 return Err(ExplorationValidationError::DuplicateOffer);
             }
         }
@@ -173,7 +173,7 @@ struct OfferFence {
 #[cfg(any(target_arch = "wasm32", test))]
 impl OfferFence {
     fn create(view: &ExplorationView<'_>) -> Self {
-        let mut state = Self {
+        let mut fence = Self {
             binding: view.binding,
             revision: view.revision,
             choices: Vec::new(),
@@ -182,8 +182,8 @@ impl OfferFence {
             pending: false,
             disposed: false,
         };
-        state.replace(view);
-        state
+        fence.replace(view);
+        fence
     }
     fn require_newer(&self, view: &ExplorationView<'_>) -> Result<(), ExplorationValidationError> {
         if self.disposed {
@@ -901,21 +901,22 @@ mod browser {
                     replace_text(&nodes.detail, Some(choice.detail));
                     replace_text(&nodes.reason, choice.disabled_reason);
                     // Reorder only changed positions; ordinary updates leave focus alone.
-                    let previous = view
+                    let previous_choice = view
                         .choices
                         .iter()
                         .take_while(|offered| offered.id != choice.id)
                         .last();
-                    let expected_previous = previous
+                    let expected_previous = previous_choice
                         .and_then(|offered| choices.get(offered.id))
                         .map(|entry| &entry.root);
                     let actual_previous = nodes.root.previous_element_sibling();
-                    let positioned = match (expected_previous, actual_previous.as_ref()) {
+                    let has_expected_position = match (expected_previous, actual_previous.as_ref())
+                    {
                         (Some(expected), Some(actual)) => expected.is_same_node(Some(actual)),
                         (None, None) => true,
                         _ => false,
                     };
-                    if !positioned {
+                    if !has_expected_position {
                         let next = expected_previous
                             .and_then(Element::next_element_sibling)
                             .or_else(|| {

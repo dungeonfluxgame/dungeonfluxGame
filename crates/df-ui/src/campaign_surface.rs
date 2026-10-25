@@ -115,7 +115,7 @@ impl CampaignView<'_> {
         {
             return Err(CampaignValidationError::ResourceLimit);
         }
-        let validate = |text: &str| {
+        let validate_text = |text: &str| {
             if text.trim().is_empty() {
                 Err(CampaignValidationError::EmptyText)
             } else if text.len() > limits.max_text_bytes {
@@ -134,19 +134,19 @@ impl CampaignView<'_> {
             self.connection,
             self.notice,
         ] {
-            validate(text)?;
+            validate_text(text)?;
         }
-        let mut keys = BTreeSet::new();
+        let mut member_keys = BTreeSet::new();
         for member in self.members {
             for text in [member.key, member.name, member.role, member.sigil] {
-                validate(text)?;
+                validate_text(text)?;
             }
-            if !keys.insert(member.key) {
+            if !member_keys.insert(member.key) {
                 return Err(CampaignValidationError::DuplicateMemberKey);
             }
         }
         for objective in self.objectives {
-            validate(objective.label)?;
+            validate_text(objective.label)?;
         }
         Ok(())
     }
@@ -616,8 +616,8 @@ mod browser {
             SceneImageOwner::complete(&owner, token, bytes)
         }
         fn update_concept_art(&self, scene: ConceptScene) -> Result<(), CampaignError> {
-            let old = self.art.borrow().clone();
-            if old.get_attribute("src").as_deref() == Some(scene.asset_path()) {
+            let old_art = self.art.borrow().clone();
+            if old_art.get_attribute("src").as_deref() == Some(scene.asset_path()) {
                 return Ok(());
             }
             // A separate browser image owns each concept request. An old network event
@@ -650,8 +650,8 @@ mod browser {
                 }
             }) as Box<dyn FnMut(Event)>);
             next.add_event_listener_with_callback("error", callback.as_ref().unchecked_ref())?;
-            if let Some(parent) = old.parent_node()
-                && let Err(error) = parent.replace_child(&next, &old)
+            if let Some(parent) = old_art.parent_node()
+                && let Err(error) = parent.replace_child(&next, &old_art)
             {
                 next.remove_event_listener_with_callback(
                     "error",
@@ -667,13 +667,13 @@ mod browser {
             }
             let mut failure = None;
             if let Some(listener) = old_listener
-                && let Err(error) = old
+                && let Err(error) = old_art
                     .remove_event_listener_with_callback("error", listener.as_ref().unchecked_ref())
             {
                 failure = Some(CampaignError::from(error));
             }
-            old.remove();
-            if let Err(error) = old.remove_attribute("src")
+            old_art.remove();
+            if let Err(error) = old_art.remove_attribute("src")
                 && failure.is_none()
             {
                 failure = Some(error.into());
