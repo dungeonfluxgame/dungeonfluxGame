@@ -262,6 +262,8 @@ mod browser {
             explanation: "13 + 4 · supplied",
             source: "Controlled supplied receipt",
             verdict: None,
+            die_face: Some(13),
+            die_rest: None,
         }];
         CombatPhaseView {
             art: CombatArt::Harbor,

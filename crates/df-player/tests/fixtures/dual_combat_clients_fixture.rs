@@ -73,6 +73,8 @@ mod browser {
         explanation: "13 on the die + 4 attack bonus",
         source: "Resolved · Corin Vale",
         verdict: None,
+        die_face: Some(13),
+        die_rest: None,
     }];
 
     fn error(failure: impl std::fmt::Display) -> JsValue {

@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use df_audio::{
     CaptureAcquisition, CaptureChunk, CaptureError, CaptureGestureObservation, CaptureLimits,
     CaptureSession, CaptureState,

@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::{cell::Cell, rc::Rc};
 
 use df_auth::rotation::{

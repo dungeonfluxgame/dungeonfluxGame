@@ -75,6 +75,7 @@ mod browser {
                 portrait_scenery: String::new(),
                 name,
                 choices: Vec::new(),
+                ..Default::default()
             }),
             ..Default::default()
         }

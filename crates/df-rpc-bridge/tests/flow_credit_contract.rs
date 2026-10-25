@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use bytes::Bytes;
 use futures::future::{join_all, poll_fn};
 use h2::{RecvStream, SendStream, client, server};

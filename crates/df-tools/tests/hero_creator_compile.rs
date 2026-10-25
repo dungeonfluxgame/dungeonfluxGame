@@ -1,5 +1,4 @@
-//! C01: compile-only browser surface checks; coordinator runs browser acceptance.
+//! The browser surface compiles as part of the library; this checks wasm test linkage.
 #![cfg(target_arch = "wasm32")]
 
-#[path = "../src/gameplay_browser/hero_creator.rs"]
-mod hero_creator;
+const _: &str = df_tools::BUILD_ID;

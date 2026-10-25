@@ -358,6 +358,7 @@ mod browser {
                 chapter: "Chapter one · Beyond the loading pier",
                 title: "Lanterns along the road",
                 narrative: "The harbor falls behind the company. Beyond the last lantern, a clearing opens beneath the stars.",
+                dialogue: None,
                 party_heading: "The company",
                 party: &AFTERMATH_PARTY,
                 next_heading: "Beyond the harbor",

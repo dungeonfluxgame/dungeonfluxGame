@@ -77,6 +77,8 @@ mod browser {
             explanation: "D20: 12 + Strength: 3 + Proficiency: 3 = 18. The server supplied this outcome.",
             source: "Synthetic resolved attack · read-only history",
             verdict: None,
+            die_face: Some(12),
+            die_rest: None,
         },
         CombatRoll {
             key: "previous-save",
@@ -85,6 +87,8 @@ mod browser {
             explanation: "D20: 14 + Dexterity: 2 = 16. DC 13, supplied by the fixture snapshot.",
             source: "Synthetic resolved save · read-only history",
             verdict: None,
+            die_face: Some(14),
+            die_rest: None,
         },
     ];
     #[derive(Clone, Copy, Eq, PartialEq)]
