@@ -474,7 +474,11 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
             .iter()
             .find(|decision| decision.operation == inn.operation)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        if accepted(decision)?.scene != Some(super::inn_scene()) {
+        if !accepted(decision)?
+            .scene
+            .as_ref()
+            .is_some_and(super::is_inn_scene)
+        {
             return invalid();
         }
     }

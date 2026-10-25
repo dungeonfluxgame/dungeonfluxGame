@@ -151,13 +151,56 @@ fn c2_created_place_fight_native_codec_recovery_needs_no_supplied_inventory() {
     });
 }
 
+/// The authored rows, except that a party hero's hit-point maximum is the bound its recorded creation
+/// choices state (SRD 5.2.1 pp. 47, 84, 87), not the party-wide authored row, which is the largest
+/// figure any supported build could reach. A party entity's rows exist only with its character, so the
+/// authored rows of party entities without one are absent from the admitted rows.
+fn assert_sheet_bounds(
+    state: &GameState,
+    admitted: &[ResourceConstraint],
+    authored: &[ResourceConstraint],
+) {
+    let authored = authored
+        .iter()
+        .filter(|row| {
+            !ENTITIES.iter().any(|bytes| bytes == row.owner.as_bytes())
+                || state
+                    .characters
+                    .iter()
+                    .any(|character| character.entity == row.owner)
+        })
+        .collect::<Vec<_>>();
+    // Created places append their own rows after the authored ones.
+    assert!(admitted.len() >= authored.len());
+    for (admitted, authored) in admitted.iter().zip(authored) {
+        let party_hit_points = authored.resource.as_str() == "hit-points"
+            && ENTITIES
+                .iter()
+                .any(|bytes| bytes == authored.owner.as_bytes())
+            && state
+                .characters
+                .iter()
+                .any(|character| character.entity == authored.owner);
+        if party_hit_points {
+            assert_eq!(
+                admitted.maximum,
+                i64::from(maximum_hit_points(state, authored.owner).unwrap())
+            );
+            assert_eq!(admitted.minimum, authored.minimum);
+        } else {
+            assert_eq!(admitted, authored);
+        }
+    }
+}
+
 #[test]
 fn c2_created_inventory_preserves_authored_bounds_and_rejects_stored_maxima() {
     with_created_place(|opening, street, _| {
         let authored = resources().unwrap();
-        assert_eq!(resources_for(opening.state()).unwrap(), authored);
+        let inventory = resources_for(opening.state()).unwrap();
+        assert_sheet_bounds(opening.state(), &inventory, &authored);
         let inventory = resources_for(street.state()).unwrap();
-        assert_eq!(&inventory[..authored.len()], authored);
+        assert_sheet_bounds(street.state(), &inventory, &authored);
         let committed = fight(&street);
         let mut state = committed.state().clone();
         let target = scene_fight::person_entity("market-street-wenna").unwrap();
@@ -169,5 +212,39 @@ fn c2_created_inventory_preserves_authored_bounds_and_rejects_stored_maxima() {
         hp.maximum = 999;
         hp.value = 999;
         assert!(model::checkpoint(committed.basis(), state).is_err());
+    });
+}
+
+#[test]
+fn c2_orphan_party_rows_at_the_party_wide_hit_point_figure_are_refused() {
+    with_created_place(|opening, _, _| {
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let orphan = opening
+            .state()
+            .characters
+            .iter()
+            .find(|character| character.owner == second)
+            .unwrap()
+            .entity;
+        let mut orphaned = opening.state().clone();
+        orphaned
+            .characters
+            .retain(|character| character.owner != second);
+        let party_wide_hit_points = resources()
+            .unwrap()
+            .into_iter()
+            .find(|constraint| {
+                constraint.owner == orphan && constraint.resource.as_str() == "hit-points"
+            })
+            .unwrap()
+            .maximum;
+        let hit_points = orphaned
+            .resources
+            .iter_mut()
+            .find(|resource| resource.owner == orphan && resource.resource.as_str() == "hit-points")
+            .unwrap();
+        hit_points.maximum = party_wide_hit_points;
+        hit_points.value = party_wide_hit_points;
+        assert!(model::checkpoint(opening.basis(), orphaned).is_err());
     });
 }

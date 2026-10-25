@@ -183,7 +183,12 @@ fn source_digests() -> &'static SourceDigests {
 // the script's exact pack bytes; no stored pin comparison is relaxed.
 fn legacy_source_digests() -> SourceDigests {
     SourceDigests {
-        manifest: source_digests().manifest,
+        // The manifest hashes the SRD citation strings, which later changed (short rest hit point
+        // dice). The pre-change saves carry the digest of their own strings, so it is frozen too.
+        manifest: ContentDigest([
+            213, 64, 202, 171, 66, 24, 24, 103, 103, 233, 104, 178, 34, 235, 148, 140, 197, 244,
+            215, 31, 12, 230, 231, 119, 7, 184, 120, 45, 43, 184, 137, 131,
+        ]),
         handler: ContentDigest([
             37, 222, 214, 38, 60, 123, 108, 79, 176, 101, 224, 124, 70, 12, 56, 33, 163, 113, 121,
             181, 40, 122, 48, 126, 245, 151, 197, 6, 169, 179, 37, 149,
@@ -205,6 +210,31 @@ fn revision_digest(
     digest.update(compiled.0);
     digest.update(revision.as_bytes());
     ContentDigest(digest.finalize().into())
+}
+
+/// The journey rules revision before the current one. Saves made under the legacy pins carry it in
+/// their combat receipts and still resume.
+const LEGACY_SOURCE_REVISION: &str = "SRD5.2.1-2024-local-journey-2";
+
+/// Whether `pins` are the legacy profile's: the handler and source manifest frozen from the saves
+/// made before the short rest change (see `legacy_source_digests`).
+pub(super) fn is_legacy_profile(pins: &CheckpointPins) -> bool {
+    let legacy = legacy_source_digests();
+    pins.rules.handler_digest == legacy.handler
+        && pins.rules.source_manifest_digest == legacy.manifest
+}
+
+/// Whether the pins in force are the legacy profile's. Every reader of stored history runs after
+/// `validate_resume` has matched the checkpoint's stored pins to these, so this is the stored
+/// pins' profile.
+pub(super) fn active_profile_is_legacy() -> bool {
+    pins().is_ok_and(|pins| is_legacy_profile(&pins))
+}
+
+/// Whether a stored receipt names the current rules revision, or the legacy one under legacy pins.
+pub(super) fn is_recorded_source_revision(recorded: &str) -> bool {
+    recorded == source_revision()
+        || (recorded == LEGACY_SOURCE_REVISION && active_profile_is_legacy())
 }
 
 pub(super) fn source_revision() -> String {
@@ -249,6 +279,15 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
     } else {
         &legacy
     };
+    // Tests without a pack stand for the current profile, so the explanation tests can check the
+    // manifest digest. Production without a pack (qualification) keeps the frozen profile, which is
+    // untested: `cfg!(test)` makes that case unreachable from a test. Passing the choice in
+    // would touch every `pins()` caller, so it is left implicit.
+    let manifest = if cfg!(test) && loaded.is_none() {
+        source_digests().manifest
+    } else {
+        digests.manifest
+    };
     let custom = loaded
         .as_ref()
         .is_some_and(|loaded| !loaded.departures.is_empty());
@@ -286,8 +325,8 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
     } else {
         "srd521-journey-subset-2".to_owned()
     };
-    let catalog_digest = loaded.as_ref().map_or(digests.manifest, |loaded| {
-        revision_digest(b"df-tuning-pin/1", digests.manifest, loaded.tuning_revision)
+    let catalog_digest = loaded.as_ref().map_or(manifest, |loaded| {
+        revision_digest(b"df-tuning-pin/1", manifest, loaded.tuning_revision)
     });
     let content_digest = loaded.as_ref().map_or(digests.content, |loaded| {
         revision_digest(b"df-pack-pin/1", digests.content, loaded.pack_revision)
@@ -303,7 +342,7 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
             catalog: label("srd521-journey-subset-2")?,
             catalog_digest,
             source_manifest: label("srd521-creation-combat-rest-reviewed-subset")?,
-            source_manifest_digest: digests.manifest,
+            source_manifest_digest: manifest,
             handler: label("source-qualified-journey-compiled-3")?,
             handler_digest: digests.handler,
         },
@@ -1314,6 +1353,76 @@ mod tuning_pin_tests {
     use super::*;
     const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
     const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
+    const LEGACY_PACK: &[u8] = include_bytes!("fixtures/legacy-beats/pack.json");
+    const SHOP_PACK: &[u8] = include_bytes!("../../../../content/merchant-shop/pack.json");
+    const SHOP_TUNING: &[u8] = include_bytes!("../../../../content/merchant-shop/tuning.json");
+
+    #[test]
+    fn the_legacy_revision_is_the_one_before_the_current_revision() {
+        let number = |revision: &str| {
+            let (prefix, number) = revision.rsplit_once('-').unwrap();
+            (prefix.to_owned(), number.parse::<u32>().unwrap())
+        };
+        let (prefix, current) = number(df_rules::local_journey::SOURCE_REVISION);
+        let (legacy_prefix, legacy) = number(LEGACY_SOURCE_REVISION);
+        assert_eq!(prefix, legacy_prefix);
+        assert_eq!(legacy + 1, current);
+    }
+    #[test]
+    fn pins_cite_the_frozen_manifest_only_under_the_legacy_profile() {
+        let current = source_digests().manifest;
+        let frozen = legacy_source_digests().manifest;
+        assert_ne!(current, frozen);
+        // A pack without script or tactical tuning is the legacy profile.
+        let legacy =
+            pack::with_test_pack(pack::load_from_bytes(LEGACY_PACK, TUNING).unwrap(), || {
+                pins().unwrap()
+            });
+        assert_eq!(legacy.rules.source_manifest_digest, frozen);
+        assert!(is_legacy_profile(&legacy));
+        // A scripted pack is the current profile.
+        let scripted = pack::with_test_pack(
+            pack::load_from_bytes(SHOP_PACK, SHOP_TUNING).unwrap(),
+            || pins().unwrap(),
+        );
+        assert_eq!(scripted.rules.source_manifest_digest, current);
+        assert!(!is_legacy_profile(&scripted));
+        // Tests without a pack stand for the current profile.
+        let unpacked = pins().unwrap();
+        assert_eq!(unpacked.rules.source_manifest_digest, current);
+        assert!(!is_legacy_profile(&unpacked));
+    }
+    #[test]
+    fn stored_receipts_name_the_current_revision_and_the_legacy_one_only_under_legacy_pins() {
+        let near_misses = [
+            "SRD5.2.1-2024-local-journey-1",
+            "SRD5.2.1-2024-local-journey-20",
+            "SRD5.2.1-2024-local-journey-2+custom-0123456789ab",
+            " SRD5.2.1-2024-local-journey-2",
+            "SRD5.2.1-2024-local-journey-2 ",
+            "srd5.2.1-2024-local-journey-2",
+            "SRD5.2.1-2024-local-journey-",
+            "",
+        ];
+        let check = |accepts_legacy: bool| {
+            assert!(is_recorded_source_revision(&source_revision()));
+            assert_eq!(
+                is_recorded_source_revision(LEGACY_SOURCE_REVISION),
+                accepts_legacy
+            );
+            for near_miss in near_misses {
+                assert!(!is_recorded_source_revision(near_miss), "{near_miss:?}");
+            }
+        };
+        pack::with_test_pack(pack::load_from_bytes(LEGACY_PACK, TUNING).unwrap(), || {
+            check(true);
+        });
+        pack::with_test_pack(
+            pack::load_from_bytes(SHOP_PACK, SHOP_TUNING).unwrap(),
+            || check(false),
+        );
+        check(false);
+    }
     #[test]
     fn identical_files_bind_stable_standard_pins_and_each_byte_edit_changes_its_digest() {
         let baseline = pins().unwrap();

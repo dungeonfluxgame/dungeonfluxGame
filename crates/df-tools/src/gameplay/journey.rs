@@ -485,7 +485,20 @@ fn resources_for_owners(
         .filter(|character| keep(character.entity))
     {
         let progression = fighter_progression(state, character.entity)?;
-        if progression.level() == 1 {
+        // A hero with recorded creation choices is bounded by the sheet those choices state, at
+        // every level; the party-wide row is only for a character with no recorded creation (the
+        // placeholder hero of `model::initial`). The bound never reads a stored resource row.
+        let level_one = progression.level() == 1;
+        if level_one && character.choices.is_empty() {
+            continue;
+        }
+        let build = recorded_sheet(state, character, progression)?;
+        for constraint in inventory.iter_mut().filter(|constraint| {
+            constraint.owner == character.entity && constraint.resource.as_str() == "hit-points"
+        }) {
+            constraint.maximum = i64::from(build.hit_points);
+        }
+        if level_one {
             continue;
         }
         inventory.push(ResourceConstraint {
@@ -495,30 +508,29 @@ fn resources_for_owners(
             maximum: 1,
             source: rule()?,
         });
-        let selected = character
-            .choices
-            .iter()
-            .filter(|choice| {
-                super::hero_identity::is_character_pack_validation_choice(choice.offer.as_str())
-                    && choice.offer.as_str() != "test-fighter-level"
-            })
-            .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
-            .collect::<Vec<_>>();
-        let mut build =
-            pack::validate_character(&name(state, character.entity)?, &selected).map_err(bad)?;
-        progression.apply(&mut build).map_err(bad)?;
         for constraint in inventory
             .iter_mut()
             .filter(|constraint| constraint.owner == character.entity)
         {
             match constraint.resource.as_str() {
-                "hit-points" => constraint.maximum = i64::from(build.hit_points),
                 "second-wind" => constraint.maximum = i64::from(build.second_wind_uses),
                 "hit-point-dice" => constraint.maximum = i64::from(progression.level()),
                 _ => {}
             }
         }
     }
+    // A party entity's rows exist only with its character: orphan rows are refused whatever their
+    // value, including the party-wide figure.
+    inventory.retain(|constraint| {
+        let party_entity = ENTITIES
+            .iter()
+            .any(|bytes| bytes == constraint.owner.as_bytes());
+        !party_entity
+            || state
+                .characters
+                .iter()
+                .any(|character| character.entity == constraint.owner)
+    });
     Ok(inventory)
 }
 
@@ -741,46 +753,43 @@ pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32
                 .maximum,
         ));
     }
-    let constitution = value(state, who, "constitution")?;
-    let progression = fighter_progression(state, who)?;
-    let base = pack::with_creation(|rules| rules.base_hit_points);
+    sheet_bound(state, who)
+}
+
+/// A hero's sheet rebuilt from the creation choices recorded on the character, never from a stored
+/// resource row: creation rules (SRD 5.2.1 pp. 47, 84, 87) at level one, advanced by the Fighter
+/// progression above it.
+fn recorded_sheet(
+    state: &GameState,
+    character: &CharacterState,
+    progression: rules::FighterProgression,
+) -> Result<rules::LegalCharacter, RepositoryError> {
+    let selected = character
+        .choices
+        .iter()
+        .filter(|choice| {
+            super::hero_identity::is_character_pack_validation_choice(choice.offer.as_str())
+                && choice.offer.as_str() != "test-fighter-level"
+        })
+        .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
+        .collect::<Vec<_>>();
+    let mut build = pack::validate_character(&name(state, character.entity)?, &selected)
+        .inspect_err(|_| refusal_detail::note("sheet-recorded-choices"))
+        .map_err(bad)?;
+    if progression.level() > 1 {
+        progression.apply(&mut build).map_err(bad)?;
+    }
+    Ok(build)
+}
+
+/// The hit point maximum a hero's recorded creation choices state.
+fn sheet_bound(state: &GameState, who: EntityId) -> Result<u32, RepositoryError> {
     let character = state
         .characters
         .iter()
         .find(|character| character.entity == who)
         .ok_or(RepositoryError::InvalidCandidate)?;
-    let species = character
-        .choices
-        .iter()
-        .find(|choice| choice.offer.as_str() == "species")
-        .and_then(|choice| rules::HeroSpecies::from_choice(choice.selected.as_str()))
-        .ok_or_else(|| {
-            refusal_detail::note("sheet-species-hit-points");
-            RepositoryError::InvalidCandidate
-        })?;
-    let choices = character
-        .choices
-        .iter()
-        .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
-        .collect::<Vec<_>>();
-    let options =
-        df_rules::species::SpeciesOptions::from_choices(species, &choices).map_err(bad)?;
-    if progression.level() > 1 {
-        return Ok(u32::from(
-            progression.hit_points(u8::try_from(constitution).map_err(bad)?, species),
-        ) + if options.tough {
-            2 * u32::from(progression.level())
-        } else {
-            0
-        });
-    }
-    // SRD 5.2.1 p. 84: apply the accepted species' Toughness, not a shared Dwarf assumption.
-    u32::try_from(
-        i32::from(base)
-            + rules::ability_modifier(constitution as u8)
-            + i32::from(options.combat_traits(species).hit_points_per_level),
-    )
-    .map_err(bad)
+    Ok(recorded_sheet(state, character, fighter_progression(state, who)?)?.hit_points)
 }
 fn weapon_display_name(item: &str) -> String {
     item.split('-')
@@ -1787,6 +1796,20 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
         return Ok(Some(event.id));
     }
     Ok(None)
+}
+
+/// Whether a stored receipt's scene is the inn. Receipts written before scenes carried their source
+/// key hold the same scene with that key empty; only a checkpoint under the legacy pins (see
+/// `model::is_legacy_profile`) may carry them.
+pub(super) fn is_inn_scene(recorded: &rpc::GameplayScene) -> bool {
+    let current = inn_scene();
+    *recorded == current
+        || (model::active_profile_is_legacy()
+            && *recorded
+                == rpc::GameplayScene {
+                    source_scene_key: String::new(),
+                    ..current
+                })
 }
 
 pub(super) fn inn_scene() -> rpc::GameplayScene {
@@ -6003,6 +6026,103 @@ mod tests {
                 rpc::JourneyPhase::Complete
             );
         });
+    }
+
+    #[test]
+    fn a_forged_constitution_row_and_hit_points_above_the_recorded_build_are_refused() {
+        let current = opening_story();
+        let hero = entity(ENTITIES[0]).unwrap();
+        let recorded = maximum_hit_points(current.state(), hero).unwrap();
+        let mut forged = current.state().clone();
+        for resource in forged
+            .resources
+            .iter_mut()
+            .filter(|resource| resource.owner == hero)
+        {
+            match resource.resource.as_str() {
+                "constitution" => resource.value = 20,
+                "hit-points" => {
+                    // The party-wide row would admit this figure; the hero's recorded build does not.
+                    resource.maximum = i64::from(recorded) + 2;
+                    resource.value = resource.maximum;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(maximum_hit_points(&forged, hero).unwrap(), recorded);
+        assert!(model::checkpoint(current.basis(), forged).is_err());
+    }
+
+    #[test]
+    fn resource_rows_of_a_party_entity_without_a_character_are_refused_whatever_their_value() {
+        let current = opening_story();
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let orphan = current
+            .state()
+            .characters
+            .iter()
+            .find(|character| character.owner == second)
+            .unwrap()
+            .entity;
+        let mut orphaned = current.state().clone();
+        orphaned
+            .characters
+            .retain(|character| character.owner != second);
+        assert!(model::checkpoint(current.basis(), orphaned.clone()).is_err());
+        // The same orphan with its hit points exactly at the party-wide figure is refused too.
+        let party_wide = resources()
+            .unwrap()
+            .into_iter()
+            .find(|constraint| {
+                constraint.owner == orphan && constraint.resource.as_str() == "hit-points"
+            })
+            .unwrap()
+            .maximum;
+        let hit_points = orphaned
+            .resources
+            .iter_mut()
+            .find(|resource| resource.owner == orphan && resource.resource.as_str() == "hit-points")
+            .unwrap();
+        hit_points.maximum = party_wide;
+        hit_points.value = party_wide;
+        assert!(model::checkpoint(current.basis(), orphaned).is_err());
+    }
+
+    #[test]
+    fn a_stored_inn_scene_may_lack_its_source_key_only_under_the_legacy_pins() {
+        let check = |accepts_keyless: bool| {
+            let current = inn_scene();
+            let mut keyless = current.clone();
+            keyless.source_scene_key.clear();
+            assert!(is_inn_scene(&current));
+            assert_eq!(is_inn_scene(&keyless), accepts_keyless);
+            for change in 0..6 {
+                let mut scene = keyless.clone();
+                match change {
+                    0 => scene.title.push('!'),
+                    1 => scene.scene_asset.push('x'),
+                    2 => scene.destination = rpc::HarborDestination::Unspecified as i32,
+                    3 => scene.speaker_portrait.push('x'),
+                    4 => scene.rules_note.push('x'),
+                    _ => scene.source_scene_key.push('x'),
+                }
+                assert!(!is_inn_scene(&scene), "change {change}");
+            }
+        };
+        let legacy = pack::load_from_bytes(
+            include_bytes!("fixtures/legacy-beats/pack.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(legacy, || check(true));
+        // The shipped tuning is tactical: the current profile.
+        let current = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            include_bytes!("../../../../content/harbor-journey/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(current, || check(false));
+        check(false);
     }
 
     #[test]

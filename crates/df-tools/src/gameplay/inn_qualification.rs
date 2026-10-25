@@ -679,7 +679,10 @@ fn preserved(before: &Checkpoint, after: &Checkpoint) -> Result<(), Error> {
         .last()
         .ok_or_else(|| io::Error::other("inn decision absent"))?;
     required(
-        source(journey::accepted(decision))?.scene == Some(journey::inn_scene())
+        source(journey::accepted(decision))?
+            .scene
+            .as_ref()
+            .is_some_and(journey::is_inn_scene)
             && decision.draws.is_empty()
             && decision.effects.is_empty(),
     )?;

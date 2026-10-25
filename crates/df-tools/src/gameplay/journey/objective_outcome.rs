@@ -278,7 +278,7 @@ fn terminal(
         || !accepted(decision)?
             .combat
             .iter()
-            .all(|outcome| outcome.source_revision == model::source_revision())
+            .all(|outcome| model::is_recorded_source_revision(&outcome.source_revision))
     {
         return invalid();
     }

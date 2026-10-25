@@ -276,9 +276,12 @@ impl FighterProgression {
         self.level >= 3
     }
     pub fn hit_points(self, constitution: u8, species: HeroSpecies) -> u16 {
-        let per_level = ability_modifier(constitution)
-            + i32::from(species.combat_traits().hit_points_per_level);
-        (10 + 6 * i32::from(self.level - 1) + per_level * i32::from(self.level)) as u16
+        maximum_hit_points(
+            self.level,
+            FIGHTER_FIRST_LEVEL_HIT_POINTS,
+            constitution,
+            species.combat_traits().hit_points_per_level,
+        ) as u16
     }
     /// Advance an accepted level-one receipt using this build's fixed source-legal ASI.
     pub fn apply(self, character: &mut LegalCharacter) -> Result<(), JourneyRuleError> {
@@ -305,12 +308,12 @@ impl FighterProgression {
             .map(|(key, choice_value)| (key.as_str(), choice_value.as_str()))
             .collect::<Vec<_>>();
         let options = crate::species::SpeciesOptions::from_choices(species, &choices)?;
-        character.hit_points = u32::from(self.hit_points(character.abilities[2], species))
-            + if options.tough {
-                2 * u32::from(self.level)
-            } else {
-                0
-            };
+        character.hit_points = maximum_hit_points(
+            self.level,
+            FIGHTER_FIRST_LEVEL_HIT_POINTS,
+            character.abilities[2],
+            options.combat_traits(species).hit_points_per_level,
+        );
         character.proficiency_bonus = u32::from(self.proficiency_bonus());
         character.second_wind_uses = u32::from(self.second_wind_maximum());
         if archer {
@@ -743,14 +746,32 @@ pub fn validate_character(
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect(),
         // SRD 5.2.1 pp. 47, 84: Fighter's d10 maximum plus Constitution and Dwarven Toughness.
-        hit_points: (i32::from(rules.base_hit_points)
-            + ability_modifier(abilities[2])
-            + i32::from(species_options.combat_traits(species).hit_points_per_level))
-            as u32,
+        hit_points: maximum_hit_points(
+            1,
+            rules.base_hit_points,
+            abilities[2],
+            species_options.combat_traits(species).hit_points_per_level,
+        ),
         armor_class: u32::from(rules.armor_class),
         proficiency_bonus: u32::from(rules.proficiency_bonus),
         second_wind_uses: u32::from(rules.second_wind_uses_max),
     })
+}
+/// A Fighter's d10 maximum, the first-level base the creation rules start from.
+pub const FIGHTER_FIRST_LEVEL_HIT_POINTS: u8 = 10;
+
+/// The one maximum hit point figure (SRD 5.2.1 pp. 47, 84, 87): the first-level base, the fixed 6 for
+/// each further Fighter level, and per level the Constitution modifier plus the species bonus
+/// (Dwarven Toughness 1, Tough 2). Creation, level advancement and every bound derive from it.
+pub fn maximum_hit_points(
+    level: u8,
+    first_level_base: u8,
+    constitution: u8,
+    species_bonus_per_level: u8,
+) -> u32 {
+    let per_level = ability_modifier(constitution) + i32::from(species_bonus_per_level);
+    let advanced = 6 * i32::from(level.saturating_sub(1));
+    (i32::from(first_level_base) + advanced + per_level * i32::from(level)) as u32
 }
 pub const fn ability_modifier(score: u8) -> i32 {
     (score as i32 - 10).div_euclid(2)
@@ -1004,6 +1025,22 @@ pub fn complete_no_hit_dice_short_rest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn srd_p47_p84_p87_maximum_hit_points_by_level_constitution_and_species_bonus() {
+        // Level 1: d10 maximum 10 + CON 14 (+2) + Dwarven Toughness 1.
+        assert_eq!(maximum_hit_points(1, 10, 14, 1), 13);
+        // Level 5 adds the fixed 6 per further level and the per-level terms five times.
+        assert_eq!(maximum_hit_points(5, 10, 14, 1), 10 + 24 + 3 * 5);
+        // Human Tough adds 2 per level; a CON 20 hero is bounded by CON 20, not by the Dwarf row.
+        assert_eq!(maximum_hit_points(1, 10, 20, 2), 17);
+        assert_eq!(maximum_hit_points(1, 10, 20, 0), 15);
+        // The progression and the creation rules agree with the one function.
+        let progression = FighterProgression::new(5).unwrap();
+        assert_eq!(
+            u32::from(progression.hit_points(14, HeroSpecies::Dwarf)),
+            maximum_hit_points(5, FIGHTER_FIRST_LEVEL_HIT_POINTS, 14, 1)
+        );
+    }
     #[test]
     fn srd_p17_p47_p187_short_rest_hit_point_die_adds_modifier_minimum_and_cap() {
         assert_eq!(heal_hit_point_die(5, 2, 3, 13), Ok((10, 7)));

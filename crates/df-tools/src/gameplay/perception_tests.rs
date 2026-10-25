@@ -508,6 +508,7 @@ fn rebuild(
     let recovery = model::recovery().unwrap();
     let mut limits = model::limits();
     limits.maximum_records = maximum_records;
+    let resources = journey::resources_for(&state).unwrap();
     Checkpoint::new(
         CHECKPOINT_SCHEMA,
         current.basis(),
@@ -516,7 +517,7 @@ fn rebuild(
         ReferenceInventory {
             rules: &recovery.rules,
             content: &recovery.content,
-            resources: &recovery.resources,
+            resources: &resources,
             assets: &recovery.assets,
         },
         limits,

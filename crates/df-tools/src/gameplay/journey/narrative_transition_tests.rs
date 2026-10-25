@@ -224,7 +224,7 @@ fn registered_story_selector_refuses_wrong_command_beat_thread_and_source_pins()
         ReferenceInventory {
             rules: &[model::rule().unwrap(), rule().unwrap()],
             content: &model::contents().unwrap(),
-            resources: &super::super::resources().unwrap(),
+            resources: &super::super::resources_for(opening.state()).unwrap(),
             assets: &[],
         },
         model::limits(),
@@ -335,7 +335,7 @@ fn checkpoint_story_selector_enforces_current_recipient_owner_and_bounded_admiss
                 inventory: ReferenceInventory {
                     rules: &[model::rule().unwrap(), rule().unwrap()],
                     content: &model::contents().unwrap(),
-                    resources: &super::super::resources().unwrap(),
+                    resources: &super::super::resources_for(current.state()).unwrap(),
                     assets: &[],
                 },
                 checkpoint_limits,

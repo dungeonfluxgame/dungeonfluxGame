@@ -155,6 +155,18 @@ const LIGHTING: &[(&str, tactical_rules::Lighting)] = &[
     ),
     ("scan-summit-voxel-v1", tactical_rules::Lighting::Sunlight),
 ];
+/// Parsed battle maps this thread has read, newest last, keyed by scene and layout. A fight view
+/// reads its battle once per hero, so the map JSON is parsed once rather than on every read.
+const REMEMBERED_MAPS: usize = 8;
+thread_local! {
+    static MAPS: std::cell::RefCell<std::collections::VecDeque<((&'static str, String), BattleMap)>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+#[cfg(test)]
+thread_local! {
+    static MAP_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The rules map for authored scene bytes the server holds, with its lighting fact.
 fn scene_map(bytes: &[u8], layout: &str) -> Result<BattleMap, RepositoryError> {
     let id = SCENES
@@ -162,14 +174,34 @@ fn scene_map(bytes: &[u8], layout: &str) -> Result<BattleMap, RepositoryError> {
         .find(|(_, held)| *held == bytes)
         .map(|(id, _)| *id)
         .ok_or(RepositoryError::InvalidCandidate)?;
+    let remembered = MAPS.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|((known, known_layout), _)| *known == id && known_layout == layout)
+            .map(|(_, map)| map.clone())
+    });
+    if let Some(map) = remembered {
+        return Ok(map);
+    }
     let lighting = LIGHTING
         .iter()
         .find(|(known, _)| *known == id)
         .map(|(_, lighting)| *lighting)
         .ok_or(RepositoryError::InvalidCandidate)?;
-    Ok(BattleMap::from_json(bytes, layout)
+    let map = BattleMap::from_json(bytes, layout)
         .map_err(bad)?
-        .with_lighting(lighting))
+        .with_lighting(lighting);
+    #[cfg(test)]
+    MAP_PARSES.with(|parses| parses.set(parses.get() + 1));
+    MAPS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= REMEMBERED_MAPS {
+            cache.pop_front();
+        }
+        cache.push_back(((id, layout.to_owned()), map.clone()));
+    });
+    Ok(map)
 }
 
 /// The scene every fight is staged on, when `DF_GAMEPLAY_BATTLE_SCENE` forces one. The server is
@@ -4771,6 +4803,22 @@ pub(super) mod tests {
             project_combat(&restored, None, &mut view).unwrap();
             assert_eq!(view.location_id, "scan-village");
         });
+    }
+
+    #[test]
+    fn repeated_battle_reads_parse_the_map_once_for_the_same_scene_and_layout() {
+        let (_, bytes) = SCENES[0];
+        let scene: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).unwrap();
+        let layout = &scene.layouts[0].id;
+        MAP_PARSES.with(|parses| parses.set(0));
+        let first = scene_map(bytes, layout).unwrap();
+        let second = scene_map(bytes, layout).unwrap();
+        assert_eq!(first, second, "a remembered map is the map that was parsed");
+        assert_eq!(
+            MAP_PARSES.with(std::cell::Cell::get),
+            1,
+            "a fight view reads its battle once per hero; the map is parsed once"
+        );
     }
 
     #[test]

@@ -1003,7 +1003,7 @@ fn objective_source_pin_changes_and_injected_terminal_events_never_create_a_cand
         ReferenceInventory {
             rules: &[model::rule().unwrap(), rule().unwrap()],
             content: &model::contents().unwrap(),
-            resources: &resources().unwrap(),
+            resources: &resources_for(before.state()).unwrap(),
             assets: &[],
         },
         model::limits(),
@@ -1228,7 +1228,7 @@ fn battlefield_complete_pin_mismatches_refuse_before_sampling() {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &resources().unwrap(),
+                resources: &resources_for(before.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),

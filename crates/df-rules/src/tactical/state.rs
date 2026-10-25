@@ -188,6 +188,17 @@ impl CombatantSpec {
         }
     }
 
+    /// The shared Fighter maximum (SRD 5.2.1 pp. 47, 84, 87) at `level`: the species' bonus per level
+    /// plus Tough's 2 when the profile's options carry it.
+    fn maximum_hit_points(&self, level: u8, species: HeroSpecies) -> u32 {
+        crate::local_journey::maximum_hit_points(
+            level,
+            crate::local_journey::FIGHTER_FIRST_LEVEL_HIT_POINTS,
+            self.abilities[2],
+            species.combat_traits().hit_points_per_level
+                + if self.species_options.tough { 2 } else { 0 },
+        )
+    }
     /// The supported fixed-HP Fighter profiles identify their level without changing legacy
     /// caller construction or snapshot schemas. Source validation checks every derived field.
     pub fn fighter_level(&self) -> Option<crate::local_journey::FighterProgression> {
@@ -198,13 +209,7 @@ impl CombatantSpec {
         (1..=5)
             .filter_map(|level| crate::local_journey::FighterProgression::new(level).ok())
             .find(|progression| {
-                progression.hit_points(self.abilities[2], species)
-                    + if self.species_options.tough {
-                        2 * u16::from(progression.level())
-                    } else {
-                        0
-                    }
-                    == self.hit_points
+                self.maximum_hit_points(progression.level(), species) == u32::from(self.hit_points)
             })
     }
     /// Upgrade an admitted level-one profile, retaining equipment and species.
@@ -229,14 +234,9 @@ impl CombatantSpec {
                 self.armor_class += 1;
             }
         }
-        self.hit_points = progression.hit_points(
-            self.abilities[2],
-            self.species.ok_or(RuleError::InvalidBuild)?,
-        );
+        self.hit_points =
+            self.maximum_hit_points(level, self.species.ok_or(RuleError::InvalidBuild)?) as u16;
         self.second_wind_uses = progression.second_wind_maximum();
-        if self.species_options.tough {
-            self.hit_points += 2 * u16::from(level);
-        }
         validate_source_profile(&self)?;
         Ok(self)
     }

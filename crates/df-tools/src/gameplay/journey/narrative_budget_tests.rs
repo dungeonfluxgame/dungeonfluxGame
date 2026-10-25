@@ -48,7 +48,7 @@ fn budget(
             inventory: ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &super::super::super::resources().unwrap(),
+                resources: &super::super::super::resources_for(current.state()).unwrap(),
                 assets: &[],
             },
             checkpoint_limits: model::limits(),
@@ -108,7 +108,7 @@ pub(super) fn design_pending_budget(
             inventory: ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &super::super::super::resources().unwrap(),
+                resources: &super::super::super::resources_for(before.state()).unwrap(),
                 assets: &[],
             },
             checkpoint_limits: model::limits(),
@@ -449,7 +449,7 @@ fn design_convergence_retains_valid_causal_alternatives_and_rejects_missing_stro
     let source_policy = model::label(THREAD_POLICY).unwrap();
     let rules = [model::rule().unwrap(), rule().unwrap()];
     let content = model::contents().unwrap();
-    let resources = super::super::super::resources().unwrap();
+    let resources = super::super::super::resources_for(current.state()).unwrap();
     let request = |receipt| df_narrative::CheckpointConvergenceRequest {
         beat: CheckpointBeatRequest {
             expected_basis: current.basis(),
@@ -617,7 +617,7 @@ fn design_npc_delivery_requires_current_place_motivation_known_source_and_past_w
         let source_policy = model::label(THREAD_POLICY).unwrap();
         let rules = [model::rule().unwrap(), rule().unwrap()];
         let content = model::contents().unwrap();
-        let resources = super::super::super::resources().unwrap();
+        let resources = super::super::super::resources_for(current.state()).unwrap();
         let proposal = df_narrative::stage_checkpoint_convergence(
             &current,
             df_narrative::CheckpointConvergenceRequest {

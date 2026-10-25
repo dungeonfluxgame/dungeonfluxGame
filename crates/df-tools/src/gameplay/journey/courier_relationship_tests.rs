@@ -186,7 +186,7 @@ fn registered_courier_relationship_stale_witness_source_actor_and_pins_refuse_wi
         ReferenceInventory {
             rules: &recovery.rules,
             content: &recovery.content,
-            resources: &recovery.resources,
+            resources: &super::super::resources_for(current.state()).unwrap(),
             assets: &recovery.assets,
         },
         model::limits(),
@@ -255,7 +255,7 @@ fn registered_with<H: RulesCommandHandler>(
     let registry = df_rules::DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
     let rules = [model::rule().unwrap(), source.clone()];
     let content = model::contents().unwrap();
-    let resources = super::super::resources().unwrap();
+    let resources = super::super::resources_for(current.state()).unwrap();
     df_engine::command_entry::decide_registered_command(
         RulesCommandInput {
             command: input,
@@ -326,7 +326,7 @@ fn registered_courier_relationship_unsupported_policy_handler_refusal_and_final_
         }
         let rules = [model::rule().unwrap(), super::super::rule().unwrap()];
         let content = model::contents().unwrap();
-        let resources = super::super::resources().unwrap();
+        let resources = super::super::resources_for(current.state()).unwrap();
         let handler = RelationshipReactionHandler {
             command_handler: &inner,
             owner: &owner,

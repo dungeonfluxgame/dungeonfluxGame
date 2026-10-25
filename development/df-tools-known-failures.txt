@@ -50,3 +50,18 @@ fail | gameplay::npc_dossier_tests::recorded_errand_talk_answers_subjects_and_re
 fail | gameplay::npc_dossier_tests::with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_topic_and_attitude | N | npc_dossier_tests.rs:1254:13: Tell me about your past.: I'm not sure about that. | REF-069 leave-blank replaces the prepared answer
 
 fail | gameplay::resource_adapters::tests::a_call_kind_writes_the_hub_line_format | C | resource_adapters.rs:748:9: RESOURCE ready kind=text key=94062e91fdff61f103f8d99d0d6b5d58 subject=text:probe ms=12 handle=handle-1 error= | hub line format assertion
+
+# Parallel-only failures (UNPROVEN CAUSE; not entries, because each test passes alone and a `fail`
+# entry would report STALE). Recorded 2026-10-25 by W1b. Running `journey::tactical::` in one process
+# with the default parallel test threads fails 20 to 25 of its 66 tests, a different subset each run
+# (unwrap on None at tactical.rs:5424, "EndTurn offer ... WrongTurn", "a hero owns the current turn").
+# The same filter passes 66/66 with --test-threads=1, and 63/63 in parallel when the three tests that
+# take `process_state_test_scope()` are skipped (r3_development_level_five_ogre_and_hill_giant_...,
+# development_start_runs_unheld_enemy_first_policy,
+# development_commands_start_edit_restore_add_remove_end_and_project_each_commit). So the failing tests
+# clash with those scoped tests on process-wide state. Hypothesis, not shown: the global dice face
+# queue (dice.rs `QUEUE`), which a scoped test snapshots, clears and refills while an unscoped test draws
+# from it. DF_GAMEPLAY_DEV_OVERRIDES is not read on these paths and the active pack is thread-local in
+# tests. Two scene_fight tests (the_fight_ends_when_the_foes_are_down..., the_intro_tells_the_fight_start...)
+# show the same pattern. Owner: W1 (journey/tactical). Matrix shards run tests in parallel, so expect
+# these as unexpected failures until the unscoped tests take the same lock or draw from a per-test queue.

@@ -3398,6 +3398,26 @@ fn srd_521_all_nine_species_reach_tactical_validation_and_keep_their_derived_pro
     }
 }
 #[test]
+fn a_level_five_tough_human_matches_the_shared_maximum_hit_points() {
+    let human = species_hero(
+        1,
+        "human",
+        &[
+            ("species-size", "small"),
+            ("human-skill", "arcana"),
+            ("versatile", "tough"),
+        ],
+        Cell(1, 1),
+    );
+    let leveled = human.at_fighter_level(5).unwrap();
+    // SRD 5.2.1 p. 87: Tough adds 2 per level on top of the Fighter's d10 and fixed 6.
+    assert_eq!(
+        u32::from(leveled.hit_points),
+        crate::local_journey::maximum_hit_points(5, 10, leveled.abilities[2], 2)
+    );
+    assert_eq!(leveled.fighter_level().map(|level| level.level()), Some(5));
+}
+#[test]
 fn srd_521_halfling_nimbleness_crosses_larger_enemy_but_cannot_stop_or_cross_equal_size() {
     let halfling = species_hero(1, "halfling", &[], Cell(1, 1));
     let state = battle(vec![

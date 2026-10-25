@@ -503,6 +503,23 @@ mod tests {
     use df_model::checkpoint::{ContentDigest, GameInput, ReferenceInventory};
     use df_types::MemberId;
 
+    /// Removes a member's hero together with the hero's resources: a hit point maximum is bounded
+    /// by its own character sheet, so resources without a sheet are not a coherent checkpoint.
+    fn remove_hero(state: &mut GameState, member: MemberId) {
+        let heroes = state
+            .characters
+            .iter()
+            .filter(|character| character.owner == member)
+            .map(|character| character.entity)
+            .collect::<Vec<_>>();
+        state
+            .characters
+            .retain(|character| character.owner != member);
+        state
+            .resources
+            .retain(|record| !heroes.contains(&record.owner));
+    }
+
     fn dialogue() -> Checkpoint {
         let opening = opening_story();
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -599,7 +616,7 @@ mod tests {
             .collect::<Vec<_>>();
         let original_draws = draws.clone();
         let pins = model::pins().unwrap();
-        let resources = super::super::resources().unwrap();
+        let resources = super::super::resources_for(current.state()).unwrap();
         assert_eq!(
             engine_order(
                 &current,
@@ -656,7 +673,7 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         let pins = model::pins().unwrap();
-        let resources = super::super::resources().unwrap();
+        let resources = super::super::resources_for(current.state()).unwrap();
         let before = current.clone();
         let mut stale_pins = pins.clone();
         stale_pins.rules.handler_digest = ContentDigest([99; 32]);
@@ -715,7 +732,7 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         let pins = model::pins().unwrap();
-        let resources = super::super::resources().unwrap();
+        let resources = super::super::resources_for(current.state()).unwrap();
         for case in 0..11 {
             let mut draws = exact.clone();
             match case {
@@ -774,7 +791,7 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         let pins = model::pins().unwrap();
-        let exact_resources = super::super::resources().unwrap();
+        let exact_resources = super::super::resources_for(combat.state()).unwrap();
         for case in 0..11 {
             let mut staged = combat.state().clone();
             let mut resources = exact_resources.clone();
@@ -925,9 +942,7 @@ mod tests {
         let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
         for case in 0..3 {
             let mut state = current.state().clone();
-            state
-                .characters
-                .retain(|character| character.owner != second);
+            remove_hero(&mut state, second);
             let link = state
                 .members
                 .iter_mut()
@@ -1051,9 +1066,7 @@ mod tests {
                 }]);
             }
             if case == 2 {
-                state
-                    .characters
-                    .retain(|character| character.owner != second);
+                remove_hero(&mut state, second);
                 state
                     .members
                     .iter_mut()
@@ -1169,7 +1182,7 @@ mod tests {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), super::super::rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &super::super::resources().unwrap(),
+                resources: &super::super::resources_for(current.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),

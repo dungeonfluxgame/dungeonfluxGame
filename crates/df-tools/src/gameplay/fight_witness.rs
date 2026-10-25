@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(
             jev.asked.load(SeqCst),
             0,
-            "a repeated witness must not start two paid calls for one key"
+            "a repeated witness is an invalid observation and is refused before any question is asked"
         );
         assert!(
             ledger
