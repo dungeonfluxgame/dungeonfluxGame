@@ -286,6 +286,6 @@ fn project_outcome(
     })
 }
 
-fn valid_label(value: &str) -> bool {
-    !value.trim().is_empty() && !value.chars().any(char::is_control)
+fn valid_label(label: &str) -> bool {
+    !label.trim().is_empty() && !label.chars().any(char::is_control)
 }

@@ -89,18 +89,19 @@ mod browser {
         /// A new ownership scope fences old callbacks before fallible validation
         /// or rendering. Failed replacement revokes rather than exposing old data.
         pub fn update(&mut self, view: &CharacterDisplayView) -> Result<(), CharacterPhaseError> {
-            let current = self
+            let current_scope = self
                 .scope
                 .as_ref()
                 .ok_or(CharacterValidationError::Disposed)?;
-            let replaced = current.0 != view.generation || current.1 != view.public_scope_key;
-            if replaced {
+            let is_new_scope =
+                current_scope.0 != view.generation || current_scope.1 != view.public_scope_key;
+            if is_new_scope {
                 self.resume_focus = None;
                 self.submission_enabled.set(false);
             }
             match self.surface.update(view) {
                 Ok(()) => {
-                    if replaced {
+                    if is_new_scope {
                         self.scope = Some((view.generation, view.public_scope_key.clone()));
                     }
                     self.submission_enabled
@@ -108,7 +109,7 @@ mod browser {
                     Ok(())
                 }
                 Err(update) => {
-                    if !replaced && matches!(&update, CharacterPhaseError::InvalidView(_)) {
+                    if !is_new_scope && matches!(&update, CharacterPhaseError::InvalidView(_)) {
                         return Err(update);
                     }
                     match self.revoke() {

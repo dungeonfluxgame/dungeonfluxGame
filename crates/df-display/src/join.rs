@@ -104,7 +104,7 @@ mod browser {
             document: &Document,
             root: &Element,
             selector: &str,
-            scene: bool,
+            is_scene: bool,
             alive: &Rc<Cell<bool>>,
         ) -> Result<Self, JoinPhaseError> {
             let image = root
@@ -113,20 +113,20 @@ mod browser {
                 .dyn_into::<HtmlImageElement>()
                 .map_err(|_| JsValue::from_str("join artwork node has wrong type"))?;
             let fallback = document
-                .create_element(if scene { "div" } else { "span" })?
+                .create_element(if is_scene { "div" } else { "span" })?
                 .dyn_into::<HtmlElement>()
                 .map_err(|_| JsValue::from_str("join artwork fallback has wrong type"))?;
             fallback.set_attribute(
                 "data-join-art-fallback",
-                if scene { "scene" } else { "narrator" },
+                if is_scene { "scene" } else { "narrator" },
             )?;
             fallback.set_attribute("role", "status")?;
-            fallback.set_attribute("style", if scene {
+            fallback.set_attribute("style", if is_scene {
                 "position:absolute;inset:0;z-index:-3;background:radial-gradient(ellipse at top,#244354,#070d14 70%);color:#c5d1d8;display:grid;place-items:center;font:14px system-ui;text-align:center;padding:24px"
             } else {
                 "min-width:46px;min-height:46px;border-radius:50%;border:1px solid #d1b67c;color:#d1b67c;display:inline-grid;place-items:center;font:20px Georgia"
             })?;
-            fallback.set_text_content(Some(if scene {
+            fallback.set_text_content(Some(if is_scene {
                 "The story continues · scene art unavailable"
             } else {
                 "✦"
@@ -135,19 +135,20 @@ mod browser {
                 .parent_node()
                 .ok_or_else(|| JsValue::from_str("join artwork parent missing"))?
                 .append_child(&fallback)?;
-            let update = |image: HtmlImageElement, fallback: HtmlElement, alive: Rc<Cell<bool>>| {
-                Closure::wrap(Box::new(move |_: Event| {
-                    // A queued completion for an earlier src cannot publish while
-                    // the browser reports the current image is still loading.
-                    if alive.get() && image.complete() {
-                        let missing = image.natural_width() == 0;
-                        image.set_hidden(missing);
-                        fallback.set_hidden(!missing);
-                    }
-                }) as Box<dyn FnMut(Event)>)
-            };
-            let load = update(image.clone(), fallback.clone(), Rc::clone(alive));
-            let error = update(image.clone(), fallback.clone(), Rc::clone(alive));
+            let update_visibility =
+                |image: HtmlImageElement, fallback: HtmlElement, alive: Rc<Cell<bool>>| {
+                    Closure::wrap(Box::new(move |_: Event| {
+                        // A queued completion for an earlier src cannot publish while
+                        // the browser reports the current image is still loading.
+                        if alive.get() && image.complete() {
+                            let missing = image.natural_width() == 0;
+                            image.set_hidden(missing);
+                            fallback.set_hidden(!missing);
+                        }
+                    }) as Box<dyn FnMut(Event)>)
+                };
+            let load = update_visibility(image.clone(), fallback.clone(), Rc::clone(alive));
+            let error = update_visibility(image.clone(), fallback.clone(), Rc::clone(alive));
             image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
             if let Err(error_value) =
                 image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())
