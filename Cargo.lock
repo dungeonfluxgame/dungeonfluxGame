@@ -611,6 +611,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "df-hosted"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "df-account-app",
+ "df-campaign",
+ "df-commerce",
+ "df-customer",
+ "df-finance",
+ "df-observe",
+ "df-persistence",
+ "df-portal",
+ "df-types",
+ "df-workos",
+ "futures",
+ "hmac",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tokio-postgres",
+ "tower",
+]
+
+[[package]]
 name = "df-intent"
 version = "0.1.0"
 dependencies = [
