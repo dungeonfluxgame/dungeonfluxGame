@@ -34,8 +34,8 @@ pub fn lifetime(hold_s: f32) -> f32 {
 
 /// Metres above the head at `age_s`: eased up over [`RISE_S`], then still.
 pub fn rise_m(age_s: f32) -> f32 {
-    let t = (age_s / RISE_S).clamp(0.0, 1.0);
-    let eased = 1.0 - (1.0 - t) * (1.0 - t);
+    let rise_progress = (age_s / RISE_S).clamp(0.0, 1.0);
+    let eased = 1.0 - (1.0 - rise_progress) * (1.0 - rise_progress);
     0.2 + 0.7 * eased
 }
 
@@ -81,10 +81,10 @@ pub fn compose(attack: Option<(&str, &str)>, base: &str, tone: FloatTone, downed
 /// An attack's name from the server's weapon id: "hand-axe" reads "Hand axe". Presentation
 /// only; the id is what the server sent.
 pub fn attack_name(weapon_id: &str) -> String {
-    let words = weapon_id.trim().replace(['-', '_'], " ");
-    let mut characters = words.chars();
-    match characters.next() {
-        Some(first) => first.to_uppercase().chain(characters).collect(),
+    let spaced_weapon_id = weapon_id.trim().replace(['-', '_'], " ");
+    let mut remaining_characters = spaced_weapon_id.chars();
+    match remaining_characters.next() {
+        Some(first) => first.to_uppercase().chain(remaining_characters).collect(),
         None => String::new(),
     }
 }

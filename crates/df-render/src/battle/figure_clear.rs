@@ -55,11 +55,11 @@ impl FigureBox {
 pub fn figure_box(view: &Mat4, view_proj: &Mat4, feet: Vec3, height_m: f32) -> Option<FigureBox> {
     let look = Vec3::new(-view.0[2], 0.0, -view.0[10]);
     let right = Vec3::new(-look.z, 0.0, look.x).normalized();
-    let half = height_m * HALF_WIDTH_SHARE;
+    let half_width = height_m * HALF_WIDTH_SHARE;
     let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
     for side in [-1.0, 1.0] {
         for height in [0.0, height_m] {
-            let point = feet + right * (half * side) + Vec3::new(0.0, height, 0.0);
+            let point = feet + right * (half_width * side) + Vec3::new(0.0, height, 0.0);
             let (x, y, _) = view_proj.project(point)?;
             bounds[0] = bounds[0].min(x);
             bounds[1] = bounds[1].min(y);

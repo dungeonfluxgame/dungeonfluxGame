@@ -100,10 +100,11 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
     // GPU pass timing is optional: it is requested only when the adapter offers it.
     let timestamps = property(&adapter, "features")
         .and_then(|features| {
-            let has = property(&features, "has")?
+            let has_feature = property(&features, "has")?
                 .dyn_into::<js_sys::Function>()
                 .ok()?;
-            has.call1(&features, &JsValue::from_str("timestamp-query"))
+            has_feature
+                .call1(&features, &JsValue::from_str("timestamp-query"))
                 .ok()
         })
         .and_then(|value| value.as_bool())
@@ -174,12 +175,12 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         error_handler.as_ref(),
     );
 
-    let both = SHADER_VERTEX | SHADER_FRAGMENT;
+    let shader_visibility = SHADER_VERTEX | SHADER_FRAGMENT;
     let layout_frame = bind_group_layout(
         &device,
         vec![layout_entry(
             0,
-            both,
+            shader_visibility,
             "buffer",
             Descriptor::new().with("type", "uniform").build(),
         )],
@@ -189,13 +190,13 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         vec![
             layout_entry(
                 0,
-                both,
+                shader_visibility,
                 "texture",
                 Descriptor::new().with("sampleType", "float").build(),
             ),
             layout_entry(
                 1,
-                both,
+                shader_visibility,
                 "sampler",
                 Descriptor::new().with("type", "filtering").build(),
             ),
@@ -206,19 +207,19 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         vec![
             layout_entry(
                 0,
-                both,
+                shader_visibility,
                 "buffer",
                 Descriptor::new().with("type", "uniform").build(),
             ),
             layout_entry(
                 1,
-                both,
+                shader_visibility,
                 "texture",
                 Descriptor::new().with("sampleType", "float").build(),
             ),
             layout_entry(
                 2,
-                both,
+                shader_visibility,
                 "sampler",
                 Descriptor::new().with("type", "filtering").build(),
             ),

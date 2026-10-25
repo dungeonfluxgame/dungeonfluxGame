@@ -251,7 +251,7 @@ fn art_url(stem: &str) -> String {
 struct Billboard {
     data: [f32; FIGURE_STRIDE],
     texture: Rc<ImageTexture>,
-    depth: f32,
+    depth_m: f32,
     effects: bool,
 }
 
@@ -1418,7 +1418,7 @@ impl Renderer {
                                     [0.0; 4],
                                 ),
                                 texture,
-                                depth,
+                                depth_m: depth,
                                 effects: false,
                             });
                         }
@@ -1512,7 +1512,7 @@ impl Renderer {
             let [over_lo, over_hi] = resolved.overlay.shader_words();
             let side = (if figure.side == Side::Enemy { 1.0 } else { 0.0 })
                 + if figure.mirror { 2.0 } else { 0.0 };
-            let depth = (figure.position - eye).dot(forward);
+            let depth_m = (figure.position - eye).dot(forward);
             let bounds = [
                 texture.bounds.top,
                 texture.bounds.bottom,
@@ -1539,7 +1539,7 @@ impl Renderer {
                         [0.0, 0.0, 0.0, figure.phase],
                     ),
                     texture: texture.clone(),
-                    depth: depth + 0.01,
+                    depth_m: depth_m + 0.01,
                     effects: false,
                 });
             }
@@ -1578,7 +1578,7 @@ impl Renderer {
                         [0.0, figure.dim, figure.heartbeat, figure.phase],
                     ),
                     texture: previous,
-                    depth: depth + 0.002,
+                    depth_m: depth_m + 0.002,
                     effects: false,
                 });
             }
@@ -1604,12 +1604,12 @@ impl Renderer {
                     [0.0, figure.dim, figure.heartbeat, figure.phase],
                 ),
                 texture,
-                depth,
+                depth_m,
                 effects: !resolved.overlay.is_empty(),
             });
         }
         list.truncate(MAX_BILLBOARDS * 2);
-        list.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        list.sort_by(|a, b| b.depth_m.total_cmp(&a.depth_m));
         list.truncate(MAX_BILLBOARDS);
         list
     }

@@ -89,11 +89,11 @@ impl ColliderMesh {
         if vertices.iter().any(|vertex| !vertex.is_finite()) {
             return Err(MeshError::NonFinite);
         }
-        let count = vertices.len();
+        let vertex_count = vertices.len();
         if triangles
             .iter()
             .flatten()
-            .any(|index| *index as usize >= count)
+            .any(|index| *index as usize >= vertex_count)
         {
             return Err(MeshError::IndexOutOfRange);
         }
@@ -125,8 +125,8 @@ impl ColliderMesh {
                 .get("POSITION")
                 .ok_or(MeshError::NoPositions)?;
             let positions = document.read(position, bin, &[COMPONENT_F32], "VEC3", 12)?;
-            let base = vertices.len();
-            if base + positions.count > MAX_VERTICES {
+            let vertex_base = vertices.len();
+            if vertex_base + positions.count > MAX_VERTICES {
                 return Err(MeshError::TooManyVertices);
             }
             for at in 0..positions.count {
@@ -161,14 +161,14 @@ impl ColliderMesh {
             if triangles.len() + indices.len() / 3 > MAX_TRIANGLES {
                 return Err(MeshError::TooManyTriangles);
             }
-            let base = u32::try_from(base).map_err(|_| MeshError::TooManyVertices)?;
+            let vertex_base = u32::try_from(vertex_base).map_err(|_| MeshError::TooManyVertices)?;
             for triple in indices.as_chunks::<3>().0 {
                 let mut corners = [0u32; 3];
                 for (corner, index) in corners.iter_mut().zip(triple) {
                     if *index as usize >= positions.count {
                         return Err(MeshError::IndexOutOfRange);
                     }
-                    *corner = base + index;
+                    *corner = vertex_base + index;
                 }
                 triangles.push(corners);
             }

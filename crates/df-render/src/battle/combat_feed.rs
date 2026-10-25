@@ -179,15 +179,15 @@ impl CombatFeed {
     /// the roster, in which case the caller keeps the flat view.
     pub fn apply(&mut self, stage: &mut Stage, snapshot: &CombatSnapshot) -> Option<FeedReport> {
         let roster: Vec<String> = snapshot.members.iter().map(|m| m.id.clone()).collect();
-        let heroes = snapshot
+        let hero_count = snapshot
             .members
             .iter()
             .filter(|m| m.side == Side::Hero)
             .count();
-        let enemies = snapshot.members.len() - heroes;
+        let enemy_count = snapshot.members.len() - hero_count;
         let seats = match stage.layout() {
-            Some(layout) => formation::from_layout(layout, stage.grid(), heroes, enemies),
-            None => formation::derive(stage.grid(), heroes, enemies),
+            Some(layout) => formation::from_layout(layout, stage.grid(), hero_count, enemy_count),
+            None => formation::derive(stage.grid(), hero_count, enemy_count),
         }
         .ok()?;
         let (mut hero_cells, mut enemy_cells) =
@@ -255,9 +255,9 @@ impl CombatFeed {
                 // Someone already acted: the initiative moment is history.
                 stage.skip_initiative();
             }
-            let fresh_start = self.seen_outcomes;
-            let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(fresh_start).collect();
-            let beat_rounds =
+            let fresh_outcome_start = self.seen_outcomes;
+            let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(fresh_outcome_start).collect();
+            let outcome_rounds =
                 rounds_for_outcomes(&snapshot.outcomes, &snapshot.initiative, &snapshot.members);
             self.seen_outcomes = snapshot.outcomes.len();
             // What a member's hit points are compared with to notice a heal. A cue-driven display
@@ -299,7 +299,10 @@ impl CombatFeed {
             stage.hold_hit_points(&targets);
             stage.set_tokens_at_sequence(tokens, snapshot.presented_sequence);
             if self.mode == FeedMode::StageOutcomes {
-                for (outcome, round) in fresh.iter().zip(beat_rounds.iter().skip(fresh_start)) {
+                for (outcome, round) in fresh
+                    .iter()
+                    .zip(outcome_rounds.iter().skip(fresh_outcome_start))
+                {
                     if let Some(label) = outcome.attack_label() {
                         stage.set_attack_label(
                             &TokenId::new(outcome.actor.clone()),

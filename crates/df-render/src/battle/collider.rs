@@ -35,7 +35,7 @@ pub struct VoxelBuilder {
 
 impl VoxelBuilder {
     pub fn new(origin: Vec3, cell_m: f32, dims: [u32; 3]) -> Result<Self, ColliderError> {
-        let count = dims
+        let voxel_count = dims
             .iter()
             .try_fold(1usize, |n, d| n.checked_mul(*d as usize));
         if !origin.is_finite()
@@ -46,14 +46,14 @@ impl VoxelBuilder {
         {
             return Err(ColliderError::Bounds);
         }
-        let count = count
+        let voxel_count = voxel_count
             .filter(|n| *n <= MAX_VOXELS)
             .ok_or(ColliderError::Capacity)?;
         Ok(Self {
             origin,
             cell_m,
             dims,
-            density: vec![0.0; count],
+            density: vec![0.0; voxel_count],
             splats: 0,
             evaluations: 0,
         })
@@ -73,8 +73,11 @@ impl VoxelBuilder {
             if opacity < 0.1 {
                 continue;
             }
-            let mut c = splat.covariance.map(f64::from);
-            if [c[0], c[3], c[5]].into_iter().any(|v| v <= 0.0) {
+            let mut covariance = splat.covariance.map(f64::from);
+            if [covariance[0], covariance[3], covariance[5]]
+                .into_iter()
+                .any(|v| v <= 0.0)
+            {
                 return Err(ColliderError::Splat);
             }
             // Scan surface Gaussians can be nearly rank two. f32 covariance rounding can
@@ -82,9 +85,9 @@ impl VoxelBuilder {
             // without expanding geometry by even one voxel.
             let variance = f64::from(self.cell_m * 0.01).powi(2);
             for axis in [0, 3, 5] {
-                c[axis] += variance;
+                covariance[axis] += variance;
             }
-            let [xx, xy, xz, yy, yz, zz] = c;
+            let [xx, xy, xz, yy, yz, zz] = covariance;
             let det =
                 xx * (yy * zz - yz * yz) - xy * (xy * zz - xz * yz) + xz * (xy * yz - xz * yy);
             if det <= 0.0 || xx <= 0.0 || yy <= 0.0 || zz <= 0.0 {
@@ -115,10 +118,10 @@ impl VoxelBuilder {
             if outside {
                 continue;
             }
-            let count = (0..3)
+            let evaluation_count = (0..3)
                 .map(|a| u64::from(high[a] - low[a] + 1))
                 .product::<u64>();
-            self.evaluations += count;
+            self.evaluations += evaluation_count;
             if self.evaluations > MAX_EVALUATIONS {
                 return Err(ColliderError::Capacity);
             }
@@ -132,13 +135,16 @@ impl VoxelBuilder {
                                 centre[axis].clamp(min, min + self.cell_m) - centre[axis],
                             );
                         }
-                        let [a, b, c] = diff;
-                        let d2 = inverse[0] * a * a
-                            + inverse[3] * b * b
-                            + inverse[5] * c * c
-                            + 2.0 * (inverse[1] * a * b + inverse[2] * a * c + inverse[4] * b * c);
-                        let at = ((z * self.dims[1] + y) * self.dims[0] + x) as usize;
-                        self.density[at] += opacity * (-0.5 * d2.max(0.0)).exp() as f32;
+                        let [dx, dy, dz] = diff;
+                        let d2 = inverse[0] * dx * dx
+                            + inverse[3] * dy * dy
+                            + inverse[5] * dz * dz
+                            + 2.0
+                                * (inverse[1] * dx * dy
+                                    + inverse[2] * dx * dz
+                                    + inverse[4] * dy * dz);
+                        let density_index = ((z * self.dims[1] + y) * self.dims[0] + x) as usize;
+                        self.density[density_index] += opacity * (-0.5 * d2.max(0.0)).exp() as f32;
                     }
                 }
             }

@@ -64,14 +64,14 @@ fn seat_row(
     grid: &Grid,
     count: usize,
     row: i32,
-    gap: i32,
+    gap_columns: i32,
     taken: &mut Vec<Cell>,
 ) -> Result<Vec<Cell>, FormationError> {
     let centre = (grid.cols() as i32 - 1) as f32 * 0.5;
     let mut seats = Vec::with_capacity(count);
     for index in 0..count {
-        let offset = (index as f32 - (count as f32 - 1.0) * 0.5) * gap as f32;
-        let wanted = (centre + offset, row as f32);
+        let column_offset = (index as f32 - (count as f32 - 1.0) * 0.5) * gap_columns as f32;
+        let wanted = (centre + column_offset, row as f32);
         let cell = grid
             .walkable_cells()
             .filter(|cell| !taken.contains(cell))
