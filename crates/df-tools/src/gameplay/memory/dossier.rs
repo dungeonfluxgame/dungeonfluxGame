@@ -29,8 +29,8 @@ use crate::gameplay::storyteller::{CallProfile, Expression, Slot, Storyteller};
 pub(in crate::gameplay) const INLINE_EVENTS: usize = 10;
 /// The events one regeneration reads (the policy's per-query bound).
 const INPUT_EVENTS: usize = 64;
-const PAGE: usize = 32;
-const PAGES: usize = 8;
+const EVENTS_PER_PAGE: usize = 32;
+const MAXIMUM_PAGES: usize = 8;
 /// The longest stored summary, in characters.
 pub(in crate::gameplay) const SUMMARY_CHARACTERS: usize = 700;
 
@@ -201,20 +201,20 @@ impl StoryMemory {
         let mut events = Vec::new();
         let mut after = 0;
         let mut truncated = false;
-        for page in 0..PAGES {
+        for page in 0..MAXIMUM_PAGES {
             match self
                 .backend
-                .entity_events(&scope, &entity, after, PAGE)
+                .entity_events(&scope, &entity, after, EVENTS_PER_PAGE)
                 .await
             {
                 Ok(found) => {
                     let last = found.last().map(|event| event.event_id);
-                    let full = found.len() == PAGE;
+                    let is_full = found.len() == EVENTS_PER_PAGE;
                     events.extend(found);
                     match last {
-                        Some(last) if full => {
+                        Some(last) if is_full => {
                             after = last;
-                            truncated = page + 1 == PAGES;
+                            truncated = page + 1 == MAXIMUM_PAGES;
                         }
                         _ => break,
                     }
@@ -329,17 +329,17 @@ impl StoryMemory {
             .unwrap_or(0);
         let mut events: Vec<StoredEvent> = Vec::new();
         let mut after = newest_covered;
-        for _ in 0..PAGES {
+        for _ in 0..MAXIMUM_PAGES {
             match self
                 .backend
-                .entity_events(&scope, entity, after, PAGE)
+                .entity_events(&scope, entity, after, EVENTS_PER_PAGE)
                 .await
             {
                 Ok(found) => {
-                    let full = found.len() == PAGE;
+                    let is_full = found.len() == EVENTS_PER_PAGE;
                     after = found.last().map_or(after, |event| event.event_id);
                     events.extend(found);
-                    if !full {
+                    if !is_full {
                         break;
                     }
                 }

@@ -2,7 +2,7 @@ use super::*;
 use df_rules::{DispatchError, InvocationError};
 use df_types::{BuildRevision, OperationId};
 
-fn request(current: &Checkpoint, die: u32) -> (GameInput, ActualDraw) {
+fn request(current: &Checkpoint, die_value: u32) -> (GameInput, ActualDraw) {
     let operation = OperationId::from_bytes(&[0x81; 16]).unwrap();
     let source = rule().unwrap();
     (
@@ -24,7 +24,7 @@ fn request(current: &Checkpoint, die: u32) -> (GameInput, ActualDraw) {
             resolution: ResolutionId::from_bytes(&[0x61; 16]).unwrap(),
             window: WindowId::from_bytes(&[0x62; 16]).unwrap(),
             sides: 20,
-            value: die,
+            value: die_value,
             source,
         },
     )
