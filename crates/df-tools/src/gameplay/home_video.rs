@@ -1755,7 +1755,12 @@ pub(crate) fn span_for(range: Option<&str>, length: u64) -> Span {
 }
 
 async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::HomeVideo,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     let started = Instant::now();

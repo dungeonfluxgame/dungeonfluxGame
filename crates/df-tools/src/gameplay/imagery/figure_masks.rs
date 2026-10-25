@@ -1225,7 +1225,8 @@ mod tests {
             + 60;
         let grant = crate::gameplay::media_grant::sign(
             key.as_str(),
-            crate::gameplay::media_grant::Audience::Display,
+            crate::gameplay::media_grant::Audience::Imagery,
+            crate::gameplay::media_grant::PrincipalAudience::Display,
             &[1; 32],
             expiry,
         )

@@ -936,7 +936,7 @@ async fn handle_inner(
     super::media_grant::sign_gameplay_url(
         &mut uri,
         "/gameplay/creator-portrait/",
-        super::media_grant::Audience::Seat,
+        super::media_grant::PrincipalAudience::Seat,
         &binding,
     );
     Ok(rpc::HeroPortraitResponse {
@@ -1052,7 +1052,12 @@ async fn serve(
             respond(&service.portraits, &audit, &key, approved).await,
         );
     }
-    let Some(grant) = super::media_grant::verify_seat_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::Portrait,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     super::media_grant::secure_media_response(

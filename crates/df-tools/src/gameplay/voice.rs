@@ -1293,7 +1293,12 @@ async fn serve_line(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::Voice,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     let response = match voice.audio_part(&key, 0, presentation_id(&headers)).await {
@@ -1318,7 +1323,12 @@ async fn serve_part(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::Voice,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     let response = match voice
@@ -1471,7 +1481,8 @@ mod tests {
             + 60;
         let token = super::super::media_grant::sign(
             key,
-            super::super::media_grant::Audience::Display,
+            super::super::media_grant::Audience::Voice,
+            super::super::media_grant::PrincipalAudience::Display,
             &[1; 32],
             expires_at,
         )

@@ -2782,7 +2782,12 @@ async fn serve_focus_mask(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::Imagery,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     let Some(bytes) = imagery.focus_mask(&key, index).await else {
@@ -2826,7 +2831,12 @@ pub(super) async fn serve_image(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+    let Some(grant) = super::media_grant::verify_request(
+        &headers,
+        &uri,
+        &key,
+        super::media_grant::Audience::Imagery,
+    ) else {
         return super::media_grant::concealed_not_found();
     };
     let started = std::time::Instant::now();
