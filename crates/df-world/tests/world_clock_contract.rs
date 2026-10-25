@@ -9,55 +9,55 @@ use df_world::{
 };
 use std::time::Duration;
 
-fn label(value: &str) -> RevisionLabel {
+fn fixture_revision_label(value: &str) -> RevisionLabel {
     RevisionLabel::new(Some(value)).unwrap()
 }
-fn entity(value: u8) -> EntityId {
+fn fixture_entity_id(value: u8) -> EntityId {
     EntityId::from_bytes(&[value; 16]).unwrap()
 }
-fn member(value: u8) -> MemberId {
+fn fixture_member_id(value: u8) -> MemberId {
     MemberId::from_bytes(&[value; 16]).unwrap()
 }
-fn revision(epoch: u64, sequence: u64) -> SessionRevision {
+fn fixture_session_revision(epoch: u64, sequence: u64) -> SessionRevision {
     SessionRevision::new(RecoveryEpoch::new(epoch).unwrap(), sequence)
 }
-fn basis() -> Basis {
+fn fixture_checkpoint_basis() -> Basis {
     Basis {
         session: SessionId::from_bytes(&[1; 16]).unwrap(),
         run: RunId::from_bytes(&[2; 16]).unwrap(),
-        revision: revision(2, 8),
+        revision: fixture_session_revision(2, 8),
     }
 }
-fn content() -> ContentReference {
+fn fixture_content_reference() -> ContentReference {
     ContentReference {
-        package: label("fixture-package-1"),
-        entry: label("fixture-entry-1"),
+        package: fixture_revision_label("fixture-package-1"),
+        entry: fixture_revision_label("fixture-entry-1"),
     }
 }
-fn rule() -> RuleReference {
+fn fixture_rule_reference() -> RuleReference {
     RuleReference {
-        catalog: label("fixture-catalog-1"),
-        source: label("fixture-source-1"),
-        entry: label("fixture-entry-1"),
-        clause: label("fixture-clause-1"),
+        catalog: fixture_revision_label("fixture-catalog-1"),
+        source: fixture_revision_label("fixture-source-1"),
+        entry: fixture_revision_label("fixture-entry-1"),
+        clause: fixture_revision_label("fixture-clause-1"),
     }
 }
-fn pins() -> CheckpointPins {
+fn fixture_checkpoint_pins() -> CheckpointPins {
     CheckpointPins {
         rules: RulesPins {
             mode: RulesMode::Standard2024,
-            ruleset: label("fixture-rules-1"),
-            catalog: label("fixture-catalog-1"),
+            ruleset: fixture_revision_label("fixture-rules-1"),
+            catalog: fixture_revision_label("fixture-catalog-1"),
             catalog_digest: ContentDigest([1; 32]),
-            source_manifest: label("fixture-sources-1"),
+            source_manifest: fixture_revision_label("fixture-sources-1"),
             source_manifest_digest: ContentDigest([2; 32]),
-            handler: label("fixture-handler-1"),
+            handler: fixture_revision_label("fixture-handler-1"),
             handler_digest: ContentDigest([3; 32]),
         },
         content: ContentPins {
-            content: label("fixture-content-1"),
+            content: fixture_revision_label("fixture-content-1"),
             content_digest: ContentDigest([4; 32]),
-            package: label("fixture-package-1"),
+            package: fixture_revision_label("fixture-package-1"),
             package_digest: ContentDigest([5; 32]),
         },
         build: BuildIdentity::new(
@@ -70,16 +70,16 @@ fn pins() -> CheckpointPins {
         .unwrap(),
     }
 }
-fn resource_constraints() -> Vec<ResourceConstraint> {
+fn fixture_resource_constraints() -> Vec<ResourceConstraint> {
     vec![ResourceConstraint {
-        owner: entity(4),
-        resource: label("fixture-resource-1"),
+        owner: fixture_entity_id(4),
+        resource: fixture_revision_label("fixture-resource-1"),
         minimum: 0,
         maximum: 8,
-        source: rule(),
+        source: fixture_rule_reference(),
     }]
 }
-fn checkpoint_limits() -> CheckpointLimits {
+fn fixture_checkpoint_limits() -> CheckpointLimits {
     CheckpointLimits {
         maximum_records: 100,
         maximum_text_bytes: 256,
@@ -87,7 +87,7 @@ fn checkpoint_limits() -> CheckpointLimits {
         maximum_retained_bytes: 1024 * 1024,
     }
 }
-fn state() -> GameState {
+fn fixture_game_state() -> GameState {
     GameState {
         mode: ExecutionMode::Replay,
         logical_time: LogicalTime {
@@ -95,29 +95,29 @@ fn state() -> GameState {
             ticks_per_second: 10,
         },
         members: vec![MembershipLink {
-            member: member(3),
-            character: Some(entity(4)),
+            member: fixture_member_id(3),
+            character: Some(fixture_entity_id(4)),
         }],
         entities: vec![WorldEntity {
-            id: entity(4),
-            definition: content(),
+            id: fixture_entity_id(4),
+            definition: fixture_content_reference(),
             location: None,
             position: Some(Position { x: 0, y: 0, z: 0 }),
-            identity_revision: label("fixture-entity-1"),
+            identity_revision: fixture_revision_label("fixture-entity-1"),
         }],
         characters: vec![CharacterState {
-            entity: entity(4),
-            build: content(),
-            owner: member(3),
+            entity: fixture_entity_id(4),
+            build: fixture_content_reference(),
+            owner: fixture_member_id(3),
             choices: vec![],
         }],
         resources: vec![ResourceState {
-            owner: entity(4),
-            resource: label("fixture-resource-1"),
+            owner: fixture_entity_id(4),
+            resource: fixture_revision_label("fixture-resource-1"),
             value: 4,
             minimum: 0,
             maximum: 8,
-            source: rule(),
+            source: fixture_rule_reference(),
         }],
         inventory: vec![],
         facts: vec![],
@@ -136,7 +136,7 @@ fn state() -> GameState {
         conversations: vec![],
         obligations: vec![],
         narrative: NarrativeState {
-            definition: content(),
+            definition: fixture_content_reference(),
             active_beats: vec![],
             completed_beats: vec![],
             open_threads: vec![],
@@ -146,17 +146,17 @@ fn state() -> GameState {
         encounters: vec![],
         activity: vec![],
         tempo: TempoState {
-            policy: content(),
+            policy: fixture_content_reference(),
             presentation_ticks: 0,
             intensity: 0,
             inertia: 0,
             fatigue: vec![],
         },
         presentation: vec![],
-        continuity: continuity(),
+        continuity: fixture_continuity_state(),
     }
 }
-fn continuity() -> ContinuityState {
+fn fixture_continuity_state() -> ContinuityState {
     ContinuityState {
         creation: vec![],
         simulation: vec![],
@@ -203,8 +203,8 @@ fn continuity() -> ContinuityState {
     }
 }
 
-fn checkpoint(supplied: GameState) -> Checkpoint {
-    let mut entries = vec![content()];
+fn checkpoint_with_state(supplied: GameState) -> Checkpoint {
+    let mut entries = vec![fixture_content_reference()];
     entries.extend(
         supplied
             .schedules
@@ -216,109 +216,142 @@ fn checkpoint(supplied: GameState) -> Checkpoint {
     }
     Checkpoint::new(
         CHECKPOINT_SCHEMA,
-        basis(),
-        pins(),
+        fixture_checkpoint_basis(),
+        fixture_checkpoint_pins(),
         supplied,
         ReferenceInventory {
-            rules: &[rule()],
+            rules: &[fixture_rule_reference()],
             content: &entries,
-            resources: &resource_constraints(),
+            resources: &fixture_resource_constraints(),
             assets: &[],
         },
-        checkpoint_limits(),
+        fixture_checkpoint_limits(),
     )
     .unwrap()
 }
-fn id(value: u8) -> RecordId {
+fn fixture_record_id(value: u8) -> RecordId {
     RecordId::from_bytes(&[value; 16]).unwrap()
 }
-fn time(ticks: u64) -> LogicalTime {
+fn logical_time(ticks: u64) -> LogicalTime {
     LogicalTime {
         ticks,
         ticks_per_second: 10,
     }
 }
-fn event(ticks: u64, value: u8, entry: &str) -> ScheduledEvent {
+fn scheduled_event(ticks: u64, value: u8, entry: &str) -> ScheduledEvent {
     ScheduledEvent {
-        id: id(value),
-        entity: entity(4),
-        due: time(ticks),
+        id: fixture_record_id(value),
+        entity: fixture_entity_id(4),
+        due: logical_time(ticks),
         definition: ContentReference {
-            entry: label(entry),
-            ..content()
+            entry: fixture_revision_label(entry),
+            ..fixture_content_reference()
         },
     }
 }
-fn request<'a>(target: u64, policy: &'a ContentReference) -> DueSelectionRequest<'a> {
+fn due_selection_request<'a>(
+    target_tick: u64,
+    policy: &'a ContentReference,
+) -> DueSelectionRequest<'a> {
     DueSelectionRequest {
-        expected_basis: basis(),
-        target_time: time(target),
+        expected_basis: fixture_checkpoint_basis(),
+        target_time: logical_time(target_tick),
         paused: false,
         deadline_remaining: Duration::from_secs(1),
         policy,
     }
 }
-fn limits() -> DueSelectionLimits {
+fn due_selection_limits() -> DueSelectionLimits {
     DueSelectionLimits {
         queue_events: 4,
         selected_events: 2,
         output_bytes: 1024 * 1024,
     }
 }
-fn scheduled() -> GameState {
-    let mut supplied = state();
+fn scheduled_game_state() -> GameState {
+    let mut supplied = fixture_game_state();
     supplied.schedules = vec![
-        event(10, 3, "long-event"),
-        event(10, 1, "event"),
-        event(10, 2, "event"),
-        event(12, 4, "event"),
+        scheduled_event(10, 3, "long-event"),
+        scheduled_event(10, 1, "event"),
+        scheduled_event(10, 2, "event"),
+        scheduled_event(12, 4, "event"),
     ];
     supplied
 }
-fn selected_ids(selected: &DueSelection<'_>) -> Vec<RecordId> {
+fn selected_event_ids(selected: &DueSelection<'_>) -> Vec<RecordId> {
     selected.events.iter().map(|event| event.id).collect()
 }
 
 #[test]
 fn paused_campaign_does_not_advance_for_positive_caller_time_budgets() {
-    let mut supplied = scheduled();
-    supplied.logical_time = time(10);
-    let checkpoint = checkpoint(supplied);
+    let mut supplied = scheduled_game_state();
+    supplied.logical_time = logical_time(10);
+    let checkpoint = checkpoint_with_state(supplied);
     let before = checkpoint.state().clone();
-    let policy = content();
+    let policy = fixture_content_reference();
 
-    let mut short_budget = request(10, &policy);
+    let mut short_budget = due_selection_request(10, &policy);
     short_budget.paused = true;
     short_budget.deadline_remaining = Duration::from_nanos(1);
-    let short = select_due_events(&checkpoint, &pins(), short_budget, limits()).unwrap();
+    let short = select_due_events(
+        &checkpoint,
+        &fixture_checkpoint_pins(),
+        short_budget,
+        due_selection_limits(),
+    )
+    .unwrap();
 
-    let mut long_budget = request(10, &policy);
+    let mut long_budget = due_selection_request(10, &policy);
     long_budget.paused = true;
     long_budget.deadline_remaining = Duration::from_secs(60);
-    let long = select_due_events(&checkpoint, &pins(), long_budget, limits()).unwrap();
+    let long = select_due_events(
+        &checkpoint,
+        &fixture_checkpoint_pins(),
+        long_budget,
+        due_selection_limits(),
+    )
+    .unwrap();
 
     assert_eq!(short, long);
     assert!(short.events.is_empty());
-    assert_eq!(short.cursor.pending_events, vec![id(1), id(2), id(3)]);
+    assert_eq!(
+        short.cursor.pending_events,
+        vec![
+            fixture_record_id(1),
+            fixture_record_id(2),
+            fixture_record_id(3)
+        ]
+    );
     assert_eq!(checkpoint.state(), &before);
-    assert_eq!(checkpoint.state().logical_time, time(10));
+    assert_eq!(checkpoint.state().logical_time, logical_time(10));
     assert_eq!(checkpoint.state().entities[0].location, None);
 }
 
 #[test]
 fn pause_and_missing_time_admission_refuse_without_mutating_the_checkpoint() {
-    let checkpoint = checkpoint(scheduled());
+    let checkpoint = checkpoint_with_state(scheduled_game_state());
     let before = checkpoint.state().clone();
-    let policy = content();
+    let policy = fixture_content_reference();
 
-    let mut paused_future = request(11, &policy);
+    let mut paused_future = due_selection_request(11, &policy);
     paused_future.paused = true;
     assert_eq!(
-        select_due_events(&checkpoint, &pins(), paused_future, limits()),
+        select_due_events(
+            &checkpoint,
+            &fixture_checkpoint_pins(),
+            paused_future,
+            due_selection_limits()
+        ),
         Err(DueSelectionError::InvalidTime)
     );
     assert_eq!(
-        stage_schedule_advancement(&checkpoint, &pins(), None, &[], world_limits()),
+        stage_schedule_advancement(
+            &checkpoint,
+            &fixture_checkpoint_pins(),
+            None,
+            &[],
+            schedule_advancement_limits()
+        ),
         Err(ScheduleAdvancementError::TimeNotAccepted)
     );
     assert_eq!(checkpoint.state(), &before);
@@ -326,56 +359,71 @@ fn pause_and_missing_time_admission_refuse_without_mutating_the_checkpoint() {
 
 #[test]
 fn stale_basis_pins_cursor_and_time_units_refuse_without_mutation() {
-    let policy = content();
-    let current_checkpoint = checkpoint(scheduled());
+    let policy = fixture_content_reference();
+    let current_checkpoint = checkpoint_with_state(scheduled_game_state());
     let before = current_checkpoint.state().clone();
 
-    let mut stale_basis = request(10, &policy);
-    stale_basis.expected_basis.revision = revision(2, 9);
+    let mut stale_basis = due_selection_request(10, &policy);
+    stale_basis.expected_basis.revision = fixture_session_revision(2, 9);
     assert!(matches!(
-        select_due_events(&current_checkpoint, &pins(), stale_basis, limits()),
+        select_due_events(
+            &current_checkpoint,
+            &fixture_checkpoint_pins(),
+            stale_basis,
+            due_selection_limits()
+        ),
         Err(DueSelectionError::Checkpoint(_))
     ));
 
-    let mut stale_pins = pins();
-    stale_pins.content.content = label("changed-content");
+    let mut stale_pins = fixture_checkpoint_pins();
+    stale_pins.content.content = fixture_revision_label("changed-content");
     assert!(matches!(
         select_due_events(
             &current_checkpoint,
             &stale_pins,
-            request(10, &policy),
-            limits()
+            due_selection_request(10, &policy),
+            due_selection_limits()
         ),
         Err(DueSelectionError::Checkpoint(_))
     ));
 
     assert_eq!(
-        select_due_events(&current_checkpoint, &pins(), request(8, &policy), limits()),
+        select_due_events(
+            &current_checkpoint,
+            &fixture_checkpoint_pins(),
+            due_selection_request(8, &policy),
+            due_selection_limits()
+        ),
         Err(DueSelectionError::InvalidTime)
     );
-    let mut mismatched_units = request(10, &policy);
+    let mut mismatched_units = due_selection_request(10, &policy);
     mismatched_units.target_time.ticks_per_second = 20;
     assert_eq!(
-        select_due_events(&current_checkpoint, &pins(), mismatched_units, limits()),
+        select_due_events(
+            &current_checkpoint,
+            &fixture_checkpoint_pins(),
+            mismatched_units,
+            due_selection_limits()
+        ),
         Err(DueSelectionError::InvalidTime)
     );
 
-    let mut stale_cursor_state = scheduled();
-    stale_cursor_state.logical_time = time(10);
+    let mut stale_cursor_state = scheduled_game_state();
+    stale_cursor_state.logical_time = logical_time(10);
     stale_cursor_state.continuity.catch_up = Some(CatchUpCursor {
-        last_processed: Some(id(1)),
-        pending_events: vec![id(3), id(2)],
-        policy: content(),
-        time: time(10),
+        last_processed: Some(fixture_record_id(1)),
+        pending_events: vec![fixture_record_id(3), fixture_record_id(2)],
+        policy: fixture_content_reference(),
+        time: logical_time(10),
     });
-    let stale_cursor_checkpoint = checkpoint(stale_cursor_state);
+    let stale_cursor_checkpoint = checkpoint_with_state(stale_cursor_state);
     let stale_cursor_before = stale_cursor_checkpoint.state().clone();
     assert_eq!(
         select_due_events(
             &stale_cursor_checkpoint,
-            &pins(),
-            request(10, &policy),
-            limits()
+            &fixture_checkpoint_pins(),
+            due_selection_request(10, &policy),
+            due_selection_limits()
         ),
         Err(DueSelectionError::StaleCursor)
     );
@@ -385,67 +433,74 @@ fn stale_basis_pins_cursor_and_time_units_refuse_without_mutation() {
 
 #[test]
 fn accepted_unpaused_time_stages_ordered_destination_and_replays_exactly() {
-    let mut supplied = scheduled();
+    let mut supplied = scheduled_game_state();
     supplied.entities.push(WorldEntity {
-        id: entity(5),
-        definition: content(),
+        id: fixture_entity_id(5),
+        definition: fixture_content_reference(),
         location: None,
         position: None,
-        identity_revision: label("fixture-destination-1"),
+        identity_revision: fixture_revision_label("fixture-destination-1"),
     });
-    let checkpoint = checkpoint(supplied);
+    let checkpoint = checkpoint_with_state(supplied);
     let before = checkpoint.state().clone();
-    let policy = content();
+    let policy = fixture_content_reference();
     let definition = ContentReference {
-        entry: label("event"),
-        ..content()
+        entry: fixture_revision_label("event"),
+        ..fixture_content_reference()
     };
     let destinations = [AdmittedScheduleDestination {
-        event: id(1),
+        event: fixture_record_id(1),
         definition: &definition,
-        entity: entity(4),
+        entity: fixture_entity_id(4),
         expected_location: None,
-        destination: entity(5),
+        destination: fixture_entity_id(5),
     }];
 
     let staged = stage_schedule_advancement(
         &checkpoint,
-        &pins(),
-        Some(request(10, &policy)),
+        &fixture_checkpoint_pins(),
+        Some(due_selection_request(10, &policy)),
         &destinations,
-        world_limits(),
+        schedule_advancement_limits(),
     )
     .unwrap();
     let replay = stage_schedule_advancement(
         &checkpoint,
-        &pins(),
-        Some(request(10, &policy)),
+        &fixture_checkpoint_pins(),
+        Some(due_selection_request(10, &policy)),
         &destinations,
-        world_limits(),
+        schedule_advancement_limits(),
     )
     .unwrap();
 
-    assert_eq!(selected_ids(&staged.due), vec![id(1), id(2), id(3)]);
+    assert_eq!(
+        selected_event_ids(&staged.due),
+        vec![
+            fixture_record_id(1),
+            fixture_record_id(2),
+            fixture_record_id(3)
+        ]
+    );
     assert_eq!(
         staged.movements,
         vec![ScheduledLocationChange {
-            event: id(1),
-            entity: entity(4),
+            event: fixture_record_id(1),
+            entity: fixture_entity_id(4),
             before: None,
-            after: entity(5),
+            after: fixture_entity_id(5),
         }]
     );
     assert_eq!(staged, replay);
     assert_eq!(checkpoint.state(), &before);
-    assert_eq!(checkpoint.state().logical_time, time(9));
+    assert_eq!(checkpoint.state().logical_time, logical_time(9));
     assert_eq!(checkpoint.state().entities[0].location, None);
 }
 
-fn world_limits() -> ScheduleAdvancementLimits {
+fn schedule_advancement_limits() -> ScheduleAdvancementLimits {
     ScheduleAdvancementLimits {
         selection: DueSelectionLimits {
             selected_events: 4,
-            ..limits()
+            ..due_selection_limits()
         },
         entities: 8,
         destinations: 8,
