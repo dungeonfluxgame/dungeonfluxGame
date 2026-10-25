@@ -356,10 +356,11 @@ strong, b { font-weight: 600; }
 .page-head p:last-child { margin-bottom: 0; }
 
 .page-body { padding: clamp(48px, 7vw, 96px) 0 var(--section); }
+.page-body.flow-page { overflow-x: clip; }
 
 /* Pills: status labels. Proposed and built-so-far are engine facts (tide); drafts are lantern; early access is outline. */
 .pill { display: inline-block; font-family: var(--sans); font-weight: 600; font-size: 14px; line-height: 1.3; border-radius: 999px; padding: 3px 12px; vertical-align: middle; font-style: normal; letter-spacing: 0; white-space: nowrap; }
-.pill-proposed { color: #10222b; background: var(--tide); }
+.pill-proposed { color: #10222b; background: var(--tide); white-space: normal; max-width: 100%; }
 .pill-early { color: var(--tide); border: 1px solid var(--tide); }
 .pill-draft { color: var(--parchment); border: 1px dashed var(--tallow); }
 
@@ -422,9 +423,10 @@ strong, b { font-weight: 600; }
 /* ---------------------------------------------------------------- how it works: the four steps */
 
 .flow { list-style: none; margin: 0; padding: 0; counter-reset: none; }
-.flow-step { display: grid; gap: 20px 48px; padding: clamp(40px, 5vw, 64px) 0; border-top: 1px solid var(--ash); position: relative; }
+.flow-step { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px 48px; padding: clamp(40px, 5vw, 64px) 0; border-top: 1px solid var(--ash); position: relative; }
 .flow-step:first-child { border-top: 0; padding-top: 0; }
 .flow-num { font-size: clamp(64px, 7vw, 96px); line-height: .8; font-weight: 300; color: var(--lantern); margin: 0; }
+.flow-main { min-width: 0; }
 .flow-main h2 { font-size: clamp(30px, 3.2vw, 42px); font-weight: 400; margin-bottom: 18px; }
 .flow-main > p { max-width: var(--measure); }
 .flow-shot { margin: 26px 0 0; }
