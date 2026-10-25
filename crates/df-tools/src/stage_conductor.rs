@@ -836,8 +836,6 @@ impl<D: Clone> Conductor<D> {
         out
     }
 
-    // -- scene -------------------------------------------------------------------------------
-
     /// A scene change sets (or replaces) the one successor. Older unspoken scenes are dropped,
     /// never queued without bound.
     fn set_pending(&mut self, now_ms: u64, plan: ViewPlan<D>) {

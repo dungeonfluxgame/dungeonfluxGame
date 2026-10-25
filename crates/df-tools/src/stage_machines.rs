@@ -11,7 +11,6 @@
 //! Display presentation only: no machine decides an outcome, sends a request or delays what a
 //! phone may do.
 
-// ---------------------------------------------------------------------------------------------
 // Bounds. Every waiting state has a watchdog built from these; a missed media event takes the
 // normal exit path when its bound passes.
 
@@ -82,9 +81,6 @@ pub(crate) fn reading_time_ms(text: &str) -> u32 {
         .clamp(READ_MINIMUM_MS, READ_MAXIMUM_MS)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Scene
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SceneState {
     Hidden,
@@ -135,9 +131,6 @@ pub(crate) fn scene_next(state: SceneState, event: SceneEvent) -> Option<SceneSt
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Line (a bubble or the narrator box)
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineState {
@@ -214,9 +207,6 @@ pub(crate) fn line_next(state: LineState, event: LineEvent) -> Option<LineState>
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Voice clip
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipState {
     /// No clip is expected (silent line, or sound locked or muted).
@@ -279,9 +269,6 @@ pub(crate) fn clip_next(state: ClipState, event: ClipEvent) -> Option<ClipState>
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Actor (a hero or non-player figure)
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ActorState {
     Offstage,
@@ -332,9 +319,6 @@ pub(crate) fn actor_next(state: ActorState, event: ActorEvent) -> Option<ActorSt
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Battle (in front of the battlefield's own animation)
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleState {

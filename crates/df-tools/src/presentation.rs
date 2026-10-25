@@ -2072,17 +2072,17 @@ mod tests {
             sequence: u64,
             actor: &'static str,
             target: &'static str,
-            damage: u32,
-            after: u32,
+            damage_hit_points: u32,
+            hit_points_after: u32,
             downed: bool,
         }
 
-        fn member(id: &str, side: Side, hp: u32) -> Member {
+        fn member(id: &str, side: Side, hit_points: u32) -> Member {
             Member {
                 id: id.to_owned(),
                 name: id.to_owned(),
                 side,
-                hit_points: hp,
+                hit_points,
                 maximum_hit_points: if id.starts_with("Bandit") { 11 } else { 13 },
                 height_m: 1.5,
                 figure: None,
@@ -2101,8 +2101,8 @@ mod tests {
                 target: blow.target.to_owned(),
                 hit: true,
                 critical: false,
-                damage: blow.damage,
-                target_hit_points_after: blow.after,
+                damage: blow.damage_hit_points,
+                target_hit_points_after: blow.hit_points_after,
                 downed: blow.downed,
                 weapon: "shortsword".to_owned(),
                 grazed: false,
@@ -2160,7 +2160,7 @@ mod tests {
             }
         }
 
-        fn hp(stage: &Stage, name: &str) -> u32 {
+        fn hit_points_for(stage: &Stage, name: &str) -> u32 {
             stage
                 .frame()
                 .figures
@@ -2200,11 +2200,11 @@ mod tests {
                                 attacker: TokenId::new(blow.actor),
                                 target: TokenId::new(blow.target),
                                 result: AttackResult::Hit {
-                                    damage: blow.damage,
+                                    damage: blow.damage_hit_points,
                                     critical: false,
                                     downed: blow.downed,
                                 },
-                                target_hit_points_after: Some(blow.after),
+                                target_hit_points_after: Some(blow.hit_points_after),
                             })
                             .unwrap();
                     }
@@ -2224,32 +2224,32 @@ mod tests {
                 sequence: 1,
                 actor: "Brakka",
                 target: "Bandit 1",
-                damage: 9,
-                after: 2,
+                damage_hit_points: 9,
+                hit_points_after: 2,
                 downed: false,
             },
             Blow {
                 sequence: 2,
                 actor: "Sigrun",
                 target: "Bandit 1",
-                damage: 2,
-                after: 0,
+                damage_hit_points: 2,
+                hit_points_after: 0,
                 downed: true,
             },
             Blow {
                 sequence: 3,
                 actor: "Bandit 2",
                 target: "Brakka",
-                damage: 9,
-                after: 4,
+                damage_hit_points: 9,
+                hit_points_after: 4,
                 downed: false,
             },
             Blow {
                 sequence: 4,
                 actor: "Bandit 3",
                 target: "Sigrun",
-                damage: 2,
-                after: 10,
+                damage_hit_points: 2,
+                hit_points_after: 10,
                 downed: false,
             },
         ];
@@ -2291,8 +2291,8 @@ mod tests {
             sequence: 0,
             actor: "Brakka",
             target: "Brakka",
-            damage: 0,
-            after: 4,
+            damage_hit_points: 0,
+            hit_points_after: 4,
             downed: false,
         };
         let commands = director.on_view(
@@ -2308,9 +2308,9 @@ mod tests {
         let mut cursor = director.presented_sequence();
         feed.apply(&mut stage, &snapshot(cursor, false, &outcomes))
             .unwrap();
-        let mut last_bandit = hp(&stage, "Bandit 1");
-        let mut last_brakka = hp(&stage, "Brakka");
-        let mut last_sigrun = hp(&stage, "Sigrun");
+        let mut last_bandit = hit_points_for(&stage, "Bandit 1");
+        let mut last_brakka = hit_points_for(&stage, "Brakka");
+        let mut last_sigrun = hit_points_for(&stage, "Sigrun");
         let mut bandit_changes = vec![(last_bandit, cursor, 0)];
         let mut brakka_changes = vec![(last_brakka, cursor, 0)];
         let mut sigrun_changes = vec![(last_sigrun, cursor, 0)];
@@ -2339,8 +2339,8 @@ mod tests {
             }
             feed.apply(&mut stage, &snapshot(cursor, false, &outcomes))
                 .unwrap();
-            let bandit = hp(&stage, "Bandit 1");
-            let brakka = hp(&stage, "Brakka");
+            let bandit = hit_points_for(&stage, "Bandit 1");
+            let brakka = hit_points_for(&stage, "Brakka");
             assert_eq!(
                 bandit,
                 if cursor >= 2 {
@@ -2357,14 +2357,14 @@ mod tests {
                 if cursor >= 3 { 4 } else { 13 },
                 "Brakka at {now} ms, sequence {cursor}"
             );
-            let sigrun = hp(&stage, "Sigrun");
+            let sigrun = hit_points_for(&stage, "Sigrun");
             assert_eq!(
                 sigrun,
                 if cursor >= 4 { 10 } else { 12 },
                 "Sigrun at {now} ms, sequence {cursor}"
             );
-            assert_eq!(hp(&stage, "Bandit 2"), 11);
-            assert_eq!(hp(&stage, "Bandit 3"), 11);
+            assert_eq!(hit_points_for(&stage, "Bandit 2"), 11);
+            assert_eq!(hit_points_for(&stage, "Bandit 3"), 11);
             if bandit != last_bandit {
                 assert!(bandit < last_bandit, "Bandit 1 health went backwards");
                 bandit_changes.push((bandit, cursor, now + 100));
@@ -2450,7 +2450,11 @@ mod tests {
             "Second Wind never changed Brakka's card"
         );
         assert_eq!(last_brakka, 8);
-        assert_eq!(hp(&stage, "Bandit 1"), 0, "the kill remains on the card");
+        assert_eq!(
+            hit_points_for(&stage, "Bandit 1"),
+            0,
+            "the kill remains on the card"
+        );
     }
 
     #[test]
