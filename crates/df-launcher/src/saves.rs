@@ -1,7 +1,11 @@
 //! Games started from the launcher, so Resume can list them by name and last-played time.
 //! The game state itself lives in the game's PostgreSQL database; this list only names it.
 use serde::{Deserialize, Serialize};
-use std::{io, path::Path};
+use std::{
+    io,
+    path::Path,
+    sync::{Mutex, PoisonError},
+};
 
 /// Which adventure a game plays. Resuming must use the same one.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -65,6 +69,10 @@ struct SavedGames {
 
 const SAVES_FILE: &str = "saved-games.toml";
 
+/// Held across one read-modify-write of the list, so games recorded from two threads at once
+/// cannot overwrite each other's entries.
+static RECORD_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn load(data: &Path) -> Result<Vec<SavedGame>, io::Error> {
     let text = match std::fs::read_to_string(data.join(SAVES_FILE)) {
         Ok(text) => text,
@@ -81,6 +89,7 @@ pub fn load(data: &Path) -> Result<Vec<SavedGame>, io::Error> {
 
 /// Adds the game or updates its last-played time and play time.
 pub fn record(data: &Path, game: &SavedGame) -> Result<(), io::Error> {
+    let _serialized = RECORD_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let mut games = load(data)?;
     match games
         .iter_mut()
@@ -267,6 +276,26 @@ mod tests {
         assert_eq!(games.len(), 2);
         assert_eq!(games[0].name, "The Amber Bell");
         assert_eq!(games[0].last_played, 30);
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn games_recorded_from_several_threads_at_once_are_all_kept() {
+        let data =
+            std::env::temp_dir().join(format!("df-launcher-concurrent-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        std::thread::scope(|scope| {
+            for thread in 0..8 {
+                let data = &data;
+                scope.spawn(move || {
+                    for index in 0..6 {
+                        let database = format!("df_gameplay_demo_t{thread}_{index}");
+                        record(data, &game(&database, "The Amber Bell", index)).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(load(&data).unwrap().len(), 48);
         std::fs::remove_dir_all(data).unwrap();
     }
 

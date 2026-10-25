@@ -357,7 +357,11 @@ pub fn wait_ready(
 pub fn dev_control_line(log: &Path, limit: Duration) -> Option<String> {
     let started = Instant::now();
     loop {
-        let text = std::fs::read_to_string(log).unwrap_or_default();
+        // Lossy, as `wait_ready` reads it: one stray byte in the server's output must not hide
+        // the line that follows it.
+        let text = std::fs::read(log)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
         if let Some(line) = text
             .lines()
             .find(|line| line.starts_with("DEV CONTROL on url="))
@@ -421,6 +425,30 @@ mod tests {
         assert!(ready.player_url.ends_with("room=ABCD"));
         assert!(parse_ready("ROOM ABCD").is_none());
         assert!(parse_ready("READY display=javascript:alert(1)").is_none());
+    }
+
+    #[test]
+    fn dev_control_line_is_found_even_when_the_log_holds_non_utf8_bytes() {
+        let folder =
+            std::env::temp_dir().join(format!("df-launcher-devctl-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let log = folder.join("server.log");
+        let mut bytes = b"READY display=http://127.0.0.1:63309/gameplay/display\n".to_vec();
+        bytes.extend_from_slice(b"postgres: caf\xe9 \xff\n");
+        bytes.extend_from_slice(
+            b"DEV CONTROL on url=http://127.0.0.1:63310 token_file=t (token never printed)\n",
+        );
+        std::fs::write(&log, &bytes).unwrap();
+        let found = dev_control_line(&log, Duration::from_millis(500));
+        assert_eq!(
+            found.as_deref(),
+            Some("DEV CONTROL on url=http://127.0.0.1:63310 token_file=t (token never printed)")
+        );
+        assert_eq!(
+            dev_control_line(&folder.join("missing.log"), Duration::from_millis(1)),
+            None
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]

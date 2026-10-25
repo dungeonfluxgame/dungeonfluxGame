@@ -153,6 +153,24 @@ fn parse(line: &str) -> Result<Request, String> {
     }
 }
 
+/// The request line `parse` reads back. A request that would not survive the trip (a line break
+/// ends the request early, a space in a name splits it, trailing spaces are trimmed) is refused
+/// here rather than applied with a different value.
+fn request_line(request: &Request) -> Result<String, String> {
+    match request {
+        Request::Read => Ok("read".to_owned()),
+        Request::Set { name, value } => {
+            if name.is_empty() || name.contains(char::is_whitespace) {
+                return Err("a property name is one word with no spaces".to_owned());
+            }
+            if value.contains(['\n', '\r']) || value.trim_end() != value {
+                return Err("a value cannot contain line breaks or end with spaces".to_owned());
+            }
+            Ok(format!("set {name} {value}"))
+        }
+    }
+}
+
 /// Sends one request to the open launcher window and returns its reply lines.
 pub fn send(data: &Path, request: &Request) -> Result<Vec<String>, String> {
     let closed = || "No launcher window is open for this data folder.".to_owned();
@@ -161,10 +179,7 @@ pub fn send(data: &Path, request: &Request) -> Result<Vec<String>, String> {
     let mut stream =
         TcpStream::connect((Ipv4Addr::LOCALHOST, endpoint.port)).map_err(|_| closed())?;
     let _ = stream.set_read_timeout(Some(WAIT + Duration::from_secs(2)));
-    let line = match request {
-        Request::Read => "read".to_owned(),
-        Request::Set { name, value } => format!("set {name} {value}"),
-    };
+    let line = request_line(request)?;
     writeln!(stream, "{}\n{line}", endpoint.token).map_err(|error| error.to_string())?;
     let reply: Vec<String> = BufReader::new(stream)
         .lines()
@@ -202,6 +217,33 @@ mod tests {
         }
         assert!(same("abc", "abc"));
         assert!(!same("abd", "abc"));
+        assert_eq!(request_line(&Request::Read), Ok("read".to_owned()));
+        let spaced = Request::Set {
+            name: "display.screenshot".to_owned(),
+            value: "C:\\a b\\shot.jpg".to_owned(),
+        };
+        let sent = request_line(&spaced).unwrap();
+        assert_eq!(parse(&sent), Ok(spaced));
+        for refused in [
+            Request::Set {
+                name: "control size".to_owned(),
+                value: "900x700".to_owned(),
+            },
+            Request::Set {
+                name: String::new(),
+                value: "x".to_owned(),
+            },
+            Request::Set {
+                name: "control.title".to_owned(),
+                value: "first\nsecond".to_owned(),
+            },
+            Request::Set {
+                name: "control.title".to_owned(),
+                value: "trailing ".to_owned(),
+            },
+        ] {
+            assert!(request_line(&refused).is_err(), "{refused:?}");
+        }
         assert!(!same("ab", "abc"));
         assert!(!same("POST / HTTP/1.1", "abc"));
     }
