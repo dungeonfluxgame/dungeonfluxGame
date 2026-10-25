@@ -12,9 +12,17 @@ df-model = { path = "../df-model" }
 df-session = { path = "../df-session" }
 df-auth = { path = "../df-auth" }
 df-observe = { path = "../df-observe" }
+df-customer = { path = "../df-customer" }
+df-assets = { path = "../df-assets" }
 tokio-postgres = { version = "=0.7.15", default-features = true }
+rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-pki-types = { version = "=1.15.1", features = ["std"] }
+tokio-rustls = { version = "=0.26.6", default-features = false }
 tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 df-rules = { path = "../df-rules" }
+df-customer = { path = "../df-customer", features = ["test-fakes"] }
+df-assets = { path = "../df-assets", features = ["test-fakes"] }
+rcgen = { version = "=0.13.2", default-features = false, features = ["aws_lc_rs", "pem"] }
 sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }

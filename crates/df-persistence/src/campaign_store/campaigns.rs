@@ -13,7 +13,7 @@ use df_campaign::{
     secrets::random_identity,
     store::OwnerFence,
 };
-use df_types::{AccountId, CampaignId, OperationId};
+use df_types::{AccountId, CampaignId, OperationId, SessionId};
 
 use super::{
     conn::Tx,
@@ -100,10 +100,24 @@ pub(super) async fn create_campaign(
         scheduled_delete_at_ms: None,
     };
     q::insert_campaign(tx, &row).await?;
+    finish_creation(tx, id, new.owner, operation, fingerprint, now_ms).await
+}
+
+/// The tail every creation shares: the creator becomes the host and takes a seat, `joined` is
+/// appended (the first event, number 1) and the operation receipt is written. The campaign row
+/// exists and the caller holds the account lock and the account's creation lock.
+pub(super) async fn finish_creation(
+    tx: &Tx<'_>,
+    id: CampaignId,
+    owner: AccountId,
+    operation: OperationId,
+    fingerprint: [u8; 32],
+    now_ms: u64,
+) -> Outcome<CampaignRow> {
     let host = MemberRow {
         member: new_member_id()?,
         campaign: id,
-        account: new.owner,
+        account: owner,
         role: CampaignRole::Host,
         holds_seat: true,
         delegations: Delegations::NONE,
@@ -126,7 +140,7 @@ pub(super) async fn create_campaign(
     if !q::insert_operation(
         tx,
         CREATE_NAMESPACE,
-        new.owner,
+        owner,
         operation.as_bytes(),
         fingerprint,
         id.as_bytes(),
@@ -142,7 +156,7 @@ pub(super) async fn create_campaign(
     }
 }
 
-async fn existing_campaign(tx: &Tx<'_>, result: &[u8]) -> Outcome<CampaignRow> {
+pub(super) async fn existing_campaign(tx: &Tx<'_>, result: &[u8]) -> Outcome<CampaignRow> {
     let id = CampaignId::from_bytes(result).map_err(|_| StoreError::InvalidRecord)?;
     match q::read_campaign(tx, id).await? {
         Some(row) => Ok(row),
@@ -365,7 +379,9 @@ pub(super) async fn flip_scheduled_deletion(
 pub(super) async fn session_started(
     tx: &Tx<'_>,
     campaign: CampaignId,
+    session: SessionId,
     fence: OwnerFence,
+    now_ms: u64,
 ) -> Outcome<()> {
     // The only thing this statement can wait on is a halt holding the service lock, so a lock
     // timeout here is the retryable `service_halting`.
@@ -397,5 +413,8 @@ pub(super) async fn session_started(
     if row.status != CampaignStatus::Active {
         return refuse(Refusal::CampaignUnavailable);
     }
+    // The lobby is frozen under the same campaign lock every lobby change takes, so a change
+    // either lands before the freeze or is refused after it.
+    q::freeze_lobby(tx, session, campaign, now_ms).await?;
     Ok(())
 }

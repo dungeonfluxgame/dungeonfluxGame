@@ -341,3 +341,90 @@ pub(super) fn head_from_row(row: &Row) -> StoreResult<df_campaign::records::Camp
         feed_epoch: feed_epoch(col(row, 2)?)?,
     })
 }
+
+pub(super) const DRAFT_COLUMNS: &str = "campaign_id, tenant_id, owner_account_id, name, \
+    adventure_kind, content_rating, seat_count, room_codes, default_co_host_delegations, \
+    voice_default, picture_default, spend_preset, custom_hourly_micro_dollars, \
+    session_ceiling_micro_dollars, funding_model, sponsor_account_id, draft_step, revision, \
+    created_at_ms, draft_expires_at_ms";
+
+pub(super) fn draft_from_row(row: &Row) -> StoreResult<df_campaign::draft::DraftRow> {
+    use df_campaign::{
+        draft::{DraftRow, FundingModel, PictureDefault, SpendPreset, VoiceDefault},
+        records::ContentRating,
+    };
+    let rating: String = col(row, 5)?;
+    let room_codes: String = col(row, 7)?;
+    let delegations: i16 = col(row, 8)?;
+    let voice: String = col(row, 9)?;
+    let picture: String = col(row, 10)?;
+    let preset: String = col(row, 11)?;
+    let funding: String = col(row, 14)?;
+    let sponsor: Option<&[u8]> = col(row, 15)?;
+    let step: Option<i16> = col(row, 16)?;
+    let expires: Option<i64> = col(row, 19)?;
+    Ok(DraftRow {
+        id: campaign_id(col(row, 0)?)?,
+        tenant: tenant_id(col(row, 1)?)?,
+        owner: account_id(col(row, 2)?)?,
+        name: col(row, 3)?,
+        adventure_kind: col(row, 4)?,
+        content_rating: match rating.as_str() {
+            "gentle" => ContentRating::Gentle,
+            "standard" => ContentRating::Standard,
+            "mature" => ContentRating::Mature,
+            _ => return Err(StoreError::InvalidRecord),
+        },
+        seat_count: to_u32(col(row, 6)?)?,
+        room_codes: RoomCodes::parse(&room_codes).ok_or(StoreError::InvalidRecord)?,
+        default_co_host_delegations: u8::try_from(delegations)
+            .ok()
+            .and_then(Delegations::from_bits)
+            .ok_or(StoreError::InvalidRecord)?,
+        voice_default: VoiceDefault::parse(&voice).ok_or(StoreError::InvalidRecord)?,
+        picture_default: PictureDefault::parse(&picture).ok_or(StoreError::InvalidRecord)?,
+        spend_preset: SpendPreset::parse(&preset).ok_or(StoreError::InvalidRecord)?,
+        custom_hourly_micro_dollars: optional_u64(col(row, 12)?)?,
+        session_ceiling_micro_dollars: optional_u64(col(row, 13)?)?,
+        funding_model: FundingModel::parse(&funding).ok_or(StoreError::InvalidRecord)?,
+        sponsor: sponsor.map(account_id).transpose()?,
+        step: step
+            .and_then(|value| u8::try_from(value).ok())
+            .ok_or(StoreError::InvalidRecord)?,
+        revision: to_u64(col(row, 17)?)?,
+        created_at_ms: to_u64(col(row, 18)?)?,
+        expires_at_ms: optional_u64(expires)?.ok_or(StoreError::InvalidRecord)?,
+    })
+}
+
+pub(super) const LOBBY_COLUMNS: &str = "session_id, member_id, campaign_id, character_choice, \
+    character_ref, ready, microphone_preference, microphone_report, updated_at_ms, revision, \
+    frozen_at_ms";
+
+pub(super) fn lobby_from_row(row: &Row) -> StoreResult<df_campaign::lobby_state::LobbyMemberRow> {
+    use df_campaign::{
+        lobby::CharacterChoice,
+        lobby_state::{LobbyMemberRow, MicrophonePreference, MicrophoneReport},
+    };
+    let choice: String = col(row, 3)?;
+    let reference: Option<&[u8]> = col(row, 4)?;
+    let preference: String = col(row, 6)?;
+    let report: String = col(row, 7)?;
+    let frozen: Option<i64> = col(row, 10)?;
+    Ok(LobbyMemberRow {
+        session: session_id(col(row, 0)?)?,
+        member: member_id(col(row, 1)?)?,
+        campaign: campaign_id(col(row, 2)?)?,
+        character: CharacterChoice::parse(&choice).ok_or(StoreError::InvalidRecord)?,
+        character_ref: reference
+            .map(|bytes| <[u8; 16]>::try_from(bytes).map_err(|_| StoreError::InvalidRecord))
+            .transpose()?,
+        ready: col(row, 5)?,
+        microphone_preference: MicrophonePreference::parse(&preference)
+            .ok_or(StoreError::InvalidRecord)?,
+        microphone_report: MicrophoneReport::parse(&report).ok_or(StoreError::InvalidRecord)?,
+        updated_at_ms: to_u64(col(row, 8)?)?,
+        revision: to_u64(col(row, 9)?)?,
+        frozen: frozen.is_some(),
+    })
+}

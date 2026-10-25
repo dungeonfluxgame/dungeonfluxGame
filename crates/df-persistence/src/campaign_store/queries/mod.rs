@@ -5,14 +5,18 @@
 
 mod campaigns;
 mod display;
+mod drafts;
 mod invitations;
+mod lobby;
 mod members;
 mod receipts;
 mod transfers;
 
 pub(super) use campaigns::*;
 pub(super) use display::*;
+pub(super) use drafts::*;
 pub(super) use invitations::*;
+pub(super) use lobby::*;
 pub(super) use members::*;
 pub(super) use receipts::*;
 pub(super) use transfers::*;

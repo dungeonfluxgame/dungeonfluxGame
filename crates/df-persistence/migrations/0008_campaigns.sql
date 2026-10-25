@@ -369,6 +369,21 @@ BEGIN
     END LOOP;
 END $$;
 
+-- A campaign row can be deleted only while it is a draft (an unfinished wizard): the trigger
+-- refuses every other status for every role, and the foreign keys refuse a row with members.
+-- Drafts are deleted by the retention pass when they expire and by account closure.
+CREATE FUNCTION campaigns.refuse_delete_unless_draft() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.status <> 'draft' THEN
+        RAISE EXCEPTION 'only a draft campaign can be deleted' USING ERRCODE = '42501';
+    END IF;
+    RETURN OLD;
+END $$;
+
+CREATE TRIGGER campaign_delete_only_drafts BEFORE DELETE ON campaigns.campaign
+    FOR EACH ROW EXECUTE FUNCTION campaigns.refuse_delete_unless_draft();
+
 -- Grants are column-level for UPDATE: no service role can rewrite an identity, the tenant, the
 -- epoch or a creation time. B's close and completion transactions run the closure methods on
 -- B's own role (`df_accounts`), so that role gets exactly the columns those methods write; the
@@ -380,7 +395,10 @@ GRANT SELECT, INSERT ON campaigns.campaign, campaigns.campaign_member,
 GRANT SELECT, INSERT ON campaigns.campaign_event, campaigns.campaign_operation TO df_campaigns;
 GRANT UPDATE (owner_account_id, name, seat_count, content_rating, room_codes,
     default_co_host_delegations, display_summary_enabled, planned_session_at_ms, status,
-    revision, event_seq, last_event_at_ms, archived_at_ms, scheduled_delete_at_ms)
+    revision, event_seq, last_event_at_ms, archived_at_ms, scheduled_delete_at_ms,
+    adventure_kind, voice_default, picture_default, spend_preset, custom_hourly_micro_dollars,
+    session_ceiling_micro_dollars, funding_model, sponsor_account_id, draft_step,
+    draft_expires_at_ms)
     ON campaigns.campaign TO df_campaigns;
 GRANT UPDATE (role, holds_seat, delegations, status, may_rejoin, removed_by_role,
     last_invitation_id, joined_at_ms, ended_at_ms, revision)
@@ -390,6 +408,7 @@ GRANT UPDATE (revoked_at_ms) ON campaigns.join_code TO df_campaigns;
 GRANT UPDATE (state, approved_as, decided_by_member, decided_at_ms)
     ON campaigns.join_request TO df_campaigns;
 GRANT UPDATE (state) ON campaigns.transfer_proposal TO df_campaigns;
+GRANT DELETE ON campaigns.campaign TO df_campaigns;
 GRANT SELECT ON campaigns.feed_bound TO df_campaigns;
 
 DO $$
@@ -404,6 +423,7 @@ GRANT SELECT ON campaigns.campaign, campaigns.campaign_member, campaigns.campaig
 GRANT SELECT, INSERT ON campaigns.campaign_event TO df_accounts;
 GRANT UPDATE (revision, event_seq, last_event_at_ms, scheduled_delete_at_ms)
     ON campaigns.campaign TO df_accounts;
+GRANT DELETE ON campaigns.campaign TO df_accounts;
 GRANT UPDATE (role, holds_seat, delegations, status, may_rejoin, removed_by_role,
     last_invitation_id, joined_at_ms, ended_at_ms, revision)
     ON campaigns.campaign_member TO df_accounts;

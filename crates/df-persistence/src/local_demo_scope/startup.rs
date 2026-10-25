@@ -248,10 +248,18 @@ async fn restore(
             RepositoryError::Unauthorized,
         ));
     }
-    let count = tx.execute(&format!("UPDATE df_game.sessions SET owner_fence=$3::bytea, lease_until=clock_timestamp()+interval '{} seconds' WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND owner_fence=$4::bytea AND lease_until<=clock_timestamp()", super::lease_seconds()), &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &fence.as_slice(), &old_fence]).await.map_err(|_| error("owner_claim", RepositoryError::Unavailable))?;
+    let seconds = i64::try_from(super::lease_seconds())
+        .map_err(|_| error("owner_claim", RepositoryError::Capacity))?;
+    let count = tx.execute("UPDATE df_game.sessions SET owner_fence=$3::bytea, lease_until=clock_timestamp()+($5::bigint * interval '1 second') WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND owner_fence=$4::bytea AND lease_until<=clock_timestamp()", &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &fence.as_slice(), &old_fence, &seconds]).await.map_err(|_| error("owner_claim", RepositoryError::Unavailable))?;
     if count != 1 {
         return Err(error("owner_claim", RepositoryError::RevisionConflict));
     }
+    tx.execute(
+        REISSUE_SESSION_GRANTS_SQL,
+        &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &seconds],
+    )
+    .await
+    .map_err(|_| error("grant_reissue", RepositoryError::Unavailable))?;
     Ok(DemoStartup {
         checkpoint,
         player_credential: player,
@@ -296,13 +304,34 @@ fn admitted_credential(bytes: Vec<u8>) -> Result<[u8; 32], DemoInitializationErr
     Ok(credential)
 }
 
+/// Retained grants are read whether or not their lease has lapsed, because a saved campaign
+/// outlives the server that wrote it. The owner claim in the same transaction renews them.
+/// FOR SHARE makes a concurrent revocation wait for this transaction, so a stale credential is
+/// never handed back after its grant was deactivated.
+const RETAINED_GRANT_SQL: &str = "SELECT CASE WHEN octet_length(credential)=32 THEN credential END AS credential FROM df_local_demo.grants WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND campaign_id=$3::bytea AND principal_id=$4::bytea AND effective_role=$5::bytea AND active LIMIT 2 FOR SHARE";
+/// Extends every active grant of the claimed session under the new owner fence. It updates the
+/// existing rows in place, so the same credentials and members are kept and none is minted.
+const REISSUE_SESSION_GRANTS_SQL: &str = "UPDATE df_local_demo.grants SET expires_at=clock_timestamp()+($3::bigint * interval '1 second') WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND active";
+
 async fn credential(
     tx: &Transaction<'_>,
     session: SessionId,
     principal: [u8; 16],
     role: &[u8],
 ) -> Result<[u8; 32], DemoInitializationError> {
-    let rows = tx.query("SELECT CASE WHEN octet_length(credential)=32 THEN credential END AS credential FROM df_local_demo.grants WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND campaign_id=$3::bytea AND principal_id=$4::bytea AND effective_role=$5::bytea AND active AND expires_at>clock_timestamp() LIMIT 2", &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &CAMPAIGN.as_slice(), &principal.as_slice(), &role]).await.map_err(|_| error("retained_access_read", RepositoryError::Unavailable))?;
+    let rows = tx
+        .query(
+            RETAINED_GRANT_SQL,
+            &[
+                &TENANT.as_slice(),
+                &session.as_bytes().as_slice(),
+                &CAMPAIGN.as_slice(),
+                &principal.as_slice(),
+                &role,
+            ],
+        )
+        .await
+        .map_err(|_| error("retained_access_read", RepositoryError::Unavailable))?;
     if rows.len() != 1 {
         return Err(error(
             "retained_access_unavailable",

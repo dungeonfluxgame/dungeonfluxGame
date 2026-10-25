@@ -3340,6 +3340,92 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn six_member_checkpoint_recovers_five_thousand_decisions_within_bounds() {
+        let started = std::time::Instant::now();
+        let mut supplied = state();
+        for member_id in 4..=8 {
+            supplied.members.push(MembershipLink {
+                member: member(member_id),
+                character: None,
+            });
+        }
+        for sequence in 1..=5_000_u64 {
+            let mut operation_bytes = [0; 16];
+            operation_bytes[8..].copy_from_slice(&sequence.to_be_bytes());
+            supplied.decisions.push(AcceptedDecision {
+                operation: OperationId::from_bytes(&operation_bytes).unwrap(),
+                revision: revision(1, sequence),
+                facts: vec![],
+                draws: vec![],
+                effects: vec![],
+                source_policy: label("fixture-policy-1"),
+                semantic_output: None,
+            });
+        }
+        let expected = Basis {
+            revision: revision(1, 5_000),
+            ..basis()
+        };
+        let rules = vec![rule()];
+        let content_entries = vec![content()];
+        let resources = resource_constraints();
+        let checkpoint = Checkpoint::new(
+            CHECKPOINT_SCHEMA,
+            expected,
+            pins(),
+            supplied,
+            ReferenceInventory {
+                rules: &rules,
+                content: &content_entries,
+                resources: &resources,
+                assets: &[],
+            },
+            CheckpointLimits {
+                maximum_records: 12_000,
+                maximum_text_bytes: 256,
+                maximum_total_text_bytes: 32 * 1024 * 1024,
+                maximum_retained_bytes: 16 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+        let mut bounds = codec_limits();
+        bounds.maximum_document_bytes = 4 * 1024 * 1024;
+        bounds.maximum_allocated_bytes = 24 * 1024 * 1024;
+        bounds.maximum_collection_items = 12_000;
+
+        let bytes = encode_checkpoint(&checkpoint, bounds).unwrap();
+        let restored = decode_checkpoint(
+            &bytes,
+            expected,
+            checkpoint.pins(),
+            ReferenceInventory {
+                rules: &rules,
+                content: &content_entries,
+                resources: &resources,
+                assets: &[],
+            },
+            CheckpointLimits {
+                maximum_records: 12_000,
+                maximum_text_bytes: 256,
+                maximum_total_text_bytes: 32 * 1024 * 1024,
+                maximum_retained_bytes: 16 * 1024 * 1024,
+            },
+            bounds,
+        )
+        .unwrap();
+
+        assert!(bytes.len() <= bounds.maximum_document_bytes);
+        assert_eq!(restored.state().members.len(), 6);
+        assert_eq!(restored.state().decisions.len(), 5_000);
+        assert_eq!(restored, checkpoint);
+        eprintln!(
+            "SAVE-04 decisions=5000 members=6 document_bytes={} combined_encode_decode_ms={}",
+            bytes.len(),
+            started.elapsed().as_millis()
+        );
+    }
     #[test]
     fn row_basis_and_admitted_pins_cannot_be_overwritten_by_envelope() {
         let checkpoint = checkpoint(state()).unwrap();

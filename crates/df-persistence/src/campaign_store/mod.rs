@@ -11,24 +11,31 @@ mod campaigns;
 mod closure;
 mod conn;
 mod display;
+mod drafts;
 mod feed;
 mod glue;
 mod invites;
+mod lobby;
 mod members;
 mod queries;
 use self::queries as q;
 mod rows;
 mod shared;
 mod transfers;
+mod views;
 
 use df_campaign::{
     config::Tunables,
+    draft::{DraftRow, DraftStepData},
     errors::{Failure, Outcome, StoreResult},
     ids::{InvitationId, PairingId, ProposalId, RequestId, TicketId},
     join_invitation::JoinRole,
+    lobby::CharacterChoice,
+    lobby_state::{LobbyMemberRow, LobbyRows, MicrophonePreference, MicrophoneReport},
     records::{
-        CampaignChange, CampaignHead, CampaignRow, CodeRow, EventRow, InvitationRow, MemberRow,
-        MemberSnapshot, NewCampaign, PairingRow, RequestRow, RevokeReason, TicketRow, TransferKind,
+        CampaignChange, CampaignHead, CampaignRow, CodeRow, DashboardRow, EventRow, InvitationRow,
+        MemberRow, MemberSnapshot, NewCampaign, OverviewRows, PairingRow, RequestRow, RevokeReason,
+        TicketRow, TransferKind,
     },
     roles::Delegations,
     store::{
@@ -265,6 +272,86 @@ impl CampaignStore for PgCampaignStore {
         let result =
             campaigns::create_campaign(&tx, &self.tunables, new, operation, fingerprint, now_ms)
                 .await;
+        finish(tx, result).await
+    }
+
+    async fn dashboard_campaigns(
+        &self,
+        account: AccountId,
+        limit: u32,
+    ) -> StoreResult<Vec<DashboardRow>> {
+        views::dashboard_campaigns(&self.reads, account, limit).await
+    }
+
+    async fn campaign_overview(
+        &self,
+        account: AccountId,
+        campaign: CampaignId,
+    ) -> StoreResult<Option<OverviewRows>> {
+        views::campaign_overview(&self.reads, account, campaign).await
+    }
+
+    async fn start_draft(
+        &self,
+        owner: AccountId,
+        tenant: df_types::TenantId,
+        now_ms: u64,
+    ) -> Outcome<DraftRow> {
+        let tx = self.begin().await?;
+        let result = drafts::start_draft(&tx, &self.tunables, owner, tenant, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn get_draft(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
+        now_ms: u64,
+    ) -> Outcome<DraftRow> {
+        let tx = self.begin().await?;
+        let result = drafts::get_draft(&tx, owner, draft, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn list_drafts(&self, owner: AccountId, now_ms: u64) -> Outcome<Vec<DraftRow>> {
+        let tx = self.begin().await?;
+        let result = q::list_drafts(&tx, owner, now_ms)
+            .await
+            .map_err(Failure::from);
+        finish(tx, result).await
+    }
+
+    async fn save_draft_step(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
+        data: DraftStepData,
+        now_ms: u64,
+    ) -> Outcome<DraftRow> {
+        let tx = self.begin().await?;
+        let result = drafts::save_draft_step(&tx, &self.tunables, owner, draft, data, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn finish_draft(
+        &self,
+        owner: AccountId,
+        draft: CampaignId,
+        operation: OperationId,
+        fingerprint: [u8; 32],
+        now_ms: u64,
+    ) -> Outcome<CampaignRow> {
+        let tx = self.begin().await?;
+        let result = drafts::finish_draft(
+            &tx,
+            &self.tunables,
+            owner,
+            draft,
+            operation,
+            fingerprint,
+            now_ms,
+        )
+        .await;
         finish(tx, result).await
     }
 
@@ -732,11 +819,64 @@ impl CampaignStore for PgCampaignStore {
     async fn session_started(
         &self,
         campaign: CampaignId,
+        session: SessionId,
         fence: OwnerFence,
-        _now_ms: u64,
+        now_ms: u64,
     ) -> Outcome<()> {
         let tx = self.begin().await?;
-        let result = campaigns::session_started(&tx, campaign, fence).await;
+        let result = campaigns::session_started(&tx, campaign, session, fence, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn lobby_rows(
+        &self,
+        session: SessionId,
+        campaign: CampaignId,
+        now_ms: u64,
+    ) -> StoreResult<Option<LobbyRows>> {
+        views::lobby_rows(&self.reads, session, campaign, now_ms).await
+    }
+
+    async fn choose_character(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        choice: CharacterChoice,
+        reference: Option<[u8; 16]>,
+        now_ms: u64,
+    ) -> Outcome<LobbyMemberRow> {
+        let tx = self.begin().await?;
+        let result =
+            lobby::choose_character(&tx, actor, campaign, session, choice, reference, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn set_ready(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        ready: bool,
+        now_ms: u64,
+    ) -> Outcome<LobbyMemberRow> {
+        let tx = self.begin().await?;
+        let result = lobby::set_ready(&tx, actor, campaign, session, ready, now_ms).await;
+        finish(tx, result).await
+    }
+
+    async fn set_microphone(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        session: SessionId,
+        preference: MicrophonePreference,
+        report: MicrophoneReport,
+        now_ms: u64,
+    ) -> Outcome<LobbyMemberRow> {
+        let tx = self.begin().await?;
+        let result =
+            lobby::set_microphone(&tx, actor, campaign, session, preference, report, now_ms).await;
         finish(tx, result).await
     }
 }

@@ -3,6 +3,9 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod account_closure;
+pub mod account_store;
+#[cfg(not(target_arch = "wasm32"))]
 mod checkpoint_codec;
 #[cfg(not(target_arch = "wasm32"))]
 mod decision_adapter;
@@ -11,11 +14,19 @@ mod decision_rows;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local_demo_scope;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod media_catalog;
+#[cfg(not(target_arch = "wasm32"))]
+mod media_catalog_sql;
+#[cfg(not(target_arch = "wasm32"))]
+mod media_pool;
+#[cfg(not(target_arch = "wasm32"))]
 mod native_bridge;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_connection;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_scope;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod postgres_tls;
 #[cfg(not(target_arch = "wasm32"))]
 mod revision_codec;
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,6 +49,9 @@ pub use native_bridge::{
 pub use native_connection::TransactionBounds as NativeTransactionBounds;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_scope::{NativeScope, NativeUncertaintyKey};
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod media_catalog_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod owned_pg_membership_fixture;

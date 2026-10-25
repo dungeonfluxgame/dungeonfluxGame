@@ -1,0 +1,104 @@
+admission.attempt string hex32
+admission.held.display_cents number
+admission.held.micro_dollars number
+admission.price_version_label string price_version_label
+admission.reservation string hex32
+dungeonflux.finance.balance/1.allocated_to_sessions.display_cents number
+dungeonflux.finance.balance/1.allocated_to_sessions.micro_dollars number
+dungeonflux.finance.balance/1.consumed_this_period.display_cents number
+dungeonflux.finance.balance/1.consumed_this_period.micro_dollars number
+dungeonflux.finance.balance/1.currency string currency
+dungeonflux.finance.balance/1.promotional_available.display_cents number
+dungeonflux.finance.balance/1.promotional_available.micro_dollars number
+dungeonflux.finance.balance/1.proposed_pilot bool
+dungeonflux.finance.balance/1.purchased_available.display_cents number
+dungeonflux.finance.balance/1.purchased_available.micro_dollars number
+dungeonflux.finance.balance/1.reserved_for_pending_work.display_cents number
+dungeonflux.finance.balance/1.reserved_for_pending_work.micro_dollars number
+dungeonflux.finance.balance/1.schema string schema:dungeonflux.finance.balance/1
+dungeonflux.finance.budget_chip/1.held.display_cents number
+dungeonflux.finance.budget_chip/1.held.micro_dollars number
+dungeonflux.finance.budget_chip/1.hourly_maximum.display_cents number
+dungeonflux.finance.budget_chip/1.hourly_maximum.micro_dollars number
+dungeonflux.finance.budget_chip/1.pot.display_cents number
+dungeonflux.finance.budget_chip/1.pot.micro_dollars number
+dungeonflux.finance.budget_chip/1.schema string schema:dungeonflux.finance.budget_chip/1
+dungeonflux.finance.purchase_status/1.lot string hex32
+dungeonflux.finance.purchase_status/1.schema string schema:dungeonflux.finance.purchase_status/1
+dungeonflux.finance.purchase_status/1.state string word failed|pending|succeeded
+dungeonflux.finance.quote/1.cancellation string word charged_if_delivered|free_before_send
+dungeonflux.finance.quote/1.estimate.display_cents number
+dungeonflux.finance.quote/1.estimate.micro_dollars number
+dungeonflux.finance.quote/1.expires_at_ms number
+dungeonflux.finance.quote/1.latency.from_ms number
+dungeonflux.finance.quote/1.latency.to_ms number
+dungeonflux.finance.quote/1.maximum.display_cents number
+dungeonflux.finance.quote/1.maximum.micro_dollars number
+dungeonflux.finance.quote/1.output_type string word image|narration|voice
+dungeonflux.finance.quote/1.own_share_estimate.display_cents number
+dungeonflux.finance.quote/1.own_share_estimate.micro_dollars number
+dungeonflux.finance.quote/1.price_version_label string price_version_label
+dungeonflux.finance.quote/1.schema string schema:dungeonflux.finance.quote/1
+dungeonflux.finance.refund_preview/1.card_suffix string digits4
+dungeonflux.finance.refund_preview/1.lots[].amount.display_cents number
+dungeonflux.finance.refund_preview/1.lots[].amount.micro_dollars number
+dungeonflux.finance.refund_preview/1.lots[].lot string hex32
+dungeonflux.finance.refund_preview/1.manual_payout bool
+dungeonflux.finance.refund_preview/1.pending_holds.display_cents number
+dungeonflux.finance.refund_preview/1.pending_holds.micro_dollars number
+dungeonflux.finance.refund_preview/1.released_allocations.display_cents number
+dungeonflux.finance.refund_preview/1.released_allocations.micro_dollars number
+dungeonflux.finance.refund_preview/1.schema string schema:dungeonflux.finance.refund_preview/1
+dungeonflux.finance.refund_preview/1.tax.display_cents number
+dungeonflux.finance.refund_preview/1.tax.micro_dollars number
+dungeonflux.finance.session_funding/1.consent[].amount.display_cents number
+dungeonflux.finance.session_funding/1.consent[].amount.micro_dollars number
+dungeonflux.finance.session_funding/1.consent[].payer string hex32
+dungeonflux.finance.session_funding/1.consent[].status string word current|needs_reconsent|withdrawn
+dungeonflux.finance.session_funding/1.end_of_session string word carry_to_next_session|return_to_available
+dungeonflux.finance.session_funding/1.funds_state string word funded|low|unfunded
+dungeonflux.finance.session_funding/1.hourly_ceiling.display_cents number
+dungeonflux.finance.session_funding/1.hourly_ceiling.micro_dollars number
+dungeonflux.finance.session_funding/1.open_holds.display_cents number
+dungeonflux.finance.session_funding/1.open_holds.micro_dollars number
+dungeonflux.finance.session_funding/1.own_allocation.authorization_remaining.display_cents number
+dungeonflux.finance.session_funding/1.own_allocation.authorization_remaining.micro_dollars number
+dungeonflux.finance.session_funding/1.own_allocation.authorized.display_cents number
+dungeonflux.finance.session_funding/1.own_allocation.authorized.micro_dollars number
+dungeonflux.finance.session_funding/1.own_allocation.consent string word current
+dungeonflux.finance.session_funding/1.own_allocation.drawn.display_cents number
+dungeonflux.finance.session_funding/1.own_allocation.drawn.micro_dollars number
+dungeonflux.finance.session_funding/1.pot_available.display_cents number
+dungeonflux.finance.session_funding/1.pot_available.micro_dollars number
+dungeonflux.finance.session_funding/1.price_effective_at_ms number
+dungeonflux.finance.session_funding/1.price_version_label string price_version_label
+dungeonflux.finance.session_funding/1.runway.at_recent_rate_ms number
+dungeonflux.finance.session_funding/1.runway.at_selected_maximum_ms number
+dungeonflux.finance.session_funding/1.schema string schema:dungeonflux.finance.session_funding/1
+dungeonflux.finance.session_funding/1.session_ceiling.display_cents number
+dungeonflux.finance.session_funding/1.session_ceiling.micro_dollars number
+dungeonflux.finance.session_funding/1.spent.display_cents number
+dungeonflux.finance.session_funding/1.spent.micro_dollars number
+dungeonflux.finance.statement/1.lines[].at_ms number
+dungeonflux.finance.statement/1.lines[].campaign string hex32
+dungeonflux.finance.statement/1.lines[].category string word image|narration|table_time|voice
+dungeonflux.finance.statement/1.lines[].charge.display_cents number
+dungeonflux.finance.statement/1.lines[].charge.micro_dollars number
+dungeonflux.finance.statement/1.lines[].price_version_label string price_version_label
+dungeonflux.finance.statement/1.lines[].quantity_text string quantity_text
+dungeonflux.finance.statement/1.lines[].reference string hex32
+dungeonflux.finance.statement/1.lines[].session string hex32
+dungeonflux.finance.statement/1.lines[].status string word credited|pending_hold|released_not_charged|settled|technical_failure_credited
+dungeonflux.finance.statement/1.provisional bool
+dungeonflux.finance.statement/1.schema string schema:dungeonflux.finance.statement/1
+dungeonflux.finance.statement/1.totals.charged.display_cents number
+dungeonflux.finance.statement/1.totals.charged.micro_dollars number
+dungeonflux.finance.statement/1.totals.credited.display_cents number
+dungeonflux.finance.statement/1.totals.credited.micro_dollars number
+dungeonflux.finance.transaction_list/1.next_cursor string cursor
+dungeonflux.finance.transaction_list/1.rows[].amount.display_cents number
+dungeonflux.finance.transaction_list/1.rows[].amount.micro_dollars number
+dungeonflux.finance.transaction_list/1.rows[].at_ms number
+dungeonflux.finance.transaction_list/1.rows[].kind string word adjustment|allocation|credit|dispute|purchase|refund|release|usage
+dungeonflux.finance.transaction_list/1.rows[].reference string hex32
+dungeonflux.finance.transaction_list/1.schema string schema:dungeonflux.finance.transaction_list/1

@@ -4750,7 +4750,7 @@ fn observe_administrator_identity_before_close(
     #[cfg(not(unix))]
     {
         let _ = (pid, backend_start);
-        return Err(RepositoryError::Unavailable);
+        Err(RepositoryError::Unavailable)
     }
     #[cfg(unix)]
     {

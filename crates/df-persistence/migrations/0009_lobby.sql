@@ -21,6 +21,10 @@ CREATE TABLE campaigns.lobby_member (
         CHECK (microphone_report IN ('unknown', 'granted', 'declined', 'unsupported')),
     updated_at_ms bigint NOT NULL,
     revision bigint NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    -- Set for every seated member's row when the session owner reports the session started
+    -- (`session_started`); a frozen row, and any new row of a session that has frozen rows, is
+    -- refused every change.
+    frozen_at_ms bigint,
     PRIMARY KEY (session_id, member_id)
 );
 CREATE INDEX lobby_member_campaign ON campaigns.lobby_member (campaign_id, member_id);
@@ -85,7 +89,8 @@ CREATE INDEX display_ticket_approver ON campaigns.display_ticket (campaign_id, a
 -- these; 0008 already failed the migration if `df_accounts` is missing.
 GRANT SELECT, INSERT, DELETE ON campaigns.lobby_member TO df_campaigns;
 GRANT UPDATE (character_choice, character_ref, ready, microphone_preference,
-    microphone_report, updated_at_ms, revision) ON campaigns.lobby_member TO df_campaigns;
+    microphone_report, updated_at_ms, revision, frozen_at_ms)
+    ON campaigns.lobby_member TO df_campaigns;
 GRANT SELECT, INSERT ON campaigns.display_pairing, campaigns.display_ticket TO df_campaigns;
 GRANT UPDATE (campaign_id, session_id, state, approved_by_member, approved_at_ms,
     redeemed_at_ms, reissue_count, renewable_until_ms, user_code)

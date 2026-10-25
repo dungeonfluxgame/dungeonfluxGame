@@ -258,7 +258,8 @@ pub(in super::super) async fn lock_campaign_creation(
     Ok(())
 }
 
-/// Campaigns an account owns that are not being deleted, counted up to `cap`.
+/// Campaigns an account owns that are not being deleted (drafts are counted apart), counted up
+/// to `cap`.
 pub(in super::super) async fn owned_campaigns_up_to(
     tx: &Tx<'_>,
     owner: AccountId,
@@ -267,7 +268,7 @@ pub(in super::super) async fn owned_campaigns_up_to(
     let row = tx
         .query_one(
             "SELECT count(*) FROM (SELECT 1 FROM campaigns.campaign \
-             WHERE owner_account_id = $1 AND status <> 'deleting' LIMIT $2) AS bounded",
+             WHERE owner_account_id = $1 AND status IN ('active', 'archived') LIMIT $2) AS bounded",
             &[&owner.as_bytes().as_slice(), &i64::from(cap)],
         )
         .await?;

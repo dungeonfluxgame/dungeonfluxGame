@@ -13,6 +13,26 @@ mod ports;
 mod spend;
 mod subscription;
 
+// The money core (planning/finance-ledger-research.md, F round 1): pure, no I/O, no clock.
+pub mod admission;
+pub mod digest;
+pub mod entry_rules;
+pub mod finance_ids;
+pub mod funding;
+pub mod funding_flows;
+pub mod keys;
+pub mod ledger;
+pub mod lifecycle;
+pub mod plan;
+pub mod pot;
+pub mod price_schedule;
+pub mod returns;
+pub mod rounding;
+pub mod settlement;
+pub mod snapshot;
+pub mod tariff;
+pub mod views;
+
 pub use allowance::{
     AllowanceGrant, AllowanceGrantId, AllowancePaymentObservation, AllowanceRefusal,
     AllowanceRenewal, AllowanceState, AllowanceTerms, AllowanceTransition, PaidPeriod,
