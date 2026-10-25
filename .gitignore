@@ -90,3 +90,6 @@ development/evidence/journey/journal.lock
 /development/runs/
 
 /development/campaigns/
+
+# Owner-only private notes (account logins, recovery codes); never committed
+/private/
