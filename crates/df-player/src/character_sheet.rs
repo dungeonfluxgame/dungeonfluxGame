@@ -26,7 +26,7 @@ mod browser {
     pub struct PlayerSheetScreen {
         document: Document,
         root: Element,
-        status: Element,
+        connection_status: Element,
         surface: CharacterSheetSurface,
         owner: Option<SheetOwnerGeneration>,
         submission_enabled: Rc<Cell<bool>>,
@@ -49,12 +49,12 @@ mod browser {
         ) -> Result<Self, SheetError> {
             let root = document.create_element("section")?;
             root.set_attribute("data-player-client", "character-sheet")?;
-            let status = document.create_element("p")?;
-            status.set_attribute("role", "status")?;
-            status.set_attribute("aria-live", "polite")?;
-            status.set_attribute("tabindex", "-1")?;
-            status.set_attribute("style", "margin:0;padding:12px 4vw;background:#211d17;color:#ead9b9;border-bottom:1px solid #6c5638;font:13px/1.5 system-ui,sans-serif;overflow-wrap:anywhere")?;
-            root.append_child(&status)?;
+            let connection_status = document.create_element("p")?;
+            connection_status.set_attribute("role", "status")?;
+            connection_status.set_attribute("aria-live", "polite")?;
+            connection_status.set_attribute("tabindex", "-1")?;
+            connection_status.set_attribute("style", "margin:0;padding:12px 4vw;background:#211d17;color:#ead9b9;border-bottom:1px solid #6c5638;font:13px/1.5 system-ui,sans-serif;overflow-wrap:anywhere")?;
+            root.append_child(&connection_status)?;
             let submission_enabled = Rc::new(Cell::new(false));
             let callback_gate = Rc::clone(&submission_enabled);
             let surface =
@@ -67,7 +67,7 @@ mod browser {
             let mut screen = Self {
                 document: document.clone(),
                 root,
-                status,
+                connection_status,
                 surface,
                 owner: Some(view.owner),
                 submission_enabled,
@@ -176,15 +176,16 @@ mod browser {
 
         fn apply_connection(&mut self) -> Result<(), SheetError> {
             let connected = self.connection == PlayerSheetConnection::Connected;
-            self.status.set_text_content(Some(match self.connection {
-                PlayerSheetConnection::Connected => "Connected · personal character sheet",
-                PlayerSheetConnection::Reconnecting => {
-                    "Reconnecting · offered actions suspended; local inspection available"
-                }
-                PlayerSheetConnection::Offline => {
-                    "Offline · offered actions suspended; local inspection available"
-                }
-            }));
+            self.connection_status
+                .set_text_content(Some(match self.connection {
+                    PlayerSheetConnection::Connected => "Connected · personal character sheet",
+                    PlayerSheetConnection::Reconnecting => {
+                        "Reconnecting · offered actions suspended; local inspection available"
+                    }
+                    PlayerSheetConnection::Offline => {
+                        "Offline · offered actions suspended; local inspection available"
+                    }
+                }));
             if !connected && self.suspended_offers.is_empty() {
                 let focused = self.document.active_element();
                 if focused
@@ -223,14 +224,15 @@ mod browser {
                 if let Some(focus) = self.resume_focus.take() {
                     // A new user focus wins over restoring the pre-suspension one.
                     let idle = self.document.active_element().is_none_or(|active| {
-                        active.tag_name() == "BODY" || active.is_same_node(Some(&self.status))
+                        active.tag_name() == "BODY"
+                            || active.is_same_node(Some(&self.connection_status))
                     });
                     if idle && self.focus_usable(&focus)? {
                         focus.focus()?;
                     }
                 }
             } else if !self.visible {
-                self.status
+                self.connection_status
                     .dyn_ref::<HtmlElement>()
                     .ok_or(SheetError::FocusUnavailable)?
                     .focus()?;
@@ -264,7 +266,7 @@ mod browser {
             self.resume_focus = None;
             self.suspended_offers.clear();
             let cleanup = self.surface.dispose();
-            self.status.set_text_content(None);
+            self.connection_status.set_text_content(None);
             self.root.remove();
             cleanup
         }

@@ -16,12 +16,14 @@ struct CanonicalHash {
 fn canonical_hash(
     checkpoint: &Checkpoint,
 ) -> Result<CanonicalHash, crate::checkpoint_codec::CodecError> {
-    let bytes = crate::checkpoint_codec::encode_checkpoint(checkpoint, codec_limits())?;
+    let checkpoint_bytes = crate::checkpoint_codec::encode_checkpoint(checkpoint, codec_limits())?;
     Ok(CanonicalHash {
-        codec_version: u16::try_from(crate::checkpoint_codec::checkpoint_storage_version(&bytes)?)
-            .map_err(|_| crate::checkpoint_codec::CodecError::UnsupportedCodec)?,
+        codec_version: u16::try_from(crate::checkpoint_codec::checkpoint_storage_version(
+            &checkpoint_bytes,
+        )?)
+        .map_err(|_| crate::checkpoint_codec::CodecError::UnsupportedCodec)?,
         model_schema: checkpoint.schema(),
-        sha256: Sha256::digest(bytes).into(),
+        sha256: Sha256::digest(checkpoint_bytes).into(),
     })
 }
 
@@ -216,11 +218,11 @@ fn empty_state() -> GameState {
 
 fn checkpoint(
     graze_choice: &str,
-    values: &[u32],
-    policy: &str,
+    die_values: &[u32],
+    policy_revision: &str,
     mut admitted: CheckpointPins,
 ) -> Checkpoint {
-    let (attack_die, damage_dice) = values.split_first().expect("fixture attack die");
+    let (attack_die, damage_dice) = die_values.split_first().expect("fixture attack die");
     let prestate = selected_prestate();
     let outcome = local_journey::resolve_melee(NormalMeleeAttack {
         critical_threshold: local_journey::CombatRules::srd_521().critical_threshold,
@@ -244,7 +246,7 @@ fn checkpoint(
         source: source(),
     };
     state.characters[0].choices.push(selected);
-    state.draws = values
+    state.draws = die_values
         .iter()
         .enumerate()
         .map(|(i, value)| ActualDraw {
@@ -261,9 +263,9 @@ fn checkpoint(
         operation: operation(),
         revision: basis().revision,
         facts: vec![],
-        draws: (0..u32::try_from(values.len()).expect("small draw count")).collect(),
+        draws: (0..u32::try_from(die_values.len()).expect("small draw count")).collect(),
         effects: vec![],
-        source_policy: label(policy),
+        source_policy: label(policy_revision),
         semantic_output: Some(semantic_output(&outcome)),
     });
     admitted.rules.catalog = source().catalog;
@@ -849,17 +851,27 @@ fn semantic_byte_change_is_hashed_and_replay_reconstructs_the_accepted_result() 
 fn recorded_choice_ordered_draws_source_pins_and_reducer_replay_round_trip() {
     let original = checkpoint("graze", &[18, 4, 2], "policy-rev-1", pins());
     let before = original.clone();
-    let bytes = crate::checkpoint_codec::encode_checkpoint(&original, codec_limits()).unwrap();
-    assert_eq!(&bytes[..4], b"DFCP");
-    assert_eq!(u16::from_be_bytes([bytes[4], bytes[5]]), 3);
+    let checkpoint_bytes =
+        crate::checkpoint_codec::encode_checkpoint(&original, codec_limits()).unwrap();
+    assert_eq!(&checkpoint_bytes[..4], b"DFCP");
+    assert_eq!(
+        u16::from_be_bytes([checkpoint_bytes[4], checkpoint_bytes[5]]),
+        3
+    );
     assert_eq!(original.schema(), 2);
     let hash = canonical_hash(&original).unwrap();
-    assert_eq!(hash.codec_version, u16::from_be_bytes([bytes[4], bytes[5]]));
-    assert_eq!(hash.model_schema, u16::from_be_bytes([bytes[6], bytes[7]]));
-    let restored = decode(&bytes, original.basis(), original.pins()).unwrap();
+    assert_eq!(
+        hash.codec_version,
+        u16::from_be_bytes([checkpoint_bytes[4], checkpoint_bytes[5]])
+    );
+    assert_eq!(
+        hash.model_schema,
+        u16::from_be_bytes([checkpoint_bytes[6], checkpoint_bytes[7]])
+    );
+    let restored = decode(&checkpoint_bytes, original.basis(), original.pins()).unwrap();
     let encoded_again =
         crate::checkpoint_codec::encode_checkpoint(&restored, codec_limits()).unwrap();
-    assert_eq!(encoded_again, bytes);
+    assert_eq!(encoded_again, checkpoint_bytes);
     assert_eq!(canonical_hash(&restored).unwrap(), hash);
     let inputs = recorded_inputs(&restored);
     let reconstructed = replay_selected(selected_prestate(), &restored, &inputs).unwrap();
@@ -871,7 +883,7 @@ fn recorded_choice_ordered_draws_source_pins_and_reducer_replay_round_trip() {
     assert_eq!(reconstructed.state().decisions, restored.state().decisions);
     let reconstructed_bytes =
         crate::checkpoint_codec::encode_checkpoint(&reconstructed, codec_limits()).unwrap();
-    assert_eq!(reconstructed_bytes, bytes);
+    assert_eq!(reconstructed_bytes, checkpoint_bytes);
     assert_eq!(canonical_hash(&reconstructed).unwrap(), hash);
     let digest_hex = hash.sha256.map(|byte| format!("{byte:02x}")).join("");
     assert_eq!(digest_hex.len(), 64);
@@ -942,20 +954,21 @@ fn meaningful_inputs_policy_and_every_pin_family_change_hash() {
 fn existing_typed_admission_refusals_do_not_change_checkpoint_or_draws() {
     let original = checkpoint("graze", &[18, 4, 2], "policy-rev-1", pins());
     let before = original.clone();
-    let bytes = crate::checkpoint_codec::encode_checkpoint(&original, codec_limits()).unwrap();
+    let checkpoint_bytes =
+        crate::checkpoint_codec::encode_checkpoint(&original, codec_limits()).unwrap();
     let hash = canonical_hash(&original).unwrap();
     assert_eq!(
-        decode(&bytes[..5], original.basis(), original.pins()),
+        decode(&checkpoint_bytes[..5], original.basis(), original.pins()),
         Err(crate::checkpoint_codec::CodecError::Truncated)
     );
-    let mut malformed = bytes.clone();
+    let mut malformed = checkpoint_bytes.clone();
     malformed[..4].copy_from_slice(b"NOPE");
     assert_eq!(
         decode(&malformed, original.basis(), original.pins()),
         Err(crate::checkpoint_codec::CodecError::UnsupportedCodec)
     );
     for version in [1_u16, 2_u16, u16::MAX] {
-        let mut wrong_codec = bytes.clone();
+        let mut wrong_codec = checkpoint_bytes.clone();
         wrong_codec[4..6].copy_from_slice(&version.to_be_bytes());
         assert_eq!(
             decode(&wrong_codec, original.basis(), original.pins()),
@@ -963,7 +976,7 @@ fn existing_typed_admission_refusals_do_not_change_checkpoint_or_draws() {
         );
     }
     for schema in [1_u16, u16::MAX] {
-        let mut wrong_schema = bytes.clone();
+        let mut wrong_schema = checkpoint_bytes.clone();
         wrong_schema[6..8].copy_from_slice(&schema.to_be_bytes());
         assert_eq!(
             decode(&wrong_schema, original.basis(), original.pins()),
@@ -972,7 +985,7 @@ fn existing_typed_admission_refusals_do_not_change_checkpoint_or_draws() {
             ))
         );
     }
-    let mut trailing = bytes.clone();
+    let mut trailing = checkpoint_bytes.clone();
     trailing.push(0);
     assert_eq!(
         decode(&trailing, original.basis(), original.pins()),
@@ -983,7 +996,7 @@ fn existing_typed_admission_refusals_do_not_change_checkpoint_or_draws() {
         ..original.basis()
     };
     assert_eq!(
-        decode(&bytes, stale, original.pins()),
+        decode(&checkpoint_bytes, stale, original.pins()),
         Err(crate::checkpoint_codec::CodecError::Checkpoint(
             CheckpointError::StaleBasis
         ))
@@ -991,18 +1004,18 @@ fn existing_typed_admission_refusals_do_not_change_checkpoint_or_draws() {
     let mut wrong_pins = original.pins().clone();
     wrong_pins.content.package_digest = ContentDigest([77; 32]);
     assert_eq!(
-        decode(&bytes, original.basis(), &wrong_pins),
+        decode(&checkpoint_bytes, original.basis(), &wrong_pins),
         Err(crate::checkpoint_codec::CodecError::Checkpoint(
             CheckpointError::ContentMismatch
         ))
     );
     let mut short = codec_limits();
-    short.maximum_document_bytes = bytes.len() - 1;
+    short.maximum_document_bytes = checkpoint_bytes.len() - 1;
     let rules = [source()];
     let contents = [content()];
     assert_eq!(
         crate::checkpoint_codec::decode_checkpoint(
-            &bytes,
+            &checkpoint_bytes,
             original.basis(),
             original.pins(),
             ReferenceInventory {

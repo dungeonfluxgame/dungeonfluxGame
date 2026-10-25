@@ -185,7 +185,7 @@ fn validate_offers(
     if player.action_available != !player.offers.is_empty() {
         return Err(GameplayViewError::InvalidOffer);
     }
-    let mut identifiers = BTreeSet::new();
+    let mut offer_ids = BTreeSet::new();
     for offer in &player.offers {
         let action = GameplayActionKind::try_from(offer.action_kind)
             .map_err(|_| GameplayViewError::UnsupportedOffer)?;
@@ -199,7 +199,7 @@ fn validate_offers(
             || offer.offer_id.len() > limits.max_identifier_bytes
             || offer.label.trim().is_empty()
             || offer.label.len() > limits.max_text_bytes
-            || !identifiers.insert(offer.offer_id.as_str())
+            || !offer_ids.insert(offer.offer_id.as_str())
         {
             return Err(GameplayViewError::InvalidOffer);
         }

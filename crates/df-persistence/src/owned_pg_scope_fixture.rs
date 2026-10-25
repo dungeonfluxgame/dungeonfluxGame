@@ -20,46 +20,50 @@ pub(crate) fn fixture_scope(
     proof: &Row,
     bound: FixtureBoundInput,
 ) -> Result<NativeScope<FixtureMembershipAuthority>, RepositoryError> {
-    fn bytes(row: &Row, column: &str, length: usize) -> Result<Vec<u8>, RepositoryError> {
-        let value: Vec<u8> = row
+    fn read_proof_bytes(
+        row: &Row,
+        column: &str,
+        length: usize,
+    ) -> Result<Vec<u8>, RepositoryError> {
+        let column_bytes: Vec<u8> = row
             .try_get(column)
             .map_err(|_| RepositoryError::Unauthorized)?;
-        if value.len() != length {
+        if column_bytes.len() != length {
             return Err(RepositoryError::Unauthorized);
         }
-        Ok(value)
+        Ok(column_bytes)
     }
-    fn identity(row: &Row, column: &str) -> Result<[u8; 16], RepositoryError> {
-        let value: [u8; 16] = bytes(row, column, 16)?
+    fn read_proof_identity(row: &Row, column: &str) -> Result<[u8; 16], RepositoryError> {
+        let identity_bytes: [u8; 16] = read_proof_bytes(row, column, 16)?
             .try_into()
             .map_err(|_| RepositoryError::Unauthorized)?;
-        if value == [0; 16] {
+        if identity_bytes == [0; 16] {
             return Err(RepositoryError::Unauthorized);
         }
-        Ok(value)
+        Ok(identity_bytes)
     }
-    let binding = bytes(proof, "binding", 32)?;
-    let tenant = identity(proof, "tenant_id")?;
-    let principal = identity(proof, "principal_id")?;
-    let campaign = identity(proof, "campaign_id")?;
+    let binding = read_proof_bytes(proof, "binding", 32)?;
+    let tenant = read_proof_identity(proof, "tenant_id")?;
+    let principal = read_proof_identity(proof, "principal_id")?;
+    let campaign = read_proof_identity(proof, "campaign_id")?;
     let effective_role: Vec<u8> = proof
         .try_get("effective_role")
         .map_err(|_| RepositoryError::Unauthorized)?;
     let revision: Vec<u8> = proof
         .try_get("access_revision")
         .map_err(|_| RepositoryError::Unauthorized)?;
-    let request = capability.request();
-    if tenant != request.tenant.0
-        || principal != request.principal.0
-        || campaign != request.campaign.0
-        || effective_role != request.role.0
+    let membership_request = capability.request();
+    if tenant != membership_request.tenant.0
+        || principal != membership_request.principal.0
+        || campaign != membership_request.campaign.0
+        || effective_role != membership_request.role.0
         || revision != capability.revision().0
     {
         return Err(RepositoryError::Unauthorized);
     }
-    let session = SessionId::from_bytes(&identity(proof, "session_id")?)
+    let session = SessionId::from_bytes(&read_proof_identity(proof, "session_id")?)
         .map_err(|_| RepositoryError::Unauthorized)?;
-    let operation = OperationId::from_bytes(&identity(proof, "operation_id")?)
+    let operation = OperationId::from_bytes(&read_proof_identity(proof, "operation_id")?)
         .map_err(|_| RepositoryError::Unauthorized)?;
     let namespace: Vec<u8> = proof
         .try_get("command_namespace")
@@ -81,7 +85,7 @@ pub(crate) fn fixture_scope(
     if fingerprint_version != 1 {
         return Err(RepositoryError::Unauthorized);
     }
-    let fingerprint = bytes(proof, "canonical_fingerprint", 32)?
+    let fingerprint = read_proof_bytes(proof, "canonical_fingerprint", 32)?
         .try_into()
         .map_err(|_| RepositoryError::Unauthorized)?;
     let mode = match proof
@@ -104,7 +108,7 @@ pub(crate) fn fixture_scope(
         namespace,
         epoch,
         fingerprint,
-        owner_fence: identity(proof, "owner_fence")?,
+        owner_fence: read_proof_identity(proof, "owner_fence")?,
         lookup_only: proof
             .try_get("lookup_only")
             .map_err(|_| RepositoryError::Unauthorized)?,

@@ -138,9 +138,10 @@ pub(super) fn observe_registered_recovery_lease(
     )?
     .map_err(|_| RepositoryError::Unavailable)??;
 
-    let direct = fixture_lost_ack_configuration(configuration, port)?;
-    let mut authority = connect_fixture_authority(handle, &direct, bounds, &context)?;
-    let produced = bind_registered_scope(
+    let fixture_configuration = fixture_lost_ack_configuration(configuration, port)?;
+    let mut authority =
+        connect_fixture_authority(handle, &fixture_configuration, bounds, &context)?;
+    let bound_scope = bind_registered_scope(
         &mut authority,
         &proof,
         FixtureBoundInput {
@@ -149,7 +150,7 @@ pub(super) fn observe_registered_recovery_lease(
         },
         fixture_database_now(handle, admin, deadline)?,
     );
-    let (scope, mut verifier) = match produced {
+    let (scope, mut verifier) = match bound_scope {
         Ok(value) => value,
         Err(error) => {
             actor_block_on(handle, authority.connection.close())??;
@@ -164,16 +165,20 @@ pub(super) fn observe_registered_recovery_lease(
                 .prepare(PROBED_VERIFIER)
                 .await
                 .map_err(|_| RepositoryError::Unavailable)?;
-            let row = client.query_one(
+            let activity_row = client.query_one(
             "SELECT pg_backend_pid(), backend_start::text FROM pg_stat_activity WHERE pid=pg_backend_pid()",
             &[],
         ).await.map_err(|_| RepositoryError::Unavailable)?;
-            let pid: i32 = row.try_get(0).map_err(|_| RepositoryError::Unavailable)?;
-            let birth: String = row.try_get(1).map_err(|_| RepositoryError::Unavailable)?;
-            if pid <= 0 || pid == 80873 || birth.is_empty() {
+            let backend_pid: i32 = activity_row
+                .try_get(0)
+                .map_err(|_| RepositoryError::Unavailable)?;
+            let backend_start: String = activity_row
+                .try_get(1)
+                .map_err(|_| RepositoryError::Unavailable)?;
+            if backend_pid <= 0 || backend_pid == 80873 || backend_start.is_empty() {
                 return Err(RepositoryError::InvalidReceipt);
             }
-            Ok::<_, RepositoryError>((statement, pid, birth))
+            Ok::<_, RepositoryError>((statement, backend_pid, backend_start))
         }),
     );
     let returned = authority.connection.return_client(client);

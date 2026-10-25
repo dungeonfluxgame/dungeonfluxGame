@@ -540,54 +540,54 @@ fn event_columns(vector: bool) -> String {
 }
 
 fn event_from_row(row: &Row) -> Result<StoredEvent, StoryMemoryError> {
-    let bad = |_| StoryMemoryError::Invalid("stored event shape");
-    let kind: String = row.try_get("kind").map_err(bad)?;
-    let visibility: String = row.try_get("visibility").map_err(bad)?;
-    let status: String = row.try_get("status").map_err(bad)?;
+    let invalid_stored_row = |_| StoryMemoryError::Invalid("stored event shape");
+    let kind: String = row.try_get("kind").map_err(invalid_stored_row)?;
+    let visibility: String = row.try_get("visibility").map_err(invalid_stored_row)?;
+    let status: String = row.try_get("status").map_err(invalid_stored_row)?;
     Ok(StoredEvent {
-        event_id: row.try_get("event_id").map_err(bad)?,
-        run_id: row.try_get("run_id").map_err(bad)?,
-        natural_key: row.try_get("natural_key").map_err(bad)?,
-        source: row.try_get("source").map_err(bad)?,
-        game_revision: row.try_get("game_revision").map_err(bad)?,
-        created_ms: row.try_get("created_ms").map_err(bad)?,
+        event_id: row.try_get("event_id").map_err(invalid_stored_row)?,
+        run_id: row.try_get("run_id").map_err(invalid_stored_row)?,
+        natural_key: row.try_get("natural_key").map_err(invalid_stored_row)?,
+        source: row.try_get("source").map_err(invalid_stored_row)?,
+        game_revision: row.try_get("game_revision").map_err(invalid_stored_row)?,
+        created_ms: row.try_get("created_ms").map_err(invalid_stored_row)?,
         kind: EventKind::parse(&kind).ok_or(StoryMemoryError::Invalid("stored kind"))?,
         visibility: Visibility::parse(&visibility)
             .ok_or(StoryMemoryError::Invalid("stored visibility"))?,
-        private_to: row.try_get("private_to").map_err(bad)?,
-        text: row.try_get("body").map_err(bad)?,
-        scene: row.try_get("scene").map_err(bad)?,
+        private_to: row.try_get("private_to").map_err(invalid_stored_row)?,
+        text: row.try_get("body").map_err(invalid_stored_row)?,
+        scene: row.try_get("scene").map_err(invalid_stored_row)?,
         entities: Entities {
-            npc: row.try_get("npc_ids").map_err(bad)?,
-            hero: row.try_get("hero_ids").map_err(bad)?,
-            place: row.try_get("place_ids").map_err(bad)?,
-            item: row.try_get("item_ids").map_err(bad)?,
+            npc: row.try_get("npc_ids").map_err(invalid_stored_row)?,
+            hero: row.try_get("hero_ids").map_err(invalid_stored_row)?,
+            place: row.try_get("place_ids").map_err(invalid_stored_row)?,
+            item: row.try_get("item_ids").map_err(invalid_stored_row)?,
         },
-        rebuildable: row.try_get("rebuildable").map_err(bad)?,
+        rebuildable: row.try_get("rebuildable").map_err(invalid_stored_row)?,
         status: if status == "active" {
             Status::Active
         } else {
             Status::Superseded
         },
-        supersedes_id: row.try_get("supersedes_id").map_err(bad)?,
-        superseded_by: row.try_get("superseded_by").map_err(bad)?,
-        retired_reason: row.try_get("retired_reason").map_err(bad)?,
-        embedding_model: row.try_get("embedding_model").map_err(bad)?,
-        embedded: row.try_get("embedded").map_err(bad)?,
+        supersedes_id: row.try_get("supersedes_id").map_err(invalid_stored_row)?,
+        superseded_by: row.try_get("superseded_by").map_err(invalid_stored_row)?,
+        retired_reason: row.try_get("retired_reason").map_err(invalid_stored_row)?,
+        embedding_model: row.try_get("embedding_model").map_err(invalid_stored_row)?,
+        embedded: row.try_get("embedded").map_err(invalid_stored_row)?,
     })
 }
 
 /// The WHERE clause every audience-bound read shares: the run, the audience, the status, the kinds.
 fn scope_clause(scope: &Scope, params: &mut Params) -> String {
     let (party, member) = scope.audience.sql_parts();
-    let run = params.add(scope.run_id.clone());
-    let party = params.add(party);
-    let member = params.add(member);
-    let superseded = params.add(scope.include_superseded);
+    let run_id_parameter = params.add(scope.run_id.clone());
+    let party_visible_parameter = params.add(party);
+    let member_id_parameter = params.add(member);
+    let include_superseded_parameter = params.add(scope.include_superseded);
     let mut clause = format!(
-        "run_id = {run} AND (visibility = 'public' OR (visibility = 'party' AND {party}::boolean) \
-         OR (visibility = 'private' AND private_to = {member}::text)) \
-         AND ({superseded}::boolean OR status = 'active')"
+        "run_id = {run_id_parameter} AND (visibility = 'public' OR (visibility = 'party' AND {party_visible_parameter}::boolean) \
+         OR (visibility = 'private' AND private_to = {member_id_parameter}::text)) \
+         AND ({include_superseded_parameter}::boolean OR status = 'active')"
     );
     if !scope.kinds.is_empty() {
         let kinds: Vec<String> = scope
@@ -707,12 +707,12 @@ impl StoryMemoryDb {
         events: &[NewEvent],
     ) -> Result<Vec<Inserted>, StoryMemoryError> {
         for event in events {
-            let private = event.visibility == Visibility::Private;
+            let is_private = event.visibility == Visibility::Private;
             if event.text.trim().is_empty()
                 || event.text.chars().count() > MAXIMUM_BODY_CHARACTERS
                 || event.run_id.is_empty()
                 || event.natural_key.is_empty()
-                || private != event.private_to.is_some()
+                || is_private != event.private_to.is_some()
             {
                 return Err(StoryMemoryError::Invalid("event fields"));
             }
@@ -879,15 +879,15 @@ impl StoryMemoryDb {
                 )
                 .await
                 .map_err(database)?;
-            let mut stored = 0;
+            let mut stored_rows = 0;
             for (id, literal) in &literals {
-                stored += transaction
+                stored_rows += transaction
                     .execute(&update, &[&run_id, id, literal, &model])
                     .await
                     .map_err(database)?;
             }
             transaction.commit().await.map_err(database)?;
-            Ok(stored)
+            Ok(stored_rows)
         })
         .await
     }
@@ -1356,18 +1356,19 @@ impl StoryMemoryDb {
                 .batch_execute("SELECT set_config('df_story.maintenance', 'on', true)")
                 .await
                 .map_err(database)?;
-            let mut removed = Removed::default();
-            removed.dossiers = transaction
+            let dossiers = transaction
                 .execute("DELETE FROM df_story.entity_dossiers WHERE run_id = $1", &[&run_id])
                 .await
                 .map_err(database)?;
-            if !rebuildable_only {
-                removed.recalls = transaction
+            let recalls = if !rebuildable_only {
+                transaction
                     .execute("DELETE FROM df_story.memory_recalls WHERE run_id = $1", &[&run_id])
                     .await
-                    .map_err(database)?;
-            }
-            removed.events = transaction
+                    .map_err(database)?
+            } else {
+                0
+            };
+            let events = transaction
                 .execute(
                     "DELETE FROM df_story.story_memory WHERE run_id = $1 AND (NOT $2 OR rebuildable)",
                     &[&run_id, &rebuildable_only],
@@ -1375,7 +1376,11 @@ impl StoryMemoryDb {
                 .await
                 .map_err(database)?;
             transaction.commit().await.map_err(database)?;
-            Ok(removed)
+            Ok(Removed {
+                events,
+                recalls,
+                dossiers,
+            })
         })
         .await
     }
