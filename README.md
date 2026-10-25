@@ -1,276 +1,226 @@
 # DungeonFlux
 
-A browser-based tabletop campaign game with a shared TV/laptop display and personal
-phone, tablet or laptop clients, including hosted remote and mixed-room campaigns. The new application is planned as **full-stack
-Rust**: a native authoritative server and Rust/WebAssembly presentation clients.
+DungeonFlux is an AI Dungeon Master for a living-room table. The adventure plays on a
+shared TV or laptop display, and each player joins from their own phone, tablet or
+laptop. A Rust server owns the story, the dice and the rules, which follow the D&D
+SRD 5.2.1. The look is photographic: scenes, people and places are generated to read
+like a live-action fantasy TV drama.
 
-Project site: [dungeonfluxdnd.com](https://dungeonfluxdnd.com/).
+The project is in active development. A local game is playable end to end on a
+development machine, but there is no packaged release, no hosted service and no
+accounts. Project site: [dungeonfluxdnd.com](https://dungeonfluxdnd.com/) (concept
+page; see [docs/README.md](docs/README.md) for its publication status).
 
-## Current state
+## What works today
 
-The playable local game runs with one command: `./development/run-gameplay.sh`. Open
-the printed display URL once and the player URL in two tabs. See [Play the game
-locally](development/README.md#play-the-game-locally) for details. Gameplay tuning
-is in progress, with design in [planning/gameplay-tuning.md](planning/gameplay-tuning.md)
-and data planned for `content/harbor-journey/`.
-For the agent CLI, visual asset provenance, scene timing, and photographic
-review, use the [visual resource operations manual](development/visual-resource-manual.md).
+- A local game server with PostgreSQL storage, a shared table display and player
+  screens, run from one script or from a desktop launcher.
+- A fixed harbor adventure, randomly rolled adventures and persistent campaigns, plus
+  a free-roam pack. Content lives in [content/](content/).
+- Level 1 Fighter (Soldier background) character creation with SRD 5.2.1 species,
+  dice rolled by the server, and typed, real-dice combat.
+- An AI storyteller, optional spoken narration and character voices, speech input,
+  adaptive music, generated pictures, and optional video and Gaussian-splat battle
+  scenes. Each is behind a switch and needs its own provider key.
+- A development command line and structured logs for driving and inspecting a running
+  game ([development/README.md](development/README.md)).
 
-The playable two-player harbor journey covers room join, Level 1 Dwarf Fighter
-(Soldier) creation, Lantern Wharf, typed courier dialogue, a real-dice bandit fight,
-a short rest and arrival at the Harbor Inn. It uses the 39-crate Rust workspace,
-real session actor and engine, generated gRPC-over-WebSocket services and durable
-PostgreSQL state; the fixture binary is `df-transport-fixture --gameplay-demo` in
-`crates/df-tools`.
+What is not built: a production `df-server` binary (the game server today is the
+`df-transport-fixture` binary in `crates/df-tools`), accounts and real sign-in,
+billing, hosted play, and rules coverage beyond the SRD 5.2.1 subset the game uses.
+The `df-server` crate directory holds source but is not a workspace member. Detailed
+status and open bugs are in [planning/issue-triage.md](planning/issue-triage.md) and
+[planning/implementation-roadmap.md](planning/implementation-roadmap.md).
 
-A production `df-server` binary, live-data `df-web`/`df-player`/`df-display` screens,
-create-room/ready, real guest sign-in, telemetry wiring and the wider 2024 rules
-catalog are not implemented. The `crates/df-server` policy modules are not yet a
-workspace crate. The earlier S00 transport lab and its desktop pressure checks remain
-available; see [fixture setup](development/start-s00.md) and
-[G02 qualification](development/qualify-g02.md). Physical-device and whole-process
-resource evidence still block full G02 approval.
+## Run it locally
 
-The sibling `dungeonflux.old/` preserves the earlier implementation as a read-only
-reference. Its website was explicitly moved into [docs/](docs/); the remaining
-archive stays untouched. Old code, todos and devlog inform the design, while demo
-restrictions and vendor choices are not the specification. The static site is
-prepared for GitHub Pages at `dungeonfluxdnd.com`; publication and DNS remain pending.
-See the [site setup guide](docs/README.md).
+Prerequisites, from the scripts and `rust-toolchain.toml`:
 
-Start with the [planning index](planning/README.md),
-[implementation roadmap](planning/implementation-roadmap.md) and
-[agent instructions](AGENTS.md).
+- Rust 1.98.1 with the `wasm32-unknown-unknown` target (pinned in `rust-toolchain.toml`).
+- `wasm-bindgen` 0.2.129 (the run script refuses any other version).
+- PostgreSQL 18.6 built locally by `development/postgres.sh setup`, which downloads
+  the official source archive, checks its SHA256 and installs under `artifacts/`.
+- A POSIX shell (Git Bash on Windows), plus Python 3 for helper scripts.
 
-## System architecture
-
-```text
-Player browser / shared display
-  Rust/WASM: input, permitted views, animation, audio capture/playback
-       |
-       | Generated protobuf RPC over persistent binary WebSocket/WSS
-       v
-Rust server: authorization -> session owner -> rules/engine
-       |                                     |
-       | PostgreSQL decision commit          | committed effect intents
-       v                                     v
-Durable game state                    AI/media services -> provider ports
-       |                                     |
-       +---------- permitted views/audio/assets ----------> clients
-
-Native/browser instrumentation -> OTEL ingestion/spool -> telemetry SQLite
-Development plans/attempts/devlog -> workflow SQLite
-Changed-source quality reviews   -> separate quality SQLite
-```
-
-The server owns state, dice, legal actions, rules resolution, progression and
-AI/media orchestration. It filters private information before projecting a view.
-Clients send input and present server-confirmed outcomes; they never duplicate
-the rules engine or hide unrestricted server state as an access-control technique.
-Host controls are a permission-gated panel on either client role, not a third
-required device or a permission granted by a URL.
-
-Each subsystem is a crate with private internals and a small typed public boundary.
-Crates initially compose into one backend process rather than independently
-deployed services. New features are modules, content and bounded tasks within those
-boundaries; a spell, scene, vendor or component does not automatically need a crate.
-
-| Family | Planned boundaries |
-| --- | --- |
-| Shared | `df-types`, `df-protocol`, `df-observe`, `df-locale`, `df-rpc-bridge`: IDs/units, generated wire schemas, instrumentation, localization and transport |
-| Game foundations | `df-model`, `df-content`, `df-rules`, `df-engine`: versioned state/content, pure mechanics and composition of staged decisions |
-| World and interaction | `df-world`, `df-knowledge`, `df-intent`, `df-interaction`: causal world updates, truth/belief/memory, input proposals and validated NPC/entity behavior |
-| Runtime directors | `df-narrative`, `df-encounter`, `df-combat`, `df-experience`: story structure, challenges, legal tactical proposals and broad pacing |
-| Presentation policy | `df-tempo`, `df-presentation`: audience-safe moment intensity, cue plans and predictive asset demand |
-| Session/API | `df-auth`, `df-session`, `df-api`, `df-server`: access, session actors, permitted RPC projections and composition |
-| AI/media/storage | `df-provider-api`, `df-providers`, `df-ai`, `df-media`, `df-assets`, `df-persistence`: provider ports, validated output, predictive asset generation, durable assets and PostgreSQL adapters |
-| Browser | `df-client`, `df-ui`, `df-render`, `df-audio`, `df-player`, `df-display`, `df-web`: connection, reusable presentation and role-specific shells |
-| Development | `df-telemetry`, `df-testkit`, `df-tools`, `df-workflow`: diagnostics, controlled fixtures, developer commands and the future Rust coordinator |
-
-The evolving [crate map](planning/subsystem-architecture.md) is authoritative;
-this family summary does not freeze later refinements. Consumer-owned ports prevent
-adapters from creating dependency cycles. Browser dependencies exclude server
-domain/rules/provider/PostgreSQL code. [Subsystem interfaces](planning/subsystem-interfaces.md)
-define ownership, typed errors, bounds, cancellation, privacy and recovery.
-
-Private campaign authoring/import/template contracts, bounded memory continuity,
-source-grounded effect/trigger testing and conditional platform expansion are
-refined in the [gap analysis](planning/gap-analysis.md) and the later
-[feature refinement](planning/feature-refinement.md). The latter adds required
-hosted remote play, observer-safe recaps/trailers and explicitly opted-in
-source/handler-approved custom content while retaining standard 2024 support. These remain plans and
-owned evidence gates; standard progression/inventory is core campaign scope.
-
-## Rules and campaign behavior
-
-The target is **standard D&D 2024 fifth edition**, with source-linked mechanics and
-content. Pin required books/catalogs, access/rights and errata before claiming full
-support; an SRD or an early legal subset is not the entire rulebook. Track supported,
-unsupported and pending entries explicitly in [rules coverage](planning/rules-coverage.md)
-and [rules support](planning/rules-support.md).
-
-Campaign planning must represent the narrative outline explicitly: beats, established
-facts, unresolved threads, backstory hooks, player intent, threat clocks, tension,
-convergence and generation budgets. A director chooses story significance and pacing
-within permitted committed facts; the rules engine determines outcomes; the LLM
-expresses validated narration/dialogue. Steering cannot overwrite dice, invent
-resources, reveal withheld knowledge or force player choices. This is the current
-planning direction. The [runtime authority map](planning/runtime-directors.md),
-[narrative engine](planning/narrative-engine.md),
-[interaction engine](planning/interaction-engine.md),
-[tempo engine](planning/tempo-engine.md) and
-[asset engine](planning/asset-engine.md) define candidate models and interfaces.
-Concrete source schemas, campaign content, replay compatibility and calibration
-remain gated. Directors propose changes; one session owner commits them. Saved
-campaign replay must not rerun an LLM or repeat a paid generation.
-
-## Persistent Rust browser presentation
-
-Both roles use mounted reusable Rust components. Ordinary views, phase changes,
-navigation, overlays, late assets and reconnect update the application in place
-without full-page reloads. Generated JavaScript for WASM loading/browser bindings
-is allowed; authored application and UI logic remains Rust.
-
-Typed server views select supported layouts, presentation variants and bounded
-scene/camera/animation cues. Existing variants can change through data; new behavior
-requires a Rust build. Stable component/entity identity preserves valid focus,
-drafts and resources while disposing replaced listeners, subscriptions and buffers.
-Animation uses elapsed frame time, supports interruption/reduced motion, and never
-delays authoritative input or resolves gameplay locally. Hidden-tab recovery skips
-obsolete cues rather than replaying an unbounded backlog.
-
-Audio/captions follow server timelines and observed browser playback. Target devices,
-codec/microphone support, frame-time tails, memory and input-to-render budgets require
-actual measurement. See [client architecture](planning/client-architecture.md) and
-[client presentation](planning/client-presentation.md).
-
-The shared display plays an adaptive score from `assets/music` (served at
-`/assets/music/<track>`): four sample-aligned 84 BPM D-minor loops (bed, motif,
-tension, combat) whose gains follow the story's tempo, a location ambience, and
-beat-quantised stingers. Music shares the voice unlock/mute state, ducks under
-narration and never starts before the first gesture; `assets/music/source-manifest.json`
-records how each file was generated.
-
-## RPC, durability and observability
-
-The planned transport ports the GoGRPCBridge idea: established HTTP/2 gRPC over a
-binary WebSocket byte stream, with generated Rust/protobuf contracts. Preserve
-unary, server-streaming, client-streaming and bidirectional calls, metadata,
-trailers/status, deadlines, cancellation, half-close and bounded flow control.
-The S00 experiment uses tonic/prost generated contracts, a local h2 browser driver
-and wasm-bindgen bindings. Its narrow browser clock patch retains upstream h2 reset
-semantics. Full browser/device/resource qualification must pass before dependent
-production implementation; desktop smoke evidence alone does not close G02. See [RPC transport](planning/rpc-transport.md)
-and [RPC API](planning/rpc-api.md).
-
-A session owner serializes decisions. PostgreSQL commits state, operation result,
-facts and effect intents atomically with revision/fence checks. A confirmed mutation
-means durable acceptance, not enqueue. A lost response is resolved by operation ID;
-it does not automatically repeat a paid call or cancel an already accepted job.
-Asset publication requires complete verified bytes before durable visibility.
-See [storage architecture](planning/storage-architecture.md) and
-[runtime reliability](planning/runtime-reliability.md).
-
-OTEL is part of the first integrated slice. Correlate input, rules, persistence,
-async jobs, projection and browser playback/rendering. Capture emitted logs at
-enabled levels without sampling; store structured logs and correlated spans in
-dedicated telemetry SQLite with durable spooling, bounded queues and read-only
-agent queries. Report lag, retention gaps and losses explicitly. Telemetry failure
-must not freeze gameplay, and telemetry does not replace authoritative state.
-See [observability](planning/observability.md).
-
-After initial integration, every crate gets a measured optimization pass covering
-its relevant CPU, memory, I/O, latency and resource costs. Preserve contracts,
-correctness, privacy and instrumentation; an evidenced within-budget result can
-close a pass without a speculative rewrite. See [optimization](planning/optimization.md).
-
-## Inspect the existing plans
-
-From this directory, with SQLite installed, these commands are read-only:
+The run script keeps its own `rustup` and `cargo` homes under `artifacts/cache/` and
+builds with `--offline --locked`, so dependencies must already be fetched there. A
+from-scratch bootstrap is not scripted.
 
 ```sh
-sqlite3 -readonly development/workflow.sqlite3 < development/queries.sql
-
-sqlite3 -readonly development/workflow.sqlite3 \
-  'SELECT kind,status,count(*) FROM features GROUP BY kind,status ORDER BY kind,status;'
-
-sqlite3 -readonly development/workflow.sqlite3 \
-  'SELECT id,title FROM dispatch_ready_tasks ORDER BY priority DESC,id LIMIT 20;'
-
-python3 development/provision.py --check-only
+development/run-gameplay.sh
 ```
 
-The five workflow tables are `features`, `tasks`, `dependencies`, `attempts` and
-append-only `devlog`. [Schema](development/schema.sql),
-[plan manifest](development/plan-manifest.json) and [query examples](development/queries.sql)
-preserve reproducibility. Python here is an existing planning-data helper, not
-application code or the future Rust agent runner. `provision.py` without
-`--check-only` writes planning data and belongs to the coordinator.
+The script builds the server and the wasm client, starts PostgreSQL if needed, and
+prints a `READY` line. Open the `display` URL on the shared screen and the `player`
+URL in a browser tab or on a phone. Ctrl-C stops the server. Useful flags:
 
-Dependency-ready plans are not necessarily dispatchable atomic tasks. The
-coordinator freezes a bounded execution brief and applicable gates before dispatch;
-source fingerprints and planned coverage do not prove completion.
-See [plan database](planning/plan-database.md).
+```sh
+development/run-gameplay.sh --print-config      # show nonsecret launch inputs, start nothing
+development/run-gameplay.sh --lan               # let phones on your network join
+development/run-gameplay.sh --no-build --database <name>   # resume a saved game
+development/run-gameplay.sh --harbor            # the fixed harbor adventure
+development/run-gameplay.sh --campaign <id>     # a persistent campaign
+```
 
-## Development workflow
+Every flag and environment variable is listed in the
+[launch and configuration reference](development/launch-reference.md), and the play
+walkthrough is in [development/README.md](development/README.md#play-the-game-locally).
+The local preview has no accounts: anyone on your network with the room code can take a
+seat, so use it on a network you trust.
 
-Agents must read [AGENTS.md](AGENTS.md), relevant planning and
-[mandatory coding style](planning/coding-style.md). Shared types, schemas, migrations
-and composition have one active edit owner. Source workers use isolated worktrees
-and the coordinator integrates sequentially.
+### Desktop launcher (Windows)
 
-- A frontier coordinator delegates each user work item to one implementing agent.
-  Prefer economical Luna/Muse workers, with Terra/Sol for harder logic and
-  Sonnet 5.5+ for UI, Opus sparingly, subject to verified runner/model availability.
-- After two unsuccessful economical implementation/repair attempts on the same
-  task, escalate to Sol for logic/interfaces/computer use, or Sol/Opus for UI,
-  UX and gameplay. A worker cannot approve its own work.
-- An independent frontier evaluator executes the affected boundary and operates
-  real user-facing outputs with computer use and vision. Audio requires actual
-  playback observation. Missing evidence remains pending; code review alone is
-  insufficient. The coordinator records completion after verified integration.
-- Dispatch as many useful agents as measured memory, edit independence, ready
-  work and actual runner slots permit, reserving build/browser/evaluation capacity.
-  Planned cleanup runs every 30 active-development minutes and protects live
-  output, retained evidence, operational databases and spools.
-- Workers retain meaningful confusion, errors, defects and challenges in devlog
-  through scoped commands when available. [CHANGELOG.md](CHANGELOG.md) captures
-  every integrated commit in six-hour blocks.
+`crates/df-launcher` builds `dungeonflux.exe`, a window for starting, resuming and
+stopping games and editing settings. It is a standalone crate (its own `Cargo.lock`,
+not a workspace member) and uses an existing game build.
 
-The installed `dungeonflux-quality-review` personal skill has a configured
-one-minute heartbeat. It claims bounded new/changed authored Rust files and caches
-MD5, relevant review context and successful review time in separate
-`development/quality.sqlite3`. It reviews smells, complexity, duplication, bugs,
-test evidence and Rust idioms. Unchanged successful reviews are skipped; MD5 is
-change detection, not a security guarantee. The S00 workspace now contains authored
-Rust source and an attributed vendored h2 clock adaptation to review.
-Findings enter the workflow through coordinator-only deduplicated intake, not
-automatic task approval. New runners must install/verify the personal skill;
-see [development quality](planning/development-quality.md).
+```sh
+cargo build --manifest-path crates/df-launcher/Cargo.toml --target-dir artifacts/build/launcher
+artifacts/build/launcher/debug/dungeonflux.exe --help
+```
 
-The [ADRs](ADR/0001-sqlite-agent-workflow.md) define queue ownership and
-[resource cleanup](ADR/0002-resource-scheduling-and-cleanup.md),
-[devlog](ADR/0003-agent-devlog.md), [reliable delivery](ADR/0004-development-reliability.md)
-and [output evaluation](ADR/0005-frontier-output-evaluation.md).
-Disposable caches/builds belong in ignored `artifacts/`; durable SQLite databases,
-their WAL/SHM, telemetry and evidence never belong to routine stale-build cleanup.
+### Provider keys
 
-## Implementation order and commercial limits
+With no keys the game still runs; features that need a provider stay off. Keys go in the
+Git-ignored `.env` at the repository root, in your shell environment, or in the
+launcher's Git-ignored `config/dungeonflux.toml` (copy options from
+`config/dungeonflux.example.toml`). The names the code reads:
 
-Prove Rust/WASM transport first, then deliver one durable two-role flow with
-PostgreSQL, privacy, reconnect and queryable OTEL. Add source-faithful character
-creation/rules, story/voice, combat, campaign continuity and complete catalog
-coverage through the [roadmap](planning/implementation-roadmap.md). Developer
-operations grow with these slices; optional renderer/video fidelity follows the
-reliable game path.
+| Variable | Used for |
+| --- | --- |
+| `OPENAI_API_KEY` | Storyteller, story memory, scene pictures, character portraits |
+| `ELEVENLABS_API_KEY` | Narration voices, music, speech input |
+| `DF_JEV_API_KEY` | Reading player actions, sorting portrait requests |
+| `FAL_KEY` (or `DF_FAL_KEY`) | Generated video clips, the FLUX picture option |
+| `BFL_API_KEY` | Alternate portrait route for mature character appearances |
+| `WORLDLABS_API_KEY` | Explorable 3D places |
 
-Campaign membership and simultaneous sessions need representative capacity tests;
-there is no approved four-player cap or unlimited-capacity claim. Provider budgets
-reserve and reconcile every paid branch. Prepared assets/replay never silently
-start a live provider on a miss. The dated [pricing research](planning/pricing-and-costs.md)
-proposes bounded campaign allowances and separate optional video credits; it is
-not a launch-price commitment or a deployed billing system. Compare the
-[asset-provider shortlist](planning/asset-provider-research.md) and
-[competitive research](planning/competitive-research.md) before fixing routes or
-customer allowances. Published latency claims still require a measured voice/media
-qualification run, and host bundles are meaningful pricing competitors.
+Never commit keys or paste them into logs. Generated video is off by default because of
+cost; see [Pricing and costs](planning/pricing-and-costs.md) for the dated cost research.
+
+## Architecture
+
+```text
+Player phones and shared display (Rust compiled to WebAssembly)
+      |  generated protobuf RPC over one binary WebSocket
+      v
+Rust server: authorization -> session owner -> rules and engine
+      |                                  |
+      | PostgreSQL commit                | committed effect intents
+      v                                  v
+Durable game state                 AI and media services -> provider ports
+      |                                  |
+      +-------- permitted views, audio and assets --------> clients
+
+Instrumentation -> OpenTelemetry spans and logs -> telemetry store
+```
+
+Key rules:
+
+- The server is authoritative. It owns state, dice, legal actions, rules outcomes and
+  AI orchestration, and filters private information before building a view.
+- Clients are thin Rust/WebAssembly presenters. They send input and show
+  server-confirmed results; they never duplicate rules or receive data to hide. Only
+  generated glue is JavaScript.
+- Transport is gRPC over a binary WebSocket, ported from the GoGRPCBridge idea
+  (`df-rpc-bridge`, tonic and prost).
+- One session owner serializes decisions, and PostgreSQL commits state and effect
+  intents atomically. The design requires that replaying a saved game never calls a
+  model or repeats a paid generation (see runtime reliability).
+- Telemetry follows OpenTelemetry conventions (`df-observe`, `df-telemetry`).
+
+`crates/` holds 41 crates: 39 workspace members plus `df-launcher` and `df-server`, which
+are outside the workspace. Each keeps its internals private behind a small typed
+boundary; the [crate map](planning/subsystem-architecture.md) is authoritative.
+
+| Role | Crates |
+| --- | --- |
+| Foundations | `df-types`, `df-model`, `df-content`, `df-locale`, `df-testkit` |
+| Rules and engine | `df-rules`, `df-engine`, `df-combat`, `df-encounter` |
+| Commercial policy | `df-commerce` |
+| World and narrative | `df-world`, `df-knowledge`, `df-intent`, `df-interaction`, `df-narrative`, `df-experience` |
+| Presentation policy | `df-tempo`, `df-presentation` |
+| Session and API | `df-auth`, `df-session`, `df-api`, `df-server` (contract only, not a workspace member) |
+| Transport | `df-protocol`, `df-rpc-bridge` |
+| AI, media and storage | `df-provider-api`, `df-providers`, `df-ai`, `df-media`, `df-assets`, `df-persistence` |
+| Browser clients and render | `df-client`, `df-ui`, `df-render`, `df-audio`, `df-player`, `df-display`, `df-web` |
+| Telemetry | `df-observe`, `df-telemetry` |
+| Tools and launcher | `df-tools` (the game server binary, dev CLI and fixtures), `df-launcher` |
+
+Design documents that explain the larger pieces: [client architecture](planning/client-architecture.md),
+[narrative engine](planning/narrative-engine.md), [interaction engine](planning/interaction-engine.md),
+[tempo engine](planning/tempo-engine.md), [asset engine](planning/asset-engine.md),
+[RPC transport](planning/rpc-transport.md), [storage](planning/storage-architecture.md),
+[observability](planning/observability.md) and [runtime reliability](planning/runtime-reliability.md).
+An LLM only expresses narration and dialogue that the rules engine and story directors
+have already validated; it never decides dice or outcomes.
+
+## Rules
+
+The game targets the 2024 fifth-edition rules and uses the System Reference Document
+5.2.1 as its source for species, creatures and mechanics; the PDF is kept in
+`development/rules-sources/`. The SRD is a subset of the full rulebooks, so full
+standard coverage is a goal tracked in [rules coverage](planning/rules-coverage.md) and
+[rules support](planning/rules-support.md), not a current claim. Content that departs
+from SRD values is flagged as custom rules in the game.
+
+This work includes material from the System Reference Document 5.2.1 by Wizards of the
+Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the
+[Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/legalcode).
+
+## Development
+
+Read [AGENTS.md](AGENTS.md) and the [coding style](planning/coding-style.md) before
+changing code. The style is mandatory: explicit names, private crate internals, typed
+errors, bounded async work, no dead code, LF endings, and rustfmt from the root
+`rustfmt.toml`. Application and UI code stays Rust.
+
+```sh
+cargo build --locked -p df-tools --bin df-transport-fixture
+cargo build --locked -p df-tools --lib --target wasm32-unknown-unknown
+cargo clippy -p <crate> --all-targets -- -D warnings
+cargo check -p df-tools --target wasm32-unknown-unknown
+cargo test -p <crate>
+```
+
+Test caveats:
+
+- `df-tools` has thousands of tests. Run filtered tests only, for example
+  `cargo test -p df-tools --lib <name-filter>`, as the coding style requires. The full
+  `df-tools` suite currently has a known crash, so do not rely on it.
+- Tests must not sleep, spend money on providers or leave processes behind.
+- `python development/test-launch-settings.py` checks the launch scripts with fake
+  tools; it does not start PostgreSQL or call providers.
+
+Where things live:
+
+| Path | Contents |
+| --- | --- |
+| `planning/` | Design documents; start at [planning/README.md](planning/README.md) |
+| `development/` | Run and launch scripts, dev CLI notes, schemas, browser checks |
+| `ADR/` | Decisions on workflow, resources, devlog and evaluation |
+| `content/` | Adventure tables, packs, voice casting, pricing data |
+| `config/` | Launcher settings (`dungeonflux.example.toml` is the clean copy) |
+| `docs/` | The static project site |
+| `CHANGELOG.md` | Integrated commits in six-hour blocks |
+
+## Status, roadmap and costs
+
+The [implementation roadmap](planning/implementation-roadmap.md) orders the remaining
+work: broader rules coverage, campaign continuity, a production server and accounts,
+and optional video fidelity. Open bugs are listed in
+[planning/issue-triage.md](planning/issue-triage.md), and recent work is in
+[CHANGELOG.md](CHANGELOG.md). Concurrency and latency findings are in
+[server concurrency research](planning/server-concurrency-research.md).
+
+Running the game with provider keys spends real money on text, voice, music, pictures
+and optionally video. Commercial pricing is research only, with no launch price or
+billing system; see [Pricing and costs](planning/pricing-and-costs.md).
+
+## License
+
+The workspace manifest declares MIT, but the repository does not yet include a
+`LICENSE` file, so treat the licensing terms as unconfirmed until one is added.
+Third-party code is credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and
+the [dependency license policy](planning/dependency-license-policy.md) covers
+dependencies.
