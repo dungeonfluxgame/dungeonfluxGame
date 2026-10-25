@@ -4,7 +4,7 @@ use df_locale::VersionedFormattedMessage;
 
 use crate::ConceptScene;
 
-const MAX_TEXT_BYTES: usize = 4096;
+const MAXIMUM_TEXT_BYTES: usize = 4096;
 
 /// Already localized, audience-safe transition content from the presentation owner.
 /// Continue is a proposal callback; displaying this screen never advances game state.
@@ -81,7 +81,7 @@ impl SceneTransitionView<'_> {
             if text.trim().is_empty() {
                 return Err(SceneTransitionValidationError::EmptyText);
             }
-            if text.len() > MAX_TEXT_BYTES {
+            if text.len() > MAXIMUM_TEXT_BYTES {
                 return Err(SceneTransitionValidationError::TextLimit);
             }
         }
@@ -405,7 +405,7 @@ mod tests {
             Err(SceneTransitionValidationError::EmptyText)
         );
         view.continue_label = "Enter the halls";
-        let overlong = "x".repeat(MAX_TEXT_BYTES + 1);
+        let overlong = "x".repeat(MAXIMUM_TEXT_BYTES + 1);
         view.narration = &overlong;
         assert_eq!(
             view.validate(),
