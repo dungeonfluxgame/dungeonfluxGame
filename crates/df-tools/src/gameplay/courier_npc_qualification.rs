@@ -16,7 +16,9 @@ use tonic::Request;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 const ROOT: &str =
     "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave24-courier-durable-20261005";
-const CALL_LIMIT: usize = 20;
+const MAXIMUM_CALL_COUNT: usize = 20;
+/// Maximum end-to-end duration for the two qualification phases.
+const QUALIFICATION_DEADLINE_MS: u64 = 90_000;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Phase {
@@ -54,7 +56,7 @@ fn repo(error: df_session::submission::RepositoryError) -> io::Error {
     io::Error::other(format!("courier NPC repository {error:?}"))
 }
 
-fn now() -> Result<u64, io::Error> {
+fn now_ms() -> Result<u64, io::Error> {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -64,9 +66,9 @@ fn now() -> Result<u64, io::Error> {
     .map_err(io::Error::other)
 }
 
-fn elapsed(start: u64) -> Result<u64, io::Error> {
-    now()?
-        .checked_sub(start)
+fn elapsed_ms(started_ms: u64) -> Result<u64, io::Error> {
+    now_ms()?
+        .checked_sub(started_ms)
         .ok_or_else(|| io::Error::other("courier NPC clock regressed"))
 }
 
@@ -169,13 +171,17 @@ fn metadata() -> Result<(u64, usize, u32), io::Error> {
 pub(super) fn call_budget(phase: Phase) -> Result<u16, io::Error> {
     configured()?;
     if phase == Phase::A {
-        return Ok(CALL_LIMIT as u16);
+        return Ok(MAXIMUM_CALL_COUNT as u16);
     }
-    let (start, count, pid) = metadata()?;
-    required(count == 8 && pid != std::process::id() && elapsed(start)? <= 90_000)?;
+    let (started_ms, count, pid) = metadata()?;
+    required(
+        count == 8
+            && pid != std::process::id()
+            && elapsed_ms(started_ms)? <= QUALIFICATION_DEADLINE_MS,
+    )?;
     required(read("courier-npc-private-build-01.bin", 96)? == crate::BUILD_ID.as_bytes())?;
     required(read("courier-npc-a-closed-01.json", 16 * 1024)?.starts_with(b"{\"pass\":true,"))?;
-    Ok(CALL_LIMIT as u16 - count as u16)
+    Ok(MAXIMUM_CALL_COUNT as u16 - count as u16)
 }
 
 pub(super) fn record_owner(phase: Phase, fence: [u8; 16]) -> Result<(), io::Error> {
@@ -187,11 +193,14 @@ pub(super) fn record_owner(phase: Phase, fence: [u8; 16]) -> Result<(), io::Erro
 
 struct Calls {
     count: usize,
-    started_milliseconds: u64,
+    started_ms: u64,
 }
 
 fn admit(calls: &mut Calls) -> Result<(), Error> {
-    required(calls.count < CALL_LIMIT && elapsed(calls.started_milliseconds)? <= 90_000)?;
+    required(
+        calls.count < MAXIMUM_CALL_COUNT
+            && elapsed_ms(calls.started_ms)? <= QUALIFICATION_DEADLINE_MS,
+    )?;
     calls.count += 1;
     Ok(())
 }
@@ -591,7 +600,7 @@ async fn phase_a(
 ) -> Result<(), Error> {
     let mut calls = Calls {
         count: 0,
-        started_milliseconds: now()?,
+        started_ms: now_ms()?,
     };
     let first = join(service, 0xd1, &mut calls).await?;
     let second = join(service, 0xd2, &mut calls).await?;
@@ -678,7 +687,7 @@ async fn phase_a(
     let snapshot = snapshot(service, &mut calls).await?;
     required(
         snapshot.checkpoint == service.updates.borrow().clone()
-            && snapshot.calls_remaining == CALL_LIMIT as u16 - calls.count as u16,
+            && snapshot.calls_remaining == MAXIMUM_CALL_COUNT as u16 - calls.count as u16,
     )?;
     verify_npc(&snapshot.checkpoint, hero, other, true)?;
     required(source(journey::phase(&snapshot.checkpoint))? == rpc::JourneyPhase::Combat)?;
@@ -711,7 +720,7 @@ async fn phase_a(
     grants.extend_from_slice(&second);
     grants.extend_from_slice(&members[0]);
     grants.extend_from_slice(&members[1]);
-    let mut metadata = Vec::from(calls.started_milliseconds.to_be_bytes());
+    let mut metadata = Vec::from(calls.started_ms.to_be_bytes());
     metadata.extend_from_slice(&(calls.count as u16).to_be_bytes());
     metadata.extend_from_slice(&std::process::id().to_be_bytes());
     for (name, bytes) in [
@@ -744,7 +753,7 @@ async fn phase_a(
     }
     save("courier-npc-a-ready-body-01.bin", format!(
         "{{\"pass\":true,\"pid\":{},\"actor_calls\":8,\"exercise_milliseconds\":{},\"joined_created_begin_escort_defend\":true,\"accepted_shared_contact\":true,\"courier_known_fact_and_witness\":true,\"exact_directional_reaction\":true,\"checkpoint_and_receipts_durable\":true,\"four_families_captured\":true}}",
-        std::process::id(), elapsed(calls.started_milliseconds)?
+        std::process::id(), elapsed_ms(calls.started_ms)?
     ).as_bytes())?;
     Ok(())
 }
@@ -768,7 +777,7 @@ async fn phase_b(
     client: &Client,
     codec: df_persistence::NativeCodecLimits,
 ) -> Result<(), Error> {
-    let (start, count, old_pid) = metadata()?;
+    let (started_ms, count, old_pid) = metadata()?;
     required(old_pid != std::process::id())?;
     // Startup publishes the restored checkpoint before any new Actor input.
     let restored = service.updates.borrow().clone();
@@ -799,10 +808,7 @@ async fn phase_b(
         rows == read("courier-npc-private-rows-01.bin", 4 * 1048576)?
             && before.envelope == read("courier-npc-private-envelope-01.bin", 1048576)?,
     )?;
-    let mut calls = Calls {
-        count,
-        started_milliseconds: start,
-    };
+    let mut calls = Calls { count, started_ms };
     for (request_name, receipt_name) in [
         (
             "courier-npc-private-escort-request-01.bin",
@@ -824,7 +830,7 @@ async fn phase_b(
     let snapshot = snapshot(service, &mut calls).await?;
     required(
         snapshot.checkpoint == restored
-            && snapshot.calls_remaining == CALL_LIMIT as u16 - calls.count as u16
+            && snapshot.calls_remaining == MAXIMUM_CALL_COUNT as u16 - calls.count as u16
             && calls.count == 11,
     )?;
     verify_npc(&snapshot.checkpoint, hero, other, true)?;
@@ -834,7 +840,7 @@ async fn phase_b(
     )?;
     save("courier-npc-b-proof-body-01.bin", format!(
         "{{\"pass\":true,\"pid\":{},\"previous_pid\":{},\"actor_calls\":11,\"exercise_milliseconds\":{},\"restored_before_actor_input\":true,\"canonical_npc_witness_reaction_equal\":true,\"exact_escort_and_defend_replay\":true,\"no_new_draws_facts_state_or_rows\":true,\"four_families_equal\":true,\"stale_fence_release_refused\":true}}",
-        std::process::id(), old_pid, elapsed(start)?
+        std::process::id(), old_pid, elapsed_ms(started_ms)?
     ).as_bytes())?;
     Ok(())
 }
@@ -881,7 +887,7 @@ pub(super) async fn run(
 }
 
 pub(super) fn closed(phase: Phase, remaining: u16) -> Result<(), io::Error> {
-    let (start, count, _) = metadata()?;
+    let (started_ms, count, _) = metadata()?;
     let (expected, name) = match phase {
         Phase::A => (count, "courier-npc-a-closed-01.json"),
         Phase::B => (
@@ -894,9 +900,9 @@ pub(super) fn closed(phase: Phase, remaining: u16) -> Result<(), io::Error> {
         ),
     };
     required(
-        expected <= CALL_LIMIT
-            && remaining == CALL_LIMIT as u16 - expected as u16
-            && elapsed(start)? <= 90_000,
+        expected <= MAXIMUM_CALL_COUNT
+            && remaining == MAXIMUM_CALL_COUNT as u16 - expected as u16
+            && elapsed_ms(started_ms)? <= QUALIFICATION_DEADLINE_MS,
     )?;
     report(
         name,
@@ -904,7 +910,7 @@ pub(super) fn closed(phase: Phase, remaining: u16) -> Result<(), io::Error> {
             "{{\"pass\":true,\"pid\":{},\"actor_calls\":{},\"exercise_milliseconds\":{},\"admission_stopped\":true,\"actor_drained\":true,\"exact_fence_released\":true,\"actor_joined\":true,\"repository_driver_joined\":true,\"grant_driver_joined\":true}}",
             std::process::id(),
             expected,
-            elapsed(start)?
+            elapsed_ms(started_ms)?
         ),
     )
 }
