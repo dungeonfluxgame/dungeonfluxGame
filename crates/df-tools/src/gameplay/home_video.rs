@@ -1760,6 +1760,10 @@ async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap, uri: 
         &uri,
         &key,
         super::media_grant::Audience::HomeVideo,
+        &[
+            super::media_grant::PrincipalAudience::Seat,
+            super::media_grant::PrincipalAudience::Display,
+        ],
     ) else {
         return super::media_grant::concealed_not_found();
     };

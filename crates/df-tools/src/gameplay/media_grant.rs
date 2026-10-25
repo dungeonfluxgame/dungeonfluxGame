@@ -104,6 +104,7 @@ pub(super) fn verify(
     token: Option<&str>,
     key: &str,
     expected_audience: Audience,
+    allowed_principal_audiences: &[PrincipalAudience],
     credential: Option<&[u8; KEY_BYTES]>,
 ) -> Option<Verified> {
     let decoded = token.and_then(hex_decode);
@@ -141,16 +142,18 @@ pub(super) fn verify(
         5 => Audience::Music,
         _ => return None,
     };
-    match take(message, &mut cursor, 1)?[0] {
-        1..=2 => {}
+    let principal_audience = match take(message, &mut cursor, 1)?[0] {
+        1 => PrincipalAudience::Seat,
+        2 => PrincipalAudience::Display,
         _ => return None,
-    }
+    };
     let encoded_principal_id = take(message, &mut cursor, PRINCIPAL_ID_BYTES)?;
     let expires_at = u64::from_be_bytes(take(message, &mut cursor, 8)?.try_into().ok()?);
     let key_length = u16::from_be_bytes(take(message, &mut cursor, 2)?.try_into().ok()?) as usize;
     let signed_key = take(message, &mut cursor, key_length)?;
     if cursor != message.len()
         || audience != expected_audience
+        || !allowed_principal_audiences.contains(&principal_audience)
         || signed_key != key.as_bytes()
         || credential.is_some_and(|credential| {
             !constant_time_equal(
@@ -177,6 +180,7 @@ pub(super) fn verify_request(
     uri: &Uri,
     key: &str,
     expected_audience: Audience,
+    allowed_principal_audiences: &[PrincipalAudience],
 ) -> Option<Verified> {
     let token = uri.query().unwrap_or_default().split('&').find_map(|part| {
         let (name, value) = part.split_once('=')?;
@@ -197,7 +201,13 @@ pub(super) fn verify_request(
     if malformed_credential {
         return None;
     }
-    verify(token, key, expected_audience, credential.as_ref())
+    verify(
+        token,
+        key,
+        expected_audience,
+        allowed_principal_audiences,
+        credential.as_ref(),
+    )
 }
 
 pub(super) fn concealed_not_found() -> Response {
@@ -237,6 +247,10 @@ pub(super) fn sign_gameplay_url(
     let Some(path) = value.strip_prefix(prefix) else {
         return;
     };
+    if principal_audience == PrincipalAudience::Display && prefix == "/gameplay/creator-portrait/" {
+        value.clear();
+        return;
+    }
     let key = path.split_once('?').map_or(path, |(key, _)| key);
     if key.contains(['/', '#']) || key.is_empty() {
         return;
@@ -633,12 +647,27 @@ mod tests {
         .unwrap()
     }
 
+    fn verify_for_every_principal(
+        token: Option<&str>,
+        key: &str,
+        audience: Audience,
+        credential: Option<&[u8; KEY_BYTES]>,
+    ) -> Option<Verified> {
+        verify(
+            token,
+            key,
+            audience,
+            &[PrincipalAudience::Seat, PrincipalAudience::Display],
+            credential,
+        )
+    }
+
     #[test]
     fn a_signed_grant_is_bound_to_its_route_audience_key_principal_and_expiry() {
         let principal = [9; KEY_BYTES];
         let token = grant(Audience::Imagery, PrincipalAudience::Seat, &principal);
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&token),
                 "asset-key",
                 Audience::Imagery,
@@ -647,7 +676,7 @@ mod tests {
             .is_some()
         );
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&token),
                 "other-key",
                 Audience::Imagery,
@@ -655,9 +684,17 @@ mod tests {
             )
             .is_none()
         );
-        assert!(verify(Some(&token), "asset-key", Audience::Voice, Some(&principal)).is_none());
         assert!(
-            verify(
+            verify_for_every_principal(
+                Some(&token),
+                "asset-key",
+                Audience::Voice,
+                Some(&principal)
+            )
+            .is_none()
+        );
+        assert!(
+            verify_for_every_principal(
                 Some(&token),
                 "asset-key",
                 Audience::Imagery,
@@ -683,9 +720,12 @@ mod tests {
     fn a_token_minted_for_one_principal_fails_for_another() {
         let owner = [0x31; KEY_BYTES];
         let token = grant(Audience::Imagery, PrincipalAudience::Seat, &owner);
-        assert!(verify(Some(&token), "asset-key", Audience::Imagery, Some(&owner)).is_some());
         assert!(
-            verify(
+            verify_for_every_principal(Some(&token), "asset-key", Audience::Imagery, Some(&owner))
+                .is_some()
+        );
+        assert!(
+            verify_for_every_principal(
                 Some(&token),
                 "asset-key",
                 Audience::Imagery,
@@ -710,7 +750,10 @@ mod tests {
         let signature = hmac_sha256(secret().unwrap(), &message);
         message.extend_from_slice(&signature);
         let old_token = hex_encode(&message);
-        assert!(verify(Some(&old_token), key, Audience::Imagery, Some(&principal)).is_none());
+        assert!(
+            verify_for_every_principal(Some(&old_token), key, Audience::Imagery, Some(&principal))
+                .is_none()
+        );
     }
 
     #[test]
@@ -724,13 +767,19 @@ mod tests {
             unix_seconds().unwrap(),
         )
         .unwrap();
-        assert!(verify(Some(&expired), "asset-key", Audience::Imagery, None).is_none());
+        assert!(
+            verify_for_every_principal(Some(&expired), "asset-key", Audience::Imagery, None)
+                .is_none()
+        );
         let mut tampered = grant(Audience::Imagery, PrincipalAudience::Display, &principal);
         tampered.replace_range(0..2, "00");
-        assert!(verify(Some(&tampered), "asset-key", Audience::Imagery, None).is_none());
+        assert!(
+            verify_for_every_principal(Some(&tampered), "asset-key", Audience::Imagery, None)
+                .is_none()
+        );
         let overlong = "a".repeat(MAXIMUM_TOKEN_BYTES + 1);
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(overlong.as_str()),
                 "asset-key",
                 Audience::Imagery,
@@ -743,8 +792,26 @@ mod tests {
     #[test]
     fn a_grant_is_restricted_to_the_route_audience_it_was_minted_for() {
         let token = grant(Audience::Imagery, PrincipalAudience::Seat, &[9; KEY_BYTES]);
-        assert!(verify(Some(&token), "asset-key", Audience::Imagery, None).is_some());
-        assert!(verify(Some(&token), "asset-key", Audience::Voice, None).is_none());
+        assert!(
+            verify(
+                Some(&token),
+                "asset-key",
+                Audience::Imagery,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display],
+                None
+            )
+            .is_some()
+        );
+        assert!(
+            verify(
+                Some(&token),
+                "asset-key",
+                Audience::Voice,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display],
+                None
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -753,7 +820,16 @@ mod tests {
         let uri: Uri = format!("/asset/asset-key?g={token}").parse().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("x-df-local-binding", token.parse().unwrap());
-        assert!(verify_request(&headers, &uri, "asset-key", Audience::Imagery).is_some());
+        assert!(
+            verify_request(
+                &headers,
+                &uri,
+                "asset-key",
+                Audience::Imagery,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -768,7 +844,16 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert!(verify_request(&matching, &uri, "asset-key", Audience::Imagery).is_some());
+        assert!(
+            verify_request(
+                &matching,
+                &uri,
+                "asset-key",
+                Audience::Imagery,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_some()
+        );
         let mut mismatched = HeaderMap::new();
         mismatched.insert(
             header::AUTHORIZATION,
@@ -776,7 +861,16 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert!(verify_request(&mismatched, &uri, "asset-key", Audience::Imagery).is_none());
+        assert!(
+            verify_request(
+                &mismatched,
+                &uri,
+                "asset-key",
+                Audience::Imagery,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -786,7 +880,7 @@ mod tests {
         let seat_token = grant(Audience::Imagery, PrincipalAudience::Seat, &seat);
         let display_token = grant(Audience::Imagery, PrincipalAudience::Display, &display);
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&seat_token),
                 "asset-key",
                 Audience::Imagery,
@@ -795,7 +889,7 @@ mod tests {
             .is_some()
         );
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&seat_token),
                 "asset-key",
                 Audience::Imagery,
@@ -804,7 +898,7 @@ mod tests {
             .is_none()
         );
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&display_token),
                 "asset-key",
                 Audience::Imagery,
@@ -813,7 +907,7 @@ mod tests {
             .is_some()
         );
         assert!(
-            verify(
+            verify_for_every_principal(
                 Some(&display_token),
                 "asset-key",
                 Audience::Imagery,
@@ -856,7 +950,16 @@ mod tests {
             panic!("display view retained its audience");
         };
         let uri: Uri = display.scene.unwrap().live_plate.parse().unwrap();
-        assert!(verify_request(&HeaderMap::new(), &uri, "plate-key", Audience::Imagery).is_some());
+        assert!(
+            verify_request(
+                &HeaderMap::new(),
+                &uri,
+                "plate-key",
+                Audience::Imagery,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_some()
+        );
         let line = &display.journey.unwrap().table_log[0];
         let voice_uri: Uri = line.audio_url.parse().unwrap();
         let voice_key = crate::voice_line::VoiceLine {
@@ -865,8 +968,84 @@ mod tests {
         }
         .key();
         assert!(
-            verify_request(&HeaderMap::new(), &voice_uri, &voice_key, Audience::Voice).is_some()
+            verify_request(
+                &HeaderMap::new(),
+                &voice_uri,
+                &voice_key,
+                Audience::Voice,
+                &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_some()
         );
+    }
+
+    #[test]
+    fn creator_portrait_route_refuses_display_grants_and_keeps_seat_grants() {
+        let display = grant(
+            Audience::Portrait,
+            PrincipalAudience::Display,
+            &[2; KEY_BYTES],
+        );
+        let seat = grant(Audience::Portrait, PrincipalAudience::Seat, &[1; KEY_BYTES]);
+        let display_uri: Uri = format!("/gameplay/creator-portrait/asset-key?g={display}")
+            .parse()
+            .unwrap();
+        let seat_uri: Uri = format!("/gameplay/creator-portrait/asset-key?g={seat}")
+            .parse()
+            .unwrap();
+
+        assert!(
+            verify_request(
+                &HeaderMap::new(),
+                &display_uri,
+                "asset-key",
+                Audience::Portrait,
+                &[PrincipalAudience::Seat]
+            )
+            .is_none()
+        );
+        assert!(
+            verify_request(
+                &HeaderMap::new(),
+                &seat_uri,
+                "asset-key",
+                Audience::Portrait,
+                &[PrincipalAudience::Seat]
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn other_private_media_routes_keep_seat_and_display_grants() {
+        for audience in [Audience::Imagery, Audience::HomeVideo, Audience::Voice] {
+            for principal_audience in [PrincipalAudience::Seat, PrincipalAudience::Display] {
+                let token = grant(audience, principal_audience, &[7; KEY_BYTES]);
+                let uri: Uri = format!("/asset/asset-key?g={token}").parse().unwrap();
+                assert!(
+                    verify_request(
+                        &HeaderMap::new(),
+                        &uri,
+                        "asset-key",
+                        audience,
+                        &[PrincipalAudience::Seat, PrincipalAudience::Display]
+                    )
+                    .is_some()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn display_views_do_not_sign_creator_portrait_urls() {
+        let mut value = "/gameplay/creator-portrait/portrait-key".to_owned();
+        sign_gameplay_url(
+            &mut value,
+            "/gameplay/creator-portrait/",
+            PrincipalAudience::Display,
+            &[7; KEY_BYTES],
+        );
+        assert!(value.is_empty());
     }
 
     #[tokio::test]
@@ -880,11 +1059,17 @@ mod tests {
                 |axum::extract::Path(key): axum::extract::Path<String>,
                  uri: Uri,
                  headers: HeaderMap| async move {
-                    verify_request(&headers, &uri, &key, Audience::Imagery)
-                        .map(|grant| {
-                            secure_media_response(StatusCode::OK.into_response(), grant.remaining)
-                        })
-                        .unwrap_or_else(concealed_not_found)
+                    verify_request(
+                        &headers,
+                        &uri,
+                        &key,
+                        Audience::Imagery,
+                        &[PrincipalAudience::Seat, PrincipalAudience::Display],
+                    )
+                    .map(|grant| {
+                        secure_media_response(StatusCode::OK.into_response(), grant.remaining)
+                    })
+                    .unwrap_or_else(concealed_not_found)
                 },
             ),
         );

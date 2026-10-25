@@ -1057,6 +1057,7 @@ async fn serve(
         &uri,
         &key,
         super::media_grant::Audience::Portrait,
+        &[super::media_grant::PrincipalAudience::Seat],
     ) else {
         return super::media_grant::concealed_not_found();
     };

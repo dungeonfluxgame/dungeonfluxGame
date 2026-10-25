@@ -2787,6 +2787,10 @@ async fn serve_focus_mask(
         &uri,
         &key,
         super::media_grant::Audience::Imagery,
+        &[
+            super::media_grant::PrincipalAudience::Seat,
+            super::media_grant::PrincipalAudience::Display,
+        ],
     ) else {
         return super::media_grant::concealed_not_found();
     };
@@ -2836,6 +2840,10 @@ pub(super) async fn serve_image(
         &uri,
         &key,
         super::media_grant::Audience::Imagery,
+        &[
+            super::media_grant::PrincipalAudience::Seat,
+            super::media_grant::PrincipalAudience::Display,
+        ],
     ) else {
         return super::media_grant::concealed_not_found();
     };

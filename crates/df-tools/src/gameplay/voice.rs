@@ -1298,6 +1298,10 @@ async fn serve_line(
         &uri,
         &key,
         super::media_grant::Audience::Voice,
+        &[
+            super::media_grant::PrincipalAudience::Seat,
+            super::media_grant::PrincipalAudience::Display,
+        ],
     ) else {
         return super::media_grant::concealed_not_found();
     };
@@ -1328,6 +1332,10 @@ async fn serve_part(
         &uri,
         &key,
         super::media_grant::Audience::Voice,
+        &[
+            super::media_grant::PrincipalAudience::Seat,
+            super::media_grant::PrincipalAudience::Display,
+        ],
     ) else {
         return super::media_grant::concealed_not_found();
     };
