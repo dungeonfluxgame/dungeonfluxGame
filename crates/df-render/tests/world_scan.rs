@@ -35,13 +35,13 @@ fn saved_world() -> Option<PathBuf> {
 }
 
 fn load_splats(directory: &Path) -> Vec<RawSplat> {
-    let bytes = std::fs::read(directory.join("m11_100k.ply")).unwrap();
-    PlyLoader { bytes: &bytes }.load().unwrap()
+    let ply_bytes = std::fs::read(directory.join("m11_100k.ply")).unwrap();
+    PlyLoader { bytes: &ply_bytes }.load().unwrap()
 }
 
 fn load_mesh(directory: &Path) -> ColliderMesh {
-    let bytes = std::fs::read(directory.join("m11_collider.glb")).unwrap();
-    ColliderMesh::from_glb(&bytes).unwrap()
+    let collider_bytes = std::fs::read(directory.join("m11_collider.glb")).unwrap();
+    ColliderMesh::from_glb(&collider_bytes).unwrap()
 }
 
 /// The grid as text, far rows first: `.` open, `#` blocked, `?` no floor.
@@ -68,9 +68,13 @@ fn the_saved_ply_loads_with_the_expected_count_and_stands_on_the_floor() {
     let splats = load_splats(&directory);
     assert_eq!(splats.len(), 98_304);
     for splat in &splats {
-        let q = splat.rotation;
-        let length = (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w).sqrt();
-        assert!((length - 1.0).abs() < 1e-3);
+        let rotation = splat.rotation;
+        let rotation_length = (rotation.x * rotation.x
+            + rotation.y * rotation.y
+            + rotation.z * rotation.z
+            + rotation.w * rotation.w)
+            .sqrt();
+        assert!((rotation_length - 1.0).abs() < 1e-3);
         assert!(splat.scale.x > 0.0 && splat.scale.y > 0.0 && splat.scale.z > 0.0);
     }
     // A fair share of the splats are solid, and a fair share are not.

@@ -25,35 +25,37 @@ fn scratch_file(label: &str) -> PathBuf {
 
 /// Decodes a WebP file to straight (non-premultiplied) RGBA bytes with its size.
 pub fn decode_webp(path: &Path) -> Option<(Vec<u8>, usize, usize)> {
-    let out = scratch_file(&path.to_string_lossy().replace(['/', '.'], "_"));
+    let bitmap_path = scratch_file(&path.to_string_lossy().replace(['/', '.'], "_"));
     let status = Command::new("sips")
         .args(["-s", "format", "bmp"])
         .arg(path)
         .arg("--out")
-        .arg(&out)
+        .arg(&bitmap_path)
         .output()
         .ok()?;
     if !status.status.success() {
         return None;
     }
-    let bytes = std::fs::read(&out).ok()?;
-    let _ = std::fs::remove_file(&out);
-    let word = |at: usize| -> Option<u32> {
-        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+    let bitmap_bytes = std::fs::read(&bitmap_path).ok()?;
+    let _ = std::fs::remove_file(&bitmap_path);
+    let read_u32 = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(
+            bitmap_bytes.get(at..at + 4)?.try_into().ok()?,
+        ))
     };
-    let offset = word(10)? as usize;
-    let width = word(18)? as i32;
-    let height = word(22)? as i32;
+    let pixel_data_offset = read_u32(10)? as usize;
+    let width = read_u32(18)? as i32;
+    let height = read_u32(22)? as i32;
     let (width, rows, top_down) = (width as usize, height.unsigned_abs() as usize, height < 0);
     // Planes without an alpha channel come out as 24-bit BMP, rows padded to four bytes.
-    let bits = u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?);
-    let bytes_per_pixel = match bits {
+    let bits_per_pixel = u16::from_le_bytes(bitmap_bytes.get(28..30)?.try_into().ok()?);
+    let bytes_per_pixel = match bits_per_pixel {
         32 => 4,
         24 => 3,
         _ => return None,
     };
     let stride = (width * bytes_per_pixel).next_multiple_of(4);
-    let pixels = bytes.get(offset..offset + stride * rows)?;
+    let pixels = bitmap_bytes.get(pixel_data_offset..pixel_data_offset + stride * rows)?;
     let mut rgba = Vec::with_capacity(width * rows * 4);
     for row in 0..rows {
         let source = if top_down { row } else { rows - 1 - row };

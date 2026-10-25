@@ -272,16 +272,16 @@ fn child(shape: Shape, field: u64) -> Option<Shape> {
     }
 }
 fn varint(bytes: &[u8], offset: &mut usize) -> Result<u64, TelemetryError> {
-    let mut value = 0u64;
+    let mut decoded_value = 0u64;
     for shift in (0..70).step_by(7) {
         let byte = *bytes.get(*offset).ok_or(TelemetryError::Malformed)?;
         *offset += 1;
         if shift == 63 && byte > 1 {
             return Err(TelemetryError::Malformed);
         }
-        value |= u64::from(byte & 0x7f) << shift;
+        decoded_value |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
-            return Ok(value);
+            return Ok(decoded_value);
         }
     }
     Err(TelemetryError::Malformed)
@@ -318,7 +318,7 @@ fn scan(
         if field == 0 {
             return Err(TelemetryError::Malformed);
         }
-        let count = match tag & 7 {
+        let field_size_bytes = match tag & 7 {
             0 => {
                 varint(bytes, &mut offset)?;
                 0
@@ -326,18 +326,22 @@ fn scan(
             1 => 8,
             5 => 4,
             2 => {
-                let count = usize::try_from(varint(bytes, &mut offset)?)
+                let field_size_bytes = usize::try_from(varint(bytes, &mut offset)?)
                     .map_err(|_| TelemetryError::Oversized)?;
-                let end = offset.checked_add(count).ok_or(TelemetryError::Oversized)?;
+                let end = offset
+                    .checked_add(field_size_bytes)
+                    .ok_or(TelemetryError::Oversized)?;
                 let nested = bytes.get(offset..end).ok_or(TelemetryError::Malformed)?;
                 if let Some(child) = child(shape, field) {
                     scan(nested, child, depth + 1, budget)?;
                 }
-                count
+                field_size_bytes
             }
             _ => return Err(TelemetryError::Malformed),
         };
-        offset = offset.checked_add(count).ok_or(TelemetryError::Oversized)?;
+        offset = offset
+            .checked_add(field_size_bytes)
+            .ok_or(TelemetryError::Oversized)?;
         if offset > bytes.len() {
             return Err(TelemetryError::Malformed);
         }

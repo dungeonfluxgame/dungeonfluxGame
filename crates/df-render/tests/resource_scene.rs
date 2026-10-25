@@ -135,7 +135,7 @@ fn already_initialized_scene_cannot_skip_resource_admission_as_duplicate() {
     scene
         .update(owner(), geometry::flat(revision(1, 0)))
         .unwrap();
-    let result = ResourceSceneRenderer::<DecodedImage<CacheKey>>::from_scene(
+    let initialization_result = ResourceSceneRenderer::<DecodedImage<CacheKey>>::from_scene(
         scene,
         owner(),
         ResourceLimits {
@@ -147,7 +147,10 @@ fn already_initialized_scene_cannot_skip_resource_admission_as_duplicate() {
         },
         label("rgba8-surface-v1"),
     );
-    assert_eq!(result.err(), Some(ResourceError::SceneAlreadyInitialized));
+    assert_eq!(
+        initialization_result.err(),
+        Some(ResourceError::SceneAlreadyInitialized)
+    );
 }
 
 #[test]

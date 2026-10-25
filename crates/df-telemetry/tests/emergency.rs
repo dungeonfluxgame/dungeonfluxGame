@@ -67,7 +67,7 @@ fn safe_lines(bytes: &[u8], error: TelemetryError) -> usize {
     let text = std::str::from_utf8(bytes).unwrap();
     assert!(!text.contains(PRIVATE_PAYLOAD));
     assert!(text.ends_with('\n'));
-    let mut count = 0;
+    let mut line_count = 0;
     for line in text.lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
         assert_eq!(fields.len(), 7);
@@ -86,9 +86,9 @@ fn safe_lines(bytes: &[u8], error: TelemetryError) -> usize {
             .parse::<usize>()
             .unwrap();
         assert_eq!(fields[6], "unconfirmed=true");
-        count += 1;
+        line_count += 1;
     }
-    count
+    line_count
 }
 
 #[test]

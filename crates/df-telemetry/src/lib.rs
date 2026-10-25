@@ -285,7 +285,7 @@ impl Store {
             self.shutdown_reply = Some(receiver);
         }
         let deadline = Instant::now() + timeout;
-        let result = self
+        let shutdown_outcome = self
             .shutdown_reply
             .as_ref()
             .ok_or(TelemetryError::Internal)?
@@ -304,7 +304,7 @@ impl Store {
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| TelemetryError::Internal)?;
         }
-        result
+        shutdown_outcome
     }
 }
 impl Drop for Store {
@@ -390,14 +390,14 @@ fn emergency(persistent: &Persistence, counters: &Counters, error: &TelemetryErr
         persistent.backlog.len()
     );
     let path = persistent.root.path.join("emergency");
-    let result = (|| {
+    let write_result = (|| {
         let mut file = if path.exists() {
             open_file(&path, true, false)?
         } else {
             open_file(&path, true, true)?
         };
-        let size = file.metadata().map_err(|_| TelemetryError::Io)?.len();
-        if size.saturating_add(line.len() as u64) > 8192 {
+        let existing_file_bytes = file.metadata().map_err(|_| TelemetryError::Io)?.len();
+        if existing_file_bytes.saturating_add(line.len() as u64) > 8192 {
             return Err(TelemetryError::Capacity);
         }
         use std::io::Seek;
@@ -408,7 +408,7 @@ fn emergency(persistent: &Persistence, counters: &Counters, error: &TelemetryErr
         file.sync_all().map_err(|_| TelemetryError::Io)?;
         ownership::sync_directory(&persistent.root.path)
     })();
-    if result.is_err() {
+    if write_result.is_err() {
         let mut stderr = std::io::stderr().lock();
         if stderr.write_all(line.as_bytes()).is_err() {
             counters.gaps.fetch_add(1, Ordering::Relaxed);
@@ -562,20 +562,20 @@ fn worker(
                 }
             }
             Command::Flush(reply) => {
-                let result = drain(&mut persistent, &counters, &mut barrier);
-                if let Err(error) = &result {
+                let drain_result = drain(&mut persistent, &counters, &mut barrier);
+                if let Err(error) = &drain_result {
                     emergency(&persistent, &counters, error);
                 }
-                if reply.send(result).is_err() {
+                if reply.send(drain_result).is_err() {
                     counters.gaps.fetch_add(1, Ordering::Relaxed);
                 }
             }
             Command::Shutdown(reply) => {
-                let result = drain(&mut persistent, &counters, &mut barrier);
-                if let Err(error) = &result {
+                let drain_result = drain(&mut persistent, &counters, &mut barrier);
+                if let Err(error) = &drain_result {
                     emergency(&persistent, &counters, error);
                 }
-                if reply.send(result).is_err() {
+                if reply.send(drain_result).is_err() {
                     counters.gaps.fetch_add(1, Ordering::Relaxed);
                 }
                 break;
