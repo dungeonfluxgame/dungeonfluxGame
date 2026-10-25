@@ -35,18 +35,18 @@ pub fn resolve_target<'a>(
     current
         .validate_resume(set.basis, set.pins)
         .map_err(TargetResolutionError::Snapshot)?;
-    let records = current
+    let record_count = current
         .state()
         .entities
         .len()
         .checked_add(set.matches.len())
-        .and_then(|n| n.checked_add(inventory.rules.len()))
-        .and_then(|n| n.checked_add(inventory.content.len()))
+        .and_then(|record_count| record_count.checked_add(inventory.rules.len()))
+        .and_then(|record_count| record_count.checked_add(inventory.content.len()))
         .ok_or(TargetResolutionError::Capacity)?;
     if limits.input_records == 0
         || limits.candidates == 0
         || limits.output_bytes == 0
-        || records > limits.input_records
+        || record_count > limits.input_records
         || set.matches.len() > limits.candidates
         || set
             .retained_bytes()
