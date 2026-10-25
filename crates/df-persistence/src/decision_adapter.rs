@@ -173,7 +173,7 @@ impl DecisionAdapter {
                 return Err(RepositoryError::Unavailable);
             }
         };
-        let value = timeout_at(deadline, async {
+        let timed_read_result = timeout_at(deadline, async {
             configure_deadline(&transaction, deadline).await?;
             self.verifier.verify(&transaction, scope).await?;
             lock_session(&transaction, scope).await?;
@@ -210,7 +210,7 @@ impl DecisionAdapter {
             }
         })
         .await;
-        let result = match value {
+        let result = match timed_read_result {
             Ok(result) => result,
             Err(_) => Err(RepositoryError::Unavailable),
         };
@@ -635,7 +635,7 @@ impl RecoverySource {
             )
             .await;
         }
-        let maximum = i64::try_from(codec_limits.maximum_document_bytes)
+        let maximum_document_bytes = i64::try_from(codec_limits.maximum_document_bytes)
             .map_err(|_| RepositoryError::Capacity)?;
         let row = transaction
             .query_opt(
@@ -643,7 +643,7 @@ impl RecoverySource {
                 &[
                     &scope.tenant_bytes(),
                     &scope.session().as_bytes().as_slice(),
-                    &maximum,
+                    &maximum_document_bytes,
                 ],
             )
             .await

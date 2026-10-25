@@ -46,39 +46,39 @@ pub async fn stored_adventure(
             RepositoryError::Unauthorized,
         ));
     }
-    let game: bool = catalog
+    let has_game_schema: bool = catalog
         .try_get(1)
         .map_err(|_| refused("adventure_catalog", RepositoryError::InvalidCandidate))?;
-    let local: bool = catalog
+    let has_local_schema: bool = catalog
         .try_get(2)
         .map_err(|_| refused("adventure_catalog", RepositoryError::InvalidCandidate))?;
-    let exists: bool = catalog
+    let has_adventure_table: bool = catalog
         .try_get(3)
         .map_err(|_| refused("adventure_catalog", RepositoryError::InvalidCandidate))?;
-    if !game && !local && !exists {
+    if !has_game_schema && !has_local_schema && !has_adventure_table {
         return Ok(AdventureStartup::Fresh);
     }
-    if !game || !local || !exists {
+    if !has_game_schema || !has_local_schema || !has_adventure_table {
         return Err(refused(
             "adventure_missing_or_incomplete",
             RepositoryError::InvalidCandidate,
         ));
     }
-    let maximum = MAXIMUM_DOCUMENT_BYTES as i32;
-    let row=client.query_opt("SELECT pack,tuning,record FROM df_local_demo.adventure WHERE singleton AND octet_length(pack) BETWEEN 1 AND $1 AND octet_length(tuning) BETWEEN 1 AND $1 AND octet_length(record) BETWEEN 1 AND $1",&[&maximum]).await.map_err(|_|refused("adventure_load",RepositoryError::Unavailable))?.ok_or_else(||refused("adventure_missing_or_oversize",RepositoryError::InvalidCandidate))?;
-    let result = DemoAdventure {
-        pack: row
+    let maximum_document_bytes = MAXIMUM_DOCUMENT_BYTES as i32;
+    let adventure_row=client.query_opt("SELECT pack,tuning,record FROM df_local_demo.adventure WHERE singleton AND octet_length(pack) BETWEEN 1 AND $1 AND octet_length(tuning) BETWEEN 1 AND $1 AND octet_length(record) BETWEEN 1 AND $1",&[&maximum_document_bytes]).await.map_err(|_|refused("adventure_load",RepositoryError::Unavailable))?.ok_or_else(||refused("adventure_missing_or_oversize",RepositoryError::InvalidCandidate))?;
+    let adventure = DemoAdventure {
+        pack: adventure_row
             .try_get("pack")
             .map_err(|_| refused("adventure_load", RepositoryError::InvalidCandidate))?,
-        tuning: row
+        tuning: adventure_row
             .try_get("tuning")
             .map_err(|_| refused("adventure_load", RepositoryError::InvalidCandidate))?,
-        record: row
+        record: adventure_row
             .try_get("record")
             .map_err(|_| refused("adventure_load", RepositoryError::InvalidCandidate))?,
     };
-    result.validate_bounds()?;
-    Ok(AdventureStartup::Stored(result))
+    adventure.validate_bounds()?;
+    Ok(AdventureStartup::Stored(adventure))
 }
 pub(super) async fn insert(
     transaction: &Transaction<'_>,

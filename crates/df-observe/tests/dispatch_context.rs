@@ -12,7 +12,7 @@ fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     future.poll(&mut Context::from_waker(Waker::noop()))
 }
 
-async fn released(gate: &AtomicBool) {
+async fn wait_for_release(gate: &AtomicBool) {
     poll_fn(|_| {
         if gate.load(Ordering::Acquire) {
             Poll::Ready(())
@@ -23,7 +23,7 @@ async fn released(gate: &AtomicBool) {
     .await;
 }
 
-fn context(trace: &str, build: &str) -> OperationContext {
+fn operation_context(trace: &str, build: &str) -> OperationContext {
     OperationContext {
         trace_parent: format!("00-{trace}-2222222222222222-01"),
         build: build.to_owned(),
@@ -33,8 +33,8 @@ fn context(trace: &str, build: &str) -> OperationContext {
 #[test]
 fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_end() {
     let telemetry = FixtureTelemetry::default();
-    let mut current = context("11111111111111111111111111111111", "build.first");
-    let mut first = telemetry.begin(&current, "request.first");
+    let mut current_context = operation_context("11111111111111111111111111111111", "build.first");
+    let mut first = telemetry.begin(&current_context, "request.first");
     let first_dispatch = first.capture_context();
     let first_parent = first_dispatch
         .trace_parent
@@ -46,7 +46,7 @@ fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_en
     let exporter = &telemetry;
     let first_release = &first_gate;
     let mut first_work = Box::pin(async move {
-        released(first_release).await;
+        wait_for_release(first_release).await;
         exporter
             .begin_dispatched(&first_dispatch, "child.first")
             .finish_unmeasured("complete");
@@ -55,8 +55,8 @@ fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_en
     first.finish_unmeasured("complete");
     drop(first);
 
-    current = context("33333333333333333333333333333333", "build.second");
-    let mut second = telemetry.begin(&current, "request.second");
+    current_context = operation_context("33333333333333333333333333333333", "build.second");
+    let mut second = telemetry.begin(&current_context, "request.second");
     let second_dispatch = second.capture_context();
     let second_parent = second_dispatch
         .trace_parent
@@ -67,7 +67,7 @@ fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_en
     let second_gate = AtomicBool::new(false);
     let second_release = &second_gate;
     let mut second_work = Box::pin(async move {
-        released(second_release).await;
+        wait_for_release(second_release).await;
         exporter
             .begin_dispatched(&second_dispatch, "child.second")
             .finish_unmeasured("complete");
@@ -75,8 +75,8 @@ fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_en
     assert!(poll_once(second_work.as_mut()).is_pending());
     second.finish_unmeasured("cancelled");
     drop(second);
-    current.trace_parent.clear();
-    current.build = "build.replaced".to_owned();
+    current_context.trace_parent.clear();
+    current_context.build = "build.replaced".to_owned();
 
     second_gate.store(true, Ordering::Release);
     assert!(poll_once(second_work.as_mut()).is_ready());
@@ -109,7 +109,7 @@ fn interleaved_futures_create_children_from_dispatch_snapshots_after_requests_en
 fn dropping_owned_future_ends_only_its_child_and_keeps_accepted_sibling_live() {
     let telemetry = FixtureTelemetry::default();
     let mut request = telemetry.begin(
-        &context("11111111111111111111111111111111", "build.dispatch"),
+        &operation_context("11111111111111111111111111111111", "build.dispatch"),
         "request",
     );
     let dispatch = request.capture_context();
@@ -119,12 +119,12 @@ fn dropping_owned_future_ends_only_its_child_and_keeps_accepted_sibling_live() {
     let release = &gate;
     let mut cancelled_work = Box::pin(async move {
         let mut child = exporter.begin_dispatched(&cancelled_dispatch, "child.cancelled");
-        released(release).await;
+        wait_for_release(release).await;
         child.finish_unmeasured("complete");
     });
     let mut accepted_work = Box::pin(async move {
         let mut child = exporter.begin_dispatched(&dispatch, "child.accepted");
-        released(release).await;
+        wait_for_release(release).await;
         child.finish_unmeasured("complete");
     });
     assert!(poll_once(cancelled_work.as_mut()).is_pending());

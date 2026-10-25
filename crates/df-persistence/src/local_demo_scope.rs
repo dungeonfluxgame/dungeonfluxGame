@@ -577,7 +577,7 @@ impl LocalDemoScopeIssuer {
             return Err(RepositoryError::InputBinding);
         }
         let role = LocalDemoRole::Player.bytes();
-        let now = self.authority.runtime.block_on(async {
+        let current_epoch_seconds = self.authority.runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(2),
                 self.authority.client()?.query_one(
@@ -599,7 +599,7 @@ impl LocalDemoScopeIssuer {
                 campaign: &CAMPAIGN,
                 role: &role,
             },
-            u64::try_from(now).map_err(|_| RepositoryError::Unavailable)?,
+            u64::try_from(current_epoch_seconds).map_err(|_| RepositoryError::Unavailable)?,
         )
         .map_err(|error| match error {
             df_auth::membership::MembershipError::Source(error) => error,
