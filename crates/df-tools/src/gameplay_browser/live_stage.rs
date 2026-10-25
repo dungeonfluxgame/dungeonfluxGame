@@ -43,7 +43,7 @@ const GENERATED: &str = live_tv::GENERATED;
 const HEROES: usize = 6;
 /// A hero panel is at least this share of the screen wide, so its text never stacks into a column
 /// (`--tune-hero-panel-min-width`); its margin is the shared panel margin (`--tune-panel-margin`).
-const HERO_PANEL_MIN_WIDTH: f64 = 0.24;
+const HERO_PANEL_MINIMUM_SCREEN_SHARE: f64 = 0.24;
 const SLOTS: usize = HEROES + MAX_NPCS;
 /// Every hero has a HUD card, followed by the foe's.
 const HUD_CARDS: usize = HEROES + 1;
@@ -1722,7 +1722,7 @@ impl Figures {
         let margin = width.min(height) * plate_layout::margin_fraction();
         let minimum_width = super::live_tv::tuning_number(&self.root, "hero-panel-min-width")
             .filter(|share| share.is_finite() && (0.05..=0.9).contains(share))
-            .unwrap_or(HERO_PANEL_MIN_WIDTH);
+            .unwrap_or(HERO_PANEL_MINIMUM_SCREEN_SHARE);
         let column = width / HEROES as f64;
         let panel_width = (column - 16.0)
             .max(width * minimum_width)

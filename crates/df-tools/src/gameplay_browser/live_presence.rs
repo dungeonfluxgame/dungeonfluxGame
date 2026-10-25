@@ -59,27 +59,31 @@ pub(super) fn signal(client: &Rc<RefCell<Client>>, requested: Intent) {
     if client.borrow().role != "player" {
         return;
     }
-    let intent = requested;
     let now = now_ms();
-    let send = LAST.with(|last| {
+    let should_send = LAST.with(|last| {
         let mut last = last.borrow_mut();
-        let fresh = match (&*last, intent) {
+        let should_send = match (&*last, requested) {
             (None, Intent::Stopped) => false,
             (Some(sent), Intent::Stopped) => sent.intent != Intent::Stopped,
-            (Some(sent), _) if sent.intent == intent => now - sent.at_ms >= f64::from(REFRESH_MS),
+            (Some(sent), _) if sent.intent == requested => {
+                now - sent.at_ms >= f64::from(REFRESH_MS)
+            }
             _ => true,
         };
-        if fresh {
-            *last = Some(Sent { intent, at_ms: now });
+        if should_send {
+            *last = Some(Sent {
+                intent: requested,
+                at_ms: now,
+            });
         }
-        fresh
+        should_send
     });
-    if !send {
+    if !should_send {
         return;
     }
-    dispatch(client, intent);
-    match intent {
-        Intent::Typing | Intent::Speaking => keep_alive(client, intent),
+    dispatch(client, requested);
+    match requested {
+        Intent::Typing | Intent::Speaking => keep_alive(client, requested),
         Intent::Submitted | Intent::Stopped => {
             LOOP.with(|current| current.set(current.get() + 1));
         }
@@ -88,7 +92,7 @@ pub(super) fn signal(client: &Rc<RefCell<Client>>, requested: Intent) {
 
 /// Whether the intent is still true: the draft is non-empty and focused, or the talk control is
 /// listening.
-fn still(client: &Rc<RefCell<Client>>, intent: Intent) -> bool {
+fn is_intent_active(client: &Rc<RefCell<Client>>, intent: Intent) -> bool {
     let state = client.borrow();
     match intent {
         Intent::Speaking => state.dialogue.talk.is_listening(),
@@ -118,7 +122,7 @@ fn keep_alive(client: &Rc<RefCell<Client>>, intent: Intent) {
             let Some(client) = weak.upgrade() else {
                 return;
             };
-            if still(&client, intent) {
+            if is_intent_active(&client, intent) {
                 signal(&client, intent);
                 // `signal` starts a loop of its own only for a change; this one carries on.
                 LOOP.with(|current| current.set(id));

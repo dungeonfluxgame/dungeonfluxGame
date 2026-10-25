@@ -115,7 +115,6 @@ fn join_address(journey: &rpc::JourneyView) -> Result<&str, JsValue> {
     Ok(&journey.join_url)
 }
 
-/// The join address as shown: the base address and path without the scheme.
 // PLAY-Q01: the address now comes from the server, not from the page this browser loaded.
 fn join_label(url: &str) -> String {
     url.strip_prefix("https://")
@@ -124,8 +123,6 @@ fn join_label(url: &str) -> String {
         .to_owned()
 }
 
-/// The host a player types the room code at, from the join address.
-// PLAY-Q01
 fn join_host(url: &str) -> String {
     join_label(url)
         .split('/')

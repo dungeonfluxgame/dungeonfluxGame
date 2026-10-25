@@ -278,9 +278,6 @@ pub(super) fn crest(
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The phone: its own hero card, the edge vignette and the vibration.
-
 /// What the phone remembers between two views of its own hero.
 #[derive(Default)]
 struct PhoneMemory {
@@ -423,7 +420,6 @@ pub(super) fn phone_sync(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
     }
     vignette(&root, tier)?;
-    // Compare with what this phone last showed of its own hero.
     let before = PHONE.with(|memory| {
         let mut memory = memory.borrow_mut();
         let known = (memory.name == own.name)
@@ -461,7 +457,6 @@ pub(super) fn phone_sync(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------------------------
 // The 3D battlefield: its plates, figures and reactions take the same tier and the same shake
 // sizes. The renderer owns no threshold: it is handed the classifier, the reaction and the
 // tremor, and the server-made variants by combatant name.
