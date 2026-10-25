@@ -4,7 +4,7 @@
 mod routes;
 mod runtime_http;
 pub mod runtime_protocol;
-pub use runtime_http::HttpRuntime;
+pub use runtime_http::{HttpRuntime, RelayConfig};
 #[cfg(test)]
 mod tests;
 
