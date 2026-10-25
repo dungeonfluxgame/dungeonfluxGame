@@ -92,6 +92,8 @@ prost-types = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio-tungstenite = "0.29"
+# The charge-site guard in gameplay/cost_tests.rs reads the sources as Rust, not as text.
+syn = { version = "=2.0.119", features = ["full", "visit"] }
 
 [[test]]
 name = "public_scene_assets"

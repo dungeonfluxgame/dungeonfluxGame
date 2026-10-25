@@ -831,7 +831,7 @@ pub(in crate::gameplay) fn image_route_model(
 }
 
 /// The FLUX route's several fal calls per edit, recorded as one unpriced call until each sub-call
-/// is metered (notes backlog C-B4).
+/// is metered (C-B4 in the cost engine backlog, `planning/issue-triage.md`).
 const FLUX_COMPOSITE_ROUTE: &str = "flux-1.1-ultra-raw+kontext-max";
 
 /// Which pool a picture waited in: `background` is look-ahead work.
@@ -1558,9 +1558,10 @@ impl CostBook {
 /// Parses a bill in the documented comparison form: a `provider,model,category,usd` header, then
 /// one row per line item, amounts in dollars (at most six decimals; repeated rows add up).
 ///
-/// TODO(C-B3, artifacts/tmp/agents/C/notes.md): read the providers' own exports (the OpenAI
-/// organization costs export names line items such as "gpt-image-2.5-flare, input image") into
-/// these rows; today the owner writes the rows from the billing page.
+/// TODO(C-B3): read the providers' own exports (the OpenAI organization costs export names line
+/// items such as "gpt-image-2.5-flare, input image") into these rows, as item C-B3 of the "Cost
+/// engine backlog" in `planning/issue-triage.md` says; today the owner writes the rows from the
+/// billing page.
 pub(in crate::gameplay) fn parse_bill(
     csv: &str,
 ) -> Result<BTreeMap<(Provider, String, Category), u64>, String> {
@@ -1733,14 +1734,19 @@ impl BilledRoute {
             "client": self.client,
             "provider": self.provider.label(),
             "model": self.model,
-            "categories": self.categories.iter().map(|category| category.label()).collect::<Vec<_>>(),
+            "categories": self
+                .categories
+                .iter()
+                .map(|category| category.label())
+                .collect::<Vec<_>>(),
             "metering": metering,
             "reason": reason,
         })
     }
 }
 
-/// Every route the game calls. The coverage tests check this against the `df_providers` clients
+/// Every route the game calls; a reason's `C-Bn` is an item of the cost engine backlog in
+/// `planning/issue-triage.md`. The coverage tests check this against the `df_providers` clients
 /// and the price file, so a new client cannot go untracked.
 pub(in crate::gameplay) const ROUTES: &[BilledRoute] = &[
     BilledRoute {

@@ -16,7 +16,7 @@ use serde_json::json;
 use super::*;
 use crate::gameplay::imagery::{ImageFailure, ImageKind, ImagePriority, ImageRoute};
 use crate::gameplay::resources::SpendLedger;
-use crate::voice_line::{VoiceLine, fight_voice_line};
+use crate::voice_line::{VoiceLine, display_lines, fight_voice_line};
 
 const TABLE: &str = r#"{
   "schema": "dungeonflux.pricing/1",
@@ -55,12 +55,26 @@ fn hero_cry(hero: &str) -> VoiceLine {
     .expect("a hero cry")
 }
 
-/// A cast member's conversation reply, in the `npc-id:<id>|<name>` form the display uses.
+/// A cast member's conversation reply, read from the display's table log as the server reads it.
 fn cast_reply(actor: &str, name: &str) -> VoiceLine {
-    VoiceLine {
-        role: format!("npc-id:{actor}|{name}"),
-        text: "Well met.".to_owned(),
-    }
+    let display = rpc::DisplayGameplayView {
+        journey: Some(rpc::JourneyView {
+            table_log: vec![rpc::TableLine {
+                sequence: 1,
+                actor_id: actor.to_owned(),
+                speaker: name.to_owned(),
+                text: "Well met.".to_owned(),
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut lines = display_lines(&display);
+    assert_eq!(lines.len(), 1, "one reply line");
+    lines.pop().expect("a reply line")
 }
 
 fn table() -> PriceTable {
@@ -921,7 +935,8 @@ fn the_dev_cost_report_has_a_pinned_shape() {
     assert_eq!(
         routes[0],
         json!({"client": "NativeImageEditProvider", "provider": "openai",
-            "model": "gpt-image-2.5-flare", "categories": ["text_input", "image_input", "image_output"],
+            "model": "gpt-image-2.5-flare",
+            "categories": ["text_input", "image_input", "image_output"],
             "metering": "priced", "reason": ""})
     );
     let price = |model: &str, category: &str, usd: &str, per: u64| {
@@ -1224,106 +1239,137 @@ fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_is_one_estimated_ca
     );
 }
 
-/// The charge sites that do not meter dollars yet, by file and unit: each is a backlog item.
-const UNMETERED_CHARGES: [(&str, &str, &str); 11] = [
-    ("gameplay/character_clips.rs", "VideoClip", "C-B1"),
-    (
-        "gameplay/creator_classification.rs",
-        "CreatorClassificationCall",
-        "C-B5",
-    ),
-    ("gameplay/home_video.rs", "VideoClip", "C-B1"),
-    ("gameplay/imagery/figure_masks.rs", "SegmentCall", "C-B1"),
-    ("gameplay/memory/embedder.rs", "EmbeddingToken", "C-B1"),
-    ("gameplay/place_music/resource.rs", "MusicCall", "C-B1"),
-    ("gameplay/place_music/resource.rs", "MusicCall", "C-B1"),
-    ("gameplay/plate_segments/service.rs", "SegmentCall", "C-B1"),
-    ("gameplay/plate_segments/service.rs", "TextToken", "C-B2"),
-    ("gameplay/speech_input.rs", "SttSecond", "C-B1"),
-    ("gameplay/splat_world.rs", "SplatCredit", "C-B1"),
-];
+// The charge-site guard, its fixtures and the pinned list of unmetered charges.
+#[path = "cost_charge_guard_tests.rs"]
+mod charge_guard;
 
-#[test]
-fn every_spend_charge_meters_its_dollars_or_is_a_tracked_backlog_item() {
+/// The ids of the rows of the "Cost engine backlog" section of the triage file.
+fn backlog_rows(triage: &str) -> BTreeSet<&str> {
+    let section = triage
+        .split("\n## ")
+        .find(|section| section.starts_with("Cost engine backlog"))
+        .expect("the Cost engine backlog section");
+    section
+        .lines()
+        .filter_map(|line| line.strip_prefix("| "))
+        .filter_map(|row| row.split(' ').next())
+        .filter(|id| id.starts_with("C-B"))
+        .collect()
+}
+
+/// Every backlog id (`C-B` and digits) mentioned in `text`, comments included.
+fn backlog_mentions(text: &str) -> Vec<&str> {
+    if !text.contains("C-B") {
+        return Vec::new();
+    }
+    text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+        .filter(|word| {
+            word.strip_prefix("C-B").is_some_and(|number| {
+                !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit())
+            })
+        })
+        .collect()
+}
+
+/// The `(source, id)` pairs among `sources` (name and text) whose id is not a row of the backlog
+/// section.
+fn unknown_citations<'a>(triage: &str, sources: &'a [(String, String)]) -> Vec<(&'a str, &'a str)> {
+    let rows = backlog_rows(triage);
+    let mut unknown = Vec::new();
+    for (name, text) in sources {
+        for id in backlog_mentions(text) {
+            if !rows.contains(id) {
+                unknown.push((name.as_str(), id));
+            }
+        }
+    }
+    unknown
+}
+
+/// Every `.rs` file under `crates/`, as (path under `crates/`, text), in path order. This test
+/// file is left out: its fixtures cite ids that are not rows, on purpose.
+fn workspace_sources() -> Vec<(String, String)> {
     fn visit(directory: &std::path::Path, files: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(directory).expect("sources") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
-                visit(&path, files);
+                if path.file_name().is_some_and(|name| name != "target") {
+                    visit(&path, files);
+                }
             } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
                 files.push(path);
             }
         }
     }
-    let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
     let mut files = Vec::new();
     visit(&root, &mut files);
     files.sort();
-    let mut metered = Vec::new();
-    let mut unmetered = Vec::new();
+    let mut sources = Vec::new();
     for path in files {
-        let relative = path
+        let name = path
             .strip_prefix(&root)
-            .expect("under src")
+            .expect("under crates")
             .to_string_lossy()
             .replace('\\', "/");
-        let name = relative.rsplit('/').next().unwrap_or_default();
-        // The ledger and the cost book themselves, the kit's generic charge, and tests.
-        if matches!(
-            relative.as_str(),
-            "gameplay/resources.rs" | "gameplay/cost.rs" | "gameplay/resource_adapters.rs"
-        ) || name.ends_with("_tests.rs")
-            || name == "tests.rs"
-        {
+        if name == "df-tools/src/gameplay/cost_tests.rs" {
             continue;
         }
-        let text = std::fs::read_to_string(&path).expect("source");
-        let lines: Vec<&str> = text.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
-            let unit = if line.contains("reserve(IMAGE_UNIT") {
-                "ImageCall"
-            } else {
-                let Some(start) = line
-                    .find("charge(Unit::")
-                    .map(|at| at + "charge(Unit::".len())
-                    .or_else(|| {
-                        line.find("reserve(Unit::")
-                            .map(|at| at + "reserve(Unit::".len())
-                    })
-                else {
-                    continue;
-                };
-                let rest = &line[start..];
-                &rest[..rest
-                    .find(|character: char| !character.is_ascii_alphanumeric())
-                    .unwrap_or(rest.len())]
-            };
-            let window = lines[index..lines.len().min(index + 10)].join("\n");
-            if window.contains("begin_call(") {
-                metered.push((relative.clone(), unit.to_owned()));
-            } else {
-                unmetered.push((relative.clone(), unit.to_owned()));
-            }
-        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{name} cannot be read: {error}"));
+        sources.push((name, text));
     }
-    let expected: Vec<(String, String)> = UNMETERED_CHARGES
-        .iter()
-        .map(|(file, unit, _)| ((*file).to_owned(), (*unit).to_owned()))
-        .collect();
+    sources
+}
+
+#[test]
+fn a_cited_backlog_id_that_is_not_a_row_is_reported() {
+    let triage = "# Triage\n\n## Cost engine backlog (C-B1..C-B2)\n\n| Id | Item | Where |\n\
+                  |---|---|---|\n| C-B1 | one | here |\n| C-B2 | two | there |\n\n\
+                  ## Other\n\n| C-B7 | a row outside the section | x |\n";
+    assert_eq!(backlog_rows(triage), BTreeSet::from(["C-B1", "C-B2"]));
+    let sources = [
+        (
+            "df-tools/src/a.rs".to_owned(),
+            "// TODO(C-B1): fine".to_owned(),
+        ),
+        (
+            "df-providers/src/b.rs".to_owned(),
+            "// see C-B99 and C-B7, then C-B2.".to_owned(),
+        ),
+    ];
     assert_eq!(
-        unmetered, expected,
-        "a charge with no begin_call within ten lines must meter its dollars or be listed with \
-         its backlog item"
+        unknown_citations(triage, &sources),
+        [
+            ("df-providers/src/b.rs", "C-B99"),
+            ("df-providers/src/b.rs", "C-B7")
+        ]
     );
-    for (file, unit) in [
-        ("gameplay/character_clips.rs", "ImageCall"),
-        ("gameplay/imagery.rs", "ImageCall"),
-        ("gameplay/storyteller.rs", "TextToken"),
-        ("gameplay/voice.rs", "VoiceCharacter"),
-    ] {
-        assert!(
-            metered.contains(&(file.to_owned(), unit.to_owned())),
-            "{file} {unit} is metered: {metered:?}"
-        );
-    }
+    assert_eq!(
+        backlog_mentions("TODO(C-B3): see C-B13) and C-Bn, C-B, C-B4x, C-B5."),
+        ["C-B3", "C-B13", "C-B5"]
+    );
+}
+
+/// Every id any source file of the workspace cites (`cost.rs` holds most: its comments and the
+/// routes' reasons; the charge guard's pinned list holds the rest) is a row of the section.
+#[test]
+fn every_cited_backlog_id_is_a_row_of_the_cost_engine_backlog() {
+    let triage = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../planning/issue-triage.md"
+    ))
+    .expect("planning/issue-triage.md");
+    let sources = workspace_sources();
+    assert!(
+        sources
+            .iter()
+            .any(|(_, text)| backlog_mentions(text).contains(&"C-B5")),
+        "the Jev route cites C-B5"
+    );
+    assert_eq!(
+        unknown_citations(&triage, &sources),
+        Vec::<(&str, &str)>::new(),
+        "cited but not a row of the Cost engine backlog in planning/issue-triage.md"
+    );
 }
