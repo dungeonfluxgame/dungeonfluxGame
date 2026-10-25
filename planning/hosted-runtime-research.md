@@ -100,7 +100,7 @@ object storage          O2 (runtimes hold no object-store credentials and get no
 Network (D18 amended by D23; S2 implements). Internal connections use mTLS and are authorized by
 certificate identity, the URI SAN, not by chain alone: the runtime's game listener accepts only
 the edge (`urn:dungeonflux:edge:<instance>`); the media gateway and the dispatcher accept a
-runtime only when its SAN `urn:dungeonflux:placement:<placement_id>` names a placement that is
+runtime only when its client-certificate SAN `urn:dungeonflux:placement:<placement_id>` names a placement that is
 current and matches the request's campaign and fence; the control plane's internal listener
 accepts dispatchers by `urn:dungeonflux:dispatcher:<worker_id>`. A runtime accepts connections only
 from the edge. It may open connections only to PostgreSQL, the egress dispatcher, the control
@@ -449,6 +449,21 @@ END $$;
   position for long, and `enter_service()` callers wait at most the lock timeout. Once it holds the
   lock, it updates `serving`. A fenced transaction therefore either finished before the halt or
   sees it; none slips past, and concurrent fenced writes share no row and build no multixact.
+- **The key is secret-ish and the holder is breakable (round 1b/1c).** The lock key is a random
+  two-int value in `df_meta.service_state` that no service role can read; the halt and the
+  restore take the lock through `acquire_exclusive_service_lock`, which after its retries
+  terminates the backends that hold it (`pg_terminate_backend`, the definer holds
+  `pg_signal_backend`) and tries again. `pg_locks` shows any held advisory key to every role,
+  so the key leaks while a legitimate holder exists: the guarantee is the escalation, not
+  secrecy. The control plane's remedies, executable by `df_control` only: `break_service_lock()`
+  (terminate the holders, replace the key; the state and the epoch are untouched) and
+  `halt_service()` (the same, then `halted_regression`; only from `serving`). The sweeper calls
+  `break_service_lock` when fenced calls see DF002 while the state is `serving` (no halt is
+  recorded). Residual: a compromised runtime can read the new key and hold the lock again, so it
+  can keep causing DF002 until its credentials are cut off. A row lock was considered and
+  rejected (the global multixact bottleneck). `max_prepared_transactions` must be 0
+  (`require_no_prepared_transactions()` at every startup and in migration 0015): a prepared
+  transaction keeps its advisory locks past its session and cannot be terminated.
 - **Pooling.** The lock and every `SET LOCAL` are transaction-scoped, so they work with session-
   or transaction-mode pooling; statement-mode pooling is forbidden (request to S2).
 - **Idle holders.** Every role that takes the shared lock (`df_campaign_runtime`, `df_control`,
@@ -783,7 +798,7 @@ id.
 
 **Routing and recheck.** The edge reads the directory row; `serving` with a live lease: open an
 internal WebSocket (mTLS, edge certificate) to `runtime_endpoint`, after checking that the
-runtime's certificate SAN names the placement in the directory row, and copy binary messages both ways within the bridge
+runtime's server-certificate SAN `urn:dungeonflux:placement-server:<id>` names the placement in the directory row and the chain passes through the pinned service issuer, and copy binary messages both ways within the bridge
 bounds (`df_rpc_bridge::MESSAGE_BYTES`, backpressure, no unbounded buffer). Anything else: create
 a placement request and answer "table starting" for the client to retry with backoff. The edge
 keeps each upstream's fence and rechecks it on `LISTEN df_runtime_owner` hints and on a timer
@@ -865,10 +880,17 @@ when it succeeds and stays frozen, with read-only campaign access, only if it fa
   runner starts only digests present in the deployed allow-list.
 - `RuntimeSpec`: image digest, campaign and tenant, placement id and token, internal port,
   database endpoint and CA path, dispatcher, media gateway and ingestor endpoints, the
-  placement's mTLS certificate with URI SAN `urn:dungeonflux:placement:<placement_id>`, used as
-  client certificate toward the media gateway and the dispatcher and as server certificate on the
-  game listener (issued by the control plane at placement, valid for the placement lease plus its
-  renewals, revoked at release), limits, lease
+  two certificates per placement (coordinator ruling, 2026-10-25): a client certificate from the
+  placement CA, a clientAuth-only intermediate that cannot sign server certificates, with URI SAN
+  `urn:dungeonflux:placement:<placement_id>`, used toward the media gateway, the dispatcher and the
+  ingestor; and a server certificate from the service CA with URI SAN
+  `urn:dungeonflux:placement-server:<placement_id>`, used on the game listener. The edge pins the
+  service issuer for runtime servers and checks that the placement id in that SAN equals the
+  directory row it routed to; receivers accept a `placement` identity only through the placement
+  issuer and fixed identities (dispatcher, control plane, servers) only through the service issuer,
+  both intermediates `pathlen:0`. Runtime descriptors pin the service issuer, not the root. Both
+  certificates are valid for the placement lease plus its renewals and are revoked at release;
+  limits, lease
   settings; delivered as a read-only mounted descriptor file, never as environment variables.
 - Placeholder limits until Round 6 measures p95: 1,536 MiB, 1.0 CPU, 256 pids, `/tmp` 512 MiB.
 
@@ -1074,7 +1096,11 @@ Existing local campaigns are importable through a one-shot offline importer (`df
 contract (Rounds 2 and 5), then W3/N/C adopt the PostgreSQL stores, then the importer (O1, after
 them), then SAVE-01. The importer reads the local run database and the run directory, writes the
 hosted rows under a new campaign with a fresh recovery namespace, backfills `df_story` tenant and
-campaign (0019), and refuses a source whose pins it cannot validate.
+campaign (0019), and refuses a source whose pins it cannot validate. It runs as `df_importer` under an
+import job (`open_import`, operator-only) that names one campaign and opens only while that
+campaign has no live owner; `place` refuses while an unexpired job exists, `importing_campaign()`
+returns nothing while an owner is live, and unclosed jobs are purged after their retention
+(`purge_import_jobs`, the sweeper).
 
 ## 10. Egress dispatcher contract (D18, D21-D23, D25, D27)
 

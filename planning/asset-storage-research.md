@@ -439,8 +439,10 @@ streaming the bytes itself (`Range` included). There is no redirect mode.
 - Every quota-changing transition locks the quota row first (3.13), then the asset row:
   - reserve: generation admission (inside F's transaction), upload request;
   - commit (reserved to committed): finalize to `Ready`;
-  - release reserved: every terminal `Rejected`, `Invalid` or `Superseded` transition, upload ticket expiry, the
-    sweeper's `cancel_unclaimed_effect` rejection, F's outcome-event consumer;
+  - release reserved: every terminal `Rejected` or `Invalid` transition, upload ticket expiry, the
+    sweeper's `cancel_unclaimed_effect` rejection, F's outcome-event consumer. F01 replacement (`Superseded`) keeps
+    the row, so it locks the quota row first and transfers the reservation to the new attempt unchanged (net zero,
+    round 1b ruling);
   - release committed: tombstone (user delete, account deletion, retention, erasure), so a deletion frees space at
     once (13.8);
   - add committed: an operator's explicit reversal of a tombstone after a restore (13);
@@ -574,7 +576,10 @@ predicates, FORCE ROW LEVEL SECURITY, `schema_migration`).
 - `0012_media_exports.sql`: `media.export_job` (wrapped data key), `media.export_access`.
 - `0013_recovery_journal.sql`: `journal.pending_entry` (with `sequence` null until stamped, `confirmed_ms`),
   `journal.writer_lease`, `journal.confirmed_head`.
-- 0014 reserved.
+- `0014_media_sweep.sql` (round 1): `media.staged_orphan`, `staged_deleted_at_ms`, the sweep indexes, the
+  request-key lookup index, and the grants: the `media`, `library` and `journal` schemas are granted only to the
+  control-plane role `df_control`, never to runtime roles or PUBLIC (owner ruling 2026-10-25; a catalog-walk test
+  enforces it), so FORCE row-level security is not needed on them.
 
 ## 17. Audit lines, metrics, dev CLI and configuration
 

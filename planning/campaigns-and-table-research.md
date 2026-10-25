@@ -211,11 +211,23 @@ coordinator ruling), and against a **tight key** (IPv6 /64, IPv4 /32) with the l
 **The loose key is checked first, and a request the loose key refuses never inserts a tight key**, so a
 single /48, which holds 65,536 /64 keys, can create at most the loose limit's worth of tight keys: with
 loose limits ten times the tight ones, at most 100 tight keys per 15 minutes on lookups and 60 per
-minute on display challenges. The tight map is sized above what the loose limits allow in a window
-(default 262,144) and the loose map at 65,536. **When the loose map is full, every new loose key on
-that layer is refused until windows elapse**; existing loose keys keep working. That residual is real
-and is listed in the threat model (section 9): about 65,536 distinct /48 or /24 sources reach it, which
-is a distributed attack the edge answers (S2-1). Keys are keyed hashes. The **client IP comes from B's
+minute on display challenges. The tight map holds 262,144 keys by default and the loose map 65,536.
+**Neither map is sized above what the loose limits could allow in a window** (65,536 loose keys times
+100 tight keys each is 6.5 million): the maps are bounded on purpose and fail closed, and the figure
+that matters is how many distinct source prefixes an attacker needs. A prefix (an IPv6 /48 or an IPv4
+/24) creates at most its loose limit's worth of tight keys per window, so the tight map is filled by
+`ceil(tight map size / loose limit)` prefixes: **2,622** on lookups (262,144 / 100), **874** on
+invitation previews, display status and ticket calls (262,144 / 300) and **4,370** on display
+challenges (262,144 / 60). The loose map is filled by 65,536 prefixes. **When a map is full, every new
+key on that layer is refused until windows elapse**; existing keys keep working, and the process-wide
+ceiling is untouched. That residual is real and is listed in the threat model (section 9): the weakest
+layer falls to about 900 distinct sources in one window, which is a distributed attack the edge
+answers (S2-1). Three guards keep the figures honest. The configuration is **refused at load**
+(`TunablesRefusal::ThrottleMapsDoNotMatchLimits`) when a tight map is smaller than the loose map or
+when the limits let fewer than 256 prefixes fill a tight map, so raising a limit cannot quietly make
+the layer cheap to saturate. The dev view prints the figure per layer. And a refusal because a map was
+full is an audit line carrying `alert=yes` on every layer, per-key windows included (the events in
+`audit::ALERT_EVENTS`), which S2's alert rule fires on; ordinary throttles are not alerted. Keys are keyed hashes. The **client IP comes from B's
 trusted-proxy extraction** (the configured proxy chain in `bootstrap-origin-policy.md`), never the
 socket peer; behind the load balancer the peer is the same address for every request. If the extraction
 yields no trusted client address, IP-keyed layers refuse the request rather than key it on the proxy.
@@ -654,8 +666,8 @@ section 3. Rate limits are keyed hashes (IPv6 by /64 and /48), one throttle map 
 | `POST sessions/:id/lobby/display/:ticket/unpair`, `/display/unpair-all` | D(StartOrPauseSession) | 30/h |
 | `POST display/challenge` | P + pre-session CSRF | 6/min and 5 pending per IP key (tight), 10 times that per loose key; no process-wide ceiling |
 | `GET display/status` (no side effects) | DC | 30/min per IP key |
-| `POST display/redeem` | DC (SameSite=Strict device cookie), no CSRF token: Origin and Sec-Fetch-Site checks, 8.5 step 4 | 12/h per pairing |
-| `POST display/renew` | DC + ticket cookie, no CSRF token: Origin and Sec-Fetch-Site checks; called by the display screen and by O1's display client | 12/h per ticket |
+| `POST display/redeem` | DC (SameSite=Strict device cookie), no CSRF token: Origin and Sec-Fetch-Site checks, 8.5 step 4 | per address first (30/min per IP key, loose key first, one layer shared with renew), then 12/h per pairing, counted only for a pairing the store found |
+| `POST display/renew` | DC + ticket cookie, no CSRF token: Origin and Sec-Fetch-Site checks; called by the display screen and by O1's display client | per address first (the layer shared with redeem), then 12/h per ticket, counted only for a ticket the store found and presented with its own device secret (a wrong device is refused without spending the window) |
 | `GET /dev/campaigns`, `/dev/members/:campaign`, `/dev/invitations`, `/dev/lobby/:session`, `/dev/tickets` | DEV | none |
 
 There is no ticket-minting endpoint (the edge mints connection tickets, 13.1) and no separate
@@ -1055,7 +1067,7 @@ campaigns, then children) and, when called inside B's transaction, requires B to
 | Display ticket abuse (AUTH-02) | Distinct type and digest domain, one capability, device-secret binding, expiry, revocation, no campaign endpoint accepts it | `a_display_ticket_is_refused_by_every_non_public_route` |
 | Leaked ticket | Needs the device secret as well, so a ticket leaked on its own (log, screenshot, header dump) is useless. **Not claimed:** protection against theft of the whole browser cookie jar, where both cookies leave together; mitigated by `HttpOnly`, `SameSite=Strict`, a 12 h life and per-display unpair | `a_ticket_without_its_device_secret_is_refused` |
 | Pairing phishing (host types an attacker's code) | Lookup shows creation time and device label and needs a Confirm; per-display unpair | `approval_requires_the_lookup_step_and_returns_the_display_details` |
-| Pairing flooding | Per-IP rate and pending caps on a tight (/64) and a loose (/48) key, loose key checked first, maps sized above one allocation's reach, trusted-proxy client IP, stale rows expire in 10 min; no process-wide ceiling so one source cannot block everyone. **Residual:** when the loose map is full (about 65,536 distinct /48 or /24 sources) every new loose key on that layer is refused until windows elapse; and a botnet of many allocations can reach the 100000 pending valve. Both alert and are answered at the edge (S2-1) | `one_ip_cannot_exhaust_pairing_for_other_ips`, `one_ipv6_48_allocation_cannot_fill_the_tight_key_map`, `a_request_refused_by_the_loose_key_never_inserts_a_tight_key`, `a_full_loose_map_refuses_every_new_loose_key_and_leaves_existing_keys_working` |
+| Pairing flooding | Per-IP rate and pending caps on a tight (/64) and a loose (/48) key, loose key checked first, maps sized above one allocation's reach, trusted-proxy client IP, stale rows expire in 10 min; no process-wide ceiling so one source cannot block everyone. **Residual:** when a map is full (the tight map falls to about 874 to 4,370 distinct /48 or /24 prefixes in one window, the loose map to 65,536; 4.3) every new key on that layer is refused until windows elapse, and the saturated audit lines alert; and a botnet of many allocations can reach the 100000 pending valve. Both alert and are answered at the edge (S2-1) | `one_ip_cannot_exhaust_pairing_for_other_ips`, `one_ipv6_48_allocation_cannot_fill_the_tight_key_map`, `a_request_refused_by_the_loose_key_never_inserts_a_tight_key`, `a_full_loose_map_refuses_every_new_loose_key_and_leaves_existing_keys_working` |
 | Lost redemption response | Reissue once within 60 s with the device secret and no ticket cookie, old ticket revoked, under the campaign lock | `a_lost_redemption_response_is_recovered_by_one_reissue` |
 | Role escalation via requests | Role and delegations read from the member row only; `authorize` on every handler; revision-guarded updates | `every_route_admits_exactly_the_roles_the_matrix_allows` |
 | Cross-account and confused-deputy access | Predicates from the session; child ids always looked up with their campaign; nonexistence-safe errors | `account_b_ids_answer_like_missing_ids_on_every_route`, `a_child_of_another_campaign_the_same_account_manages_answers_like_a_missing_id` |
@@ -1113,7 +1125,8 @@ secrets). A feature without its dev view is not done.
 | `invitation_lifetime_days`, `invitation_default_max_uses` | 7, open seats | 9.6 |
 | `join_code_lifetime_hours` | 24 | 6 |
 | `lookup_limit_per_ip`, `lookup_limit_per_account`, `lookup_limit_process_per_minute` | 10 per 15 min, 20 per hour, 600 per replica | 14.1 |
-| `throttle_maximum_keys_tight`, `throttle_maximum_keys_loose` | 262144, 65536 per IP-keyed layer (sized above one allocation's reach); 65536 for account-keyed layers | fail-closed bound |
+| `throttle_maximum_keys_tight`, `throttle_maximum_keys_loose`, `throttle_maximum_keys_account` | 262144, 65536 per IP-keyed layer; 65536 for account-keyed layers | fail-closed bound. Load refuses a tight map smaller than the loose map, and limits under which fewer than 256 prefixes fill a tight map (4.3) |
+| `display_ticket_limit_per_ip_per_minute` | 30 (redeem and renew share it) | address layer in front of the per-pairing and per-ticket windows |
 | `throttle_loose_multiplier` | 10 (loose key limits = 10 times the tight limits; coordinator ruling) | 14.1 |
 | `display_challenge_minutes`, `display_ticket_hours` | 10, 12 | 9.6 |
 | `display_renewal_window_minutes`, `display_pairing_maximum_hours`, `display_reissue_window_seconds` | 60, 24, 60 | 14.1 |

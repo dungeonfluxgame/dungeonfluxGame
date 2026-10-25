@@ -1,8 +1,12 @@
 # Customer accounts, funds, operator dashboard and business site
 
-Date: 2026-10-24 (round 0b: revised after the critic's review)
-Status: plan (agent B). No code exists for anything described here. Rounds 1-4 implement it in the
-order at the end; each round is critic-reviewed before the coordinator commits it.
+Date: 2026-10-24 (round 0b: revised after the critic's review); revised 2026-10-25 (launch round 2)
+Status: plan (agent B). Round 1 (accounts, sessions, reset, closure, `0005_accounts.sql`) and launch
+round 2 (identity provider port, WorkOS adapter, JSON services, account closure with the campaign
+owner, `0006_account_closure.sql`, hostnames as configuration) are built. The money core moved to
+agent F (launch decision 27): sections 8 and 9 now point at `planning/finance-ledger-research.md`.
+Section 2.1 lists the launch decisions that supersede parts of this plan; the delivery order at the
+end is the current one. Each round is critic-reviewed before the coordinator commits it.
 
 This plan answers the owner's request of 2026-10-24: billing, an admin dashboard, auth and customer
 login, setting up an account, adding funds and settings for how fast the funds are spent, account
@@ -94,6 +98,43 @@ Coordinator decisions after the second review (round 0c, 2026-10-24):
     Local and owner play hold no reservation and are never refused (8.4, 15.2).
 18. Launch accepts card payments only (`payment_method_types = ["card"]`), so there is no
     delayed-payment path; delayed methods (bank debits, vouchers) are later work.
+
+Owner requirement (2026-10-24): "we give each new user $10 to do a quick trial". Coordinator
+decisions (standard practice):
+
+19. Every new account gets a one-time $10.00 trial credit when its email is verified (not at
+    signup); no card is needed. One grant per account and one per verified email address
+    (normalized): an address re-registered after deletion gets none, so a keyed hash of every
+    granted address is kept past deletion (it holds no address in the clear, so it is
+    retention-safe). Signup and verification throttles stay keyed on keyed email and IP hashes.
+20. The trial is a separate ledger entry kind `promotional_credit` (`source_kind = trial`,
+    `source_ref` = the account id): not top-up principal and not revenue; never refundable, no cash
+    value; spent before paid credit; no expiry for now.
+21. The $10 is customer credit at the rate card (the DRAFT markup still applies). The platform's
+    supplier cost of trial play is reported separately, as `trial_spend`, on the operator
+    dashboard and in `dev billing`.
+22. ~~Players who join a host's table play on the host's balance; only the host needs an account.~~
+    Superseded by launch decision 9: every hosted player signs in (an account), and only funders
+    pay. Guest bootstrap is local-only (2.1).
+23. The account page shows the trial balance distinctly ("Trial credit $10.00") until it is spent.
+
+### 2.1 Launch decisions that change this plan (`artifacts/tmp/agents/LAUNCH.md`)
+
+| Decision | What it says | Effect here |
+| --- | --- | --- |
+| 7 | One PostgreSQL database for hosted play, one schema per owner: `accounts` and finance (B and F), `campaigns` (S1), asset catalog (O2), runtime directory, sessions, checkpoints (O1) | Closes 15.2 item 1: there is no separate `df_service` database. B's tables are schema `accounts` (5). Saves record asset references atomically; paid admission can share a transaction with game state. |
+| 9 | Hosted players authenticate (J02); only funders pay; guest bootstrap is local-only | Replaces decision 22. Every seat has an account, so closure and export matter to every player; payment stays a separate capability from campaign role. |
+| 26 | Customer surfaces show only what is paid: pace price per table-hour, estimate, maximum, actual charges per line, balance. Never the table fee, the multiplier or a provider price | Every page, JSON reply, statement, quote, receipt and email B serves. The customer wire types have no field for a fee. A test pins it on each surface. |
+| 27 | Ownership split: F owns the money core; B keeps identity, accounts, the portal and its pages, the processor adapter, the webhook inbox and processor records, operators | Sections 8 and 9 are F's. Cross-team money asks (settlement, admission hook, dispatch status, `cancel_unclaimed_effect`, terminal outcomes, lock order) go to F. |
+| 28 | Every account screen is a Rust wasm app (`df-account-app`, owner P) on the house df-ui stack. Hosted identity is WorkOS through its server-side User Management API, called from our server; no AuthKit hosted pages. Server sessions in a `__Host-` HttpOnly cookie plus CSRF; no tokens in JS-reachable storage. P owns `df-portal/src/app_api/`; B mounts it and serves the bundle at `/app/`. The server enforces all authorization | Supersedes launch decision 1 and the server-rendered pages of section 6 (they remain for local development and self-hosting). The identity port, the WorkOS adapter and the local password provider are in 4.4 and 7. |
+| 29 | Lock order: accounts and finance rows, then O1 directory and session rows, then `campaigns.campaign`, then campaign child rows, then media. Event-bumping transactions set `transaction_timeout` (PostgreSQL 17 or later) | The close transaction takes the account row first (7.5). B's role has `ALTER ROLE ... SET transaction_timeout` of 10 s and the store refuses to start without it (5.1). |
+| 30 | Finance admission is an F endpoint on the control plane's internal mTLS listener. PostgreSQL 17 or later | Nothing for B to build; `credit.rs` and `CommerceRepository` retire once S4's tests pass on F's service. |
+| 31 | No cross-owner foreign keys: ids from another owner's schema are validated at creation. Account closure cancels outgoing transfer proposals | B's tables reference no other schema, and S1's reference none of B's. Closure calls the campaign owner's participant inside the close transaction (7.5). |
+| 32 | Production is one origin, `https://dungeonfluxdnd.com`; staging `staging.dungeonfluxdnd.com`; mail goes from a `mail.dungeonfluxdnd.com` subdomain, support is `support@dungeonfluxdnd.com`; hostnames are configuration | `HostConfig` (`dungeonflux.hosts/1`) supplies the origin, the email From and Reply-To, the link bases in every email, the identity provider's redirect allowlist and the processor's return and cancel URLs (4.4). Session and pre-session cookies stay host-only (`__Host-`, no `Domain`), so staging can never receive production's. |
+
+The campaign table is S1's (`campaigns.campaign`, renamed from the earlier billing `campaign`
+table). Billing records that need a campaign reference S1's campaign id by value, in a
+billing-specific link table owned by F, with no foreign key (decision 31).
 
 ## 3. What exists today, and the layout decisions that follow
 
@@ -213,6 +254,22 @@ time, rt), `serde_json` (export). No axum, no HTML, no SQL.
 Every task (mail worker, webhook worker, reconciliation, usage consumer, retention) is held in one
 `JoinSet` owned by the services and stopped on the server's shutdown signal; nothing is detached.
 
+**Built in launch round 2 (what the module table above does not show).**
+
+| Module | Responsibility |
+| --- | --- |
+| `provider.rs` | The identity provider port (`IdentityProvider`: create user, authenticate, find, mark verified, begin and finish reset, end session, delete user) with failure classes kept apart (`Unavailable`, `Unknown`, `Malformed`), an object-safe wrapper, and `IdentitySource::{local_passwords, provider}`, the one seam the service has. Hosted production configures a provider; local passwords (Argon2id hashes in the account store) are for development and self-hosting. |
+| `provider_flows.rs` | Provider-mode sign up, sign in, verification, reset and re-authentication. The provider keeps the password; we keep the account, the sessions, the verified flag (only OUR emailed link sets it), the throttles and every message. The provider's own session is ended at once. An unverified address gets no session when the provider refuses it; a verification our link made but the provider did not hear about is repeated at the next sign in. An unverified provider user with no account here (a sign up that failed between the two writes) is replaced; a verified one is not taken over. |
+| `hosts.rs` | `HostConfig` (`dungeonflux.hosts/1`): the origin, the mail From and Reply-To, the link style, the identity redirect allowlist and the payment return and cancel URLs (decision 32). |
+| `closure.rs` | The values the close transaction exchanges with the campaign owner (7.5). |
+
+`df-workos` (new) implements the port over WorkOS's User Management API with an `HttpTransport` seam
+(`ReqwestTransport`: HTTPS only, no redirects, no proxies, no retries, bounded body) and ships
+`FakeWorkOsServer`, an in-memory WorkOS with the same endpoints and answer shapes. The error code
+strings WorkOS does not publish are the adapter's one reading, listed in its module notes to check
+against the WorkOS sandbox before launch. Passwords, API keys and tokens never appear in `Debug`
+output or audit lines.
+
 ### 4.5 `df-metering` (new, tiny shared metering contract crate)
 
 The contract between the cost engine (writer and drawer) and billing (reader and funder). No I/O.
@@ -283,7 +340,7 @@ New files `account_store.rs`, `billing_store.rs`, `operator_store.rs` implementi
 | TV and phone clients | W5 | funds notices and the pairing code |
 | `df-launcher` | W8 | `DF_PORTAL_*` lines when the owner enables the portal |
 
-## 5. PostgreSQL schema and migrations (database `df_service`)
+## 5. PostgreSQL schema and migrations (schema `accounts` of the hosted database)
 
 Money columns are `numeric(39,0)` micro-units with `CHECK (x >= 0)`; currency `char(3)`; times
 `timestamptz` from the service clock; IDs `bytea` with `CHECK (octet_length(id) = 16)`. Queries are
@@ -306,7 +363,38 @@ Each migration is one transaction recorded in `schema_migration`.
 | `account_event` | `event_id`, `account_id`, `at`, `kind` (closed set), `device_label` | Append-only security history shown to the customer; no email, IP or token. |
 | `export_request` | `export_id` pk, `account_id`, `requested_at`, `ready_at`, `expires_at`, `byte_length` | The export file itself is generated on demand (7.5). |
 
-### 5.2 `0006_billing.sql` (Round 2)
+### 5.1a `0006_account_closure.sql` (launch round 2, built)
+
+Roles `df_accounts` (this service's runtime role) and `df_campaigns` (S1's) are created `NOLOGIN` when
+absent; the deployment adds `LOGIN` and a password. `ALTER ROLE df_accounts SET transaction_timeout =
+'10s'` (PostgreSQL 17 or later): the close transaction calls the campaign owner's event-bumping
+methods, a per-transaction `SET LOCAL` does not shorten a timer already running, so the role default
+is the guarantee, and `PostgresAccountStore::open` refuses to start unless the role's default is
+positive and at most the configured bound (`TimeoutPolicy::AtMostMs(10_000)` in hosted
+composition). The view `accounts.account_status (account_id, status)` is S1's single-statement read
+for `member_snapshot` (unauthorized while `closing` or `closed`); the `SECURITY DEFINER` function
+`accounts.lock_account_status(account_id) -> status` takes the `FOR SHARE` row lock S1's role may
+not take itself, with `EXECUTE` granted to `df_campaigns` only, so a transfer acceptance either
+commits before a concurrent closure or sees `closing`. A runtime role cannot migrate: `open` skips
+the DDL when every migration is recorded.
+
+Migration numbers: B has 0005 to 0007 (launch decision 8). 0006 is used above, so the processor
+records (5.2) take 0007 and the operator tables (5.3) need a number from the coordinator.
+
+### 5.2 `0007_processor.sql` (B-3, not built)
+
+The earlier billing tables are F's (decision 27): wallet, reservation, run totals, ledger entries,
+payer grants, pairing codes, spend pace, usage cursor, usage debits and platform loss are in
+`planning/finance-ledger-research.md`. B keeps the processor's own records:
+
+| Table | Key columns | Notes |
+| --- | --- | --- |
+| `checkout` | `checkout_id` pk, `account_id`, `operation_id` unique, `gateway`, `gateway_session_ref` unique, `payment_intent_ref` unique null, `charge_ref` unique null, `amount`, `currency`, `status` (`creating`, `open`, `paid`, `expired`, `failed`, `unknown`), `refunded_amount`, `disputed_amount`, `created_at`, `idempotency_expires_at` (created + 24 h), `expires_at`, `paid_at` | `refunded_amount + disputed_amount <= amount`. The payment intent and charge references are stored when F is told the checkout is paid, because refund and dispute events name them, not the session. |
+| `gateway_inbox` | pk (`gateway`, `event_id`), `event_type`, `object_ref`, `received_at`, `raw_body` (<= 256 KiB), `status` (`received`, `applied`, `ignored`, `failed`), `attempts`, `next_attempt_at`, `last_error`, `processed_at` | Inserted before the 200; raw body deleted 30 days after processing. |
+
+### 5.2 (superseded) the earlier billing table list
+
+Kept for history only. The tables below were this plan's design before the F split.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -491,6 +579,19 @@ person can resend. Email bodies are the only place a token appears.
   paid-launch gate, decision 15) and records a support request visible on the operator dashboard;
   with a zero balance closure completes. The account can be reopened by logging in during a 30-day
   window (`delete_after`).
+- **Closure and the campaign owner (J14, launch round 2).** Closing is blocked while the account
+  owns or hosts an `active` campaign. The close transaction locks the account row and sets
+  `closing` (the lock `accounts.lock_account_status` shares, 5.1a), calls the campaign owner's
+  `closure_campaigns` in the same transaction, and rolls back with the blocking list when any block;
+  otherwise it also schedules the deletion of the owned archived campaigns (members are told by
+  email, with the date), cancels the account's outgoing transfer proposals, revokes every session and
+  commits together. A login within the window reopens the account and cancels the scheduled
+  deletions in the same transaction. The completion transaction (retention, after the window)
+  locks the account row, then has the campaign owner leave every campaign the account only played
+  in, re-checking blockers; blockers that appeared meanwhile keep the account `closing`. With an
+  identity provider, the provider's user is deleted first and its link dropped; only then is the
+  account's personal data purged. The campaign owner's side is the `ClosureParticipant` trait in
+  `df-persistence`, run on this store's connection.
 - **Deletion is blocked until money is settled.** Neither the retention task nor an operator
   deletes an account while it has a positive available balance, an active prepaid reservation, a
   refund that is `held`, `sent` or `unknown`, or an open dispute. The closure page and the operator's
@@ -509,265 +610,120 @@ person can resend. Email bodies are the only place a token appears.
   personal data; and when an account is deleted, every such field on rows that target it is replaced
   with `[redacted after deletion]` (the target id, action and time stay).
 
-## 8. Funds (Round 2)
+### 7.6 Hardening from the round 2 review (launch round 2b)
 
-### 8.1 Adding funds
+- **Verify and set a password in one step.** The verification link opens a page that asks for the
+  password. Verifying (a) replaces the password set at sign up (the provider's too, through its
+  `set_password`, before our link is spent), (b) bumps the credential generation and revokes every
+  session created before the proof. Someone who signed up with another person's address therefore
+  cannot keep the account. The older token-only `verify_email` still revokes earlier sessions but
+  keeps the sign-up password; P's app must switch to `verify_email_and_set_password`.
+- **WorkOS's own email verification is OFF**, because ours is the only one in use. An address
+  the provider refuses for lack of its verification is a failed sign-in like any other (counted, the
+  generic refusal). Unrecognized provider answers fail closed and never say which accounts exist
+  (sign-in: refused credential; sign-up: ask `find_user`, taken or a refused password; reset: spent
+  token). `Unavailable` is only for 429, 5xx, a rejected key and the named steps this server does not
+  support (multi-factor, organization choice, single sign-on, Radar). The transport URL is parsed
+  by parts: production is exactly `https://api.workos.com`.
+- **Provider reset tokens** are stored by digest for 15 minutes and 5 attempts when the mail is
+  queued. Confirming spends the token and revokes our sessions BEFORE the provider changes the
+  password, so a failure on either side never leaves an old session alive. Reset requests are
+  resolved in a bounded set of tasks the mail worker owns.
+- **Sign-in abuse.** At most two checks run at once per address (failures are counted when a check
+  ends); a provider sign up takes a fixed minimum time whether the address was new or registered.
+- **Closure.** Reopening needs `delete_after_ms > now` and exactly one row changed. Completion is
+  per account: a check under the account row lock, the campaign owner's chunked `leave_all`, and
+  only then the provider's user is deleted, its link dropped and the personal data purged, in
+  bounded batches (20 accounts a pass); a failing account is audited and skipped. Closing needs a
+  fresh proof within five minutes (the password again, or a new sign-in); an export accepts ten.
+- **Client address.** Per-address limits use the peer address; `X-Forwarded-For` counts only from
+  configured proxy networks, taking the rightmost hop that is not itself a proxy. A request whose
+  address is unknown is refused (503), never counted in a shared bucket. Composition must serve with
+  `into_make_service_with_connect_info`.
+- **Privileges and refusals.** The runtime role holds per-table grants only (`schema_migration` is
+  read-only; no default privileges); the production schema accepts only the `workos` provider.
+  Local passwords on a public `https` origin, and an unchecked `transaction_timeout` policy for a
+  database that is not local, are refused unless a development flag says otherwise. Addresses with
+  `, " < > ;` are refused; hosts are checked by character set; payment URLs take only a hex id.
 
-1. Presets (default 10, 25, 50, 100 USD) and a custom whole-dollar amount (default 10 to 500),
-   owner-tunable; the page shows what the amount buys at the current pace. Verified email and an
-   Active tenant are required.
-2. `POST /account/funds/checkout` validates, inserts a `checkout` row (`creating`), then calls
-   `create_topup_checkout` outside any transaction (10 s deadline, idempotency key = operation id,
-   `client_reference_id` = checkout id, `mode = payment`, `payment_method_types = ["card"]`
-   (decision 18), so a completed session is paid at once and there is no delayed-payment path). Known success stores the reference (`open`) and returns
-   `303` to the hosted page; Unknown sets `unknown` and shows "We could not confirm the checkout was
-   created; try again" (8.6).
-3. The return page never credits; it shows the stored status, refreshing every 5 s with
-   `<meta http-equiv="refresh">` while `open`.
+## 8. Funds: owned by F; what B keeps
 
-### 8.2 The fake gateway
+### 8.1 Ownership
 
-`payment_fake.rs` behaves like Stripe Checkout for one-time payments: create returns a session and a
-URL on the portal's own `/dev-checkout/{id}` page with "Pay (test)" and "Cancel"; paying emits
-`checkout.session.completed` signed in Stripe's `Stripe-Signature` format with the fake secret and
-delivers it through the real webhook handler (raw bytes, in process); retrieve returns the session
-state; refunds and disputes can be scripted (succeeded, failed, pending then succeeded, no answer;
-dispute opened, won, lost). Test hooks deliver twice, out of order, drop the first delivery, or make
-create time out after recording the session. The fake is the default (`DF_PORTAL_GATEWAY=fake`) and
-**the portal refuses to start with the fake gateway unless both the configured origin and the
-server's listen address are loopback** (origin host `127.0.0.1`, `[::1]` or `localhost`; listen
-address `127.0.0.1` or `::1`). The origin check alone is not enough: the launcher binds `0.0.0.0`
-when phones are on the network (`df-launcher/src/server.rs`), and a LAN client could then post
-`/dev-checkout/{id}/pay` without any `Origin`. The listen check uses the same `settings.listen`
-value the dev control surface checks (`dev_control::setting_on(settings.listen)` in `gameplay.rs`),
-so a fake checkout can never credit funds on a reachable server. The Stripe adapter needs `DF_PORTAL_GATEWAY=stripe` plus key and webhook-secret
-files, refuses live keys, and is not run in these rounds.
+Launch decision 27 moved the money core to agent F. `planning/finance-ledger-research.md` is the
+design for: the append-only double-entry journal and chart of accounts; funding lots (purchased and
+promotional, the $10 trial of decisions 19-23); pots, contributions and allocations; consent and
+quotes; per-operation reservations and admission; settlement; time-meter pricing; refunds, disputes
+and tax fields; reconciliation; price versions; company-loss classes; and accounting exports. The
+plan's presets and caps (master plan 4.2 and 4.3) are customer controls, built there as specified.
+The earlier text of this section on the prepaid tranche, `df-metering`, the cost-log consumer, the
+spend ledger, balances and history, tables and pairing (8.4, 8.7, 8.8) and of section 9 (settings,
+out of funds, the hourly governor, play time left) is superseded and removed.
+
+B keeps three things, and renders F's customer-safe shapes only (decision 26):
+
+1. The **processor adapter** (8.2): Stripe Checkout in test mode behind a port, with a faithful fake.
+2. The **webhook inbox and processor records** (5.2): verification, dedupe, retry, reconciliation.
+3. The **customer and operator pages** as JSON services for P's wasm app (8.5).
+
+The rule "never reveal how DungeonFlux makes its profit" applies to every surface B serves: no table
+fee, multiplier or provider price in any customer page, reply, statement, quote, receipt or email.
+Operator pages and the ledger keep the full breakdown.
+
+### 8.2 The processor adapter (B-3)
+
+1. Presets and a custom amount are owner-tunable. A verified email is required.
+2. Creating a checkout inserts a `checkout` row (`creating`), then calls the processor outside any
+   transaction (10 s deadline, idempotency key = operation id, `client_reference_id` = checkout id,
+   `mode = payment`, `payment_method_types = ["card"]`: launch accepts card payments only, decision
+   18). Known success stores the reference (`open`); Unknown sets `unknown`. The return and cancel
+   URLs come from `HostConfig::payment_return_url` and `payment_cancel_url` (decision 32), never a
+   constant. The return page never credits; it shows the stored status.
+3. The fake gateway behaves like Stripe Checkout for one-time payments, signs its events in Stripe's
+   `Stripe-Signature` format with a fake secret and delivers them through the real webhook handler.
+   Test hooks deliver twice, out of order, drop the first delivery, or make create time out after
+   recording the session. The portal refuses to start with the fake unless the origin and the listen
+   address are both loopback. The Stripe adapter refuses live keys and is not run in these rounds.
 
 ### 8.3 Webhooks and crediting
 
 1. The webhook router reads at most 256 KiB, verifies `Stripe-Signature` (timestamp within 5 min,
-   any `v1=` HMAC-SHA256 over `"{t}.{raw body}"` matching a configured secret in constant time;
-   several secrets allowed for rotation), parses only id, type and object reference, inserts the inbox
-   row (`ON CONFLICT DO NOTHING`) and returns 200. Bad signatures return 400 and one audit line;
-   nothing is stored.
-2. The webhook worker claims `received` rows (`FOR UPDATE SKIP LOCKED`) and re-reads the
-   authoritative object from the gateway (10 s deadline; `credit.rs` refuses webhook-only evidence).
-3. Checkout events: only a session that is complete and paid, with matching amount, currency and our
-   `client_reference_id`, produces `SettledTopup` with `VerifiedLatest`. One transaction locks the
-   wallet, runs `propose_credit_adjustment`, updates the wallet at the expected revision, inserts the
-   ledger entry (unique by operation and by (`checkout`, checkout id, kind)), stores the session's
-   payment intent and charge references on the checkout row, marks the checkout `paid` and the inbox
-   row `applied`. Repeats find the entry (`AlreadyRecorded`) and change nothing.
-   Order does not matter because each event re-reads the object.
-4. Failures back off (10 s, 1 min, 10 min, 1 h; `failed` after 8 attempts) and show on the operator
+   HMAC-SHA256 over `"{t}.{raw body}"` against any configured secret in constant time), parses only
+   id, type and object reference, inserts the inbox row (`ON CONFLICT DO NOTHING`) and returns 200.
+   Bad signatures return 400 and one audit line; nothing is stored.
+2. The worker claims `received` rows (`FOR UPDATE SKIP LOCKED`) and re-reads the authoritative object
+   from the processor (10 s deadline). Only a session that is complete and paid, with matching
+   amount, currency and our `client_reference_id`, is reported to F's crediting API, with the
+   checkout id as the idempotency key. Repeats change nothing; order does not matter because each
+   event re-reads the object.
+3. Failures back off (10 s, 1 min, 10 min, 1 h; `failed` after 8 attempts) and show on the operator
    webhook page.
 
-### 8.4 Spending: the prepaid reservation, and the cost records as reconciliation
+### 8.4 Refunds, disputes and reconciliation (processor side)
 
-**The bound: a durable prepaid reservation drawn at `BilledCall::new` (decision 17).**
+Refund and dispute events name a charge or payment intent; they are matched to the checkout through
+the references stored at crediting. An event whose charge matches no checkout is `ignored` and shown
+to operators. `charge.refunded` and the dispute events are re-read and passed to F, which owns the
+ledger effect, the restriction of the account and the company-loss class. Every 15 minutes and at
+startup, checkouts in `creating`, `open` and `unknown` older than two minutes are reconciled: within
+24 hours the create call is repeated with the same idempotency key and fingerprint; after 24 hours a
+row with a session reference is retrieved by reference, and one without is resolved only by a
+webhook carrying our `client_reference_id` or marked `expired`. Refunds in `unknown` are retrieved by
+the same key until known.
 
-- *Reserve.* When a paired table has available credit (at startup, at pairing, after a top-up), the
-  billing service reserves a tranche in one `df_service` transaction: `ReserveUsage` moves customer
-  credit into `usage_reserved` and the `prepaid_reservation` row records it with its supplier
-  equivalent (customer amount converted back through the rate card, rounded down, so the draw can
-  never spend more supplier money than the customer reserved). Tranche size is the larger of 15
-  minutes of estimated play and $1, limited by the available balance (tunable in `portal.json`). Only
-  after the commit is the amount added to the table's `df_metering::PrepaidDraw`.
-- *Draw.* `BilledCall::new` prices its estimate (the cost engine's existing `Price::micro_usd`) and
-  draws it from the `PrepaidDraw`: a compare-and-swap on an atomic, no I/O, no await. If the
-  remaining tranche is smaller than the estimate it returns `FundsRefusal` and the call site takes
-  the capability's existing provider-unavailable fallback (4.9). `settle` trues the draw up to the
-  metered amount; `not_billed` releases it. `Drop` with an unknown outcome keeps the estimate drawn
-  until the usage consumer has recorded that call as `unknown_outcome_not_billed` (decision 14); it
-  then calls `credit_back`, so the estimate returns to the table mid-session instead of waiting for
-  the session to end. An estimate on a priced route that prices to zero is refused, never drawn as
-  zero (4.5). Calls on `Metering::Unpriced` routes (metered, deliberately unpriced) draw nothing and
-  are booked as `unpriced_usage` platform loss.
-- *Refill.* An owned refill task wakes when the remaining tranche falls below half of it and reserves
-  another tranche durably, then adds it to the draw. The tranche is sized so that a refill (one
-  `df_service` transaction, target under 100 ms) completes long before the remaining half is spent;
-  a refusal while a refill is in flight and unreserved balance remains is counted as
-  `draw_refused reason=refill_pending` and alerted on the operator page, because it means the
-  tranche is too small. If the wallet cannot fund a refill the table moves to `Low` and then
-  `Exhausted` (9.2).
-- *Completion margin.* Unit: supplier micro-dollars, like the draw. Per-action cost is the p95 of the
-  table's measured supplier cost per player action in this session (cost records grouped by the
-  causing hero action); until 20 actions are measured it is the tier's reference per-action cost from
-  `content/spend-pace.json`. The margin is that per-action cost times (the number of player actions
-  admitted and not yet finished, plus one), recomputed at each admission and completion; the game's
-  admission point reports the in-flight count through the same shared funds state it reads. When the
-  unreserved balance is zero and the draw's remaining falls to the margin, the table goes
-  `Exhausted`: new player actions and optional work stop, and the margin pays for the media of
-  actions already admitted. The draw refuses only when the margin is gone too, so a metered call
-  site that misses the funds `watch` still cannot spend beyond the reservation.
-- *Bound.* The customer is never charged more than was durably reserved. The only overrun is a
-  true-up in which a call's actual cost exceeded its estimate after the tranche was empty; billing
-  records it as `overrun_beyond_reservation` platform loss. Worst case: the sum over calls in flight
-  at that moment of actual minus estimate; Round 2 measures it per exhaustion (audit line and
-  dashboard).
-- *Local and owner play* hold no reservation: `SpendLedger` has no draw and `BilledCall::new` always
-  succeeds (decision 10).
-- *Crash and restart.* The reservation is durable; the draw is memory. The run is the game
-  database name and survives restarts; each server start is a new cost-book session, and the
-  reservation belongs to (campaign, run, session). At start, reservations of earlier sessions move to
-  `releasing`; the usage consumer finishes debiting those sessions' records, then `ReleaseUsage`
-  returns the unconsumed remainder to the customer. Calls drawn but never recorded (lost with the process) are not charged
-  to the customer; the reserved-but-unaccounted amount is the upper bound of a `run_not_closed`
-  conservation gap.
+### 8.5 Pages as JSON services
 
-**Reconciliation and conservation: the cost records.**
+The account and session logic (7) and the processor calls are services; P's `df-portal/src/app_api/`
+is the JSON layer over them and `df-account-app` the screens. The balance, statement and funding
+screens read F's customer-safe types. The server decides every permission; the app only hides what
+the server already refuses.
 
-- *Source.* The usage consumer reads `cost.jsonl` of each run through `df_metering::decode_line`. It
-  never meters.
-- *Cursor.* Per (`campaign_id`, `run`) it stores the file identity (digest of the first complete
-  line), the byte offset after the last complete line, and the last sequence of each session (the
-  file spans restarts; call ids are `<session>-<n>`). It advances only past
-  a newline-terminated line; a partial last line waits for the next pass. A file shorter than the
-  offset, a different first line, or an undecodable line halts the cursor.
-- *A halted cursor fails closed.* Halting sets the table's funds `watch` to `Exhausted` (the pause in
-  9.2), freezes the draw at zero so every further `BilledCall::new` refuses, stops refills, raises one
-  `BILLING cursor_halted` alert (operator page and `dev billing`), and records everything the cost
-  book accrued after the last debited record (from `run_totals`) as `accrued_while_halted` platform
-  loss; nothing of it is charged. An operator resumes, with a reason, only after inspecting the file
-  (re-verified identity and offset) or closing the run.
-- *Debit.* Each record becomes one `usage_debit` keyed by (`campaign_id`, `run`, `call_id`); its
-  ledger `source_ref` is the same triple, `<campaign_id>/<run>/<call_id>` (5.2), so two runs or two
-  tables reusing a call id stay distinct. Records before pairing are not billed. Priced lines convert
-  with `customer_amount` (rounded toward the customer) and are applied with `ConsumeReserved` against
-  the run's reservation; an amount beyond what is left of it is `overrun_beyond_reservation`. Unpriced
-  lines are recorded as `unpriced_usage` platform loss, never as a silent zero. `source=unknown`
-  records are `unknown_outcome_not_billed`.
-- *Totals survive a crash.* Every minute and at close, the consumer copies the cost book's totals
-  for the current session and its write-failure count (`CostTotalsSource`, and the `RunTotals` line
-  `close_run` writes) into `run_totals`, keyed (campaign, run, session). A session that ended
-  without `closed_cleanly` is a `run_not_closed` conservation gap, bounded by that session's
-  reservation; it cannot pass silently.
-- *Dropped lines.* The cost writer can lose lines (full queue) and does not fsync today (fsync is
-  requested from agent C, 4.9). The conservation check catches losses: a gap between `run_totals`
-  and the debits is recorded as `dropped_cost_lines` platform loss and alerted.
-- *Unmetered routes.* The nine `Metering::Pending` routes (4.9 e) never reach the cost book, so
-  neither the draw nor the conservation check can see them. Until C meters them, their spend is an
-  explicit platform-loss class, `unmetered_route`, of unknown amount: the dashboard and `dev billing`
-  list the Pending routes and say that their spend is not visible. Paid pairing is refused while any
-  route is Pending (8.8).
-- *Conservation check* (in `dev billing` and on `/admin/conservation`): per session, cost-book
-  supplier total = debited supplier amounts + unpriced + unknown + dropped + accrued-while-halted; per
-  reservation, consumed + released + unreleased remainder = reserved; per tenant, ledger sums by kind
-  equal the wallet columns, `topup_principal = deferred + earned + refunded` and
-  `usage_reserved` = the sum of active reservations' unconsumed amounts. A mismatch shows in red with
-  the difference.
-- The consumer runs every second and is idempotent; replaying a file adds nothing.
+## 9. Spend pace and out of funds: F's and S1's
 
-### 8.5 Refunds outside the portal and disputes
-
-- Refund and dispute events name a charge or payment intent, not a session; they are matched to
-  the checkout through the `charge_ref` and `payment_intent_ref` stored when it was credited (8.3).
-  An event whose charge matches no checkout is marked `ignored` and shown on the operator webhook
-  page.
-- `charge.refunded` (for example a refund from the Stripe dashboard): after re-reading the charge,
-  the refunded amount not already recorded by a portal refund becomes `ExternalReversal`: available
-  credit is reduced and recorded as refunded principal (`external_refund` entry); any part already
-  consumed is a shortfall recorded as `external_reversal_shortfall` platform loss and the tenant
-  becomes Restricted (commerce lifecycle) until an operator reviews it.
-- `charge.dispute.created`: the disputed amount is held (`dispute_held`; a hold reduces available
-  credit, like a refund hold) and the tenant becomes Restricted. `charge.dispute.closed` won releases
-  the hold (`dispute_won`); lost applies `ExternalReversal` (`dispute_lost`, shortfall as platform
-  loss). Restriction is lifted only by an operator with a reason. Restricted tenants keep reads and
-  export; their tables pause like an empty balance.
-
-### 8.6 Reconciliation
-
-Every 15 min and at startup, the reconciliation pass looks at checkouts in `creating`, `open` and
-`unknown` older than 2 min:
-
-- Within 24 h of creation (`idempotency_expires_at`), it repeats the create call with the same
-  idempotency key and fingerprint; Stripe returns the original session for a repeated key within 24
-  h, so a `creating` row (crash before the call finished) or an `unknown` one learns its session
-  reference, and an `open` one is retrieved by reference to catch a lost webhook.
-- After 24 h the key can no longer be replayed. A row with a session reference is retrieved by
-  reference. A row without one cannot be found by our id; it is resolved only by a webhook carrying
-  our `client_reference_id`, and is otherwise marked `expired` (Checkout sessions expire within 24
-  h, so no payment can still arrive).
-- Refunds in `unknown` are retrieved by the same key until known.
-
-### 8.7 Balance, estimate and history
-
-Available balance (deferred credit minus holds), display rounded down to the cent; estimated play
-time at the current pace and at each tier; funds state; standing; a paginated history from
-`ledger_entry` (25 rows per page, opaque cursor scoped to the session's tenant).
-
-### 8.8 Tables and pairing
-
-A game server with the portal on registers its `campaign` row at startup (keyed by its database
-identity). The host menu on the display shows an 8-character pairing code (unambiguous alphabet, 10
-min, single use, stored hashed, 5 attempts); the host enters it on `/account/tables`, creating the
-`payer_grant`. An unpaired table runs exactly as today and is never charged.
-
-**Paid pairing requires complete metering.** Composition passes the billing service the cost
-engine's route table (`cost::BILLED_ROUTES`) as a coverage fact. While any route is
-`Metering::Pending`, pairing with the Stripe gateway is refused ("This server cannot bill play yet")
-and `dev billing` names the Pending routes. With the fake gateway (loopback only, 8.2) pairing is
-allowed so Round 2 can be exercised, and the Pending routes' spend is the `unmetered_route` class
-(8.4). A coverage test in `df-tools` (requested from C) fails if a route is added without a
-`Metering` value, and a `df-customer` test pins that a Pending route refuses Stripe pairing. Showing the code is a
-W5 request; `dev billing tables` prints it so Round 2 can be tested first.
-
-## 9. Spend pace and the game (Round 2)
-
-### 9.1 Settings
-
-| Setting | Values | Game effect (where it is read) |
-| --- | --- | --- |
-| Quality tier | Economical, Standard, Premium | Picture quality and size (imagery profile and `ImageQuality`); voice model (Economical and Standard `eleven_flash_v2_5`, Premium `eleven_multilingual_v2`) |
-| Picture cadence | Scene changes only, Relaxed (about 60 s), Standard (REF-068, about 30 s, the default) | The periodic same-scene plate refresh only; visible changes redraw at once |
-| Voice | On, Off | Narration and character voices; captions remain |
-| Hourly pace | None, or dollars per hour | The soft governor (9.3) |
-
-Tiers, their media mapping and reference usage per hour live in `content/spend-pace.json`
-(owner-tunable, validated at load, per-knob fallback with an audit line). The game reads
-`watch::Receiver<TablePace>` where these choices are made today; a watch read is a small copy with
-no I/O.
-
-### 9.2 Out of funds (and Restricted)
-
-`Exhausted` or a Restricted tenant pauses the paired table:
-
-- Work already admitted finishes: the player action being resolved commits, and its media is paid
-  from the completion margin of the reservation (8.4); anything beyond the reservation is absorbed.
-- No new paid work starts. Player actions are refused with the existing `Paused` rejection, and the
-  same funds `watch` is read wherever new paid work is requested without a player action: periodic
-  plate refreshes, look-ahead and prefetch, timer-driven music and clips, NPC timers that call the
-  storyteller, story-memory summaries and embeddings, and splat worlds. Those requests return the
-  existing prepared or "unavailable" fallback, never a stall. The hub request point (`resources.rs`)
-  and the timer sites are hunks requested from their owners (4.9). Behind the watch, the draw itself
-  refuses once the margin is spent, so the bound holds for every metered route even where a site is
-  missed; the Pending routes build no `BilledCall`, which is why paid play waits for them (8.8).
-- If a call for an action already admitted is refused (the margin was too small), the action's
-  rules outcome is still committed and shown, and its narration uses the defined fallback: the
-  committed outcome's plain summary line (the deterministic, logged outcome text the view already
-  carries) followed by the pause notice. The storyteller does not enter its retry loop for a refusal.
-  This is a `BILLING draw_refused reason=margin` line and counts against the margin rule (8.4).
-- A halted usage cursor (8.4) pauses the table the same way.
-- The display and phones show "This table is out of funds. The host can add funds at
-  <origin>/account/funds"; nothing is lost; committed outcomes stay.
-- A credited top-up (or an operator lifting a restriction) returns the table to `Funded` and play
-  resumes.
-- `Low` (under 30 min of estimated play, tunable) shows a notice on the host's phone only.
-- Owner and local play (`DF_PORTAL=off`, or an unpaired table) never pause (decision 10).
-
-### 9.3 The hourly pace governor (soft)
-
-Above the customer's hourly pace (trailing 60-minute customer spend, `pace_decision`), the table's
-effective settings step down one level at a time (cadence first, then tier); they step back up below
-80 % of the pace. It never pauses and never refuses a line. Each step is a `PACE` line and is shown
-on the account page.
-
-### 9.4 Estimated play time left
-
-Cost per hour is the table's measured customer spend per hour of play at the current settings once
-30 min of such play exists, otherwise the tier's reference usage priced with `content/pricing.json`
-and the DRAFT rate card. Play time left = available balance / cost per hour, whole minutes, integer
-arithmetic; labelled an estimate.
+The customer's spend pace (presets Story, Immersive, Cinematic and Custom, the per-session ceiling),
+the estimate and maximum shown before a session starts, what happens when funds run out, and the
+estimated play time left are F's (`planning/finance-ledger-research.md`, the spend preset catalog and
+`start_readiness`), shown by S1's lobby and P's screens. Nothing in this plan builds them.
 
 ## 10. Operator dashboard (Round 3)
 
@@ -1021,7 +977,9 @@ Decisions 9-16 in section 2 settle the round 0 questions; decisions 17-18 the ro
 
 ### 15.2 Deviations from the governing documents (for the owner)
 
-1. **Separate service database; admission through a durable prepaid reservation.**
+1. **Closed by launch decision 7 (one database, one schema per owner); admission is F's.** The text
+   below is the earlier reasoning, kept for the record.
+   ~~Separate service database; admission through a durable prepaid reservation.~~
    `commerce-service.md` shares one PostgreSQL transaction between game and commerce authority at
    admission; auth D03 and commerce say a cached snapshot cannot authorize paid work; `AGENTS.md`
    requires current grants at durable admission and native egress. Accounts and billing stay in
@@ -1078,32 +1036,26 @@ Decisions 9-16 in section 2 settle the round 0 questions; decisions 17-18 the ro
    pages); `subsystem-architecture.md` map entries for the new crates and edges. Done when the Round 1
    tests pass including the Postgres contract tests, the gate passes, the in-process router test signs
    up, verifies through the outbox link, logs in and out, and the browser smoke check is recorded.
-2. **Round 2: funds.** `df-metering` (record codec and `PrepaidDraw`); `df-commerce` `topup`,
-   `customer_rate`, `funds`, `pace`, `standing`, the reservation and `ExternalReversal` credit events
-   and the port amendment; `df-providers` fake and Stripe adapters;
-   `df-persistence` `billing_store` and `0006_billing.sql`; `df-customer` billing, prepaid tranche
-   and refill, usage reconciliation, pace, checkout reconciliation, disputes; `df-portal` funds, pace, tables, webhook router and fake checkout;
-   requests for agent C's draw and record changes, the game's funds gate, pause sites, pace reads
-   and pairing display. Must be done in Round 2 (carried from the third critic pass):
-   - The `DrawTicket` sits in an `Option` in `BilledCall`, taken once by `settle`, `not_billed` or
-     `Drop`.
-   - Unknown-outcome draws stay drawn only until the consumer records them, then `credit_back`
-     returns them mid-session; refills continue meanwhile.
-   - The draw happens before any unit counter or side record is charged (4.9 d).
-   - Estimates are in the route's priced categories, the storyteller's includes its output ceiling,
-     and a zero estimate on a priced route is refused (4.9 c).
-   - A storyteller refusal skips its retry loop; a refused admitted action gets the narration
-     fallback in 9.2.
-   - The completion margin rule in 8.4 (supplier micro-dollars; measured p95 per action or the tier
-     reference; times actions in flight plus one).
-   - Refusals during a pending refill are counted and alerted.
-   - Run identity is (campaign, run, session) for reservations and totals.
-   - Stripe pairing is refused while any route is Pending.
-3. **Round 3: operator dashboard.** `0007_operators.sql`, `operator_store`, `df-customer` operators,
-   enrolment, re-enrolment and seal rotation, `df-portal` admin routes, the conservation page; the
-   `df-tools` operator subcommands requested from W4.
-4. **Round 4: business site and visual design.** Public pages, pricing explanation, the visual pass
-   over every page, full browser checks.
+2. **Round B-2 (launch round 2, built): identity provider, closure, hostnames.** The identity
+   provider port and `IdentitySource` (local passwords for development, a remote provider for hosted
+   production); the WorkOS adapter and an in-memory WorkOS (`df-workos`); provider-mode sign up,
+   sign in, verification, reset and sign-out; JSON-ready services for P's app; `/app/` mounted
+   (`router_with_app`) with `/app/join` answering 200 and no redirect; account closure with the
+   campaign owner's participant inside the close transaction, outgoing proposals cancelled, reopening
+   cancelling the scheduled deletions, the completion transaction on retention;
+   `0006_account_closure.sql` and the `transaction_timeout` startup check; `HostConfig`; a TLS
+   handshake test for `postgres_tls`; this plan revised.
+3. **Round B-3: the processor.** Stripe Checkout in test mode behind a port, the fake, the webhook
+   inbox and processor records (`0007_processor.sql`), reconciliation, calling F's crediting API.
+4. **Round B-4: operators.** Operator capability and MFA, audit, `OperatorDirectory` for P's console
+   (migration number from the coordinator).
+5. **Round B-5: the business pages** served by `df-portal` (`/` from the coordinator's `docs/index.html`;
+   `/signup`, `/login`, `/terms`, `/privacy`).
+
+Not yet built and owed (round 2 report): recording the terms version and the adult attestation at
+sign up; exact-match account lookup for the operator console; email change and password change for
+provider-held accounts; a trusted-proxy client-IP extraction function for S1's routes; moving the
+clock and token helpers into `df-types` (S1 request B-2).
 
 Each round writes `artifacts/tmp/agents/B/round-<n>.md` with files changed, behaviours and their
 tests, the gate result line, test filters and counts, open questions and requests.

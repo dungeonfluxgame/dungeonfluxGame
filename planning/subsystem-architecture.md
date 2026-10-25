@@ -64,9 +64,16 @@ those services. DTOs are explicitly mapped to domain/client types.
 | `df-providers` | Actual vendor/native HTTP adapters; provider modules | factories implementing provider ports | df-types, df-observe, df-provider-api, df-commerce |
 | `df-ai` | Validated narrative/intent/flavor, cache/replay/policy | AiService::run; AiResult with permitted text/proposals | df-types, df-model, df-content, df-observe, df-provider-api |
 | `df-media` | Asset Engine: predictive media, live speech, audio routing, visual/sound jobs | AssetEngine::admit/status/cancel/complete/reconcile; MediaService streams | df-types, df-model, df-content, df-assets, df-observe, df-provider-api |
-| `df-persistence` | PostgreSQL adapters and migrations | implementations of repository/auth/asset/budget/recording ports | df-types, df-model, df-session, df-auth, df-assets, df-provider-api, df-observe, df-commerce |
+| `df-persistence` | PostgreSQL adapters and migrations | implementations of repository/auth/asset/budget/recording ports | df-types, df-model, df-session, df-auth, df-assets, df-provider-api, df-observe, df-commerce, df-customer |
+| `df-customer` | Native customer-account facade: signup, verification, sessions, password change/reset, email change, closure/export, throttles, dev mail outbox ([Account service](account-service-research.md)) | CustomerService; AccountStore and EmailSender ports | df-types, df-auth, df-observe |
+| `df-portal` | Server-rendered customer portal: HTTP routes, escaped HTML, cookies, CSRF, static CSS; no database, gateway or game types | router, dev_routes, PortalState, PortalOrigin | df-types, df-observe, df-customer |
 | `df-api` | RPC handlers, audience projection and debug surfaces | generated services; PublicServiceSet/AdminServiceSet | df-types, df-protocol, df-model, df-session, df-auth, df-assets, df-media, df-provider-api, df-locale, df-observe, df-commerce |
-| `df-server` | Composition binary: config, listeners/wiring/readiness/shutdown | startup/configuration; no reusable game logic | df-types, df-content, df-engine, df-session, df-auth, df-assets, df-provider-api, df-providers, df-ai, df-media, df-persistence, df-api, df-rpc-bridge, df-observe, df-telemetry, df-commerce |
+| `df-server` | Hosted composition binary: typed configuration (`toml`), health, metrics exporter, ownership contracts for the control plane, campaign runtime and egress dispatcher; dev surfaces behind the `local-dev` feature | startup/configuration; no reusable game logic. Today it depends only on df-session; as the production root it will wire (launch decision 15) df-tools as the runtime library, df-persistence stores (`PostgresAccountStore` with a `TimeoutPolicy`), df-customer with `HostConfig` and `IdentitySource` (df-workos in hosted production), `df_portal::router_with_app`, df-campaign, df-finance and df-runner | df-session (planned: df-types, df-persistence, df-customer, df-workos, df-portal, df-campaign, df-finance, df-runner, df-observe, df-telemetry) |
+| `df-workos` | WorkOS User Management adapter for df-customer's `IdentityProvider` port, plus an in-memory WorkOS for tests; HTTPS transport with no redirects, proxies or retries | `WorkOsIdentity`, `ReqwestTransport`, `FakeWorkOsServer` (test-fakes) | df-customer, df-observe |
+| `df-account-app` | The account web app (wasm32 cdylib) and its JSON wire types; df-portal's `app_api` uses the wire types only | routes, update loop, views, wire types | none native (web-sys on wasm32) |
+| `df-campaign`, `df-campaign-wire` | Campaigns, membership, invitations, lobby and display pairing; wire types shared with the account app | CampaignService, ports, JSON routes (feature `routes`) | df-types, df-auth, df-observe, df-campaign-wire |
+| `df-finance` | Money core: journal, lots, pots, admission, settlement (finance-ledger-research.md) | ledger stores and services | df-types, df-commerce |
+| `df-runner` | Trusted runner that starts one isolated campaign runtime process | runner, Docker proxy fake (test-fakes) | df-observe |
 
 Async ports belong to their consumer's crate; adapters depend on that contract,
 never the reverse. `df-session` does not import `df-persistence`, `df-ai`, or
@@ -152,5 +159,8 @@ reservation/grant IDs. The native CommerceService facade owns I/O, separately fr
 pure policy. df-auth owns EntitlementReader and its persistence projection; current
 capability plus atomic reservation/dispatch revalidation protects paid admissions.
 No df-commerce dependency enters df-session, df-engine/directors or browser closure.
+The customer portal is `df-customer` (native facade; owns its store and mail ports) plus
+`df-portal` (HTTP and markup only). Composition wires `df-persistence`'s `PostgresAccountStore`
+into them and merges the portal router into the running server; neither enters a browser closure.
 [Service operations](service-operations.md) fixes dispatch/tenant/recovery limits;
 [Commercial validation](commercial-validation.md) owns future income evidence.
