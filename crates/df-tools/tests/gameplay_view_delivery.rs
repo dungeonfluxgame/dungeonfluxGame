@@ -17,6 +17,25 @@ mod presentation;
 #[allow(dead_code)]
 #[path = "../src/voice_line.rs"]
 mod voice_line;
+// The presentation module's combat beats, roll cards and stage director use the dice, layout and stage machinery.
+#[allow(dead_code)]
+#[path = "../src/combat_beats.rs"]
+mod combat_beats;
+#[allow(dead_code)]
+#[path = "../src/dice_roll.rs"]
+mod dice_roll;
+#[allow(dead_code)]
+#[path = "../src/layout_contract.rs"]
+mod layout_contract;
+#[allow(dead_code)]
+#[path = "../src/roll_card.rs"]
+mod roll_card;
+#[allow(dead_code)]
+#[path = "../src/stage_director.rs"]
+mod stage_director;
+#[allow(dead_code)]
+#[path = "../src/stage_machines.rs"]
+mod stage_machines;
 
 use df_client::{
     cache::CacheScope, connection::RpcConnection, connection_views::ConnectionViewAcceptance,
