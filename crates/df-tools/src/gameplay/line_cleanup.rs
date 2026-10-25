@@ -35,7 +35,7 @@ pub(super) const CLEANUP_OUTPUT_TOKENS: u32 = 160;
 /// a long but valid player utterance is not silently shortened before the stage can pace it.
 pub(super) const DISPLAY_CHARACTERS: usize = 420;
 /// The most characters a cleaned line may gain over the raw one (a typo fix, a name).
-const MAXIMUM_GROWTH: usize = 12;
+const MAXIMUM_GROWTH_CHARACTERS: usize = 12;
 
 const FILLERS: [&str; 12] = [
     "um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "ahh", "hmm", "hm", "eh",
@@ -392,13 +392,13 @@ fn same_word(raw: &str, clean: &str) -> bool {
     if raw.chars().any(char::is_numeric) || clean.chars().any(char::is_numeric) {
         return false;
     }
-    let (short, long) = (raw.chars().count(), clean.chars().count());
-    if short >= 4 && edit_distance(raw, clean) <= 2 {
+    let (raw_characters, cleaned_characters) = (raw.chars().count(), clean.chars().count());
+    if raw_characters >= 4 && edit_distance(raw, clean) <= 2 {
         return true;
     }
-    if short <= 3
-        && long <= short + 3
-        && short >= 2
+    if raw_characters <= 3
+        && cleaned_characters <= raw_characters + 3
+        && raw_characters >= 2
         && is_subsequence(raw, clean)
         && raw.chars().next() == clean.chars().next()
     {
@@ -457,8 +457,10 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
     {
         return None;
     }
-    let raw_chars = raw.trim().chars().count();
-    if candidate.chars().count() > raw_chars + MAXIMUM_GROWTH.max(raw_chars / 8) {
+    let raw_characters = raw.trim().chars().count();
+    if candidate.chars().count()
+        > raw_characters + MAXIMUM_GROWTH_CHARACTERS.max(raw_characters / 8)
+    {
         return None;
     }
     let mut raw_words = Vec::new();

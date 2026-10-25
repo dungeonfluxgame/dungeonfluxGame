@@ -62,7 +62,6 @@ pub(super) fn set(name: &str, on: bool) -> Result<(), UnknownEffect> {
     Ok(())
 }
 
-/// Every effect with whether it is on.
 pub(super) fn states() -> Vec<(&'static str, bool)> {
     let off = off();
     EFFECTS
