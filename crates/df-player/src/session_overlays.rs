@@ -138,12 +138,12 @@ mod browser {
             if !self.active.get() {
                 return Err(SessionOverlayMountError::Revoked);
             }
-            let result = if view.generation != self.generation {
+            let update_result = if view.generation != self.generation {
                 Err(SessionOverlayValidationError::WrongGeneration.into())
             } else {
                 self.phase.update(view)
             };
-            if let Err(update) = result {
+            if let Err(update) = update_result {
                 // Invalid ordinary views leave df-ui's current snapshot untouched.
                 // Changed owners and partial DOM failures must fail closed.
                 if matches!(&update, SessionOverlayError::Validation(error)
@@ -178,11 +178,14 @@ mod browser {
                 .and_then(|node| node.dyn_into::<HtmlElement>().ok());
             let mut failure = None;
             if self.phase.essential_input().contains(Some(&self.essential)) {
-                let next = self.essential_next.as_ref().filter(|node| {
+                let next_sibling = self.essential_next.as_ref().filter(|node| {
                     node.parent_node()
                         .is_some_and(|parent| parent.is_same_node(Some(&self.essential_parent)))
                 });
-                if let Err(error) = self.essential_parent.insert_before(&self.essential, next) {
+                if let Err(error) = self
+                    .essential_parent
+                    .insert_before(&self.essential, next_sibling)
+                {
                     failure = Some(SessionOverlayError::from(error));
                 }
             }

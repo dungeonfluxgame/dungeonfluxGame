@@ -221,7 +221,7 @@ mod browser {
             .dyn_into()
             .map_err(|_| JsValue::from_str("wrong choice node type"))
     }
-    fn next(fixture: &Fixture) -> Result<SessionRevision, JsValue> {
+    fn next_revision(fixture: &Fixture) -> Result<SessionRevision, JsValue> {
         fixture.revision.next_sequence().map_err(|failure| {
             JsValue::from_str(&format!("fixture revision rejected: {failure:?}"))
         })
@@ -232,11 +232,11 @@ mod browser {
         pending: bool,
         refused: bool,
     ) -> Result<(), JsValue> {
-        let current = next(fixture)?;
+        let current_revision = next_revision(fixture)?;
         player(fixture)?
             .update(&private_view(
                 fixture.player_binding,
-                current,
+                current_revision,
                 reordered,
                 pending,
                 refused,
@@ -245,12 +245,12 @@ mod browser {
         display(fixture)?
             .update(&public_view(
                 fixture.display_binding,
-                current,
+                current_revision,
                 fixture.host,
                 pending,
             ))
             .map_err(error)?;
-        fixture.revision = current;
+        fixture.revision = current_revision;
         Ok(())
     }
     fn mount_pair(fixture: &mut Fixture) -> Result<(), JsValue> {
@@ -344,9 +344,9 @@ mod browser {
             choice.dispatch_event(&Event::new("click")?)?;
             require(fixture.inputs.borrow().len() == count, "pending view emitted input")?;
             update(fixture, false, false, false)?;
-            let mut wrong = private_view(binding(99)?, next(fixture)?, false, false, false);
+            let mut wrong = private_view(binding(99)?, next_revision(fixture)?, false, false, false);
             require(matches!(player(fixture)?.update(&wrong), Err(PlayerError::Admission(ViewAcceptance::WrongBinding))), "wrong player binding accepted")?;
-            wrong = public_view(binding(99)?, next(fixture)?, false, false);
+            wrong = public_view(binding(99)?, next_revision(fixture)?, false, false);
             require(matches!(display(fixture)?.update(&wrong), Err(DisplayError::Admission(ViewAcceptance::WrongBinding))), "wrong public binding accepted")?;
             require(display(fixture)?.root().query_selector(".exploration-choice")?.is_none(), "public view manufactured host offers")?;
             fixture.host = true;

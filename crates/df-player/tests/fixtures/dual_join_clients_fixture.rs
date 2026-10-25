@@ -97,8 +97,8 @@ mod browser {
             .click();
         Ok(())
     }
-    fn write_draft(input: &HtmlInputElement, value: &str) -> Result<(), JsValue> {
-        input.set_value(value);
+    fn write_draft(input: &HtmlInputElement, draft_text: &str) -> Result<(), JsValue> {
+        input.set_value(draft_text);
         input.dispatch_event(&Event::new("input")?)?;
         Ok(())
     }
@@ -109,16 +109,16 @@ mod browser {
             max_text_bytes: 4096,
         }
     }
-    fn view(player: bool, stamp: JoinStamp, mode: Mode) -> JoinPhaseView<'static> {
+    fn view(is_player: bool, stamp: JoinStamp, mode: Mode) -> JoinPhaseView<'static> {
         let lobby = matches!(mode, Mode::Lobby | Mode::Host | Mode::Empty);
-        let offer = if player && lobby || !player && matches!(mode, Mode::Host) {
+        let offer = if is_player && lobby || !is_player && matches!(mode, Mode::Host) {
             Some(LobbyOffer {
-                key: if player {
+                key: if is_player {
                     "synthetic-player-ready-current"
                 } else {
                     "synthetic-display-host-start-current"
                 },
-                label: if player {
+                label: if is_player {
                     "Mark yourself ready"
                 } else {
                     "Begin the story · host offer"
@@ -143,12 +143,12 @@ mod browser {
                 description: "Rain slips between the rooftops of Greyhaven. Across the harbor, an old lantern is waiting for your company.",
                 location: "Greyhaven · The old harbor",
                 scene_label: "Gather your party",
-                narration: if player {
+                narration: if is_player {
                     PRIVATE
                 } else {
                     "PUBLIC · Beyond the rain, a door opens and a story waits to be told together."
                 },
-                connection: if player {
+                connection: if is_player {
                     "Synthetic permitted player projection · Production RPC pending"
                 } else {
                     "Synthetic public display projection · Production RPC pending"
@@ -162,7 +162,7 @@ mod browser {
             } else {
                 "Step into the story"
             },
-            panel_description: if player {
+            panel_description: if is_player {
                 "Your name and invitation stay on this player client. Sending input cannot confirm a seat or readiness."
             } else {
                 "Public presence and readiness are supplied facts. Host controls appear only when this projection explicitly includes an offer."
@@ -170,7 +170,7 @@ mod browser {
             invitation_label: "Room code or invitation",
             name_label: "Your player name",
             join_label: "Join the adventure",
-            join_enabled: player,
+            join_enabled: is_player,
             feedback: match mode {
                 Mode::Pending => {
                     JoinFeedback::Pending("Synthetic response pending · no membership confirmed")
@@ -204,13 +204,13 @@ mod browser {
     fn advance(stamp: &mut JoinStamp) {
         stamp.sequence = stamp.sequence.saturating_add(1);
     }
-    fn update(fixture: &mut Fixture, player: Mode, display: Mode) -> Result<(), JsValue> {
+    fn update(fixture: &mut Fixture, player_mode: Mode, display_mode: Mode) -> Result<(), JsValue> {
         advance(&mut fixture.player_stamp);
         advance(&mut fixture.display_stamp);
         check(
             fixture
                 .player
-                .update(&view(true, fixture.player_stamp, player))
+                .update(&view(true, fixture.player_stamp, player_mode))
                 .map_err(error)?
                 == JoinUpdate::Applied,
             "player update was not applied",
@@ -218,13 +218,13 @@ mod browser {
         check(
             fixture
                 .display
-                .update(&view(false, fixture.display_stamp, display))
+                .update(&view(false, fixture.display_stamp, display_mode))
                 .map_err(error)?
                 == JoinUpdate::Applied,
             "display update was not applied",
         )?;
-        fixture.player_mode = player;
-        fixture.display_mode = display;
+        fixture.player_mode = player_mode;
+        fixture.display_mode = display_mode;
         Ok(())
     }
     fn collect(node: &Node, nodes: &mut Vec<Node>) {
@@ -798,17 +798,17 @@ mod browser {
         style.set_text_content(Some("#dual-join-toolbar button{min-height:44px;padding:10px 14px;border:1px solid #c3a26b;border-radius:4px;background:#182b3c;color:#f3d89f;font:13px system-ui;cursor:pointer}#dual-join-toolbar button:focus-visible{outline:2px solid #a3d9fb;outline-offset:3px}#dual-join-status{padding:16px;margin:0;font:14px/1.7 system-ui;overflow-wrap:anywhere}"));
         toolbar.set_id("dual-join-toolbar");
         toolbar.append_child(&style)?;
-        let result = document.create_element("p")?;
-        result.set_id("dual-join-status");
-        result.set_attribute("role", "status")?;
-        result.set_attribute("data-result", "ready")?;
-        result.set_text_content(Some("Two separately constructed filtered projections · Synthetic input only · No server admission"));
+        let status_element = document.create_element("p")?;
+        status_element.set_id("dual-join-status");
+        status_element.set_attribute("role", "status")?;
+        status_element.set_attribute("data-result", "ready")?;
+        status_element.set_text_content(Some("Two separately constructed filtered projections · Synthetic input only · No server admission"));
         let player_slot = document.create_element("main")?;
         player_slot.set_id("join-player-slot");
         let display_slot = document.create_element("section")?;
         display_slot.set_id("join-display-slot");
         body.append_child(&toolbar)?;
-        body.append_child(&result)?;
+        body.append_child(&status_element)?;
         body.append_child(&player_slot)?;
         body.append_child(&display_slot)?;
         let player_stamp = JoinStamp {

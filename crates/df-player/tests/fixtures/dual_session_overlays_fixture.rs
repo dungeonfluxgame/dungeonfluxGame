@@ -494,9 +494,9 @@ mod browser {
             "public overlay contains private data",
         )
     }
-    fn result(fixture: &Fixture, value: &str) -> Result<(), JsValue> {
-        fixture.status.set_text_content(Some(value));
-        fixture.status.set_attribute("data-result", value)
+    fn record_result(fixture: &Fixture, result_label: &str) -> Result<(), JsValue> {
+        fixture.status.set_text_content(Some(result_label));
+        fixture.status.set_attribute("data-result", result_label)
     }
     #[wasm_bindgen]
     pub fn exercise_session_overlays() -> Result<(), JsValue> {
@@ -557,7 +557,7 @@ mod browser {
             require(fixture.selections.borrow().count == count, "revoked host offer emitted")?;
             require(input.value() == PRIVATE_DRAFT, "host lifecycle changed essential draft")?;
             close.click(); input.focus()?;
-            result(fixture, "exercise-pass")
+            record_result(fixture, "exercise-pass")
         })
     }
     #[wasm_bindgen]
@@ -579,7 +579,7 @@ mod browser {
                     character.remove_attribute("hidden")?;
                 }
             }
-            result(fixture, "navigation-pass")
+            record_result(fixture, "navigation-pass")
         })
     }
     #[wasm_bindgen]
@@ -643,7 +643,7 @@ mod browser {
             fixture.display_overlay.take();
             fixture.revision = 0;
             mount_overlays(fixture)?;
-            result(fixture, "replacement-pass")
+            record_result(fixture, "replacement-pass")
         })
     }
     #[wasm_bindgen]
@@ -696,7 +696,7 @@ mod browser {
                     .is_some_and(|parent| parent.is_same_node(Some(&fixture.player_parent))),
                 "Drop failed to restore essential parent",
             )?;
-            result(fixture, "drop-pass")
+            record_result(fixture, "drop-pass")
         })
     }
     #[wasm_bindgen]
@@ -712,7 +712,7 @@ mod browser {
                 ));
             }
             mount_overlays(fixture)?;
-            result(fixture, "remount-pass")
+            record_result(fixture, "remount-pass")
         })
     }
     #[wasm_bindgen(start)]
@@ -859,7 +859,7 @@ mod browser {
             controls_root.append_child(action.element())?;
             fixture.controls.push(action);
         }
-        result(&fixture, "ready")?;
+        record_result(&fixture, "ready")?;
         FIXTURE.with(|slot| *slot.borrow_mut() = Some(fixture));
         Ok(())
     }
