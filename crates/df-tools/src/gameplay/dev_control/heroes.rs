@@ -17,19 +17,19 @@ fn authorize_command(
     headers: &HeaderMap,
     token: &str,
     action: &str,
-    id: Option<i64>,
+    hero_id: Option<i64>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     if let Err(error) = authorized(headers, token) {
-        audit(action, id, "unauthorized");
+        audit(action, hero_id, "unauthorized");
         return Err(error);
     }
-    if id.is_some_and(|id| id <= 0) {
-        audit(action, id, "invalid_id");
+    if hero_id.is_some_and(|hero_id| hero_id <= 0) {
+        audit(action, hero_id, "invalid_id");
         return Err(super::bad_request("Hero id must be positive"));
     }
     Ok(())
 }
-fn metadata(row: &df_persistence::hero_library::HeroRevision) -> Value {
+fn hero_metadata(row: &df_persistence::hero_library::HeroRevision) -> Value {
     json!({"id":row.reference.hero_id,"revision":row.reference.revision,"name":row.record.name,"species":row.record.species,"class":row.record.character_class,"design":{"species":row.record.species,"class":row.record.character_class},"portrait_bytes":row.record.portrait.len(),"portrait_media_type":row.record.portrait_media_type})
 }
 pub(super) async fn list(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
@@ -50,7 +50,7 @@ pub(super) async fn list(State(state): State<Arc<Shared>>, headers: HeaderMap) -
     let rows = result.map_err(|_| failed("Hero library unavailable"))?;
     Ok((
         StatusCode::OK,
-        Json(json!({"heroes":rows.iter().map(metadata).collect::<Vec<_>>()})),
+        Json(json!({"heroes":rows.iter().map(hero_metadata).collect::<Vec<_>>()})),
     ))
 }
 async fn read(state: Arc<Shared>, headers: HeaderMap, id: i64, history: bool) -> Outcome {
@@ -77,7 +77,7 @@ async fn read(state: Arc<Shared>, headers: HeaderMap, id: i64, history: bool) ->
     if history {
         return Ok((
             StatusCode::OK,
-            Json(json!({"revisions":rows.iter().map(metadata).collect::<Vec<_>>()})),
+            Json(json!({"revisions":rows.iter().map(hero_metadata).collect::<Vec<_>>()})),
         ));
     }
     let row = rows.first().ok_or_else(|| {
@@ -89,7 +89,7 @@ async fn read(state: Arc<Shared>, headers: HeaderMap, id: i64, history: bool) ->
     use prost::Message;
     let identity = df_protocol::common::LibraryHeroIdentity::decode(row.record.encoded.as_slice())
         .map_err(|_| failed("Hero record invalid"))?;
-    let mut value = metadata(row);
+    let mut value = hero_metadata(row);
     value["public_look"] = json!(
         identity
             .identity

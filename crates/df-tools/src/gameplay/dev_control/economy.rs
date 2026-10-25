@@ -20,12 +20,15 @@ pub(super) async fn scene_changes(
     Query(params): Query<HashMap<String, String>>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    let last =
+    let entry_count =
         parse::parse_last(params.get("last").map_or("50", String::as_str)).map_err(bad_request)?;
     let checkpoint = state.service.updates.borrow().clone();
     let journal = living_scene::scene_change_journal(&checkpoint)
         .map_err(|_| failed("scene journal unavailable"))?;
-    Ok((StatusCode::OK, Json(journal_document(journal, last)?)))
+    Ok((
+        StatusCode::OK,
+        Json(journal_document(journal, entry_count)?),
+    ))
 }
 
 /// The newest `last` journal entries as the operator reads them. The receipt of a theft, a

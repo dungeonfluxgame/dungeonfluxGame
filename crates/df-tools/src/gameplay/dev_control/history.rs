@@ -58,7 +58,7 @@ pub(crate) struct History {
     redo: Vec<SavedMoment>,
     redo_base: Option<Revision>,
     named: BTreeMap<String, SavedMoment>,
-    dropped_redo: u64,
+    dropped_redo_count: u64,
 }
 
 impl History {
@@ -69,7 +69,7 @@ impl History {
             redo: Vec::new(),
             redo_base: None,
             named: BTreeMap::new(),
-            dropped_redo: 0,
+            dropped_redo_count: 0,
         }
     }
 
@@ -104,10 +104,11 @@ impl History {
     pub(crate) fn back_from(
         &self,
         current: Revision,
-        n: u64,
+        decisions_back: u64,
     ) -> Result<(SavedMoment, Vec<SavedMoment>), String> {
-        let n = usize::try_from(n).map_err(|_| "step count too large".to_owned())?;
-        if n == 0 {
+        let decisions_back =
+            usize::try_from(decisions_back).map_err(|_| "step count too large".to_owned())?;
+        if decisions_back == 0 {
             return Err("back needs at least 1".to_owned());
         }
         let target = back_target(
@@ -117,7 +118,7 @@ impl History {
                 .map(SavedMoment::revision)
                 .collect::<Vec<_>>(),
             current,
-            n,
+            decisions_back,
         )
         .ok_or_else(|| available_message(&self.past, current))?;
         let stepped: Vec<SavedMoment> = self
@@ -168,7 +169,7 @@ impl History {
         }
         let dropped = std::mem::take(&mut self.redo);
         self.redo_base = None;
-        self.dropped_redo += dropped.len() as u64;
+        self.dropped_redo_count += dropped.len() as u64;
         dropped
     }
 
@@ -206,7 +207,7 @@ impl History {
 
     /// Redo entries dropped by playing on so far (reported, never silent).
     pub(crate) fn dropped(&self) -> u64 {
-        self.dropped_redo
+        self.dropped_redo_count
     }
 
     pub(crate) fn named_list(&self) -> Vec<(String, Revision)> {

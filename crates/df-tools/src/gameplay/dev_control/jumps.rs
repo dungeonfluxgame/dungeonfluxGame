@@ -175,7 +175,7 @@ pub(super) async fn restore_named(
         let seats = state.seats.lock().await;
         table_credential(&seats)?
     };
-    let pre = pre_jump_moment(&state);
+    let pre_jump_entries = pre_jump_moment(&state);
     let what = format!("checkpoint {name:?}");
     let (revision, before, after) = owner_jump(
         &state,
@@ -187,7 +187,7 @@ pub(super) async fn restore_named(
     )
     .await?;
     if let Ok(mut guarded) = state.history.lock() {
-        guarded.set_redo(pre, revision);
+        guarded.set_redo(pre_jump_entries, revision);
     }
     notices.push(format!("restored {what}"));
     Ok((
@@ -226,8 +226,8 @@ pub(super) async fn step_back(
     if jumps_off() {
         return jumps_disabled();
     }
-    let n = body.get("n").and_then(Value::as_u64).unwrap_or(1);
-    if n == 0 || n > 64 {
+    let steps = body.get("n").and_then(Value::as_u64).unwrap_or(1);
+    if steps == 0 || steps > 64 {
         return Err(bad_request("back needs {\"n\": 1..=64}"));
     }
     let (current, _) = current_revision(&state).await?;
@@ -236,13 +236,13 @@ pub(super) async fn step_back(
         .history
         .lock()
         .map_err(|_| failed("history lock poisoned"))?
-        .back_from(current, n)
+        .back_from(current, steps)
         .map_err(bad_request)?;
     let credential = {
         let seats = state.seats.lock().await;
         table_credential(&seats)?
     };
-    let what = format!("back {n}");
+    let what = format!("back {steps}");
     let (revision, before, after) = owner_jump(
         &state,
         credential,
@@ -260,7 +260,7 @@ pub(super) async fn step_back(
         axum::http::StatusCode::OK,
         Json(json!({
             "status": "restored",
-            "back": n,
+            "back": steps,
             "revision": {"epoch": revision.0, "sequence": revision.1},
             "before": before,
             "after": after,
@@ -280,8 +280,8 @@ pub(super) async fn step_forward(
     if jumps_off() {
         return jumps_disabled();
     }
-    let n = body.get("n").and_then(Value::as_u64).unwrap_or(1);
-    if n == 0 || n > 64 {
+    let steps = body.get("n").and_then(Value::as_u64).unwrap_or(1);
+    if steps == 0 || steps > 64 {
         return Err(bad_request("forward needs {\"n\": 1..=64}"));
     }
     let (current, _) = current_revision(&state).await?;
@@ -294,7 +294,7 @@ pub(super) async fn step_forward(
     let mut revision = current;
     let mut before = String::new();
     let mut after = String::new();
-    for _ in 0..n {
+    for _ in 0..steps {
         let popped = state
             .history
             .lock()
@@ -434,7 +434,7 @@ pub(super) async fn apply_override(
             ));
         }
     };
-    let pre = pre_jump_moment(&state);
+    let pre_jump_entries = pre_jump_moment(&state);
     let (revision, before, after) = owner_jump(&state, credential, job).await?;
     let entry = json!({
         "kind": kind,
@@ -445,7 +445,7 @@ pub(super) async fn apply_override(
     });
     state.overrides.lock().await.push(entry);
     if let Ok(mut guarded) = state.history.lock() {
-        guarded.set_redo(pre, revision);
+        guarded.set_redo(pre_jump_entries, revision);
     }
     notices.push("run marked edited".to_owned());
     Ok((

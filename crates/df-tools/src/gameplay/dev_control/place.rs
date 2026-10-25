@@ -81,7 +81,7 @@ pub(super) async fn go(
             break operation;
         }
     };
-    let pre = super::jumps::pre_jump_moment(&state);
+    let pre_jump_entries = super::jumps::pre_jump_moment(&state);
     let result = state
         .service
         .move_party_toward(credential, operation, resolved, target)
@@ -117,7 +117,7 @@ pub(super) async fn go(
         "revision": {"epoch": revision.0, "sequence": revision.1},
     }));
     if let Ok(mut guarded) = state.history.lock() {
-        guarded.set_redo(pre, revision);
+        guarded.set_redo(pre_jump_entries, revision);
     }
     Ok((
         StatusCode::OK,
