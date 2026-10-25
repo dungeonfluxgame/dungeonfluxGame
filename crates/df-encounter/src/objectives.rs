@@ -358,7 +358,7 @@ pub fn propose_objective_transitions<'a>(
         return Err(ObjectiveProposalError::Capacity);
     }
     admit_request_bytes(&request, input_bytes)?;
-    let mut output_bound = input_bytes
+    let mut output_bytes = input_bytes
         .checked_add(size_of::<Vec<ObjectiveChangeEvidence<'a>>>())
         .and_then(|bytes| bytes.checked_add(size_of::<Vec<RecordId>>()))
         .and_then(|bytes| {
@@ -370,13 +370,13 @@ pub fn propose_objective_transitions<'a>(
         })
         .ok_or(ObjectiveProposalError::Capacity)?;
     for transition in request.transitions {
-        output_bound = output_bound
+        output_bytes = output_bytes
             .checked_add(transition.replacement.package.retained_heap_bytes())
             .and_then(|bytes| bytes.checked_add(transition.replacement.entry.retained_heap_bytes()))
             .ok_or(ObjectiveProposalError::Capacity)?;
     }
-    if output_bound > request.limits.maximum_output_bytes
-        || output_bound > request.checkpoint_limits.maximum_retained_bytes
+    if output_bytes > request.limits.maximum_output_bytes
+        || output_bytes > request.checkpoint_limits.maximum_retained_bytes
     {
         return Err(ObjectiveProposalError::Capacity);
     }

@@ -4,14 +4,14 @@ use df_types::{
     SessionRevision,
 };
 
-fn label(value: &str) -> RevisionLabel {
-    RevisionLabel::new(Some(value)).unwrap()
+fn label(label_text: &str) -> RevisionLabel {
+    RevisionLabel::new(Some(label_text)).unwrap()
 }
-fn entity(value: u8) -> EntityId {
-    EntityId::from_bytes(&[value; 16]).unwrap()
+fn entity(id_byte: u8) -> EntityId {
+    EntityId::from_bytes(&[id_byte; 16]).unwrap()
 }
-fn member(value: u8) -> MemberId {
-    MemberId::from_bytes(&[value; 16]).unwrap()
+fn member(id_byte: u8) -> MemberId {
+    MemberId::from_bytes(&[id_byte; 16]).unwrap()
 }
 fn revision(epoch: u64, sequence: u64) -> SessionRevision {
     SessionRevision::new(RecoveryEpoch::new(epoch).unwrap(), sequence)
@@ -169,9 +169,9 @@ fn checkpoint(state: GameState) -> Result<Checkpoint, CheckpointError> {
         limits(),
     )
 }
-fn fact(value: u8, ordinal: u32) -> GameFact {
+fn fact(id_byte: u8, ordinal: u32) -> GameFact {
     GameFact {
-        id: FactId::from_bytes(&[value; 16]).unwrap(),
+        id: FactId::from_bytes(&[id_byte; 16]).unwrap(),
         revision: basis().revision,
         operation: OperationId::from_bytes(&[6; 16]).unwrap(),
         ordinal,

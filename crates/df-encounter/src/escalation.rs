@@ -502,14 +502,18 @@ fn preflight_challenge<E>(
         return Err(EscalationError::Capacity);
     }
     // Conservative label bounds qualify child byte limits before the lifecycle callback.
-    let mut input = size_of::<CheckpointPins>() + 11 * 128;
-    let mut output = size_of::<EncounterPlan>() + 11 * 128;
+    let mut input_bytes = size_of::<CheckpointPins>() + 11 * 128;
+    let mut output_bytes = size_of::<EncounterPlan>() + 11 * 128;
     let mut add =
         |count: usize, size: usize, output_view: bool| -> Result<(), EscalationError<E>> {
             let bytes = count.checked_mul(size).ok_or(EscalationError::Capacity)?;
-            input = input.checked_add(bytes).ok_or(EscalationError::Capacity)?;
+            input_bytes = input_bytes
+                .checked_add(bytes)
+                .ok_or(EscalationError::Capacity)?;
             if output_view {
-                output = output.checked_add(bytes).ok_or(EscalationError::Capacity)?;
+                output_bytes = output_bytes
+                    .checked_add(bytes)
+                    .ok_or(EscalationError::Capacity)?;
             }
             Ok(())
         };
@@ -539,7 +543,9 @@ fn preflight_challenge<E>(
         size_of::<df_model::checkpoint::AssetReference>() + 128,
         false,
     )?;
-    if input > budget.max_input_bytes || output > budget.max_output_bytes.min(output_limit) {
+    if input_bytes > budget.max_input_bytes
+        || output_bytes > budget.max_output_bytes.min(output_limit)
+    {
         return Err(EscalationError::Capacity);
     }
     Ok(())

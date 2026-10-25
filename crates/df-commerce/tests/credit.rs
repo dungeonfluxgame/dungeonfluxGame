@@ -11,8 +11,8 @@ fn currency() -> Currency {
     Currency::parse("USD").unwrap()
 }
 
-fn money(amount: u128) -> Money {
-    Money::new(currency(), amount)
+fn money(amount_micros: u128) -> Money {
+    Money::new(currency(), amount_micros)
 }
 
 fn operation(byte: u8) -> OperationId {
