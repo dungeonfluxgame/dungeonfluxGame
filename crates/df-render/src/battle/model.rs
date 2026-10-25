@@ -281,6 +281,7 @@ pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> Strin
 
 /// The side seat for the die, "left" or "right": the one whose centre (21% or 79% across) is
 /// farthest from the nearest fighter's screen x; `None` when no fighter is on screen.
+#[cfg(any(target_arch = "wasm32", test))]
 pub fn dice_side(fighters_x: &[f32]) -> Option<&'static str> {
     let clearance = |seat: f32| {
         fighters_x

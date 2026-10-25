@@ -48,8 +48,8 @@ pub const FIELD_AREA: Rect = (0.04, 0.30, 0.96, 0.97);
 
 /// How far the resting shot looks down, in degrees: at least this, so it reads as a three-quarter
 /// view of the ground, and never above the upper limit, so figures keep their height.
-const MIN_PITCH_DEG: f32 = 33.0;
-const MAX_PITCH_DEG: f32 = 42.0;
+const MINIMUM_PITCH_DEG: f32 = 33.0;
+const MAXIMUM_PITCH_DEG: f32 = 42.0;
 /// How much higher than usual the camera may be raised to clear scan geometry near the lens
 /// (a trunk, a branch, foliage), as extra pitch in degrees, tried in this order, and the highest
 /// pitch that results.
@@ -64,8 +64,8 @@ const CLEAR_END_M: f32 = 1.3;
 const CLEAR_FIELD_SHARE: f32 = 0.4;
 /// The closest the resting shot comes, as a share of the scene's own wide shot: the place around
 /// the grid is always shown.
-const MIN_DISTANCE_SHARE: f32 = 0.9;
-const MAX_DISTANCE_M: f32 = 48.0;
+const MINIMUM_DISTANCE_SHARE: f32 = 0.9;
+const MAXIMUM_DISTANCE_M: f32 = 48.0;
 /// Room kept around each figure when fitting: extra height and width in metres.
 const FIT_SLACK_M: f32 = 0.3;
 /// Headings tried either side of the scene's own, in degrees.
@@ -184,8 +184,8 @@ fn inside(rect: Rect, area: Rect) -> bool {
 fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
     // A scene may ask for a steeper wide shot than the usual upper limit (a wood whose trunks
     // stand in the field is read from higher up); the raised limit still bounds it.
-    let own_limit = MAX_PITCH_DEG.max(input.hint.pitch_deg.min(MAX_RAISED_PITCH_DEG));
-    let pitch_deg = (input.hint.pitch_deg.clamp(MIN_PITCH_DEG, own_limit) + raise_deg)
+    let own_limit = MAXIMUM_PITCH_DEG.max(input.hint.pitch_deg.min(MAX_RAISED_PITCH_DEG));
+    let pitch_deg = (input.hint.pitch_deg.clamp(MINIMUM_PITCH_DEG, own_limit) + raise_deg)
         .min(MAX_RAISED_PITCH_DEG);
     let yaw = yaw_deg.to_radians();
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
@@ -213,14 +213,14 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
         pitch_deg,
         fov_deg: input.hint.fov_deg,
     };
-    let minimum = input.hint.distance * MIN_DISTANCE_SHARE;
+    let minimum = input.hint.distance * MINIMUM_DISTANCE_SHARE;
     let want = centre(REST_AREA);
     let size = |rect: Rect| (rect.2 - rect.0, rect.3 - rect.1);
     let (area_width, area_height) = size(REST_AREA);
     let (field_width, field_height) = size(FIELD_AREA);
     for _ in 0..48 {
         let (Some(found), Some(all)) = (figures_extent(&pose, input), extent(&pose, input)) else {
-            pose.distance = (pose.distance * 1.3).min(MAX_DISTANCE_M);
+            pose.distance = (pose.distance * 1.3).min(MAXIMUM_DISTANCE_M);
             continue;
         };
         // The figures fill the free middle, or the ground fills the field, whichever is tighter.
@@ -259,13 +259,13 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
             }
         }
         pose.distance =
-            (pose.distance * need.clamp(0.7, 1.4).powf(0.9)).clamp(minimum, MAX_DISTANCE_M);
+            (pose.distance * need.clamp(0.7, 1.4).powf(0.9)).clamp(minimum, MAXIMUM_DISTANCE_M);
     }
     // Whatever the iteration reached, back off until it is inside.
-    while pose.distance < MAX_DISTANCE_M && !holds(&pose, input) {
+    while pose.distance < MAXIMUM_DISTANCE_M && !holds(&pose, input) {
         pose.distance *= 1.03;
     }
-    pose.distance = pose.distance.min(MAX_DISTANCE_M);
+    pose.distance = pose.distance.min(MAXIMUM_DISTANCE_M);
     pose
 }
 
@@ -460,12 +460,12 @@ mod tests {
                     "{id} {heroes}v{enemies}: the reachable region leaves the frame {held:?}"
                 );
                 assert!(
-                    pose.distance >= hint.distance * MIN_DISTANCE_SHARE - 1e-3,
+                    pose.distance >= hint.distance * MINIMUM_DISTANCE_SHARE - 1e-3,
                     "{id}: closer than the wide shot ({})",
                     pose.distance
                 );
                 assert!(
-                    (MIN_PITCH_DEG..=MAX_RAISED_PITCH_DEG).contains(&pose.pitch_deg),
+                    (MINIMUM_PITCH_DEG..=MAX_RAISED_PITCH_DEG).contains(&pose.pitch_deg),
                     "{id}: pitch {}",
                     pose.pitch_deg
                 );

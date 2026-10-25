@@ -25,8 +25,8 @@ const MARGIN: f32 = 0.012;
 /// How far the bubble sits from the speaker's head: the length of the tail.
 const TAIL: f32 = 0.05;
 /// Narrowest and widest a bubble is, as a share of the picture's width.
-const MIN_WIDTH: f32 = 0.16;
-const MAX_WIDTH: f32 = 0.3;
+const MINIMUM_WIDTH: f32 = 0.16;
+const MAXIMUM_WIDTH: f32 = 0.3;
 
 /// A rectangle in screen fractions.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,7 +97,7 @@ pub struct Placement {
 /// its height.
 pub fn estimate_size(text: &str, aspect: f32) -> (f32, f32) {
     let characters = text.chars().count().max(1) as f32;
-    let width = (0.05 + characters * 0.0065).clamp(MIN_WIDTH, MAX_WIDTH);
+    let width = (0.05 + characters * 0.0065).clamp(MINIMUM_WIDTH, MAXIMUM_WIDTH);
     // About 0.0105 of the picture's width per character at the display's type size.
     let per_line = (width / 0.0105).max(8.0);
     let lines = (characters / per_line).ceil().max(1.0);
@@ -424,7 +424,7 @@ mod tests {
     fn longer_lines_get_wider_then_taller_bubbles_within_the_caps() {
         let (short_w, short_h) = estimate_size("No.", ASPECT);
         let (long_w, long_h) = estimate_size(&"word ".repeat(40), ASPECT);
-        assert!(short_w >= MIN_WIDTH && long_w <= MAX_WIDTH);
+        assert!(short_w >= MINIMUM_WIDTH && long_w <= MAXIMUM_WIDTH);
         assert!(long_w >= short_w && long_h > short_h);
     }
 

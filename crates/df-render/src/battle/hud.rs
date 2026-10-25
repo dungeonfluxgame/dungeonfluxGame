@@ -111,7 +111,7 @@ struct InitiativeDie {
 }
 
 /// Most icons shown over a figure's head before the rest collapse into "+N".
-const MAX_PIPS: usize = 4;
+const MAXIMUM_PIPS: usize = 4;
 
 fn marker_overlaps_figure(marker: Rect, figure: Rect) -> bool {
     marker.overlap(&figure) > 0.0
@@ -750,16 +750,16 @@ impl Hud {
             };
             if row.signature != signature {
                 row.root.set_text_content(None);
-                for status in icons.iter().take(MAX_PIPS) {
+                for status in icons.iter().take(MAXIMUM_PIPS) {
                     pip(&self.document, &row.root, *status)?;
                 }
-                if icons.len() > MAX_PIPS {
+                if icons.len() > MAXIMUM_PIPS {
                     element(
                         &self.document,
                         &row.root,
                         "span",
                         "bf-pip-more",
-                        &format!("+{}", icons.len() - MAX_PIPS),
+                        &format!("+{}", icons.len() - MAXIMUM_PIPS),
                     )?;
                 }
                 row.signature = signature;

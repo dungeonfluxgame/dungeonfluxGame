@@ -22,9 +22,9 @@ use super::{
 /// The largest PLY accepted, the same ceiling as the `.splat` fetch. A file at the splat limit
 /// (4 million splats of 56 bytes) is 224 MB.
 pub const MAX_PLY_BYTES: usize = 256 * 1024 * 1024;
-const MAX_HEADER_BYTES: usize = 16 * 1024;
-const MAX_PROPERTIES: usize = 256;
-const SH_C0: f32 = 0.282_094_8;
+const MAXIMUM_HEADER_BYTES: usize = 16 * 1024;
+const MAXIMUM_PROPERTIES: usize = 256;
+const SPHERICAL_HARMONIC_C0: f32 = 0.282_094_8;
 const END_HEADER: &[u8] = b"end_header";
 const LARGEST_SCALE_FACTOR: f32 = 100.0;
 const LARGEST_GROUND_OFFSET_M: f32 = 1_000.0;
@@ -128,7 +128,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, PlyError> {
     if !bytes.starts_with(b"ply") {
         return Err(PlyError::NotPly);
     }
-    let window = bytes.get(..MAX_HEADER_BYTES).unwrap_or(bytes);
+    let window = bytes.get(..MAXIMUM_HEADER_BYTES).unwrap_or(bytes);
     let marker = (0..window.len())
         .find(|&at| {
             window
@@ -188,7 +188,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, PlyError> {
                 if names.contains(name) {
                     return Err(PlyError::DuplicateProperty);
                 }
-                if names.len() >= MAX_PROPERTIES {
+                if names.len() >= MAXIMUM_PROPERTIES {
                     return Err(PlyError::TooManyProperties);
                 }
                 names.push(name);
@@ -244,7 +244,7 @@ impl PlyLoader<'_> {
             .bytes
             .get(header.body_start..)
             .ok_or(PlyError::Truncated)?;
-        // `width` is at most MAX_PROPERTIES and `count` at most MAX_SPLATS: no overflow.
+        // `width` is at most MAXIMUM_PROPERTIES and `count` at most MAX_SPLATS: no overflow.
         let stride = header.width * 4;
         let expected = header.count * stride;
         if body.len() < expected {
@@ -277,7 +277,9 @@ impl PlyLoader<'_> {
             if !scale.is_finite() {
                 return Err(PlyError::NonFinite);
             }
-            let colour = |dc: f32| ((0.5 + SH_C0 * dc).clamp(0.0, 1.0) * 255.0).round() as u8;
+            let colour = |dc: f32| {
+                ((0.5 + SPHERICAL_HARMONIC_C0 * dc).clamp(0.0, 1.0) * 255.0).round() as u8
+            };
             let opacity = 1.0 / (1.0 + (-logit).exp());
             splats.push(RawSplat {
                 position,
@@ -569,7 +571,7 @@ mod tests {
         assert_eq!(parse(&with_count(usize::MAX)), Err(PlyError::TooMany));
         // A count that fits the limit but not the body is a short body, found without allocating.
         assert_eq!(parse(&with_count(MAX_SPLATS)), Err(PlyError::Truncated));
-        let many: Vec<String> = (0..=MAX_PROPERTIES).map(|n| format!("p{n}")).collect();
+        let many: Vec<String> = (0..=MAXIMUM_PROPERTIES).map(|n| format!("p{n}")).collect();
         let names: Vec<&str> = many.iter().map(String::as_str).collect();
         assert_eq!(parse(&file(&names, &[])), Err(PlyError::TooManyProperties));
     }
@@ -608,7 +610,7 @@ mod tests {
     #[test]
     fn a_header_that_never_ends_within_the_limit_is_refused() {
         let mut bytes = b"ply\nformat binary_little_endian 1.0\n".to_vec();
-        while bytes.len() < MAX_HEADER_BYTES + 100 {
+        while bytes.len() < MAXIMUM_HEADER_BYTES + 100 {
             bytes.extend_from_slice(b"comment padding padding padding padding\n");
         }
         bytes.extend_from_slice(b"end_header\n");
