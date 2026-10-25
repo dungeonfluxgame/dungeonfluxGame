@@ -162,7 +162,7 @@ impl HexId {
     /// Accepts 2 to 64 lowercase hexadecimal characters, an even count.
     pub fn parse(text: &str) -> Option<Self> {
         let valid = (2..=64).contains(&text.len())
-            && text.len() % 2 == 0
+            && text.len().is_multiple_of(2)
             && text
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));

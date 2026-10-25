@@ -1723,8 +1723,6 @@ pub(in crate::gameplay) fn open_run(
 pub(in crate::gameplay) enum Metering {
     /// Metered and priced from the table.
     Priced,
-    /// Not metered yet; the reason names the backlog item.
-    Pending(&'static str),
 }
 
 /// One billed route: the `df_providers` client, the provider, the model and the categories its
@@ -1766,10 +1764,6 @@ fn declared_categories(provider: Provider, model: &str) -> &'static [Category] {
 
 impl BilledRoute {
     fn json(&self) -> Value {
-        let (metering, reason) = match self.metering {
-            Metering::Priced => ("priced", ""),
-            Metering::Pending(reason) => ("pending", reason),
-        };
         json!({
             "client": self.client,
             "provider": self.provider.label(),
@@ -1779,8 +1773,8 @@ impl BilledRoute {
                 .iter()
                 .map(|category| category.label())
                 .collect::<Vec<_>>(),
-            "metering": metering,
-            "reason": reason,
+            "metering": "priced",
+            "reason": "",
         })
     }
 }

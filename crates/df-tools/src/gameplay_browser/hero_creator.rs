@@ -493,20 +493,18 @@ impl Controls {
             .join(" · ");
         self.chips.set_text_content(Some(&chips));
         for (_, select) in &self.appearance {
-            if let Some(label) = select.parent_element() {
-                if let Ok(buttons) = label.query_selector_all(".hero-swatch") {
-                    for index in 0..buttons.length() {
-                        if let Some(button) = buttons
-                            .item(index)
-                            .and_then(|node| node.dyn_into::<Element>().ok())
-                        {
-                            let selected = button.get_attribute("data-option-value").as_deref()
-                                == Some(select.value().as_str());
-                            let _ = button.set_attribute(
-                                "aria-pressed",
-                                if selected { "true" } else { "false" },
-                            );
-                        }
+            if let Some(label) = select.parent_element()
+                && let Ok(buttons) = label.query_selector_all(".hero-swatch")
+            {
+                for index in 0..buttons.length() {
+                    if let Some(button) = buttons
+                        .item(index)
+                        .and_then(|node| node.dyn_into::<Element>().ok())
+                    {
+                        let selected = button.get_attribute("data-option-value").as_deref()
+                            == Some(select.value().as_str());
+                        let _ = button
+                            .set_attribute("aria-pressed", if selected { "true" } else { "false" });
                     }
                 }
             }
@@ -1401,10 +1399,10 @@ impl HeroCreator {
         // Native controls keep phone pickers and keyboard navigation. Descriptions follow
         // the current server catalog selection rather than a wall of ancestry cards.
         for (group, input) in &surface.controls.choices {
-            if matches!(group.group_id.as_str(), "species" | "class" | "background") {
-                if let Some(label) = input.parent_element() {
-                    node(document, &label, "span", "hero-choice-description", "")?;
-                }
+            if matches!(group.group_id.as_str(), "species" | "class" | "background")
+                && let Some(label) = input.parent_element()
+            {
+                node(document, &label, "span", "hero-choice-description", "")?;
             }
         }
         let inputs = surface.root.query_selector_all("textarea, select")?;

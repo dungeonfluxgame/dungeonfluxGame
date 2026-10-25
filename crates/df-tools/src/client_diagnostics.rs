@@ -53,6 +53,7 @@ pub(crate) enum Diagnostic {
 }
 
 impl Diagnostic {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::PortraitRequestStart => "portrait-request-start",
@@ -167,6 +168,7 @@ impl Diagnostic {
 
 pub(crate) use df_observe::operation_hash;
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn decoded(event: &TimingEvent) -> Option<(Diagnostic, u32, u32)> {
     if event.kind != "usable" || event.id & 0xff00_0000_0000_0000 != MARKER {
         return None;
@@ -224,6 +226,7 @@ pub(crate) fn decoded(event: &TimingEvent) -> Option<(Diagnostic, u32, u32)> {
     ))
 }
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn log_suffix(event: &TimingEvent) -> String {
     decoded(event).map_or_else(String::new, |(diagnostic, attempt, delay_ms)| {
         format!(

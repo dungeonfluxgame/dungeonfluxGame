@@ -662,7 +662,7 @@ fn a_story_plate_start_wakes_the_display_with_update_pending() {
     let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     observe(&shared, &current, &[], &[1]);
     drain(&mut queue);
-    let mut wake = shared.inner.wake.subscribe();
+    let wake = shared.inner.wake.subscribe();
     let wake_start = *wake.borrow();
     let mut story_view = view(&current, &[1], false);
     story_view.graph_revision = 2;
@@ -2212,7 +2212,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
             placement: None,
         },
     );
-    let mut wake = shared.inner.wake.subscribe();
+    let wake = shared.inner.wake.subscribe();
     let wake_start = *wake.borrow();
     let receive = plates
         .direct("Brakka unsheathes his sword".to_owned(), true)

@@ -473,7 +473,7 @@ impl Drop for DialogueRecovery {
 enum Call {
     Raw(rpc::RawDialogueRequest),
     Cancel(rpc::CancelDialogueRequest),
-    Confirm(rpc::ConfirmDialogueRequest),
+    Confirm(Box<rpc::ConfirmDialogueRequest>),
 }
 
 pub(super) fn submit_disabled(client: &Client) -> bool {
@@ -572,7 +572,7 @@ pub(super) fn mount(
             .as_ref()
             .filter(|exchange| exchange.revision == state.revision);
         let replying = addressee_after_reply(&replying, exchange);
-        let addressee = addressee_chip(&replying);
+        let addressee = addressee_chip(replying);
         let chip = node(
             &document,
             &panel,
@@ -1115,7 +1115,7 @@ fn confirm(client: Rc<RefCell<Client>>) {
         })
     })();
     match prepared {
-        Ok(body) => dispatch(client, Call::Confirm(body)),
+        Ok(body) => dispatch(client, Call::Confirm(Box::new(body))),
         Err(message) => show(&client, &message),
     }
 }
@@ -1123,7 +1123,7 @@ fn confirm(client: Rc<RefCell<Client>>) {
 pub(super) fn retry(client: Rc<RefCell<Client>>) {
     let body = client.borrow().dialogue.confirmation.clone();
     match body {
-        Some(body) => dispatch(client, Call::Confirm(body)),
+        Some(body) => dispatch(client, Call::Confirm(Box::new(body))),
         None => show(&client, "No uncertain dialogue confirmation is retained."),
     }
 }
@@ -1166,14 +1166,14 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
         if let Call::Confirm(body) = &call {
             let action = body.action.clone().ok_or("Separate typed action absent")?;
             if let Some(original) = &state.dialogue.confirmation
-                && original != body
+                && original != body.as_ref()
             {
                 return Err("Retry the exact original confirmation.".to_owned());
             }
             state.last_request = Some(action);
             state.last_confirmed = false;
             state.last_accepted = false;
-            state.dialogue.confirmation = Some(body.clone());
+            state.dialogue.confirmation = Some((**body).clone());
         }
         let instance = Rc::new(());
         let (abort, registration) = AbortHandle::new_pair();
@@ -1208,7 +1208,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                         .await
                         .map(|reply| (Some(reply.into_inner()), None)),
                     Call::Confirm(body) => channel
-                        .confirm(request(body.clone(), &credential).map_err(|_| {
+                        .confirm(request((**body).clone(), &credential).map_err(|_| {
                             tonic::Status::unauthenticated("input binding unavailable")
                         })?)
                         .await

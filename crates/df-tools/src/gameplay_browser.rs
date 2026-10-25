@@ -578,17 +578,16 @@ fn leave_saved_game(client: Rc<RefCell<Client>>) {
 /// hero and the room membership; nothing is deleted there.
 fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
     if client.borrow().campaign_entry {
-        if let Some(window) = web_sys::window() {
-            if window
+        if let Some(window) = web_sys::window()
+            && window
                 .location()
                 .replace(&page_path(&client.borrow()))
                 .is_err()
-            {
-                status(
-                    &client.borrow(),
-                    "Return to your campaign lobby to enter again.",
-                );
-            }
+        {
+            status(
+                &client.borrow(),
+                "Return to your campaign lobby to enter again.",
+            );
         }
         return;
     }
@@ -1844,7 +1843,7 @@ fn complete_action_response(
                                         "The observation was saved without a check receipt."
                                             .to_owned()
                                     },
-                                    |check| observation_roll_line(check),
+                                    observation_roll_line,
                                 )
                             } else if receipt.replayed {
                                 "Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()
@@ -3413,15 +3412,14 @@ fn render_dead_hero_notice(
     notice.set_attribute("role", "status")?;
     notice.set_attribute("aria-live", "polite")?;
     node(&document, &notice, "p", "dead-hero-copy", &message)?;
-    if journey.creation.is_none() {
-        if let Some(offer) = offers
+    if journey.creation.is_none()
+        && let Some(offer) = offers
             .iter()
             .find(|offer| offer.action_kind == rpc::GameplayActionKind::CreateCharacter as i32)
-        {
-            let mut offer = offer.clone();
-            offer.label = "Make a new hero".to_owned();
-            action_button(client, &notice, offer)?;
-        }
+    {
+        let mut offer = offer.clone();
+        offer.label = "Make a new hero".to_owned();
+        action_button(client, &notice, offer)?;
     }
     Ok(())
 }

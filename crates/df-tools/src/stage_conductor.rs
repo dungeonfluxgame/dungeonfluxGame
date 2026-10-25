@@ -489,6 +489,7 @@ impl<D: Clone> Conductor<D> {
 
     /// Presentation-clock facts only. The DOM adapter supplies scene/character metadata and
     /// reports them only after successful application; this snapshot grants no game authority.
+    #[cfg(test)]
     pub(crate) fn line_timing(&self, id: LineId) -> Option<df_observe::presentation::TimingEvent> {
         self.line_timings
             .iter()
@@ -583,6 +584,7 @@ impl<D: Clone> Conductor<D> {
 
     /// The slot of the figure whose line is waiting for its voice clip (queued, its clip on the
     /// way): the display keeps the thinking mark there until the clip starts.
+    #[cfg(test)]
     pub(crate) fn awaiting_clip_slot(&self) -> Option<usize> {
         self.lines
             .iter()

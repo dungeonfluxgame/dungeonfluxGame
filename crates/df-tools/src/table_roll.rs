@@ -66,7 +66,7 @@ pub(crate) fn outcome_roll(outcome: &rpc::CombatOutcome) -> Option<rpc::TableRol
 
 /// How the phone's latest-roll card words a stabilise outcome: its own kind of roll, with the
 /// Medicine die, the modifier, the total and the DC, or a healer's kit that rolled nothing.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) struct StabiliseCard {
     pub(crate) label: String,
     pub(crate) value: String,
@@ -76,7 +76,7 @@ pub(crate) struct StabiliseCard {
     pub(crate) succeeded: bool,
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn stabilise_card(outcome: &rpc::CombatOutcome) -> Option<StabiliseCard> {
     if rpc::OutcomeKind::try_from(outcome.kind) != Ok(rpc::OutcomeKind::Stabilisation) {
         return None;

@@ -113,33 +113,6 @@ impl MeterStart {
     }
 }
 
-/// A route the game calls but does not meter yet: hosted paid play refuses it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PendingRoute {
-    pub client: String,
-    pub provider: String,
-    pub model: String,
-    /// The backlog item and what is missing.
-    pub reason: String,
-}
-
-/// The routes not metered yet, read from the engine's route table. An admission that refuses
-/// unmetered routes (hosted paid play) reads this list instead of keeping one of its own.
-pub fn pending_routes() -> Vec<PendingRoute> {
-    super::ROUTES
-        .iter()
-        .filter_map(|route| match route.metering {
-            super::Metering::Pending(reason) => Some(PendingRoute {
-                client: route.client.to_owned(),
-                provider: route.provider.label().to_owned(),
-                model: route.model.to_owned(),
-                reason: reason.to_owned(),
-            }),
-            super::Metering::Priced => None,
-        })
-        .collect()
-}
-
 impl MeteredCall {
     pub(super) fn of(event: &CostEvent) -> Self {
         Self {

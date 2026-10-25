@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum MuralState {
+pub(crate) enum MuralState {
     Pending,
     Ready,
     Failed,
@@ -11,15 +11,15 @@ pub(super) enum MuralState {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct MuralView {
-    pub(super) state: MuralState,
-    pub(super) url: String,
+pub(crate) struct MuralView {
+    pub(crate) state: MuralState,
+    pub(crate) url: String,
     #[serde(default)]
-    pub(super) key: String,
+    pub(crate) key: String,
 }
 
 impl MuralView {
-    pub(super) fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         let digest = |key: &str| {
             key.len() == 64
                 && key
@@ -38,7 +38,7 @@ impl MuralView {
         }
     }
 
-    pub(super) fn from_scene_contents(contents: &str) -> Option<Self> {
+    pub(crate) fn from_scene_contents(contents: &str) -> Option<Self> {
         let contents: serde_json::Value = serde_json::from_str(contents).ok()?;
         let view: Self = serde_json::from_value(contents.get("party_mural")?.clone()).ok()?;
         view.valid().then_some(view)
@@ -47,7 +47,7 @@ impl MuralView {
 
 /// Merges only this validated presentation member on a same-revision scene update.
 /// The caller must first enforce its existing audience/scene identity checks.
-pub(super) fn merge_scene_contents(shown: &mut String, new: &str) -> bool {
+pub(crate) fn merge_scene_contents(shown: &mut String, new: &str) -> bool {
     if shown == new {
         return false;
     }

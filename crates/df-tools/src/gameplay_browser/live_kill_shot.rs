@@ -26,7 +26,7 @@ pub(super) struct KillShotPlayer {
     caption: Element,
     shown: Rc<RefCell<Shown>>,
     playing: Rc<RefCell<Option<(String, u64)>>>,
-    listeners: Vec<Closure<dyn FnMut()>>,
+    _listeners: Vec<Closure<dyn FnMut()>>,
 }
 
 impl KillShotPlayer {
@@ -75,7 +75,7 @@ impl KillShotPlayer {
             caption,
             shown,
             playing,
-            listeners,
+            _listeners: listeners,
         })
     }
 
@@ -142,6 +142,12 @@ impl KillShotPlayer {
         let _paused = self.video.pause();
         let _removed = self.video.remove_attribute("src");
         self.video.load();
+    }
+}
+
+impl Drop for KillShotPlayer {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 

@@ -704,15 +704,14 @@ pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, choice_id: &str) {
         .iter()
         .find(|group| group.group_id == "dialogue-addressee")
     {
-        if let [actor] = group.options.as_slice() {
-            if let Err(error) =
+        if let [actor] = group.options.as_slice()
+            && let Err(error) =
                 dialogue_recovery::address_actor(client, &offer.offer_id, &actor.label)
-            {
-                feedback(
-                    &client.borrow(),
-                    &format!("Could not open the conversation: {error:?}"),
-                );
-            }
+        {
+            feedback(
+                &client.borrow(),
+                &format!("Could not open the conversation: {error:?}"),
+            );
         }
         return;
     }
@@ -1215,35 +1214,41 @@ fn render_item_card(
         read_ms,
     );
     super::presentation_timing::schedule_component_transition(
-        card.clone(),
-        df_observe::presentation::PresentationComponent::ItemCard,
-        id,
-        scene.clone(),
-        df_observe::presentation::ComponentPhase::Readable,
-        "ready",
-        read_ms,
-        0,
+        super::presentation_timing::ComponentTransition {
+            element: card.clone(),
+            component_type: df_observe::presentation::PresentationComponent::ItemCard,
+            id,
+            scene: scene.clone(),
+            phase: df_observe::presentation::ComponentPhase::Readable,
+            reason: "ready",
+            read_ms,
+            delay_ms: 0,
+        },
     );
     if display {
         super::presentation_timing::schedule_component_transition(
-            card.clone(),
-            df_observe::presentation::PresentationComponent::ItemCard,
-            id,
-            scene.clone(),
-            df_observe::presentation::ComponentPhase::Closing,
-            "timeout",
-            read_ms,
-            7_200,
+            super::presentation_timing::ComponentTransition {
+                element: card.clone(),
+                component_type: df_observe::presentation::PresentationComponent::ItemCard,
+                id,
+                scene: scene.clone(),
+                phase: df_observe::presentation::ComponentPhase::Closing,
+                reason: "timeout",
+                read_ms,
+                delay_ms: 7_200,
+            },
         );
         super::presentation_timing::schedule_component_transition(
-            card,
-            df_observe::presentation::PresentationComponent::ItemCard,
-            id,
-            scene,
-            df_observe::presentation::ComponentPhase::Hidden,
-            "timeout",
-            read_ms,
-            8_000,
+            super::presentation_timing::ComponentTransition {
+                element: card,
+                component_type: df_observe::presentation::PresentationComponent::ItemCard,
+                id,
+                scene,
+                phase: df_observe::presentation::ComponentPhase::Hidden,
+                reason: "timeout",
+                read_ms,
+                delay_ms: 8_000,
+            },
         );
     }
     Ok(())

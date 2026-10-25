@@ -32,9 +32,8 @@ use web_sys::{Event, HtmlImageElement};
 
 #[path = "live_scene_stage.rs"]
 mod live_scene_stage;
+use crate::live_art::mural_view;
 pub(super) use live_scene_stage::SceneGraphView;
-#[path = "../gameplay/living_scenes/mural_view.rs"]
-mod mural_view;
 #[path = "live_tv_status.rs"]
 mod status;
 use status::plate_loading_visible;
@@ -809,14 +808,16 @@ fn refresh_establish_component(stage: &Element) {
             0,
         );
         super::presentation_timing::schedule_component_transition(
-            establish.clone(),
-            df_observe::presentation::PresentationComponent::SceneCard,
-            id,
-            previous_scene.clone(),
-            df_observe::presentation::ComponentPhase::Hidden,
-            "scene-change",
-            0,
-            0,
+            super::presentation_timing::ComponentTransition {
+                element: establish.clone(),
+                component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                scene: previous_scene.clone(),
+                phase: df_observe::presentation::ComponentPhase::Hidden,
+                reason: "scene-change",
+                read_ms: 0,
+                delay_ms: 0,
+            },
         );
         let _removed = establish.remove_attribute("data-component-id");
         let _removed = establish.remove_attribute("data-component-open");
@@ -873,38 +874,44 @@ fn refresh_establish_component(stage: &Element) {
                 read_ms,
             );
             super::presentation_timing::schedule_component_transition(
-                establish,
-                df_observe::presentation::PresentationComponent::SceneCard,
-                id,
-                scene,
-                df_observe::presentation::ComponentPhase::Readable,
-                "ready",
-                read_ms,
-                500,
+                super::presentation_timing::ComponentTransition {
+                    element: establish,
+                    component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    scene,
+                    phase: df_observe::presentation::ComponentPhase::Readable,
+                    reason: "ready",
+                    read_ms,
+                    delay_ms: 500,
+                },
             );
             let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
             let close_id = id;
             let close_element = stage.query_selector(".tv-establish").ok().flatten();
             if let Some(close_element) = close_element {
                 super::presentation_timing::schedule_component_transition(
-                    close_element.clone(),
-                    df_observe::presentation::PresentationComponent::SceneCard,
-                    close_id,
-                    scene.clone(),
-                    df_observe::presentation::ComponentPhase::Closing,
-                    "timeout",
-                    read_ms,
-                    3_500,
+                    super::presentation_timing::ComponentTransition {
+                        element: close_element.clone(),
+                        component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                        id: close_id,
+                        scene: scene.clone(),
+                        phase: df_observe::presentation::ComponentPhase::Closing,
+                        reason: "timeout",
+                        read_ms,
+                        delay_ms: 3_500,
+                    },
                 );
                 super::presentation_timing::schedule_component_transition(
-                    close_element,
-                    df_observe::presentation::PresentationComponent::SceneCard,
-                    close_id,
-                    scene,
-                    df_observe::presentation::ComponentPhase::Hidden,
-                    "timeout",
-                    read_ms,
-                    5_000,
+                    super::presentation_timing::ComponentTransition {
+                        element: close_element,
+                        component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                        id: close_id,
+                        scene,
+                        phase: df_observe::presentation::ComponentPhase::Hidden,
+                        reason: "timeout",
+                        read_ms,
+                        delay_ms: 5_000,
+                    },
                 );
             }
         }
@@ -928,14 +935,16 @@ fn refresh_establish_component(stage: &Element) {
         );
         let _set = establish.set_attribute("data-component-open", "false");
         super::presentation_timing::schedule_component_transition(
-            establish,
-            df_observe::presentation::PresentationComponent::SceneCard,
-            id,
-            previous_scene,
-            df_observe::presentation::ComponentPhase::Hidden,
-            reason,
-            read_ms,
-            0,
+            super::presentation_timing::ComponentTransition {
+                element: establish,
+                component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                scene: previous_scene,
+                phase: df_observe::presentation::ComponentPhase::Hidden,
+                reason,
+                read_ms,
+                delay_ms: 0,
+            },
         );
     }
 }
@@ -1680,14 +1689,16 @@ fn activate_plate_request_at(
             0,
         );
         super::presentation_timing::schedule_component_transition(
-            frame.clone(),
-            df_observe::presentation::PresentationComponent::PlateIncoming,
-            incoming_id,
-            scene.clone(),
-            df_observe::presentation::ComponentPhase::Readable,
-            "ready",
-            0,
-            1_000,
+            super::presentation_timing::ComponentTransition {
+                element: frame.clone(),
+                component_type: df_observe::presentation::PresentationComponent::PlateIncoming,
+                id: incoming_id,
+                scene: scene.clone(),
+                phase: df_observe::presentation::ComponentPhase::Readable,
+                reason: "ready",
+                read_ms: 0,
+                delay_ms: 1_000,
+            },
         );
     }
     if let Some(previous_frame) = outgoing
@@ -1703,24 +1714,28 @@ fn activate_plate_request_at(
             .get_attribute("data-component-scene")
             .unwrap_or_else(|| scene.clone());
         super::presentation_timing::schedule_component_transition(
-            previous_frame.clone(),
-            df_observe::presentation::PresentationComponent::PlateIncoming,
-            previous_id,
-            previous_scene.clone(),
-            df_observe::presentation::ComponentPhase::Hidden,
-            "successor",
-            0,
-            1_000,
+            super::presentation_timing::ComponentTransition {
+                element: previous_frame.clone(),
+                component_type: df_observe::presentation::PresentationComponent::PlateIncoming,
+                id: previous_id,
+                scene: previous_scene.clone(),
+                phase: df_observe::presentation::ComponentPhase::Hidden,
+                reason: "successor",
+                read_ms: 0,
+                delay_ms: 1_000,
+            },
         );
         super::presentation_timing::schedule_component_transition(
-            previous_frame,
-            df_observe::presentation::PresentationComponent::PlateOutgoing,
-            previous_id,
-            previous_scene,
-            df_observe::presentation::ComponentPhase::Hidden,
-            "successor",
-            0,
-            1_000,
+            super::presentation_timing::ComponentTransition {
+                element: previous_frame,
+                component_type: df_observe::presentation::PresentationComponent::PlateOutgoing,
+                id: previous_id,
+                scene: previous_scene,
+                phase: df_observe::presentation::ComponentPhase::Hidden,
+                reason: "successor",
+                read_ms: 0,
+                delay_ms: 1_000,
+            },
         );
     }
     let bitmap_changed = stage.get_attribute("data-plate-key").as_deref() != Some(key.as_str());
@@ -2490,14 +2505,16 @@ impl TvStage {
                     .root
                     .set_attribute("data-component-open", "false")?;
                 super::presentation_timing::schedule_component_transition(
-                    self.card.root.clone(),
-                    component,
-                    id,
-                    scene,
-                    df_observe::presentation::ComponentPhase::Hidden,
-                    "successor",
-                    0,
-                    0,
+                    super::presentation_timing::ComponentTransition {
+                        element: self.card.root.clone(),
+                        component_type: component,
+                        id,
+                        scene,
+                        phase: df_observe::presentation::ComponentPhase::Hidden,
+                        reason: "successor",
+                        read_ms: 0,
+                        delay_ms: 0,
+                    },
                 );
             }
         }
@@ -2648,14 +2665,16 @@ impl TvStage {
             read_ms,
         );
         super::presentation_timing::schedule_component_transition(
-            shown.root.clone(),
-            component,
-            id,
-            scene,
-            df_observe::presentation::ComponentPhase::Readable,
-            "ready",
-            read_ms,
-            0,
+            super::presentation_timing::ComponentTransition {
+                element: shown.root.clone(),
+                component_type: component,
+                id,
+                scene,
+                phase: df_observe::presentation::ComponentPhase::Readable,
+                reason: "ready",
+                read_ms,
+                delay_ms: 0,
+            },
         );
         Ok(())
     }
@@ -2894,14 +2913,16 @@ impl TvStage {
         );
         if state == LineState::Closing {
             super::presentation_timing::schedule_component_transition(
-                self.narration.clone(),
-                df_observe::presentation::PresentationComponent::Subtitle,
-                id,
-                scene,
-                df_observe::presentation::ComponentPhase::Hidden,
-                reason,
-                read_ms,
-                500,
+                super::presentation_timing::ComponentTransition {
+                    element: self.narration.clone(),
+                    component_type: df_observe::presentation::PresentationComponent::Subtitle,
+                    id,
+                    scene,
+                    phase: df_observe::presentation::ComponentPhase::Hidden,
+                    reason,
+                    read_ms,
+                    delay_ms: 500,
+                },
             );
         }
         Ok(opened)
@@ -3039,14 +3060,16 @@ impl TvStage {
                     read_ms,
                 );
                 super::presentation_timing::schedule_component_transition(
-                    context.clone(),
-                    df_observe::presentation::PresentationComponent::SceneCard,
-                    id,
-                    scene,
-                    df_observe::presentation::ComponentPhase::Readable,
-                    "ready",
-                    read_ms,
-                    0,
+                    super::presentation_timing::ComponentTransition {
+                        element: context.clone(),
+                        component_type: df_observe::presentation::PresentationComponent::SceneCard,
+                        id,
+                        scene,
+                        phase: df_observe::presentation::ComponentPhase::Readable,
+                        reason: "ready",
+                        read_ms,
+                        delay_ms: 0,
+                    },
                 );
                 context
             }
@@ -3762,14 +3785,16 @@ impl TvStage {
             );
             if state == LineState::Opening {
                 super::presentation_timing::schedule_component_transition(
-                    lower.root.clone(),
-                    df_observe::presentation::PresentationComponent::Subtitle,
-                    id,
-                    scene.clone(),
-                    df_observe::presentation::ComponentPhase::Readable,
-                    "ready",
-                    read_ms,
-                    450,
+                    super::presentation_timing::ComponentTransition {
+                        element: lower.root.clone(),
+                        component_type: df_observe::presentation::PresentationComponent::Subtitle,
+                        id,
+                        scene: scene.clone(),
+                        phase: df_observe::presentation::ComponentPhase::Readable,
+                        reason: "ready",
+                        read_ms,
+                        delay_ms: 450,
+                    },
                 );
             }
         }
@@ -3787,14 +3812,16 @@ impl TvStage {
             LineState::Closing | LineState::Done | LineState::Cancelled
         ) {
             super::presentation_timing::schedule_component_transition(
-                lower.root.clone(),
-                df_observe::presentation::PresentationComponent::Subtitle,
-                id,
-                scene,
-                df_observe::presentation::ComponentPhase::Hidden,
-                reason,
-                read_ms,
-                500,
+                super::presentation_timing::ComponentTransition {
+                    element: lower.root.clone(),
+                    component_type: df_observe::presentation::PresentationComponent::Subtitle,
+                    id,
+                    scene,
+                    phase: df_observe::presentation::ComponentPhase::Hidden,
+                    reason,
+                    read_ms,
+                    delay_ms: 500,
+                },
             );
         }
         Ok(())
@@ -3867,24 +3894,28 @@ impl TvStage {
                 0,
             );
             super::presentation_timing::schedule_component_transition(
-                active_frame.clone(),
-                df_observe::presentation::PresentationComponent::PlateIncoming,
-                id,
-                previous_scene.clone(),
-                df_observe::presentation::ComponentPhase::Hidden,
-                "scene-change",
-                0,
-                0,
+                super::presentation_timing::ComponentTransition {
+                    element: active_frame.clone(),
+                    component_type: df_observe::presentation::PresentationComponent::PlateIncoming,
+                    id,
+                    scene: previous_scene.clone(),
+                    phase: df_observe::presentation::ComponentPhase::Hidden,
+                    reason: "scene-change",
+                    read_ms: 0,
+                    delay_ms: 0,
+                },
             );
             super::presentation_timing::schedule_component_transition(
-                active_frame.clone(),
-                df_observe::presentation::PresentationComponent::PlateOutgoing,
-                id,
-                previous_scene,
-                df_observe::presentation::ComponentPhase::Hidden,
-                "scene-change",
-                0,
-                0,
+                super::presentation_timing::ComponentTransition {
+                    element: active_frame.clone(),
+                    component_type: df_observe::presentation::PresentationComponent::PlateOutgoing,
+                    id,
+                    scene: previous_scene,
+                    phase: df_observe::presentation::ComponentPhase::Hidden,
+                    reason: "scene-change",
+                    read_ms: 0,
+                    delay_ms: 0,
+                },
             );
         }
         self.root.remove_attribute("data-plate-key")?;

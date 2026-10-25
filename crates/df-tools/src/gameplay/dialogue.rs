@@ -1613,8 +1613,6 @@ pub(super) fn watched_subject_from_judgement(
     }
 }
 
-/// Jev's instructions for the watched person's facts. The hero question and facts are data.
-
 /// The scene with the party heroes as people, so a line that names a party hero resolves as a target:
 /// a coin gift or a hand-over to a companion is then a scene interaction, not an empty reply.
 fn scene_with_party(

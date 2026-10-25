@@ -513,68 +513,67 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
     outcomes
         .into_iter()
         .enumerate()
-        .filter_map(|(index, outcome)| {
-            if let Some(roll) = death_save_roll(outcome, index) {
-                return Some(roll);
-            }
-            let damage_rolls = outcome
-                .damage_rolls
-                .iter()
-                .map(|roll| (roll.dice.as_slice(), roll.kept))
-                .collect::<Vec<_>>();
-            let damage = if outcome.grazed {
-                crate::combat_text::graze_summary(
-                    &df_render::battle::float_text::attack_name(&outcome.weapon),
-                    outcome.damage,
-                    &outcome.damage_type,
-                )
-            } else {
-                crate::combat_text::damage_summary(
-                    outcome.damage,
-                    &damage_rolls,
-                    outcome.damage_modifier,
-                )
-            };
-            let knockout = if outcome.knocked_out {
-                " · Nonlethal knockout: unconscious at 1 HP"
-            } else {
-                ""
-            };
-            Some(RollText {
-                key: format!("roll-{index}"),
-                // The card says what kind of attack it was: a shot or a melee strike, and with what.
-                label: if outcome.weapon.is_empty() {
-                    format!("{} attacks {}", outcome.actor_name, outcome.target_name)
-                } else {
-                    crate::combat_text::combat_attack_label(
-                        &outcome.actor_name,
-                        &outcome.target_name,
-                        &outcome.weapon,
+        .map(|(index, outcome)| {
+            death_save_roll(outcome, index).unwrap_or_else(|| {
+                let damage_rolls = outcome
+                    .damage_rolls
+                    .iter()
+                    .map(|roll| (roll.dice.as_slice(), roll.kept))
+                    .collect::<Vec<_>>();
+                let damage = if outcome.grazed {
+                    crate::combat_text::graze_summary(
                         &df_render::battle::float_text::attack_name(&outcome.weapon),
-                        outcome.attack_style,
+                        outcome.damage,
+                        &outcome.damage_type,
                     )
-                },
-                value: outcome.attack_die.to_string(),
-                explanation: attack_roll_explanation(outcome),
-                source: format!(
-                    "{damage} · {} has {} HP left{knockout}",
-                    outcome.target_name, outcome.target_hit_points
-                ),
-                verdict: if outcome.hit && outcome.critical {
-                    ("Critical hit", CombatTone::Success)
-                } else if outcome.hit {
-                    ("Hit", CombatTone::Success)
                 } else {
-                    ("Miss", CombatTone::Failure)
-                },
-                die_face: u8::try_from(outcome.attack_die)
-                    .ok()
-                    .filter(|face| (1..=20).contains(face)),
-                die_rest: crate::gameplay_browser::live_dice::rest_url_for(
-                    outcome.attack_die,
-                    &outcome.faces,
-                    outcome.roll_mode,
-                ),
+                    crate::combat_text::damage_summary(
+                        outcome.damage,
+                        &damage_rolls,
+                        outcome.damage_modifier,
+                    )
+                };
+                let knockout = if outcome.knocked_out {
+                    " · Nonlethal knockout: unconscious at 1 HP"
+                } else {
+                    ""
+                };
+                RollText {
+                    key: format!("roll-{index}"),
+                    // The card says what kind of attack it was: a shot or a melee strike, and with what.
+                    label: if outcome.weapon.is_empty() {
+                        format!("{} attacks {}", outcome.actor_name, outcome.target_name)
+                    } else {
+                        crate::combat_text::combat_attack_label(
+                            &outcome.actor_name,
+                            &outcome.target_name,
+                            &outcome.weapon,
+                            &df_render::battle::float_text::attack_name(&outcome.weapon),
+                            outcome.attack_style,
+                        )
+                    },
+                    value: outcome.attack_die.to_string(),
+                    explanation: attack_roll_explanation(outcome),
+                    source: format!(
+                        "{damage} · {} has {} HP left{knockout}",
+                        outcome.target_name, outcome.target_hit_points
+                    ),
+                    verdict: if outcome.hit && outcome.critical {
+                        ("Critical hit", CombatTone::Success)
+                    } else if outcome.hit {
+                        ("Hit", CombatTone::Success)
+                    } else {
+                        ("Miss", CombatTone::Failure)
+                    },
+                    die_face: u8::try_from(outcome.attack_die)
+                        .ok()
+                        .filter(|face| (1..=20).contains(face)),
+                    die_rest: crate::gameplay_browser::live_dice::rest_url_for(
+                        outcome.attack_die,
+                        &outcome.faces,
+                        outcome.roll_mode,
+                    ),
+                }
             })
         })
         .collect()

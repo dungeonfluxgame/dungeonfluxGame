@@ -803,22 +803,24 @@ impl Figures {
             PARTY_HUD_FADE_MS,
         );
         super::presentation_timing::schedule_component_transition(
-            hud,
-            PresentationComponent::PartyHud,
-            id,
-            PARTY_HUD_SCENE.to_owned(),
-            if visible {
-                ComponentPhase::Readable
-            } else {
-                ComponentPhase::Hidden
+            super::presentation_timing::ComponentTransition {
+                element: hud,
+                component_type: PresentationComponent::PartyHud,
+                id,
+                scene: PARTY_HUD_SCENE.to_owned(),
+                phase: if visible {
+                    ComponentPhase::Readable
+                } else {
+                    ComponentPhase::Hidden
+                },
+                reason: if visible {
+                    "battle-begin"
+                } else {
+                    "phase-change"
+                },
+                read_ms: PARTY_HUD_FADE_MS,
+                delay_ms: PARTY_HUD_FADE_MS,
             },
-            if visible {
-                "battle-begin"
-            } else {
-                "phase-change"
-            },
-            PARTY_HUD_FADE_MS,
-            PARTY_HUD_FADE_MS,
         );
         Ok(())
     }
@@ -1404,34 +1406,40 @@ impl Figures {
         );
         if !managed {
             super::presentation_timing::schedule_component_transition(
-                panel.clone(),
-                PresentationComponent::CheckCard,
-                component_id,
-                scene.clone(),
-                ComponentPhase::Readable,
-                "ready",
-                finding_ms,
-                roll_ms.saturating_add(CHECK_FINDING_REVEAL_MS),
+                super::presentation_timing::ComponentTransition {
+                    element: panel.clone(),
+                    component_type: PresentationComponent::CheckCard,
+                    id: component_id,
+                    scene: scene.clone(),
+                    phase: ComponentPhase::Readable,
+                    reason: "ready",
+                    read_ms: finding_ms,
+                    delay_ms: roll_ms.saturating_add(CHECK_FINDING_REVEAL_MS),
+                },
             );
             super::presentation_timing::schedule_component_transition(
-                panel.clone(),
-                PresentationComponent::CheckCard,
-                component_id,
-                scene.clone(),
-                ComponentPhase::Closing,
-                "timeout",
-                finding_ms,
-                total_ms.saturating_sub(CHECK_FADE_MS),
+                super::presentation_timing::ComponentTransition {
+                    element: panel.clone(),
+                    component_type: PresentationComponent::CheckCard,
+                    id: component_id,
+                    scene: scene.clone(),
+                    phase: ComponentPhase::Closing,
+                    reason: "timeout",
+                    read_ms: finding_ms,
+                    delay_ms: total_ms.saturating_sub(CHECK_FADE_MS),
+                },
             );
             super::presentation_timing::schedule_component_transition(
-                panel,
-                PresentationComponent::CheckCard,
-                component_id,
-                scene,
-                ComponentPhase::Hidden,
-                "timeout",
-                finding_ms,
-                total_ms,
+                super::presentation_timing::ComponentTransition {
+                    element: panel,
+                    component_type: PresentationComponent::CheckCard,
+                    id: component_id,
+                    scene,
+                    phase: ComponentPhase::Hidden,
+                    reason: "timeout",
+                    read_ms: finding_ms,
+                    delay_ms: total_ms,
+                },
             );
         } else if settled {
             super::presentation_timing::component(
@@ -1594,35 +1602,43 @@ impl Figures {
                 read_ms,
             );
             super::presentation_timing::schedule_component_transition(
-                bubble.clone(),
-                PresentationComponent::SpeechBubble,
-                id,
-                scene.clone(),
-                ComponentPhase::Readable,
-                "ready",
-                read_ms,
-                u32::try_from(appear_ms).unwrap_or(u32::MAX),
+                super::presentation_timing::ComponentTransition {
+                    element: bubble.clone(),
+                    component_type: PresentationComponent::SpeechBubble,
+                    id,
+                    scene: scene.clone(),
+                    phase: ComponentPhase::Readable,
+                    reason: "ready",
+                    read_ms,
+                    delay_ms: u32::try_from(appear_ms).unwrap_or(u32::MAX),
+                },
             );
             super::presentation_timing::schedule_component_transition(
-                bubble.clone(),
-                PresentationComponent::SpeechBubble,
-                id,
-                scene.clone(),
-                ComponentPhase::Closing,
-                "timeout",
-                read_ms,
-                u32::try_from(appear_ms.saturating_add(hold)).unwrap_or(u32::MAX),
+                super::presentation_timing::ComponentTransition {
+                    element: bubble.clone(),
+                    component_type: PresentationComponent::SpeechBubble,
+                    id,
+                    scene: scene.clone(),
+                    phase: ComponentPhase::Closing,
+                    reason: "timeout",
+                    read_ms,
+                    delay_ms: u32::try_from(appear_ms.saturating_add(hold)).unwrap_or(u32::MAX),
+                },
             );
             super::presentation_timing::schedule_component_transition(
-                bubble,
-                PresentationComponent::SpeechBubble,
-                id,
-                scene,
-                ComponentPhase::Hidden,
-                "timeout",
-                read_ms,
-                u32::try_from(appear_ms.saturating_add(hold).saturating_add(FADE_OUT_MS))
+                super::presentation_timing::ComponentTransition {
+                    element: bubble,
+                    component_type: PresentationComponent::SpeechBubble,
+                    id,
+                    scene,
+                    phase: ComponentPhase::Hidden,
+                    reason: "timeout",
+                    read_ms,
+                    delay_ms: u32::try_from(
+                        appear_ms.saturating_add(hold).saturating_add(FADE_OUT_MS),
+                    )
                     .unwrap_or(u32::MAX),
+                },
             );
         }
         Ok(())
@@ -2650,14 +2666,16 @@ impl Figures {
         );
         if created && live {
             super::presentation_timing::schedule_component_transition(
-                loader,
-                PresentationComponent::IntentLoader,
-                id,
-                scene,
-                ComponentPhase::Readable,
-                "ready",
-                0,
-                200,
+                super::presentation_timing::ComponentTransition {
+                    element: loader,
+                    component_type: PresentationComponent::IntentLoader,
+                    id,
+                    scene,
+                    phase: ComponentPhase::Readable,
+                    reason: "ready",
+                    read_ms: 0,
+                    delay_ms: 200,
+                },
             );
         }
         Ok(())
@@ -2741,27 +2759,31 @@ impl Figures {
                     && let Some(lower) = lower
                 {
                     super::presentation_timing::schedule_component_transition(
-                        lower,
-                        PresentationComponent::SpeechBubble,
-                        id,
-                        scene,
-                        ComponentPhase::Readable,
-                        "ready",
-                        read_ms,
-                        500,
+                        super::presentation_timing::ComponentTransition {
+                            element: lower,
+                            component_type: PresentationComponent::SpeechBubble,
+                            id,
+                            scene,
+                            phase: ComponentPhase::Readable,
+                            reason: "ready",
+                            read_ms,
+                            delay_ms: 500,
+                        },
                     );
                 } else if state == LineState::Closing
                     && let Some(lower) = lower
                 {
                     super::presentation_timing::schedule_component_transition(
-                        lower,
-                        PresentationComponent::SpeechBubble,
-                        id,
-                        scene,
-                        ComponentPhase::Hidden,
-                        "successor",
-                        read_ms,
-                        500,
+                        super::presentation_timing::ComponentTransition {
+                            element: lower,
+                            component_type: PresentationComponent::SpeechBubble,
+                            id,
+                            scene,
+                            phase: ComponentPhase::Hidden,
+                            reason: "successor",
+                            read_ms,
+                            delay_ms: 500,
+                        },
                     );
                 }
                 return Ok(opened);
@@ -2859,25 +2881,29 @@ impl Figures {
         );
         if state == LineState::Opening && opened {
             super::presentation_timing::schedule_component_transition(
-                element,
-                component_type,
-                id,
-                scene,
-                ComponentPhase::Readable,
-                "ready",
-                read_ms,
-                200,
+                super::presentation_timing::ComponentTransition {
+                    element,
+                    component_type,
+                    id,
+                    scene,
+                    phase: ComponentPhase::Readable,
+                    reason: "ready",
+                    read_ms,
+                    delay_ms: 200,
+                },
             );
         } else if state == LineState::Closing {
             super::presentation_timing::schedule_component_transition(
-                element,
-                component_type,
-                id,
-                scene,
-                ComponentPhase::Hidden,
-                reason,
-                read_ms,
-                200,
+                super::presentation_timing::ComponentTransition {
+                    element,
+                    component_type,
+                    id,
+                    scene,
+                    phase: ComponentPhase::Hidden,
+                    reason,
+                    read_ms,
+                    delay_ms: 200,
+                },
             );
         }
         Ok(opened)
@@ -3080,14 +3106,16 @@ impl Figures {
                     0,
                 );
                 super::presentation_timing::schedule_component_transition(
-                    dots,
-                    PresentationComponent::ThinkingLoader,
-                    id,
-                    scene,
-                    ComponentPhase::Readable,
-                    "ready",
-                    0,
-                    200,
+                    super::presentation_timing::ComponentTransition {
+                        element: dots,
+                        component_type: PresentationComponent::ThinkingLoader,
+                        id,
+                        scene,
+                        phase: ComponentPhase::Readable,
+                        reason: "ready",
+                        read_ms: 0,
+                        delay_ms: 200,
+                    },
                 );
             } else if wanted {
                 self.place_bubble(figure);

@@ -2529,38 +2529,52 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
         idle
     });
     if phase_idle {
-        start_mount(
+        start_mount(MountRequest {
             client,
-            &choice,
+            choice: &choice,
             backdrop,
-            &key,
-            view.journey
+            key: &key,
+            server_layout: view
+                .journey
                 .combat
                 .as_ref()
                 .map(|combat| combat.layout_id.clone())
                 .filter(|id| !id.is_empty()),
-            &view.scene.location_id,
-            &view.scene.title,
-            view.journey
+            story_location: &view.scene.location_id,
+            place_title: &view.scene.title,
+            world: view
+                .journey
                 .combat
                 .as_ref()
                 .and_then(|combat| combat.battle_world.clone()),
-        );
+        });
     } else {
         sync("view");
     }
 }
 
-fn start_mount(
-    client: &Rc<RefCell<Client>>,
-    choice: &battle::SceneChoice,
+struct MountRequest<'a> {
+    client: &'a Rc<RefCell<Client>>,
+    choice: &'a battle::SceneChoice,
     backdrop: Option<String>,
-    key: &str,
+    key: &'a str,
     server_layout: Option<String>,
-    story_location: &str,
-    place_title: &str,
+    story_location: &'a str,
+    place_title: &'a str,
     world: Option<rpc::BattleWorld>,
-) {
+}
+
+fn start_mount(request: MountRequest<'_>) {
+    let MountRequest {
+        client,
+        choice,
+        backdrop,
+        key,
+        server_layout,
+        story_location,
+        place_title,
+        world,
+    } = request;
     let (document, host) = {
         let state = client.borrow();
         (state.document.clone(), state.root.clone())

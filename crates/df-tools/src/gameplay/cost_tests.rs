@@ -373,14 +373,10 @@ fn every_provider_client_has_a_billed_route() {
 
 #[test]
 fn the_client_metered_routes_have_no_pending_admission_entry() {
-    let pending: Vec<(&str, &str)> = ROUTES
-        .iter()
-        .filter(|route| matches!(route.metering, Metering::Pending(_)))
-        .map(|route| (route.client, route.model))
-        .collect();
     assert!(
-        pending.is_empty(),
-        "all declared routes are metered: {pending:?}"
+        ROUTES
+            .iter()
+            .all(|route| route.metering == Metering::Priced)
     );
 }
 

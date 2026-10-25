@@ -16,7 +16,7 @@ use crate::presentation::imagery_url;
 
 // The party mural (HS49) is generated art too: a ready mural at the same revision reaches the TV.
 #[path = "gameplay/living_scenes/mural_view.rs"]
-mod mural_view;
+pub(crate) mod mural_view;
 
 fn well_formed(path: &str) -> bool {
     path.is_empty() || imagery_url(path).is_some()

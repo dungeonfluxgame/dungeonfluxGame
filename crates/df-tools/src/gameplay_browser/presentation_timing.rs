@@ -101,7 +101,7 @@ fn now_ms() -> Option<u64> {
     measured.map(|time| time as u64)
 }
 
-fn component_event(
+struct ComponentEvent {
     id: u64,
     scene: u64,
     at_ms: u64,
@@ -114,15 +114,24 @@ fn component_event(
     closed_ms: Option<u64>,
     visible_held_ms: Option<u64>,
     lag_ms: Option<u64>,
-) -> TimingEvent {
-    let mut event =
-        TimingEvent::component_lifecycle(id, scene, at_ms, component, phase, visibility, reason);
-    event.read_ms = read_ms;
-    event.opened_ms = opened_ms;
-    event.closed_ms = closed_ms;
-    event.visible_held_ms = visible_held_ms;
-    event.lag_ms = lag_ms;
-    event
+}
+
+fn component_event(event: ComponentEvent) -> TimingEvent {
+    let mut timing = TimingEvent::component_lifecycle(
+        event.id,
+        event.scene,
+        event.at_ms,
+        event.component,
+        event.phase,
+        event.visibility,
+        event.reason,
+    );
+    timing.read_ms = event.read_ms;
+    timing.opened_ms = event.opened_ms;
+    timing.closed_ms = event.closed_ms;
+    timing.visible_held_ms = event.visible_held_ms;
+    timing.lag_ms = event.lag_ms;
+    timing
 }
 
 // Stable content-free local identifiers. Clear the sign bit for the OTLP integer domain.
@@ -476,20 +485,20 @@ pub(super) fn entry_gap(
         report_loss(1);
         return;
     }
-    let event = component_event(
+    let event = component_event(ComponentEvent {
         id,
-        identity(scene),
-        now,
+        scene: identity(scene),
+        at_ms: now,
         component,
-        ComponentPhase::Opened,
-        effective_visibility(Some(element)),
-        "scene-change",
-        0,
-        Some(now),
-        None,
-        None,
-        Some(now.saturating_sub(started_ms as u64)),
-    );
+        phase: ComponentPhase::Opened,
+        visibility: effective_visibility(Some(element)),
+        reason: "scene-change",
+        read_ms: 0,
+        opened_ms: Some(now),
+        closed_ms: None,
+        visible_held_ms: None,
+        lag_ms: Some(now.saturating_sub(started_ms as u64)),
+    });
     displays(|capture| retain(capture, event.clone()));
 }
 
@@ -523,20 +532,20 @@ pub(super) fn component(
             |element| effective_visibility(Some(element)),
         );
         if phase == ComponentPhase::Failed && !capture.components.contains_key(&key) {
-            let event = component_event(
+            let event = component_event(ComponentEvent {
                 id,
                 scene,
-                now,
+                at_ms: now,
                 component,
                 phase,
                 visibility,
                 reason,
                 read_ms,
-                None,
-                Some(now),
-                Some(0),
-                None,
-            );
+                opened_ms: None,
+                closed_ms: Some(now),
+                visible_held_ms: Some(0),
+                lag_ms: None,
+            });
             retain(capture, event);
             return;
         }
@@ -600,26 +609,26 @@ pub(super) fn component(
                 active.element = element.cloned();
             }
             let visible_held_ms = active.clock.observe(now, active.phase, visibility);
-            let mut event = component_event(
+            let mut event = component_event(ComponentEvent {
                 id,
                 scene,
-                now,
+                at_ms: now,
                 component,
-                active.phase,
+                phase: active.phase,
                 visibility,
                 reason,
-                active.read_ms,
-                active.clock.opened_ms(),
-                closing.then_some(now),
-                Some(visible_held_ms),
-                NEXT_LAG_MS.take(),
-            );
+                read_ms: active.read_ms,
+                opened_ms: active.clock.opened_ms(),
+                closed_ms: closing.then_some(now),
+                visible_held_ms: Some(visible_held_ms),
+                lag_ms: NEXT_LAG_MS.take(),
+            });
             if active.phase == ComponentPhase::Closing && active.close_reason == "ended" {
                 active.close_reason = reason;
             }
-            if active.phase == ComponentPhase::Closing {
-                event.reason = active.close_reason;
-            } else if closing && previous_phase == ComponentPhase::Closing {
+            if active.phase == ComponentPhase::Closing
+                || (closing && previous_phase == ComponentPhase::Closing)
+            {
                 event.reason = active.close_reason;
             } else if closing {
                 event.reason = reason;
@@ -634,18 +643,31 @@ pub(super) fn component(
     refresh_component_visibility();
 }
 
+/// A delayed presentation update, scoped to one mounted component and scene.
+pub(super) struct ComponentTransition {
+    pub(super) element: web_sys::Element,
+    pub(super) component_type: PresentationComponent,
+    pub(super) id: u64,
+    pub(super) scene: String,
+    pub(super) phase: ComponentPhase,
+    pub(super) reason: &'static str,
+    pub(super) read_ms: u32,
+    pub(super) delay_ms: u32,
+}
+
 /// Delay an element phase until its entrance, readable window or authored hold completes. The
 /// callback rechecks the live element and carries only its closed component id and timings.
-pub(super) fn schedule_component_transition(
-    element: web_sys::Element,
-    component_type: PresentationComponent,
-    id: u64,
-    scene: String,
-    phase: ComponentPhase,
-    reason: &'static str,
-    read_ms: u32,
-    delay_ms: u32,
-) {
+pub(super) fn schedule_component_transition(transition: ComponentTransition) {
+    let ComponentTransition {
+        element,
+        component_type,
+        id,
+        scene,
+        phase,
+        reason,
+        read_ms,
+        delay_ms,
+    } = transition;
     wasm_bindgen_futures::spawn_local(async move {
         TimeoutFuture::new(delay_ms).await;
         if !component_is_active(component_type, id, &scene, &element, phase) {
@@ -1361,24 +1383,24 @@ mod tests {
         for (component, label, phases) in expected {
             for phase in phases {
                 let at_ms = if *phase == Hidden { 2_500 } else { 1_000 };
-                let event = component_event(
-                    7,
-                    11,
+                let event = component_event(ComponentEvent {
+                    id: 7,
+                    scene: 11,
                     at_ms,
                     component,
-                    *phase,
-                    if *phase == Hidden {
+                    phase: *phase,
+                    visibility: if *phase == Hidden {
                         EffectiveVisibility::Hidden
                     } else {
                         EffectiveVisibility::Visible
                     },
-                    if *phase == Hidden { "read" } else { "ready" },
-                    1_500,
-                    Some(1_000),
-                    (*phase == Hidden).then_some(at_ms),
-                    Some(if *phase == Hidden { 1_400 } else { 0 }),
-                    (*phase == Opened).then_some(25),
-                );
+                    reason: if *phase == Hidden { "read" } else { "ready" },
+                    read_ms: 1_500,
+                    opened_ms: Some(1_000),
+                    closed_ms: (*phase == Hidden).then_some(at_ms),
+                    visible_held_ms: Some(if *phase == Hidden { 1_400 } else { 0 }),
+                    lag_ms: (*phase == Opened).then_some(25),
+                });
                 assert_eq!(event.kind, "component");
                 assert_eq!(event.id, 7);
                 assert_eq!(event.scene, 11);
