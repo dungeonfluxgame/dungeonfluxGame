@@ -92,7 +92,7 @@ impl DatabaseBindingVerifier {
         let expected_campaign = (scope.mapping.campaign_bytes)(request.campaign)?;
         let expected_role = (scope.mapping.role_bytes)(request.role)?;
         let expected_revision = (scope.mapping.revision_bytes)(scope.capability.revision())?;
-        for value in [
+        for authority_bytes in [
             &campaign,
             &role,
             &revision,
@@ -100,7 +100,9 @@ impl DatabaseBindingVerifier {
             &expected_role,
             &expected_revision,
         ] {
-            if value.is_empty() || value.len() > self.maximum_authority_value_bytes {
+            if authority_bytes.is_empty()
+                || authority_bytes.len() > self.maximum_authority_value_bytes
+            {
                 return Err(RepositoryError::Unauthorized);
             }
         }
@@ -321,14 +323,15 @@ fn copy_key_namespace(
     if maximum_retained_bytes == 0 || namespace.len() > maximum_heap_bytes {
         return Err(RepositoryError::Capacity);
     }
-    let mut copy = Vec::new();
-    copy.try_reserve_exact(namespace.len())
+    let mut namespace_copy = Vec::new();
+    namespace_copy
+        .try_reserve_exact(namespace.len())
         .map_err(|_| RepositoryError::Capacity)?;
-    if copy.capacity() > maximum_heap_bytes {
+    if namespace_copy.capacity() > maximum_heap_bytes {
         return Err(RepositoryError::Capacity);
     }
-    copy.extend_from_slice(namespace);
-    Ok(copy)
+    namespace_copy.extend_from_slice(namespace);
+    Ok(namespace_copy)
 }
 
 #[cfg(test)]
@@ -381,22 +384,23 @@ mod uncertainty_key_tests {
             copy_key_namespace(b"namespace", 0),
             Err(RepositoryError::Capacity)
         ));
-        let size = std::mem::size_of::<NativeUncertaintyKey>();
+        let key_inline_size_bytes = std::mem::size_of::<NativeUncertaintyKey>();
         assert!(matches!(
-            copy_key_namespace(b"namespace", size + 8),
+            copy_key_namespace(b"namespace", key_inline_size_bytes + 8),
             Err(RepositoryError::Capacity)
         ));
-        let copied = copy_key_namespace(b"namespace", size + 128).unwrap();
-        assert_eq!(copied, b"namespace");
-        assert!(copied.capacity() <= 128);
+        let copied_namespace =
+            copy_key_namespace(b"namespace", key_inline_size_bytes + 128).unwrap();
+        assert_eq!(copied_namespace, b"namespace");
+        assert!(copied_namespace.capacity() <= 128);
     }
     #[test]
     fn retained_key_accounting_reports_actual_capacity() {
-        let mut value = key();
-        value.namespace.reserve_exact(64);
+        let mut uncertainty_key = key();
+        uncertainty_key.namespace.reserve_exact(64);
         assert_eq!(
-            value.retained_heap_bytes(),
-            Some(value.namespace.capacity())
+            uncertainty_key.retained_heap_bytes(),
+            Some(uncertainty_key.namespace.capacity())
         );
     }
 }

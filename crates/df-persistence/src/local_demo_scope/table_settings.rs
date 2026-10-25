@@ -21,7 +21,7 @@ impl LocalDemoScopeIssuer {
     ) -> Result<Option<StoredTableSettings>, RepositoryError> {
         tokio::time::timeout(READ_DEADLINE, async {
             let client = self.authority.client()?;
-            let exists: bool = client
+            let table_exists: bool = client
                 .query_one(
                     "SELECT to_regclass('df_local_demo.table_settings') IS NOT NULL",
                     &[],
@@ -30,7 +30,7 @@ impl LocalDemoScopeIssuer {
                 .map_err(|_| RepositoryError::Unavailable)?
                 .try_get(0)
                 .map_err(|_| RepositoryError::InvalidCandidate)?;
-            if !exists {
+            if !table_exists {
                 return Ok(None);
             }
             let row = client

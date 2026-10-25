@@ -32,17 +32,17 @@ pub struct ProxyBounds {
 struct Frames {
     buffer: Vec<u8>,
     startup: bool,
-    maximum: usize,
+    maximum_frame_bytes: usize,
 }
 impl Frames {
-    fn new(startup: bool, maximum: usize) -> Result<Self, ProxyError> {
-        if !(8..=4 * 1024 * 1024).contains(&maximum) {
+    fn new(startup: bool, maximum_frame_bytes: usize) -> Result<Self, ProxyError> {
+        if !(8..=4 * 1024 * 1024).contains(&maximum_frame_bytes) {
             return Err(ProxyError::Capacity);
         }
         Ok(Self {
             buffer: Vec::new(),
             startup,
-            maximum,
+            maximum_frame_bytes,
         })
     }
     fn append(&mut self, bytes: &[u8]) -> Result<(), ProxyError> {
@@ -51,14 +51,17 @@ impl Frames {
             .len()
             .checked_add(bytes.len())
             .ok_or(ProxyError::Capacity)?;
-        let bound = self.maximum.checked_add(8192).ok_or(ProxyError::Capacity)?;
-        if next > bound {
+        let maximum_buffer_bytes = self
+            .maximum_frame_bytes
+            .checked_add(8192)
+            .ok_or(ProxyError::Capacity)?;
+        if next > maximum_buffer_bytes {
             return Err(ProxyError::Capacity);
         }
         self.buffer
             .try_reserve_exact(bytes.len())
             .map_err(|_| ProxyError::Capacity)?;
-        if self.buffer.capacity() > bound {
+        if self.buffer.capacity() > maximum_buffer_bytes {
             return Err(ProxyError::Capacity);
         }
         self.buffer.extend_from_slice(bytes);
@@ -82,7 +85,7 @@ impl Frames {
             let length =
                 usize::try_from(i32::from_be_bytes(raw)).map_err(|_| ProxyError::Protocol)?;
             let total = length.checked_add(offset).ok_or(ProxyError::Capacity)?;
-            if length < 4 || total > self.maximum {
+            if length < 4 || total > self.maximum_frame_bytes {
                 return Err(ProxyError::Protocol);
             }
             if current.len() < total {

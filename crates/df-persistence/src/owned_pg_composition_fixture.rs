@@ -26,11 +26,11 @@ pub(crate) fn bind_registered_scope(
     ),
     RepositoryError,
 > {
-    fn identity(row: &Row, column: &str) -> Result<[u8; 16], RepositoryError> {
-        let bytes: Vec<u8> = row
+    fn decode_identity(row: &Row, column: &str) -> Result<[u8; 16], RepositoryError> {
+        let identity_bytes: Vec<u8> = row
             .try_get(column)
             .map_err(|_| RepositoryError::Unauthorized)?;
-        let identity: [u8; 16] = bytes
+        let identity: [u8; 16] = identity_bytes
             .try_into()
             .map_err(|_| RepositoryError::Unauthorized)?;
         if identity == [0; 16] {
@@ -38,9 +38,9 @@ pub(crate) fn bind_registered_scope(
         }
         Ok(identity)
     }
-    let principal = FixturePrincipal(identity(proof, "principal_id")?);
-    let tenant = FixtureTenant(identity(proof, "tenant_id")?);
-    let campaign = FixtureCampaign(identity(proof, "campaign_id")?);
+    let principal = FixturePrincipal(decode_identity(proof, "principal_id")?);
+    let tenant = FixtureTenant(decode_identity(proof, "tenant_id")?);
+    let campaign = FixtureCampaign(decode_identity(proof, "campaign_id")?);
     let role = FixtureRole(
         proof
             .try_get("effective_role")

@@ -71,10 +71,10 @@ pub(crate) async fn seed_session(
     if *tenant == [0; 16] || *fence == [0; 16] || !(1..=300).contains(&lease_seconds) {
         return Err(RepositoryError::InvalidCandidate);
     }
-    let bytes = encode_checkpoint(checkpoint, codec_limits)
+    let checkpoint_document = encode_checkpoint(checkpoint, codec_limits)
         .map_err(|_| RepositoryError::InvalidCandidate)?;
     let decoded = decode_checkpoint(
-        &bytes,
+        &checkpoint_document,
         checkpoint.basis(),
         checkpoint.pins(),
         inventory,
@@ -88,7 +88,7 @@ pub(crate) async fn seed_session(
     let basis = checkpoint.basis();
     let epoch = basis.revision.epoch().get().to_string();
     let sequence = basis.revision.sequence().to_string();
-    let count = transaction
+    let inserted_session_count = transaction
         .execute(
             "INSERT INTO df_game.sessions (tenant_id, session_id, run_id,
         recovery_epoch, in_epoch_sequence, owner_fence, lease_until)
@@ -106,10 +106,10 @@ pub(crate) async fn seed_session(
         )
         .await
         .map_err(|_| RepositoryError::Unavailable)?;
-    if count != 1 {
+    if inserted_session_count != 1 {
         return Err(RepositoryError::Unavailable);
     }
-    let count = transaction
+    let inserted_checkpoint_count = transaction
         .execute(
             crate::sql::INSERT_CHECKPOINT,
             &[
@@ -120,12 +120,12 @@ pub(crate) async fn seed_session(
                 &basis.run.as_bytes().as_slice(),
                 &i32::from(checkpoint.schema()),
                 &STORAGE_CODEC_VERSION,
-                &bytes,
+                &checkpoint_document,
             ],
         )
         .await
         .map_err(|_| RepositoryError::Unavailable)?;
-    if count != 1 {
+    if inserted_checkpoint_count != 1 {
         return Err(RepositoryError::Unavailable);
     }
     Ok(())
@@ -136,14 +136,14 @@ pub(crate) async fn seed_grant(
     grant: &FixtureGrant<'_>,
 ) -> Result<(), RepositoryError> {
     grant.validate()?;
-    let count = transaction.execute("INSERT INTO df_fixture_authority.grants
+    let inserted_grant_count = transaction.execute("INSERT INTO df_fixture_authority.grants
         (service_role, tenant_id, principal_id, campaign_id, effective_role, access_revision, active, expires_at)
         VALUES ($1::text::name, $2::bytea, $3::bytea, $4::bytea, $5::bytea, $6::bytea, true,
             clock_timestamp() + $7::bigint * interval '1 second')",
         &[&grant.service_role, &grant.tenant.as_slice(), &grant.principal.as_slice(),
             &grant.campaign.as_slice(), &grant.role, &grant.access_revision, &grant.lifetime_seconds])
         .await.map_err(|_| RepositoryError::Unavailable)?;
-    if count != 1 {
+    if inserted_grant_count != 1 {
         return Err(RepositoryError::Unavailable);
     }
     Ok(())
@@ -268,10 +268,10 @@ pub(crate) async fn physical_snapshot(
         .iter()
         .enumerate()
     {
-        let value: i64 = row
+        let family_row_count: i64 = row
             .try_get(*column)
             .map_err(|_| RepositoryError::Unavailable)?;
-        counts[slot] = u64::try_from(value).map_err(|_| RepositoryError::Unavailable)?;
+        counts[slot] = u64::try_from(family_row_count).map_err(|_| RepositoryError::Unavailable)?;
     }
     let sequence: String = row
         .try_get("session_sequence")

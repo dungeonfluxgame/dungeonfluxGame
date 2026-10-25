@@ -124,7 +124,7 @@ pub(crate) fn observe_family_rollback(
     context: &OperationContext,
     physical: &PhysicalObservation<'_>,
 ) -> Result<(), RepositoryError> {
-    let count = match family {
+    let family_row_count = match family {
         InsertedFamily::Checkpoint
         | InsertedFamily::Operation
         | InsertedFamily::FinalRevisionCas
@@ -146,7 +146,7 @@ pub(crate) fn observe_family_rollback(
             .filter(|i| i.basis == candidate.basis())
             .count(),
     };
-    if count == 0 {
+    if family_row_count == 0 {
         return Err(RepositoryError::InvalidCandidate);
     }
     if repository.load_current(scope, context)?.basis() != expected
