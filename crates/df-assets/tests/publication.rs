@@ -31,7 +31,7 @@ fn operation(seed: u8) -> OperationId {
     OperationId::from_bytes(&[seed; 16]).unwrap()
 }
 
-fn expected(bytes: &[u8]) -> AssetManifest {
+fn manifest_for(bytes: &[u8]) -> AssetManifest {
     AssetManifest {
         byte_len: bytes.len() as u64,
         sha256: Sha256::digest(bytes).into(),
@@ -139,7 +139,7 @@ fn staged_partial_and_wrong_hash_never_reach_metadata() {
     let metadata = Metadata::new(bytes.clone());
     let complete = b"asset-v1";
     let short = bytes.stage(operation(1), &mut &complete[..3]).unwrap();
-    let candidate = publication(operation(1), 1, "image", expected(complete));
+    let candidate = publication(operation(1), 1, "image", manifest_for(complete));
     assert!(matches!(
         publish(&context(), &candidate, &short, bytes.as_ref(), &metadata),
         Err(PublicationError::Incomplete)
@@ -150,7 +150,7 @@ fn staged_partial_and_wrong_hash_never_reach_metadata() {
     assert!(matches!(
         publish(
             &context(),
-            &publication(operation(9), 1, "image", expected(complete)),
+            &publication(operation(9), 1, "image", manifest_for(complete)),
             &short,
             bytes.as_ref(),
             &metadata,
@@ -160,7 +160,7 @@ fn staged_partial_and_wrong_hash_never_reach_metadata() {
     assert_eq!(metadata.publish_calls.load(Ordering::Relaxed), 0);
 
     let wrong = bytes.stage(operation(2), &mut &complete[..]).unwrap();
-    let wrong_manifest = expected(b"asset-w0");
+    let wrong_manifest = manifest_for(b"asset-w0");
     assert_eq!(wrong_manifest.byte_len, candidate.bytes.byte_len);
     assert!(matches!(
         publish(
@@ -182,7 +182,7 @@ fn durable_bytes_precede_visibility_and_old_version_survives_retry_and_conflict(
     let bytes = Arc::new(NativeFileStore::new(&path, 1024).unwrap());
     let metadata = Metadata::new(bytes.clone());
     let content = b"asset-v1";
-    let first = publication(operation(3), 1, "image", expected(content));
+    let first = publication(operation(3), 1, "image", manifest_for(content));
     let staged = bytes.stage(operation(3), &mut &content[..]).unwrap();
     assert_eq!(metadata.count(), 0);
     let receipt = publish(&context(), &first, &staged, bytes.as_ref(), &metadata).unwrap();
@@ -195,14 +195,14 @@ fn durable_bytes_precede_visibility_and_old_version_survives_retry_and_conflict(
         .unwrap();
 
     let repeat = bytes.stage(operation(4), &mut &content[..]).unwrap();
-    let repeated = publication(operation(4), 1, "image", expected(content));
+    let repeated = publication(operation(4), 1, "image", manifest_for(content));
     assert_eq!(
         publish(&context(), &repeated, &repeat, bytes.as_ref(), &metadata)
             .unwrap()
             .status,
         PublicationStatus::AlreadyPublished
     );
-    let changed_metadata = publication(operation(4), 1, "audio", expected(content));
+    let changed_metadata = publication(operation(4), 1, "audio", manifest_for(content));
     assert!(matches!(
         publish(
             &context(),
@@ -218,7 +218,7 @@ fn durable_bytes_precede_visibility_and_old_version_survives_retry_and_conflict(
     assert!(matches!(
         publish(
             &context(),
-            &publication(operation(5), 1, "image", expected(changed)),
+            &publication(operation(5), 1, "image", manifest_for(changed)),
             &replacement,
             bytes.as_ref(),
             &metadata,
@@ -227,7 +227,7 @@ fn durable_bytes_precede_visibility_and_old_version_survives_retry_and_conflict(
     ));
     assert_eq!(
         metadata.lookup(&1).unwrap().unwrap().bytes,
-        expected(content)
+        manifest_for(content)
     );
     assert_eq!(metadata.count(), 1);
 }
@@ -239,7 +239,7 @@ fn failed_or_unknown_metadata_acknowledgement_has_no_false_success() {
     let metadata = Metadata::new(bytes.clone());
     let content = b"committed";
     let staged = bytes.stage(operation(6), &mut &content[..]).unwrap();
-    let candidate = publication(operation(6), 6, "still", expected(content));
+    let candidate = publication(operation(6), 6, "still", manifest_for(content));
     *metadata.fail_next.lock().unwrap() = Some(MetadataFailure::Unavailable);
     assert!(matches!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
@@ -254,7 +254,7 @@ fn failed_or_unknown_metadata_acknowledgement_has_no_false_success() {
     );
 
     let next = bytes.stage(operation(7), &mut &b"new"[..]).unwrap();
-    let next_candidate = publication(operation(7), 7, "still", expected(b"new"));
+    let next_candidate = publication(operation(7), 7, "still", manifest_for(b"new"));
     *metadata.fail_next.lock().unwrap() = Some(MetadataFailure::Unknown);
     assert!(matches!(
         publish(
@@ -308,7 +308,7 @@ fn configured_byte_ceiling_accepts_edge_and_refuses_excess_before_publication() 
     let bytes = Arc::new(NativeFileStore::new(&path, 4).unwrap());
     let metadata = Metadata::new(bytes.clone());
     let edge = bytes.stage(operation(10), &mut &b"1234"[..]).unwrap();
-    let candidate = publication(operation(10), 10, "still", expected(b"1234"));
+    let candidate = publication(operation(10), 10, "still", manifest_for(b"1234"));
     assert_eq!(
         publish(&context(), &candidate, &edge, bytes.as_ref(), &metadata)
             .unwrap()
@@ -323,7 +323,7 @@ fn configured_byte_ceiling_accepts_edge_and_refuses_excess_before_publication() 
     assert!(matches!(
         publish(
             &context(),
-            &publication(operation(10), 11, "still", expected(b"12345")),
+            &publication(operation(10), 11, "still", manifest_for(b"12345")),
             &edge,
             bytes.as_ref(),
             &metadata,
@@ -346,7 +346,7 @@ fn abandoned_promotion_path_does_not_block_resumed_publication() {
     let marker_bytes = b"abandoned promotion from a previous process";
     fs::write(&marker, marker_bytes).unwrap();
 
-    let candidate = publication(operation(12), 12, "still", expected(content));
+    let candidate = publication(operation(12), 12, "still", manifest_for(content));
     let restarted = NativeFileStore::new(&path, 1024).unwrap();
     let resumed = restarted.resume_staged(operation(12)).unwrap();
     assert_eq!(metadata.count(), 0);
@@ -385,7 +385,7 @@ fn two_occupied_promotion_slots_survive_publication_through_next_slot() {
     fs::write(&first, first_marker).unwrap();
     fs::write(&second, second_marker).unwrap();
 
-    let candidate = publication(operation(14), 14, "still", expected(content));
+    let candidate = publication(operation(14), 14, "still", manifest_for(content));
     assert_eq!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata)
             .unwrap()
@@ -423,7 +423,7 @@ fn occupied_promotion_slot_bound_refuses_without_visibility_or_overwrite() {
         occupied.push(marker);
     }
 
-    let candidate = publication(operation(13), 13, "still", expected(content));
+    let candidate = publication(operation(13), 13, "still", manifest_for(content));
     assert!(matches!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
         Err(PublicationError::Store(StoreError::StagingConflict))
@@ -456,7 +456,7 @@ fn confirm_rejects_oversized_truncated_and_wrong_digest_backing_without_metadata
         let metadata = Metadata::new(bytes.clone());
         let content = b"asset-v1";
         let staged = bytes.stage(operation(20), &mut &content[..]).unwrap();
-        let candidate = publication(operation(20), 1, "image", expected(content));
+        let candidate = publication(operation(20), 1, "image", manifest_for(content));
         let receipt = publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata).unwrap();
         assert_eq!(receipt.status, PublicationStatus::Published);
         let published = metadata.lookup(&1).unwrap().unwrap();
@@ -472,7 +472,7 @@ fn confirm_rejects_oversized_truncated_and_wrong_digest_backing_without_metadata
         assert_eq!(fs::read(&object).unwrap(), damaged);
         let retained = metadata.lookup(&1).unwrap().unwrap();
         assert_eq!(retained.metadata, "image");
-        assert_eq!(retained.bytes, expected(content));
+        assert_eq!(retained.bytes, manifest_for(content));
         assert_eq!(retained.object, published.object);
         assert_eq!(metadata.publish_calls.load(Ordering::Relaxed), 1);
         assert_eq!(metadata.count(), 1);
@@ -491,7 +491,7 @@ fn unknown_ack_retry_refuses_oversized_truncated_and_wrong_digest_backing_atomic
         let metadata = Metadata::new(bytes.clone());
         let content = b"asset-v1";
         let staged = bytes.stage(operation(21), &mut &content[..]).unwrap();
-        let candidate = publication(operation(21), 1, "image", expected(content));
+        let candidate = publication(operation(21), 1, "image", manifest_for(content));
         *metadata.fail_next.lock().unwrap() = Some(MetadataFailure::Unknown);
         assert!(matches!(
             publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
@@ -541,7 +541,7 @@ fn occupied_digest_destination_refuses_bad_backing_without_new_visibility_or_ove
         let metadata = Metadata::new(bytes.clone());
         let content = b"asset-v1";
         let first = bytes.stage(operation(22), &mut &content[..]).unwrap();
-        let initial = publication(operation(22), 1, "image", expected(content));
+        let initial = publication(operation(22), 1, "image", manifest_for(content));
         let receipt = publish(&context(), &initial, &first, bytes.as_ref(), &metadata).unwrap();
         assert_eq!(receipt.status, PublicationStatus::Published);
         let published = metadata.lookup(&1).unwrap().unwrap();
@@ -549,7 +549,7 @@ fn occupied_digest_destination_refuses_bad_backing_without_new_visibility_or_ove
         fs::remove_file(&object).unwrap();
         fs::write(&object, damaged).unwrap();
         let fresh = bytes.stage(operation(23), &mut &content[..]).unwrap();
-        let candidate = publication(operation(23), 2, "still", expected(content));
+        let candidate = publication(operation(23), 2, "still", manifest_for(content));
 
         assert!(matches!(
             publish(&context(), &candidate, &fresh, bytes.as_ref(), &metadata),
@@ -559,7 +559,7 @@ fn occupied_digest_destination_refuses_bad_backing_without_new_visibility_or_ove
         assert!(metadata.lookup(&2).unwrap().is_none());
         let old = metadata.lookup(&1).unwrap().unwrap();
         assert_eq!(old.metadata, "image");
-        assert_eq!(old.bytes, expected(content));
+        assert_eq!(old.bytes, manifest_for(content));
         assert_eq!(old.object, published.object);
         assert_eq!(metadata.publish_calls.load(Ordering::Relaxed), 1);
         assert_eq!(metadata.count(), 1);
@@ -575,7 +575,7 @@ fn occupied_digest_destination_refuses_bad_backing_without_new_visibility_or_ove
         );
         assert_eq!(
             metadata.lookup(&1).unwrap().unwrap().bytes,
-            expected(content)
+            manifest_for(content)
         );
         assert_eq!(metadata.count(), 2);
         bytes.confirm(published.object).unwrap();
@@ -594,7 +594,7 @@ fn occupied_digest_symlink_to_matching_cache_refuses_publication() {
     let cache = root().join("cached-copy");
     fs::write(&cache, content).unwrap();
     let object = path.join("objects").join(
-        expected(content)
+        manifest_for(content)
             .sha256
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -602,7 +602,7 @@ fn occupied_digest_symlink_to_matching_cache_refuses_publication() {
     );
     symlink(&cache, &object).unwrap();
     let staged = bytes.stage(operation(25), &mut &content[..]).unwrap();
-    let candidate = publication(operation(25), 1, "image", expected(content));
+    let candidate = publication(operation(25), 1, "image", manifest_for(content));
 
     assert!(matches!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
@@ -626,7 +626,7 @@ fn symlinked_objects_directory_refuses_new_publication_without_writing_cache() {
     symlink(&cache, path.join("objects")).unwrap();
     let content = b"asset-v1";
     let staged = bytes.stage(operation(26), &mut &content[..]).unwrap();
-    let candidate = publication(operation(26), 1, "image", expected(content));
+    let candidate = publication(operation(26), 1, "image", manifest_for(content));
 
     assert!(matches!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
@@ -644,7 +644,7 @@ fn missing_backing_remains_typed_missing_for_confirm_and_unknown_ack_retry() {
     let metadata = Metadata::new(bytes.clone());
     let content = b"asset-v1";
     let staged = bytes.stage(operation(24), &mut &content[..]).unwrap();
-    let candidate = publication(operation(24), 1, "image", expected(content));
+    let candidate = publication(operation(24), 1, "image", manifest_for(content));
     *metadata.fail_next.lock().unwrap() = Some(MetadataFailure::Unknown);
     assert!(matches!(
         publish(&context(), &candidate, &staged, bytes.as_ref(), &metadata),
@@ -663,7 +663,7 @@ fn missing_backing_remains_typed_missing_for_confirm_and_unknown_ack_retry() {
     ));
     assert_eq!(
         metadata.lookup(&1).unwrap().unwrap().bytes,
-        expected(content)
+        manifest_for(content)
     );
     assert_eq!(metadata.publish_calls.load(Ordering::Relaxed), 1);
     assert_eq!(metadata.count(), 1);
@@ -719,7 +719,7 @@ fn retry_refuses_staged_growth_after_length_check_without_metadata_republication
     };
     let content = b"asset-v1";
     let staged = bytes.stage(operation(30), &mut &content[..]).unwrap();
-    let initial = publication(operation(30), 1, "image", expected(content));
+    let initial = publication(operation(30), 1, "image", manifest_for(content));
     assert_eq!(
         publish(&context(), &initial, &staged, bytes.as_ref(), &metadata)
             .unwrap()
@@ -731,7 +731,7 @@ fn retry_refuses_staged_growth_after_length_check_without_metadata_republication
     let retry = bytes.stage(operation(31), &mut &content[..]).unwrap();
     let staged_path = path.join("staging").join("1f".repeat(16));
     *metadata.append_to_staging.lock().unwrap() = Some(staged_path.clone());
-    let candidate = publication(operation(31), 1, "image", expected(content));
+    let candidate = publication(operation(31), 1, "image", manifest_for(content));
 
     assert!(matches!(
         publish(&context(), &candidate, &retry, bytes.as_ref(), &metadata),

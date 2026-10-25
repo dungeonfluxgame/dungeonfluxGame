@@ -61,9 +61,9 @@ fn queue_pcm_web_audio_copy_and_channel_scratch_all_count_against_capacity() {
 #[test]
 fn mono_and_stereo_local_pcm_bytes_are_verified_and_preserve_interleaved_channels() {
     for channels in [1, 2] {
-        let mut source = local_pcm(channels);
-        let bytes = source.cache.lease_bytes(&source.source).unwrap();
-        let buffer = source.buffer.take().unwrap();
+        let mut pcm_fixture = local_pcm(channels);
+        let bytes = pcm_fixture.cache.lease_bytes(&pcm_fixture.source).unwrap();
+        let buffer = pcm_fixture.buffer.take().unwrap();
         assert_eq!(buffer.frames(), FRAMES);
         assert_eq!(bytes.len(), buffer.sample_bytes());
         for (encoded, sample) in bytes.as_chunks::<4>().0.iter().zip(buffer.samples()) {
@@ -79,41 +79,41 @@ fn mono_and_stereo_local_pcm_bytes_are_verified_and_preserve_interleaved_channel
 #[test]
 fn finite_close_drains_exact_pcm_and_stale_old_end_cannot_release_replacement() {
     let mut audio = queue();
-    let mut source = local_pcm(1);
-    let format = source.buffer.as_ref().unwrap().format();
+    let mut pcm_fixture = local_pcm(1);
+    let format = pcm_fixture.buffer.as_ref().unwrap().format();
     let old = audio
         .replace(
             &lease(),
             basis(),
             identity(1),
-            source.reference.clone(),
+            pcm_fixture.reference.clone(),
             format,
             0,
         )
         .unwrap()
         .receipt;
-    source.cache.lease_bytes(&source.source).unwrap();
+    pcm_fixture.cache.lease_bytes(&pcm_fixture.source).unwrap();
     audio
         .enqueue(
             &old,
             &lease(),
-            source.manifest,
+            pcm_fixture.manifest,
             0,
             0,
-            source.buffer.take().unwrap(),
+            pcm_fixture.buffer.take().unwrap(),
         )
         .unwrap();
     audio.close(&old, &lease(), 1, FRAMES).unwrap();
     let old_ticket = audio.begin(&old, &lease()).unwrap().unwrap();
     let retained = audio.snapshot().sample_bytes;
-    let mut next_source = local_pcm(2);
+    let mut next_pcm = local_pcm(2);
     let next = audio
         .replace(
             &lease(),
             basis(),
             identity(2),
-            next_source.reference.clone(),
-            next_source.buffer.as_ref().unwrap().format(),
+            next_pcm.reference.clone(),
+            next_pcm.buffer.as_ref().unwrap().format(),
             100,
         )
         .unwrap()
@@ -124,15 +124,15 @@ fn finite_close_drains_exact_pcm_and_stale_old_end_cannot_release_replacement() 
         audio.confirm_stopped(&old_ticket),
         Ok(BufferCompletion::Retired(QueueState::Accepting))
     );
-    next_source.cache.lease_bytes(&next_source.source).unwrap();
+    next_pcm.cache.lease_bytes(&next_pcm.source).unwrap();
     audio
         .enqueue(
             &next,
             &lease(),
-            next_source.manifest,
+            next_pcm.manifest,
             0,
             100,
-            next_source.buffer.take().unwrap(),
+            next_pcm.buffer.take().unwrap(),
         )
         .unwrap();
     audio.close(&next, &lease(), 1, 100 + FRAMES).unwrap();

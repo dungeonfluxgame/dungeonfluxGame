@@ -40,7 +40,7 @@ fn cue(job: u8, generation: u64) -> PlaybackCue {
 fn format() -> PcmFormat {
     PcmFormat::new(1, 48_000).unwrap()
 }
-fn source(key: &str, digest: u8, length: u64) -> PcmSource {
+fn pcm_source(key: &str, digest: u8, length: u64) -> PcmSource {
     PcmSource::new(
         RevisionLabel::new(Some(key)).unwrap(),
         AssetManifest {
@@ -89,7 +89,7 @@ fn pcm() -> PcmBuffer {
 #[test]
 fn approved_exact_caption_and_source_remain_bound_to_current_receipt() {
     let mut owner = queue();
-    let asset = source("approved-recording", 7, 8);
+    let asset = pcm_source("approved-recording", 7, 8);
     let receipt = start(&mut owner, cue(6, 1), &asset, 100);
     let approved = "  Approved café line.  ";
     let binding = owner
@@ -117,7 +117,7 @@ fn approved_exact_caption_and_source_remain_bound_to_current_receipt() {
 #[test]
 fn wrong_source_scope_and_identity_refuse_without_changing_pcm() {
     let mut owner = queue();
-    let asset = source("approved-recording", 7, 8);
+    let asset = pcm_source("approved-recording", 7, 8);
     let receipt = start(&mut owner, cue(6, 1), &asset, 0);
     let binding = owner
         .bind_caption(&receipt, &output(), &asset, "Actual line", 100)
@@ -127,9 +127,9 @@ fn wrong_source_scope_and_identity_refuse_without_changing_pcm() {
         .unwrap();
     let before = owner.snapshot();
     for wrong in [
-        source("other-key", 7, 8),
-        source("approved-recording", 9, 8),
-        source("approved-recording", 7, 9),
+        pcm_source("other-key", 7, 8),
+        pcm_source("approved-recording", 9, 8),
+        pcm_source("approved-recording", 7, 9),
     ] {
         assert_eq!(
             owner.caption(&binding, &receipt, &output(), &wrong),
@@ -164,7 +164,7 @@ fn wrong_source_scope_and_identity_refuse_without_changing_pcm() {
 #[test]
 fn same_label_replacement_cannot_reuse_an_old_caption_instance() {
     let mut owner = queue();
-    let asset = source("same-recording", 7, 8);
+    let asset = pcm_source("same-recording", 7, 8);
     let original = start(&mut owner, cue(6, 1), &asset, 0);
     let old = owner
         .bind_caption(&original, &output(), &asset, "Old association", 100)
@@ -195,8 +195,8 @@ fn same_label_replacement_cannot_reuse_an_old_caption_instance() {
 #[test]
 fn fallback_requires_explicit_new_text_source_and_completed_old_stop() {
     let mut owner = queue();
-    let primary = source("primary-recording", 7, 8);
-    let fallback = source("fallback-recording", 8, 8);
+    let primary = pcm_source("primary-recording", 7, 8);
+    let fallback = pcm_source("fallback-recording", 8, 8);
     let original = start(&mut owner, cue(6, 1), &primary, 0);
     let old = owner
         .bind_caption(&original, &output(), &primary, "Primary line", 100)
@@ -392,7 +392,7 @@ fn exact_server_drift_direction_budget_edge_and_fractional_frames_are_retained()
 #[test]
 fn late_pcm_chunk_arrival_keeps_the_original_frame_and_server_anchors() {
     let mut owner = queue();
-    let asset = source("ordered-recording", 7, 16);
+    let asset = pcm_source("ordered-recording", 7, 16);
     let receipt = start(&mut owner, cue(6, 1), &asset, 100);
     let caption = owner
         .bind_caption(&receipt, &output(), &asset, "One stable line", 100)
@@ -456,7 +456,7 @@ fn invalid_order_limits_and_caption_bytes_refuse_while_valid_extremes_do_not_wra
         DriftDirection::Aligned
     );
     let mut owner = queue();
-    let asset = source("bounded-recording", 7, 8);
+    let asset = pcm_source("bounded-recording", 7, 8);
     let receipt = start(&mut owner, cue(6, 1), &asset, 0);
     let before = owner.snapshot();
     for limit in [0, 16_385, usize::MAX] {
@@ -491,7 +491,7 @@ fn invalid_order_limits_and_caption_bytes_refuse_while_valid_extremes_do_not_wra
 #[test]
 fn tail_drain_cancellation_and_disposal_reject_obsolete_caption_access() {
     let mut owner = queue();
-    let asset = source("finite-recording", 7, 8);
+    let asset = pcm_source("finite-recording", 7, 8);
     let receipt = start(&mut owner, cue(6, 1), &asset, 0);
     let caption = owner
         .bind_caption(&receipt, &output(), &asset, "Finite line", 100)
