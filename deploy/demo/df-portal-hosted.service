@@ -10,9 +10,16 @@ Group=dungeonflux
 WorkingDirectory=/opt/dungeonflux
 EnvironmentFile=/etc/dungeonflux/demo.env
 EnvironmentFile=/etc/dungeonflux/portal.env
-ExecStart=/opt/dungeonflux/bin/df-portal-hosted
+ExecStart=/usr/bin/env DF_ACCOUNTS_OPEN=false DF_PROFILE=demo DF_PORTAL_LISTEN=127.0.0.1:8099 DF_PORTAL_BUNDLE_DIR=/opt/dungeonflux/app DF_OPERATOR_TUNNEL=false /opt/dungeonflux/bin/df-portal-hosted
 Restart=on-failure
 RestartSec=5
+# Two concurrent production password hashes need 38 MiB before process overhead.
+# This budget assumes the static-site + portal deployment, with the game stopped.
+MemoryMax=128M
+MemoryHigh=96M
+MemorySwapMax=0
+Environment=MALLOC_ARENA_MAX=2
+TasksMax=64
 TimeoutStopSec=30
 KillSignal=SIGTERM
 NoNewPrivileges=true
@@ -20,6 +27,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/opt/dungeonflux/app
+StateDirectory=dungeonflux-portal
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/dungeonflux-portal
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 UMask=0077
 

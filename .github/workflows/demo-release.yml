@@ -62,6 +62,41 @@ jobs:
           printf 'Image: `%s@%s`\n\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      # Second image, not a second target in the game image: the portal has its
+      # own entrypoint, digest and rollback line (deploy/demo/deploy-portal.sh),
+      # and check-profile.sh inspects the game image for df-transport-fixture.
+      # Same workflow so one main commit yields a matched game+portal pair.
+      - name: Build and push the portal image
+        id: portal-image
+        env:
+          IMAGE: ghcr.io/dungeonfluxgame/dungeonflux-portal
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          short_sha="${SHORT_SHA:0:12}"
+          docker buildx build \
+            --file deploy/demo/Dockerfile.portal \
+            --platform linux/amd64 \
+            --target runtime \
+            --tag "$IMAGE:sha-$short_sha" \
+            --tag "$IMAGE:main" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --push \
+            --metadata-file "$RUNNER_TEMP/portal-image-metadata.json" \
+            .
+          digest="$(jq -r '.["containerimage.digest"]' "$RUNNER_TEMP/portal-image-metadata.json")"
+          case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo 'Build did not return a SHA-256 image digest.' >&2; exit 1 ;; esac
+          docker pull "$IMAGE@$digest"
+          container="$(docker create "$IMAGE@$digest")"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container:/usr/local/bin/df-portal-hosted" "$RUNNER_TEMP/df-portal-hosted"
+          test -x "$RUNNER_TEMP/df-portal-hosted"
+          docker cp "$container:/opt/dungeonflux/app/index.html" "$RUNNER_TEMP/portal-index.html"
+          test -s "$RUNNER_TEMP/portal-index.html"
+          printf '%s\n' "$digest" > "$RUNNER_TEMP/portal-digest.txt"
+          printf 'Portal image: `%s@%s`\n\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Export the site and account app bundle
         run: |
           mkdir -p "$RUNNER_TEMP/demo-web"
@@ -80,6 +115,14 @@ jobs:
         with:
           name: demo-digest
           path: ${{ runner.temp }}/demo-digest.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the portal image digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portal-digest
+          path: ${{ runner.temp }}/portal-digest.txt
           if-no-files-found: error
           retention-days: 30
 

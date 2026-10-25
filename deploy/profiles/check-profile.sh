@@ -30,6 +30,12 @@ else
   read_env_file "$settings"
 fi
 
+accounts_open=${values[DF_ACCOUNTS_OPEN]:-false}
+[[ "$accounts_open" == true || "$accounts_open" == false ]] || fail 'DF_ACCOUNTS_OPEN must be true or false'
+if [[ ( "$profile" == demo || "$profile" == production ) && "$accounts_open" == true ]]; then
+  [[ ${values[DF_ACCOUNTS_OPEN_CONFIRMED]-} == yes ]] || fail 'DF_ACCOUNTS_OPEN=true requires DF_ACCOUNTS_OPEN_CONFIRMED=yes'
+fi
+
 if [[ "$profile" == production ]]; then
   business_env="${values[DF_SECRET_ENV_DIR]:-/etc/dungeonflux}/business.env"
   [[ -r "$business_env" ]] || fail 'production business.env is missing or unreadable'

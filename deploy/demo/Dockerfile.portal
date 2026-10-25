@@ -1,0 +1,65 @@
+# Portal image: transport and provenance for the hosted account binary.
+# The droplet does not run this image as a container. deploy-portal.sh pulls it
+# by digest, extracts /usr/local/bin/df-portal-hosted and /opt/dungeonflux/app,
+# and runs the binary under df-portal-hosted.service (systemd owns restart,
+# memory limits and the loopback listener; extraction preserves that existing
+# service contract without requiring container networking or database changes).
+# BuildKit builds this release for linux/amd64 in demo-release.yml.
+FROM rust:1.98.1-bookworm AS build
+
+WORKDIR /src
+RUN rustup target add wasm32-unknown-unknown
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/local/cargo/wasm-bindgen-target \
+    CARGO_TARGET_DIR=/usr/local/cargo/wasm-bindgen-target \
+      cargo install --locked --version 0.2.129 wasm-bindgen-cli
+
+COPY . .
+
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=z \
+    CARGO_PROFILE_RELEASE_LTO=true \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    CARGO_PROFILE_RELEASE_PANIC=abort
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --locked --release -p df-hosted --bin df-portal-hosted && \
+    mkdir -p /opt/dungeonflux/bin && \
+    cp /src/target/release/df-portal-hosted /opt/dungeonflux/bin/ && \
+    cargo build --locked --release -p df-account-app --lib --target wasm32-unknown-unknown && \
+    mkdir -p /opt/dungeonflux/app/assets && \
+    wasm-bindgen --target web --no-typescript --out-name account_app \
+      --out-dir /opt/dungeonflux/app/assets \
+      /src/target/wasm32-unknown-unknown/release/df_account_app.wasm && \
+    cat crates/df-account-app/web/css/base.css \
+      crates/df-account-app/web/css/customer.css \
+      crates/df-account-app/web/css/campaign.css \
+      crates/df-account-app/web/css/admin.css > /opt/dungeonflux/app/assets/app.css && \
+    printf 'import init from "/app/assets/account_app.js";\ninit({ module_or_path: "/app/assets/account_app_bg.wasm" });\n' \
+      > /opt/dungeonflux/app/assets/boot.js && \
+    cp crates/df-account-app/web/index.html /opt/dungeonflux/app/index.html && \
+    cp docs/assets/establishing-harbor-canal-rowboat-bridge.webp /opt/dungeonflux/app/assets/landing.webp && \
+    test "$(stat -c %s /opt/dungeonflux/app/assets/account_app_bg.wasm)" -le 716800
+
+FROM debian:bookworm-slim AS runtime
+ENV DF_PORTAL_LISTEN=127.0.0.1:8099 \
+    DF_PORTAL_BUNDLE_DIR=/opt/dungeonflux/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 10001 dungeonflux && \
+    useradd --system --uid 10001 --gid dungeonflux --no-create-home \
+      --shell /usr/sbin/nologin dungeonflux && \
+    install -d -o dungeonflux -g dungeonflux /opt/dungeonflux/app
+
+COPY --from=build --chown=10001:10001 /opt/dungeonflux/bin/df-portal-hosted /usr/local/bin/df-portal-hosted
+COPY --from=build --chown=10001:10001 /opt/dungeonflux/app /opt/dungeonflux/app
+
+USER 10001:10001
+WORKDIR /opt/dungeonflux
+EXPOSE 8099
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["/usr/bin/curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8099/app/healthz"]
+ENTRYPOINT ["/usr/local/bin/df-portal-hosted"]
