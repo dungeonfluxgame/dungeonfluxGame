@@ -117,7 +117,8 @@ fn a_valid_runtime_create_is_accepted() {
 
 #[test]
 fn each_escalation_in_a_create_body_is_refused() {
-    let cases: Vec<(&str, Box<dyn FnOnce(&mut Value)>)> = vec![
+    type Mutation = Box<dyn FnOnce(&mut Value)>;
+    let cases: Vec<(&str, Mutation)> = vec![
         (
             "privileged",
             Box::new(|b| b["HostConfig"]["Privileged"] = json!(true)),
@@ -524,7 +525,7 @@ fn every_other_call_is_refused() {
         ("POST", "/auth".to_string()),
         ("POST", "/session".to_string()),
         ("GET", format!("/containers/{NAME}/../json")),
-        ("GET", format!("/containers/%64f-rt-x/json")),
+        ("GET", "/containers/%64f-rt-x/json".to_string()),
         ("GET", format!("/containers//{NAME}/json")),
     ];
     for (method, target) in refused {
@@ -915,4 +916,44 @@ fn the_spool_is_a_sized_per_container_tmpfs_and_never_a_bind() {
     }
     // /tmp needs a size too.
     assert!(mutated(|b| b["HostConfig"]["Tmpfs"]["/tmp"] = json!("rw,noexec")).is_err());
+}
+
+#[test]
+fn a_bind_listed_twice_is_refused() {
+    let descriptor =
+        "/run/dungeonflux/runtime/slot1/descriptor.toml:/etc/dungeonflux/runtime.toml:ro";
+    let secrets = "/run/dungeonflux/runtime/slot1/secrets:/run/secrets:ro";
+    // The valid body carries the descriptor and the secrets bind once each.
+    assert_eq!(mutated(|_| {}), Ok(()));
+    for duplicate in [descriptor, secrets] {
+        let refusal = mutated(|b| {
+            b["HostConfig"]["Binds"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(duplicate));
+        })
+        .unwrap_err();
+        assert!(refusal.contains("listed twice"), "{duplicate}: {refusal}");
+    }
+    // The same source mounted at a second target, and the same target fed from a second source, are refused too.
+    let refusal = mutated(|b| {
+        b["HostConfig"]["Binds"].as_array_mut().unwrap().push(json!(
+            "/run/dungeonflux/runtime/slot1/secrets:/etc/other:ro"
+        ));
+    })
+    .unwrap_err();
+    assert!(
+        refusal.contains("listed twice") || refusal.contains("not the descriptor"),
+        "{refusal}"
+    );
+    let refusal = mutated(|b| {
+        b["HostConfig"]["Binds"].as_array_mut().unwrap().push(json!(
+            "/run/dungeonflux/runtime/slot1/descriptor.toml:/run/secrets:ro"
+        ));
+    })
+    .unwrap_err();
+    assert!(
+        refusal.contains("listed twice") || refusal.contains("not the descriptor"),
+        "{refusal}"
+    );
 }

@@ -53,6 +53,7 @@ fi
 # --- policy checks that need only bash/grep/sed -------------------------------------------------------------------------------------------
 step "config policy (TOML, templates, issuer pins)" bash deploy/scripts/check-config-policy.sh
 step "DNS record list" bash deploy/scripts/check-dns-records.sh
+step "staging qualification checklist" bash deploy/scripts/check-qualification.sh
 step "edge log redaction" bash deploy/scripts/check-edge-redaction.sh
 step "secrets: no secret-looking content in deploy/ and infra/" bash deploy/scripts/secrets-audit.sh repo
 
@@ -89,6 +90,7 @@ fi
 if need_tool cargo "docker-proxy crate"; then
   step "docker-proxy rustfmt" bash -c 'cd deploy/docker-proxy && cargo fmt --check'
   step "docker-proxy tests (--locked)" bash -c 'cd deploy/docker-proxy && cargo test --locked'
+  step "docker-proxy clippy (warnings are errors)" bash -c 'cd deploy/docker-proxy && cargo clippy --locked --all-targets -- -D warnings'
 fi
 
 # --- monitoring ------------------------------------------------------------------------------------------------------------------------------------

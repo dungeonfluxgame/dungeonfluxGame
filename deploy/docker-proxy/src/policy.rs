@@ -227,12 +227,12 @@ fn signal_ok(signal: &str) -> Result<(), Refusal> {
 
 fn strip_version(path: &str) -> &str {
     // /v1.45/containers/... -> /containers/...
-    if let Some(rest) = path.strip_prefix("/v1.") {
-        if let Some((digits, tail)) = rest.split_once('/') {
-            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
-                return &path[path.len() - tail.len() - 1..];
-            }
-        }
+    if let Some(rest) = path.strip_prefix("/v1.")
+        && let Some((digits, tail)) = rest.split_once('/')
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        return &path[path.len() - tail.len() - 1..];
     }
     path
 }
@@ -586,10 +586,11 @@ fn host_config(
     {
         return refuse("OomKillDisable is not allowed");
     }
-    if let Some(runtime) = host.get("Runtime") {
-        if runtime != "runc" && runtime != "" {
-            return refuse("only the default runtime is allowed");
-        }
+    if let Some(runtime) = host.get("Runtime")
+        && runtime != "runc"
+        && runtime != ""
+    {
+        return refuse("only the default runtime is allowed");
     }
     if let Some(policy_object) = host.get("RestartPolicy") {
         let object = policy_object
@@ -645,10 +646,22 @@ fn host_config(
         let binds = binds
             .as_array()
             .ok_or_else(|| Refusal("Binds must be a list".into()))?;
+        // The same bind twice (the same source or the same target) is refused: every allowed bind has its own source and its own target, so a
+        // repeat is never legitimate, and Docker would resolve a repeated target in a way the policy did not look at.
+        let mut seen: Vec<&str> = Vec::new();
         for bind in binds {
             let bind = bind
                 .as_str()
                 .ok_or_else(|| Refusal("a bind must be a string".into()))?;
+            let mut parts = bind.split(':');
+            let (source, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+            if seen.iter().any(|earlier| {
+                let mut p = earlier.split(':');
+                p.next().unwrap_or("") == source || p.next().unwrap_or("") == target
+            }) {
+                return refuse("a bind source or target is listed twice");
+            }
+            seen.push(bind);
             let Some((_, source, kind)) =
                 allowed_binds.iter().find(|(allowed, _, _)| allowed == bind)
             else {
