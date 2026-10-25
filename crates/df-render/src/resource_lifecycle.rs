@@ -45,7 +45,7 @@ struct PendingLease {
 /// owner through that callback, including after scope replacement or disposal.
 pub struct ResourceLifecycle {
     scope: CacheScope,
-    bytes: Rc<RefCell<AssetCache>>,
+    asset_cache: Rc<RefCell<AssetCache>>,
     target: Target,
     pending: Vec<PendingLease>,
     resident_leases: Vec<CacheLease>,
@@ -157,7 +157,7 @@ impl ResourceLifecycle {
     fn new(scope: CacheScope, bytes: AssetCache, target: Target) -> Self {
         Self {
             scope,
-            bytes: Rc::new(RefCell::new(bytes)),
+            asset_cache: Rc::new(RefCell::new(bytes)),
             target,
             pending: Vec::new(),
             resident_leases: Vec::new(),
@@ -190,7 +190,7 @@ impl ResourceLifecycle {
                 .validate_current(revision, references)
                 .map_err(ResourceLifecycleError::Resource)?;
         }
-        self.bytes
+        self.asset_cache
             .borrow_mut()
             .apply_current(scope, revision, references)
             .map_err(ResourceLifecycleError::Cache)?;
@@ -205,14 +205,14 @@ impl ResourceLifecycle {
 
     /// Current encoded presence only; no byte/cache handle escapes this owner.
     pub fn contains_bytes(&mut self, key: &CacheKey) -> Result<bool, CacheError> {
-        self.bytes
+        self.asset_cache
             .borrow_mut()
             .get(key)
             .map(|bytes| bytes.is_some())
     }
 
     pub fn fetch(&mut self, key: &CacheKey) -> Result<FetchToken, CacheError> {
-        self.bytes.borrow_mut().fetch(key)
+        self.asset_cache.borrow_mut().fetch(key)
     }
 
     /// SHA-256/length validation and any LRU eviction remain canonical AssetCache work.
@@ -222,7 +222,7 @@ impl ResourceLifecycle {
         token: &FetchToken,
         bytes: Vec<u8>,
     ) -> Result<(), ResourceLifecycleError> {
-        self.bytes
+        self.asset_cache
             .borrow_mut()
             .complete(token, bytes)
             .map_err(ResourceLifecycleError::Cache)?;
@@ -230,11 +230,11 @@ impl ResourceLifecycle {
     }
 
     pub fn cancel_fetch(&mut self, token: &FetchToken) -> Result<(), CacheError> {
-        self.bytes.borrow_mut().cancel(token)
+        self.asset_cache.borrow_mut().cancel(token)
     }
 
     pub fn release(&mut self, key: &CacheKey) -> Result<(), ResourceLifecycleError> {
-        self.bytes
+        self.asset_cache
             .borrow_mut()
             .release(key)
             .map_err(ResourceLifecycleError::Cache)?;
@@ -245,7 +245,7 @@ impl ResourceLifecycle {
     /// A PNG acquired from another canonical cache cannot affect this owner.
     pub fn release_lease(&mut self, input: &VerifiedPng) -> Result<(), ResourceLifecycleError> {
         self.check_input(input.image())?;
-        self.bytes
+        self.asset_cache
             .borrow_mut()
             .release_lease(input.image().cache_lease())
             .map_err(ResourceLifecycleError::Cache)?;
@@ -257,7 +257,7 @@ impl ResourceLifecycle {
         key: &CacheKey,
         limits: ImageDecodeLimits,
     ) -> Result<VerifiedPng, ImageDecodeError> {
-        VerifiedPng::acquire(Rc::clone(&self.bytes), key, limits)
+        VerifiedPng::acquire(Rc::clone(&self.asset_cache), key, limits)
     }
 
     /// MIME/dimensions describe this exact already permitted asset; they cannot authorize
@@ -268,7 +268,7 @@ impl ResourceLifecycle {
         metadata: PreparedImageMetadata<'_>,
         limits: ImageDecodeLimits,
     ) -> Result<VerifiedImage, ImageDecodeError> {
-        VerifiedImage::acquire_prepared(Rc::clone(&self.bytes), key, metadata, limits)
+        VerifiedImage::acquire_prepared(Rc::clone(&self.asset_cache), key, metadata, limits)
     }
 
     pub fn update_scene(
@@ -351,7 +351,12 @@ impl ResourceLifecycle {
         {
             return Err(ResourceError::WrongResource);
         }
-        if self.bytes.borrow().lease_bytes(&canonical_lease).is_err() {
+        if self
+            .asset_cache
+            .borrow()
+            .lease_bytes(&canonical_lease)
+            .is_err()
+        {
             // Current authority still fences the exact original operation, even when
             // its codec reports success after canonical cache invalidation.
             self.cancel(token)?;
@@ -441,7 +446,7 @@ impl ResourceLifecycle {
     }
 
     pub fn dispose(&mut self) -> Result<PresentationOutcome, RenderError> {
-        self.bytes.borrow_mut().dispose();
+        self.asset_cache.borrow_mut().dispose();
         self.closed = true;
         self.resident_leases = Vec::new();
         match &mut self.target {
@@ -454,10 +459,10 @@ impl ResourceLifecycle {
     }
 
     pub fn resident_bytes(&self) -> usize {
-        self.bytes.borrow().resident_bytes()
+        self.asset_cache.borrow().resident_bytes()
     }
     pub fn lease_count(&self) -> usize {
-        self.bytes.borrow().lease_count()
+        self.asset_cache.borrow().lease_count()
     }
     pub fn work_bytes(&self) -> usize {
         match &self.target {
@@ -488,7 +493,7 @@ impl ResourceLifecycle {
     }
 
     fn check_input(&self, input: &VerifiedImage) -> Result<(), ResourceLifecycleError> {
-        if !input.belongs_to(&self.bytes) {
+        if !input.belongs_to(&self.asset_cache) {
             return Err(ResourceLifecycleError::Decode(ImageDecodeError::WrongOwner));
         }
         Ok(())
@@ -499,7 +504,11 @@ impl ResourceLifecycle {
             return Ok(());
         }
         for pending in &self.pending {
-            let invalid = self.bytes.borrow().lease_bytes(&pending.lease).is_err();
+            let invalid = self
+                .asset_cache
+                .borrow()
+                .lease_bytes(&pending.lease)
+                .is_err();
             if invalid {
                 match &mut self.target {
                     Target::Flat(target) => target.cancel(&pending.token),
@@ -512,7 +521,7 @@ impl ResourceLifecycle {
             }
         }
         for lease in &self.resident_leases {
-            let invalid = self.bytes.borrow().lease_bytes(lease).is_err();
+            let invalid = self.asset_cache.borrow().lease_bytes(lease).is_err();
             if invalid {
                 match &mut self.target {
                     Target::Flat(target) => target.release(lease.key()),
@@ -574,6 +583,6 @@ impl Drop for ResourceLifecycle {
     fn drop(&mut self) {
         // The target owns terminal DOM Drop cleanup. Avoid fallible DOM calls here.
         // Explicit disposal is required before releasing the runner's final ownership.
-        self.bytes.borrow_mut().dispose();
+        self.asset_cache.borrow_mut().dispose();
     }
 }

@@ -37,7 +37,7 @@ fn a_real_lossy_chunk_decodes_to_plausible_positions_scales_colours_and_rotation
     assert_eq!(splats.len(), meta.count);
     assert!(splats.len() > 100_000);
 
-    let n = splats.len() as f32;
+    let splat_count = splats.len() as f32;
     // Colour: this autumn scene is bright and warm; the independent decoder's means are
     // (0.733, 0.724, 0.660) over the first chunk.
     let mean = |channel: usize| {
@@ -45,7 +45,7 @@ fn a_real_lossy_chunk_decodes_to_plausible_positions_scales_colours_and_rotation
             .iter()
             .map(|s| s.colour[channel] as f32 / 255.0)
             .sum::<f32>()
-            / n
+            / splat_count
     };
     for (channel, expected) in [(0, 0.733), (1, 0.724), (2, 0.660)] {
         assert!(
