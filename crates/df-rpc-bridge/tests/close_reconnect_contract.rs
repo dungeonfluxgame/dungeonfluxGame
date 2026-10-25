@@ -359,6 +359,56 @@ async fn fault_proxy_preserves_bytes_and_applies_seeded_latency() {
     echo.abort();
 }
 
+#[tokio::test]
+async fn fault_proxy_injects_each_fault_at_the_exact_one_byte_boundary() {
+    use support::fault_proxy::{FaultProfile, FaultProxy};
+
+    for profile in [
+        FaultProfile {
+            chunk_bytes: 4096,
+            hard_drop_after_bytes: Some(1),
+            ..FaultProfile::default()
+        },
+        FaultProfile {
+            chunk_bytes: 4096,
+            half_close_after_bytes: Some(1),
+            ..FaultProfile::default()
+        },
+        FaultProfile {
+            chunk_bytes: 4096,
+            blackhole_after_bytes: Some(1),
+            ..FaultProfile::default()
+        },
+    ] {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("sink listener");
+        let upstream_address = upstream.local_addr().expect("sink address");
+        let received = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.expect("sink accept");
+            let mut payload = Vec::new();
+            stream.read_to_end(&mut payload).await.expect("sink read");
+            payload.len()
+        });
+        let proxy = FaultProxy::start(upstream_address, profile)
+            .await
+            .expect("boundary proxy");
+        let mut client = tokio::net::TcpStream::connect(proxy.address())
+            .await
+            .expect("proxy connect");
+        client
+            .write_all(&vec![0x5a; 4096])
+            .await
+            .expect("send full read chunk");
+        client.shutdown().await.expect("close client write half");
+        let received_bytes = tokio::time::timeout(Duration::from_secs(2), received)
+            .await
+            .expect("sink close bound")
+            .expect("sink task");
+        assert_eq!(received_bytes, 1, "fault profile: {profile:?}");
+    }
+}
+
 async fn round_trip(address: std::net::SocketAddr, payload: &[u8]) -> u128 {
     let mut stream = tokio::net::TcpStream::connect(address)
         .await

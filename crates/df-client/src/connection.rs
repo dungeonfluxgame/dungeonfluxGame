@@ -60,6 +60,48 @@ pub struct ReconnectBackoff {
     retry_index: u32,
 }
 
+const RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
+const RECONNECT_MAXIMUM_DELAY: Duration = Duration::from_secs(8);
+
+struct ReconnectOwner {
+    backoff: Cell<ReconnectBackoff>,
+    intentionally_closed: Cell<bool>,
+}
+
+impl ReconnectOwner {
+    fn new() -> Self {
+        Self {
+            backoff: Cell::new(ReconnectBackoff {
+                base_delay: RECONNECT_BASE_DELAY,
+                maximum_delay: RECONNECT_MAXIMUM_DELAY,
+                retry_index: 0,
+            }),
+            intentionally_closed: Cell::new(false),
+        }
+    }
+
+    fn schedule_after_disconnect(&self, jitter_sample: Duration) -> Option<Duration> {
+        if self.intentionally_closed.get() {
+            return None;
+        }
+        let mut backoff = self.backoff.get();
+        let delay = backoff.delay(jitter_sample);
+        backoff.advance();
+        self.backoff.set(backoff);
+        Some(delay)
+    }
+
+    fn connected(&self) {
+        let mut backoff = self.backoff.get();
+        backoff.reset();
+        self.backoff.set(backoff);
+    }
+
+    fn close_intentionally(&self) {
+        self.intentionally_closed.set(true);
+    }
+}
+
 impl ReconnectBackoff {
     pub fn new(base_delay: Duration, maximum_delay: Duration) -> Option<Self> {
         (base_delay > Duration::ZERO && maximum_delay >= base_delay).then_some(Self {
@@ -242,6 +284,7 @@ impl Drop for CallLease {
 pub struct RpcConnection<Client> {
     client: Client,
     scope: ConnectionScope,
+    reconnect: ReconnectOwner,
     #[cfg(target_arch = "wasm32")]
     browser: Option<df_rpc_bridge::BrowserConnection>,
 }
@@ -254,6 +297,7 @@ impl<Client: Clone> RpcConnection<Client> {
                 closed: Rc::new(Cell::new(false)),
                 calls: RefCell::new(Vec::new()),
             },
+            reconnect: ReconnectOwner::new(),
             #[cfg(target_arch = "wasm32")]
             browser: None,
         }
@@ -364,11 +408,23 @@ impl<Client: Clone> RpcConnection<Client> {
     }
 
     pub fn close(&self) {
+        self.reconnect.close_intentionally();
         self.scope.close();
         #[cfg(target_arch = "wasm32")]
         if let Some(browser) = &self.browser {
             browser.close();
         }
+    }
+
+    /// Returns the full-jitter delay for the next owned reconnect attempt.
+    /// The owner supplies its uniform random sample and calls `connected` after success.
+    pub fn schedule_reconnect(&self, jitter_sample: Duration) -> Option<Duration> {
+        self.reconnect.schedule_after_disconnect(jitter_sample)
+    }
+
+    /// Resets retry growth after this connection owner establishes a successful connection.
+    pub fn connected(&self) {
+        self.reconnect.connected();
     }
 }
 
@@ -450,7 +506,7 @@ impl<Message> RpcStream<Message> {
 
 #[cfg(test)]
 mod reconnect_tests {
-    use super::ReconnectBackoff;
+    use super::{ReconnectBackoff, RpcConnection};
     use std::time::Duration;
 
     #[test]
@@ -488,5 +544,39 @@ mod reconnect_tests {
     fn retry_backoff_rejects_invalid_bounds() {
         assert!(ReconnectBackoff::new(Duration::ZERO, Duration::from_secs(1)).is_none());
         assert!(ReconnectBackoff::new(Duration::from_secs(2), Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn disconnect_retries_reset_after_success_and_stop_after_intentional_close() {
+        let connection = RpcConnection::new(());
+        assert_eq!(
+            connection.schedule_reconnect(Duration::from_secs(1)),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            connection.schedule_reconnect(Duration::from_secs(1)),
+            Some(Duration::from_millis(500))
+        );
+        connection.connected();
+        assert_eq!(
+            connection.schedule_reconnect(Duration::from_secs(1)),
+            Some(Duration::from_millis(250))
+        );
+        connection.close();
+        assert_eq!(connection.schedule_reconnect(Duration::ZERO), None);
+    }
+
+    #[test]
+    fn replacing_a_connection_fences_the_old_client_scope() {
+        let old_connection = RpcConnection::new(());
+        let old_generation = old_connection.generation();
+        let new_connection = RpcConnection::new(());
+        let new_generation = new_connection.generation();
+
+        old_connection.close();
+
+        assert!(!old_generation.is_active());
+        assert!(new_generation.is_active());
+        assert!(!old_generation.same_scope(&new_generation));
     }
 }

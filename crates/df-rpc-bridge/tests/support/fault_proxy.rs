@@ -107,6 +107,41 @@ where
             writer.shutdown().await?;
             return Ok(());
         }
+        if half_closed {
+            continue;
+        }
+        let hard_drop_bytes = profile
+            .hard_drop_after_bytes
+            .map(|limit| limit.saturating_sub(transferred_bytes));
+        let half_close_bytes = (!half_closed)
+            .then_some(profile.half_close_after_bytes)
+            .flatten()
+            .map(|limit| limit.saturating_sub(transferred_bytes));
+        let blackhole_bytes = profile
+            .blackhole_after_bytes
+            .map(|limit| limit.saturating_sub(transferred_bytes));
+        let forward_count = [hard_drop_bytes, half_close_bytes, blackhole_bytes]
+            .into_iter()
+            .flatten()
+            .min()
+            .map_or(count, |boundary| count.min(boundary));
+        if forward_count > 0 {
+            random = random
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let jitter_nanos = profile.jitter.as_nanos();
+            let jitter = if jitter_nanos == 0 {
+                Duration::ZERO
+            } else {
+                Duration::from_nanos((u128::from(random) % (jitter_nanos + 1)) as u64)
+            };
+            let delay = profile.latency + jitter + profile.slow_reader_delay;
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            writer.write_all(&buffer[..forward_count]).await?;
+            transferred_bytes = transferred_bytes.saturating_add(forward_count);
+        }
         if profile
             .hard_drop_after_bytes
             .is_some_and(|limit| transferred_bytes >= limit)
@@ -123,10 +158,6 @@ where
         {
             writer.shutdown().await?;
             half_closed = true;
-            continue;
-        }
-        if half_closed {
-            continue;
         }
         if profile
             .blackhole_after_bytes
@@ -134,20 +165,8 @@ where
         {
             continue;
         }
-        random = random
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        let jitter_nanos = profile.jitter.as_nanos();
-        let jitter = if jitter_nanos == 0 {
-            Duration::ZERO
-        } else {
-            Duration::from_nanos((u128::from(random) % (jitter_nanos + 1)) as u64)
-        };
-        let delay = profile.latency + jitter + profile.slow_reader_delay;
-        if !delay.is_zero() {
-            tokio::time::sleep(delay).await;
+        if forward_count < count {
+            continue;
         }
-        writer.write_all(&buffer[..count]).await?;
-        transferred_bytes = transferred_bytes.saturating_add(count);
     }
 }
