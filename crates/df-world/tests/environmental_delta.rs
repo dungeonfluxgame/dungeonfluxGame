@@ -8,14 +8,14 @@ use df_world::{
     EnvironmentalDeltaLimits, stage_environmental_delta,
 };
 
-fn label(value: &str) -> RevisionLabel {
-    RevisionLabel::new(Some(value)).unwrap()
+fn label(label_text: &str) -> RevisionLabel {
+    RevisionLabel::new(Some(label_text)).unwrap()
 }
-fn entity(value: u8) -> EntityId {
-    EntityId::from_bytes(&[value; 16]).unwrap()
+fn entity(repeated_byte: u8) -> EntityId {
+    EntityId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
-fn member(value: u8) -> MemberId {
-    MemberId::from_bytes(&[value; 16]).unwrap()
+fn member(repeated_byte: u8) -> MemberId {
+    MemberId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 fn revision(epoch: u64, sequence: u64) -> SessionRevision {
     SessionRevision::new(RecoveryEpoch::new(epoch).unwrap(), sequence)
@@ -202,8 +202,8 @@ fn continuity() -> ContinuityState {
     }
 }
 
-fn fact_id(value: u8) -> FactId {
-    FactId::from_bytes(&[value; 16]).unwrap()
+fn fact_id(repeated_byte: u8) -> FactId {
+    FactId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 fn storm() -> ContentReference {
     ContentReference {
@@ -212,11 +212,11 @@ fn storm() -> ContentReference {
     }
 }
 fn environmental_state() -> GameState {
-    let mut supplied = state();
-    let mut second = supplied.entities[0].clone();
-    second.id = entity(5);
-    supplied.entities.push(second);
-    supplied.facts = vec![
+    let mut game_state = state();
+    let mut second_entity = game_state.entities[0].clone();
+    second_entity.id = entity(5);
+    game_state.entities.push(second_entity);
+    game_state.facts = vec![
         GameFact {
             id: fact_id(1),
             revision: revision(2, 7),
@@ -254,10 +254,10 @@ fn environmental_state() -> GameState {
             },
         },
     ];
-    supplied.decisions = vec![
+    game_state.decisions = vec![
         AcceptedDecision {
-            operation: supplied.facts[0].operation,
-            revision: supplied.facts[0].revision,
+            operation: game_state.facts[0].operation,
+            revision: game_state.facts[0].revision,
             facts: vec![fact_id(1)],
             draws: vec![],
             effects: vec![],
@@ -265,7 +265,7 @@ fn environmental_state() -> GameState {
             semantic_output: None,
         },
         AcceptedDecision {
-            operation: supplied.facts[1].operation,
+            operation: game_state.facts[1].operation,
             revision: basis().revision,
             facts: vec![fact_id(2), fact_id(3)],
             draws: vec![],
@@ -274,12 +274,12 @@ fn environmental_state() -> GameState {
             semantic_output: None,
         },
     ];
-    supplied.continuity.environment = vec![EnvironmentalState {
+    game_state.continuity.environment = vec![EnvironmentalState {
         location: entity(4),
         definition: content(),
         change_facts: vec![fact_id(1)],
     }];
-    supplied.continuity.scenes = vec![SceneIdentityRevision {
+    game_state.continuity.scenes = vec![SceneIdentityRevision {
         scene: entity(4),
         revision: label("fixture-scene-1"),
         source_facts: vec![fact_id(1)],
@@ -291,7 +291,7 @@ fn environmental_state() -> GameState {
         },
         canonical_pack: label("fixture-pack-1"),
     }];
-    supplied.continuity.canonical_packs = vec![CanonicalPack {
+    game_state.continuity.canonical_packs = vec![CanonicalPack {
         revision: label("fixture-pack-1"),
         digest: ContentDigest([7; 32]),
         bible: VisualBible {
@@ -303,10 +303,10 @@ fn environmental_state() -> GameState {
         },
         identities: vec![],
     }];
-    supplied
+    game_state
 }
-fn admitted_checkpoint(supplied: GameState) -> Result<Checkpoint, CheckpointError> {
-    let assets: Vec<_> = supplied
+fn admitted_checkpoint(game_state: GameState) -> Result<Checkpoint, CheckpointError> {
+    let assets: Vec<_> = game_state
         .continuity
         .scenes
         .iter()
@@ -316,7 +316,7 @@ fn admitted_checkpoint(supplied: GameState) -> Result<Checkpoint, CheckpointErro
         CHECKPOINT_SCHEMA,
         basis(),
         pins(),
-        supplied,
+        game_state,
         ReferenceInventory {
             rules: &[rule()],
             content: &[content(), storm()],
@@ -326,8 +326,8 @@ fn admitted_checkpoint(supplied: GameState) -> Result<Checkpoint, CheckpointErro
         checkpoint_limits(),
     )
 }
-fn checkpoint(supplied: GameState) -> Checkpoint {
-    admitted_checkpoint(supplied).unwrap()
+fn checkpoint(game_state: GameState) -> Checkpoint {
+    admitted_checkpoint(game_state).unwrap()
 }
 fn replacement() -> EnvironmentalState {
     EnvironmentalState {
