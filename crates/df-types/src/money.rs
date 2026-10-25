@@ -49,7 +49,6 @@ impl Money {
         Self { currency, micros }
     }
 
-    /// Returns the supplied currency discriminator.
     pub fn currency(self) -> Currency {
         self.currency
     }
@@ -110,12 +109,10 @@ impl Usage {
         Self { quantity, unit }
     }
 
-    /// Returns the exact quantity.
     pub fn quantity(self) -> u128 {
         self.quantity
     }
 
-    /// Returns the declared usage kind.
     pub fn unit(self) -> UsageUnit {
         self.unit
     }
@@ -162,17 +159,14 @@ impl LiabilityRate {
         })
     }
 
-    /// Returns the rate's currency.
     pub fn currency(self) -> Currency {
         self.currency
     }
 
-    /// Returns the rate's usage kind.
     pub fn unit(self) -> UsageUnit {
         self.unit
     }
 
-    /// Returns the exact numerator in currency micro-units.
     pub fn numerator_micros(self) -> u128 {
         self.numerator_micros
     }
