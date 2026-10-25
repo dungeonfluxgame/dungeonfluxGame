@@ -157,7 +157,7 @@ mod browser {
     fn error(e: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&e.to_string())
     }
-    fn view(scene: ConceptScene, members: bool) -> CampaignView<'static> {
+    fn campaign_view(scene: ConceptScene, include_members: bool) -> CampaignView<'static> {
         let (chapter, title, description, location, scene_label, narration) = match scene {
             ConceptScene::Harbor | ConceptScene::MaraHarbor => (
                 "Act I · The Lamplighter",
@@ -242,7 +242,7 @@ mod browser {
             narration,
             connection: "Visual design preview · Synthetic party and story · No gameplay session connected",
             notice: "Design preview · Original concept art",
-            members: if members { &MEMBERS } else { &[] },
+            members: if include_members { &MEMBERS } else { &[] },
             objectives: &OBJECTIVES,
         }
     }
@@ -310,7 +310,7 @@ mod browser {
         let surface = Rc::new(
             CampaignSurface::create(
                 &document,
-                &view(ConceptScene::Harbor, true),
+                &campaign_view(ConceptScene::Harbor, true),
                 CampaignLimits {
                     max_members: 128,
                     max_objectives: 128,
@@ -367,7 +367,7 @@ mod browser {
             control
                 .on_activate(move || {
                     let result = (|| -> Result<(), JsValue> {
-                        owner.update(&view(scene, true)).map_err(error)?;
+                        owner.update(&campaign_view(scene, true)).map_err(error)?;
                         for (position, button) in buttons.iter().enumerate() {
                             button.set_attribute(
                                 "aria-pressed",
@@ -429,7 +429,7 @@ mod browser {
                     let title_before = repeated.root().query_selector("h1")?;
                     for turn in 0..64 {
                         repeated
-                            .update(&view(
+                            .update(&campaign_view(
                                 if turn % 2 == 0 {
                                     ConceptScene::Tavern
                                 } else {

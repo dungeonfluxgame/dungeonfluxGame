@@ -60,7 +60,7 @@ mod browser {
             portrait: Some(portrait),
         }
     }
-    fn view() -> CharacterPhaseView {
+    fn character_view() -> CharacterPhaseView {
         CharacterPhaseView {
             generation: 1, owner_key: "synthetic-player-one".into(), revision: 1,
             chapter: "Prologue · Character creation".into(), title: "Who will you become?".into(),
@@ -132,7 +132,7 @@ mod browser {
         }
     }
     fn private_view() -> CharacterPhaseView {
-        let mut data = view();
+        let mut data = character_view();
         data.chapter = "Private synthetic chapter".into();
         data.title = "Private synthetic title".into();
         data.description = "Private synthetic description".into();
@@ -223,7 +223,7 @@ mod browser {
             .filter(|node| node.node_type() == Node::TEXT_NODE)
             .cloned()
             .collect();
-        let mut next = view();
+        let mut next = character_view();
         next.generation += 1;
         next.owner_key = "replacement-owner".into();
         next.groups.clear();
@@ -274,7 +274,7 @@ mod browser {
             .query_selector(".character-actions button")?
             .ok_or_else(|| JsValue::from_str("action missing"))?;
         surface.name_input().dispose().map_err(error)?;
-        let mut next = view();
+        let mut next = character_view();
         next.generation += 1;
         next.owner_key = "new-owner-after-failure".into();
         if surface.update(&next).is_ok() {
@@ -302,7 +302,7 @@ mod browser {
     fn check_equal_revision(document: &Document) -> Result<(), JsValue> {
         let delivered = Rc::new(RefCell::new(None));
         let captured = Rc::clone(&delivered);
-        let initial = view();
+        let initial = character_view();
         let surface = CharacterPhaseSurface::create(
             document,
             "equal-revision-check",
@@ -548,7 +548,7 @@ mod browser {
         output.set_attribute("role", "status")?;
         output.set_attribute("aria-live", "polite")?;
         output.set_text_content(Some("Fixture input is local only. Use the view controls to inspect reported pending, rejected, ready and locked states."));
-        let model = Rc::new(RefCell::new(view()));
+        let model = Rc::new(RefCell::new(character_view()));
         let owner: Rc<RefCell<Option<Weak<CharacterPhaseSurface>>>> = Rc::new(RefCell::new(None));
         let submitted_output = output.clone();
         let submitted_owner = Rc::clone(&owner);
@@ -629,7 +629,7 @@ mod browser {
                 next.actions = match status {
                     CharacterStatus::Ready => vec![CharacterAction { id: "fixture-mark-ready".into(), kind: CharacterActionKind::MarkReady, label: "Confirm readiness · fixture only".into(), enabled: true }],
                     CharacterStatus::Locked => vec![],
-                    _ => view().actions,
+                    _ => character_view().actions,
                 };
                 let result = updated_surface.update(&next).map_err(error);
                 if result.is_ok() { *updated_model.borrow_mut() = next; }
@@ -771,7 +771,7 @@ mod browser {
             control.on_activate(move || {
                 let mut next = changed_model.borrow().clone(); next.revision += 1;
                 if generation_change {
-                    next = view(); next.generation = changed_model.borrow().generation + 1;
+                    next = character_view(); next.generation = changed_model.borrow().generation + 1;
                     next.owner_key = format!("synthetic-player-{}", next.generation); next.name.clear(); next.flavor.clear();
                 } else if let Some(group) = next.groups.first_mut() {
                     group.options.retain(|option| option.id != "lantern-keeper"); group.selected = None;

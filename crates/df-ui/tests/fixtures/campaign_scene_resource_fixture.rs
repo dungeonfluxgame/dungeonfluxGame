@@ -38,7 +38,7 @@ mod browser {
             Err(JsValue::from_str(why))
         }
     }
-    fn view() -> CampaignView<'static> {
+    fn campaign_view() -> CampaignView<'static> {
         CampaignView {
             scene: ConceptScene::Harbor,
             chapter: "Synthetic resource integration",
@@ -82,16 +82,16 @@ mod browser {
             },
         })
     }
-    fn next(fixture: &mut Fixture) -> Result<SessionRevision, JsValue> {
+    fn next_revision(fixture: &mut Fixture) -> Result<SessionRevision, JsValue> {
         fixture.revision = fixture.revision.next_sequence().map_err(error)?;
         Ok(fixture.revision)
     }
     fn apply(fixture: &mut Fixture, key: &CacheKey, bytes: &[u8]) -> Result<(), JsValue> {
-        let revision = next(fixture)?;
+        let revision = next_revision(fixture)?;
         let token = fixture
             .surface
             .update_with_scene_assets(
-                &view(),
+                &campaign_view(),
                 CampaignSceneAssets {
                     scope: fixture.scope,
                     revision,
@@ -127,7 +127,7 @@ mod browser {
         let surface = Rc::new(
             CampaignSurface::create(
                 &document,
-                &view(),
+                &campaign_view(),
                 CampaignLimits {
                     max_members: 4,
                     max_objectives: 4,
@@ -269,11 +269,11 @@ mod browser {
                 .ok_or_else(|| error("selection missing"))?;
             let before = canvas(fixture.surface.root())?;
             for _ in 0..64 {
-                let revision = next(fixture)?;
+                let revision = next_revision(fixture)?;
                 let request = fixture
                     .surface
                     .update_with_scene_assets(
-                        &view(),
+                        &campaign_view(),
                         CampaignSceneAssets {
                             scope: fixture.scope,
                             revision,
@@ -302,7 +302,7 @@ mod browser {
                 .ok_or_else(|| error("selection missing"))?;
             let revision = fixture.revision.next_sequence().map_err(error)?;
             let wrong = fixture.surface.update_with_scene_assets(
-                &view(),
+                &campaign_view(),
                 CampaignSceneAssets {
                     scope: scope(9)?,
                     revision,
@@ -320,7 +320,7 @@ mod browser {
                 "wrong scope changed component",
             )?;
             let stale = fixture.surface.update_with_scene_assets(
-                &view(),
+                &campaign_view(),
                 CampaignSceneAssets {
                     scope: fixture.scope,
                     revision: fixture.revision,
@@ -340,7 +340,7 @@ mod browser {
             let mut changed = key.clone();
             changed.bytes.sha256 = [0; 32];
             let conflict = fixture.surface.update_with_scene_assets(
-                &view(),
+                &campaign_view(),
                 CampaignSceneAssets {
                     scope: fixture.scope,
                     revision,
@@ -376,11 +376,11 @@ mod browser {
                 .map(|node| node.dyn_into::<HtmlCanvasElement>())
                 .transpose()
                 .map_err(error)?;
-            let revision = next(fixture)?;
+            let revision = next_revision(fixture)?;
             fixture
                 .surface
                 .update_with_scene_assets(
-                    &view(),
+                    &campaign_view(),
                     CampaignSceneAssets {
                         scope: fixture.scope,
                         revision,
@@ -441,7 +441,7 @@ mod browser {
             let token = fixture
                 .surface
                 .update_with_scene_assets(
-                    &view(),
+                    &campaign_view(),
                     CampaignSceneAssets {
                         scope: fixture.scope,
                         revision: fixture.revision,
@@ -529,11 +529,11 @@ mod browser {
                 .get(index as usize)
                 .ok_or_else(|| error("refusal missing"))?;
             let key = key(name, bytes, *digest)?;
-            let revision = next(fixture)?;
+            let revision = next_revision(fixture)?;
             let token = fixture
                 .surface
                 .update_with_scene_assets(
-                    &view(),
+                    &campaign_view(),
                     CampaignSceneAssets {
                         scope: fixture.scope,
                         revision,
@@ -597,9 +597,9 @@ mod browser {
                 .selected
                 .clone()
                 .ok_or_else(|| error("selection missing"))?;
-            let revision = next(fixture)?;
+            let revision = next_revision(fixture)?;
             let result = fixture.surface.update_with_scene_assets(
-                &view(),
+                &campaign_view(),
                 CampaignSceneAssets {
                     scope: fixture.scope,
                     revision,

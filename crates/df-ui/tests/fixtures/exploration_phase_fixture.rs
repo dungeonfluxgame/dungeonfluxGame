@@ -110,7 +110,10 @@ mod browser {
             sequence,
         ))
     }
-    fn view(revision: SessionRevision, mode: Mode) -> Result<ExplorationView<'static>, JsValue> {
+    fn exploration_view(
+        revision: SessionRevision,
+        mode: Mode,
+    ) -> Result<ExplorationView<'static>, JsValue> {
         let hall = matches!(mode, Mode::Hall);
         Ok(ExplorationView {
             binding: ClientBindingId::from_bytes(&[7; 16])
@@ -198,7 +201,10 @@ mod browser {
             .get()
             .next_sequence()
             .map_err(|_| JsValue::from_str("fixture sequence exhausted"))?;
-        fixture.phase.update(&view(next, mode)?).map_err(error)?;
+        fixture
+            .phase
+            .update(&exploration_view(next, mode)?)
+            .map_err(error)?;
         fixture.revision.set(next);
         fixture.mode.set(mode);
         Ok(())
@@ -299,7 +305,7 @@ mod browser {
             } else {
                 "exploration-privacy-drop"
             },
-            &view(first, Mode::Refused)?,
+            &exploration_view(first, Mode::Refused)?,
             ExplorationLimits {
                 campaign: CampaignLimits {
                     max_members: 16,
@@ -340,14 +346,14 @@ mod browser {
             "fixture portrait lacks NPC identity",
         )?;
         phase
-            .update(&view(revision(31, 2)?, Mode::Conversation)?)
+            .update(&exploration_view(revision(31, 2)?, Mode::Conversation)?)
             .map_err(error)?;
         require(
             phase.draft_input().draft() == "Audience-owned draft retained across updates",
             "same-owner update erased draft",
         )?;
         let updated = RetainedAudience::capture(&phase)?;
-        let mut no_portrait = view(revision(31, 3)?, Mode::Conversation)?;
+        let mut no_portrait = exploration_view(revision(31, 3)?, Mode::Conversation)?;
         if let Some(npc) = no_portrait.npc.as_mut() {
             npc.portrait = None;
         }
@@ -357,10 +363,10 @@ mod browser {
             "no-portrait update retained NPC image identity",
         )?;
         phase
-            .update(&view(revision(31, 4)?, Mode::Conversation)?)
+            .update(&exploration_view(revision(31, 4)?, Mode::Conversation)?)
             .map_err(error)?;
         phase
-            .update(&view(revision(31, 5)?, Mode::Hall)?)
+            .update(&exploration_view(revision(31, 5)?, Mode::Hall)?)
             .map_err(error)?;
         require(
             portrait.get_attribute("src").is_none() && portrait.get_attribute("alt").is_none(),
@@ -380,11 +386,11 @@ mod browser {
             "removed offered choice retained audience data",
         )?;
         phase
-            .update(&view(revision(32, 0)?, Mode::Conversation)?)
+            .update(&exploration_view(revision(32, 0)?, Mode::Conversation)?)
             .map_err(error)?;
         let epoch_choice = RetainedAudience::capture(&phase)?;
         phase
-            .update(&view(revision(33, 0)?, Mode::Conversation)?)
+            .update(&exploration_view(revision(33, 0)?, Mode::Conversation)?)
             .map_err(error)?;
         require(
             epoch_choice
@@ -408,7 +414,7 @@ mod browser {
             phase.dispose().map_err(error)?;
             require(
                 phase
-                    .update(&view(revision(33, 1)?, Mode::Conversation)?)
+                    .update(&exploration_view(revision(33, 1)?, Mode::Conversation)?)
                     .is_err(),
                 "disposed phase admitted update",
             )?;
@@ -498,14 +504,17 @@ mod browser {
         )?;
         let current = fixture.revision.get();
         require(
-            fixture.phase.update(&view(current, Mode::Hall)?).is_err(),
+            fixture
+                .phase
+                .update(&exploration_view(current, Mode::Hall)?)
+                .is_err(),
             "duplicate view admitted",
         )?;
         let old_choice = choice.clone();
         let newer = revision(current.epoch().get() + 1, 0)?;
         fixture
             .phase
-            .update(&view(newer, Mode::Conversation)?)
+            .update(&exploration_view(newer, Mode::Conversation)?)
             .map_err(error)?;
         fixture.revision.set(newer);
         fixture.mode.set(Mode::Conversation);
@@ -560,7 +569,7 @@ mod browser {
             ExplorationPhase::create(
                 &document,
                 "exploration-action-draft",
-                &view(initial, Mode::Conversation)?,
+                &exploration_view(initial, Mode::Conversation)?,
                 ExplorationLimits {
                     campaign: CampaignLimits {
                         max_members: 16,
@@ -641,7 +650,16 @@ mod browser {
                     if let Some(fixture) = slot.borrow().as_ref() {
                         let result = match operation {
                             0 => advance(fixture, Mode::Conversation), 1 => advance(fixture, Mode::Hall), 2 => advance(fixture, Mode::Pending), 3 => advance(fixture, Mode::Refused),
-                            4 => (|| { let next = revision(fixture.revision.get().epoch().get() + 1, 0)?; fixture.phase.update(&view(next, Mode::Conversation)?).map_err(error)?; fixture.revision.set(next); fixture.mode.set(Mode::Conversation); Ok(()) })(),
+                            4 => (|| {
+                                let next = revision(fixture.revision.get().epoch().get() + 1, 0)?;
+                                fixture
+                                    .phase
+                                    .update(&exploration_view(next, Mode::Conversation)?)
+                                    .map_err(error)?;
+                                fixture.revision.set(next);
+                                fixture.mode.set(Mode::Conversation);
+                                Ok(())
+                            })(),
                             5 => check(fixture),
                             _ => (|| { if let Some(art) = fixture.phase.root().query_selector(".scene-art")? { art.set_attribute("src", "assets/concept-art/fixture-missing-art.webp")?; } Ok(()) })(),
                         };
@@ -703,7 +721,13 @@ mod browser {
                 for control in &fixture.controls { control.dispose().map_err(error)?; }
                 fixture.phase.dispose().map_err(error)?; fixture.phase.dispose().map_err(error)?;
                 if let Some(old) = old { old.dispatch_event(&Event::new("click")?)?; }
-                require(fixture.phase.update(&view(fixture.revision.get(), Mode::Conversation)?).is_err(), "disposed phase admitted update")?;
+                require(
+                    fixture
+                        .phase
+                        .update(&exploration_view(fixture.revision.get(), Mode::Conversation)?)
+                        .is_err(),
+                    "disposed phase admitted update",
+                )?;
                 require(fixture.phase.draft_input().draft().is_empty(), "disposed draft retained text")?;
                 if let Some(body) = fixture.document.body() { body.set_text_content(Some("PASS · Exploration fixture disposed twice; draft cleared, listeners retired and late input fenced.")); }
             }

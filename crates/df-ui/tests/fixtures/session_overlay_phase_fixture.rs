@@ -41,7 +41,7 @@ mod browser {
         JsValue::from_str(&error.to_string())
     }
 
-    fn view(state: u32, revision: u64) -> SessionOverlayView<'static> {
+    fn session_overlay_view(state: u32, revision: u64) -> SessionOverlayView<'static> {
         let connection = match state {
             1 | 2 => SessionConnection::Reconnecting,
             3 => SessionConnection::Offline,
@@ -195,7 +195,8 @@ mod browser {
             .ok_or_else(|| JsValue::from_str("body unavailable"))?;
         body.set_attribute("style", "margin:0;background:#070d14")?;
         document.set_title("DungeonFlux · Session overlays · Synthetic Rust/WASM fixture");
-        let phase = SessionOverlayPhase::create(&document, &view(0, 1)).map_err(error)?;
+        let phase =
+            SessionOverlayPhase::create(&document, &session_overlay_view(0, 1)).map_err(error)?;
         let fixture_bar = document.create_element("section")?;
         fixture_bar.set_attribute("style", "padding:20px;color:#f5eee0;background:#182535;font:14px/1.6 system-ui;display:flex;gap:10px;flex-wrap:wrap")?;
         let label = document.create_element("p")?;
@@ -319,7 +320,7 @@ mod browser {
             fixture.revision += 1;
             fixture
                 .phase
-                .update(&view(state, fixture.revision))
+                .update(&session_overlay_view(state, fixture.revision))
                 .map_err(error)?;
             fixture
                 .input
@@ -361,7 +362,7 @@ mod browser {
                 fixture.revision += 1;
                 fixture
                     .phase
-                    .update(&view(index % 11, fixture.revision))
+                    .update(&session_overlay_view(index % 11, fixture.revision))
                     .map_err(error)?;
             }
             if fixture.input.draft() != draft
@@ -376,7 +377,7 @@ mod browser {
             {
                 return Err(JsValue::from_str("node, draft or focus changed"));
             }
-            let mut stale = view(0, fixture.revision - 1);
+            let mut stale = session_overlay_view(0, fixture.revision - 1);
             if fixture.phase.update(&stale).is_ok() {
                 return Err(JsValue::from_str("stale update accepted"));
             }
@@ -414,7 +415,7 @@ mod browser {
             fixture.revision += 1;
             fixture
                 .phase
-                .update(&view(0, fixture.revision))
+                .update(&session_overlay_view(0, fixture.revision))
                 .map_err(error)?;
             let host = fixture
                 .phase
@@ -448,7 +449,7 @@ mod browser {
             fixture.revision += 1;
             fixture
                 .phase
-                .update(&view(5, fixture.revision))
+                .update(&session_overlay_view(5, fixture.revision))
                 .map_err(error)?;
             host.click();
             if fixture.callback_count.get() != count + 1 {
@@ -457,7 +458,7 @@ mod browser {
             fixture.revision += 1;
             fixture
                 .phase
-                .update(&view(2, fixture.revision))
+                .update(&session_overlay_view(2, fixture.revision))
                 .map_err(error)?;
             host.click();
             let unresolved = fixture
@@ -516,7 +517,8 @@ mod browser {
         let body = document
             .body()
             .ok_or_else(|| JsValue::from_str("body unavailable"))?;
-        let mut phase = SessionOverlayPhase::create(&document, &view(0, 1)).map_err(error)?;
+        let mut phase =
+            SessionOverlayPhase::create(&document, &session_overlay_view(0, 1)).map_err(error)?;
         body.append_child(phase.root())?;
         let input = ControlledTextInput::create(
             &document,
@@ -569,7 +571,7 @@ mod browser {
             ];
             let current = SessionOverlayView {
                 host_offers: &reordered,
-                ..view(0, 2)
+                ..session_overlay_view(0, 2)
             };
             phase.update(&current).map_err(error)?;
             require_active(&document, host.as_ref())?;
@@ -591,7 +593,7 @@ mod browser {
                     "focused action did not deliver exactly the current selection",
                 ));
             }
-            phase.update(&view(0, 3)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 3)).map_err(error)?;
             require_active(&document, host.as_ref())?;
             let disabled = [
                 SessionOverlayOffer {
@@ -603,7 +605,7 @@ mod browser {
             phase
                 .update(&SessionOverlayView {
                     host_offers: &disabled,
-                    ..view(0, 4)
+                    ..session_overlay_view(0, 4)
                 })
                 .map_err(error)?;
             require_active(&document, close.as_ref())?;
@@ -611,7 +613,7 @@ mod browser {
             if !host.disabled() || count.get() != 1 {
                 return Err(JsValue::from_str("disabled focused action was not fenced"));
             }
-            phase.update(&view(0, 5)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 5)).map_err(error)?;
             require_active(&document, close.as_ref())?;
             host.focus()?;
             let pending = [
@@ -624,7 +626,7 @@ mod browser {
             phase
                 .update(&SessionOverlayView {
                     host_offers: &pending,
-                    ..view(0, 6)
+                    ..session_overlay_view(0, 6)
                 })
                 .map_err(error)?;
             require_active(&document, close.as_ref())?;
@@ -632,12 +634,12 @@ mod browser {
             if !host.disabled() || count.get() != 1 {
                 return Err(JsValue::from_str("pending focused action was not fenced"));
             }
-            phase.update(&view(0, 7)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 7)).map_err(error)?;
             host.focus()?;
             let removed_label = host
                 .first_child()
                 .ok_or_else(|| JsValue::from_str("restored host label missing"))?;
-            phase.update(&view(5, 8)).map_err(error)?;
+            phase.update(&session_overlay_view(5, 8)).map_err(error)?;
             require_active(&document, close.as_ref())?;
             host.click();
             if !host.disabled()
@@ -652,7 +654,7 @@ mod browser {
                     "removed focused action retained payload or delivered a selection",
                 ));
             }
-            phase.update(&view(0, 9)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 9)).map_err(error)?;
             host.focus()?;
             let replacement = [
                 SessionOverlayOffer {
@@ -666,7 +668,7 @@ mod browser {
             phase
                 .update(&SessionOverlayView {
                     host_offers: &replacement,
-                    ..view(0, 10)
+                    ..session_overlay_view(0, 10)
                 })
                 .map_err(error)?;
             require_active(&document, close.as_ref())?;
@@ -675,10 +677,10 @@ mod browser {
                     "replacement selection is unexpectedly disabled",
                 ));
             }
-            phase.update(&view(0, 11)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 11)).map_err(error)?;
             let recovered_host = offered_button(&phase, "synthetic-pause-current")?;
             recovered_host.focus()?;
-            phase.update(&view(2, 12)).map_err(error)?;
+            phase.update(&session_overlay_view(2, 12)).map_err(error)?;
             require_active(&document, close.as_ref())?;
             recovered_host.click();
             if count.get() != 1 {
@@ -686,10 +688,10 @@ mod browser {
                     "reconnecting focused selection was not fenced",
                 ));
             }
-            phase.update(&view(0, 13)).map_err(error)?;
+            phase.update(&session_overlay_view(0, 13)).map_err(error)?;
             let skip = offered_button(&phase, "synthetic-skip-current")?;
             skip.focus()?;
-            phase.update(&view(8, 14)).map_err(error)?;
+            phase.update(&session_overlay_view(8, 14)).map_err(error)?;
             require_active(&document, close.as_ref())?;
             skip.click();
             if !skip.disabled() || count.get() != 1 {
@@ -697,7 +699,9 @@ mod browser {
             }
             input.input().focus()?;
             for (revision, state) in [(15, 0), (16, 2), (17, 5)] {
-                phase.update(&view(state, revision)).map_err(error)?;
+                phase
+                    .update(&session_overlay_view(state, revision))
+                    .map_err(error)?;
                 require_active(&document, input.input().as_ref())?;
                 if input.draft() != "Keep this uncommitted draft"
                     || input.input().value() != "Keep this uncommitted draft"
@@ -818,7 +822,8 @@ mod browser {
         let body = document
             .body()
             .ok_or_else(|| JsValue::from_str("body unavailable"))?;
-        let mut phase = SessionOverlayPhase::create(&document, &view(0, 1)).map_err(error)?;
+        let mut phase =
+            SessionOverlayPhase::create(&document, &session_overlay_view(0, 1)).map_err(error)?;
         body.append_child(phase.root())?;
         let callbacks = Rc::new(Cell::new(0));
         let counted = Rc::clone(&callbacks);
@@ -826,8 +831,8 @@ mod browser {
             .on_selection(move |_| counted.set(counted.get() + 1))
             .map_err(error)?;
         let removed = hold_view(&phase)?;
-        phase.update(&view(8, 2)).map_err(error)?;
-        phase.update(&view(5, 3)).map_err(error)?;
+        phase.update(&session_overlay_view(8, 2)).map_err(error)?;
+        phase.update(&session_overlay_view(5, 3)).map_err(error)?;
         // Former cue and host selections are now absent, including a previously
         // pending button and its retained label Text. Skip is still a current cue.
         if removed
@@ -843,7 +848,7 @@ mod browser {
                 "removed selection retained prose or label Text",
             ));
         }
-        phase.update(&view(8, 4)).map_err(error)?;
+        phase.update(&session_overlay_view(8, 4)).map_err(error)?;
         if removed.image.has_attribute("src")
             || removed.image.has_attribute("alt")
             || !removed.image.has_attribute("hidden")
@@ -851,7 +856,7 @@ mod browser {
         {
             return Err(JsValue::from_str("removed cue retained asset attributes"));
         }
-        let mut no_still = view(0, 5);
+        let mut no_still = session_overlay_view(0, 5);
         if let Some(bookend) = no_still.bookend.as_mut() {
             bookend.still = None;
         }
@@ -861,11 +866,11 @@ mod browser {
                 "no-still view retained previous alt or source",
             ));
         }
-        phase.update(&view(0, 6)).map_err(error)?;
+        phase.update(&session_overlay_view(0, 6)).map_err(error)?;
         let disposed = hold_view(&phase)?;
         phase.dispose().map_err(error)?;
         phase.dispose().map_err(error)?;
-        let mut replacement_view = view(0, 1);
+        let mut replacement_view = session_overlay_view(0, 1);
         replacement_view.generation = 42;
         let mut replacement =
             SessionOverlayPhase::create(&document, &replacement_view).map_err(error)?;
@@ -874,14 +879,15 @@ mod browser {
         for button in &disposed.offers {
             button.click();
         }
-        if callbacks.get() != 0 || phase.update(&view(0, 7)).is_ok() {
+        if callbacks.get() != 0 || phase.update(&session_overlay_view(0, 7)).is_ok() {
             return Err(JsValue::from_str(
                 "disposed owner accepted a captured selection or view",
             ));
         }
         replacement.dispose().map_err(error)?;
         let dropped = {
-            let phase = SessionOverlayPhase::create(&document, &view(0, 1)).map_err(error)?;
+            let phase = SessionOverlayPhase::create(&document, &session_overlay_view(0, 1))
+                .map_err(error)?;
             body.append_child(phase.root())?;
             let held = hold_view(&phase)?;
             drop(phase);
@@ -902,7 +908,11 @@ mod browser {
                 }
                 fixture.phase.dispose().map_err(error)?;
                 fixture.phase.dispose().map_err(error)?;
-                if fixture.phase.update(&view(0, fixture.revision + 1)).is_ok() {
+                if fixture
+                    .phase
+                    .update(&session_overlay_view(0, fixture.revision + 1))
+                    .is_ok()
+                {
                     return Err(JsValue::from_str("disposed update accepted"));
                 }
             }
