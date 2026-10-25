@@ -58,8 +58,8 @@ const SCRIPT: [Step; 5] = [
     },
 ];
 
-fn parsed_rating(name: &str) -> ContentRating {
-    match name.trim() {
+fn parse_content_rating(rating_name: &str) -> ContentRating {
+    match rating_name.trim() {
         "mature" => ContentRating::Mature,
         "restrained" => ContentRating::Restrained,
         other => panic!("unknown rating {other}"),
@@ -155,7 +155,7 @@ async fn live_conversations_in_each_rating() {
         .collect();
     let mut calls = 0_u32;
     for name in std::env::var("DF_PLAY_R01_RATINGS").unwrap().split(',') {
-        let _rating = TestRating::set(parsed_rating(name));
+        let _rating = TestRating::set(parse_content_rating(name));
         let adventure = adventure(seed);
         let ledger = SocialLedger::open(adventure.dossiers.clone(), "0xlive", None).unwrap();
         let enemy = adventure

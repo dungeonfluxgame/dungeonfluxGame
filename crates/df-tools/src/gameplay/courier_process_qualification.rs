@@ -51,7 +51,7 @@ fn metadata(name: &str) -> Result<(u64, u16, u32), io::Error> {
     ))
 }
 fn save_metadata(name: &str, calls: &Calls) -> Result<(), Error> {
-    let mut bytes = Vec::from(calls.started_milliseconds.to_be_bytes());
+    let mut bytes = Vec::from(calls.started_ms.to_be_bytes());
     bytes.extend_from_slice(&u16::try_from(calls.count)?.to_be_bytes());
     bytes.extend_from_slice(&std::process::id().to_be_bytes());
     save(name, &bytes)?;
@@ -74,9 +74,9 @@ pub(super) fn call_budget(phase: Phase) -> Result<u16, io::Error> {
     } else {
         "courier-private-metadata-b-01.bin"
     };
-    let (start, count, pid) = metadata(name)?;
+    let (started_ms, count, pid) = metadata(name)?;
     required(count == if phase == Phase::B { 9 } else { 14 })?;
-    required(pid != std::process::id() && elapsed(start)? <= 90_000)?;
+    required(pid != std::process::id() && elapsed_ms(started_ms)? <= 90_000)?;
     if phase == Phase::C {
         required(metadata("courier-private-metadata-a-01.bin")?.2 != std::process::id())?;
     }
@@ -101,7 +101,7 @@ fn required(value: bool) -> Result<(), io::Error> {
         )))
     }
 }
-fn now() -> Result<u64, io::Error> {
+fn now_ms() -> Result<u64, io::Error> {
     u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -110,9 +110,9 @@ fn now() -> Result<u64, io::Error> {
     )
     .map_err(io::Error::other)
 }
-fn elapsed(start: u64) -> Result<u64, io::Error> {
-    now()?
-        .checked_sub(start)
+fn elapsed_ms(started_ms: u64) -> Result<u64, io::Error> {
+    now_ms()?
+        .checked_sub(started_ms)
         .ok_or_else(|| io::Error::other("restart clock regressed"))
 }
 fn path(name: &str) -> std::path::PathBuf {
@@ -141,10 +141,10 @@ fn report(name: &str, body: &str) -> Result<(), io::Error> {
 }
 struct Calls {
     count: usize,
-    started_milliseconds: u64,
+    started_ms: u64,
 }
 fn admit(calls: &mut Calls) -> Result<(), Error> {
-    required(calls.count < 32 && elapsed(calls.started_milliseconds)? <= 90_000)?;
+    required(calls.count < 32 && elapsed_ms(calls.started_ms)? <= 90_000)?;
     calls.count = calls
         .count
         .checked_add(1)
@@ -433,7 +433,7 @@ async fn phase_a(
 ) -> Result<(), Error> {
     let mut calls = Calls {
         count: 0,
-        started_milliseconds: now()?,
+        started_ms: now_ms()?,
     };
     let first = join(service, 0xc1, &mut calls).await?;
     let second = join(service, 0xc2, &mut calls).await?;
@@ -523,12 +523,12 @@ pub(super) fn after_drained(
     if phase != Phase::A {
         return Ok(());
     }
-    let (start, count, pid) = metadata("courier-private-metadata-a-01.bin")?;
+    let (started_ms, count, pid) = metadata("courier-private-metadata-a-01.bin")?;
     required(
         pid == std::process::id()
             && count == 9
             && actor.calls_remaining == 23
-            && elapsed(start)? < 45_000,
+            && elapsed_ms(started_ms)? < 45_000,
     )?;
     required(read("courier-a-prepared-01.json", 16 * 1024)?.starts_with(b"{\"pass\":true,"))?;
     required(!actor.fenced && actor.owner.is_current() && !actor.owner.has_uncertain_operation())?;
@@ -601,7 +601,7 @@ pub(super) fn after_drained(
     save("courier-private-receipt-01.bin", &generated.encode_to_vec())?;
     required(reductions.load(std::sync::atomic::Ordering::SeqCst) == 6)?;
     let remaining = 45_000_u64
-        .checked_sub(elapsed(start)?)
+        .checked_sub(elapsed_ms(started_ms)?)
         .ok_or_else(|| io::Error::other("courier A work deadline"))?;
     runtime
         .block_on(inspect_pending(
@@ -611,7 +611,7 @@ pub(super) fn after_drained(
             Duration::from_millis(remaining),
         ))
         .map_err(io::Error::other)?;
-    required(elapsed(start)? <= 45_000)?;
+    required(elapsed_ms(started_ms)? <= 45_000)?;
     report(
         "courier-a-pending-01.json",
         &format!(
@@ -768,10 +768,10 @@ async fn phase_b(
     codec: df_persistence::NativeCodecLimits,
     reductions: &std::sync::atomic::AtomicUsize,
 ) -> Result<(), Error> {
-    let (start, count, _) = metadata("courier-private-metadata-a-01.bin")?;
+    let (started_ms, count, _) = metadata("courier-private-metadata-a-01.bin")?;
     let mut calls = Calls {
         count: usize::from(count),
-        started_milliseconds: start,
+        started_ms,
     };
     let (credentials, members) = private_grants()?;
     let member = df_types::MemberId::from_bytes(&members[0])
@@ -870,10 +870,10 @@ async fn phase_c(
     codec: df_persistence::NativeCodecLimits,
     reductions: &std::sync::atomic::AtomicUsize,
 ) -> Result<(), Error> {
-    let (start, count, _) = metadata("courier-private-metadata-b-01.bin")?;
+    let (started_ms, count, _) = metadata("courier-private-metadata-b-01.bin")?;
     let mut calls = Calls {
         count: usize::from(count),
-        started_milliseconds: start,
+        started_ms,
     };
     let (credentials, members) = private_grants()?;
     let views = three_views(service, credentials, members, display, &mut calls, true).await?;
@@ -951,7 +951,7 @@ pub(super) async fn run(
     )
 }
 pub(super) fn closed(phase: Phase, remaining: u16, reductions: usize) -> Result<(), io::Error> {
-    let (start, _, _) = metadata("courier-private-metadata-a-01.bin")?;
+    let (started_ms, _, _) = metadata("courier-private-metadata-a-01.bin")?;
     let (name, expected) = match phase {
         Phase::A => ("courier-a-closed-01.json", 23),
         Phase::B => ("courier-b-closed-01.json", 18),
@@ -959,7 +959,7 @@ pub(super) fn closed(phase: Phase, remaining: u16, reductions: usize) -> Result<
     };
     required(
         remaining == expected
-            && elapsed(start)? <= 90_000
+            && elapsed_ms(started_ms)? <= 90_000
             && reductions
                 == match phase {
                     Phase::A => 6,
@@ -973,7 +973,7 @@ pub(super) fn closed(phase: Phase, remaining: u16, reductions: usize) -> Result<
             "{{\"pass\":true,\"pid\":{},\"aggregate_actor_calls\":{},\"actor_calls_limit\":32,\"native_engine_reductions\":{reductions},\"exercise_milliseconds\":{},\"total_milliseconds_limit\":90000,\"admission_stopped\":true,\"inbox_drained\":true,\"exact_fence_released\":true,\"actor_joined\":true,\"repository_driver_joined\":true,\"grant_driver_joined\":true}}",
             std::process::id(),
             32 - remaining,
-            elapsed(start)?
+            elapsed_ms(started_ms)?
         ),
     )
 }
