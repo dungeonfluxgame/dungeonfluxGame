@@ -645,7 +645,7 @@ pub(super) fn operational_notice() -> Option<&'static str> {
         .then_some("Narration provider unavailable; no new charge")
 }
 
-pub(super) fn set_quota_notice(transition: Transition) {
+fn set_quota_notice(transition: Transition) {
     QUOTA_NOTICE_OPEN.store(transition == Transition::Opened, Ordering::SeqCst);
 }
 
