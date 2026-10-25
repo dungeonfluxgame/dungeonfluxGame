@@ -106,8 +106,8 @@ pub fn select_committed_moment_plan<'a>(
         .validate_resume(current.basis, current.pins)
         .map_err(MomentError::Checkpoint)?;
     let state = checkpoint.state();
-    let mut records = 0;
-    for count in [
+    let mut record_count = 0;
+    for record_count_to_add in [
         state.continuity.moments.len(),
         state.presentation.len(),
         state.continuity.shots.len(),
@@ -115,10 +115,14 @@ pub fn select_committed_moment_plan<'a>(
         state.facts.len(),
         state.decisions.len(),
     ] {
-        add_items(&mut records, count, limits.maximum_items)?;
+        add_items(&mut record_count, record_count_to_add, limits.maximum_items)?;
     }
     for decision in &state.decisions {
-        add_items(&mut records, decision.facts.len(), limits.maximum_items)?;
+        add_items(
+            &mut record_count,
+            decision.facts.len(),
+            limits.maximum_items,
+        )?;
     }
     if state.mode != current.mode
         || !state.continuity.moments.contains(current.moment)
@@ -184,13 +188,13 @@ pub fn select_moment_plan<'a>(
     {
         return Err(MomentError::InvalidCurrentContext);
     }
-    let mut result = MomentSelection {
+    let mut selection = MomentSelection {
         disposition: MomentDisposition::Unavailable,
         selected: None,
         rejections: MomentRejections::default(),
     };
     let Some(permitted) = permitted else {
-        return Ok(result);
+        return Ok(selection);
     };
     if permitted.context != current {
         return Err(MomentError::StalePermittedContext);
@@ -218,24 +222,24 @@ pub fn select_moment_plan<'a>(
     }
     for alternative in alternatives {
         if alternative.context != current {
-            result.rejections.stale += 1;
+            selection.rejections.stale += 1;
             continue;
         }
         match validate_alternative(alternative, now, permitted, limits) {
             Ok(()) => {
-                result.disposition = MomentDisposition::Selected;
-                result.selected = Some(alternative);
-                return Ok(result);
+                selection.disposition = MomentDisposition::Selected;
+                selection.selected = Some(alternative);
+                return Ok(selection);
             }
-            Err(AlternativeRefusal::Unpermitted) => result.rejections.unpermitted += 1,
-            Err(AlternativeRefusal::Invalid) => result.rejections.invalid += 1,
-            Err(AlternativeRefusal::Expired) => result.rejections.expired += 1,
+            Err(AlternativeRefusal::Unpermitted) => selection.rejections.unpermitted += 1,
+            Err(AlternativeRefusal::Invalid) => selection.rejections.invalid += 1,
+            Err(AlternativeRefusal::Expired) => selection.rejections.expired += 1,
         }
     }
-    if !alternatives.is_empty() && result.rejections.expired == alternatives.len() {
-        result.disposition = MomentDisposition::Expired;
+    if !alternatives.is_empty() && selection.rejections.expired == alternatives.len() {
+        selection.disposition = MomentDisposition::Expired;
     }
-    Ok(result)
+    Ok(selection)
 }
 
 fn validate_limits(limits: MomentLimits) -> Result<(), MomentError> {
@@ -262,9 +266,13 @@ fn audience_items(audience: &AudienceScope) -> usize {
     }
 }
 
-fn add_items(total: &mut usize, count: usize, limit: usize) -> Result<(), MomentError> {
-    *total = total.checked_add(count).ok_or(MomentError::Capacity)?;
-    if *total > limit {
+fn add_items(
+    total: &mut usize,
+    item_count: usize,
+    maximum_items: usize,
+) -> Result<(), MomentError> {
+    *total = total.checked_add(item_count).ok_or(MomentError::Capacity)?;
+    if *total > maximum_items {
         return Err(MomentError::Capacity);
     }
     Ok(())
@@ -273,9 +281,9 @@ fn add_items(total: &mut usize, count: usize, limit: usize) -> Result<(), Moment
 fn context_items(
     context: MomentContext<'_>,
     total: &mut usize,
-    limit: usize,
+    maximum_items: usize,
 ) -> Result<(), MomentError> {
-    for count in [
+    for item_count in [
         context.moment.characters.len(),
         context.moment.facts.len(),
         context.moment.attributed_claims.len(),
@@ -283,7 +291,7 @@ fn context_items(
         audience_items(&context.moment.audience),
         audience_items(&context.presentation.audience),
     ] {
-        add_items(total, count, limit)?;
+        add_items(total, item_count, maximum_items)?;
     }
     Ok(())
 }
@@ -297,48 +305,56 @@ fn bound_input(
     if alternatives.len() > limits.maximum_alternatives {
         return Err(MomentError::Capacity);
     }
-    let mut items = alternatives.len();
-    context_items(current, &mut items, limits.maximum_items)?;
+    let mut item_count = alternatives.len();
+    context_items(current, &mut item_count, limits.maximum_items)?;
     if let Some(permitted) = permitted {
-        context_items(permitted.context, &mut items, limits.maximum_items)?;
-        for count in [
+        context_items(permitted.context, &mut item_count, limits.maximum_items)?;
+        for item_count_to_add in [
             permitted.facts.len(),
             permitted.attributed_claims.len(),
             permitted.entities.len(),
             permitted.content.len(),
             permitted.assets.len(),
         ] {
-            add_items(&mut items, count, limits.maximum_items)?;
+            add_items(&mut item_count, item_count_to_add, limits.maximum_items)?;
         }
     }
     for alternative in alternatives {
-        context_items(alternative.context, &mut items, limits.maximum_items)?;
+        context_items(alternative.context, &mut item_count, limits.maximum_items)?;
         if alternative.shots.len() > limits.maximum_shots
             || alternative.demands.len() > limits.maximum_demands
         {
             return Err(MomentError::Capacity);
         }
-        add_items(&mut items, alternative.shots.len(), limits.maximum_items)?;
-        add_items(&mut items, alternative.demands.len(), limits.maximum_items)?;
+        add_items(
+            &mut item_count,
+            alternative.shots.len(),
+            limits.maximum_items,
+        )?;
+        add_items(
+            &mut item_count,
+            alternative.demands.len(),
+            limits.maximum_items,
+        )?;
         for shot in alternative.shots {
-            for count in [
+            for item_count_to_add in [
                 shot.subjects.len(),
                 shot.references.len(),
                 shot.performance.emphasis_facts.len(),
                 audience_items(&shot.audience),
                 usize::from(shot.performance.voice.is_some()),
             ] {
-                add_items(&mut items, count, limits.maximum_items)?;
+                add_items(&mut item_count, item_count_to_add, limits.maximum_items)?;
             }
         }
         for demand in alternative.demands {
             add_items(
-                &mut items,
+                &mut item_count,
                 demand.key.references.len(),
                 limits.maximum_items,
             )?;
             add_items(
-                &mut items,
+                &mut item_count,
                 audience_items(&demand.key.audience),
                 limits.maximum_items,
             )?;
@@ -367,25 +383,25 @@ fn validate_alternative(
     if alternative.shots.is_empty() {
         return Err(AlternativeRefusal::Invalid);
     }
-    let current = alternative.context;
-    let mut duration = 0_u64;
+    let alternative_context = alternative.context;
+    let mut duration_ticks = 0_u64;
     let mut reference_bytes = 0_u64;
-    for (index, shot) in alternative.shots.iter().enumerate() {
-        if shot.moment != current.moment.id
-            || shot.audience != current.moment.audience
+    for (shot_index, shot) in alternative.shots.iter().enumerate() {
+        if shot.moment != alternative_context.moment.id
+            || shot.audience != alternative_context.moment.audience
             || shot.duration_ticks == 0
             || alternative
                 .shots
                 .iter()
-                .take(index)
+                .take(shot_index)
                 .any(|prior| prior.id == shot.id)
         {
             return Err(AlternativeRefusal::Invalid);
         }
-        duration = duration
+        duration_ticks = duration_ticks
             .checked_add(shot.duration_ticks)
             .ok_or(AlternativeRefusal::Invalid)?;
-        if duration > limits.maximum_duration_ticks {
+        if duration_ticks > limits.maximum_duration_ticks {
             return Err(AlternativeRefusal::Invalid);
         }
         if !content_allowed(&shot.definition, permitted)
@@ -393,12 +409,12 @@ fn validate_alternative(
             || !shot
                 .subjects
                 .iter()
-                .all(|id| current.moment.characters.contains(id))
+                .all(|id| alternative_context.moment.characters.contains(id))
             || !shot
                 .performance
                 .emphasis_facts
                 .iter()
-                .all(|id| current.moment.facts.contains(id))
+                .all(|id| alternative_context.moment.facts.contains(id))
         {
             return Err(AlternativeRefusal::Unpermitted);
         }
@@ -407,20 +423,20 @@ fn validate_alternative(
         }
     }
     let mut demand_bytes = 0_u64;
-    for (index, demand) in alternative.demands.iter().enumerate() {
-        if demand.basis != current.basis
-            || demand.mode != current.mode
+    for (demand_index, demand) in alternative.demands.iter().enumerate() {
+        if demand.basis != alternative_context.basis
+            || demand.mode != alternative_context.mode
             || demand.key.schema != CHECKPOINT_SCHEMA
-            || demand.key.source != current.pins.content.content_digest
-            || demand.key.moment != current.moment.id
-            || demand.key.identity != current.moment.identity_revision
-            || demand.key.audience != current.moment.audience
+            || demand.key.source != alternative_context.pins.content.content_digest
+            || demand.key.moment != alternative_context.moment.id
+            || demand.key.identity != alternative_context.moment.identity_revision
+            || demand.key.audience != alternative_context.moment.audience
             || demand.maximum_bytes == 0
             || demand.expires.ticks_per_second != now.ticks_per_second
             || alternative
                 .demands
                 .iter()
-                .take(index)
+                .take(demand_index)
                 .any(|prior| prior.id == demand.id)
         {
             return Err(AlternativeRefusal::Invalid);

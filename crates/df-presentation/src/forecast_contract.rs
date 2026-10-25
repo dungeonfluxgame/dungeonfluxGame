@@ -115,32 +115,32 @@ pub fn qualify_forecast<'a>(
     {
         return Err(ForecastError::Capacity);
     }
-    let mut items = candidates.len();
-    bound_context(current, &mut items, limits.maximum_items)?;
+    let mut item_count = candidates.len();
+    bound_context(current, &mut item_count, limits.maximum_items)?;
     if let Some(inventory) = permitted {
-        bound_context(inventory.context, &mut items, limits.maximum_items)?;
-        for count in [
+        bound_context(inventory.context, &mut item_count, limits.maximum_items)?;
+        for item_count_to_add in [
             inventory.facts.len(),
             inventory.attributed_claims.len(),
             inventory.entities.len(),
             inventory.content.len(),
             inventory.assets.len(),
         ] {
-            add_items(&mut items, count, limits.maximum_items)?;
+            add_items(&mut item_count, item_count_to_add, limits.maximum_items)?;
         }
     }
     let mut reference_bytes = 0;
     let mut demand_bytes = 0;
-    let mut duration = 0;
+    let mut duration_ticks = 0;
     for candidate in candidates {
         let demand = candidate.demand;
         add_items(
-            &mut items,
+            &mut item_count,
             demand.key.references.len(),
             limits.maximum_items,
         )?;
         add_items(
-            &mut items,
+            &mut item_count,
             audience_items(&demand.key.audience),
             limits.maximum_items,
         )?;
@@ -157,7 +157,7 @@ pub fn qualify_forecast<'a>(
             limits.maximum_demand_bytes.min(policy.maximum_bytes),
         )?;
         add_bytes(
-            &mut duration,
+            &mut duration_ticks,
             candidate.duration_ticks,
             limits
                 .maximum_duration_ticks
@@ -248,17 +248,25 @@ fn audience_items(audience: &AudienceScope) -> usize {
     }
 }
 
-fn add_items(total: &mut usize, count: usize, cap: usize) -> Result<(), ForecastError> {
-    *total = total.checked_add(count).ok_or(ForecastError::Capacity)?;
-    if *total > cap {
+fn add_items(
+    total: &mut usize,
+    item_count: usize,
+    maximum_items: usize,
+) -> Result<(), ForecastError> {
+    *total = total
+        .checked_add(item_count)
+        .ok_or(ForecastError::Capacity)?;
+    if *total > maximum_items {
         return Err(ForecastError::Capacity);
     }
     Ok(())
 }
 
-fn add_bytes(total: &mut u64, count: u64, cap: u64) -> Result<(), ForecastError> {
-    *total = total.checked_add(count).ok_or(ForecastError::Capacity)?;
-    if *total > cap {
+fn add_bytes(total: &mut u64, byte_count: u64, maximum_bytes: u64) -> Result<(), ForecastError> {
+    *total = total
+        .checked_add(byte_count)
+        .ok_or(ForecastError::Capacity)?;
+    if *total > maximum_bytes {
         return Err(ForecastError::Capacity);
     }
     Ok(())
@@ -267,9 +275,9 @@ fn add_bytes(total: &mut u64, count: u64, cap: u64) -> Result<(), ForecastError>
 fn bound_context(
     context: MomentContext<'_>,
     total: &mut usize,
-    cap: usize,
+    maximum_items: usize,
 ) -> Result<(), ForecastError> {
-    for count in [
+    for item_count in [
         context.moment.characters.len(),
         context.moment.facts.len(),
         context.moment.attributed_claims.len(),
@@ -277,7 +285,7 @@ fn bound_context(
         audience_items(&context.moment.audience),
         audience_items(&context.presentation.audience),
     ] {
-        add_items(total, count, cap)?;
+        add_items(total, item_count, maximum_items)?;
     }
     Ok(())
 }

@@ -181,23 +181,23 @@ pub fn select_committed_celebration<'a>(
     if current.cue.ready_assets.is_empty() {
         return Err(CriticalCueError::AssetsUnavailable);
     }
-    let mut bytes = 0_u64;
-    for (index, asset) in current.cue.ready_assets.iter().enumerate() {
+    let mut asset_bytes = 0_u64;
+    for (asset_index, asset) in current.cue.ready_assets.iter().enumerate() {
         if asset.byte_length == 0
             || !permitted.assets.contains(asset)
             || current
                 .cue
                 .ready_assets
                 .iter()
-                .take(index)
+                .take(asset_index)
                 .any(|prior| prior.key == asset.key)
         {
             return Err(CriticalCueError::AssetsUnavailable);
         }
-        bytes = bytes
+        asset_bytes = asset_bytes
             .checked_add(asset.byte_length)
             .ok_or(CriticalCueError::Capacity)?;
-        if bytes > limits.maximum_asset_bytes {
+        if asset_bytes > limits.maximum_asset_bytes {
             return Err(CriticalCueError::Capacity);
         }
     }
@@ -211,12 +211,12 @@ fn bound_inputs(
     outcome: Option<ResolvedOutcomeAdmission<'_>>,
     permitted: Option<PermittedCriticalCue<'_>>,
 ) -> Result<(), CriticalCueError> {
-    let mut items = 0_usize;
-    let mut count = |length: usize| {
-        items = items
+    let mut item_count = 0_usize;
+    let mut add_item_count = |length: usize| {
+        item_count = item_count
             .checked_add(length)
             .ok_or(CriticalCueError::Capacity)?;
-        if items > request.limits.maximum_items {
+        if item_count > request.limits.maximum_items {
             return Err(CriticalCueError::Capacity);
         }
         Ok(())
@@ -229,7 +229,7 @@ fn bound_inputs(
         inventory.resources.len(),
         inventory.assets.len(),
     ] {
-        count(length)?;
+        add_item_count(length)?;
     }
     if let Some(outcome) = outcome {
         for length in [
@@ -240,9 +240,9 @@ fn bound_inputs(
             outcome.decision.draws.len(),
             outcome.decision.effects.len(),
         ] {
-            count(length)?;
+            add_item_count(length)?;
         }
-        count(fact_items(outcome.fact))?;
+        add_item_count(fact_items(outcome.fact))?;
         if outcome
             .decision
             .semantic_output
@@ -261,7 +261,7 @@ fn bound_inputs(
             permitted.content.len(),
             permitted.assets.len(),
         ] {
-            count(length)?;
+            add_item_count(length)?;
         }
     }
     Ok(())
