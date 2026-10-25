@@ -142,15 +142,15 @@ fn validate_point(point: Point) -> Result<(), RenderError> {
     Ok(())
 }
 
-fn validate_length(value: f64) -> Result<(), RenderError> {
-    if !value.is_finite() || value <= 0.0 || value > MAX_COORDINATE {
+fn validate_length(length: f64) -> Result<(), RenderError> {
+    if !length.is_finite() || length <= 0.0 || length > MAX_COORDINATE {
         return Err(RenderError::InvalidGeometry);
     }
     Ok(())
 }
 
-fn validate_label(value: &str) -> Result<(), RenderError> {
-    if value.len() > MAX_LABEL_BYTES || value.chars().any(char::is_control) {
+fn validate_label(label: &str) -> Result<(), RenderError> {
+    if label.len() > MAX_LABEL_BYTES || label.chars().any(char::is_control) {
         return Err(RenderError::InvalidLabel);
     }
     Ok(())

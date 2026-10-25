@@ -373,15 +373,18 @@ pub fn world_grid(
         }
     }
 
-    let cell = settings.cell_m;
+    let cell_m = settings.cell_m;
     let (origin, reach) = match settings.footprint {
         Some(footprint) => (footprint.min, footprint.max),
         None => (
-            [(low.x / cell).floor() * cell, (low.z / cell).floor() * cell],
+            [
+                (low.x / cell_m).floor() * cell_m,
+                (low.z / cell_m).floor() * cell_m,
+            ],
             [high.x, high.z],
         ),
     };
-    let side = |from: f32, to: f32| ((to - from) / cell).ceil().max(1.0);
+    let side = |from: f32, to: f32| ((to - from) / cell_m).ceil().max(1.0);
     let (cols, rows) = (side(origin[0], reach[0]), side(origin[1], reach[1]));
     if cols > MAX_WORLD_GRID_SIDE as f32 || rows > MAX_WORLD_GRID_SIDE as f32 {
         return Err(WorldGridError::GridTooLarge);
@@ -390,18 +393,19 @@ pub fn world_grid(
 
     let (floor_area, block_area) =
         gather_surface_areas(mesh, &corners, settings, origin, cols, rows)?;
-    let cell_area = f64::from(cell) * f64::from(cell);
+    let cell_area_m2 = f64::from(cell_m) * f64::from(cell_m);
     let [band_low, band_high] = settings.hero_band_m;
-    let blocking_area =
-        f64::from(settings.blocking_wall_share) * f64::from(cell) * f64::from(band_high - band_low);
+    let blocking_area_m2 = f64::from(settings.blocking_wall_share)
+        * f64::from(cell_m)
+        * f64::from(band_high - band_low);
     let mut blocked_by_mesh: Vec<bool> = Vec::with_capacity(floor_area.len());
     let mut cells: Vec<WorldCell> = Vec::with_capacity(floor_area.len());
     for (floor, block) in floor_area.iter().zip(&block_area) {
-        let blocked = *block >= blocking_area;
+        let blocked = *block >= blocking_area_m2;
         blocked_by_mesh.push(blocked);
         cells.push(if blocked {
             WorldCell::Blocked
-        } else if *floor < f64::from(settings.floor_coverage) * cell_area {
+        } else if *floor < f64::from(settings.floor_coverage) * cell_area_m2 {
             WorldCell::NoFloor
         } else {
             WorldCell::Open
@@ -437,7 +441,7 @@ pub fn world_grid(
 
     Ok(WorldGrid {
         origin,
-        cell_m: cell,
+        cell_m,
         cols,
         rows,
         cells,
@@ -558,12 +562,12 @@ fn probe_blocked_squares(
 
     let per_side =
         ((settings.cell_m / PROBE_SPACING_M).ceil() as u32).clamp(1, PROBE_MAX_SUBDIVISIONS);
-    let sub = settings.cell_m / per_side as f32;
-    let radius = (sub * 0.5).min(PROBE_BODY_RADIUS_M);
+    let probe_spacing_m = settings.cell_m / per_side as f32;
+    let capsule_radius_m = (probe_spacing_m * 0.5).min(PROBE_BODY_RADIUS_M);
     // The capsule's spine runs between the band's ends less the radius, so the capsule fills the
     // band exactly; a band narrower than a body is a single point.
-    let (spine_low, spine_high) = if band_low + radius < band_high - radius {
-        (band_low + radius, band_high - radius)
+    let (spine_low, spine_high) = if band_low + capsule_radius_m < band_high - capsule_radius_m {
+        (band_low + capsule_radius_m, band_high - capsule_radius_m)
     } else {
         let middle = 0.5 * (band_low + band_high);
         (middle, middle)
@@ -578,13 +582,13 @@ fn probe_blocked_squares(
             let mut touched = false;
             'lattice: for i in 0..per_side {
                 for j in 0..per_side {
-                    let x = x0 + (i as f32 + 0.5) * sub;
-                    let z = z0 + (j as f32 + 0.5) * sub;
+                    let x = x0 + (i as f32 + 0.5) * probe_spacing_m;
+                    let z = z0 + (j as f32 + 0.5) * probe_spacing_m;
                     if collider
                         .touches_capsule(
                             Vec3::new(x, spine_low, z),
                             Vec3::new(x, spine_high, z),
-                            radius,
+                            capsule_radius_m,
                         )
                         .map_err(WorldGridError::Probe)?
                     {

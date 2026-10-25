@@ -23,10 +23,10 @@ impl<K: Clone + Eq> DecodedImage<K> {
         current: impl Fn(&K) -> bool + 'static,
         release: impl FnOnce() + 'static,
     ) -> Result<Self, ResourceError> {
-        let expected = (width as usize)
+        let expected_bytes = (width as usize)
             .checked_mul(height as usize)
             .and_then(|value| value.checked_mul(4));
-        if width == 0 || height == 0 || expected != Some(pixels.len()) {
+        if width == 0 || height == 0 || expected_bytes != Some(pixels.len()) {
             release();
             return Err(ResourceError::ReservationExceeded);
         }

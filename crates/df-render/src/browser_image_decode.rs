@@ -420,10 +420,11 @@ fn inspect_webp(
     if bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WEBP") {
         return Err(ImageDecodeError::CorruptWebp);
     }
-    let total = (read_webp_u32(bytes.get(4..8).ok_or(ImageDecodeError::CorruptWebp)?)? as usize)
+    let total_bytes = (read_webp_u32(bytes.get(4..8).ok_or(ImageDecodeError::CorruptWebp)?)?
+        as usize)
         .checked_add(8)
         .ok_or(ImageDecodeError::CorruptWebp)?;
-    if total != bytes.len() {
+    if total_bytes != bytes.len() {
         return Err(ImageDecodeError::CorruptWebp);
     }
     if bytes.get(12..16) != Some(b"VP8 ") {
@@ -1083,11 +1084,11 @@ mod browser {
     ) -> Result<DecodedImage<CacheKey>, ImageDecodeError> {
         let plan = input.plan();
         let Prepared { blob, promise } = prepared;
-        let value = JsFuture::from(promise)
+        let bitmap_value = JsFuture::from(promise)
             .await
             .map_err(|_| ImageDecodeError::BrowserDecode)?;
         let bitmap = Bitmap(
-            value
+            bitmap_value
                 .dyn_into::<ImageBitmap>()
                 .map_err(|_| ImageDecodeError::BrowserDecode)?,
         );
@@ -1121,11 +1122,11 @@ mod browser {
         context
             .draw_image_with_image_bitmap(&bitmap.0, 0.0, 0.0)
             .map_err(|_| ImageDecodeError::BrowserDecode)?;
-        let data = context
+        let image_data = context
             .get_image_data(0.0, 0.0, f64::from(plan.width), f64::from(plan.height))
             .map_err(|_| ImageDecodeError::BrowserDecode)?;
-        let pixels = data.data().0.into_boxed_slice();
-        drop(data);
+        let pixels = image_data.data().0.into_boxed_slice();
+        drop(image_data);
         drop(context);
         drop(canvas);
         drop(bitmap);

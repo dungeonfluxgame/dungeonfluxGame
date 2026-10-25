@@ -259,9 +259,9 @@ impl StatusSet {
 
     /// The low and high halves as exact floats for the shader's per-instance data.
     pub fn shader_words(self) -> [f32; 2] {
-        let low = self.0 & ((1 << MASK_SPLIT) - 1);
-        let high = self.0 >> MASK_SPLIT;
-        [low as f32, high as f32]
+        let low_word = self.0 & ((1 << MASK_SPLIT) - 1);
+        let high_word = self.0 >> MASK_SPLIT;
+        [low_word as f32, high_word as f32]
     }
 }
 
@@ -371,7 +371,7 @@ pub struct StatusPose {
 
 /// The pose for `set`.
 pub fn pose_for(set: StatusSet) -> StatusPose {
-    let has = |status| set.contains(status);
+    let has_status = |status| set.contains(status);
     let slump = [
         (Status::Prone, 1.0),
         (Status::Unconscious, 1.0),
@@ -380,17 +380,18 @@ pub fn pose_for(set: StatusSet) -> StatusPose {
         (Status::Exhaustion, 0.3),
     ]
     .into_iter()
-    .filter(|(status, _)| has(*status))
+    .filter(|(status, _)| has_status(*status))
     .map(|(_, amount)| amount)
     .fold(0.0, f32::max);
-    let rigid = has(Status::Petrified) || has(Status::Paralyzed);
-    let unconscious = has(Status::Unconscious) || has(Status::Dying) || has(Status::Stable);
-    let constrained = has(Status::Restrained) || has(Status::Grappled);
+    let rigid = has_status(Status::Petrified) || has_status(Status::Paralyzed);
+    let unconscious =
+        has_status(Status::Unconscious) || has_status(Status::Dying) || has_status(Status::Stable);
+    let constrained = has_status(Status::Restrained) || has_status(Status::Grappled);
     let idle = if rigid || unconscious {
         0.0
     } else if constrained {
         0.3
-    } else if has(Status::Exhaustion) || has(Status::Incapacitated) {
+    } else if has_status(Status::Exhaustion) || has_status(Status::Incapacitated) {
         0.55
     } else {
         1.0
@@ -398,20 +399,36 @@ pub fn pose_for(set: StatusSet) -> StatusPose {
     StatusPose {
         slump,
         idle,
-        breath: if has(Status::Raging) { 2.4 } else { 1.0 },
-        wobble: if has(Status::Stunned) { 1.0 } else { 0.0 },
-        shiver: if has(Status::Frightened) { 1.0 } else { 0.0 },
-        flinch: if has(Status::Frightened) { 0.16 } else { 0.0 },
-        dim: if unconscious || has(Status::Incapacitated) {
+        breath: if has_status(Status::Raging) { 2.4 } else { 1.0 },
+        wobble: if has_status(Status::Stunned) {
+            1.0
+        } else {
+            0.0
+        },
+        shiver: if has_status(Status::Frightened) {
+            1.0
+        } else {
+            0.0
+        },
+        flinch: if has_status(Status::Frightened) {
+            0.16
+        } else {
+            0.0
+        },
+        dim: if unconscious || has_status(Status::Incapacitated) {
             0.45
-        } else if has(Status::Exhaustion) {
+        } else if has_status(Status::Exhaustion) {
             0.15
         } else {
             0.0
         },
-        alpha: if has(Status::Invisible) { 0.3 } else { 1.0 },
-        heartbeat: has(Status::Dying) && !has(Status::Stable),
-        afterimage: has(Status::Dodging),
+        alpha: if has_status(Status::Invisible) {
+            0.3
+        } else {
+            1.0
+        },
+        heartbeat: has_status(Status::Dying) && !has_status(Status::Stable),
+        afterimage: has_status(Status::Dodging),
     }
 }
 
@@ -420,14 +437,14 @@ pub fn pose_for(set: StatusSet) -> StatusPose {
 /// reports the combatant knocked out. Conditions such as prone, poisoned or stunned are never
 /// guessed here; they wait for the server to carry them.
 pub fn derived_from_view(hit_points: u32, maximum: u32, knocked_out: bool) -> Vec<Status> {
-    let mut derived = Vec::new();
+    let mut derived_statuses = Vec::new();
     if maximum > 0 && hit_points > 0 && hit_points * 2 <= maximum {
-        derived.push(Status::Bloodied);
+        derived_statuses.push(Status::Bloodied);
     }
     if knocked_out {
-        derived.push(Status::Unconscious);
+        derived_statuses.push(Status::Unconscious);
     }
-    derived
+    derived_statuses
 }
 
 /// Statuses worth an icon: everything except the ones that read better as a tile marker.
