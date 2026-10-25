@@ -140,13 +140,13 @@ impl<JobId: Ord + Clone, SceneId: Clone + Eq, CueId: Clone + Eq>
         if !Arc::ptr_eq(&self.owner, &ticket.owner) {
             return false;
         }
-        let matches = self.active.get(&ticket.job).is_some_and(|active| {
+        let is_active_job = self.active.get(&ticket.job).is_some_and(|active| {
             active.generation == ticket.generation && active.operation == ticket.operation
         });
-        if matches {
+        if is_active_job {
             self.active.remove(&ticket.job);
         }
-        matches
+        is_active_job
     }
 
     /// Moves to a strictly newer canonical revision and invalidates all old work.

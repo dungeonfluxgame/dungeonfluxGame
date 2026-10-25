@@ -2562,50 +2562,52 @@ fn validate_continuity(
         content_candidates,
         content_admissions
     );
-    let entities = unique(state.entities.iter().map(|x| x.id))?;
-    let members = unique(state.members.iter().map(|x| x.member))?;
-    let facts = unique(state.facts.iter().map(|x| x.id))?;
-    let episodes = unique(state.memories.iter().map(|x| x.id))?;
+    let entities = unique(state.entities.iter().map(|entity| entity.id))?;
+    let members = unique(state.members.iter().map(|membership| membership.member))?;
+    let facts = unique(state.facts.iter().map(|fact| fact.id))?;
+    let episodes = unique(state.memories.iter().map(|memory| memory.id))?;
     unique(state.schedules.iter().map(|x| x.id))?;
-    let claims = unique(state.beliefs.iter().map(|x| x.id))?;
-    let summaries = unique(all.summaries.iter().map(|x| x.id))?;
-    unique(all.retrieval.iter().map(|x| x.id))?;
-    let moments = unique(all.moments.iter().map(|x| x.id))?;
-    let demands = unique(all.demands.iter().map(|x| x.id))?;
-    let hooks = unique(all.hooks.iter().map(|x| x.id))?;
-    let candidates = unique(all.content_candidates.iter().map(|x| x.id))?;
-    let bookends = unique(all.bookends.iter().map(|x| x.spec.id))?;
+    let claims = unique(state.beliefs.iter().map(|belief| belief.id))?;
+    let summaries = unique(all.summaries.iter().map(|summary| summary.id))?;
+    unique(all.retrieval.iter().map(|request| request.id))?;
+    let moments = unique(all.moments.iter().map(|moment| moment.id))?;
+    let demands = unique(all.demands.iter().map(|demand| demand.id))?;
+    let hooks = unique(all.hooks.iter().map(|hook| hook.id))?;
+    let candidates = unique(all.content_candidates.iter().map(|candidate| candidate.id))?;
+    let bookends = unique(all.bookends.iter().map(|bookend| bookend.spec.id))?;
     let entity = |id| require(entities.contains(&id), CheckpointError::InvalidReference);
     let member = |id| require(members.contains(&id), CheckpointError::InvalidReference);
     let fact = |id| require(facts.contains(&id), CheckpointError::InvalidReference);
     let claim = |id| require(claims.contains(&id), CheckpointError::InvalidReference);
     let episode = |id| require(episodes.contains(&id), CheckpointError::InvalidReference);
-    let content = |x: &ContentReference| {
+    let content = |reference: &ContentReference| {
         require(
-            x.package == pins.content.package && inventory.content.contains(x),
+            reference.package == pins.content.package && inventory.content.contains(reference),
             CheckpointError::InvalidReference,
         )
     };
-    let rule = |x: &RuleReference| {
+    let rule = |reference: &RuleReference| {
         require(
-            x.catalog == pins.rules.catalog && inventory.rules.contains(x),
+            reference.catalog == pins.rules.catalog && inventory.rules.contains(reference),
             CheckpointError::InvalidReference,
         )
     };
-    let asset = |x: &AssetReference| {
+    let asset = |reference: &AssetReference| {
         require(
-            x.byte_length > 0 && inventory.assets.contains(x),
+            reference.byte_length > 0 && inventory.assets.contains(reference),
             CheckpointError::InvalidReference,
         )
     };
-    let current_basis = |x: Basis| {
+    let current_basis = |candidate_basis: Basis| {
         require(
-            x.session == basis.session && x.run == basis.run && x.revision <= basis.revision,
+            candidate_basis.session == basis.session
+                && candidate_basis.run == basis.run
+                && candidate_basis.revision <= basis.revision,
             CheckpointError::StaleBasis,
         )
     };
-    let audience = |x: &AudienceScope, records: &mut usize| -> Result<(), CheckpointError> {
-        if let AudienceScope::Members(ids) = x {
+    let audience = |scope: &AudienceScope, records: &mut usize| -> Result<(), CheckpointError> {
+        if let AudienceScope::Members(ids) = scope {
             count_records(records, ids.len(), limits.maximum_records)?;
             unique(ids.iter().copied())?;
             for id in ids {

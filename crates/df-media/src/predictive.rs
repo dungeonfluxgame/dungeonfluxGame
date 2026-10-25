@@ -146,25 +146,26 @@ impl<RightsBasis: Eq> PredictivePlan<RightsBasis> {
         }
         validate_dependencies(&candidates)?;
 
-        let count = candidates.len();
-        let mut order: Vec<usize> = (0..count).collect();
-        order.sort_by(|left, right| compare_candidates(&candidates[*left], &candidates[*right]));
-        let mut selected_ids = Vec::new();
-        let mut branches = Vec::new();
+        let candidate_count = candidates.len();
+        let mut candidate_order: Vec<usize> = (0..candidate_count).collect();
+        candidate_order
+            .sort_by(|left, right| compare_candidates(&candidates[*left], &candidates[*right]));
+        let mut selected_demand_ids = Vec::new();
+        let mut selected_branches = Vec::new();
         let mut selected_order = Vec::new();
         let mut selected_output_bytes = 0u64;
         while selected_order.len()
             < usize::try_from(policy.maximum_candidates).unwrap_or(usize::MAX)
         {
-            let next = order.iter().copied().find(|index| {
+            let next = candidate_order.iter().copied().find(|index| {
                 let candidate = &candidates[*index];
-                !selected_ids.contains(&candidate.demand.id)
+                !selected_demand_ids.contains(&candidate.demand.id)
                     && candidate
                         .prerequisites
                         .iter()
-                        .all(|dependency| selected_ids.contains(dependency))
-                    && (branches.contains(&candidate.branch)
-                        || branches.len() < policy.maximum_branches as usize)
+                        .all(|dependency| selected_demand_ids.contains(dependency))
+                    && (selected_branches.contains(&candidate.branch)
+                        || selected_branches.len() < policy.maximum_branches as usize)
                     && selected_output_bytes
                         .checked_add(candidate.demand.maximum_bytes)
                         .is_some_and(|bytes| bytes <= policy.maximum_bytes)
@@ -172,10 +173,10 @@ impl<RightsBasis: Eq> PredictivePlan<RightsBasis> {
             let Some(index) = next else { break };
             let candidate = &candidates[index];
             selected_output_bytes += candidate.demand.maximum_bytes;
-            if !branches.contains(&candidate.branch) {
-                branches.push(candidate.branch);
+            if !selected_branches.contains(&candidate.branch) {
+                selected_branches.push(candidate.branch);
             }
-            selected_ids.push(candidate.demand.id);
+            selected_demand_ids.push(candidate.demand.id);
             selected_order.push(index);
         }
 
@@ -213,7 +214,7 @@ impl<RightsBasis: Eq> PredictivePlan<RightsBasis> {
             scheduler,
             admitted_now: current.now,
             selected_output_bytes,
-            deferred_items: count - selected_ids.len(),
+            deferred_items: candidate_count - selected_demand_ids.len(),
         })
     }
 
@@ -326,18 +327,21 @@ fn validate_dependencies<RightsBasis>(
         }
     }
     for candidate in candidates {
-        let mut pending = candidate.prerequisites.clone();
-        let mut visited = Vec::new();
-        while let Some(id) = pending.pop() {
-            if id == candidate.demand.id {
+        let mut pending_dependencies = candidate.prerequisites.clone();
+        let mut visited_dependencies = Vec::new();
+        while let Some(dependency_id) = pending_dependencies.pop() {
+            if dependency_id == candidate.demand.id {
                 return Err(PredictiveError::DependencyCycle);
             }
-            if visited.contains(&id) {
+            if visited_dependencies.contains(&dependency_id) {
                 continue;
             }
-            visited.push(id);
-            if let Some(dependency) = candidates.iter().find(|item| item.demand.id == id) {
-                pending.extend_from_slice(&dependency.prerequisites);
+            visited_dependencies.push(dependency_id);
+            if let Some(dependency) = candidates
+                .iter()
+                .find(|item| item.demand.id == dependency_id)
+            {
+                pending_dependencies.extend_from_slice(&dependency.prerequisites);
             }
         }
     }
