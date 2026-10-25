@@ -14,6 +14,9 @@ df-auth = { path = "../df-auth" }
 df-observe = { path = "../df-observe" }
 df-customer = { path = "../df-customer" }
 df-assets = { path = "../df-assets" }
+async-trait = "=0.1.92"
+df-support = { path = "../df-support" }
+serde_json = "=1.0.151"
 tokio-postgres = { version = "=0.7.15", default-features = true }
 rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pki-types = { version = "=1.15.1", features = ["std"] }

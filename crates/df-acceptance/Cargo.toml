@@ -20,4 +20,5 @@ df-campaign = { path = "../df-campaign", features = ["routes", "test-fakes"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 df-assets = { path = "../df-assets" }
+df-persistence = { path = "../df-persistence" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }

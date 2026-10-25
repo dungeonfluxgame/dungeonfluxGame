@@ -30,9 +30,13 @@ pub mod postgres_tls;
 #[cfg(not(target_arch = "wasm32"))]
 mod revision_codec;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod save_store;
+#[cfg(not(target_arch = "wasm32"))]
 mod sql;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod story_memory;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod support_store;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use checkpoint_codec::CodecLimits as NativeCodecLimits;
@@ -52,6 +56,8 @@ pub use native_scope::{NativeScope, NativeUncertaintyKey};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod media_catalog_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod save_store_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod owned_pg_membership_fixture;

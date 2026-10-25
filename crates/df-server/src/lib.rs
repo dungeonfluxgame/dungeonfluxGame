@@ -21,6 +21,7 @@ pub mod exporter;
 pub mod health;
 pub mod metrics;
 pub mod runtime_recovery;
+pub mod serving;
 #[allow(
     dead_code,
     reason = "ownership contract waiting for the production composition"
@@ -39,5 +40,7 @@ mod exporter_tests;
 mod metrics_tests;
 #[cfg(test)]
 mod runtime_recovery_tests;
+#[cfg(test)]
+mod serving_tests;
 #[cfg(test)]
 mod shutdown_policy_tests;

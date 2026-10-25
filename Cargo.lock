@@ -376,6 +376,7 @@ dependencies = [
  "df-commerce",
  "df-model",
  "df-observe",
+ "df-persistence",
  "df-provider-api",
  "df-session",
  "df-types",
@@ -719,6 +720,7 @@ dependencies = [
 name = "df-persistence"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "df-assets",
  "df-auth",
  "df-customer",
@@ -726,10 +728,12 @@ dependencies = [
  "df-observe",
  "df-rules",
  "df-session",
+ "df-support",
  "df-types",
  "rcgen",
  "rustls",
  "rustls-pki-types",
+ "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-postgres",
@@ -881,6 +885,7 @@ dependencies = [
 name = "df-server"
 version = "0.1.0"
 dependencies = [
+ "df-finance",
  "df-observe",
  "df-persistence",
  "df-session",
