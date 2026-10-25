@@ -6,7 +6,20 @@ readonly ssh_key="${HOME}/.ssh/id_ed25519_dungeonfluxdnd"
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly repository_dir="$(cd -- "$script_dir/../.." && pwd)"
 readonly temporary_dir="$(mktemp -d)"
-trap 'rm -rf "$temporary_dir"' EXIT
+remote_upload_dir=
+cleanup() {
+  if [[ -n "$remote_upload_dir" ]]; then
+    ssh -i "$ssh_key" "$host" bash -s -- "$remote_upload_dir" >/dev/null 2>&1 <<'CLEANUP' || true
+set -Eeuo pipefail
+case $1 in
+  /tmp/df-demo-upload.*) rm -rf -- "$1" ;;
+  *) exit 1 ;;
+esac
+CLEANUP
+  fi
+  rm -rf "$temporary_dir"
+}
+trap cleanup EXIT
 
 fail() { printf 'deploy: %s\n' "$1" >&2; exit 1; }
 if [[ $# -ne 1 ]]; then
@@ -71,32 +84,89 @@ HTML
 fi
 
 run_token="$(date -u +%Y%m%d%H%M%S)-$$"
+remote_upload_dir="$(ssh -i "$ssh_key" "$host" bash -s <<'PREPARE'
+set -Eeuo pipefail
+umask 077
+upload_dir="$(mktemp -d /tmp/df-demo-upload.XXXXXX)"
+chmod 0700 "$upload_dir"
+[[ "$(stat -c '%u:%a' "$upload_dir")" == '0:700' ]]
+printf '%s\n' "$upload_dir"
+PREPARE
+)"
+[[ "$remote_upload_dir" =~ ^/tmp/df-demo-upload\.[A-Za-z0-9]+$ ]] || fail 'Host returned an invalid private upload directory.'
 if [[ "$mode" == deploy ]]; then
-  scp -i "$ssh_key" "$script_dir/compose.yml" "$host:/tmp/df-demo-$run_token-compose.yml"
-  scp -i "$ssh_key" "$script_dir/../scripts/render-site.sh" "$host:/tmp/df-demo-$run_token-render-site.sh"
-  scp -i "$ssh_key" "$temporary_dir/site.tar.gz" "$host:/tmp/df-demo-$run_token-site.tar.gz"
-  scp -i "$ssh_key" "$temporary_dir/app.tar.gz" "$host:/tmp/df-demo-$run_token-app.tar.gz"
+  scp -i "$ssh_key" "$script_dir/compose.yml" "$host:$remote_upload_dir/compose.yml"
+  scp -i "$ssh_key" "$script_dir/../scripts/render-site.sh" "$host:$remote_upload_dir/render-site.sh"
+  scp -i "$ssh_key" "$temporary_dir/site.tar.gz" "$host:$remote_upload_dir/site.tar.gz"
+  scp -i "$ssh_key" "$temporary_dir/app.tar.gz" "$host:$remote_upload_dir/app.tar.gz"
+  compose_sha256="$(sha256sum -- "$script_dir/compose.yml" | cut -d ' ' -f 1)"
+  renderer_sha256="$(sha256sum -- "$script_dir/../scripts/render-site.sh" | cut -d ' ' -f 1)"
+  site_sha256="$(sha256sum -- "$temporary_dir/site.tar.gz" | cut -d ' ' -f 1)"
+  app_sha256="$(sha256sum -- "$temporary_dir/app.tar.gz" | cut -d ' ' -f 1)"
 fi
 
 printf 'Deploying to %s.\n' "$host"
-ssh -i "$ssh_key" "$host" bash -s -- "$mode" "$digest" "$run_token" <<'REMOTE'
+ssh -i "$ssh_key" "$host" bash -s -- "$mode" "$digest" "$run_token" "$remote_upload_dir" "${compose_sha256:-}" "${renderer_sha256:-}" "${site_sha256:-}" "${app_sha256:-}" <<'REMOTE'
 set -Eeuo pipefail
 mode=$1
 requested_digest=$2
 run_token=$3
+incoming_dir=$4
+compose_sha256=$5
+renderer_sha256=$6
+site_sha256=$7
+app_sha256=$8
 image='ghcr.io/monstercameron/dungeonflux-demo'
 directory='/opt/dungeonflux/demo'
 current_file="$directory/current"
 previous_file="$directory/previous"
 compose_file="$directory/compose.yml"
 staging="/tmp/df-demo-deploy-$run_token"
-incoming_compose="/tmp/df-demo-$run_token-compose.yml"
-incoming_site="/tmp/df-demo-$run_token-site.tar.gz"
-incoming_app="/tmp/df-demo-$run_token-app.tar.gz"
-incoming_renderer="/tmp/df-demo-$run_token-render-site.sh"
+incoming_compose="$incoming_dir/compose.yml"
+incoming_site="$incoming_dir/site.tar.gz"
+incoming_app="$incoming_dir/app.tar.gz"
+incoming_renderer="$incoming_dir/render-site.sh"
+
+verify_upload_directory() {
+  local owner_mode
+  [[ "$incoming_dir" =~ ^/tmp/df-demo-upload\.[A-Za-z0-9]+$ && -d "$incoming_dir" && ! -L "$incoming_dir" ]] || {
+    echo 'Private upload directory is missing or invalid.' >&2
+    exit 1
+  }
+  owner_mode=$(stat -c '%u:%a' -- "$incoming_dir")
+  [[ "$owner_mode" == '0:700' ]] || { echo 'Private upload directory ownership or mode is invalid.' >&2; exit 1; }
+}
+
+verify_upload_file() {
+  local path=$1
+  local expected_sha256=$2
+  local owner mode actual_sha256
+  [[ -f "$path" && ! -L "$path" && "$expected_sha256" =~ ^[a-f0-9]{64}$ ]] || {
+    echo 'Uploaded file is missing or invalid.' >&2
+    exit 1
+  }
+  read -r owner mode < <(stat -c '%u %a' -- "$path")
+  [[ "$owner" == 0 ]] || { echo 'Uploaded file is not owned by root.' >&2; exit 1; }
+  (( (8#$mode & 0022) == 0 )) || { echo 'Uploaded file is group or other writable.' >&2; exit 1; }
+  actual_sha256=$(sha256sum -- "$path")
+  actual_sha256=${actual_sha256%% *}
+  [[ "$actual_sha256" == "$expected_sha256" ]] || { echo 'Uploaded file checksum mismatch.' >&2; exit 1; }
+}
+
+verify_upload_directory
+cleanup_upload_dir() {
+  rm -rf -- "$incoming_dir"
+}
+trap cleanup_upload_dir EXIT
 
 [[ -f /etc/dungeonflux/demo.env ]] || { echo 'Missing owner-managed /etc/dungeonflux/demo.env.' >&2; exit 1; }
 [[ -r /etc/dungeonflux/business.env ]] || { echo 'Missing owner-managed /etc/dungeonflux/business.env.' >&2; exit 1; }
+if [[ "$mode" == deploy ]]; then
+  verify_upload_file "$incoming_compose" "$compose_sha256"
+  verify_upload_file "$incoming_renderer" "$renderer_sha256"
+  verify_upload_file "$incoming_site" "$site_sha256"
+  verify_upload_file "$incoming_app" "$app_sha256"
+fi
 install -d -m 0755 "$directory" /opt/dungeonflux
 mkdir -m 0700 "$staging"
 if [[ "$mode" == rollback ]]; then
@@ -149,7 +219,6 @@ rollback_on_error() {
     DEMO_DIGEST="$target_digest" docker compose --project-directory "$directory" -f "$staging/compose.next.yml" down
   fi
   if [[ -n "$old_previous" ]]; then printf '%s\n' "$old_previous" > "$previous_file"; else rm -f "$previous_file"; fi
-  rm -f "$incoming_compose" "$incoming_renderer" "$incoming_site" "$incoming_app"
   rm -rf "$staging"
   exit "$result"
 }
@@ -182,7 +251,6 @@ fi
 nginx -t
 systemctl reload nginx
 if [[ -f "$staging/compose.old.yml" ]]; then install -m 0644 "$staging/compose.old.yml" "$directory/compose.previous.yml"; else rm -f "$directory/compose.previous.yml"; fi
-rm -f "$incoming_compose" "$incoming_renderer" "$incoming_site" "$incoming_app"
 rm -rf "$staging"
 trap - ERR
 printf 'Deployment complete: %s@%s\n' "$image" "$target_digest"
