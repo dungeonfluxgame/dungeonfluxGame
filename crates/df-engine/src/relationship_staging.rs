@@ -241,7 +241,7 @@ fn check_axis_capacity<R>(
         change_bytes = change_bytes
             .checked_add(change.replacement.value.retained_heap_bytes())
             .ok_or(RelationshipAxisStagingError::Capacity)?;
-        let source = match &change.replacement.provenance {
+        let rule_reference = match &change.replacement.provenance {
             RelationshipAxisProvenance::AuthoredBaseline { source } => source,
             RelationshipAxisProvenance::AcceptedFact {
                 source,
@@ -255,8 +255,8 @@ fn check_axis_capacity<R>(
             }
         };
         change_bytes = change_bytes
-            .checked_add(source.package.retained_heap_bytes())
-            .and_then(|total| total.checked_add(source.entry.retained_heap_bytes()))
+            .checked_add(rule_reference.package.retained_heap_bytes())
+            .and_then(|total| total.checked_add(rule_reference.entry.retained_heap_bytes()))
             .ok_or(RelationshipAxisStagingError::Capacity)?;
     }
     let pass_bytes = limits

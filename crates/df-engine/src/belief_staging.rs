@@ -219,8 +219,8 @@ impl<Owner: BeliefSourceOwner> RulesCommandHandler for BeliefStagingHandler<'_, 
         let validated = validate_belief_update(self.owner, update.clone())
             .map_err(BeliefStagingError::Belief)?;
 
-        let mut next = self.current_basis;
-        next.revision = next
+        let mut next_basis = self.current_basis;
+        next_basis.revision = next_basis
             .revision
             .next_sequence()
             .map_err(|_| BeliefStagingError::RevisionExhausted)?;
@@ -236,7 +236,7 @@ impl<Owner: BeliefSourceOwner> RulesCommandHandler for BeliefStagingHandler<'_, 
             .map_err(|_| BeliefStagingError::Capacity)?;
         state.decisions.push(AcceptedDecision {
             operation: command.operation,
-            revision: next.revision,
+            revision: next_basis.revision,
             facts: vec![],
             draws: vec![],
             effects: vec![],
@@ -246,7 +246,7 @@ impl<Owner: BeliefSourceOwner> RulesCommandHandler for BeliefStagingHandler<'_, 
 
         Checkpoint::new(
             current.schema(),
-            next,
+            next_basis,
             current.pins().clone(),
             state,
             ReferenceInventory {
@@ -341,14 +341,16 @@ impl<Owner: BeliefSourceOwner> BeliefStagingHandler<'_, Owner> {
         let current_bytes = current
             .retained_bytes()
             .ok_or(BeliefStagingError::Capacity)?;
-        let total = limits
+        let total_pass_bytes = limits
             .maximum_checkpoint_bytes
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(current_bytes))
             .and_then(|bytes| bytes.checked_add(request_bytes))
             .and_then(|bytes| bytes.checked_add(input.retained_bytes()?))
             .ok_or(BeliefStagingError::Capacity)?;
-        if current_bytes > limits.maximum_checkpoint_bytes || total > limits.maximum_pass_bytes {
+        if current_bytes > limits.maximum_checkpoint_bytes
+            || total_pass_bytes > limits.maximum_pass_bytes
+        {
             return Err(BeliefStagingError::Capacity);
         }
         Ok(())

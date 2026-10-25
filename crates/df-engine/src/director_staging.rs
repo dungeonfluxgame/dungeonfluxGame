@@ -191,18 +191,28 @@ pub fn compose_director_candidates<'a>(
     if !world.events.is_empty() || world.remaining_due() != 0 {
         return Ok(DirectorStaging::WorldPending(Box::new(world)));
     }
-    let mut selected = current.clone();
+    let mut selected_checkpoint = current.clone();
     if let Some(interaction) = candidates.interaction {
-        validate_proposal(&interaction, &selected, DirectorStage::Interaction, limits)?;
-        selected = interaction;
+        validate_proposal(
+            &interaction,
+            &selected_checkpoint,
+            DirectorStage::Interaction,
+            limits,
+        )?;
+        selected_checkpoint = interaction;
     }
     if let Some(narrative) = candidates.narrative {
-        validate_proposal(&narrative, &selected, DirectorStage::Narrative, limits)?;
-        selected = narrative;
+        validate_proposal(
+            &narrative,
+            &selected_checkpoint,
+            DirectorStage::Narrative,
+            limits,
+        )?;
+        selected_checkpoint = narrative;
     }
     Ok(DirectorStaging::Staged(Box::new(StagedDirectors {
         world,
-        candidate: selected,
+        candidate: selected_checkpoint,
         narrative_policy: None,
         narrative_evidence: vec![],
         beat_selection: None,
@@ -751,7 +761,7 @@ fn compose_world_candidates<'a>(
     }
     state.logical_time = advanced.due.proposed_time;
     state.continuity.catch_up = Some(advanced.due.cursor.clone());
-    let mut selected = Checkpoint::new(
+    let mut selected_checkpoint = Checkpoint::new(
         current.schema(),
         current.basis(),
         current.pins().clone(),
@@ -760,14 +770,19 @@ fn compose_world_candidates<'a>(
         limits.checkpoint,
     )
     .map_err(DirectorError::InvalidCandidate)?;
-    checkpoint_bytes(&selected, bounds)?;
+    checkpoint_bytes(&selected_checkpoint, bounds)?;
     if let Some(narrative) = candidates.narrative {
-        validate_proposal(&narrative, &selected, DirectorStage::Narrative, bounds)?;
-        selected = narrative;
+        validate_proposal(
+            &narrative,
+            &selected_checkpoint,
+            DirectorStage::Narrative,
+            bounds,
+        )?;
+        selected_checkpoint = narrative;
     }
     Ok(DirectorStaging::Staged(Box::new(StagedDirectors {
         world: advanced.due,
-        candidate: selected,
+        candidate: selected_checkpoint,
         narrative_policy: None,
         narrative_evidence: vec![],
         beat_selection: None,

@@ -187,8 +187,8 @@ impl<Owner: ObjectiveSourceOwner> RulesCommandHandler for ObjectiveTransitionHan
         self.owner
             .admit_application(current, registration, command, transitions)
             .map_err(ObjectiveStagingError::Source)?;
-        let mut next = self.current_basis;
-        next.revision = next
+        let mut next_basis = self.current_basis;
+        next_basis.revision = next_basis
             .revision
             .next_sequence()
             .map_err(|_| ObjectiveStagingError::RevisionExhausted)?;
@@ -201,7 +201,7 @@ impl<Owner: ObjectiveSourceOwner> RulesCommandHandler for ObjectiveTransitionHan
         // Do not duplicate their facts/draws/effects or classify new mechanical outcomes.
         state.decisions.push(AcceptedDecision {
             operation: command.operation,
-            revision: next.revision,
+            revision: next_basis.revision,
             facts: vec![],
             draws: vec![],
             effects: vec![],
@@ -210,7 +210,7 @@ impl<Owner: ObjectiveSourceOwner> RulesCommandHandler for ObjectiveTransitionHan
         });
         Checkpoint::new(
             current.schema(),
-            next,
+            next_basis,
             current.pins().clone(),
             state,
             self.inventory(),
@@ -282,7 +282,7 @@ impl<Owner: ObjectiveSourceOwner> ObjectiveTransitionHandler<'_, Owner> {
             .filter(|bytes| *bytes <= limits.maximum_checkpoint_bytes)
             .ok_or(ObjectiveStagingError::Capacity)?;
         // Reserve proposer traversal/output and both final constructor working copies up front.
-        let total = limits
+        let total_pass_bytes = limits
             .maximum_checkpoint_bytes
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(current_bytes))
@@ -291,7 +291,7 @@ impl<Owner: ObjectiveSourceOwner> ObjectiveTransitionHandler<'_, Owner> {
             .and_then(|bytes| bytes.checked_add(registration_bytes))
             .and_then(|bytes| bytes.checked_add(input.retained_bytes()?))
             .ok_or(ObjectiveStagingError::Capacity)?;
-        if total > limits.maximum_pass_bytes {
+        if total_pass_bytes > limits.maximum_pass_bytes {
             return Err(ObjectiveStagingError::Capacity);
         }
         Ok(())

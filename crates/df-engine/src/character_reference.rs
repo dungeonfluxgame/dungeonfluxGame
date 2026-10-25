@@ -622,7 +622,7 @@ pub fn character_reference_for_scene(
     {
         return Err(ReferenceSheetError::IdentityChanged);
     }
-    let mut selected = None;
+    let mut matching_reference = None;
     for job in &current.state().continuity.asset_jobs {
         let Some(demand) = current
             .state()
@@ -666,12 +666,12 @@ pub fn character_reference_for_scene(
         if !canonical.appearances.contains(reference) {
             return Err(ReferenceSheetError::OutputUnavailable);
         }
-        if selected.is_some() {
+        if matching_reference.is_some() {
             return Err(ReferenceSheetError::PlanBinding);
         }
-        selected = Some(reference);
+        matching_reference = Some(reference);
     }
-    let reference = selected.ok_or(ReferenceSheetError::OutputUnavailable)?;
+    let reference = matching_reference.ok_or(ReferenceSheetError::OutputUnavailable)?;
     let mut key = scene_key.clone();
     if !key.references.contains(reference) {
         key.references.push(reference.clone());
@@ -899,7 +899,7 @@ fn preflight(
     {
         return Err(ReferenceSheetError::Capacity);
     }
-    let mut total = extra.checked_mul(3).ok_or(ReferenceSheetError::Capacity)?;
+    let mut owned_bytes = extra.checked_mul(3).ok_or(ReferenceSheetError::Capacity)?;
     for checkpoint in checkpoints {
         let state = checkpoint.state();
         let mut records = 0usize;
@@ -932,11 +932,11 @@ fn preflight(
         if bytes > limits.checkpoint.maximum_retained_bytes {
             return Err(ReferenceSheetError::Capacity);
         }
-        total = total
+        owned_bytes = owned_bytes
             .checked_add(bytes.checked_mul(3).ok_or(ReferenceSheetError::Capacity)?)
             .ok_or(ReferenceSheetError::Capacity)?;
     }
-    if total > limits.maximum_owned_bytes {
+    if owned_bytes > limits.maximum_owned_bytes {
         return Err(ReferenceSheetError::Capacity);
     }
     Ok(())

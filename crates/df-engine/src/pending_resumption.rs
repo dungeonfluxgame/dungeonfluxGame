@@ -79,17 +79,18 @@ pub fn stage_pending_response<H: RulesCommandHandler>(
     if fence.cancel_before_admission {
         return Err(ResumeError::CancelledBeforeAdmission);
     }
-    let source = current_pending_source(input.command, current).map_err(ResumeError::Response)?;
+    let pending_source =
+        current_pending_source(input.command, current).map_err(ResumeError::Response)?;
     let handler = registry
-        .select(context.admitted_pins, selector, source)
+        .select(context.admitted_pins, selector, pending_source)
         .map_err(|error| {
             ResumeError::Command(CommandRejection::Invocation(
                 df_rules::InvocationError::Dispatch(error),
             ))
         })?;
-    if handler.source() != source {
+    if handler.source() != pending_source {
         return Err(ResumeError::HandlerSourceMismatch);
     }
-    decide_registered_command(input, current, context, registry, selector, source)
+    decide_registered_command(input, current, context, registry, selector, pending_source)
         .map_err(ResumeError::Command)
 }

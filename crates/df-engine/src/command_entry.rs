@@ -103,11 +103,18 @@ pub fn decide_registered_command<H: RulesCommandHandler>(
     selector: &RevisionLabel,
     source: &RuleReference,
 ) -> Result<Checkpoint, CommandRejection<H::Rejection>> {
-    let pins = context.admitted_pins;
-    let maximum_bytes = context.limits.maximum_staged_bytes;
+    let admitted_pins = context.admitted_pins;
+    let maximum_staged_bytes = context.limits.maximum_staged_bytes;
     admit_command(input.command, checkpoint, context)?;
     registry
-        .stage(pins, selector, source, input, checkpoint, maximum_bytes)
+        .stage(
+            admitted_pins,
+            selector,
+            source,
+            input,
+            checkpoint,
+            maximum_staged_bytes,
+        )
         .map_err(CommandRejection::Invocation)
 }
 
