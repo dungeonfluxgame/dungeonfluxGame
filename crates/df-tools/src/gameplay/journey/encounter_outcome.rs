@@ -11,7 +11,7 @@ fn invalid<T>() -> Result<T, RepositoryError> {
     Err(RepositoryError::InvalidCandidate)
 }
 
-fn down(state: &GameState, actor: EntityId) -> Result<bool, RepositoryError> {
+fn is_down(state: &GameState, actor: EntityId) -> Result<bool, RepositoryError> {
     let hit_points = value(state, actor, "hit-points")?;
     let unconscious = value(state, actor, "unconscious")?;
     let prone = value(state, actor, "prone")?;
@@ -117,9 +117,9 @@ pub(super) fn validate(
     }
     let mut party_down = true;
     for hero in party {
-        party_down &= down(state, *hero)?;
+        party_down &= is_down(state, *hero)?;
     }
-    let monster_down = down(state, *monster)?;
+    let monster_down = is_down(state, *monster)?;
     let objective = model::content("defend-courier")?;
     if phase == rpc::JourneyPhase::Combat {
         let Some(active) = encounter.active_turn else {
@@ -129,7 +129,7 @@ pub(super) fn validate(
             || monster_down
             || party_down
             || !encounter.turn_order.contains(&active)
-            || down(state, active)?
+            || is_down(state, active)?
         {
             return invalid();
         }

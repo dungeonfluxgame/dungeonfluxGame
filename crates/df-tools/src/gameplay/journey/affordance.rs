@@ -61,7 +61,7 @@ pub(in crate::gameplay) fn current(
         rule().map_err(NativeTargetError::State)?,
     ];
     let contents = model::contents().map_err(NativeTargetError::State)?;
-    let mut result = Vec::new();
+    let mut offers = Vec::new();
     for (kind, label) in authored_offered(checkpoint, member).map_err(NativeTargetError::State)? {
         // A resolution is the script's own pure step, offered by the script rather than a handler.
         if kind == rpc::GameplayActionKind::ResolveErrand {
@@ -120,9 +120,9 @@ pub(in crate::gameplay) fn current(
             },
         )
         .map_err(NativeTargetError::Lookup)?;
-        result.push(CurrentOffer { kind, label, set });
+        offers.push(CurrentOffer { kind, label, set });
     }
-    Ok(result)
+    Ok(offers)
 }
 
 pub(in crate::gameplay) fn offered(
@@ -134,7 +134,7 @@ pub(in crate::gameplay) fn offered(
         rule().map_err(NativeTargetError::State)?,
     ];
     let contents = model::contents().map_err(NativeTargetError::State)?;
-    let mut result = Vec::new();
+    let mut offered_actions = Vec::new();
     for offer in current(checkpoint, member)? {
         match resolve_target(
             checkpoint,
@@ -145,7 +145,7 @@ pub(in crate::gameplay) fn offered(
         )
         .map_err(NativeTargetError::Resolution)?
         {
-            TargetResolution::Selected(_) => result.push((offer.kind, offer.label)),
+            TargetResolution::Selected(_) => offered_actions.push((offer.kind, offer.label)),
             TargetResolution::NeedsClarification(targets) => {
                 return Err(NativeTargetError::NeedsClarification(targets));
             }
@@ -155,7 +155,7 @@ pub(in crate::gameplay) fn offered(
             TargetResolution::NeedsRuling => return Err(NativeTargetError::NeedsRuling),
         }
     }
-    Ok(result)
+    Ok(offered_actions)
 }
 
 /// Revalidation runs before any staging/draw and feeds the unchanged registered mechanics.

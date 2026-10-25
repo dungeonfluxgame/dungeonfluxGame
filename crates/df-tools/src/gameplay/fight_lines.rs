@@ -214,16 +214,16 @@ pub(crate) fn select(current: &CurrentAttack, so_far: &FightSoFar) -> Vec<rpc::F
         return Vec::new();
     };
     let fact = &current.fact;
-    let die = current.die.to_string();
+    let die_face = current.die.to_string();
     let total = current.total.to_string();
-    let prior = so_far.prior.len().to_string();
+    let prior_attack_count = so_far.prior.len().to_string();
     let seed_base = [
         fact.attacker.as_str(),
         current.attacker_pool,
         fact.target.as_str(),
-        die.as_str(),
+        die_face.as_str(),
         total.as_str(),
-        prior.as_str(),
+        prior_attack_count.as_str(),
     ];
     let seed = |tag: &str| {
         let mut parts = seed_base.clone().to_vec();
