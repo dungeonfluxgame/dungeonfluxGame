@@ -11,14 +11,14 @@ use df_world::{
 };
 use std::time::Duration;
 
-fn label(value: &str) -> RevisionLabel {
-    RevisionLabel::new(Some(value)).unwrap()
+fn label(label_text: &str) -> RevisionLabel {
+    RevisionLabel::new(Some(label_text)).unwrap()
 }
-fn entity(value: u8) -> EntityId {
-    EntityId::from_bytes(&[value; 16]).unwrap()
+fn entity(repeated_byte: u8) -> EntityId {
+    EntityId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
-fn member(value: u8) -> MemberId {
-    MemberId::from_bytes(&[value; 16]).unwrap()
+fn member(repeated_byte: u8) -> MemberId {
+    MemberId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 fn revision(epoch: u64, sequence: u64) -> SessionRevision {
     SessionRevision::new(RecoveryEpoch::new(epoch).unwrap(), sequence)
@@ -248,10 +248,10 @@ fn try_checkpoint_at(
         checkpoint_limits(),
     )
 }
-fn id(value: u8) -> RecordId {
-    RecordId::from_bytes(&[value; 16]).unwrap()
+fn record_id(repeated_byte: u8) -> RecordId {
+    RecordId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
-fn time(ticks: u64) -> LogicalTime {
+fn logical_time(ticks: u64) -> LogicalTime {
     LogicalTime {
         ticks,
         ticks_per_second: 10,
@@ -372,21 +372,21 @@ fn unresolved_world_events_preserve_cursor_and_stop_policy_staging() {
     let mut supplied = state();
     supplied.schedules = vec![
         ScheduledEvent {
-            id: id(9),
+            id: record_id(9),
             entity: entity(4),
-            due: time(9),
+            due: logical_time(9),
             definition: content(),
         },
         ScheduledEvent {
-            id: id(7),
+            id: record_id(7),
             entity: entity(4),
-            due: time(9),
+            due: logical_time(9),
             definition: content(),
         },
         ScheduledEvent {
-            id: id(8),
+            id: record_id(8),
             entity: entity(4),
-            due: time(7),
+            due: logical_time(7),
             definition: content(),
         },
     ];
@@ -409,9 +409,9 @@ fn unresolved_world_events_preserve_cursor_and_stop_policy_staging() {
             .iter()
             .map(|event| event.id)
             .collect::<Vec<_>>(),
-        vec![id(8), id(7), id(9)]
+        vec![record_id(8), record_id(7), record_id(9)]
     );
-    assert_eq!(world.cursor.last_processed, Some(id(9)));
+    assert_eq!(world.cursor.last_processed, Some(record_id(9)));
     assert_eq!(current.state().continuity.catch_up, None);
     assert_eq!(current, unchanged);
 }
@@ -420,9 +420,9 @@ fn unresolved_world_events_preserve_cursor_and_stop_policy_staging() {
 fn paused_due_backlog_remains_pending_even_without_selected_events() {
     let mut supplied = state();
     supplied.schedules.push(ScheduledEvent {
-        id: id(8),
+        id: record_id(8),
         entity: entity(4),
-        due: time(7),
+        due: logical_time(7),
         definition: content(),
     });
     let current = checkpoint(supplied);
@@ -584,7 +584,7 @@ fn world_deadline_refusal_exposes_no_policy_candidate() {
     let current = checkpoint(state());
     let request = DueSelectionRequest {
         expected_basis: current.basis(),
-        target_time: time(9),
+        target_time: logical_time(9),
         paused: false,
         deadline_remaining: Duration::ZERO,
         policy: &content(),
@@ -611,7 +611,7 @@ fn stale_input_and_content_bindings_are_refused_before_director_selection() {
     expected.revision = revision(2, 7);
     let request = DueSelectionRequest {
         expected_basis: expected,
-        target_time: time(9),
+        target_time: logical_time(9),
         paused: false,
         deadline_remaining: Duration::from_secs(1),
         policy: &content(),
@@ -649,10 +649,10 @@ fn stale_input_and_content_bindings_are_refused_before_director_selection() {
 fn stale_world_cursor_does_not_publish_a_policy_snapshot() {
     let mut supplied = state();
     supplied.continuity.catch_up = Some(CatchUpCursor {
-        last_processed: Some(id(7)),
+        last_processed: Some(record_id(7)),
         pending_events: vec![],
         policy: content(),
-        time: time(9),
+        time: logical_time(9),
     });
     let current = checkpoint(supplied);
     let unchanged = current.clone();
@@ -751,15 +751,15 @@ fn schedule_state() -> GameState {
     }
     supplied.schedules = vec![
         ScheduledEvent {
-            id: id(8),
+            id: record_id(8),
             entity: entity(4),
-            due: time(10),
+            due: logical_time(10),
             definition: content(),
         },
         ScheduledEvent {
-            id: id(9),
+            id: record_id(9),
             entity: entity(4),
-            due: time(11),
+            due: logical_time(11),
             definition: content(),
         },
     ];
@@ -793,7 +793,7 @@ fn schedule_compose<'a>(
         ScheduleDirectorRequest {
             accepted_time: Some(DueSelectionRequest {
                 expected_basis: current.basis(),
-                target_time: time(12),
+                target_time: logical_time(12),
                 paused: false,
                 deadline_remaining: Duration::from_secs(1),
                 policy: &content(),
@@ -819,14 +819,14 @@ fn admitted_schedule_chain_merges_sibling_policy_and_stages_real_cursor_atomical
     let definition = content();
     let destinations = [
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition: &definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition: &definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -848,7 +848,7 @@ fn admitted_schedule_chain_merges_sibling_policy_and_stages_real_cursor_atomical
     let DirectorStaging::Staged(staged) = outcome else {
         panic!("admitted mapped schedule did not stage")
     };
-    assert_eq!(staged.candidate().state().logical_time, time(12));
+    assert_eq!(staged.candidate().state().logical_time, logical_time(12));
     assert_eq!(
         staged
             .candidate()
@@ -863,7 +863,7 @@ fn admitted_schedule_chain_merges_sibling_policy_and_stages_real_cursor_atomical
         staged.candidate().state().continuity.catch_up.as_ref(),
         Some(&staged.world().cursor)
     );
-    assert_eq!(staged.world().cursor.last_processed, Some(id(9)));
+    assert_eq!(staged.world().cursor.last_processed, Some(record_id(9)));
     assert_eq!(
         staged.candidate().state().relationships,
         interaction_state().relationships
@@ -879,7 +879,7 @@ fn unmapped_selected_schedule_cannot_advance_time_location_or_cursor() {
     let unchanged = current.clone();
     let definition = content();
     let partial = [AdmittedScheduleDestination {
-        event: id(8),
+        event: record_id(8),
         definition: &definition,
         entity: entity(4),
         expected_location: None,
@@ -907,7 +907,7 @@ fn complete_bounded_schedule_prefix_retains_replayable_remaining_backlog() {
     let current = checkpoint(schedule_state());
     let definition = content();
     let destinations = [AdmittedScheduleDestination {
-        event: id(8),
+        event: record_id(8),
         definition: &definition,
         entity: entity(4),
         expected_location: None,
@@ -940,7 +940,7 @@ fn complete_bounded_schedule_prefix_retains_replayable_remaining_backlog() {
             .as_ref()
             .unwrap()
             .pending_events,
-        vec![id(9)]
+        vec![record_id(9)]
     );
     assert_eq!(
         staged
@@ -956,7 +956,7 @@ fn complete_bounded_schedule_prefix_retains_replayable_remaining_backlog() {
     let DirectorStaging::WorldPending(due) = continuation else {
         panic!("remaining event disappeared")
     };
-    assert_eq!(due.events.first().unwrap().id, id(9));
+    assert_eq!(due.events.first().unwrap().id, record_id(9));
 }
 
 #[test]
@@ -965,7 +965,7 @@ fn schedule_source_location_and_time_admission_refusals_leave_current_unchanged(
     let unchanged = current.clone();
     let definition = content();
     let wrong = [AdmittedScheduleDestination {
-        event: id(8),
+        event: record_id(8),
         definition: &definition,
         entity: entity(4),
         expected_location: Some(entity(6)),
@@ -1019,14 +1019,14 @@ fn stale_narrative_snapshot_cannot_overwrite_selected_world_schedule() {
     let definition = content();
     let destinations = [
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition: &definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition: &definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -1047,7 +1047,7 @@ fn stale_narrative_snapshot_cannot_overwrite_selected_world_schedule() {
         ),
         Err(DirectorError::AuthorityConflict(DirectorStage::Narrative)),
     );
-    assert_eq!(current.state().logical_time, time(9));
+    assert_eq!(current.state().logical_time, logical_time(9));
     assert_eq!(current.state().entities.first().unwrap().location, None);
 }
 
@@ -1117,14 +1117,14 @@ fn actual_world_and_narrative_producers_compose_without_changing_declared_effect
     let definition = content();
     let destinations = [
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition: &definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition: &definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -1181,7 +1181,7 @@ fn actual_world_and_narrative_producers_compose_without_changing_declared_effect
         ScheduleDirectorRequest {
             accepted_time: Some(DueSelectionRequest {
                 expected_basis: current.basis(),
-                target_time: time(12),
+                target_time: logical_time(12),
                 paused: false,
                 deadline_remaining: Duration::from_secs(1),
                 policy: &definition,
@@ -1328,14 +1328,14 @@ fn actual_effect_inspection_keeps_staged_schedule_pending_when_registration_is_m
     let definition = content();
     let destinations = [
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition: &definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition: &definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -1523,14 +1523,14 @@ fn environmental_destinations(current: &Checkpoint) -> Vec<AdmittedScheduleDesti
     let definition = &current.state().narrative.definition;
     vec![
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -1594,7 +1594,7 @@ fn environmental_request<'a>(
     ScheduleDirectorRequest {
         accepted_time: Some(DueSelectionRequest {
             expected_basis: current.basis(),
-            target_time: time(12),
+            target_time: logical_time(12),
             paused: false,
             deadline_remaining: Duration::from_secs(1),
             policy: &current.state().narrative.definition,
@@ -1667,7 +1667,7 @@ fn actual_environment_and_schedule_proposals_merge_with_policy_in_one_owned_cand
     };
     assert_eq!(staged.basis(), current.basis());
     assert_eq!(staged.pins(), current.pins());
-    assert_eq!(staged.candidate().state().logical_time, time(12));
+    assert_eq!(staged.candidate().state().logical_time, logical_time(12));
     assert_eq!(
         staged.candidate().state().continuity.environment,
         replacements
@@ -2105,7 +2105,7 @@ fn compose_threads<'a>(
         ScheduleDirectorRequest {
             accepted_time: Some(DueSelectionRequest {
                 expected_basis: current.basis(),
-                target_time: time(12),
+                target_time: logical_time(12),
                 paused: false,
                 deadline_remaining: Duration::from_secs(1),
                 policy: &current.state().narrative.definition,
@@ -2489,7 +2489,7 @@ fn beat_schedule<'a>(
     ScheduleDirectorRequest {
         accepted_time: Some(DueSelectionRequest {
             expected_basis: current.basis(),
-            target_time: time(12),
+            target_time: logical_time(12),
             paused: false,
             deadline_remaining: Duration::from_secs(1),
             policy: &current.state().narrative.definition,
@@ -2972,14 +2972,14 @@ fn engine_final_beat_refusal_discards_tentative_schedule_cursor_time_and_interac
     let definition = content();
     let destinations = [
         AdmittedScheduleDestination {
-            event: id(8),
+            event: record_id(8),
             definition: &definition,
             entity: entity(4),
             expected_location: None,
             destination: entity(5),
         },
         AdmittedScheduleDestination {
-            event: id(9),
+            event: record_id(9),
             definition: &definition,
             entity: entity(4),
             expected_location: Some(entity(5)),
@@ -3008,7 +3008,7 @@ fn engine_final_beat_refusal_discards_tentative_schedule_cursor_time_and_interac
         staged.candidate().state().entities[0].location,
         Some(entity(6))
     );
-    assert_eq!(staged.candidate().state().logical_time, time(12));
+    assert_eq!(staged.candidate().state().logical_time, logical_time(12));
     assert!(staged.candidate().state().continuity.catch_up.is_some());
     assert_eq!(
         staged.candidate().state().relationships,

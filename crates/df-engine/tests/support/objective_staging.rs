@@ -7,12 +7,12 @@ pub fn content(entry: &str) -> ContentReference {
     }
 }
 
-pub fn operation(value: u8) -> OperationId {
-    OperationId::from_bytes(&[value; 16]).unwrap()
+pub fn operation(repeated_byte: u8) -> OperationId {
+    OperationId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 
-pub fn encounter(value: u8) -> RecordId {
-    RecordId::from_bytes(&[value; 16]).unwrap()
+pub fn encounter(repeated_byte: u8) -> RecordId {
+    RecordId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 
 pub fn command_limits() -> CommandLimits {
@@ -102,8 +102,8 @@ impl Fixture {
         state.facts = [30, 31]
             .into_iter()
             .enumerate()
-            .map(|(ordinal, id)| GameFact {
-                id: FactId::from_bytes(&[id; 16]).unwrap(),
+            .map(|(ordinal, id_byte)| GameFact {
+                id: FactId::from_bytes(&[id_byte; 16]).unwrap(),
                 revision: fixture::basis().revision,
                 operation: operation(30),
                 ordinal: ordinal as u32,

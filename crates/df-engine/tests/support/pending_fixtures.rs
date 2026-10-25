@@ -5,16 +5,16 @@ use df_types::{
     SessionRevision,
 };
 
-pub(super) fn label(value: &str) -> RevisionLabel {
-    RevisionLabel::new(Some(value)).unwrap()
+pub(super) fn label(label_text: &str) -> RevisionLabel {
+    RevisionLabel::new(Some(label_text)).unwrap()
 }
 
-pub(super) fn entity(value: u8) -> EntityId {
-    EntityId::from_bytes(&[value; 16]).unwrap()
+pub(super) fn entity(repeated_byte: u8) -> EntityId {
+    EntityId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 
-pub(super) fn member(value: u8) -> MemberId {
-    MemberId::from_bytes(&[value; 16]).unwrap()
+pub(super) fn member(repeated_byte: u8) -> MemberId {
+    MemberId::from_bytes(&[repeated_byte; 16]).unwrap()
 }
 
 pub(super) fn revision(epoch: u64, sequence: u64) -> SessionRevision {
@@ -182,9 +182,9 @@ pub(super) fn checkpoint(state: GameState) -> Result<Checkpoint, CheckpointError
     )
 }
 
-pub(super) fn fact(value: u8, ordinal: u32) -> GameFact {
+pub(super) fn fact(repeated_byte: u8, ordinal: u32) -> GameFact {
     GameFact {
-        id: FactId::from_bytes(&[value; 16]).unwrap(),
+        id: FactId::from_bytes(&[repeated_byte; 16]).unwrap(),
         revision: basis().revision,
         operation: OperationId::from_bytes(&[6; 16]).unwrap(),
         ordinal,
