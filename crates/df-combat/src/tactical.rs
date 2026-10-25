@@ -8,8 +8,8 @@ use crate::ranking::{
     UtilityRankingError, rank_tactics,
 };
 use df_rules::tactical::{
-    Action, AttackSpend, AttackUse, Battle, Cell, Combatant, CreatureKind, DrawBinding, RuleError,
-    Side, Weapon, resolve,
+    Action, AttackSpend, AttackUse, Battle, Cell, Combatant, CreatureKind, DrawBinding,
+    PendingReaction, RuleError, Side, Weapon, resolve,
 };
 
 /// Current canonical source/basis/policy and actor perception, supplied by engine/session.
@@ -189,13 +189,20 @@ fn propose_with_shield_policy(
     doff_shield_for_ranged: bool,
 ) -> Result<Option<Action>, RuleError> {
     let actor = battle.actor(id)?;
+    // A Giant Ancestry reaction blocks every creature, including the next opportunity reactor.
+    if matches!(
+        battle.pending_reaction(),
+        Some(PendingReaction::Species { .. })
+    ) {
+        return Err(RuleError::PendingReaction);
+    }
     if battle.reaction_offers().first().copied() == Some(id) {
         let weapon = opportunity_weapon(&actor.spec().weapons, actor.held_weapons());
         return Ok(Some(Action::Opportunity {
             attack: Some(weapon_use(weapon, false)),
         }));
     }
-    if !battle.reaction_offers().is_empty() {
+    if battle.pending_reaction().is_some() {
         return Err(RuleError::PendingReaction);
     }
     if battle.active_actor() != Some(id) {
@@ -608,6 +615,12 @@ fn opportunity_weapon(weapons: &[Weapon], held: &[Weapon]) -> Weapon {
 /// The previous policy deliberately declined optional opportunity reactions.
 pub fn propose_legacy(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
     battle.actor(id)?;
+    if matches!(
+        battle.pending_reaction(),
+        Some(PendingReaction::Species { .. })
+    ) {
+        return Err(RuleError::PendingReaction);
+    }
     if battle.reaction_offers().first().copied() == Some(id) {
         return Ok(Some(Action::Opportunity { attack: None }));
     }

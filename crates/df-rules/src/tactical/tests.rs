@@ -3966,3 +3966,62 @@ fn srd_521_resumed_damage_uses_wide_zombie_save_arithmetic_at_the_snapshot_bound
     assert!(result.battle.actor(4).unwrap().health().dead);
     assert_eq!(result.battle.actor(4).unwrap().health().hit_points, 0);
 }
+
+#[test]
+fn pending_reaction_is_none_without_a_window_or_species_reaction() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    assert_eq!(state.pending_reaction(), None);
+}
+
+#[test]
+fn pending_reaction_falls_back_to_the_first_opportunity_reactor() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "bandit", Cell(2, 2), 0).unwrap(),
+    ]);
+    state.pending = Some(super::state::PendingMove {
+        actor: 1,
+        path: vec![Cell(1, 0)],
+        next: 0,
+        eligible: vec![4, 3],
+    });
+    assert_eq!(state.reaction_offers(), &[4, 3]);
+    assert_eq!(
+        state.pending_reaction(),
+        Some(PendingReaction::Opportunity { reactor: 4 })
+    );
+}
+
+#[test]
+fn a_species_reaction_takes_precedence_over_an_opportunity_window() {
+    let mut state = battle(vec![
+        species_hero(1, "goliath", &[("giant-ancestry", "stone")], Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.pending = Some(super::state::PendingMove {
+        actor: 1,
+        path: vec![Cell(0, 1)],
+        next: 0,
+        eligible: vec![3],
+    });
+    state.species_damage.push(super::species::SpeciesDamage {
+        source: 3,
+        target: 1,
+        amount: 5,
+        critical: false,
+        knockout: false,
+        applied: false,
+    });
+    assert_eq!(state.reaction_offers(), &[3]);
+    assert_eq!(
+        state.pending_reaction(),
+        Some(PendingReaction::Species {
+            hero: 1,
+            kind: SpeciesReaction::StoneEndurance
+        })
+    );
+}

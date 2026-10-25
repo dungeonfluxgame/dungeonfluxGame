@@ -1,4 +1,4 @@
-use super::{BattleMap, Cell, RuleError, Weapon};
+use super::{BattleMap, Cell, RuleError, SpeciesReaction, Weapon};
 use crate::local_journey::{ChallengeRating, HeroSpecies, SpeciesCombatTraits, SpeciesSize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -728,6 +728,14 @@ pub(crate) struct PendingMove {
     pub next: usize,
     pub eligible: Vec<u32>,
 }
+/// The reaction a battle waits on before it accepts an ordinary action (`Battle::pending_reaction`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PendingReaction {
+    /// An opportunity or movement reactor from `reaction_offers`.
+    Opportunity { reactor: u32 },
+    /// A Giant Ancestry reaction that only `resolve_species` can clear.
+    Species { hero: u32, kind: SpeciesReaction },
+}
 /// A detached pure battle; only resolve returns a successor. No durable authority is implied.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Battle {
@@ -898,8 +906,20 @@ impl Battle {
     pub fn round(&self) -> u32 {
         self.round
     }
+    /// Opportunity and movement reactors waiting in order. Giant Ancestry reactions are not listed
+    /// here; read `pending_reaction` to decide whether the battle waits.
     pub fn reaction_offers(&self) -> &[u32] {
         self.pending.as_ref().map_or(&[], |p| p.eligible.as_slice())
+    }
+    /// What the battle waits on before it accepts an ordinary action. A species reaction (SRD 5.2.1
+    /// pp. 85-86) comes first, then the first `reaction_offers` entry.
+    pub fn pending_reaction(&self) -> Option<PendingReaction> {
+        if let Some((hero, kind)) = self.species_reaction_offer() {
+            return Some(PendingReaction::Species { hero, kind });
+        }
+        self.reaction_offers()
+            .first()
+            .map(|&reactor| PendingReaction::Opportunity { reactor })
     }
     pub fn needs_death_save(&self) -> bool {
         self.needs_death_save

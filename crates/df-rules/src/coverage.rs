@@ -146,7 +146,7 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "Attack, Dash, Disengage, Dodge, Move, Stand, Utilize (doff shield, pick up a weapon) exist; Help, Hide, Influence, Magic, Ready, Search and Study do not. The owner's order-of-combat checks (initiative, turns, one action) hold over generated fights",
+        note: "Attack, Dash, Disengage, Dodge, Help (attack; stabilise on a DC 10 Wisdom (Medicine) check), Move, Stand, Utilize (doff shield, pick up a weapon, Healer's Kit to stabilise with no check) exist; Hide, Magic, Ready, Search and Study do not. The owner's order-of-combat checks (initiative, turns, one action) hold over generated fights",
         evidence: &[
             (RESOLVE, "Action::Dash"),
             (INVARIANTS, "generated_fights_with_planner_enemies"),
@@ -264,7 +264,7 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Second Wind (self only) and the knockout awakening exist; no potions, no Help action to stabilise a dying ally, no Hit Point Dice, no temporary Hit Points",
+        note: "Second Wind (self only), Help to stabilise a dying ally (DC 10 Wisdom (Medicine)), Utilize a Healer's Kit to stabilise (no check) and the knockout awakening exist; no potions, no Hit Point Dice, no temporary Hit Points",
         evidence: &[(RESOLVE, "Action::SecondWind")],
         browser_scripts: &["play-t03-fight.mjs"],
     },
@@ -375,7 +375,7 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Influence action with willing/hesitant/unwilling, DC 15 or Intelligence, attitude Advantage/Disadvantage, the 24-hour retry wait, an approach-to-skill table and table-ready explanations in df-rules; word quality as an Advantage/Disadvantage source is the disclosed house rule influence.word-quality-advantage; nothing calls it yet, so NPC replies still come from the story layer",
+        note: "Influence action with willing/hesitant/unwilling, DC 15 or Intelligence, attitude Advantage/Disadvantage, the 24-hour retry wait, an approach-to-skill table and table-ready explanations in df-rules; word quality as an Advantage/Disadvantage source is the disclosed house rule influence.word-quality-advantage; live hesitant-NPC rolls call `influence::resolve` from df-tools npc_reply.rs (`roll_hesitant_influence`), and the story layer still writes the reply text",
         evidence: &[
             (INFLUENCE, "pub fn resolve"),
             (INFLUENCE, "WORD_QUALITY_RULE_ID"),

@@ -28,7 +28,7 @@ pub use resolve::{
 pub use species::{BreathDirection, BreathShape, SavingThrowSummary, SpeciesReaction};
 pub use state::{
     Battle, Budget, Combatant, CombatantSpec, CreatureExperience, CreatureKind,
-    EncounterExperience, Health, Side, Size, begin,
+    EncounterExperience, Health, PendingReaction, Side, Size, begin,
 };
 pub use weapons::{DamageType, Mastery, Weapon};
 

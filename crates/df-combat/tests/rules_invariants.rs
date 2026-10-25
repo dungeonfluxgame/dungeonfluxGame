@@ -1168,6 +1168,334 @@ fn the_auditor_flags_a_second_action_in_one_turn() {
     );
 }
 
+/// A two-cell row for the Action Surge fixtures: one hero acts first, one wolf opposes it.
+const SURGE_MAP: &[u8] = br#"{"schema":2,"grid":{"cols":12,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,1]],"enemies":[[6,1]]}}]}"#;
+
+/// A hand-built fight whose hero is a Fighter of `level`, with an empty step record.
+fn surge_fight(level: u8) -> (Scripted, Battle, Rng) {
+    surge_fight_with(level, true)
+}
+
+/// As `surge_fight`, with the hero's Action Surge either available or already spent at the start.
+fn surge_fight_with(level: u8, surge_available: bool) -> (Scripted, Battle, Rng) {
+    let map = BattleMap::from_json(SURGE_MAP, "flat").unwrap();
+    let grid = Grid::from_scene(SURGE_MAP, "flat", false);
+    let fighter = if level == 1 {
+        hero(1, Cell(0, 1), false)
+    } else {
+        hero(1, Cell(0, 1), false).at_fighter_level(level).unwrap()
+    };
+    let specs = vec![
+        fighter,
+        CombatantSpec::creature(10, "wolf", Cell(6, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(53);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [20, 1].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let initial = begin(map, specs.clone(), binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    let initial = if level >= 2 {
+        initial.with_hero_action_surge(1, surge_available).unwrap()
+    } else {
+        initial
+    };
+    let fight = Scripted {
+        grid,
+        specs: specs
+            .iter()
+            .map(|s| (s.id, s.kind, s.abilities[1]))
+            .collect(),
+        begin_draws: initiative,
+        initial: initial.clone(),
+        steps: Vec::new(),
+    };
+    (fight, initial, rng)
+}
+
+/// Resolves `action` for `actor` against the current state and records the accepted step.
+fn play(fight: &mut Scripted, current: &mut Battle, rng: &mut Rng, actor: u32, action: Action) {
+    let result = resolve_dice(current, actor, &action, rng).unwrap();
+    let before = std::mem::replace(current, result.battle.clone());
+    fight.steps.push(Step {
+        before,
+        actor,
+        action,
+        result,
+    });
+}
+
+/// Records a step the engine would refuse, as a tampered record. Its state is the last accepted
+/// step's, so the auditor sees the action against the state it would have had.
+fn fabricate(fight: &mut Scripted, actor: u32, action: Action) {
+    let last = fight.steps.last().unwrap().clone();
+    fight.steps.push(Step {
+        before: last.result.battle.clone(),
+        actor,
+        action,
+        result: last.result,
+    });
+}
+
+/// Replays with a Magic-action classifier, to test the Action Surge restriction without a spell.
+fn replay_classified(s: &Scripted, magic: fn(&Action) -> bool) -> Audit {
+    let mut checker = FightAudit::begin(&s.initial, &s.grid, &s.specs, &s.begin_draws);
+    checker.magic = magic;
+    for step in &s.steps {
+        checker.accepted(&step.before, step.actor, &step.action, &step.result);
+    }
+    checker.audit
+}
+
+/// SRD 5.2.1 p. 48: Action Surge grants one additional action on the Fighter's turn. The engine
+/// accepts Dodge, the surge, then Dash as the extra action, and the auditor must agree.
+#[test]
+fn a_fighter_takes_one_extra_action_from_action_surge() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dash);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::EndTurn);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        audit.violations.is_empty(),
+        "legal Action Surge flagged: {:?}",
+        audit.violations
+    );
+    assert_eq!(audit.counts.get("action-surges"), Some(&1));
+}
+
+/// SRD 5.2.1 p. 48: Action Surge recharges only on a Short or Long Rest. A second surge before a
+/// rest is refused by the engine, so this record is tampered in, as the auditor must flag it.
+#[test]
+fn a_second_action_surge_before_a_rest_is_flagged() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    fabricate(&mut fight, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::EndTurn);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SURGE-LIMIT"),
+        "second surge before a rest not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// SRD 5.2.1 p. 48: a Short Rest recharges Action Surge, so a surge after the rest is legal.
+#[test]
+fn a_short_rest_renews_action_surge() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dash);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::EndTurn);
+    play(&mut fight, &mut battle, &mut rng, 10, Action::EndTurn);
+    play(
+        &mut fight,
+        &mut battle,
+        &mut rng,
+        1,
+        Action::ShortRest {
+            elapsed_seconds: 3600,
+        },
+    );
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::EndTurn);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        audit.violations.is_empty(),
+        "surge after a Short Rest flagged: {:?}",
+        audit.violations
+    );
+    assert_eq!(audit.counts.get("action-surges"), Some(&2));
+}
+
+/// SRD 5.2.1 p. 48: the extra action from Action Surge cannot be the Magic action. The engine
+/// has no spell action, so the classifier is stood in for by Dash to exercise the rule.
+#[test]
+fn a_surged_magic_action_is_flagged() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dash);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::EndTurn);
+    let audit = replay_classified(&fight, |action| matches!(action, Action::Dash));
+    assert!(
+        flagged(&audit, "T-SURGE-MAGIC"),
+        "surged Magic action not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// SRD 5.2.1 p. 14: one Action per turn. An action after the Action is spent is only legal as
+/// the extra action from Action Surge; the engine refuses it here, so the record is tampered in.
+#[test]
+fn an_extra_action_without_action_surge_is_flagged() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    fabricate(&mut fight, 1, Action::Dash);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SECOND-ACTION"),
+        "extra action without a surge not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// SRD 5.2.1 p. 48: Action Surge is a Fighter feature from level 2. A level-1 Fighter's surge is
+/// refused by the engine, so the record is tampered in.
+#[test]
+fn action_surge_below_fighter_level_two_is_flagged() {
+    let (mut fight, mut battle, mut rng) = surge_fight(1);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    fabricate(&mut fight, 1, Action::ActionSurge);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SURGE-CLASS"),
+        "level-one surge not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// SRD 5.2.1 p. 48: a Fighter whose surge was spent before the fight began cannot surge again.
+#[test]
+fn a_surge_spent_before_the_fight_is_flagged_when_used_again() {
+    let (mut fight, mut battle, mut rng) = surge_fight_with(2, false);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    fabricate(&mut fight, 1, Action::ActionSurge);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SURGE-LIMIT"),
+        "surge spent at fight start not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// The hero may take one Action and one extra action from Action Surge. A third action is flagged
+/// once, on that third action; the legal extra Dash is not flagged.
+#[test]
+fn a_third_action_after_one_surge_is_flagged_once() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dash);
+    fabricate(&mut fight, 1, Action::Disengage);
+    let audit = replay(&fight, &mut |_, _| false);
+    let second: Vec<_> = audit
+        .violations
+        .iter()
+        .filter(|v| v.id == "T-SECOND-ACTION")
+        .collect();
+    assert_eq!(
+        second.len(),
+        1,
+        "expected one flag on the third action: {:?}",
+        audit.violations
+    );
+    assert!(second[0].detail.contains("Disengage"), "{:?}", second[0]);
+}
+
+/// SRD 5.2.1 p. 48: Action Surge does not spend the Action. A record where it does is flagged.
+#[test]
+fn an_action_surge_that_spends_the_action_is_flagged() {
+    let (mut fight, _, mut rng) = surge_fight(2);
+    let (before, actor, result) = {
+        let mut battle = fight.initial.clone();
+        play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+        let dodge = fight.steps[0].clone();
+        (dodge.before, 1, dodge.result)
+    };
+    // The Action was unspent before the surge, and the surge's record shows it spent.
+    fight.steps.push(Step {
+        before,
+        actor,
+        action: Action::ActionSurge,
+        result,
+    });
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SURGE-BUDGET"),
+        "surge that spends the Action not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// SRD 5.2.1 p. 48: an unused extra action from Action Surge does not carry into the next turn. A
+/// record that starts the next turn with the extra action still available is flagged.
+#[test]
+fn an_unused_surge_extra_carried_into_the_next_turn_is_flagged() {
+    let (mut fight, mut battle, mut rng) = surge_fight(2);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    let surged = fight.steps.last().unwrap().clone();
+    fight.steps.push(Step {
+        before: surged.result.battle.clone(),
+        actor: 1,
+        action: Action::EndTurn,
+        result: surged.result,
+    });
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        flagged(&audit, "T-SURGE-CARRY"),
+        "carried surge extra not flagged: {:?}",
+        audit.violations
+    );
+}
+
+/// The Fighter has already thrown two javelins, which lie on its cell; six remain in stock. The
+/// state is edited through the engine's own snapshot format, so `from_snapshot` admits it.
+fn with_dropped_javelins(initial: &Battle) -> Battle {
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&initial.snapshot().unwrap()).unwrap();
+    snapshot["actors"][0]["weapon_counts"]["Javelin"] = serde_json::json!(6);
+    snapshot["actors"][0]["dropped"] =
+        serde_json::json!([["Javelin", [0, 1]], ["Javelin", [0, 1]]]);
+    let map = BattleMap::from_json(SURGE_MAP, "flat").unwrap();
+    Battle::from_snapshot(map, &serde_json::to_vec(&snapshot).unwrap()).unwrap()
+}
+
+/// SRD 5.2.1 p. 14 and p. 48: the first object pickup each turn is free. A second pickup spends the
+/// Action, or the surge's extra action. Here the second pickup uses the extra, so a third action
+/// after it is flagged.
+#[test]
+fn a_second_pickup_uses_the_surge_extra_action() {
+    let (mut fight, _, mut rng) = surge_fight(2);
+    let mut battle = with_dropped_javelins(&fight.initial);
+    fight.initial = battle.clone();
+    play(&mut fight, &mut battle, &mut rng, 1, Action::Dodge);
+    play(&mut fight, &mut battle, &mut rng, 1, Action::ActionSurge);
+    play(
+        &mut fight,
+        &mut battle,
+        &mut rng,
+        1,
+        Action::PickUpWeapon(Weapon::Javelin),
+    );
+    play(
+        &mut fight,
+        &mut battle,
+        &mut rng,
+        1,
+        Action::PickUpWeapon(Weapon::Javelin),
+    );
+    fabricate(&mut fight, 1, Action::Disengage);
+    let audit = replay(&fight, &mut |_, _| false);
+    assert!(
+        audit
+            .violations
+            .iter()
+            .any(|v| v.id == "T-SECOND-ACTION" && v.detail.contains("Disengage")),
+        "third action after a surged pickup not flagged: {:?}",
+        audit.violations
+    );
+}
+
 #[test]
 fn the_auditor_flags_acting_out_of_turn() {
     let (s, at) = find_step(|st| first_attack(st) && st.actor >= 10);

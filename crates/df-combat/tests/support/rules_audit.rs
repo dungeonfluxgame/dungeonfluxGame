@@ -800,7 +800,60 @@ pub struct FightAudit<'g> {
     turn_saves: u8,
     turn_savage_hits: u8,
     turn_reactions: BTreeMap<u32, u8>,
+    /// Action Surge uses accepted this turn, and extra actions taken this turn.
+    turn_surges: u8,
+    turn_extra: u8,
+    /// Fighters whose Action Surge is spent until their next Short or Long Rest.
+    surged: BTreeSet<u32>,
+    /// Classifies Magic actions for the Action Surge restriction; see `is_magic_action`.
+    pub magic: fn(&Action) -> bool,
     pub turns: u64,
+}
+
+/// SRD 5.2.1 p. 48: the extra action from Action Surge may not be the Magic action. The tactical
+/// engine has no spellcasting action yet, so no variant is Magic. A spell action added to
+/// `Action` must be listed here, because this match is exhaustive.
+pub fn is_magic_action(action: &Action) -> bool {
+    match action {
+        Action::Move(_)
+        | Action::Stand
+        | Action::DropProne
+        | Action::Dash
+        | Action::Disengage
+        | Action::Dodge
+        | Action::Help { .. }
+        | Action::UtilizeHealersKit { .. }
+        | Action::NimbleDisengage
+        | Action::Attack { .. }
+        | Action::Opportunity { .. }
+        | Action::SecondWind
+        | Action::ActionSurge
+        | Action::LongRest { .. }
+        | Action::EndTurn
+        | Action::DeathSave
+        | Action::ShortRest { .. }
+        | Action::RecoverAmmunition { .. }
+        | Action::StableRecovery
+        | Action::DoffShield
+        | Action::PickUpWeapon(_) => false,
+    }
+}
+
+/// Actions that spend the Action (SRD p. 14). Only these can use Action Surge's extra action.
+fn takes_action(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Dash
+            | Action::Disengage
+            | Action::Dodge
+            | Action::DoffShield
+            | Action::Help { .. }
+            | Action::UtilizeHealersKit { .. }
+            | Action::Attack {
+                spend: AttackSpend::Action,
+                ..
+            }
+    )
 }
 
 impl<'g> FightAudit<'g> {
@@ -889,6 +942,21 @@ impl<'g> FightAudit<'g> {
             turn_saves: 0,
             turn_savage_hits: 0,
             turn_reactions: BTreeMap::new(),
+            turn_surges: 0,
+            turn_extra: 0,
+            // A fight may begin with a Fighter's surge already spent (`with_hero_action_surge`).
+            surged: initial
+                .combatants()
+                .iter()
+                .filter(|c| {
+                    c.spec()
+                        .fighter_level()
+                        .is_some_and(|progression| progression.level() >= 2)
+                        && !c.action_surge_available()
+                })
+                .map(|c| c.id())
+                .collect(),
+            magic: is_magic_action,
             turns: 1,
         }
     }
@@ -961,6 +1029,17 @@ impl<'g> FightAudit<'g> {
                 format!("{actor} acted while incapacitated: {action:?}"),
             );
         }
+        // Action Surge's extra action is the one a Magic action cannot use (SRD 5.2.1 p. 48).
+        // A Magic action always spends an action, so this does not depend on `takes_action`.
+        if self.turn_extra < self.turn_surges
+            && before.actor(actor).is_ok_and(|a| a.budget().action_used)
+            && (self.magic)(action)
+        {
+            self.audit.fail(
+                "T-SURGE-MAGIC",
+                format!("{actor} used Action Surge's extra action for {action:?}, a Magic action"),
+            );
+        }
         self.reaction_flags(before, after, actor, action);
         match action {
             Action::Move(path) => self.audit_move_start(before, actor, path, after),
@@ -1012,12 +1091,23 @@ impl<'g> FightAudit<'g> {
             Action::DeathSave => self.audit_death_save(before, actor, res),
             Action::StableRecovery => self.audit_stable_recovery(before, actor, res),
             Action::ShortRest { elapsed_seconds } => {
+                self.surged.remove(&actor);
                 self.audit_short_rest(before, actor, *elapsed_seconds, res)
             }
-            Action::RecoverAmmunition { .. }
-            | Action::PickUpWeapon(_)
-            | Action::ActionSurge
-            | Action::LongRest { .. } => {}
+            Action::ActionSurge => self.audit_action_surge(before, actor, after),
+            Action::LongRest { .. } => {
+                self.surged.remove(&actor);
+            }
+            Action::PickUpWeapon(_) => {
+                // The first pickup each turn is free; a later one spends the Action or the extra.
+                if before
+                    .actor(actor)
+                    .is_ok_and(|a| a.budget().object_interaction_used)
+                {
+                    self.take_action(before, actor, "PickUpWeapon");
+                }
+            }
+            Action::RecoverAmmunition { .. } => {}
         }
         self.audit_untouched(before, after, actor, action);
     }
@@ -1076,16 +1166,28 @@ impl<'g> FightAudit<'g> {
             || format!("{actor} took a second Bonus Action this turn"),
         );
     }
+    /// The turn's Action (SRD p. 14) may be spent once. Once it is spent, one further action is
+    /// legal only as the extra action from an Action Surge used earlier this turn (SRD p. 48).
     fn take_action(&mut self, before: &Battle, actor: u32, what: &str) {
         self.turn_actions += 1;
         let used = before
             .actor(actor)
             .map(|a| a.budget().action_used)
             .unwrap_or(true);
-        self.audit
-            .expect(!used && self.turn_actions <= 1, "T-SECOND-ACTION", || {
-                format!("{actor} took a second action this turn ({what})")
-            });
+        let extra = used;
+        let permitted = if extra {
+            self.turn_extra < self.turn_surges
+        } else {
+            self.turn_actions == 1
+        };
+        if extra {
+            self.turn_extra += 1;
+        }
+        self.audit.expect(permitted, "T-SECOND-ACTION", || {
+            format!(
+                "{actor} took a second action this turn ({what}) beyond its Action and Action Surge"
+            )
+        });
     }
 
     fn audit_action_flag(&mut self, before: &Battle, actor: u32, action: &Action, after: &Battle) {
@@ -1448,6 +1550,37 @@ impl<'g> FightAudit<'g> {
         }
     }
 
+    /// SRD 5.2.1 p. 48: a Fighter of level 2 or higher may take one additional action on its turn,
+    /// once until its next Short or Long Rest. The surge itself spends no Action, and the extra
+    /// action it grants is checked where that action is taken (`take_action`). The engine caps
+    /// Fighters at level 5, so the twice-per-rest rule for level 17 and up is not reachable here.
+    fn audit_action_surge(&mut self, before: &Battle, actor: u32, after: &Battle) {
+        let Ok(b) = before.actor(actor) else {
+            return;
+        };
+        self.audit.expect(
+            b.spec()
+                .fighter_level()
+                .is_some_and(|progression| progression.level() >= 2),
+            "T-SURGE-CLASS",
+            || format!("{actor} used Action Surge without Fighter level 2"),
+        );
+        self.audit
+            .expect(!self.surged.contains(&actor), "T-SURGE-LIMIT", || {
+                format!("{actor} used Action Surge again before a Short or Long Rest")
+            });
+        self.surged.insert(actor);
+        self.turn_surges += 1;
+        if let Ok(a) = after.actor(actor) {
+            self.audit.expect(
+                a.budget().action_used == b.budget().action_used,
+                "T-SURGE-BUDGET",
+                || "Action Surge spent the Action".into(),
+            );
+        }
+        self.audit.tally("action-surges");
+    }
+
     /// SRD p18: only a Stable hero at 0 recovers, to exactly 1 Hit Point, after the d4 hours.
     fn audit_stable_recovery(&mut self, before: &Battle, actor: u32, res: &Resolution) {
         let (Ok(b), Ok(a)) = (before.actor(actor), res.battle.actor(actor)) else {
@@ -1568,6 +1701,14 @@ impl<'g> FightAudit<'g> {
                 "T-BUDGET-RESET",
                 || format!("{} starts its turn with a spent budget {fresh:?}", n.id()),
             );
+            self.audit
+                .expect(n.additional_actions() == 0, "T-SURGE-CARRY", || {
+                    format!(
+                        "{} starts its turn with {} unused Action Surge extra action(s)",
+                        n.id(),
+                        n.additional_actions()
+                    )
+                });
             let owes = n.health().hit_points == 0 && !n.health().dead && !n.health().stable;
             self.audit.expect(
                 after.needs_death_save() == owes,
@@ -1584,6 +1725,8 @@ impl<'g> FightAudit<'g> {
             }
         }
         self.turn_actions = 0;
+        self.turn_surges = 0;
+        self.turn_extra = 0;
         self.turn_multi = 0;
         self.turn_light = 0;
         self.turn_bonus = 0;
