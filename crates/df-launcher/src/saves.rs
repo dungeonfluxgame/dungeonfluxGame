@@ -108,9 +108,9 @@ pub fn record(data: &Path, game: &SavedGame) -> Result<(), io::Error> {
 /// The game after a session that began at its `last_played` and ended `now`: the session's
 /// length is added to its play time and `now` becomes its last-played time.
 pub fn after_session(game: &SavedGame, now: i64) -> SavedGame {
-    let session = u64::try_from(now.saturating_sub(game.last_played)).unwrap_or(0);
+    let session_seconds = u64::try_from(now.saturating_sub(game.last_played)).unwrap_or(0);
     SavedGame {
-        played_seconds: game.played_seconds.saturating_add(session),
+        played_seconds: game.played_seconds.saturating_add(session_seconds),
         last_played: now,
         ..game.clone()
     }

@@ -36,20 +36,20 @@ pub fn private_address() -> Option<Ipv4Addr> {
 
 pub fn network(settings: &Settings, address: Option<Ipv4Addr>) -> Network {
     let port = settings.game_port;
-    let local = format!("http://127.0.0.1:{port},http://localhost:{port}");
+    let localhost_origins = format!("http://127.0.0.1:{port},http://localhost:{port}");
     match address.filter(|_| settings.phones_on_network) {
         Some(address) => {
-            let public = format!("http://{address}:{port}");
+            let public_url = format!("http://{address}:{port}");
             Network {
                 listen: format!("0.0.0.0:{port}"),
-                allowed_origins: format!("{public},{local}"),
-                public_url: Some(public),
+                allowed_origins: format!("{public_url},{localhost_origins}"),
+                public_url: Some(public_url),
             }
         }
         None => Network {
             listen: format!("127.0.0.1:{port}"),
             public_url: None,
-            allowed_origins: local,
+            allowed_origins: localhost_origins,
         },
     }
 }
@@ -113,16 +113,19 @@ pub struct Launch<'a> {
 }
 
 pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
-    let play = &launch.install.play_root;
-    let root = &launch.install.root;
-    let path = |value: PathBuf| value.display().to_string();
+    let play_root = &launch.install.play_root;
+    let install_root = &launch.install.root;
+    let display_path = |value: PathBuf| value.display().to_string();
     let mut environment: Vec<(String, String)> = vec![
         ("DF_GAMEPLAY_DEMO_DATABASE".into(), launch.database.into()),
         (
             "DF_GAMEPLAY_DATABASE_PORT".into(),
             launch.settings.database_port.to_string(),
         ),
-        ("DF_GAMEPLAY_STOP_FILE".into(), path(launch.stop_dir.into())),
+        (
+            "DF_GAMEPLAY_STOP_FILE".into(),
+            display_path(launch.stop_dir.into()),
+        ),
         (
             "DF_GAMEPLAY_LAUNCHER_TOKEN".into(),
             launch.status_token.to_owned(),
@@ -138,37 +141,37 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
         ),
         (
             "DF_GAMEPLAY_PACK_DIR".into(),
-            path(root.join("content/harbor-journey")),
+            display_path(install_root.join("content/harbor-journey")),
         ),
         (
             "DF_GAMEPLAY_ADVENTURE_TABLES".into(),
-            path(root.join("content/adventure-tables")),
+            display_path(install_root.join("content/adventure-tables")),
         ),
         (
             "DF_GAMEPLAY_VOICE_CASTING".into(),
-            path(root.join("content/voice-casting.json")),
+            display_path(install_root.join("content/voice-casting.json")),
         ),
         (
             "DF_GAMEPLAY_TEXT_CACHE".into(),
-            path(play.join("text-cache")),
+            display_path(play_root.join("text-cache")),
         ),
         (
             "DF_GAMEPLAY_VOICE_CACHE".into(),
-            path(play.join("voice-cache")),
+            display_path(play_root.join("voice-cache")),
         ),
         (
             "DF_GAMEPLAY_HOME_VIDEO_CACHE".into(),
-            path(play.join("home-video-cache")),
+            display_path(play_root.join("home-video-cache")),
         ),
         (
             "DF_GAMEPLAY_MUSIC_CACHE".into(),
-            path(play.join("music-cache")),
+            display_path(play_root.join("music-cache")),
         ),
         // Hand-tuned TV values (zoom, margins, focus, thinking), kept across restarts and read on
         // every display load, so changing them needs no rebuild.
         (
             "DF_GAMEPLAY_DISPLAY_TUNING".into(),
-            path(play.join("display-tuning.css")),
+            display_path(play_root.join("display-tuning.css")),
         ),
     ];
     if let Some(public) = &launch.network.public_url {
@@ -295,19 +298,19 @@ pub struct Ready {
 
 pub fn parse_ready(line: &str) -> Option<Ready> {
     let rest = line.trim_end().strip_prefix("READY ")?;
-    let mut display = None;
-    let mut player = None;
+    let mut display_url = None;
+    let mut player_url = None;
     for field in rest.split(' ') {
         if let Some(value) = field.strip_prefix("display=") {
-            display = Some(value.to_owned());
+            display_url = Some(value.to_owned());
         } else if let Some(value) = field.strip_prefix("player=") {
-            player = Some(value.to_owned());
+            player_url = Some(value.to_owned());
         }
     }
-    let display_url = display.filter(|url| url.starts_with("http://"))?;
+    let display_url = display_url.filter(|url| url.starts_with("http://"))?;
     Some(Ready {
         display_url,
-        player_url: player.unwrap_or_default(),
+        player_url: player_url.unwrap_or_default(),
     })
 }
 
@@ -326,17 +329,17 @@ pub fn wait_ready(
     mut progress: impl FnMut(&str),
 ) -> Result<Wait, io::Error> {
     let started = Instant::now();
-    let mut offset = 0u64;
-    let mut pending = String::new();
+    let mut log_offset_bytes = 0u64;
+    let mut pending_text = String::new();
     loop {
         let mut file = std::fs::File::open(log)?;
-        file.seek(SeekFrom::Start(offset))?;
-        let mut fresh = Vec::new();
-        file.read_to_end(&mut fresh)?;
-        offset += fresh.len() as u64;
-        pending.push_str(&String::from_utf8_lossy(&fresh));
-        while let Some(end) = pending.find('\n') {
-            let line: String = pending.drain(..=end).collect();
+        file.seek(SeekFrom::Start(log_offset_bytes))?;
+        let mut new_bytes = Vec::new();
+        file.read_to_end(&mut new_bytes)?;
+        log_offset_bytes += new_bytes.len() as u64;
+        pending_text.push_str(&String::from_utf8_lossy(&new_bytes));
+        while let Some(newline_index) = pending_text.find('\n') {
+            let line: String = pending_text.drain(..=newline_index).collect();
             if let Some(ready) = parse_ready(&line) {
                 return Ok(Wait::Ready(ready));
             }

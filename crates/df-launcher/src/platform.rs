@@ -18,20 +18,25 @@ pub fn process_is(pid: u32, executable: &Path) -> bool {
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
             return false;
         };
-        let mut code = 0u32;
-        let alive = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE.0 as u32;
-        let mut name = [0u16; 1024];
-        let mut length = name.len() as u32;
-        let named = QueryFullProcessImageNameW(
+        let mut exit_code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut exit_code).is_ok()
+            && exit_code == STILL_ACTIVE.0 as u32;
+        let mut image_path_utf16 = [0u16; 1024];
+        let mut image_path_length_utf16 = image_path_utf16.len() as u32;
+        let image_path_was_queried = QueryFullProcessImageNameW(
             handle,
             PROCESS_NAME_WIN32,
-            windows::core::PWSTR(name.as_mut_ptr()),
-            &mut length,
+            windows::core::PWSTR(image_path_utf16.as_mut_ptr()),
+            &mut image_path_length_utf16,
         )
         .is_ok();
         let _ = CloseHandle(handle);
-        let image = String::from_utf16_lossy(name.get(..length as usize).unwrap_or_default());
-        alive && named && same_file(Path::new(&image), executable)
+        let image_path = String::from_utf16_lossy(
+            image_path_utf16
+                .get(..image_path_length_utf16 as usize)
+                .unwrap_or_default(),
+        );
+        alive && image_path_was_queried && same_file(Path::new(&image_path), executable)
     }
 }
 
@@ -193,17 +198,21 @@ fn save_stream(
     // SAFETY: reads the finished capture out of the memory stream into an owned buffer.
     let bytes = unsafe {
         stream.Stat(&mut stat, STATFLAG_NONAME)?;
-        let size = u32::try_from(stat.cbSize)?;
-        if size == 0 || size > 32 * 1024 * 1024 {
+        let capture_size_bytes = u32::try_from(stat.cbSize)?;
+        if capture_size_bytes == 0 || capture_size_bytes > 32 * 1024 * 1024 {
             return Err("capture size out of range".into());
         }
         stream.Seek(0, STREAM_SEEK_SET, None)?;
-        let mut bytes = vec![0u8; size as usize];
-        let mut read = 0u32;
+        let mut bytes = vec![0u8; capture_size_bytes as usize];
+        let mut bytes_read = 0u32;
         stream
-            .Read(bytes.as_mut_ptr().cast(), size, Some(&mut read))
+            .Read(
+                bytes.as_mut_ptr().cast(),
+                capture_size_bytes,
+                Some(&mut bytes_read),
+            )
             .ok()?;
-        bytes.truncate(read as usize);
+        bytes.truncate(bytes_read as usize);
         bytes
     };
     if let Some(parent) = path.parent() {
