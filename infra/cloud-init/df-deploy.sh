@@ -263,7 +263,17 @@ release() {
     local slots
     slots=$(grep -c '^\[\[slots\]\]' "$dest.new/config/runner.toml" || true)
     [[ "$slots" =~ ^[0-9]+$ ]] && [ "$slots" -ge 1 ] || { echo "runner.toml lists no [[slots]]" >&2; exit 4; }
-    printf 'DF_DOCKER_GID=%s\nDF_SLOTS=%s\n' "$gid" "$slots" > "$dest.new/host.env"
+    # The database NAMES the firewall resolves (the primary, and a standby host if the provider exposes one): the rules allow tcp 25060-25061
+    # to exactly their addresses, refreshed every 30 s.
+    local dbhosts standby
+    dbhosts=$(sed -n 's/^DB_HOST=//p' "$env_file" | head -n 1)
+    standby=$(sed -n 's/^DB_STANDBY_HOST=//p' "$env_file" | head -n 1)
+    [[ "$dbhosts" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || { echo "DB_HOST is missing or malformed in the release environment" >&2; exit 4; }
+    if [ -n "$standby" ]; then
+      [[ "$standby" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || { echo "DB_STANDBY_HOST is malformed" >&2; exit 4; }
+      dbhosts="$dbhosts,$standby"
+    fi
+    printf 'DF_DOCKER_GID=%s\nDF_SLOTS=%s\nDF_DB_HOSTS=%s\n' "$gid" "$slots" "$dbhosts" > "$dest.new/host.env"
     chown -R root:root "$dest.new"
     mv -T "$dest.new" "$dest"
   fi

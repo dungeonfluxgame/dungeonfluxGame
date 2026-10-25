@@ -18,6 +18,7 @@ locals {
     slot_dirs_script                 = file("${path.module}/../../../cloud-init/df-slot-dirs.sh")
     net_rules_script                 = file("${path.module}/../../../cloud-init/df-net-rules.sh")
     stack_script                     = file("${path.module}/../../../cloud-init/df-stack.sh")
+    db_dns_script                    = file("${path.module}/../../../cloud-init/df-db-dns.sh")
     backup_script                    = file("${path.module}/../../../cloud-init/df-backup.sh")
     host_metrics_script              = file("${path.module}/../../../cloud-init/df-host-metrics.sh")
     compose_version_pin              = var.compose_version_pin

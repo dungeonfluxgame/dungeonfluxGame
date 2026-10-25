@@ -35,6 +35,7 @@ packages:
   - age
   - socat
   - iptables
+  - dnsmasq-base
   - unattended-upgrades
 %{ else }
 # The bastion has no outbound 80/443 unless package_mirror_cidrs is set (ruling d), so it installs nothing at first
@@ -269,6 +270,57 @@ write_files:
       ${key}=${value}
 %{ endfor }
 
+  - path: /usr/local/sbin/df-db-dns
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, db_dns_script)}
+
+  # The database-only resolver stub: answers names under the database suffix only, listens on the database bridge's gateway address.
+  - path: /etc/systemd/system/df-db-dns.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=DungeonFlux database-only DNS stub
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStartPre=/usr/local/sbin/df-db-dns --write /run/dungeonflux/db-dns.conf
+      ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/dungeonflux/db-dns.conf --pid-file=
+      Restart=always
+      RestartSec=2
+      NoNewPrivileges=yes
+      ProtectHome=yes
+      PrivateTmp=yes
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_NET_ADMIN CAP_NET_RAW
+      [Install]
+      WantedBy=multi-user.target
+
+  # The database addresses move in a failover: re-resolve them and replace the firewall rules every 30 seconds.
+  - path: /etc/systemd/system/df-net-rules-refresh.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=DungeonFlux firewall refresh (database addresses)
+      After=df-net-rules.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/df-net-rules --auto
+  - path: /etc/systemd/system/df-net-rules-refresh.timer
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=DungeonFlux firewall refresh every 30 seconds
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=30s
+      AccuracySec=2s
+      [Install]
+      WantedBy=timers.target
+
   - path: /usr/local/sbin/df-stack
     permissions: "0755"
     owner: root:root
@@ -418,7 +470,8 @@ write_files:
       DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce=${docker_version_pin} docker-ce-cli=${docker_version_pin} containerd.io=${containerd_version_pin} docker-compose-plugin=${compose_version_pin}
       apt-mark hold docker-ce docker-ce-cli containerd.io docker-compose-plugin
       systemctl daemon-reload
-      systemctl enable df-slot-dirs.service df-net-rules.service df-host-metrics.timer
+      systemctl enable df-slot-dirs.service df-net-rules.service df-net-rules-refresh.timer df-db-dns.service df-host-metrics.timer
+      systemctl start df-db-dns.service df-net-rules-refresh.timer || true
 %{ if role == "app" }
       systemctl enable df-backup.timer
 %{ endif }

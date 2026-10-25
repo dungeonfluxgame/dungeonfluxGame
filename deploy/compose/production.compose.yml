@@ -37,9 +37,12 @@ networks:
   control-out:
     driver_opts:
       com.docker.network.bridge.name: dfctl0
+  # The database bridge has a FIXED subnet so that its gateway, 172.30.8.1, is a known address: that is where the database-only resolver
+  # stub listens (infra/cloud-init/df-db-dns.sh) and the ONLY host address the bridge may reach (df-net-rules).
   db-out:
     driver_opts:
       com.docker.network.bridge.name: dfdb0
+    ipam: { config: [{ subnet: 172.30.8.0/24, gateway: 172.30.8.1 }] }
   egress-out:
     driver_opts:
       com.docker.network.bridge.name: dfegr0
@@ -103,6 +106,9 @@ services:
     <<: *hardened
     image: ${DBGATE_IMAGE:?pass --env-file release.lock}
     user: "${DF_UID_DBGATE}:${DF_UID_DBGATE}"
+    # Its ONLY DNS server: the host's database-only stub on the database bridge's gateway. Docker's embedded resolver forwards every name it
+    # does not know to this address; the stub answers names under the database suffix and refuses everything else.
+    dns: ["172.30.8.1"]
     networks:
       db-out: {}
       data: { ipv4_address: 172.30.2.7 }

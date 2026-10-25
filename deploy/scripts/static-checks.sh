@@ -78,6 +78,7 @@ fi
 step "df-backup against a fake docker" bash deploy/scripts/tests/test-df-backup.sh
 step "revocation list superset rule" bash deploy/scripts/tests/test-revoked-superset.sh
 step "egress firewall rules and issuer pins" bash deploy/scripts/tests/test-net-and-pins.sh
+step "database-only DNS stub (forwards the database suffix, refuses every other name)" bash deploy/scripts/tests/test-db-dns.sh
 if [ "$slow" -eq 1 ]; then step "activation state machine against a fake docker" bash deploy/scripts/tests/test-df-stack.sh; else echo "SKIP activation state machine (--skip-slow)"; skips=$((skips + 1)); fi
 if need_tool openssl "SCRAM verifier and PKI tests"; then
   step "SCRAM verifier derivation" bash deploy/db/test-scram-verifier.sh

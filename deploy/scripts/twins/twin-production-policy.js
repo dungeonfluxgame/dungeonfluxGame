@@ -35,6 +35,12 @@ function check(c) {
     if (!want || (v.driver_opts || {})['com.docker.network.bridge.name'] !== want) fail('network ' + n + ' bridge name');
   }
   for (const [name, s] of Object.entries(svc)) for (const v of s.volumes || []) if (/allowed-images/.test(v.target) && (v.target !== '/etc/dungeonflux/allowed-images.d' || v.source !== '/etc/dungeonflux/allowed-images.d' || v.read_only !== true)) fail(name + ' allow-list mount ' + v.target);
+  const dbc = ((nets['db-out'].ipam || {}).config || []);
+  if (dbc.length !== 1 || dbc[0].subnet !== '172.30.8.0/24' || dbc[0].gateway !== '172.30.8.1') fail('db-out is not 172.30.8.0/24 with gateway 172.30.8.1');
+  for (const [name, s] of Object.entries(svc)) {
+    const dns = s.dns || [];
+    if (name === 'db-gate' ? JSON.stringify(dns) !== '["172.30.8.1"]' : dns.length) fail(name + ' dns ' + JSON.stringify(dns));
+  }
   const dp = svc['docker-proxy'];
   if (dp.network_mode !== 'none' || (dp.networks && Object.keys(dp.networks).length)) fail('docker-proxy has a network');
 
@@ -114,6 +120,9 @@ const mutations = {
   'runner extra group': c => { c.services.runner.group_add = ['10013']; },
   'unnamed bridge on a slot network': c => { delete c.networks.slot1.driver_opts; },
   'alertmanager on the ingestor network': c => { c.services.alertmanager.networks.monitoring = {}; },
+  'db-gate with another DNS server': c => { c.services['db-gate'].dns = ['67.207.67.2']; },
+  'a service using the stub': c => { c.services.egress.dns = ['172.30.8.1']; },
+  'db-out without its fixed subnet': c => { delete c.networks['db-out'].ipam; },
   'unnamed bridge on db-out': c => { delete c.networks['db-out'].driver_opts; },
   'allow-list as a single file': c => { const v = c.services.runner.volumes.find(x => /allowed-images/.test(x.target)); v.source = '/etc/dungeonflux/allowed-images'; v.target = '/etc/dungeonflux/allowed-images'; },
   'public egress network member': c => { c.services['control-plane'].networks['egress-out'] = {}; }
