@@ -253,31 +253,31 @@ fn propose_with_shield_policy(
                         .iter()
                         .any(|enemy| enemy.cell().distance(actor.cell()) <= 5))
         {
-            let (normal, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
+            let (normal_range_ft, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
             let mut destinations = Vec::new();
             for cell in battle.reachable_cells(id)? {
-                let safety = opponents
+                let nearest_opponent_distance_ft = opponents
                     .iter()
                     .map(|enemy| cell.distance(enemy.cell()))
                     .min()
                     .unwrap_or(0);
                 // A cell within melee reach of an enemy is never a destination, whatever the target.
-                if safety <= 5 {
+                if nearest_opponent_distance_ft <= 5 {
                     continue;
                 }
                 // The route and its cost depend only on the destination, so they are searched
                 // at most once per cell, when the first target passes the checks below.
                 let mut route: Option<(Vec<Cell>, u16)> = None;
                 for target in &opponents {
-                    let distance = cell.distance(target.cell());
-                    if distance <= 5 || distance > u32::from(normal) {
+                    let distance_ft = cell.distance(target.cell());
+                    if distance_ft <= 5 || distance_ft > u32::from(normal_range_ft) {
                         continue;
                     }
                     if battle.attack_from(id, cell, target.id(), usage).is_err() {
                         continue;
                     }
                     let protection = battle.map().cover_between(target.cell(), cell, &[])?;
-                    let (path, cost) = match &route {
+                    let (path, path_cost_ft) = match &route {
                         Some(known) => known.clone(),
                         None => {
                             let path = battle.shortest_path(
@@ -285,19 +285,19 @@ fn propose_with_shield_policy(
                                 cell,
                                 Some(actor.movement_remaining_ft()),
                             )?;
-                            let cost = if path.is_empty() {
+                            let path_cost_ft = if path.is_empty() {
                                 0
                             } else {
                                 battle.validate_path(id, &path)?
                             };
-                            route = Some((path.clone(), cost));
-                            (path, cost)
+                            route = Some((path.clone(), path_cost_ft));
+                            (path, path_cost_ft)
                         }
                     };
                     destinations.push((
                         std::cmp::Reverse(protection),
-                        std::cmp::Reverse(safety),
-                        cost,
+                        std::cmp::Reverse(nearest_opponent_distance_ft),
+                        path_cost_ft,
                         target.id(),
                         cell,
                         path,
@@ -374,10 +374,10 @@ fn propose_with_shield_policy(
                 let Ok(path) = battle.shortest_path(id, cell, None) else {
                     continue;
                 };
-                let full_cost = battle.path_cost(id, &path)?;
+                let full_path_cost_ft = battle.path_cost(id, &path)?;
                 paths.push((
-                    full_cost > u32::from(actor.movement_remaining_ft()),
-                    full_cost,
+                    full_path_cost_ft > u32::from(actor.movement_remaining_ft()),
+                    full_path_cost_ft,
                     target.id(),
                     cell,
                     path,
@@ -396,8 +396,10 @@ fn propose_with_shield_policy(
     {
         return Ok(Some(action));
     }
-    if let Some((_, full_cost, _, _, path)) = paths.first() {
-        if *full_cost > u32::from(actor.movement_remaining_ft()) && !actor.budget().action_used {
+    if let Some((_, full_path_cost_ft, _, _, path)) = paths.first() {
+        if *full_path_cost_ft > u32::from(actor.movement_remaining_ft())
+            && !actor.budget().action_used
+        {
             return Ok(Some(Action::Dash));
         }
         let mut prefix = Vec::new();
@@ -538,12 +540,12 @@ fn approach_target(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError
             let Ok(path) = battle.shortest_path(id, cell, None) else {
                 continue;
             };
-            let cost = battle.path_cost(id, &path)?;
+            let path_cost_ft = battle.path_cost(id, &path)?;
             for &(target, from) in &from_actor {
                 if closer(cell, target, from) {
                     paths.push((
                         cell.distance(target.cell()),
-                        cost,
+                        path_cost_ft,
                         target.id(),
                         path.clone(),
                     ));
@@ -552,10 +554,11 @@ fn approach_target(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError
         }
     }
     paths.sort();
-    let Some((_, full_cost, _, path)) = paths.first() else {
+    let Some((_, full_path_cost_ft, _, path)) = paths.first() else {
         return Ok(None);
     };
-    if *full_cost > u32::from(actor.movement_remaining_ft()) && !actor.budget().action_used {
+    if *full_path_cost_ft > u32::from(actor.movement_remaining_ft()) && !actor.budget().action_used
+    {
         return Ok(Some(Action::Dash));
     }
 
@@ -634,7 +637,7 @@ fn thrown_attack(
         return Ok(None);
     };
     let actor = battle.actor(id)?;
-    let (normal, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
+    let (normal_range_ft, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
     let usage = weapon_use(weapon, true);
     let safe = |cell: Cell| {
         opponents
@@ -642,7 +645,7 @@ fn thrown_attack(
             .all(|enemy| cell.distance(enemy.cell()) > 5)
     };
     let in_range = |cell: Cell, enemy: &df_rules::tactical::Combatant| {
-        cell.distance(enemy.cell()) <= u32::from(normal)
+        cell.distance(enemy.cell()) <= u32::from(normal_range_ft)
             && battle.attack_from(id, cell, enemy.id(), usage).is_ok()
     };
     if safe(actor.cell())

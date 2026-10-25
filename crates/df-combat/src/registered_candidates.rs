@@ -416,7 +416,7 @@ pub fn enumerate_registered_actions<'a, H: RulesCommandHandler>(
     if inventory_records > limits.maximum_inventory_records {
         return Err(RegisteredActionError::Capacity);
     }
-    let mut retained = 0usize;
+    let mut retained_bytes = 0usize;
     for offer in offers {
         let bytes = offer
             .retained_bytes()
@@ -424,11 +424,11 @@ pub fn enumerate_registered_actions<'a, H: RulesCommandHandler>(
         if bytes > context.command_limits.maximum_retained_bytes {
             return Err(RegisteredActionError::Capacity);
         }
-        retained = retained
+        retained_bytes = retained_bytes
             .checked_add(bytes)
             .ok_or(RegisteredActionError::Capacity)?;
     }
-    if retained > limits.candidates.max_candidate_bytes {
+    if retained_bytes > limits.candidates.max_candidate_bytes {
         return Err(RegisteredActionError::Capacity);
     }
     if context.basis != *request.current.basis {

@@ -158,16 +158,16 @@ pub fn select_movement<'a, Owner: MovementOwner>(
     if comparison_count > limits.identity_comparisons {
         return Err(MovementError::ComparisonCapacity);
     }
-    let mut total_points = 0_usize;
+    let mut total_path_points = 0_usize;
     for (index, candidate) in candidates.iter().enumerate() {
-        let points = owner.point_count(candidate.path);
-        if points > limits.points_per_path {
+        let path_point_count = owner.point_count(candidate.path);
+        if path_point_count > limits.points_per_path {
             return Err(MovementError::PathCapacity { index });
         }
-        total_points = total_points
-            .checked_add(points)
+        total_path_points = total_path_points
+            .checked_add(path_point_count)
             .ok_or(MovementError::TotalPointCapacity)?;
-        if total_points > limits.total_points {
+        if total_path_points > limits.total_points {
             return Err(MovementError::TotalPointCapacity);
         }
         for (first, earlier) in candidates.iter().take(index).enumerate() {
