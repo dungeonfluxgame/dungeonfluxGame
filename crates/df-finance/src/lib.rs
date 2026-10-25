@@ -11,10 +11,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod admit;
+pub mod exports;
 pub mod fakes;
 pub mod held;
 pub mod maintenance;
 pub mod ports;
+pub mod reconcile_bank;
 pub mod reconciliation;
 pub mod service;
 pub mod wire;

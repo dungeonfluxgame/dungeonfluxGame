@@ -57,6 +57,8 @@ pub enum FinanceError {
     ReconciliationUnknownAccount(u16),
     ReconciliationUnknownReferenceKind(String),
     ReconciliationPort,
+    BankImport(crate::reconcile_bank::ImportError),
+    BankPayoutReferenceMissing,
     Database(tokio_postgres::Error),
 }
 

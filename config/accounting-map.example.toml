@@ -1,0 +1,40 @@
+# Placeholder ledger-to-bookkeeping mapping. Replace account names in a private local file.
+# This example contains no business or account identifiers.
+
+[accounting]
+currency = "USD"
+amount_unit = "integer_cents"
+
+[accounts]
+"1000" = "Operating cash"
+"1100" = "Processor clearing"
+"1200" = "Supplier prepaid"
+"1300" = "Dispute funds withheld"
+"2110" = "Purchased credit available"
+"2120" = "Purchased credit allocated"
+"2130" = "Purchased credit reserved"
+"2140" = "Purchased credit frozen"
+"2300" = "Supplier payable"
+"2310" = "Supplier accrued unconfirmed"
+"2400" = "Tax payable"
+"2500" = "Refund payable"
+"3000" = "Owner equity"
+"4100" = "Table time revenue"
+"4110" = "AI usage revenue"
+"4190" = "Refunds of consumed service"
+"4200" = "Promotional revenue"
+"5100" = "Cost of services"
+"5110" = "Promotional cost of services"
+"5200" = "Absorbed supplier cost"
+"5400" = "Processing fees"
+"5500" = "Chargeback loss"
+"5700" = "Rounding"
+"5300" = "Promotional credit expense"
+
+[memo_accounts]
+"2210" = "Promotional credit available (memo)"
+"2220" = "Promotional credit allocated (memo)"
+"2230" = "Promotional credit reserved (memo)"
+"3910" = "Promotional offset (memo)"
+"9100" = "Supplier exposure open (memo)"
+"9190" = "Supplier exposure offset (memo)"
