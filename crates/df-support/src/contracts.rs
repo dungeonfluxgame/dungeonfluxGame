@@ -45,6 +45,7 @@ string_id!(RightsCaseId);
 string_id!(OwnerQueue);
 string_id!(CallId);
 string_id!(JobId);
+string_id!(PageCursor);
 
 /// Failure while creating or validating a support contract value.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -61,6 +62,8 @@ pub enum ContractError {
     MissingFreshMfa,
     #[error("action plan exceeds five proposals")]
     TooManyProposals,
+    #[error("message page size must be between one and one hundred")]
+    InvalidPageSize,
 }
 
 /// Email body bytes interpreted as untrusted text, with no formatting or serialization interface.
@@ -169,6 +172,27 @@ pub struct SupportMessage {
     pub content: UntrustedEmailContent,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessagePageRequest {
+    pub cursor: Option<PageCursor>,
+    pub page_size: u8,
+}
+
+impl MessagePageRequest {
+    pub fn new(cursor: Option<PageCursor>, page_size: u8) -> Result<Self, ContractError> {
+        if !(1..=100).contains(&page_size) {
+            return Err(ContractError::InvalidPageSize);
+        }
+        Ok(Self { cursor, page_size })
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct MessagePage {
+    pub messages: Vec<SupportMessage>,
+    pub next_cursor: Option<PageCursor>,
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct SupportTicket {
     pub id: TicketId,
@@ -178,7 +202,6 @@ pub struct SupportTicket {
     pub created_at_unix_s: i64,
     pub first_received_at_unix_s: i64,
     pub last_inbound_at_unix_s: i64,
-    pub messages: Vec<SupportMessage>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -794,6 +817,20 @@ mod tests {
         assert_eq!(
             ActionProposalBatch::new(3, vec![proposal; 6]),
             Err(ContractError::TooManyProposals)
+        );
+    }
+
+    #[test]
+    fn message_page_requests_enforce_the_bounded_page_size() {
+        assert!(MessagePageRequest::new(None, 1).is_ok());
+        assert!(MessagePageRequest::new(None, 100).is_ok());
+        assert_eq!(
+            MessagePageRequest::new(None, 0),
+            Err(ContractError::InvalidPageSize)
+        );
+        assert_eq!(
+            MessagePageRequest::new(None, 101),
+            Err(ContractError::InvalidPageSize)
         );
     }
 

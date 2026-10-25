@@ -1,7 +1,8 @@
 //! Consumer-owned ports for support persistence, classification, mail and approved effects.
 use crate::contracts::{
     ActionProposalBatch, ActionProposalRecord, ApprovedAction, AuditEvent, ExecutionOutcome,
-    JevClassification, MeteredCall, OperationId, SupportMessage, SupportTicket, TicketId,
+    JevClassification, MessagePage, MessagePageRequest, MeteredCall, OperationId, SupportTicket,
+    TicketId,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -180,7 +181,8 @@ pub trait SupportStore: Send + Sync {
     async fn list_messages(
         &self,
         ticket_id: &TicketId,
-    ) -> Result<Vec<SupportMessage>, SupportStoreError>;
+        request: MessagePageRequest,
+    ) -> Result<MessagePage, SupportStoreError>;
     async fn save_ticket(
         &self,
         ticket: SupportTicket,

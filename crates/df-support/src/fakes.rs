@@ -1,7 +1,8 @@
 //! Deterministic local adapters for support contract tests; no provider or network access.
 use crate::contracts::{
     ActionProposalBatch, ActionProposalRecord, ApprovedAction, AuditEvent, ExecutionOutcome,
-    JevClassification, MeteredCall, ModelActionProposal, SupportMessage, SupportTicket, TicketId,
+    JevClassification, MessagePage, MessagePageRequest, MeteredCall, ModelActionProposal,
+    SupportTicket, TicketId,
 };
 use crate::ports::*;
 use std::collections::HashMap;
@@ -129,8 +130,13 @@ impl SupportStore for FakeStore {
     async fn list_messages(
         &self,
         ticket_id: &TicketId,
-    ) -> Result<Vec<SupportMessage>, SupportStoreError> {
-        Ok(self.get_ticket(ticket_id).await?.messages)
+        _request: MessagePageRequest,
+    ) -> Result<MessagePage, SupportStoreError> {
+        self.get_ticket(ticket_id).await?;
+        Ok(MessagePage {
+            messages: Vec::new(),
+            next_cursor: None,
+        })
     }
 
     async fn save_ticket(
