@@ -33,23 +33,24 @@ pub(crate) fn placement(
     }
     let frame_ratio = frame.width / frame.height;
     let picture_ratio = picture.width / picture.height;
-    let visible_x = if picture_ratio > frame_ratio {
+    let visible_x_share = if picture_ratio > frame_ratio {
         frame_ratio / picture_ratio
     } else {
         1.0
     };
-    let visible_y = if picture_ratio < frame_ratio {
+    let visible_y_share = if picture_ratio < frame_ratio {
         picture_ratio / frame_ratio
     } else {
         1.0
     };
-    let crop_left = (1.0 - visible_x) / 2.0;
-    let crop_top = (1.0 - visible_y) / 2.0;
-    let normalized_x = f64::from(anchor_x_permille) / 1000.0;
-    let normalized_y = f64::from(anchor_y_permille) / 1000.0;
+    let crop_left_share = (1.0 - visible_x_share) / 2.0;
+    let crop_top_share = (1.0 - visible_y_share) / 2.0;
+    let anchor_x_share = f64::from(anchor_x_permille) / 1000.0;
+    let anchor_y_share = f64::from(anchor_y_permille) / 1000.0;
     Some(Placement {
-        left_percent: ((normalized_x - crop_left) / visible_x).clamp(0.0, 1.0) * 100.0,
-        top_percent: ((normalized_y - crop_top) / visible_y).clamp(0.0, 1.0) * 100.0,
+        left_percent: ((anchor_x_share - crop_left_share) / visible_x_share).clamp(0.0, 1.0)
+            * 100.0,
+        top_percent: ((anchor_y_share - crop_top_share) / visible_y_share).clamp(0.0, 1.0) * 100.0,
         scale: 0.55 + 0.55 * f64::from(depth_permille) / 1000.0,
         z_index: depth_permille + 1,
     })
