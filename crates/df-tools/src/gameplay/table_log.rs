@@ -787,6 +787,8 @@ impl TableLog {
             });
             let position = ring.lines.partition_point(|line| line.sequence < sequence);
             let entry = rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence,
                 actor_id: actor_id.to_owned(),
                 speaker: speaker.chars().take(48).collect(),

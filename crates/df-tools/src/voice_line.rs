@@ -455,6 +455,8 @@ mod tests {
                 .unwrap()
                 .table_log
                 .push(rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     actor_id: "courier".into(),
                     speaker: speaker.into(),
                     text: voice.text.clone(),
@@ -507,6 +509,8 @@ mod tests {
             .unwrap()
             .table_log
             .push(rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 actor_id: "courier".into(),
                 speaker: "Bandit".into(),
                 text: "Give me the packet.".into(),
@@ -527,6 +531,8 @@ mod tests {
                 .unwrap()
                 .table_log
                 .push(rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     actor_id: actor_id.into(),
                     speaker: speaker.into(),
                     text: "Give me the packet.".into(),
@@ -553,6 +559,8 @@ mod tests {
             ..Default::default()
         });
         let row = |sequence: u64, text: &str| rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence,
             actor_id: "bandit".into(),
             speaker: "Dain Rusk".into(),
@@ -601,6 +609,8 @@ mod tests {
         };
         let journey = shown.journey.as_mut().unwrap();
         journey.table_log.push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 1,
             actor_id: "courier".into(),
             speaker: "cOuRiEr".into(),
@@ -633,6 +643,8 @@ mod tests {
             .unwrap()
             .table_log
             .push(rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 actor_id: "bandit".into(),
                 speaker: "Bandit".into(),
                 role: rpc::TableRole::Npc as i32,
@@ -784,6 +796,8 @@ mod tests {
         });
         view.journey.as_mut().unwrap().table_log = vec![
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 8,
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -792,6 +806,8 @@ mod tests {
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 9,
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -843,6 +859,8 @@ mod tests {
             ..Default::default()
         });
         view.journey.as_mut().unwrap().table_log = vec![rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 8,
             role: rpc::TableRole::Narrator as i32,
             kind: rpc::TableKind::Action as i32,
@@ -858,6 +876,8 @@ mod tests {
             .unwrap()
             .table_log
             .push(rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 10,
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -893,6 +913,8 @@ mod tests {
 
     fn line_with_sequence(sequence: u64, speaker: &str, text: &str) -> rpc::TableLine {
         rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence,
             role: rpc::TableRole::Narrator as i32,
             kind: rpc::TableKind::Action as i32,
@@ -917,6 +939,8 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             roll: None,
             actor_id: String::new(),
             sequence: 1,
@@ -949,12 +973,16 @@ mod tests {
 
     fn fight_display() -> rpc::DisplayGameplayView {
         let cry = rpc::FightLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             role: rpc::TableRole::Hero as i32,
             hero_index: 0,
             speaker: "Brynn".to_owned(),
             text: "Take that!".to_owned(),
         };
         let closing = rpc::FightLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             role: rpc::TableRole::Narrator as i32,
             hero_index: 0,
             speaker: String::new(),
@@ -999,6 +1027,8 @@ mod tests {
     fn fight_lines_without_text_or_speaker_are_not_voiced() {
         assert_eq!(
             fight_voice_line(&rpc::FightLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 role: rpc::TableRole::Npc as i32,
                 hero_index: 0,
                 speaker: String::new(),
@@ -1008,6 +1038,8 @@ mod tests {
         );
         assert_eq!(
             fight_voice_line(&rpc::FightLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 role: rpc::TableRole::Narrator as i32,
                 hero_index: 0,
                 speaker: String::new(),

@@ -37,6 +37,8 @@ const TABLE: &str = r#"{
 /// A Dungeon Master fight line, built as the server builds it.
 fn narration() -> VoiceLine {
     fight_voice_line(&rpc::FightLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         role: rpc::TableRole::Narrator as i32,
         hero_index: 0,
         speaker: String::new(),
@@ -48,6 +50,8 @@ fn narration() -> VoiceLine {
 /// A hero's battle cry, voiced as its named speaker.
 fn hero_cry(hero: &str) -> VoiceLine {
     fight_voice_line(&rpc::FightLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         role: rpc::TableRole::Hero as i32,
         hero_index: 1,
         speaker: hero.to_owned(),
@@ -61,6 +65,8 @@ fn cast_reply(actor: &str, name: &str) -> VoiceLine {
     let display = rpc::DisplayGameplayView {
         journey: Some(rpc::JourneyView {
             table_log: vec![rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 1,
                 actor_id: actor.to_owned(),
                 speaker: name.to_owned(),

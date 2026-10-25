@@ -351,6 +351,8 @@ mod tests {
             narration: OPENING.into(),
             journey: Some(rpc::JourneyView {
                 table_log: vec![rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     sequence: pickup.sequence,
                     role: rpc::TableRole::Narrator as i32,
                     kind: rpc::TableKind::Action as i32,

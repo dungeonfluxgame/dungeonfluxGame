@@ -50,6 +50,7 @@ mod journey;
 mod launcher_status;
 mod line_cleanup;
 mod living_scenes;
+mod media_grant;
 mod media_policy;
 mod memory;
 mod model;
@@ -273,6 +274,8 @@ impl Service {
             .attach(&mut message)
             .await
             .map_err(|error| Status::internal(error.to_string()))?;
+        voice::attach_urls(&mut message);
+        media_grant::sign_view(&mut message, role == LocalDemoRole::Display, &credential);
         wire::validate_view_size(&message).map_err(actor::unavailable)?;
         Ok((role, message))
     }
@@ -2820,6 +2823,15 @@ async fn serve_run(
     if let Some(routes) = dev_control.router {
         router = router.merge(routes);
     }
+    let router = router.layer(axum::middleware::map_response(
+        |mut response: axum::response::Response| async move {
+            response.headers_mut().insert(
+                axum::http::header::REFERRER_POLICY,
+                axum::http::HeaderValue::from_static("no-referrer"),
+            );
+            response
+        },
+    ));
     // Kept before `service` moves into qualification so shutdown can stop free-roam look-ahead.
     let free_roam_look_ahead = service.look_ahead.clone();
     let npc = npc_phase.map(|phase| {

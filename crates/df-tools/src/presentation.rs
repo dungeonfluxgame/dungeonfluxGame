@@ -2947,6 +2947,8 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             roll: None,
             actor_id: String::new(),
             sequence,
@@ -4101,6 +4103,8 @@ mod caption_speakers {
 
     fn npc_line(sequence: u64, actor_id: &str) -> rpc::TableLine {
         rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence,
             actor_id: actor_id.to_owned(),
             speaker: "Marek".to_owned(),
@@ -4220,6 +4224,8 @@ mod caption_speakers {
     #[test]
     fn a_logged_hero_line_names_its_party_position() {
         let hero_line = rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 9,
             role: rpc::TableRole::Hero as i32,
             hero_index: 1,

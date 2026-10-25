@@ -5042,6 +5042,8 @@ pub(super) mod tests {
     #[test]
     fn a_worst_case_receipt_fits_the_checkpoint_text_limit() {
         let line = rpc::FightLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             role: rpc::TableRole::Hero as i32,
             hero_index: 1,
             speaker: "\u{10400}".repeat(32),

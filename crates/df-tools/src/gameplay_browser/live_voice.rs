@@ -23,7 +23,6 @@ use web_sys::{
     RequestInit, Response, Url,
 };
 
-const VOICE_PATH: &str = "/gameplay/voice";
 const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
 /// A zero-length WAV played inside the first gesture so Safari lets this element play later.
 const UNLOCK_CLIP: &str =
@@ -96,6 +95,92 @@ struct Director {
 type Shared = Rc<RefCell<Director>>;
 
 thread_local! {static DIRECTOR:RefCell<Option<Shared>>=const{RefCell::new(None)};}
+thread_local! {static SIGNED_URLS:RefCell<HashMap<String,Vec<String>>>=RefCell::new(HashMap::new());}
+
+pub(super) fn update_urls(view: &rpc::ViewMessage) {
+    let mut urls = HashMap::new();
+    if let Some(rpc::view_message::Audience::Display(display)) = &view.audience
+        && let Some(journey) = display.journey.as_ref()
+    {
+        let check_voice = crate::voice_line::check_voice_line(display);
+        for line in &journey.table_log {
+            let role = match rpc::TableRole::try_from(line.role) {
+                Ok(rpc::TableRole::Narrator) => crate::voice_line::NARRATOR_ROLE.to_owned(),
+                Ok(rpc::TableRole::Npc) if !line.actor_id.is_empty() => {
+                    format!("npc-id:{}|{}", line.actor_id, line.speaker)
+                }
+                Ok(rpc::TableRole::Npc) if !line.speaker.is_empty() => {
+                    format!("npc:{}", line.speaker)
+                }
+                _ => continue,
+            };
+            if line.audio_url.is_empty() && line.audio_part_urls.is_empty() {
+                continue;
+            }
+            let key = check_voice
+                .as_ref()
+                .filter(|check| check.result_sequence == line.sequence)
+                .map_or_else(
+                    || {
+                        crate::voice_line::VoiceLine {
+                            role,
+                            text: line.text.clone(),
+                        }
+                        .key()
+                    },
+                    |check| check.voice.key(),
+                );
+            let mut line_urls = Vec::with_capacity(1 + line.audio_part_urls.len());
+            if !line.audio_url.is_empty() {
+                line_urls.push(line.audio_url.clone());
+            }
+            line_urls.extend(line.audio_part_urls.iter().cloned());
+            urls.insert(key, line_urls);
+        }
+        if let Some(combat) = journey.combat.as_ref() {
+            for outcome in combat
+                .outcomes
+                .iter()
+                .chain(&combat.move_outcomes)
+                .chain(&combat.death_save_outcomes)
+            {
+                for line in &outcome.lines {
+                    if let Some(voice) = crate::voice_line::fight_voice_line(line) {
+                        insert_fight_urls(
+                            &mut urls,
+                            &voice,
+                            &line.audio_url,
+                            &line.audio_part_urls,
+                        );
+                    }
+                }
+            }
+            for line in &combat.closing_lines {
+                if let Some(voice) = crate::voice_line::fight_voice_line(line) {
+                    insert_fight_urls(&mut urls, &voice, &line.audio_url, &line.audio_part_urls);
+                }
+            }
+        }
+    }
+    SIGNED_URLS.with(|current| *current.borrow_mut() = urls);
+}
+
+fn insert_fight_urls(
+    urls: &mut HashMap<String, Vec<String>>,
+    voice: &crate::voice_line::VoiceLine,
+    audio_url: &str,
+    audio_part_urls: &[String],
+) {
+    if audio_url.is_empty() && audio_part_urls.is_empty() {
+        return;
+    }
+    let mut line_urls = Vec::with_capacity(1 + audio_part_urls.len());
+    if !audio_url.is_empty() {
+        line_urls.push(audio_url.to_owned());
+    }
+    line_urls.extend(audio_part_urls.iter().cloned());
+    urls.insert(voice.key(), line_urls);
+}
 
 impl Director {
     fn sound(&self) -> Sound {
@@ -757,10 +842,13 @@ fn on_error(shared: &Shared, _event: &Event) {
 /// Fetches one clip and returns an object URL for it. Anything but a non-empty, bounded
 /// 200 response is an error and the line stays silent.
 async fn fetch_clips(key: &str, presentation_id: LineId) -> Result<VecDeque<String>, JsValue> {
-    let (first, count) = fetch_clip(key, 0, presentation_id).await?;
-    let mut clips = VecDeque::from([first]);
-    for index in 1..count {
-        match fetch_clip(key, index, presentation_id).await {
+    let urls = SIGNED_URLS
+        .with(|current| current.borrow().get(key).cloned())
+        .filter(|urls| !urls.is_empty())
+        .ok_or_else(|| JsValue::from_str("signed voice URL absent"))?;
+    let mut clips = VecDeque::new();
+    for url in urls {
+        match fetch_clip(&url, presentation_id).await {
             Ok((clip, _)) => clips.push_back(clip),
             Err(error) => {
                 for clip in clips {
@@ -773,24 +861,15 @@ async fn fetch_clips(key: &str, presentation_id: LineId) -> Result<VecDeque<Stri
     Ok(clips)
 }
 
-async fn fetch_clip(
-    key: &str,
-    index: usize,
-    presentation_id: LineId,
-) -> Result<(String, usize), JsValue> {
+async fn fetch_clip(url: &str, presentation_id: LineId) -> Result<(String, usize), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
-    let path = if index == 0 {
-        format!("{VOICE_PATH}/{key}")
-    } else {
-        format!("{VOICE_PATH}/{key}/{index}")
-    };
     let headers = Headers::new()?;
     headers.set("x-gameplay-presentation-id", &presentation_id.to_string())?;
     let options = RequestInit::new();
     options.set_method("GET");
     options.set_headers(&headers);
     options.set_cache(web_sys::RequestCache::NoStore);
-    let request = Request::new_with_str_and_init(&path, &options)?;
+    let request = Request::new_with_str_and_init(url, &options)?;
     let response: Response = JsFuture::from(window.fetch_with_request(&request))
         .await?
         .dyn_into()?;
@@ -802,14 +881,8 @@ async fn fetch_clip(
     if bytes.length() == 0 || bytes.length() > MAXIMUM_CLIP_BYTES {
         return Err(JsValue::from_str("voice clip size refused"));
     }
-    let count = response
-        .headers()
-        .get("x-voice-parts")?
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|count| *count > 0)
-        .unwrap_or(1);
     let options = BlobPropertyBag::new();
     options.set_type("audio/mpeg");
     let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&bytes), &options)?;
-    Ok((Url::create_object_url_with_blob(&blob)?, count))
+    Ok((Url::create_object_url_with_blob(&blob)?, 1))
 }

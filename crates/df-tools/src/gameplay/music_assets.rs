@@ -104,6 +104,7 @@ fn respond(track: &Track, headers: &HeaderMap) -> Response {
         (header::CONTENT_TYPE, MIME.to_owned()),
         (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
         (header::CONTENT_LENGTH, track.bytes.len().to_string()),
+        (header::REFERRER_POLICY, "no-referrer".to_owned()),
     ];
     if revalidated {
         return (StatusCode::NOT_MODIFIED, headers, Body::empty()).into_response();

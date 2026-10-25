@@ -260,6 +260,8 @@ mod hs41_actor_hook_tests {
                 iven.name = "Iven".into();
                 model.people = vec![hero, tovin, iven];
                 let line = rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     sequence: 1,
                     speaker: "Orla Stonehide".into(),
                     role: rpc::TableRole::Hero as i32,
@@ -1936,12 +1938,16 @@ mod merchant_trade_tests {
         ];
         let mut lines = vec![
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 speaker: "Pip".into(),
                 role: rpc::TableRole::Hero as i32,
                 hero_index: 2,
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 actor_id: "bram".into(),
                 speaker: "Bram Weller".into(),
                 role: rpc::TableRole::Npc as i32,
@@ -1951,6 +1957,8 @@ mod merchant_trade_tests {
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 actor_id: "tessa".into(),
                 speaker: "Tessa Reed".into(),
                 role: rpc::TableRole::Npc as i32,

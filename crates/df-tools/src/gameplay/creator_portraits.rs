@@ -12,7 +12,7 @@ use super::{
 use axum::{
     Router,
     extract::{Path as RoutePath, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -905,7 +905,7 @@ async fn handle_inner(
         }
     }
     let entry = &requests[&operation_key];
-    let (state, uri, message) = match imagery.hub().status(&entry.resource) {
+    let (state, mut uri, message) = match imagery.hub().status(&entry.resource) {
         ResourceStatus::Ready(generated) => (
             "ready",
             format!(
@@ -933,6 +933,12 @@ async fn handle_inner(
             "The portrait result is unknown. No automatic retry was sent.".to_owned(),
         ),
     };
+    super::media_grant::sign_gameplay_url(
+        &mut uri,
+        "/gameplay/creator-portrait/",
+        super::media_grant::Audience::Seat,
+        &binding,
+    );
     Ok(rpc::HeroPortraitResponse {
         draft_revision: body.draft_revision,
         state: state.into(),
@@ -1026,6 +1032,8 @@ pub(super) fn router(service: super::Service) -> Router {
 async fn serve(
     State(service): State<super::Service>,
     RoutePath(key): RoutePath<String>,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
     let audit = super::service_audit_context(&service, None);
     let approved = service
@@ -1039,7 +1047,18 @@ async fn serve(
         .flat_map(|identity| &identity.appearances)
         .find(|asset| asset.key.as_str() == key)
         .cloned();
-    respond(&service.portraits, &audit, &key, approved).await
+    if approved.is_some() {
+        return super::media_grant::public_media_response(
+            respond(&service.portraits, &audit, &key, approved).await,
+        );
+    }
+    let Some(grant) = super::media_grant::verify_seat_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
+    super::media_grant::secure_media_response(
+        respond(&service.portraits, &audit, &key, approved).await,
+        grant.remaining,
+    )
 }
 
 /// Answers one portrait request. An approved appearance is public to the room (the shared display

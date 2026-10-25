@@ -1215,6 +1215,8 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     }),
                     table_log: vec![
                         rpc::TableLine {
+                            audio_url: String::new(),
+                            audio_part_urls: Vec::new(),
                             roll: None,
                             actor_id: String::new(),
                             sequence: 1,
@@ -1225,6 +1227,8 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                             text: "private words never read".to_owned(),
                         },
                         rpc::TableLine {
+                            audio_url: String::new(),
+                            audio_part_urls: Vec::new(),
                             roll: None,
                             actor_id: String::new(),
                             sequence: 2,

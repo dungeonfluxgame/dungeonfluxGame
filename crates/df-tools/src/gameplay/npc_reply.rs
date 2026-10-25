@@ -5835,6 +5835,8 @@ pub(super) mod tests {
             .unwrap()
             .table_log
             .push(rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 1,
                 actor_id: "bandit".into(),
                 speaker: "Bandit".into(),

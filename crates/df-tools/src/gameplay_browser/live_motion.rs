@@ -1056,6 +1056,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         };
         (view, state.generation, state.document.hidden())
     };
+    live_voice::update_urls(&view);
     let Some((journey, scene)) = journey_scene(&view) else {
         return redraw(client);
     };
@@ -4368,11 +4369,15 @@ mod tests {
 
         let lines = [
             rpc::FightLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 role: rpc::TableRole::Narrator as i32,
                 text: "The rat rushes from the shadows.".to_owned(),
                 ..Default::default()
             },
             rpc::FightLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 role: rpc::TableRole::Hero as i32,
                 hero_index: 0,
                 speaker: "Brakka".to_owned(),

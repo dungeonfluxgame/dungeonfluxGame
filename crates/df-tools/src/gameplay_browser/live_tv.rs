@@ -6157,6 +6157,8 @@ mod tests {
                 ..Default::default()
             }],
             table_log: vec![rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
                 speaker: "Roll".to_owned(),
@@ -6206,12 +6208,16 @@ mod tests {
             ],
             table_log: vec![
                 rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     role: rpc::TableRole::Hero as i32,
                     kind: rpc::TableKind::Action as i32,
                     speaker: "Brakka".to_owned(),
                     ..Default::default()
                 },
                 rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     role: rpc::TableRole::Narrator as i32,
                     hero_index: 1,
                     kind: rpc::TableKind::Action as i32,

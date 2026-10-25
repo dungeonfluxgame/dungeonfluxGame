@@ -137,6 +137,8 @@ mod tests {
 
     fn line(sequence: u64, hero_index: u32, text: &str) -> rpc::TableLine {
         rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence,
             hero_index,
             text: text.into(),
@@ -154,6 +156,8 @@ mod tests {
                 line(2, 1, "studying the scale"),
                 line(3, 0, "flirting with Tobin"),
                 rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     role: rpc::TableRole::Npc as i32,
                     ..line(4, 1, "NPC reply")
                 },
@@ -177,6 +181,8 @@ mod tests {
         let mut journey = rpc::JourneyView {
             table_log: (1..=8)
                 .map(|sequence| rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
                     sequence,
                     role: rpc::TableRole::Narrator as i32,
                     kind: rpc::TableKind::Action as i32,
@@ -187,6 +193,8 @@ mod tests {
             ..Default::default()
         };
         journey.table_log.push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 9,
             roll: Some(rpc::TableRoll::default()),
             role: rpc::TableRole::Narrator as i32,

@@ -176,7 +176,7 @@ message DeathSaveState { bytes participant_id = 1; string name = 2; uint32 succe
 // empty). Authored on the server from content tables, deterministic for a given fight record; the
 // browser only captions and voices it, never inventing one. Voice role and budget follow the existing
 // narrator/NPC voice path by role.
-message FightLine { TableRole role = 1; uint32 hero_index = 2; string speaker = 3; string text = 4; }
+message FightLine { TableRole role = 1; uint32 hero_index = 2; string speaker = 3; string text = 4; string audio_url = 5; repeated string audio_part_urls = 6; }
 message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; string damage_type = 19; uint32 distance_ft = 20; OutcomeKind kind = 21; repeated GridCell path = 22; uint32 cost_ft = 23; uint32 remaining_ft = 24; sint32 roll_mode = 25; repeated uint32 faces = 26; repeated string reasons = 27; string cover = 28; DeathSaveResult death_save_result = 29; uint32 death_successes = 30; uint32 death_failures = 31; uint32 recovery_hours = 32; repeated FightLine lines = 33; uint64 sequence = 34; StabilizationResult stabilization = 35; repeated DamageRoll damage_rolls = 36; sint32 damage_modifier = 37; optional BattleTechnique presentation = 38; optional CombatDisplayMetadata display_metadata = 39; }
 // Server-projected audience metadata for an already committed outcome. It contains no rules and is optional so older outcomes remain renderable.
 // Optional committed breakdown; absence means the historical outcome recorded only the sum.
@@ -229,7 +229,7 @@ message NpcStanding { string npc_id = 1; string name = 2; uint32 attitude = 3; s
 enum RollKind { ROLL_KIND_UNSPECIFIED = 0; ROLL_KIND_CHECK = 1; ROLL_KIND_SAVE = 2; ROLL_KIND_ATTACK = 3; ROLL_KIND_DEATH_SAVE = 4; ROLL_KIND_STABILIZE = 5; ROLL_KIND_INITIATIVE = 6; }
 enum RollAgainst { ROLL_AGAINST_UNSPECIFIED = 0; ROLL_AGAINST_DC = 1; ROLL_AGAINST_AC = 2; }
 message TableRoll { repeated uint32 faces = 1; uint32 kept = 2; sint32 roll_mode = 3; sint32 modifier = 4; sint32 total = 5; RollAgainst against = 6; uint32 target_number = 7; bool succeeded = 8; string label = 9; RollKind kind = 10; }
-message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; string actor_id = 7; TableRoll roll = 8; }
+message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; string actor_id = 7; TableRoll roll = 8; string audio_url = 9; repeated string audio_part_urls = 10; }
 
 service DialogueService {
   rpc Submit(RawDialogueRequest) returns (DialogueResponse);

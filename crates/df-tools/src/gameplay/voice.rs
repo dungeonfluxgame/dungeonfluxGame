@@ -35,7 +35,7 @@ use super::{
 use axum::{
     Router,
     extract::{Path as RoutePath, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -1211,12 +1211,92 @@ pub(super) fn router(voice: Voice) -> Router {
         .with_state(voice)
 }
 
+pub(super) fn attach_urls(message: &mut rpc::ViewMessage) {
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+        return;
+    };
+    let voiced_lines = crate::voice_line::display_lines(display);
+    let check_voice = crate::voice_line::check_voice_line(display);
+    let Some(journey) = display.journey.as_mut() else {
+        return;
+    };
+    for line in &mut journey.table_log {
+        if let Some(check) = check_voice
+            .as_ref()
+            .filter(|check| check.result_sequence == line.sequence)
+        {
+            attach_voice_url(line, &check.voice);
+            continue;
+        }
+        let role = match rpc::TableRole::try_from(line.role) {
+            Ok(rpc::TableRole::Narrator) => "narrator".to_owned(),
+            Ok(rpc::TableRole::Npc) if !line.actor_id.is_empty() => {
+                format!("npc-id:{}|{}", line.actor_id, line.speaker)
+            }
+            Ok(rpc::TableRole::Npc) if !line.speaker.is_empty() => {
+                format!("npc:{}", line.speaker)
+            }
+            _ => continue,
+        };
+        let Some(voice_line) = voiced_lines.iter().find(|voice_line| {
+            voice_line.role == role && voice_line.text.trim() == line.text.trim()
+        }) else {
+            continue;
+        };
+        attach_voice_url(line, voice_line);
+    }
+    if let Some(combat) = journey.combat.as_mut() {
+        for outcome in combat
+            .outcomes
+            .iter_mut()
+            .chain(&mut combat.move_outcomes)
+            .chain(&mut combat.death_save_outcomes)
+        {
+            for line in &mut outcome.lines {
+                if let Some(voice_line) = crate::voice_line::fight_voice_line(line) {
+                    attach_fight_url(line, &voice_line);
+                }
+            }
+        }
+        for line in &mut combat.closing_lines {
+            if let Some(voice_line) = crate::voice_line::fight_voice_line(line) {
+                attach_fight_url(line, &voice_line);
+            }
+        }
+    }
+}
+
+fn attach_voice_url(line: &mut rpc::TableLine, voice_line: &VoiceLine) {
+    let key = voice_line.key();
+    line.audio_url = format!("/gameplay/voice/{key}");
+    let segment_count = voice_segments(&voice_line.text).len();
+    if segment_count > 1 {
+        line.audio_part_urls = (1..segment_count)
+            .map(|index| format!("/gameplay/voice/{key}/{index}"))
+            .collect();
+    }
+}
+
+fn attach_fight_url(line: &mut rpc::FightLine, voice_line: &VoiceLine) {
+    line.audio_url = format!("/gameplay/voice/{}", voice_line.key());
+    let segment_count = voice_segments(&voice_line.text).len();
+    if segment_count > 1 {
+        line.audio_part_urls = (1..segment_count)
+            .map(|index| format!("/gameplay/voice/{}/{index}", voice_line.key()))
+            .collect();
+    }
+}
+
 async fn serve_line(
     State(voice): State<Voice>,
     RoutePath(key): RoutePath<String>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
-    match voice.audio_part(&key, 0, presentation_id(&headers)).await {
+    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
+    let response = match voice.audio_part(&key, 0, presentation_id(&headers)).await {
         Lookup::Audio(bytes) => (
             [
                 (header::CONTENT_TYPE, "audio/mpeg"),
@@ -1228,15 +1308,20 @@ async fn serve_line(
         Lookup::Part { bytes, count } => audio_parts_response(bytes, count),
         Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
         Lookup::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
+    };
+    super::media_grant::secure_media_response(response, grant.remaining)
 }
 
 async fn serve_part(
     State(voice): State<Voice>,
     RoutePath((key, part)): RoutePath<(String, usize)>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
-    match voice
+    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
+    let response = match voice
         .audio_part(&key, part, presentation_id(&headers))
         .await
     {
@@ -1244,7 +1329,8 @@ async fn serve_part(
         Lookup::Part { bytes, count } => audio_parts_response(bytes, count),
         Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
         Lookup::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
+    };
+    super::media_grant::secure_media_response(response, grant.remaining)
 }
 
 fn presentation_id(headers: &HeaderMap) -> Option<u64> {
@@ -1376,6 +1462,22 @@ mod tests {
     use crate::gameplay::resources::{Invalidate, ResourceKey};
 
     const AUDIO: &[u8] = b"ID3 fake mpeg audio";
+
+    fn granted_uri(key: &str) -> Uri {
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60;
+        let token = super::super::media_grant::sign(
+            key,
+            super::super::media_grant::Audience::Display,
+            &[1; 32],
+            expires_at,
+        )
+        .unwrap();
+        format!("/?g={token}").parse().unwrap()
+    }
 
     /// A loopback stand-in for the ElevenLabs streaming endpoint.
     struct FakeEleven {
@@ -1663,7 +1765,14 @@ mod tests {
         let fake = FakeEleven::start(Duration::ZERO, true);
         let voice = voice_with(&fake, &cache);
 
-        let response = serve_line(State(voice), RoutePath("0".repeat(64)), HeaderMap::new()).await;
+        let key = "0".repeat(64);
+        let response = serve_line(
+            State(voice),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+            granted_uri(&key),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(fake.calls(), 0);
@@ -1680,18 +1789,27 @@ mod tests {
             State(voice.clone()),
             RoutePath(key.clone()),
             HeaderMap::new(),
+            granted_uri(&key),
         )
         .await;
         let second = serve_line(
             State(voice.clone()),
             RoutePath(key.clone()),
             HeaderMap::new(),
+            granted_uri(&key),
         )
         .await;
 
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(first.headers()[header::CONTENT_TYPE], "audio/mpeg");
-        assert_eq!(first.headers()[header::CACHE_CONTROL], CACHE_CONTROL);
+        assert_eq!(first.headers()[header::REFERRER_POLICY], "no-referrer");
+        let cache_control = first.headers()[header::CACHE_CONTROL].to_str().unwrap();
+        let maximum_age = cache_control
+            .strip_prefix("private, max-age=")
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        assert!((1..=60).contains(&maximum_age));
         let body = axum::body::to_bytes(first.into_body(), 1 << 20)
             .await
             .unwrap();
@@ -1716,15 +1834,23 @@ mod tests {
             State(voice.clone()),
             RoutePath(key.clone()),
             HeaderMap::new(),
+            granted_uri(&key),
         )
         .await;
         let second = serve_part(
             State(voice.clone()),
             RoutePath((key.clone(), 1)),
             HeaderMap::new(),
+            granted_uri(&key),
         )
         .await;
-        let replay = serve_part(State(voice), RoutePath((key, 1)), HeaderMap::new()).await;
+        let replay = serve_part(
+            State(voice),
+            RoutePath((key.clone(), 1)),
+            HeaderMap::new(),
+            granted_uri(&key),
+        )
+        .await;
 
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(first.headers()["x-voice-parts"], "2");
@@ -1821,7 +1947,13 @@ mod tests {
         let voice = voice_with(&fake, &cache);
         let key = register(&voice, &narrator("The seal cracks."));
 
-        let response = serve_line(State(voice), RoutePath(key.clone()), HeaderMap::new()).await;
+        let response = serve_line(
+            State(voice),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+            granted_uri(&key),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(fake.calls(), 1);
@@ -2589,11 +2721,19 @@ mod tests {
         voice.register_view(&display_message("The wharf is quiet."));
         let key = narrator("The wharf is quiet.").key();
 
-        let known = serve_line(State(voice.clone()), RoutePath(key), HeaderMap::new()).await;
+        let known = serve_line(
+            State(voice.clone()),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+            granted_uri(&key),
+        )
+        .await;
+        let unknown_key = "1".repeat(64);
         let unknown = serve_line(
             State(voice.clone()),
-            RoutePath("1".repeat(64)),
+            RoutePath(unknown_key.clone()),
             HeaderMap::new(),
+            granted_uri(&unknown_key),
         )
         .await;
 
@@ -2631,6 +2771,8 @@ mod tests {
     fn register_view_registers_every_public_npc_reply_without_a_cast_figure() {
         let voice = Voice::disabled(VoiceOff::Disabled);
         let row = |sequence: u64, text: &str| rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence,
             actor_id: "bandit".into(),
             speaker: "Dain Rusk".into(),

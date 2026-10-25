@@ -1538,6 +1538,8 @@ mod tests {
         };
         journey.table_log = vec![
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 1,
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -1546,6 +1548,8 @@ mod tests {
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 2,
                 role: rpc::TableRole::Npc as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -1554,6 +1558,8 @@ mod tests {
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 3,
                 role: rpc::TableRole::Hero as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -1572,6 +1578,8 @@ mod tests {
         );
 
         journey.table_log.push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 4,
             role: rpc::TableRole::Npc as i32,
             kind: rpc::TableKind::Speech as i32,
@@ -1597,6 +1605,8 @@ mod tests {
         let journey = rpc::JourneyView {
             speaker: "Second Messenger".into(),
             table_log: vec![rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 4,
                 role: rpc::TableRole::Npc as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -1687,6 +1697,8 @@ mod tests {
         };
         journey.table_log = vec![
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 7,
                 role: rpc::TableRole::Npc as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -1695,6 +1707,8 @@ mod tests {
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 8,
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -1708,6 +1722,8 @@ mod tests {
         assert_eq!(exploration_speech(&journey, &scene), None);
 
         journey.table_log.push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 9,
             role: rpc::TableRole::Hero as i32,
             kind: rpc::TableKind::Speech as i32,
@@ -1722,6 +1738,8 @@ mod tests {
         );
 
         journey.table_log.push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 10,
             role: rpc::TableRole::Npc as i32,
             kind: rpc::TableKind::Speech as i32,

@@ -34,6 +34,7 @@ tonic.workspace = true
 tokio.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "=0.2.17"
 df-intent = { path = "../df-intent" }
 axum = { version = "0.8", features = ["ws"] }
 tonic = { workspace = true, features = ["transport", "router"] }
@@ -67,7 +68,6 @@ qrcode = { version = "=0.14.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "=0.1.11"
-getrandom = "=0.2.17"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 df-ui = { path = "../df-ui" }

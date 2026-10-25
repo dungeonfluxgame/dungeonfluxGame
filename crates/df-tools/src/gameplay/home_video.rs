@@ -34,7 +34,7 @@ use axum::{
     Router,
     body::Body,
     extract::Path as RoutePath,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -1754,7 +1754,10 @@ pub(crate) fn span_for(range: Option<&str>, length: u64) -> Span {
     Span::Part { first, last }
 }
 
-async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap) -> Response {
+async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap, uri: Uri) -> Response {
+    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
     let started = Instant::now();
     let response = match ENGINE.lock().ok().and_then(|engine| engine.clone()) {
         Some(engine) => respond(&engine.cache_dir, &key, &headers).await,
@@ -1800,7 +1803,7 @@ async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap) -> Re
         Some(status),
         Some(browser_asset_id),
     );
-    response
+    super::media_grant::secure_media_response(response, grant.remaining)
 }
 
 /// The response for one cached clip: the whole file, a byte range, or a refusal of a range that

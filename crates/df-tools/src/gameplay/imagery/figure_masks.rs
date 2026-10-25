@@ -1218,21 +1218,44 @@ mod tests {
         );
         let cached_mask = focus_mask_path(&directory, key.as_str(), figure.mask_index);
         let mask_modified = std::fs::metadata(&cached_mask).unwrap().modified().unwrap();
+        let expiry = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60;
+        let grant = crate::gameplay::media_grant::sign(
+            key.as_str(),
+            crate::gameplay::media_grant::Audience::Display,
+            &[1; 32],
+            expiry,
+        )
+        .unwrap();
+        let uri: axum::http::Uri = format!("/?g={grant}").parse().unwrap();
         let response = super::super::serve_focus_mask(
             axum::extract::State(imagery.clone()),
             axum::extract::Path((key.as_str().to_owned(), figure.mask_index)),
             axum::http::HeaderMap::new(),
+            uri.clone(),
         )
         .await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
+            response.headers()[axum::http::header::REFERRER_POLICY],
+            "no-referrer"
+        );
+        assert_eq!(
             response.headers()[axum::http::header::CONTENT_TYPE],
             "image/png"
         );
-        assert_eq!(
-            response.headers()[axum::http::header::CACHE_CONTROL],
-            super::super::CACHE_CONTROL
-        );
+        let cache_control = response.headers()[axum::http::header::CACHE_CONTROL]
+            .to_str()
+            .unwrap();
+        let maximum_age = cache_control
+            .strip_prefix("private, max-age=")
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        assert!((1..=60).contains(&maximum_age));
         let etag = response.headers()[axum::http::header::ETAG].clone();
         let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
@@ -1245,6 +1268,7 @@ mod tests {
             axum::extract::State(imagery.clone()),
             axum::extract::Path((key.as_str().to_owned(), figure.mask_index)),
             headers,
+            uri,
         )
         .await;
         assert_eq!(unchanged.status(), axum::http::StatusCode::NOT_MODIFIED);

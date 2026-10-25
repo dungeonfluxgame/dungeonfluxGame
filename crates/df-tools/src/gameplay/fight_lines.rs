@@ -176,6 +176,8 @@ fn cry(
     seed: &[u8],
 ) -> Option<rpc::FightLine> {
     pick(tables, pool, attacker, target, seed).map(|text| rpc::FightLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         role: cry_role(hero) as i32,
         hero_index: 0,
         speaker: speaker.to_owned(),
@@ -191,6 +193,8 @@ fn narration(
     seed: &[u8],
 ) -> Option<rpc::FightLine> {
     pick(tables, pool, attacker, target, seed).map(|text| rpc::FightLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         role: rpc::TableRole::Narrator as i32,
         hero_index: 0,
         speaker: String::new(),

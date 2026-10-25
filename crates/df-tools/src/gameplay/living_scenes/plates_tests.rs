@@ -861,6 +861,8 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
     let mut journey = rpc::JourneyView {
         table_log: vec![
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 1,
                 role: rpc::TableRole::Npc as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -869,6 +871,8 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 2,
                 role: rpc::TableRole::Hero as i32,
                 kind: rpc::TableKind::Action as i32,
@@ -876,6 +880,8 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
                 ..Default::default()
             },
             rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: 3,
                 role: rpc::TableRole::Hero as i32,
                 kind: rpc::TableKind::Speech as i32,
@@ -888,6 +894,8 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
     };
     assert!(committed_story(&journey).is_none());
     journey.table_log.push(rpc::TableLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         sequence: 4,
         role: rpc::TableRole::Npc as i32,
         kind: rpc::TableKind::Speech as i32,
@@ -1584,6 +1592,8 @@ fn public_story_message(scene: &pack::Scene, table_log: Vec<rpc::TableLine>) -> 
 
 fn public_npc_line(sequence: u64, actor: &pack::SceneCastMember, text: &str) -> rpc::TableLine {
     rpc::TableLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         sequence,
         actor_id: actor.id.clone(),
         speaker: actor.name.clone(),
@@ -2002,6 +2012,8 @@ async fn public_story_caller_ignores_private_withheld_and_action_only_updates() 
     let mut private = public_npc_line(2, &current.cast[0], "murmurs to Hero 1");
     private.kind = rpc::TableKind::Action as i32;
     let action = rpc::TableLine {
+        audio_url: String::new(),
+        audio_part_urls: Vec::new(),
         sequence: 3,
         role: rpc::TableRole::Hero as i32,
         kind: rpc::TableKind::Action as i32,
@@ -2048,6 +2060,8 @@ fn retained_narrator_findings_do_not_hold_the_plate_roll_guard() {
     };
     display.journey = Some(rpc::JourneyView {
         table_log: vec![rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             role: rpc::TableRole::Narrator as i32,
             kind: rpc::TableKind::Action as i32,
             speaker: "Roll".into(),
@@ -5632,6 +5646,8 @@ async fn scene_plate_stages_six_heroes_by_latest_activity_and_keeps_custody_with
         rows.iter()
             .enumerate()
             .map(|(index, text)| rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
                 sequence: index as u64 + 1,
                 hero_index: index as u32,
                 role: rpc::TableRole::Hero as i32,
@@ -5661,6 +5677,8 @@ async fn scene_plate_stages_six_heroes_by_latest_activity_and_keeps_custody_with
         .unwrap()
         .table_log
         .push(rpc::TableLine {
+            audio_url: String::new(),
+            audio_part_urls: Vec::new(),
             sequence: 5,
             role: rpc::TableRole::Narrator as i32,
             kind: rpc::TableKind::Action as i32,

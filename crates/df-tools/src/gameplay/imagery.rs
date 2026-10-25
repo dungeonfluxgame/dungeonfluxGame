@@ -52,7 +52,7 @@ use std::{
 use axum::{
     Router,
     extract::{Path as RoutePath, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -2780,9 +2780,13 @@ async fn serve_focus_mask(
     State(imagery): State<Imagery>,
     RoutePath((key, index)): RoutePath<(String, u32)>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
+    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
     let Some(bytes) = imagery.focus_mask(&key, index).await else {
-        return StatusCode::NOT_FOUND.into_response();
+        return super::media_grant::concealed_not_found();
     };
     let etag = format!("\"{key}-figure-{index}-v1\"");
     if headers
@@ -2790,31 +2794,41 @@ async fn serve_focus_mask(
         .and_then(|value| value.to_str().ok())
         == Some(etag.as_str())
     {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag),
-                (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
-            ],
-        )
-            .into_response();
+        return super::media_grant::secure_media_response(
+            (
+                StatusCode::NOT_MODIFIED,
+                [
+                    (header::ETAG, etag),
+                    (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+                ],
+            )
+                .into_response(),
+            grant.remaining,
+        );
     }
-    (
-        [
-            (header::CONTENT_TYPE, "image/png".to_owned()),
-            (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
-            (header::ETAG, etag),
-        ],
-        bytes,
+    super::media_grant::secure_media_response(
+        (
+            [
+                (header::CONTENT_TYPE, "image/png".to_owned()),
+                (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+                (header::ETAG, etag),
+            ],
+            bytes,
+        )
+            .into_response(),
+        grant.remaining,
     )
-        .into_response()
 }
 
 pub(super) async fn serve_image(
     State(imagery): State<Imagery>,
     RoutePath(key): RoutePath<String>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
+    let Some(grant) = super::media_grant::verify_request(&headers, &uri, &key) else {
+        return super::media_grant::concealed_not_found();
+    };
     let started = std::time::Instant::now();
     let resource_id = safe_image_resource_id(&key);
     let browser_asset_id =
@@ -2892,7 +2906,7 @@ pub(super) async fn serve_image(
         cache_result,
         started.elapsed().as_millis(),
     );
-    response
+    super::media_grant::secure_media_response(response, grant.remaining)
 }
 
 fn safe_image_resource_id(key: &str) -> String {
