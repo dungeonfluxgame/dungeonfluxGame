@@ -465,3 +465,16 @@ h3 { font-size: clamp(1.4rem, 0.6vw + 1.15rem, 1.8rem); line-height: 1.15; }
 .paces-custom { margin-top: 24px; max-width: 68ch; color: #d8d0bf; }
 .paces-custom strong { color: #fbf1da; font-weight: 600; }
 @media (max-width: 700px) { .paces { grid-template-columns: 1fr; } }
+
+/* News and changelog. */
+.post-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 32px; max-width: 760px; }
+.post-list li { padding-top: 24px; border-top: 1px solid rgba(230, 180, 94, 0.22); display: grid; gap: 8px; }
+.post-list time, .post-meta { color: var(--mist); font-size: 1rem; }
+.post-list h2 { font-size: clamp(1.7rem, 1.2vw + 1.3rem, 2.3rem); }
+.post-list h2 a { color: #fbf1da; text-decoration: none; }
+.post-list h2 a:hover { text-decoration: underline; text-decoration-color: var(--gilt); text-underline-offset: 5px; }
+.post-list p { color: #d8d0bf; max-width: 60ch; }
+.doc-toc.is-plain ol { list-style: none; padding-left: 0; }
+.change-day { margin-top: clamp(32px, 4vw, 52px); }
+.change-day h2 { font-size: clamp(1.6rem, 1.1vw + 1.2rem, 2.1rem); margin-top: 0; }
+.note + .change-day { margin-top: clamp(32px, 4vw, 52px); }
