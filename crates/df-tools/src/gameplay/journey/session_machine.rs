@@ -41,11 +41,11 @@ impl SessionState {
     /// The state of a checkpoint: its journey phase, with the end card split
     /// out of `Complete`.
     pub(crate) fn of(current: &Checkpoint) -> Result<Self, RepositoryError> {
-        let phase = phase(current)?;
+        let journey_phase = phase(current)?;
         if super::new_adventure_requested(current) {
             return Ok(Self::Preparing);
         }
-        Ok(match phase {
+        Ok(match journey_phase {
             rpc::JourneyPhase::Room => Self::Lobby,
             rpc::JourneyPhase::Opening => Self::Story,
             rpc::JourneyPhase::Dialogue => Self::Conversation,
