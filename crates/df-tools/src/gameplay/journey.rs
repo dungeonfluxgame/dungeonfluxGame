@@ -5289,6 +5289,75 @@ pub(super) fn stage_with_supplier(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn current_cpu_time() -> Duration {
+        #[repr(C)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn GetThreadTimes(
+                thread: *mut std::ffi::c_void,
+                creation: *mut FileTime,
+                exit: *mut FileTime,
+                kernel: *mut FileTime,
+                user: *mut FileTime,
+            ) -> i32;
+        }
+
+        let mut creation = FileTime { low: 0, high: 0 };
+        let mut exit = FileTime { low: 0, high: 0 };
+        let mut kernel = FileTime { low: 0, high: 0 };
+        let mut user = FileTime { low: 0, high: 0 };
+        // SAFETY: Windows accepts the current-thread pseudo-handle and writable FILETIME outputs.
+        let succeeded = unsafe {
+            GetThreadTimes(
+                GetCurrentThread(),
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        assert_ne!(succeeded, 0, "GetThreadTimes failed");
+        let ticks = |time: FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+        Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+    }
+
+    #[cfg(unix)]
+    fn current_cpu_time() -> Duration {
+        #[repr(C)]
+        struct Timespec {
+            seconds: i64,
+            nanoseconds: i64,
+        }
+
+        unsafe extern "C" {
+            fn clock_gettime(clock_id: i32, time: *mut Timespec) -> i32;
+        }
+
+        #[cfg(target_vendor = "apple")]
+        const THREAD_CPUTIME_ID: i32 = 16;
+        #[cfg(not(target_vendor = "apple"))]
+        const THREAD_CPUTIME_ID: i32 = 3;
+
+        let mut time = Timespec {
+            seconds: 0,
+            nanoseconds: 0,
+        };
+        // SAFETY: CLOCK_THREAD_CPUTIME_ID writes one timespec to the valid local pointer.
+        let result = unsafe { clock_gettime(THREAD_CPUTIME_ID, &mut time) };
+        assert_eq!(result, 0, "clock_gettime failed");
+        Duration::new(
+            u64::try_from(time.seconds).expect("thread CPU seconds are non-negative"),
+            u32::try_from(time.nanoseconds).expect("thread CPU nanoseconds fit u32"),
+        )
+    }
     pub(super) fn input(
         current: &Checkpoint,
         member: MemberId,
@@ -6651,7 +6720,7 @@ mod tests {
                 "HS54 checkpoint_rebuilds=100 elapsed_us={}",
                 checkpoint_started.elapsed().as_micros()
             );
-            let started = std::time::Instant::now();
+            let started = current_cpu_time();
             for index in 0..100 {
                 let role = if index % 7 == 0 {
                     df_persistence::local_demo_scope::LocalDemoRole::Display
@@ -6662,15 +6731,14 @@ mod tests {
                 let view = wire::journey_view(&current, role, member).unwrap();
                 std::hint::black_box(view);
             }
-            let elapsed = started.elapsed();
-            // Parallel CI workers need scheduler headroom; this still bounds each view to 20 ms.
+            let elapsed = current_cpu_time() - started;
             eprintln!(
-                "HS54 six_heroes views=100 elapsed_us={} budget_us=2000000",
+                "HS54 six_heroes views=100 thread_cpu_us={} budget_us=500000",
                 elapsed.as_micros()
             );
             assert!(
-                elapsed < Duration::from_secs(2),
-                "100 pure projections exceeded the parallel-load wall-time budget: {elapsed:?}"
+                elapsed < Duration::from_millis(500),
+                "100 pure projections exceeded the thread CPU budget: {elapsed:?}"
             );
         });
     }
