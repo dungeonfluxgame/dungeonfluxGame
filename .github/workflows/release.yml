@@ -19,11 +19,6 @@ name: release
 
 on:
   workflow_dispatch:
-    inputs:
-      previous_release_digest:
-        description: "Digest (sha256:...) of the previous signed release image, or 'none' for the very first release. Its revoked-images list must be a subset of this release's."
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -94,18 +89,13 @@ jobs:
           edge=$(sed -n "s/^EDGE_IMAGE=//p" "$RUNNER_TEMP/built.txt" | tail -n 1)
           test -n "$edge"
           deploy/scripts/check-edge-image.sh "$edge"
-      - name: Fetch the previous release's revocation list
+      - name: Fetch the latest signed release's revocation list
         env:
-          PREVIOUS: ${{ inputs.previous_release_digest }}
-        run: |
-          if [ "$PREVIOUS" = none ]; then : > "$RUNNER_TEMP/previous-revoked"; echo first > "$RUNNER_TEMP/first-release"; exit 0; fi
-          case "$PREVIOUS" in sha256:[0-9a-f][0-9a-f]*) ;; *) echo "bad digest"; exit 1 ;; esac
-          ref="ghcr.io/${{ github.repository_owner }}/dungeonflux-release@$PREVIOUS"
-          cosign verify --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
-          cid=$(docker create "$ref" /noop)
-          docker cp "$cid:/release/revoked-images" "$RUNNER_TEMP/previous-revoked"
-          docker rm "$cid" >/dev/null
+          GH_TOKEN: ${{ github.token }}
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RELEASE_IMAGE: ghcr.io/${{ github.repository_owner }}/dungeonflux-release
+        run: deploy/scripts/fetch-previous-release.sh "$RELEASE_IMAGE" "$OWNER_TYPE" "$REPOSITORY_OWNER" "$GITHUB_REPOSITORY" "$RUNNER_TEMP"
       - name: Build, push and sign the release image
         env:
           DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
@@ -114,5 +104,13 @@ jobs:
           deploy/scripts/build-release.sh release --built "$RUNNER_TEMP/built.txt" "${rev[@]}" --push --sign | tee "$RUNNER_TEMP/release.txt"
       - name: Show the digest
         run: |
-          grep "^RELEASE_DIGEST=" "$RUNNER_TEMP/release.txt"
-          grep "^RELEASE_DIGEST=" "$RUNNER_TEMP/release.txt" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          digest=$(sed -n 's/^RELEASE_DIGEST=//p' "$RUNNER_TEMP/release.txt" | tail -n 1)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          release_ref="ghcr.io/${{ github.repository_owner }}/dungeonflux-release@$digest"
+          cosign verify --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$release_ref" >/dev/null
+          docker buildx imagetools create --tag "ghcr.io/${{ github.repository_owner }}/dungeonflux-release:latest" "$release_ref"
+          promoted_digest=$(docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/dungeonflux-release:latest" --format '{{.Manifest.Digest}}')
+          test "$promoted_digest" = "$digest"
+          grep "^RELEASE_DIGEST=$digest$" "$RUNNER_TEMP/release.txt" >> "$GITHUB_STEP_SUMMARY"
