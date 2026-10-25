@@ -303,11 +303,11 @@ pub(crate) fn parse_manifest(text: &str) -> Option<DiceManifest> {
             key_mp4: clip.field("key_mp4")?.string()?,
             rest_image: clip.field("rest_image")?.string()?,
             rest_ms: {
-                let rest = clip.field("rest_ms")?.number()?;
-                if rest <= 0.0 || rest.fract() != 0.0 || rest > u64::MAX as f64 {
+                let rest_ms = clip.field("rest_ms")?.number()?;
+                if rest_ms <= 0.0 || rest_ms.fract() != 0.0 || rest_ms > u64::MAX as f64 {
                     return None;
                 }
-                rest as u64
+                rest_ms as u64
             },
             face_center: point(clip.field("face_center")?)?,
             face_corners: {

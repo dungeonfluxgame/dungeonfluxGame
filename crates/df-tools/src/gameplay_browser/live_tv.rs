@@ -44,7 +44,7 @@ pub(super) const GENERATED: &str = "/assets/ui/generated";
 const JOIN_QR: &str = "/gameplay/join-qr.svg";
 /// The lobby row always shows every seat of the table (open seats pad a smaller party), all in one
 /// row (REF-062).
-const PARTY_MAX: usize = 6;
+const MAXIMUM_PARTY_SIZE: usize = 6;
 const GATHERED_SOUND_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2129,8 +2129,8 @@ impl TvStage {
 
         let party_bar = node(document, &safe, "section", "tv-partybar", "")?;
         let party = node(document, &roster_slot, "div", "tv-party party", "")?;
-        let mut cards = Vec::with_capacity(PARTY_MAX);
-        for _ in 0..PARTY_MAX {
+        let mut cards = Vec::with_capacity(MAXIMUM_PARTY_SIZE);
+        for _ in 0..MAXIMUM_PARTY_SIZE {
             let card = node(document, &party, "article", "tv-card", "")?;
             let (_, glyph, image) = portrait(document, &card, "tv-portrait")?;
             let words = node(document, &card, "div", "tv-card-words", "")?;
@@ -3237,7 +3237,11 @@ impl TvStage {
         }
         let announce = self.drawn.get() && lobby;
         // Open seats belong to the lobby; scenes show every present party member.
-        let shown = if lobby { PARTY_MAX } else { model.party.len() };
+        let shown = if lobby {
+            MAXIMUM_PARTY_SIZE
+        } else {
+            model.party.len()
+        };
         self.party
             .set_attribute("style", &format!("--seats:{}", shown.max(1)))?;
         self.roster

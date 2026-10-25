@@ -150,17 +150,17 @@ fn finish(layer: &Element, playing: &Rc<RefCell<Option<(String, u64)>>>, reason:
     let _hidden = layer.set_attribute("hidden", "");
     let _aria = layer.set_attribute("aria-hidden", "true");
     if let Some((id, _epoch)) = taken {
-        let sequence = id
+        let sequence_number = id
             .strip_prefix("kill-")
             .and_then(|rest| rest.split('-').next())
             .and_then(|text| text.parse::<u64>().ok())
             .unwrap_or(0);
-        record_display(&id, sequence, ComponentPhase::Hidden, reason);
+        record_display(&id, sequence_number, ComponentPhase::Hidden, reason);
     }
 }
 
 /// A DISPLAY record for the clip starting and ending on the TV.
-fn record_display(id: &str, sequence: u64, phase: ComponentPhase, reason: &'static str) {
+fn record_display(id: &str, sequence_number: u64, phase: ComponentPhase, reason: &'static str) {
     super::presentation_timing::component(
         None,
         PresentationComponent::TitleCard,
@@ -168,7 +168,7 @@ fn record_display(id: &str, sequence: u64, phase: ComponentPhase, reason: &'stat
         "kill_shot",
         phase,
         reason,
-        u32::try_from(sequence.min(u64::from(u32::MAX))).unwrap_or(u32::MAX),
+        u32::try_from(sequence_number.min(u64::from(u32::MAX))).unwrap_or(u32::MAX),
     );
 }
 

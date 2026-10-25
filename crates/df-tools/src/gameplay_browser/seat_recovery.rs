@@ -3,6 +3,9 @@ use super::*;
 
 pub(super) const REFUSED: &str = "That hero is being played on another phone.";
 pub(super) const ROOM_MOVED: &str = "This game has ended or moved. Scan the QR code on the TV, or enter its new room code to join the current game.";
+/// A retained proof field is at most 256 bytes, so at most 512 hex characters.
+const MAXIMUM_ENCODED_HEX_CHARACTERS: usize = 512;
+const SEAT_POLL_INTERVAL_MS: u32 = 1_000;
 
 pub(super) fn wrong_room(answer: &rpc::ReclaimRoomResponse) -> bool {
     matches!(
@@ -24,11 +27,12 @@ fn key(code: &str) -> String {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-fn decode(text: &str) -> Option<Vec<u8>> {
-    if text.len() > 512 || !text.len().is_multiple_of(2) {
+fn decode(encoded_hex: &str) -> Option<Vec<u8>> {
+    if encoded_hex.len() > MAXIMUM_ENCODED_HEX_CHARACTERS || !encoded_hex.len().is_multiple_of(2) {
         return None;
     }
-    text.as_bytes()
+    encoded_hex
+        .as_bytes()
         .as_chunks::<2>()
         .0
         .iter()
@@ -48,22 +52,25 @@ fn encode(request: &rpc::ReclaimRoomRequest) -> String {
         hex(&request.seat_token)
     )
 }
-fn parse(text: &str, code: &str) -> Option<rpc::ReclaimRoomRequest> {
-    let mut parts = text.split('.');
-    if parts.next()? != "v1" || parts.next()? != code {
+fn parse(encoded_request: &str, room_code: &str) -> Option<rpc::ReclaimRoomRequest> {
+    let mut encoded_fields = encoded_request.split('.');
+    if encoded_fields.next()? != "v1" || encoded_fields.next()? != room_code {
         return None;
     }
-    let operation = decode(parts.next()?)?;
-    let token = decode(parts.next()?)?;
-    if parts.next().is_some() || operation.len() != 16 || token.len() != 32 {
+    let operation_id_bytes = decode(encoded_fields.next()?)?;
+    let seat_token_bytes = decode(encoded_fields.next()?)?;
+    if encoded_fields.next().is_some()
+        || operation_id_bytes.len() != 16
+        || seat_token_bytes.len() != 32
+    {
         return None;
     }
     Some(rpc::ReclaimRoomRequest {
-        room_code: code.to_owned(),
+        room_code: room_code.to_owned(),
         operation_id: Some(rpc::OperationId {
-            value: Some(operation),
+            value: Some(operation_id_bytes),
         }),
-        seat_token: token,
+        seat_token: seat_token_bytes,
     })
 }
 fn load(code: &str) -> Result<Option<rpc::ReclaimRoomRequest>, JsValue> {
@@ -164,7 +171,7 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     let Some(client) = weak.upgrade() else {
                         break;
                     };
-                    let (code, generation, skip) = {
+                    let (code, generation, is_busy) = {
                         let state = client.borrow();
                         if !state.credential.is_empty() {
                             break;
@@ -183,9 +190,9 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         (code, state.generation, state.busy)
                     };
                     let now_ms = js_sys::Date::now() as u64;
-                    if let Some(code) = code
-                        .filter(|code| !skip && client.borrow_mut().seat_poll.ready(code, now_ms))
-                    {
+                    if let Some(code) = code.filter(|code| {
+                        !is_busy && client.borrow_mut().seat_poll.ready(code, now_ms)
+                    }) {
                         let answer = call(rpc::ReclaimRoomRequest {
                             room_code: code.clone(),
                             operation_id: None,
@@ -244,7 +251,7 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         }
                     }
                     drop(client);
-                    gloo_timers::future::TimeoutFuture::new(1000).await;
+                    gloo_timers::future::TimeoutFuture::new(SEAT_POLL_INTERVAL_MS).await;
                 }
             };
             let _cancelled = Abortable::new(run, registration).await;
