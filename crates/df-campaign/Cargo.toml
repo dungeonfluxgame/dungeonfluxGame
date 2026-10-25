@@ -34,7 +34,7 @@ futures = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 df-campaign = { path = ".", features = ["test-fakes", "routes"] }
-tokio = { version = "=1.53.1", default-features = false, features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net", "test-util"] }
 tokio-postgres = { version = "=0.7.15", default-features = true }
 df-customer = { path = "../df-customer", features = ["test-fakes"] }
 tower = { version = "=0.5.3", features = ["util"] }

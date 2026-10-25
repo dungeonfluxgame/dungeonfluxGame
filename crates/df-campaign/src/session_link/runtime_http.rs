@@ -469,6 +469,235 @@ async fn close_both(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        Router,
+        extract::{Path, State},
+        routing::get,
+    };
+    use tokio::{
+        net::TcpListener,
+        sync::{broadcast, mpsc, oneshot},
+        task::JoinHandle,
+    };
+
+    type ClientSocket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    #[derive(Clone)]
+    struct UpstreamState {
+        outbound: broadcast::Sender<String>,
+        events: mpsc::UnboundedSender<String>,
+    }
+
+    #[derive(Clone)]
+    struct FrontState {
+        runtime: HttpRuntime,
+        placement: Placement,
+        room: Room,
+    }
+
+    struct RelayHarness {
+        address: SocketAddr,
+        outbound: broadcast::Sender<String>,
+        events: mpsc::UnboundedReceiver<String>,
+        front_shutdown: Option<oneshot::Sender<()>>,
+        upstream_shutdown: Option<oneshot::Sender<()>>,
+        front_task: JoinHandle<()>,
+        upstream_task: JoinHandle<()>,
+    }
+
+    impl RelayHarness {
+        async fn start(config: RelayConfig) -> Self {
+            let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let upstream_address = upstream_listener.local_addr().unwrap();
+            let (outbound, _) = broadcast::channel(32);
+            let (events_tx, mut events) = mpsc::unbounded_channel();
+            let upstream_router = Router::new()
+                .route("/gameplay/internal/entry/tunnel", get(upstream_entry))
+                .with_state(UpstreamState {
+                    outbound: outbound.clone(),
+                    events: events_tx,
+                });
+            let (upstream_shutdown, upstream_shutdown_rx) = oneshot::channel();
+            let upstream_task = tokio::spawn(async move {
+                axum::serve(upstream_listener, upstream_router)
+                    .with_graceful_shutdown(async {
+                        let _ = upstream_shutdown_rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            tokio::task::yield_now().await;
+            let (mut upstream_probe, _) = tokio_tungstenite::connect_async(format!(
+                "ws://{upstream_address}/gameplay/internal/entry/tunnel"
+            ))
+            .await
+            .expect("loopback upstream WebSocket fixture failed its own handshake");
+            assert_eq!(events.recv().await.as_deref(), Some("ready"));
+            upstream_probe.close(None).await.unwrap();
+
+            let secret =
+                LaunchSecret::new(&format!("relay-test-secret-{}", "x".repeat(24))).unwrap();
+            let runtime = HttpRuntime::new_with_relay_config(
+                upstream_address,
+                secret,
+                Duration::from_secs(60),
+                config,
+            )
+            .unwrap();
+            let front_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = front_listener.local_addr().unwrap();
+            let front_router = Router::new()
+                .route("/tunnel/{seat}", get(front_entry))
+                .with_state(FrontState {
+                    runtime,
+                    placement: Placement {
+                        campaign: df_types::CampaignId::from_bytes(&[1; 16]).unwrap(),
+                        session: df_types::SessionId::from_bytes(&[2; 16]).unwrap(),
+                        roster: Vec::new(),
+                    },
+                    room: Room {
+                        code: "RELAY".to_owned(),
+                        run_identity: "relay-test-run".to_owned(),
+                    },
+                });
+            let (front_shutdown, front_shutdown_rx) = oneshot::channel();
+            let front_task = tokio::spawn(async move {
+                axum::serve(front_listener, front_router)
+                    .with_graceful_shutdown(async {
+                        let _ = front_shutdown_rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            tokio::task::yield_now().await;
+
+            Self {
+                address,
+                outbound,
+                events,
+                front_shutdown: Some(front_shutdown),
+                upstream_shutdown: Some(upstream_shutdown),
+                front_task,
+                upstream_task,
+            }
+        }
+
+        async fn connect(&self, seat: u8) -> ClientSocket {
+            let (socket, response) =
+                tokio_tungstenite::connect_async(format!("ws://{}/tunnel/{seat}", self.address))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("seat {seat} WebSocket upgrade failed: {error}")
+                    });
+            assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+            socket
+        }
+
+        async fn expect_upstream_ready(&mut self) {
+            let event = tokio::time::timeout(Duration::from_secs(2), self.events.recv())
+                .await
+                .expect("upstream handshake did not reach its WebSocket handler");
+            assert_eq!(event.as_deref(), Some("ready"));
+        }
+
+        async fn close(self) {
+            let _ = self.front_shutdown.unwrap().send(());
+            let _ = self.upstream_shutdown.unwrap().send(());
+            self.front_task.await.unwrap();
+            self.upstream_task.await.unwrap();
+        }
+    }
+
+    async fn upstream_entry(
+        upgrade: WebSocketUpgrade,
+        State(state): State<UpstreamState>,
+    ) -> Response {
+        upgrade
+            .on_upgrade(move |socket| run_upstream(socket, state))
+            .into_response()
+    }
+
+    async fn run_upstream(mut socket: WebSocket, state: UpstreamState) {
+        let mut outbound = state.outbound.subscribe();
+        let _ = state.events.send("ready".to_owned());
+        loop {
+            tokio::select! {
+                incoming = socket.next() => match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        let _ = state.events.send(text.to_string());
+                    }
+                    Some(Ok(Message::Ping(bytes))) => {
+                        if socket.send(Message::Pong(bytes)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(_)) => {}
+                },
+                outgoing = outbound.recv() => match outgoing {
+                    Ok(message) => {
+                        if socket.send(Message::Text(message.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                },
+            }
+        }
+    }
+
+    async fn front_entry(
+        State(state): State<FrontState>,
+        Path(seat): Path<u8>,
+        request: Request,
+    ) -> Response {
+        let member = df_types::MemberId::from_bytes(&[seat + 1; 16]).unwrap();
+        match state
+            .runtime
+            .serve(
+                &state.placement,
+                &state.room,
+                Audience::Player(member),
+                Surface::Tunnel,
+                request,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(RuntimeError::Deadline) => StatusCode::GATEWAY_TIMEOUT.into_response(),
+            Err(RuntimeError::Unavailable) => StatusCode::BAD_GATEWAY.into_response(),
+            Err(RuntimeError::Occupied | RuntimeError::InvalidReply) => {
+                StatusCode::BAD_REQUEST.into_response()
+            }
+        }
+    }
+
+    async fn expect_close(socket: &mut ClientSocket) {
+        let close = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    Some(Ok(tungstenite::Message::Close(_))) | None => break true,
+                    Some(Err(_)) => break true,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await;
+        assert!(
+            close.is_ok(),
+            "relay did not close before the bounded timeout"
+        );
+    }
+
+    async fn expect_upstream_data(harness: &mut RelayHarness, expected: &str) {
+        let event = tokio::time::timeout(Duration::from_secs(2), harness.events.recv())
+            .await
+            .expect("client data did not reach the upstream WebSocket");
+        assert_eq!(event.as_deref(), Some(expected));
+    }
 
     #[test]
     fn relay_configuration_defaults_bound_idle_lifetime_and_principal_count() {
@@ -499,5 +728,161 @@ mod tests {
             PrincipalPermit::acquire(std::sync::Arc::clone(&connections), seat, 2).unwrap();
         drop((second, other_seat, replacement));
         assert!(connections.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_relays_close_and_return_global_and_principal_permits() {
+        let harness = RelayHarness::start(RelayConfig {
+            idle_timeout: Duration::from_secs(5),
+            maximum_lifetime: Duration::from_secs(60),
+            maximum_per_principal: 2,
+        })
+        .await;
+        let mut sockets = vec![harness.connect(0).await, harness.connect(0).await];
+        for seat in 1..=30 {
+            sockets.push(harness.connect(seat).await);
+        }
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::time::resume();
+        for socket in &mut sockets {
+            expect_close(socket).await;
+        }
+
+        let _first_replacement = harness.connect(0).await;
+        let _second_replacement = harness.connect(0).await;
+        drop((_first_replacement, _second_replacement, sockets));
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn ping_only_traffic_does_not_refresh_the_idle_window() {
+        let mut harness = RelayHarness::start(RelayConfig {
+            idle_timeout: Duration::from_secs(5),
+            maximum_lifetime: Duration::from_secs(60),
+            maximum_per_principal: 2,
+        })
+        .await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::time::resume();
+        socket
+            .send(tungstenite::Message::Ping(vec![1].into()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            tungstenite::Message::Pong(_)
+        ));
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::time::resume();
+        expect_close(&mut socket).await;
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn client_data_refreshes_the_idle_window() {
+        let mut harness = RelayHarness::start(RelayConfig {
+            idle_timeout: Duration::from_secs(5),
+            maximum_lifetime: Duration::from_secs(60),
+            maximum_per_principal: 2,
+        })
+        .await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+
+        tokio::time::pause();
+        for _ in 0..2 {
+            tokio::time::advance(Duration::from_secs(4)).await;
+            tokio::time::resume();
+            socket
+                .send(tungstenite::Message::Text("client-data".into()))
+                .await
+                .unwrap();
+            expect_upstream_data(&mut harness, "client-data").await;
+            tokio::time::pause();
+        }
+        tokio::time::resume();
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn upstream_data_refreshes_the_idle_window() {
+        let mut harness = RelayHarness::start(RelayConfig {
+            idle_timeout: Duration::from_secs(5),
+            maximum_lifetime: Duration::from_secs(60),
+            maximum_per_principal: 2,
+        })
+        .await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+
+        tokio::time::pause();
+        for _ in 0..2 {
+            tokio::time::advance(Duration::from_secs(4)).await;
+            tokio::time::resume();
+            harness.outbound.send("upstream-data".to_owned()).unwrap();
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                tungstenite::Message::Text(text) if text == "upstream-data"
+            ));
+            tokio::time::pause();
+        }
+        tokio::time::resume();
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn active_relays_close_at_the_absolute_lifetime_limit() {
+        let mut harness = RelayHarness::start(RelayConfig {
+            idle_timeout: Duration::from_secs(5),
+            maximum_lifetime: Duration::from_secs(12),
+            maximum_per_principal: 2,
+        })
+        .await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+
+        tokio::time::pause();
+        for elapsed in [4, 4, 3] {
+            tokio::time::advance(Duration::from_secs(elapsed)).await;
+            tokio::time::resume();
+            socket
+                .send(tungstenite::Message::Text("keepalive-data".into()))
+                .await
+                .unwrap();
+            expect_upstream_data(&mut harness, "keepalive-data").await;
+            tokio::time::pause();
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::resume();
+        expect_close(&mut socket).await;
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_third_tunnel_is_refused_per_seat_while_another_seat_connects() {
+        let harness = RelayHarness::start(RelayConfig::default()).await;
+        let _first = harness.connect(1).await;
+        let _second = harness.connect(1).await;
+        let refused =
+            tokio_tungstenite::connect_async(format!("ws://{}/tunnel/1", harness.address)).await;
+        assert!(matches!(
+            refused,
+            Err(tokio_tungstenite::tungstenite::Error::Http(response))
+                if response.status() == StatusCode::TOO_MANY_REQUESTS
+        ));
+        let _other_seat = harness.connect(2).await;
+        drop((_first, _second, _other_seat));
+        harness.close().await;
     }
 }
