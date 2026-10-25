@@ -92,8 +92,8 @@ impl Battle {
         {
             return Err(RuleError::SnapshotData);
         }
-        let mut ids = BTreeSet::new();
-        let mut living_cells = BTreeSet::new();
+        let mut actor_ids = BTreeSet::new();
+        let mut living_actor_cells = BTreeSet::new();
         for actor in &state.actors {
             // A pending mover is passing through this cell and has not ended its move here.
             let in_transit = state.pending.as_ref().is_some_and(|pending| {
@@ -102,7 +102,7 @@ impl Battle {
                     && pending.path.get(pending.next - 1) == Some(&actor.cell())
             });
             if actor.id() == 0
-                || !ids.insert(actor.id())
+                || !actor_ids.insert(actor.id())
                 || !map.contains(actor.cell())
                 || map.is_blocked(actor.cell())
                 || actor.turn_count > state.round
@@ -151,7 +151,7 @@ impl Battle {
                         .spec
                         .space_cells(actor.cell())
                         .iter()
-                        .any(|cell| map.is_blocked(*cell) || !living_cells.insert(*cell)))
+                        .any(|cell| map.is_blocked(*cell) || !living_actor_cells.insert(*cell)))
                 || actor.budget.movement_spent_ft > 240
                 || (actor.budget.dash && !actor.budget.action_used)
                 || (actor.budget.dodging && !actor.budget.action_used)
@@ -213,22 +213,22 @@ impl Battle {
             {
                 return Err(RuleError::SnapshotData);
             }
-            let mut original = actor.spec.clone();
+            let mut original_source_profile = actor.spec.clone();
             // Source creation is fixed; resources can only decrease/recover through resolve.
-            if original.kind == super::CreatureKind::Hero {
-                original.arrows = 20;
-                original.second_wind_uses = original
+            if original_source_profile.kind == super::CreatureKind::Hero {
+                original_source_profile.arrows = 20;
+                original_source_profile.second_wind_uses = original_source_profile
                     .fighter_level()
                     .ok_or(RuleError::SnapshotData)?
                     .second_wind_maximum();
             }
             if actor.spec.shield && !actor.shield_equipped {
-                original.armor_class = original
+                original_source_profile.armor_class = original_source_profile
                     .armor_class
                     .checked_add(2)
                     .ok_or(RuleError::SnapshotData)?;
             }
-            super::state::validate_source_profile(&original)?;
+            super::state::validate_source_profile(&original_source_profile)?;
             if actor
                 .held
                 .iter()
@@ -242,11 +242,10 @@ impl Battle {
         if !state.initiatives.is_empty()
             && (state.initiatives.len() != state.actors.len()
                 || state.actors.iter().any(|actor| {
-                    let modifier = actor.spec.initiative_modifier();
-                    state
-                        .initiatives
-                        .get(&actor.id())
-                        .is_none_or(|total| !(1 + modifier..=20 + modifier).contains(total))
+                    let initiative_modifier = actor.spec.initiative_modifier();
+                    state.initiatives.get(&actor.id()).is_none_or(|total| {
+                        !(1 + initiative_modifier..=20 + initiative_modifier).contains(total)
+                    })
                 }))
         {
             return Err(RuleError::SnapshotData);
@@ -276,7 +275,7 @@ impl Battle {
                 return Err(RuleError::SnapshotData);
             }
         }
-        if state.order.iter().copied().collect::<BTreeSet<_>>() != ids {
+        if state.order.iter().copied().collect::<BTreeSet<_>>() != actor_ids {
             return Err(RuleError::SnapshotData);
         }
         for actor in &state.actors {
@@ -285,11 +284,11 @@ impl Battle {
                 .iter()
                 .chain(&actor.sap)
                 .chain(&actor.frost_chill)
-                .any(|effect| !ids.contains(&effect.origin) || effect.expires_turn == 0)
+                .any(|effect| !actor_ids.contains(&effect.origin) || effect.expires_turn == 0)
                 || actor
                     .vex
                     .iter()
-                    .any(|(target, until)| !ids.contains(target) || *until == 0)
+                    .any(|(target, until)| !actor_ids.contains(target) || *until == 0)
             {
                 return Err(RuleError::SnapshotData);
             }
@@ -311,7 +310,7 @@ impl Battle {
                 || pending
                     .eligible
                     .iter()
-                    .any(|id| !ids.contains(id) || *id == pending.actor)
+                    .any(|id| !actor_ids.contains(id) || *id == pending.actor)
                 || pending.path.iter().any(|cell| !map.contains(*cell)))
         {
             return Err(RuleError::SnapshotData);
@@ -341,11 +340,11 @@ impl Battle {
         if let Some(pending) = &battle.pending {
             let mover = battle.actor(pending.actor)?;
             let destination = pending.path[pending.next];
-            let mut from = mover.cell();
+            let mut from_cell = mover.cell();
             let remaining_path_is_clear = pending.path[pending.next..].iter().all(|to| {
-                let clear = battle.map.step_clear(from, *to);
-                from = *to;
-                clear
+                let is_clear = battle.map.step_clear(from_cell, *to);
+                from_cell = *to;
+                is_clear
             });
             if mover.health.incapacitated()
                 || mover.budget.disengaged

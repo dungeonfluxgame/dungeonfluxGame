@@ -60,8 +60,8 @@ impl Battle {
             }
             DevelopmentEdit::Initiative(value) => {
                 let actor = next.actor(id)?;
-                let modifier = actor.spec.initiative_modifier();
-                if !(1 + modifier..=20 + modifier).contains(value) {
+                let initiative_modifier = actor.spec.initiative_modifier();
+                if !(1 + initiative_modifier..=20 + initiative_modifier).contains(value) {
                     return Err(RuleError::InvalidDraw);
                 }
                 let active = next.active_actor();
@@ -192,11 +192,11 @@ impl Battle {
                     },
                     DevelopmentEdit::Resource { name, value } => match name.as_str() {
                         "second-wind" => {
-                            let cap = actor
+                            let maximum_uses = actor
                                 .spec
                                 .fighter_level()
                                 .map_or(0, |level| level.second_wind_maximum());
-                            if *value > u16::from(cap) {
+                            if *value > u16::from(maximum_uses) {
                                 return Err(RuleError::InvalidCombatant);
                             }
                             actor.spec.second_wind_uses = *value as u8;
@@ -216,8 +216,8 @@ impl Battle {
                             actor.additional_dash = false;
                         }
                         "ammo" => {
-                            let maximum = 1000;
-                            if *value > maximum {
+                            let maximum_ammunition = 1000;
+                            if *value > maximum_ammunition {
                                 return Err(RuleError::InvalidCombatant);
                             }
                             actor.spec.arrows = *value;

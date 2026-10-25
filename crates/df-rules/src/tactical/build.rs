@@ -63,22 +63,25 @@ pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBui
     if choices.len() < local_journey::BUILD_GROUPS.len() {
         return Err(RuleError::InvalidBuild);
     }
-    let mut mapped = Vec::with_capacity(choices.len());
-    for &(group, value) in choices {
-        let replacement = match group {
-            "array" if value == "dexterous" => "stalwart",
-            "equipment" if value == "fighter-b-soldier-b" => "fighter-a-soldier-a",
-            "style-masteries" if value == "archery-longbow-scimitar-shortsword" => {
+    let mut mapped_choices = Vec::with_capacity(choices.len());
+    for &(choice_group, choice_value) in choices {
+        let replacement = match choice_group {
+            "array" if choice_value == "dexterous" => "stalwart",
+            "equipment" if choice_value == "fighter-b-soldier-b" => "fighter-a-soldier-a",
+            "style-masteries" if choice_value == "archery-longbow-scimitar-shortsword" => {
                 "defense-greatsword-flail-javelin"
             }
             "array" | "equipment" | "style-masteries" => return Err(RuleError::InvalidBuild),
-            _ => value,
+            _ => choice_value,
         };
-        mapped.push((group, replacement));
+        mapped_choices.push((choice_group, replacement));
     }
-    let mut character =
-        local_journey::validate_character(&local_journey::CreationRules::srd_521(), name, &mapped)
-            .map_err(|_| RuleError::InvalidBuild)?;
+    let mut character = local_journey::validate_character(
+        &local_journey::CreationRules::srd_521(),
+        name,
+        &mapped_choices,
+    )
+    .map_err(|_| RuleError::InvalidBuild)?;
     character.abilities = [13, 17, 15, 10, 12, 8];
     character.armor_class = 15;
     let species = HeroSpecies::from_choice(

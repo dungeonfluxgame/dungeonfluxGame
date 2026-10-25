@@ -232,46 +232,48 @@ impl SpeciesOptions {
         {
             return Err(JourneyRuleError::InvalidChoice);
         }
-        let value = |id: &str| {
+        let choice_value = |id: &str| {
             choices
                 .iter()
                 .find(|(key, _)| *key == id)
                 .map(|(_, value)| *value)
         };
         // SRD pp.84,86: skill grants are additional proficiencies, not duplicate grants.
-        if let Some(skill) = value("human-skill").or_else(|| value("keen-senses"))
+        if let Some(skill) = choice_value("human-skill").or_else(|| choice_value("keen-senses"))
             && (matches!(skill, "athletics" | "intimidation")
-                || value("skill-1") == Some(skill)
-                || value("skill-2") == Some(skill))
+                || choice_value("skill-1") == Some(skill)
+                || choice_value("skill-2") == Some(skill))
         {
             return Err(JourneyRuleError::InvalidChoice);
         }
         let ancestry = match species {
-            HeroSpecies::Dragonborn => Some(Ancestry::Draconic(match value("draconic-ancestry") {
-                Some("black") => DraconicAncestry::Black,
-                Some("blue") => DraconicAncestry::Blue,
-                Some("brass") => DraconicAncestry::Brass,
-                Some("bronze") => DraconicAncestry::Bronze,
-                Some("copper") => DraconicAncestry::Copper,
-                Some("gold") => DraconicAncestry::Gold,
-                Some("green") => DraconicAncestry::Green,
-                Some("red") => DraconicAncestry::Red,
-                Some("silver") => DraconicAncestry::Silver,
-                Some("white") => DraconicAncestry::White,
-                _ => return Err(JourneyRuleError::InvalidChoice),
-            })),
-            HeroSpecies::Elf => Some(Ancestry::Elven(match value("elven-lineage") {
+            HeroSpecies::Dragonborn => Some(Ancestry::Draconic(
+                match choice_value("draconic-ancestry") {
+                    Some("black") => DraconicAncestry::Black,
+                    Some("blue") => DraconicAncestry::Blue,
+                    Some("brass") => DraconicAncestry::Brass,
+                    Some("bronze") => DraconicAncestry::Bronze,
+                    Some("copper") => DraconicAncestry::Copper,
+                    Some("gold") => DraconicAncestry::Gold,
+                    Some("green") => DraconicAncestry::Green,
+                    Some("red") => DraconicAncestry::Red,
+                    Some("silver") => DraconicAncestry::Silver,
+                    Some("white") => DraconicAncestry::White,
+                    _ => return Err(JourneyRuleError::InvalidChoice),
+                },
+            )),
+            HeroSpecies::Elf => Some(Ancestry::Elven(match choice_value("elven-lineage") {
                 Some("drow") => ElvenLineage::Drow,
                 Some("high-elf") => ElvenLineage::HighElf,
                 Some("wood-elf") => ElvenLineage::WoodElf,
                 _ => return Err(JourneyRuleError::InvalidChoice),
             })),
-            HeroSpecies::Gnome => Some(Ancestry::Gnomish(match value("gnomish-lineage") {
+            HeroSpecies::Gnome => Some(Ancestry::Gnomish(match choice_value("gnomish-lineage") {
                 Some("forest-gnome") => GnomishLineage::Forest,
                 Some("rock-gnome") => GnomishLineage::Rock,
                 _ => return Err(JourneyRuleError::InvalidChoice),
             })),
-            HeroSpecies::Goliath => Some(Ancestry::Giant(match value("giant-ancestry") {
+            HeroSpecies::Goliath => Some(Ancestry::Giant(match choice_value("giant-ancestry") {
                 Some("cloud") => GiantAncestry::Cloud,
                 Some("fire") => GiantAncestry::Fire,
                 Some("frost") => GiantAncestry::Frost,
@@ -280,24 +282,26 @@ impl SpeciesOptions {
                 Some("storm") => GiantAncestry::Storm,
                 _ => return Err(JourneyRuleError::InvalidChoice),
             })),
-            HeroSpecies::Tiefling => Some(Ancestry::Fiendish(match value("fiendish-legacy") {
-                Some("abyssal") => FiendishLegacy::Abyssal,
-                Some("chthonic") => FiendishLegacy::Chthonic,
-                Some("infernal") => FiendishLegacy::Infernal,
-                _ => return Err(JourneyRuleError::InvalidChoice),
-            })),
+            HeroSpecies::Tiefling => {
+                Some(Ancestry::Fiendish(match choice_value("fiendish-legacy") {
+                    Some("abyssal") => FiendishLegacy::Abyssal,
+                    Some("chthonic") => FiendishLegacy::Chthonic,
+                    Some("infernal") => FiendishLegacy::Infernal,
+                    _ => return Err(JourneyRuleError::InvalidChoice),
+                }))
+            }
             _ => None,
         };
         Ok(Self {
             ancestry,
-            size: value("species-size").map(|size| {
+            size: choice_value("species-size").map(|size| {
                 if size == "small" {
                     SpeciesSize::Small
                 } else {
                     SpeciesSize::Medium
                 }
             }),
-            tough: value("versatile") == Some("tough"),
+            tough: choice_value("versatile") == Some("tough"),
         })
     }
     pub fn valid_for(self, species: HeroSpecies) -> bool {

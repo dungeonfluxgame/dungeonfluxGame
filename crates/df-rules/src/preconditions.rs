@@ -416,49 +416,49 @@ fn validate_bounds(
         return Err(PreconditionError::Capacity);
     }
     let prepared = preconditions.prepared;
-    let mut bytes = 0usize;
+    let mut checkpoint_bytes = 0usize;
     for checkpoint in [prepared, current] {
-        let retained = checkpoint
+        let retained_checkpoint_bytes = checkpoint
             .retained_bytes()
             .ok_or(PreconditionError::Capacity)?;
-        if retained > limits.maximum_checkpoint_bytes {
+        if retained_checkpoint_bytes > limits.maximum_checkpoint_bytes {
             return Err(PreconditionError::Capacity);
         }
-        bytes = bytes
-            .checked_add(retained)
+        checkpoint_bytes = checkpoint_bytes
+            .checked_add(retained_checkpoint_bytes)
             .ok_or(PreconditionError::Capacity)?;
     }
-    let count = preconditions
+    let source_and_dependency_count = preconditions
         .sources
         .len()
         .checked_add(preconditions.dependencies.len())
         .ok_or(PreconditionError::Capacity)?;
-    if count > limits.maximum_dependencies {
+    if source_and_dependency_count > limits.maximum_dependencies {
         return Err(PreconditionError::Capacity);
     }
     // Retained bytes conservatively bound nested snapshot records and source comparisons.
-    let records = [
-        count,
+    let scan_units_per_pass = [
+        source_and_dependency_count,
         inventory.rules.len(),
         inventory.content.len(),
         inventory.resources.len(),
-        bytes,
+        checkpoint_bytes,
     ]
     .into_iter()
     .try_fold(0usize, |total, amount| total.checked_add(amount))
     .ok_or(PreconditionError::Capacity)?;
-    let comparisons = count
+    let comparison_count = source_and_dependency_count
         .checked_add(1)
-        .and_then(|count| count.checked_mul(records))
-        .and_then(|comparisons| {
+        .and_then(|pass_count| pass_count.checked_mul(scan_units_per_pass))
+        .and_then(|comparison_count| {
             inventory
                 .content
                 .len()
                 .checked_add(1)
-                .and_then(|content| comparisons.checked_mul(content))
+                .and_then(|content_count| comparison_count.checked_mul(content_count))
         })
         .ok_or(PreconditionError::Capacity)?;
-    if comparisons > limits.maximum_comparisons {
+    if comparison_count > limits.maximum_comparisons {
         return Err(PreconditionError::Capacity);
     }
     Ok(())
