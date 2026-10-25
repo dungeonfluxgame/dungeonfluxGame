@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Tooling quick start
+
+Use [development/tooling.md](development/tooling.md) for the shared local commands
+(`check`, focused `test`, `fmt`, `lint`, `wasm`, `test-tools`, and `run`). Read
+`planning/coding-style.md` for mandatory verification and use the pinned
+`rust-toolchain.toml`; local helpers do not replace the lane gate or coordinator
+review. The coordinator owns integration, commits, and `CHANGELOG.md`. Product
+version impact and release steps are in [planning/versioning-policy.md](planning/versioning-policy.md).
+
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.

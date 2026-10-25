@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$ROOT"
+
+mapfile -t staged_paths < <(git diff --cached --name-only --diff-filter=ACM)
+rust_files=()
+shell_files=()
+python_files=()
+for path in "${staged_paths[@]}"; do
+  case "$path" in
+    *.rs) rust_files+=("$path") ;;
+    *.sh) shell_files+=("$path") ;;
+    *.py) python_files+=("$path") ;;
+  esac
+done
+
+if [[ ${#rust_files[@]} -gt 0 ]]; then
+  rustfmt --edition 2024 --config-path "$ROOT/rustfmt.toml" --check "${rust_files[@]}"
+fi
+if [[ ${#shell_files[@]} -gt 0 ]]; then
+  bash -n "${shell_files[@]}"
+fi
+if [[ ${#python_files[@]} -gt 0 ]]; then
+  python_cache="$ROOT/artifacts/tmp/df-python-cache"
+  if command -v py >/dev/null 2>&1; then
+    py -3 -I -X "pycache_prefix=$python_cache" -m py_compile "${python_files[@]}"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -I -X "pycache_prefix=$python_cache" -m py_compile "${python_files[@]}"
+  else
+    echo "pre-commit needs the Python launcher (Windows) or python3 (Linux)" >&2
+    exit 2
+  fi
+fi

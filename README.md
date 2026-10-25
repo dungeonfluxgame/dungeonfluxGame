@@ -175,6 +175,10 @@ changing code. The style is mandatory: explicit names, private crate internals, 
 errors, bounded async work, no dead code, LF endings, and rustfmt from the root
 `rustfmt.toml`. Application and UI code stays Rust.
 
+Use the shared [developer tooling guide](development/tooling.md) for the Rust
+workspace commands, focused `df-tools` tests, local PostgreSQL setup, and optional
+pre-commit formatting check.
+
 ```sh
 cargo build --locked -p df-tools --bin df-transport-fixture
 cargo build --locked -p df-tools --lib --target wasm32-unknown-unknown
