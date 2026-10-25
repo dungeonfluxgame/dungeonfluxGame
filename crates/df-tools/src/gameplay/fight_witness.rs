@@ -2,6 +2,7 @@
 //! ledger; recovery reads them and never asks Jev again.
 use std::{collections::BTreeSet, future::Future, pin::Pin};
 
+use futures::{StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -52,41 +53,51 @@ pub(in crate::gameplay) struct WitnessRecord {
     pub(in crate::gameplay) grievance_victim: Option<String>,
 }
 
-impl WitnessRecord {
+/// Observation-level bounds, shared by every witness of one fight. `react_to_fight` checks them
+/// before any witness is asked, so an invalid stored observation never reaches Jev.
+impl Observation {
     pub(in crate::gameplay) fn validate(&self) -> bool {
-        let observation = &self.observation;
-        let bounded =
-            |value: &str, limit: usize| !value.trim().is_empty() && value.chars().count() <= limit;
-        bounded(&observation.fight_id, 64)
-            && bounded(&observation.scene, 96)
-            && bounded(&observation.cause, 600)
-            && bounded(&self.witness_id, 96)
-            && (1..=8).contains(&observation.heroes.len())
-            && observation
+        bounded_text(&self.fight_id, 64)
+            && bounded_text(&self.scene, 96)
+            && bounded_text(&self.cause, 600)
+            && (1..=8).contains(&self.heroes.len())
+            && self
                 .heroes
                 .iter()
                 .all(|member| super::member_from_hex(member).is_some())
-            && observation.heroes.iter().collect::<BTreeSet<_>>().len() == observation.heroes.len()
-            && observation.witnesses.len() <= 20
-            && observation.witnesses.iter().collect::<BTreeSet<_>>().len()
-                == observation.witnesses.len()
-            && observation.witnesses.iter().all(|id| bounded(id, 96))
-            && observation.witnesses.contains(&self.witness_id)
-            && observation.deaths.len() <= 4
-            && observation
+            && self.heroes.iter().collect::<BTreeSet<_>>().len() == self.heroes.len()
+            && self.witnesses.len() <= 20
+            && self.witnesses.iter().collect::<BTreeSet<_>>().len() == self.witnesses.len()
+            && self.witnesses.iter().all(|id| bounded_text(id, 96))
+            && self.deaths.len() <= 4
+            && self
                 .deaths
                 .iter()
                 .map(|death| &death.person_id)
                 .collect::<BTreeSet<_>>()
                 .len()
-                == observation.deaths.len()
-            && observation.deaths.iter().all(|death| {
-                bounded(&death.person_id, 96)
-                    && bounded(&death.person_name, 64)
-                    && bounded(&death.killer_name, 64)
-                    && observation.heroes.contains(&death.killer_member_id)
-                    && !observation.witnesses.contains(&death.person_id)
+                == self.deaths.len()
+            && self.deaths.iter().all(|death| {
+                bounded_text(&death.person_id, 96)
+                    && bounded_text(&death.person_name, 64)
+                    && bounded_text(&death.killer_name, 64)
+                    && self.heroes.contains(&death.killer_member_id)
+                    && !self.witnesses.contains(&death.person_id)
             })
+    }
+}
+
+fn bounded_text(value: &str, limit: usize) -> bool {
+    !value.trim().is_empty() && value.chars().count() <= limit
+}
+
+impl WitnessRecord {
+    /// Record-level checks on top of the observation's own bounds.
+    pub(in crate::gameplay) fn validate(&self) -> bool {
+        let observation = &self.observation;
+        observation.validate()
+            && bounded_text(&self.witness_id, 96)
+            && observation.witnesses.contains(&self.witness_id)
             && self.grievance_victim.as_ref().is_none_or(|victim| {
                 observation
                     .deaths
@@ -238,16 +249,28 @@ impl std::error::Error for WitnessError {}
 
 impl super::SocialLedger {
     /// Session-owner composition: resume saved reactions without Jev and commit each newly
-    /// judged witness before any reply. A partial failure leaves prior witnesses durable.
+    /// judged witness before any reply. Every check that needs no answer (a conflicting saved
+    /// record, a missing dossier) runs before the first Jev call, so nothing is asked or committed
+    /// against an observation the ledger disagrees with. The asked witnesses are then judged at
+    /// once, and each answer commits as it arrives, so a cancelled wait keeps every answer already
+    /// paid for. The first failure is returned after the rest have committed.
     pub(in crate::gameplay) async fn react_to_fight(
         &self,
         jev: &impl Jev,
         observation: &Observation,
     ) -> Result<usize, WitnessError> {
-        let mut recorded = 0;
+        // An invalid stored observation (repeated witness, too many witnesses) is refused before
+        // any witness is asked, so no paid answer can be requested for it.
+        if !observation.validate() {
+            return Err(WitnessError::Ledger(super::SocialError::Invalid(
+                "fight observation",
+            )));
+        }
+        let mut asked = Vec::new();
         for witness in &observation.witnesses {
-            let record = match self.fight_witness_record(&observation.fight_id, witness) {
-                Some(record) if record.observation == *observation => record,
+            match self.fight_witness_record(&observation.fight_id, witness) {
+                // Already durable with this exact observation: nothing to ask or commit.
+                Some(record) if record.observation == *observation => {}
                 Some(_) => {
                     return Err(WitnessError::Ledger(super::SocialError::Invalid(
                         "conflicting fight observation",
@@ -259,17 +282,37 @@ impl super::SocialLedger {
                         .ok_or(WitnessError::Ledger(super::SocialError::Invalid(
                             "fight witness dossier",
                         )))?;
-                    judge(jev, observation, witness, dossier)
-                        .await
-                        .map_err(WitnessError::Jev)?
+                    asked.push((witness.as_str(), dossier));
                 }
-            };
-            recorded += usize::from(
-                self.record_fight_witness(&record)
-                    .map_err(WitnessError::Ledger)?,
-            );
+            }
         }
-        Ok(recorded)
+        let mut judgements = asked
+            .into_iter()
+            .map(|(witness, dossier)| async move {
+                judge(jev, observation, witness, dossier)
+                    .await
+                    .map_err(WitnessError::Jev)
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut recorded = 0;
+        let mut failure = None;
+        while let Some(judgement) = judgements.next().await {
+            let committed = judgement.and_then(|record| {
+                self.record_fight_witness(&record)
+                    .map(usize::from)
+                    .map_err(WitnessError::Ledger)
+            });
+            match committed {
+                Ok(added) => recorded += added,
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(recorded),
+        }
     }
 }
 
@@ -570,6 +613,205 @@ mod tests {
             recovered.react_to_fight(&FakeJev, &changed).await,
             Err(WitnessError::Ledger(_))
         ));
+    }
+
+    /// Answers every witness at once, so the first call waits (bounded) for a second one. A
+    /// composition that judges witnesses one after another peaks at a single judgement in flight.
+    #[derive(Default)]
+    struct OverlapJev {
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Jev for OverlapJev {
+        fn reaction<'a>(&'a self, _: &'a Value, _: &'a [String]) -> ChoiceFuture<'a> {
+            Box::pin(async move {
+                use std::sync::atomic::Ordering::SeqCst;
+                let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+                self.peak.fetch_max(now, SeqCst);
+                for _ in 0..1_000 {
+                    if self.in_flight.load(SeqCst) >= 2 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                self.in_flight.fetch_sub(1, SeqCst);
+                Ok(0)
+            })
+        }
+    }
+
+    /// Counts every judgement asked, and fails the judgement of one named witness when set.
+    #[derive(Default)]
+    struct CountingJev {
+        asked: std::sync::atomic::AtomicUsize,
+        failing: Option<&'static str>,
+    }
+
+    impl Jev for CountingJev {
+        fn reaction<'a>(&'a self, facts: &'a Value, _: &'a [String]) -> ChoiceFuture<'a> {
+            Box::pin(async move {
+                self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if self
+                    .failing
+                    .is_some_and(|witness| facts["witness_id"] == witness)
+                {
+                    Err(JevUnavailable::ProviderUnavailable)
+                } else {
+                    Ok(0)
+                }
+            })
+        }
+    }
+
+    /// Two bystanders who did not die, so both are asked and no death needs a grievance choice.
+    fn two_witness_observation() -> Observation {
+        Observation {
+            witnesses: vec!["shop-adventurer".into(), "shop-soldier".into()],
+            deaths: Vec::new(),
+            ..observation()
+        }
+    }
+
+    #[tokio::test]
+    async fn s1_witnesses_are_judged_together_and_both_commit() {
+        let ledger = SocialLedger::open(dossiers(), "s1-test", None).unwrap();
+        let jev = OverlapJev::default();
+        assert_eq!(
+            ledger
+                .react_to_fight(&jev, &two_witness_observation())
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(jev.peak.load(std::sync::atomic::Ordering::SeqCst), 2);
+        for witness in ["shop-adventurer", "shop-soldier"] {
+            assert!(
+                ledger.fight_witness_record("fight-0001", witness).is_some(),
+                "{witness} keeps its judgement"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn s1_a_failed_first_witness_keeps_the_later_judgement_and_retry_asks_only_the_failed_one()
+     {
+        use std::sync::atomic::Ordering::SeqCst;
+        let ledger = SocialLedger::open(dossiers(), "s1-test", None).unwrap();
+        let failing = CountingJev {
+            failing: Some("shop-adventurer"),
+            ..Default::default()
+        };
+        assert!(matches!(
+            ledger
+                .react_to_fight(&failing, &two_witness_observation())
+                .await,
+            Err(WitnessError::Jev(JevUnavailable::ProviderUnavailable))
+        ));
+        assert_eq!(
+            failing.asked.load(SeqCst),
+            2,
+            "both witnesses are asked at once"
+        );
+        assert!(
+            ledger
+                .fight_witness_record("fight-0001", "shop-adventurer")
+                .is_none()
+        );
+        assert!(
+            ledger
+                .fight_witness_record("fight-0001", "shop-soldier")
+                .is_some(),
+            "the answer that arrived is kept when a sibling fails"
+        );
+        let retry = CountingJev::default();
+        assert_eq!(
+            ledger
+                .react_to_fight(&retry, &two_witness_observation())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            retry.asked.load(SeqCst),
+            1,
+            "only the failed witness is asked again"
+        );
+        assert!(
+            ledger
+                .fight_witness_record("fight-0001", "shop-adventurer")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn s1_a_conflicting_saved_witness_stops_before_any_question_is_asked() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let ledger = SocialLedger::open(dossiers(), "s1-test", None).unwrap();
+        let mut changed = two_witness_observation();
+        changed.cause = "A different cause cannot rewrite the same completed fight.".into();
+        ledger
+            .record_fight_witness(&WitnessRecord {
+                observation: changed,
+                witness_id: "shop-soldier".into(),
+                reaction: Reaction::Afraid,
+                grievance_victim: None,
+            })
+            .unwrap();
+        let jev = CountingJev::default();
+        assert!(matches!(
+            ledger
+                .react_to_fight(&jev, &two_witness_observation())
+                .await,
+            Err(WitnessError::Ledger(_))
+        ));
+        assert_eq!(
+            jev.asked.load(SeqCst),
+            0,
+            "no witness is asked against a conflict"
+        );
+        assert!(
+            ledger
+                .fight_witness_record("fight-0001", "shop-adventurer")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn s1_a_repeated_witness_is_refused_before_any_question_is_asked() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let ledger = SocialLedger::open(dossiers(), "s1-test", None).unwrap();
+        let mut repeated = two_witness_observation();
+        repeated.witnesses = vec!["shop-adventurer".into(), "shop-adventurer".into()];
+        let jev = CountingJev::default();
+        assert!(matches!(
+            ledger.react_to_fight(&jev, &repeated).await,
+            Err(WitnessError::Ledger(_))
+        ));
+        assert_eq!(
+            jev.asked.load(SeqCst),
+            0,
+            "a repeated witness must not start two paid calls for one key"
+        );
+        assert!(
+            ledger
+                .fight_witness_record("fight-0001", "shop-adventurer")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn s1_observation_bounds_allow_twenty_witnesses_and_refuse_a_twenty_first_or_a_repeat() {
+        let mut twenty = observation();
+        twenty.witnesses = (0..20).map(|index| format!("bystander-{index}")).collect();
+        assert!(twenty.validate());
+        let mut twenty_one = twenty.clone();
+        twenty_one.witnesses.push("bystander-20".into());
+        assert!(!twenty_one.validate());
+        let mut repeated = observation();
+        repeated.witnesses = vec!["shop-adventurer".into(), "shop-adventurer".into()];
+        assert!(!repeated.validate());
+        assert!(observation().validate());
     }
 
     #[test]

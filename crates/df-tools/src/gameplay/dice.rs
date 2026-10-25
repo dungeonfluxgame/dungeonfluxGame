@@ -15,11 +15,21 @@ use super::{actor::record_audit_line, model};
 
 /// The die sizes the queue accepts, in the order the queue lists them.
 pub(super) const QUEUEABLE_DIE_SIZES: [u32; 7] = [4, 6, 8, 10, 12, 20, 100];
+/// Most faces one die size may hold at once. A dev script that would pass this is refused whole.
+const MAXIMUM_QUEUED_FACES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum QueueError {
     UnknownDie,
-    FaceOutOfRange { face: u32, sides: u32 },
+    FaceOutOfRange {
+        face: u32,
+        sides: u32,
+    },
+    QueueFull {
+        sides: u32,
+        held: usize,
+        requested: usize,
+    },
 }
 
 impl QueueError {
@@ -36,6 +46,14 @@ impl QueueError {
             Self::FaceOutOfRange { face, sides } => {
                 format!("face {face} is outside 1..={sides} for d{sides}; nothing was queued")
             }
+            Self::QueueFull {
+                sides,
+                held,
+                requested,
+            } => format!(
+                "d{sides} holds {held} queued faces; {requested} more would pass the \
+                 {MAXIMUM_QUEUED_FACES} limit; nothing was queued"
+            ),
         }
     }
 }
@@ -65,6 +83,14 @@ impl Queue {
             .find(|face| !(1..=sides).contains(face))
         {
             return Err(QueueError::FaceOutOfRange { face, sides });
+        }
+        let held = self.faces.get(&sides).map_or(0, VecDeque::len);
+        if held + faces.len() > MAXIMUM_QUEUED_FACES {
+            return Err(QueueError::QueueFull {
+                sides,
+                held,
+                requested: faces.len(),
+            });
         }
         let queue = self.faces.entry(sides).or_default();
         queue.extend(faces.iter().copied());
@@ -189,6 +215,64 @@ mod tests {
         assert!(queue.snapshot().iter().all(|(_, faces)| faces.is_empty()));
         assert_eq!(queue.push(100, &[100, 1]), Ok(2));
         assert_eq!(queue.take(100), Some((100, 1)));
+    }
+
+    #[test]
+    fn a_die_size_accepts_exactly_the_limit_and_refuses_one_more_face() {
+        let mut queue = Queue::new();
+        assert_eq!(
+            queue.push(6, &vec![6; MAXIMUM_QUEUED_FACES + 1]),
+            Err(QueueError::QueueFull {
+                sides: 6,
+                held: 0,
+                requested: MAXIMUM_QUEUED_FACES + 1,
+            }),
+            "a batch larger than the limit is refused on an empty queue"
+        );
+        assert!(queue.snapshot().iter().all(|(_, faces)| faces.is_empty()));
+        assert_eq!(
+            queue.push(6, &vec![6; MAXIMUM_QUEUED_FACES]),
+            Ok(MAXIMUM_QUEUED_FACES),
+            "exactly the limit on an empty queue is accepted"
+        );
+        assert_eq!(
+            queue.push(6, &[1]),
+            Err(QueueError::QueueFull {
+                sides: 6,
+                held: MAXIMUM_QUEUED_FACES,
+                requested: 1,
+            })
+        );
+        assert_eq!(queue.snapshot()[1].1.len(), MAXIMUM_QUEUED_FACES);
+    }
+
+    #[test]
+    fn a_full_die_size_leaves_other_sizes_room_and_frees_a_slot_on_take() {
+        let mut queue = Queue::new();
+        queue.push(6, &vec![6; MAXIMUM_QUEUED_FACES]).unwrap();
+        assert_eq!(
+            queue.push(20, &[20]),
+            Ok(1),
+            "other die sizes keep their own room"
+        );
+        assert_eq!(queue.take(6), Some((6, MAXIMUM_QUEUED_FACES - 1)));
+        assert_eq!(queue.push(6, &[1]), Ok(MAXIMUM_QUEUED_FACES));
+    }
+
+    #[test]
+    fn a_refused_queue_full_names_the_held_and_requested_counts() {
+        let message = QueueError::QueueFull {
+            sides: 6,
+            held: 255,
+            requested: 2,
+        }
+        .message();
+        assert!(message.contains("d6 holds 255 queued faces"), "{message}");
+        assert!(
+            message.contains("2 more would pass the 256 limit"),
+            "{message}"
+        );
+        assert!(message.contains("nothing was queued"), "{message}");
     }
 
     #[test]
