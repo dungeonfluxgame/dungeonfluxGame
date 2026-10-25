@@ -273,7 +273,7 @@ pub fn select_continuity<'a>(
         {
             return Err(ContinuityError::UnsupportedTier);
         }
-        let canonical = identity.is_some_and(|identity| {
+        let is_canonical = identity.is_some_and(|identity| {
             identity.appearances.contains(offer.asset)
                 || identity.sound.contains(offer.asset)
                 || identity.voice.as_ref() == Some(offer.asset)
@@ -282,7 +282,7 @@ pub fn select_continuity<'a>(
             || binding
                 .scene
                 .is_some_and(|scene| &scene.geometry == offer.asset);
-        if !canonical || !context.inventory.assets.contains(offer.asset) {
+        if !is_canonical || !context.inventory.assets.contains(offer.asset) {
             return Err(ContinuityError::ReferenceUnavailable);
         }
         let bytes = admitted_bytes
@@ -326,10 +326,10 @@ fn unique<'a, T>(mut records: impl Iterator<Item = &'a T>) -> Result<&'a T, Cont
 fn entity_identity<'a>(
     pack: &'a CanonicalPack,
     entity: EntityId,
-    current: &RevisionLabel,
-    requested: &RevisionLabel,
+    current_revision: &RevisionLabel,
+    requested_revision: &RevisionLabel,
 ) -> Result<&'a EntityIdentityRevision, ContinuityError> {
-    if current != requested {
+    if current_revision != requested_revision {
         return Err(ContinuityError::StaleBinding);
     }
     let identity = unique(
@@ -337,7 +337,7 @@ fn entity_identity<'a>(
             .iter()
             .filter(|identity| identity.entity == entity),
     )?;
-    if &identity.revision != requested {
+    if &identity.revision != requested_revision {
         return Err(ContinuityError::StaleBinding);
     }
     Ok(identity)
@@ -365,7 +365,7 @@ fn validate_facts(
     let scene_facts = binding
         .scene
         .map_or(&[][..], |scene| scene.source_facts.as_slice());
-    let origin = binding.item.map(|item| item.source_fact);
+    let item_source_fact = binding.item.map(|item| item.source_fact);
     for facts in [identity_facts, scene_facts] {
         if facts
             .iter()
@@ -375,15 +375,15 @@ fn validate_facts(
             return Err(ContinuityError::Duplicate);
         }
     }
-    let required = |id: &FactId| {
-        identity_facts.contains(id) || scene_facts.contains(id) || origin == Some(*id)
+    let is_required_fact = |id: &FactId| {
+        identity_facts.contains(id) || scene_facts.contains(id) || item_source_fact == Some(*id)
     };
-    if binding.facts.iter().any(|id| !required(id))
+    if binding.facts.iter().any(|id| !is_required_fact(id))
         || identity_facts
             .iter()
             .chain(scene_facts)
             .any(|id| !binding.facts.contains(id))
-        || origin.is_some_and(|id| !binding.facts.contains(&id))
+        || item_source_fact.is_some_and(|id| !binding.facts.contains(&id))
     {
         return Err(ContinuityError::MissingFacts);
     }
@@ -408,7 +408,7 @@ fn preflight(
     binding: &ContinuityBinding<'_>,
     tiers: &[PreparedTier],
     prepared: &[PreparedRepresentation<'_>],
-    bytes: &[AdmittedPreparedBytes<'_>],
+    admitted_bytes: &[AdmittedPreparedBytes<'_>],
     limits: ContinuityLimits,
 ) -> Result<(), ContinuityError> {
     let checkpoint = limits.checkpoint;
@@ -439,7 +439,7 @@ fn preflight(
     .try_fold(0usize, |total, count| total.checked_add(count))
     .is_none_or(|count| count > checkpoint.maximum_records)
         || prepared.len() > limits.maximum_prepared_records
-        || bytes.len() > limits.maximum_prepared_records
+        || admitted_bytes.len() > limits.maximum_prepared_records
         || context
             .current
             .retained_bytes()
@@ -475,19 +475,19 @@ fn preflight(
             return Err(ContinuityError::Capacity);
         }
     }
-    let mut total = 0usize;
-    for (index, entry) in bytes.iter().enumerate() {
-        if bytes
+    let mut total_admitted_bytes = 0usize;
+    for (index, entry) in admitted_bytes.iter().enumerate() {
+        if admitted_bytes
             .iter()
             .take(index)
             .any(|prior| prior.asset == entry.asset)
         {
             return Err(ContinuityError::Duplicate);
         }
-        total = total
+        total_admitted_bytes = total_admitted_bytes
             .checked_add(entry.bytes.len())
             .ok_or(ContinuityError::Capacity)?;
-        if total > limits.maximum_prepared_bytes {
+        if total_admitted_bytes > limits.maximum_prepared_bytes {
             return Err(ContinuityError::Capacity);
         }
     }

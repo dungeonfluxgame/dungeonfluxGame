@@ -121,12 +121,12 @@ impl Fixture {
                 let lookup = catalog.lookup(entry_key, chain);
                 assert_eq!(lookup.version, catalog.version());
                 values.push(lookup.lookup.label().unwrap().to_owned());
-                let args = if entry_key == &key("ui.greeting") {
+                let arguments = if entry_key == &key("ui.greeting") {
                     arguments()
                 } else {
                     BTreeMap::new()
                 };
-                let formatted = catalog.format(entry_key, chain, &args).unwrap();
+                let formatted = catalog.format(entry_key, chain, &arguments).unwrap();
                 assert_eq!(formatted.version, catalog.version());
                 values.push(formatted.message.plain_text());
             }
@@ -477,8 +477,8 @@ fn admitted_reload_replaces_inventory_slot_declarations_and_text_revision_togeth
         None
     );
     let quantity = Usage::new(u128::MAX, UsageUnit::Token);
-    let args = BTreeMap::from([("name".to_owned(), ArgumentValue::Quantity(quantity))]);
-    let formatted = catalog.format(&greeting, &[german], &args).unwrap();
+    let arguments = BTreeMap::from([("name".to_owned(), ArgumentValue::Quantity(quantity))]);
+    let formatted = catalog.format(&greeting, &[german], &arguments).unwrap();
     assert_eq!(formatted.version, &revision("text:2"));
     assert_eq!(
         formatted.message.parts,
@@ -543,7 +543,7 @@ fn missing_keys_and_invalid_arguments_emit_no_fabricated_label_or_message() {
 
 #[test]
 fn revision_admission_preserves_exact_money_quantity_and_stable_keys() {
-    let language = locale("en");
+    let locale = locale("en");
     let entry_key = key("mechanics.resource.cost");
     let currency = Currency::parse("USD").unwrap();
     let kinds = BTreeMap::from([
@@ -565,14 +565,14 @@ fn revision_admission_preserves_exact_money_quantity_and_stable_keys() {
         },
     ];
     let entries = [CatalogEntry {
-        locale: &language,
+        locale: &locale,
         key: &entry_key,
         text: "Cost",
         parts: &parts,
     }];
     let catalog = VersionedCatalog::load_revision(
         Some("text:1"),
-        std::slice::from_ref(&language),
+        std::slice::from_ref(&locale),
         &declarations,
         &entries,
         &[revision("text:1")],
@@ -581,12 +581,12 @@ fn revision_admission_preserves_exact_money_quantity_and_stable_keys() {
     for value in [0, 1, u128::MAX] {
         let amount = Money::new(currency, value);
         let quantity = Usage::new(value, UsageUnit::Byte);
-        let args = BTreeMap::from([
+        let arguments = BTreeMap::from([
             ("amount".to_owned(), ArgumentValue::Money(amount)),
             ("quantity".to_owned(), ArgumentValue::Quantity(quantity)),
         ]);
         let formatted = catalog
-            .format(&entry_key, std::slice::from_ref(&language), &args)
+            .format(&entry_key, std::slice::from_ref(&locale), &arguments)
             .unwrap();
         assert_eq!(formatted.version, &revision("text:1"));
         assert_eq!(formatted.message.key, entry_key);

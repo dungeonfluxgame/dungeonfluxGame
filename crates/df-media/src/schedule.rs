@@ -227,15 +227,15 @@ impl<JobId: Copy + Eq> MediaScheduler<JobId> {
         {
             return Err(ScheduleError::Duplicate);
         }
-        let items = self.queues.iter().map(VecDeque::len).sum::<usize>();
-        let non_speech = self.queues.iter().skip(1).map(VecDeque::len).sum::<usize>();
-        if items >= self.limits.queue_items
+        let queued_items = self.queues.iter().map(VecDeque::len).sum::<usize>();
+        let queued_non_speech_items = self.queues.iter().skip(1).map(VecDeque::len).sum::<usize>();
+        if queued_items >= self.limits.queue_items
             || (request.priority != MediaPriority::Speech
-                && non_speech >= self.limits.queue_items - self.limits.speech_items)
+                && queued_non_speech_items >= self.limits.queue_items - self.limits.speech_items)
         {
             return Err(ScheduleError::ItemCapacity);
         }
-        let bytes = request.payload.len();
+        let request_bytes = request.payload.len();
         let active_bytes = self.active.iter().map(|job| job.bytes).sum::<usize>();
         let active_non_speech_bytes = self
             .active
@@ -243,9 +243,9 @@ impl<JobId: Copy + Eq> MediaScheduler<JobId> {
             .filter(|job| job.priority != MediaPriority::Speech)
             .map(|job| job.bytes)
             .sum::<usize>();
-        if bytes > self.limits.queue_bytes - self.queued_bytes - active_bytes
+        if request_bytes > self.limits.queue_bytes - self.queued_bytes - active_bytes
             || (request.priority != MediaPriority::Speech
-                && bytes
+                && request_bytes
                     > self.limits.queue_bytes
                         - self.limits.speech_bytes
                         - self.non_speech_bytes
@@ -272,28 +272,29 @@ impl<JobId: Copy + Eq> MediaScheduler<JobId> {
         if self.active.len() >= self.limits.execution_slots {
             return Ok(None);
         }
-        let non_speech = self
+        let active_non_speech_count = self
             .active
             .iter()
             .filter(|job| job.priority != MediaPriority::Speech)
             .count();
         for offset in 0..TURNS.len() {
-            let turn = (self.cursor + offset) % TURNS.len();
-            let index = TURNS[turn];
-            if self.queues[index].is_empty()
-                || (index != 0
-                    && non_speech >= self.limits.execution_slots - self.limits.speech_slots)
+            let turn_index = (self.cursor + offset) % TURNS.len();
+            let priority_index = TURNS[turn_index];
+            if self.queues[priority_index].is_empty()
+                || (priority_index != 0
+                    && active_non_speech_count
+                        >= self.limits.execution_slots - self.limits.speech_slots)
             {
                 continue;
             }
-            let Some(position) = self.queues[index].iter().position(&eligible) else {
+            let Some(position) = self.queues[priority_index].iter().position(&eligible) else {
                 continue;
             };
             let generation = self
                 .generation
                 .checked_add(1)
                 .ok_or(ScheduleError::IdentityExhausted)?;
-            if let Some(request) = self.queues[index].remove(position) {
+            if let Some(request) = self.queues[priority_index].remove(position) {
                 self.remove_queued_bytes(&request);
                 self.active.push(Active {
                     id: request.id,
@@ -302,7 +303,7 @@ impl<JobId: Copy + Eq> MediaScheduler<JobId> {
                     bytes: request.payload.len(),
                 });
                 self.generation = generation;
-                self.cursor = (turn + 1) % TURNS.len();
+                self.cursor = (turn_index + 1) % TURNS.len();
                 return Ok(Some(MediaDispatch {
                     owner: Arc::clone(&self.owner),
                     generation,

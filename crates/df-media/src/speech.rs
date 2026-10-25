@@ -235,17 +235,17 @@ impl SpeechScheduler {
     /// Obsolete commands retain their queue budget until explicit receipt-fenced cancellation.
     pub fn begin(&mut self) -> Result<Option<SpeechReceipt>, SpeechBeginRefusal> {
         let jobs = &self.jobs;
-        let current = self.current;
+        let current_basis = self.current;
         let dispatch = match self.scheduler.begin_eligible(|request| {
             jobs.get(request.id())
-                .is_some_and(|job| job.identity.basis == current)
+                .is_some_and(|job| job.identity.basis == current_basis)
         }) {
             Ok(Some(dispatch)) => dispatch,
             Ok(None) => return Ok(None),
             Err(reason) => return Err(SpeechBeginRefusal::Schedule(reason)),
         };
-        let id = *dispatch.request().id();
-        let Some(job) = self.jobs.get_mut(&id) else {
+        let job_id = *dispatch.request().id();
+        let Some(job) = self.jobs.get_mut(&job_id) else {
             return Err(SpeechBeginRefusal::Owned {
                 reason: SpeechError::NotStarted,
                 dispatch: Box::new(dispatch),
@@ -259,7 +259,11 @@ impl SpeechScheduler {
         Ok(Some(receipt))
     }
 
-    fn check(&self, receipt: &SpeechReceipt, current: bool) -> Result<&SpeechJob, SpeechError> {
+    fn check(
+        &self,
+        receipt: &SpeechReceipt,
+        require_current_basis: bool,
+    ) -> Result<&SpeechJob, SpeechError> {
         let job = self
             .jobs
             .get(&receipt.identity.job)
@@ -267,7 +271,7 @@ impl SpeechScheduler {
         if job.identity != receipt.identity || !Arc::ptr_eq(&job.instance, &receipt.instance) {
             return Err(SpeechError::Stale);
         }
-        if current && job.identity.basis != self.current {
+        if require_current_basis && job.identity.basis != self.current {
             return Err(SpeechError::Stale);
         }
         Ok(job)
@@ -299,7 +303,7 @@ impl SpeechScheduler {
         sequence: u64,
         bytes: Box<[u8]>,
     ) -> Result<(), SpeechChunkRefusal> {
-        let check = self.check_event(receipt, identity).and_then(|job| {
+        let validation = self.check_event(receipt, identity).and_then(|job| {
             if job.closed {
                 return Err(SpeechError::Closed);
             }
@@ -319,7 +323,7 @@ impl SpeechScheduler {
             }
             Ok(())
         });
-        if let Err(reason) = check {
+        if let Err(reason) = validation {
             return Err(SpeechChunkRefusal { reason, bytes });
         }
         let Some(job) = self.jobs.get_mut(&identity.job) else {
@@ -373,11 +377,11 @@ impl SpeechScheduler {
         if job.closed {
             return Err(SpeechError::Closed);
         }
-        let complete = job.end.is_some_and(|count| {
+        let is_complete = job.end.is_some_and(|count| {
             count == job.chunks.len() as u64 && job.chunks.keys().copied().eq(0..count)
         });
         let job = self.jobs.get_mut(&identity.job).ok_or(SpeechError::Stale)?;
-        if !complete {
+        if !is_complete {
             job.failure = Some(NativeFailure::Rejected);
             return Err(SpeechError::IncompleteEof);
         }

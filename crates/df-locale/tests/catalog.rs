@@ -3,7 +3,7 @@ use df_locale::{
 };
 use df_types::LocaleTag;
 
-fn tags(spellings: &[&str]) -> Vec<LocaleTag> {
+fn parse_locales(spellings: &[&str]) -> Vec<LocaleTag> {
     spellings
         .iter()
         .map(|spelling| LocaleTag::parse(spelling).unwrap())
@@ -13,7 +13,7 @@ fn tags(spellings: &[&str]) -> Vec<LocaleTag> {
 #[test]
 fn negotiated_caller_preserves_source_identity_across_translations_fallback_and_miss() {
     let key = TextKey::parse("mechanics.action.attack").unwrap();
-    let supported = tags(&["en", "fr"]);
+    let supported = parse_locales(&["en", "fr"]);
     let default = LocaleTag::parse("en").unwrap();
     let source_context = ("source-revision-7", "action.attack");
     let mut translated = Catalog::default();
@@ -21,7 +21,7 @@ fn negotiated_caller_preserves_source_identity_across_translations_fallback_and_
     translated.insert(&supported[1], key.clone(), "Attaque");
 
     for (requested, label) in [("en", "Attack"), ("fr", "Attaque")] {
-        let selection = settle(&tags(&[requested]), &supported, &default).unwrap();
+        let selection = settle(&parse_locales(&[requested]), &supported, &default).unwrap();
         let chain = lookup_chain(selection.selected(), &default);
         let presentation = (source_context, translated.lookup(&key, &chain));
         assert_eq!(presentation.0, source_context);
@@ -35,7 +35,7 @@ fn negotiated_caller_preserves_source_identity_across_translations_fallback_and_
         assert!(!selection.used_fallback());
     }
 
-    let selection = settle(&tags(&["fr"]), &supported, &default).unwrap();
+    let selection = settle(&parse_locales(&["fr"]), &supported, &default).unwrap();
     let chain = lookup_chain(selection.selected(), &default);
     let mut default_only = Catalog::default();
     default_only.insert(&default, key.clone(), "Attack");
@@ -96,11 +96,14 @@ fn parsed_key_grammar_accepts_exact_spelling_and_refuses_malformed_segments() {
 fn chain_deduplicates_only_equal_inputs_and_empty_chain_is_an_explicit_miss() {
     let selected = LocaleTag::parse("FR").unwrap();
     let default = LocaleTag::parse("en").unwrap();
-    assert_eq!(lookup_chain(&selected, &default), tags(&["fr", "en"]));
-    assert_eq!(lookup_chain(&default, &default), tags(&["en"]));
+    assert_eq!(
+        lookup_chain(&selected, &default),
+        parse_locales(&["fr", "en"])
+    );
+    assert_eq!(lookup_chain(&default, &default), parse_locales(&["en"]));
     assert_eq!(
         lookup_chain(&selected, &LocaleTag::parse("fr").unwrap()),
-        tags(&["fr"])
+        parse_locales(&["fr"])
     );
     let key = TextKey::parse("mechanics.action.attack").unwrap();
     let mut catalog = Catalog::default();
@@ -119,7 +122,7 @@ fn exact_tags_and_key_isolation_preserve_caller_inputs_and_search_order() {
     let key = TextKey::parse("mechanics.action.attack").unwrap();
     let other = TextKey::parse("mechanics.action.dodge").unwrap();
     let locale = LocaleTag::parse("en-US").unwrap();
-    let chain = tags(&["en", "fr", "en-US"]);
+    let chain = parse_locales(&["en", "fr", "en-US"]);
     let before = (key.clone(), chain.clone());
     let mut catalog = Catalog::default();
     catalog.insert(&locale, key.clone(), "Attack");
@@ -139,7 +142,7 @@ fn exact_tags_and_key_isolation_preserve_caller_inputs_and_search_order() {
         let mut catalog = Catalog::default();
         catalog.insert(&LocaleTag::parse(stored).unwrap(), key.clone(), "label");
         assert!(matches!(
-            catalog.lookup(&key, &tags(&[requested])),
+            catalog.lookup(&key, &parse_locales(&[requested])),
             Lookup::Missing { .. }
         ));
     }
@@ -148,7 +151,7 @@ fn exact_tags_and_key_isolation_preserve_caller_inputs_and_search_order() {
 #[test]
 fn catalog_owns_inserted_text_and_found_text_borrows_storage_including_empty_entries() {
     let key = TextKey::parse("mechanics.action.attack").unwrap();
-    let chain = tags(&["en"]);
+    let chain = parse_locales(&["en"]);
     let mut catalog = Catalog::default();
     {
         let text = String::from("Attack");
@@ -175,8 +178,8 @@ fn catalog_owns_inserted_text_and_found_text_borrows_storage_including_empty_ent
 
 #[test]
 fn unsupported_default_refuses_the_negotiated_lookup_caller() {
-    let requested = tags(&["fr"]);
-    let supported = tags(&["fr"]);
+    let requested = parse_locales(&["fr"]);
+    let supported = parse_locales(&["fr"]);
     let default = LocaleTag::parse("en").unwrap();
     let key = TextKey::parse("mechanics.action.attack").unwrap();
     let mut catalog = Catalog::default();
