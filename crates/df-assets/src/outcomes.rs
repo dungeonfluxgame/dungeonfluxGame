@@ -128,7 +128,7 @@ where
         Ok(AssetRange {
             selected: self,
             inner,
-            failed: false,
+            has_failed: false,
         })
     }
 }
@@ -140,7 +140,7 @@ where
 {
     selected: &'s SelectedAsset<'a, A>,
     inner: AuthorizedRange<'s, AssetResolver<'a, A>, File>,
-    failed: bool,
+    has_failed: bool,
 }
 
 impl<A> AssetRange<'_, '_, A>
@@ -155,7 +155,7 @@ where
         current: &AssetRequestKey,
         output: &mut [u8],
     ) -> Result<ChunkOutcome, AssetResolutionError> {
-        if self.failed {
+        if self.has_failed {
             return Err(AssetResolutionError::Range(RangeError::Terminated));
         }
         let result = self.selected.check_current(current).and_then(|()| {
@@ -164,7 +164,7 @@ where
                 .map_err(AssetResolutionError::from)
         });
         if result.is_err() {
-            self.failed = true;
+            self.has_failed = true;
         }
         result
     }

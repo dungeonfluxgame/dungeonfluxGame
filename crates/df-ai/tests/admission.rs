@@ -60,8 +60,8 @@ impl RecordingPublisher for Store {
     }
 }
 
-fn operation(value: u8) -> OperationId {
-    OperationId::from_bytes(&[value; 16]).unwrap()
+fn operation(operation_byte: u8) -> OperationId {
+    OperationId::from_bytes(&[operation_byte; 16]).unwrap()
 }
 
 fn key() -> Key {

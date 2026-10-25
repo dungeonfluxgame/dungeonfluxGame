@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const MAX_PROMOTION_SLOTS: u32 = 1024;
+const MAXIMUM_PROMOTION_SLOTS: u32 = 1024;
 
 /// Native file-backed byte port. The caller configures a durable root outside caches.
 pub struct NativeFileStore {
@@ -168,7 +168,7 @@ impl AssetStore for NativeFileStore {
             let mut input = File::open(&staged.path).map_err(StoreError::from)?;
             let operation_name = hex(staged.operation.as_bytes());
             let mut output = None;
-            for slot in 0..MAX_PROMOTION_SLOTS {
+            for slot in 0..MAXIMUM_PROMOTION_SLOTS {
                 let name = if slot == 0 {
                     operation_name.clone()
                 } else {

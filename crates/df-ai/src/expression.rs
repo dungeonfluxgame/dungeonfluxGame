@@ -107,12 +107,16 @@ impl<'a> PreparedExpression<'a> {
     }
 }
 
-fn append(bytes: &mut Vec<u8>, value: &[u8], maximum: usize) -> Result<(), ExpressionRequestError> {
+fn append_bounded_bytes(
+    bytes: &mut Vec<u8>,
+    value: &[u8],
+    maximum_bytes: usize,
+) -> Result<(), ExpressionRequestError> {
     let length = bytes
         .len()
         .checked_add(value.len())
         .ok_or(ExpressionRequestError::Capacity)?;
-    if length > maximum {
+    if length > maximum_bytes {
         return Err(ExpressionRequestError::Capacity);
     }
     bytes
@@ -122,10 +126,14 @@ fn append(bytes: &mut Vec<u8>, value: &[u8], maximum: usize) -> Result<(), Expre
     Ok(())
 }
 
-fn field(bytes: &mut Vec<u8>, value: &[u8], maximum: usize) -> Result<(), ExpressionRequestError> {
+fn append_length_prefixed_bytes(
+    bytes: &mut Vec<u8>,
+    value: &[u8],
+    maximum_bytes: usize,
+) -> Result<(), ExpressionRequestError> {
     let length = u64::try_from(value.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-    append(bytes, &length.to_be_bytes(), maximum)?;
-    append(bytes, value, maximum)
+    append_bounded_bytes(bytes, &length.to_be_bytes(), maximum_bytes)?;
+    append_bounded_bytes(bytes, value, maximum_bytes)
 }
 
 fn intent_byte(intent: SpeechIntent) -> u8 {
@@ -153,47 +161,55 @@ fn slot_byte(value: SlotKind) -> u8 {
 /// Every prompt/retrieval/style/asset field comes from the permitted canonical claim selection.
 fn encode_context(
     context: &ExpressionContext<'_>,
-    maximum: usize,
+    maximum_bytes: usize,
 ) -> Result<Vec<u8>, ExpressionRequestError> {
     let mut bytes = Vec::new();
-    append(&mut bytes, b"df-expression-input/1\n", maximum)?;
-    field(&mut bytes, context.metadata().locale.as_bytes(), maximum)?;
+    append_bounded_bytes(&mut bytes, b"df-expression-input/1\n", maximum_bytes)?;
+    append_length_prefixed_bytes(
+        &mut bytes,
+        context.metadata().locale.as_bytes(),
+        maximum_bytes,
+    )?;
     let count =
         u64::try_from(context.claims().len()).map_err(|_| ExpressionRequestError::Capacity)?;
-    append(&mut bytes, &count.to_be_bytes(), maximum)?;
+    append_bounded_bytes(&mut bytes, &count.to_be_bytes(), maximum_bytes)?;
     for claim in context.claims() {
-        field(&mut bytes, claim.id.as_bytes(), maximum)?;
-        field(&mut bytes, claim.holder.as_bytes(), maximum)?;
-        field(&mut bytes, claim.subject.as_bytes(), maximum)?;
-        append(
+        append_length_prefixed_bytes(&mut bytes, claim.id.as_bytes(), maximum_bytes)?;
+        append_length_prefixed_bytes(&mut bytes, claim.holder.as_bytes(), maximum_bytes)?;
+        append_length_prefixed_bytes(&mut bytes, claim.subject.as_bytes(), maximum_bytes)?;
+        append_bounded_bytes(
             &mut bytes,
             &[
                 intent_byte(claim.intent),
                 uncertainty_byte(claim.uncertainty),
             ],
-            maximum,
+            maximum_bytes,
         )?;
-        field(&mut bytes, claim.text.as_bytes(), maximum)?;
+        append_length_prefixed_bytes(&mut bytes, claim.text.as_bytes(), maximum_bytes)?;
         // Retrieval keys are the same already-visible evidence, never a private query context.
         let evidence =
             u64::try_from(claim.evidence.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-        append(&mut bytes, &evidence.to_be_bytes(), maximum)?;
+        append_bounded_bytes(&mut bytes, &evidence.to_be_bytes(), maximum_bytes)?;
         for id in claim.evidence {
-            field(&mut bytes, id.as_bytes(), maximum)?;
+            append_length_prefixed_bytes(&mut bytes, id.as_bytes(), maximum_bytes)?;
         }
         // Source style references and subject asset cues have the same listener scope as the claim.
-        field(
+        append_length_prefixed_bytes(
             &mut bytes,
             claim.source.package.as_str().as_bytes(),
-            maximum,
+            maximum_bytes,
         )?;
-        field(&mut bytes, claim.source.entry.as_str().as_bytes(), maximum)?;
+        append_length_prefixed_bytes(
+            &mut bytes,
+            claim.source.entry.as_str().as_bytes(),
+            maximum_bytes,
+        )?;
         let slots =
             u64::try_from(claim.slots.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-        append(&mut bytes, &slots.to_be_bytes(), maximum)?;
+        append_bounded_bytes(&mut bytes, &slots.to_be_bytes(), maximum_bytes)?;
         for slot in &claim.slots {
-            append(&mut bytes, &[slot_byte(slot.kind)], maximum)?;
-            field(&mut bytes, slot.value.as_bytes(), maximum)?;
+            append_bounded_bytes(&mut bytes, &[slot_byte(slot.kind)], maximum_bytes)?;
+            append_length_prefixed_bytes(&mut bytes, slot.value.as_bytes(), maximum_bytes)?;
         }
     }
     Ok(bytes)
