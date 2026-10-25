@@ -1035,7 +1035,7 @@ pub(super) fn submit_notebook_command(client: Rc<RefCell<Client>>, command: Stri
         Ok(rpc::RawDialogueRequest {
             session_id: state.session.clone(),
             run_id: state.run.clone(),
-            observed_revision: state.revision.clone(),
+            observed_revision: state.revision,
             input_id: Some(operation()?),
             text: command,
             context: rpc::DialogueContext::Meta as i32,
@@ -1258,7 +1258,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                         state.dialogue.ticket = None;
                         let (disposition, result) = split_action_response(&reply.npc_reply);
                         state.dialogue.exchange = Some(Exchange {
-                            revision: reply.revision.clone(),
+                            revision: reply.revision,
                             you: input.text.clone(),
                             disposition: Some(disposition.to_owned()),
                             speaker: "Narrator".to_owned(),

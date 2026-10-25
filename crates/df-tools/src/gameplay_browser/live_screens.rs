@@ -421,7 +421,6 @@ fn choice_icon(action_kind: i32) -> &'static str {
 
 /// Offers that need no extra typed input become scene choices; the rest keep their
 /// existing controls in the dock. A travel with one destination needs no drop-down.
-
 fn phone_choice_label(label: &str, tv_choices: &[String]) -> String {
     tv_choices
         .iter()
@@ -675,7 +674,6 @@ fn choice_disabled_reason(busy: bool, unconfirmed: bool) -> Option<&'static str>
 
 /// A choice or lobby action chosen on a screen: the server's own current offer is sent
 /// through the existing prepare/send path, or the choice is reported as ended.
-
 pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, choice_id: &str) {
     let (offer_id, travel_option) = match choice_id.split_once('|') {
         Some((offer, option)) => (offer, Some(option)),

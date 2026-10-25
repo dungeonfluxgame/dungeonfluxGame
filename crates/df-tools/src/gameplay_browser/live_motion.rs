@@ -61,7 +61,7 @@ thread_local! {
 #[derive(Clone)]
 enum Detail {
     Roll(Box<RollDetail>),
-    Line(LineDetail),
+    Line(Box<LineDetail>),
     Banner {
         victory: bool,
         /// The finished fight's Dungeon Master closing line, installed when the banner
@@ -661,7 +661,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
         slot: None,
         settled: false,
         timing: LineTiming::Ordinary,
-        detail: Detail::Line(LineDetail {
+        detail: Detail::Line(Box::new(LineDetail {
             table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
@@ -674,7 +674,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
             check_roll: None,
             check_settled: false,
             dice: None,
-        }),
+        })),
     })
 }
 
@@ -712,7 +712,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                 slot,
                 settled: false,
                 timing: LineTiming::Ordinary,
-                detail: Detail::Line(LineDetail {
+                detail: Detail::Line(Box::new(LineDetail {
                     table_sequence: None,
                     speaker,
                     actor_id: voice.actor_id().unwrap_or_default().to_owned(),
@@ -725,7 +725,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                     check_roll: None,
                     check_settled: false,
                     dice: None,
-                }),
+                })),
             })
         })
         .collect()
@@ -814,7 +814,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
         slot: None,
         settled,
         timing: LineTiming::Ordinary,
-        detail: Detail::Line(LineDetail {
+        detail: Detail::Line(Box::new(LineDetail {
             table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
@@ -827,7 +827,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
             check_roll: None,
             check_settled: false,
             dice: None,
-        }),
+        })),
     }
 }
 
@@ -846,7 +846,7 @@ fn check_voice_script_line(
         slot: None,
         settled,
         timing: LineTiming::CheckResult,
-        detail: Detail::Line(LineDetail {
+        detail: Detail::Line(Box::new(LineDetail {
             table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
@@ -859,7 +859,7 @@ fn check_voice_script_line(
             check_roll: None,
             check_settled: false,
             dice: None,
-        }),
+        })),
     }
 }
 
@@ -885,7 +885,7 @@ fn check_roll_script_line(
                 reveal_ms: super::live_stage::check_reveal_ms(),
             }
         },
-        detail: Detail::Line(LineDetail {
+        detail: Detail::Line(Box::new(LineDetail {
             table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
@@ -898,7 +898,7 @@ fn check_roll_script_line(
             check_roll: Some(payload),
             check_settled: settled,
             dice: None,
-        }),
+        })),
     }
 }
 
@@ -915,7 +915,7 @@ fn dice_script_line(line: &TableLine) -> Option<ScriptLine<Detail>> {
         slot: None,
         settled: false,
         timing: LineTiming::Dice,
-        detail: Detail::Line(LineDetail {
+        detail: Detail::Line(Box::new(LineDetail {
             table_sequence: (line.sequence != 0).then_some(line.sequence),
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
@@ -928,7 +928,7 @@ fn dice_script_line(line: &TableLine) -> Option<ScriptLine<Detail>> {
             check_roll: None,
             check_settled: false,
             dice: Some(card),
-        }),
+        })),
     })
 }
 
@@ -952,7 +952,7 @@ fn script_line(
             slot: None,
             settled,
             timing: LineTiming::Ordinary,
-            detail: Detail::Line(detail),
+            detail: Detail::Line(Box::new(detail)),
         });
     }
     let slot = match line.role {
@@ -993,7 +993,7 @@ fn script_line(
         slot,
         settled,
         timing: LineTiming::Ordinary,
-        detail: Detail::Line(detail),
+        detail: Detail::Line(Box::new(detail)),
     })
 }
 
