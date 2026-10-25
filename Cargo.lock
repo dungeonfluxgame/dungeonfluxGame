@@ -716,7 +716,6 @@ dependencies = [
 name = "df-persistence"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "df-assets",
  "df-auth",
  "df-customer",
@@ -724,12 +723,10 @@ dependencies = [
  "df-observe",
  "df-rules",
  "df-session",
- "df-support",
  "df-types",
  "rcgen",
  "rustls",
  "rustls-pki-types",
- "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-postgres",
@@ -2568,6 +2565,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
