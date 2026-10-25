@@ -515,6 +515,24 @@ impl rpc::action_service_server::ActionService for Service {
         ))
     }
 
+    async fn request_hero_portrait(
+        &self,
+        _request: Request<rpc::HeroPortraitRequest>,
+    ) -> Result<Response<rpc::HeroPortraitResponse>, Status> {
+        Err(Status::unimplemented(
+            "the revision peer does not read hero portraits",
+        ))
+    }
+
+    async fn get_hero_portrait(
+        &self,
+        _request: Request<rpc::HeroPortraitRequest>,
+    ) -> Result<Response<rpc::HeroPortraitResponse>, Status> {
+        Err(Status::unimplemented(
+            "the revision peer does not read hero portraits",
+        ))
+    }
+
     async fn submit(
         &self,
         request: Request<rpc::SubmitActionRequest>,
