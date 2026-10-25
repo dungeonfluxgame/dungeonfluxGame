@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/dungeonfluxgame/dungeonfluxGame/security/advisories/new
+    about: Use private vulnerability reporting; do not post vulnerabilities publicly.
+  - name: Support
+    url: mailto:support@dungeonfluxdnd.com
+    about: Contact DungeonFlux support.
+  - name: Website
+    url: https://dungeonfluxdnd.com
+    about: Visit the DungeonFlux website.

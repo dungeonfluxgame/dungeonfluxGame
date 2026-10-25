@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a project improvement
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not include credentials, private player data, or security vulnerabilities.
+  - type: textarea
+    id: need
+    attributes:
+      label: Need or problem
+      description: What user need would this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired outcome and important constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include other approaches you considered, if any.

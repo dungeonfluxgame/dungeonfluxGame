@@ -1,5 +1,11 @@
 # DungeonFlux
 
+AI-powered tabletop adventures for a shared screen and each player's phone.
+
+[Website](https://dungeonfluxdnd.com) · [X](https://x.com/DungeonFluxGame) · [Facebook](https://www.facebook.com/profile.php?id=61595900670341) · [Issues](https://github.com/dungeonfluxgame/dungeonfluxGame/issues)
+
+**Status:** Active development; the local game is playable. Hosted accounts and billing are in development and are not deployed.
+
 DungeonFlux is an AI Dungeon Master for a living-room table. The adventure plays on a
 shared TV or laptop display, and each player joins from their own phone, tablet or
 laptop. A Rust server owns the story, the dice and the rules, which follow the D&D
@@ -7,9 +13,11 @@ SRD 5.2.1. The look is photographic: scenes, people and places are generated to 
 like a live-action fantasy TV drama.
 
 The project is in active development. A local game is playable end to end on a
-development machine, but there is no packaged release, no hosted service and no
-accounts. Project site: [dungeonfluxdnd.com](https://dungeonfluxdnd.com/) (concept
-page; see [docs/README.md](docs/README.md) for its publication status).
+development machine, but there is no packaged release. Hosted account work is underway
+in `df-hosted`, `df-portal` and `df-customer`: PostgreSQL accounts and email verification
+are in development, with Stripe top-ups in test mode and PayPal and Google sign-in in
+progress. The service is not deployed, and production sign-up shows the message "coming soon".
+The site publishes customer prices per table-hour at [pricing](docs/pricing/index.html).
 
 ## What works today
 
@@ -26,8 +34,8 @@ page; see [docs/README.md](docs/README.md) for its publication status).
   game ([development/README.md](development/README.md)).
 
 What is not built: a production `df-server` binary (the game server today is the
-`df-transport-fixture` binary in `crates/df-tools`), accounts and real sign-in,
-billing, hosted play, and rules coverage beyond the SRD 5.2.1 subset the game uses.
+`df-transport-fixture` binary in `crates/df-tools`), deployed hosted play, production
+sign-in or billing, and rules coverage beyond the SRD 5.2.1 subset the game uses.
 The `df-server` crate directory holds source but is not a workspace member. Detailed
 status and open bugs are in [planning/issue-triage.md](planning/issue-triage.md) and
 [planning/implementation-roadmap.md](planning/implementation-roadmap.md).
@@ -95,8 +103,7 @@ launcher's Git-ignored `config/dungeonflux.toml` (copy options from
 | `BFL_API_KEY` | Alternate portrait route for mature character appearances |
 | `WORLDLABS_API_KEY` | Explorable 3D places |
 
-Never commit keys or paste them into logs. Generated video is off by default because of
-cost; see [Pricing and costs](planning/pricing-and-costs.md) for the dated cost research.
+Never commit keys or paste them into logs. Generated video is off by default.
 
 ## Architecture
 
@@ -165,8 +172,8 @@ standard coverage is a goal tracked in [rules coverage](planning/rules-coverage.
 from SRD values is flagged as custom rules in the game.
 
 This work includes material from the System Reference Document 5.2.1 by Wizards of the
-Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the
-[Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/legalcode).
+Coast LLC (https://www.dndbeyond.com/srd). The SRD 5.2.1 is licensed under Creative
+Commons Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/legalcode).
 
 ## Development
 
@@ -208,23 +215,37 @@ Where things live:
 | `docs/` | The static project site |
 | `CHANGELOG.md` | Integrated commits in six-hour blocks |
 
-## Status, roadmap and costs
+## Status and roadmap
 
-The [implementation roadmap](planning/implementation-roadmap.md) orders the remaining
-work: broader rules coverage, campaign continuity, a production server and accounts,
-and optional video fidelity. Open bugs are listed in
+The [implementation roadmap](planning/implementation-roadmap.md) orders remaining work.
+The project is still in development, with broader rules coverage, campaign continuity,
+production service readiness and optional video fidelity among the open work. Open bugs are listed in
 [planning/issue-triage.md](planning/issue-triage.md), and recent work is in
 [CHANGELOG.md](CHANGELOG.md). Concurrency and latency findings are in
 [server concurrency research](planning/server-concurrency-research.md).
 
-Running the game with provider keys spends real money on text, voice, music, pictures
-and optionally video. Commercial pricing is research only, with no launch price or
-billing system; see [Pricing and costs](planning/pricing-and-costs.md).
+Optional provider features use provider keys. Billing is available in test mode only;
+the customer prices published on the site are listed [here](docs/pricing/index.html).
 
 ## License
 
-The workspace manifest declares MIT, but the repository does not yet include a
-`LICENSE` file, so treat the licensing terms as unconfirmed until one is added.
-Third-party code is credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and
-the [dependency license policy](planning/dependency-license-policy.md) covers
-dependencies.
+DungeonFlux is licensed under the MIT License. Copyright (c) 2026 The DungeonFlux
+authors. See [LICENSE](LICENSE) for the full terms. Third-party code is credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the [dependency license
+policy](planning/dependency-license-policy.md) covers dependencies.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build and test commands, the contribution
+process and the project gate.
+
+## Security
+
+Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md) for reporting
+options and what to include.
+
+## Community and support
+
+Follow [DungeonFlux on X](https://x.com/DungeonFluxGame) and [Facebook](https://www.facebook.com/profile.php?id=61595900670341),
+visit [dungeonfluxdnd.com](https://dungeonfluxdnd.com), or contact
+[support@dungeonfluxdnd.com](mailto:support@dungeonfluxdnd.com). Use [GitHub issues](https://github.com/dungeonfluxgame/dungeonfluxGame/issues) for public project work.

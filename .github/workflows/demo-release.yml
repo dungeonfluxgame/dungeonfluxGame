@@ -39,7 +39,7 @@ jobs:
       - name: Build and push the demo image
         id: image
         env:
-          IMAGE: ghcr.io/monstercameron/dungeonflux-demo
+          IMAGE: ghcr.io/dungeonfluxgame/dungeonflux-demo
           SHORT_SHA: ${{ github.sha }}
         run: |
           short_sha="${SHORT_SHA:0:12}"

@@ -28,8 +28,11 @@ with the business identity variables. The repository contains placeholders only;
 ```sh
 deploy/profiles/check-profile.sh production deploy/profiles/production.env
 # Build and inspect the demo image using the named demo exception:
-deploy/profiles/check-profile.sh demo deploy/profiles/demo.env ghcr.io/monstercameron/dungeonflux-demo:tag
+deploy/profiles/check-profile.sh demo deploy/profiles/demo.env ghcr.io/dungeonfluxgame/dungeonflux-demo:tag
 ```
+
+The first package published under the organization will be private by default. An
+organization owner must make it public before the public demo host can pull it.
 
 **Production never runs a dev profile; the guard enforces it.** For now, binary
 feature proof is fail-closed: production requires the requested embedded build

@@ -1179,10 +1179,10 @@ Sources were checked for this planning pass. Reconfirm vendor prices and account
 
 ## Repository evidence
 
-- **R1 — Current README at inspected revision.** Implementation status, runtime boundaries, rules subset, known test crash, and licensing caveat. https://github.com/monstercameron/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/README.md
-- **R2 — Commerce spend policy.** Pure proposals, six supplier-exposure scopes, and unknown-liability treatment. https://github.com/monstercameron/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/crates/df-commerce/src/spend.rs
-- **R3 — Observed image-testing spend note.** Development observation without a per-table-hour denominator. https://github.com/monstercameron/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/planning/asset-provider-research.md
-- **R4 — Server concurrency research.** Repository-reported measurements and bottleneck hypotheses, not independently rerun here. https://github.com/monstercameron/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/planning/server-concurrency-research.md
+- **R1 — Current README at inspected revision.** Implementation status, runtime boundaries, rules subset, known test crash, and licensing caveat. https://github.com/dungeonfluxgame/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/README.md
+- **R2 — Commerce spend policy.** Pure proposals, six supplier-exposure scopes, and unknown-liability treatment. https://github.com/dungeonfluxgame/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/crates/df-commerce/src/spend.rs
+- **R3 — Observed image-testing spend note.** Development observation without a per-table-hour denominator. https://github.com/dungeonfluxgame/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/planning/asset-provider-research.md
+- **R4 — Server concurrency research.** Repository-reported measurements and bottleneck hypotheses, not independently rerun here. https://github.com/dungeonfluxgame/dungeonfluxGame/blob/7350b151e863b2797d16f3999579f48453cfd5fe/planning/server-concurrency-research.md
 
 ## Final recommendation
 

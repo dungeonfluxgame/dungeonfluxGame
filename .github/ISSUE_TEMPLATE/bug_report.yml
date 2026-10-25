@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not include credentials, private player data, or security vulnerabilities.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest safe set of steps and test data.
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision or version
+      description: Include the commit or version, if known.
+  - type: textarea
+    id: checks
+    attributes:
+      label: Relevant checks or logs
+      description: Redact secrets and private information before sharing.

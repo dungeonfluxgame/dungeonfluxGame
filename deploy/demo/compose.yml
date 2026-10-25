@@ -1,6 +1,6 @@
 services:
   game:
-    image: ghcr.io/monstercameron/dungeonflux-demo@${DEMO_DIGEST:?Set DEMO_DIGEST to a sha256 image digest}
+    image: ghcr.io/dungeonfluxgame/dungeonflux-demo@${DEMO_DIGEST:?Set DEMO_DIGEST to a sha256 image digest}
     container_name: dungeonflux-demo-game
     restart: unless-stopped
     init: true
