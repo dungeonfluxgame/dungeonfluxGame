@@ -291,7 +291,7 @@ pub(super) struct Expression<'a> {
 pub(super) struct PartialExpression {
     pub(super) accepted: BTreeMap<String, String>,
     pub(super) rejected: BTreeMap<String, ValidationFailure>,
-    /// Supplier-reported tokens of the calls made; zero when served from the cache.
+    /// Supplier-reported tokens for generation and judgement calls; cached prose adds none.
     pub(super) tokens: u64,
 }
 

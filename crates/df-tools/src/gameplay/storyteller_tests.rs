@@ -417,6 +417,39 @@ async fn adventure_slots_rewrite_a_judged_non_srd_creature() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_partial_rewrite_includes_generation_and_judgement_usage() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"narration": "A beholder watches from the tower."})),
+        Reply::Output(json!({
+            "decision": "published_non_srd",
+            "flagged_span": "beholder",
+        })),
+        Reply::Output(json!({"narration": "A many-eyed creature watches from the tower."})),
+        Reply::Output(json!({
+            "decision": "campaign_or_srd",
+            "flagged_span": "",
+        })),
+    ]);
+    let cache = cache_directory("partial-usage");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({"srd_catalog": {"creatures": [{"id": "owlbear"}]}});
+    let slots = [Slot::new("narration", 100)];
+    let request = expression(&facts, &slots);
+
+    let result = storyteller.express_partial(&request).await.unwrap();
+
+    assert_eq!(
+        result.accepted["narration"],
+        "A many-eyed creature watches from the tower."
+    );
+    assert_eq!(
+        result.tokens, 304,
+        "two generations and two nonzero judgements are accounted"
+    );
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn an_unknown_structured_srd_entity_id_is_refused() {
     let endpoint = FakeEndpoint::start(vec![
         Reply::Output(json!({"creature_id": "published-beholder"})),

@@ -164,7 +164,8 @@ impl StoredInstance {
 struct SegmentsNote {
     picture: [u32; 2],
     model: String,
-    micro_dollars: u64,
+    #[serde(default)]
+    micro_dollars: Option<u64>,
     person_ms: u64,
     head_ms: u64,
     person: Vec<StoredInstance>,
@@ -213,7 +214,7 @@ pub(in crate::gameplay) struct Analysis {
     pub(in crate::gameplay) image_key: String,
     pub(in crate::gameplay) picture: (u32, u32),
     pub(in crate::gameplay) people: Vec<AnalysedPerson>,
-    pub(in crate::gameplay) sam_micro_dollars: u64,
+    pub(in crate::gameplay) sam_micro_dollars: Option<u64>,
 }
 
 /// What one analysis is made from. The plate is the cached image (any format); the references
@@ -521,14 +522,11 @@ impl Segmentation {
         let note = SegmentsNote {
             picture: [prepared.width, prepared.height],
             model: model.label().to_owned(),
-            micro_dollars: ledger
-                .costs()
-                .quote(
-                    cost::Provider::Fal,
-                    model.endpoint(),
-                    &[(cost::Category::Calls, 2)],
-                )
-                .unwrap_or(0),
+            micro_dollars: ledger.costs().quote(
+                cost::Provider::Fal,
+                model.endpoint(),
+                &[(cost::Category::Calls, 2)],
+            ),
             person_ms: person.elapsed.as_millis() as u64,
             head_ms: head.elapsed.as_millis() as u64,
             person: person.instances.iter().map(StoredInstance::of).collect(),
@@ -543,6 +541,7 @@ impl Segmentation {
                     note.person.len(),
                     note.head.len(),
                     note.micro_dollars
+                        .map_or_else(|| "unknown".to_owned(), |price| price.to_string())
                 ),
             },
             payload: Some(Arc::new(note)),
@@ -809,8 +808,7 @@ impl Segmentation {
                     cost::Provider::Fal,
                     self.model().endpoint(),
                     &[(cost::Category::Calls, calls.committed)],
-                )
-                .unwrap_or(0),
+                ),
             "judge_tokens": tokens.committed,
             "model": self.model().label(),
         })
@@ -879,7 +877,9 @@ fn record_staging_line(
             segments.person_ms.max(segments.head_ms),
             staging.identity_ms,
             staging.facing_ms,
-            segments.micro_dollars,
+            segments
+                .micro_dollars
+                .map_or_else(|| "unknown".to_owned(), |price| price.to_string()),
             staging.tokens[0],
             staging.tokens[1],
             staging.identity_error.as_deref().unwrap_or("none"),
@@ -887,6 +887,35 @@ fn record_staging_line(
             elapsed.as_millis()
         ),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_segment_price_is_kept_unknown_in_the_note() {
+        let quote = cost::PriceTable::default().quote(
+            cost::Provider::Fal,
+            "fal-ai/sam-3.1",
+            &[(cost::Category::Calls, 2)],
+        );
+        assert_eq!(quote, None);
+
+        let note = SegmentsNote {
+            picture: [1, 1],
+            model: "sam".to_owned(),
+            micro_dollars: quote,
+            person_ms: 0,
+            head_ms: 0,
+            person: Vec::new(),
+            head: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(note).unwrap()["micro_dollars"],
+            Value::Null
+        );
+    }
 }
 
 /// The SHA-256 of `bytes` as lowercase hexadecimal (a reference portrait's identity).
