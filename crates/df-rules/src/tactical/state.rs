@@ -1058,14 +1058,14 @@ impl Battle {
             return Err(RuleError::Capacity);
         }
         let mut from = actor.cell();
-        let mut cost = 0_u32;
+        let mut movement_cost_ft = 0_u32;
         for &cell in path {
-            cost = cost
+            movement_cost_ft = movement_cost_ft
                 .checked_add(u32::from(self.step_cost(actor, from, cell)?))
                 .ok_or(RuleError::Capacity)?;
             from = cell;
         }
-        Ok(cost)
+        Ok(movement_cost_ft)
     }
     pub fn validate_path(&self, id: u32, path: &[Cell]) -> Result<u16, RuleError> {
         let actor = self.actor(id)?;
@@ -1076,9 +1076,9 @@ impl Battle {
             return Err(RuleError::InvalidPath);
         }
         let mut from = actor.cell();
-        let mut cost = 0_u16;
+        let mut movement_cost_ft = 0_u16;
         for &to in path {
-            cost = cost
+            movement_cost_ft = movement_cost_ft
                 .checked_add(self.step_cost(actor, from, to)?)
                 .ok_or(RuleError::MovementSpent)?;
             from = to;
@@ -1088,10 +1088,10 @@ impl Battle {
         }) {
             return Err(RuleError::Occupied);
         }
-        if cost > actor.movement_remaining_ft() {
+        if movement_cost_ft > actor.movement_remaining_ft() {
             return Err(RuleError::MovementSpent);
         }
-        Ok(cost)
+        Ok(movement_cost_ft)
     }
     /// Dijkstra with deterministic cell ordering; includes no destination already occupied.
     /// If max_cost is None, searches the whole bounded map; otherwise caps total path cost.
@@ -1114,9 +1114,9 @@ impl Battle {
             return Err(RuleError::Occupied);
         }
         let mut frontier = BTreeSet::from([(0_u32, actor.cell())]);
-        let mut costs = BTreeMap::from([(actor.cell(), 0_u32)]);
+        let mut movement_costs_ft = BTreeMap::from([(actor.cell(), 0_u32)]);
         let mut parents = BTreeMap::new();
-        while let Some((cost, cell)) = frontier.pop_first() {
+        while let Some((movement_cost_ft, cell)) = frontier.pop_first() {
             if cell == goal {
                 let mut path = Vec::new();
                 let mut current = goal;
@@ -1128,21 +1128,26 @@ impl Battle {
                 return Ok(path);
             }
             for next in self.map.neighbors(cell) {
-                let Ok(step) = self.step_cost(actor, cell, next) else {
+                let Ok(step_cost_ft) = self.step_cost(actor, cell, next) else {
                     continue;
                 };
-                let Some(next_cost) = cost.checked_add(u32::from(step)) else {
+                let Some(next_cost_ft) = movement_cost_ft.checked_add(u32::from(step_cost_ft))
+                else {
                     continue;
                 };
-                if max_cost.is_some_and(|max| next_cost > u32::from(max)) {
+                if max_cost.is_some_and(|maximum_cost_ft| next_cost_ft > u32::from(maximum_cost_ft))
+                {
                     continue;
                 }
-                if costs.get(&next).is_none_or(|old| next_cost < *old) {
-                    if let Some(old) = costs.insert(next, next_cost) {
-                        frontier.remove(&(old, next));
+                if movement_costs_ft
+                    .get(&next)
+                    .is_none_or(|old_cost_ft| next_cost_ft < *old_cost_ft)
+                {
+                    if let Some(old_cost_ft) = movement_costs_ft.insert(next, next_cost_ft) {
+                        frontier.remove(&(old_cost_ft, next));
                     }
                     parents.insert(next, cell);
-                    frontier.insert((next_cost, next));
+                    frontier.insert((next_cost_ft, next));
                 }
             }
         }
@@ -1154,27 +1159,30 @@ impl Battle {
             return Err(RuleError::Incapacitated);
         }
         let mut frontier = BTreeSet::from([(0_u16, actor.cell())]);
-        let mut costs = BTreeMap::from([(actor.cell(), 0_u16)]);
-        while let Some((cost, cell)) = frontier.pop_first() {
+        let mut movement_costs_ft = BTreeMap::from([(actor.cell(), 0_u16)]);
+        while let Some((movement_cost_ft, cell)) = frontier.pop_first() {
             for next in self.map.neighbors(cell) {
-                let Ok(step) = self.step_cost(actor, cell, next) else {
+                let Ok(step_cost_ft) = self.step_cost(actor, cell, next) else {
                     continue;
                 };
-                let Some(next_cost) = cost.checked_add(step) else {
+                let Some(next_cost_ft) = movement_cost_ft.checked_add(step_cost_ft) else {
                     continue;
                 };
-                if next_cost > actor.movement_remaining_ft() {
+                if next_cost_ft > actor.movement_remaining_ft() {
                     continue;
                 }
-                if costs.get(&next).is_none_or(|old| next_cost < *old) {
-                    if let Some(old) = costs.insert(next, next_cost) {
-                        frontier.remove(&(old, next));
+                if movement_costs_ft
+                    .get(&next)
+                    .is_none_or(|old_cost_ft| next_cost_ft < *old_cost_ft)
+                {
+                    if let Some(old_cost_ft) = movement_costs_ft.insert(next, next_cost_ft) {
+                        frontier.remove(&(old_cost_ft, next));
                     }
-                    frontier.insert((next_cost, next));
+                    frontier.insert((next_cost_ft, next));
                 }
             }
         }
-        Ok(costs
+        Ok(movement_costs_ft
             .into_keys()
             .filter(|cell| {
                 !self.actors.iter().any(|other| {

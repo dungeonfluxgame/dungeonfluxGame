@@ -66,8 +66,8 @@ pub struct SpeciesCombatTraits {
 }
 
 impl HeroSpecies {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        Some(match value {
+    pub fn from_choice(choice_id: &str) -> Option<Self> {
+        Some(match choice_id {
             "dragonborn" => Self::Dragonborn,
             "dwarf" => Self::Dwarf,
             "elf" => Self::Elf,
@@ -227,7 +227,9 @@ pub fn experience_points_for_challenge_rating(cr: ChallengeRating) -> Option<u32
         ChallengeRating::Eighth => 25,
         ChallengeRating::Quarter => 50,
         ChallengeRating::Half => 100,
-        ChallengeRating::Whole(value) => *WHOLE_CR_XP.get(usize::from(value.checked_sub(1)?))?,
+        ChallengeRating::Whole(whole_challenge_rating) => {
+            *WHOLE_CR_XP.get(usize::from(whole_challenge_rating.checked_sub(1)?))?
+        }
     })
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -284,12 +286,12 @@ impl FighterProgression {
             .choices
             .iter()
             .find(|(key, _)| key == "species")
-            .and_then(|(_, value)| HeroSpecies::from_choice(value))
+            .and_then(|(_, species_id)| HeroSpecies::from_choice(species_id))
             .ok_or(JourneyRuleError::InvalidChoice)?;
         let archer = character
             .choices
             .iter()
-            .any(|(key, value)| key == "array" && value == "dexterous");
+            .any(|(key, choice_value)| key == "array" && choice_value == "dexterous");
         if self.level >= 4 {
             let ability = if archer { 1 } else { 0 };
             if character.abilities[ability] > 18 {
@@ -300,7 +302,7 @@ impl FighterProgression {
         let choices = character
             .choices
             .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .map(|(key, choice_value)| (key.as_str(), choice_value.as_str()))
             .collect::<Vec<_>>();
         let options = crate::species::SpeciesOptions::from_choices(species, &choices)?;
         character.hit_points = u32::from(self.hit_points(character.abilities[2], species))

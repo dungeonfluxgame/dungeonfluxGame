@@ -445,14 +445,17 @@ fn barrier_between(
     if from == to {
         return Cover::None;
     }
-    let p = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
-    let q = [i64::from(to.0) * 2 + 1, i64::from(to.1) * 2 + 1];
-    let cross = |u: [i64; 2], v: [i64; 2], w: [i64; 2]| {
-        (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0])
+    let line_start = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
+    let line_end = [i64::from(to.0) * 2 + 1, i64::from(to.1) * 2 + 1];
+    let signed_area = |origin: [i64; 2], edge_end: [i64; 2], point: [i64; 2]| {
+        (edge_end[0] - origin[0]) * (point[1] - origin[1])
+            - (edge_end[1] - origin[1]) * (point[0] - origin[0])
     };
-    let within = |point: [i64; 2]| {
-        (0..2)
-            .all(|axis| p[axis].min(q[axis]) <= point[axis] && point[axis] <= p[axis].max(q[axis]))
+    let within_line_bounds = |point: [i64; 2]| {
+        (0..2).all(|axis| {
+            line_start[axis].min(line_end[axis]) <= point[axis]
+                && point[axis] <= line_start[axis].max(line_end[axis])
+        })
     };
     // Corners the line touches, with the sides of the line a barrier leaves them on.
     let mut cover = Cover::None;
@@ -472,17 +475,23 @@ fn barrier_between(
             i64::from(a.0) + i64::from(b.0) + 1,
             i64::from(a.1) + i64::from(b.1) + 1,
         ];
-        let r = [mid[0] - delta[1], mid[1] + delta[0]];
-        let s = [mid[0] + delta[1], mid[1] - delta[0]];
-        let (side_r, side_s) = (cross(p, q, r).signum(), cross(p, q, s).signum());
+        let side_point_r = [mid[0] - delta[1], mid[1] + delta[0]];
+        let side_point_s = [mid[0] + delta[1], mid[1] - delta[0]];
+        let (side_r, side_s) = (
+            signed_area(line_start, line_end, side_point_r).signum(),
+            signed_area(line_start, line_end, side_point_s).signum(),
+        );
         if side_r * side_s < 0 {
-            if cross(r, s, p).signum() * cross(r, s, q).signum() < 0 {
+            if signed_area(side_point_r, side_point_s, line_start).signum()
+                * signed_area(side_point_r, side_point_s, line_end).signum()
+                < 0
+            {
                 cover = cover.max(grade);
             }
             continue;
         }
-        for (corner, side) in [(r, side_s), (s, side_r)] {
-            if cross(p, q, corner) != 0 || !within(corner) {
+        for (corner, side) in [(side_point_r, side_s), (side_point_s, side_r)] {
+            if signed_area(line_start, line_end, corner) != 0 || !within_line_bounds(corner) {
                 continue;
             }
             let index = match touched.iter().position(|(known, _, _)| *known == corner) {
