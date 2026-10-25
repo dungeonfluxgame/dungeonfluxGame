@@ -3511,7 +3511,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         offers
     };
     if role == "display" {
-        // PLAY-H01: the battlefield draws the server's health variants of these combatants.
+        // The server supplies health variants; the client never derives them (PLAY-H01).
         live_health::publish_battlefield_variants(&journey, scene.as_ref());
     }
     let surface = root

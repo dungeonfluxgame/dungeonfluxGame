@@ -314,6 +314,7 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 /// Aftermath and short-rest screens: the courier road painting over the combat painting.
 const REST: &str = r#"
 @S[data-screen=aftermath] .df-aftermath{background:linear-gradient(180deg,#05080a70 0,transparent 22%,transparent 40%,#05080ac4 66%,#05080af2),@BATTLE_BACKDROP center 38%/cover,#0b0f0c}
+/* The campfire sets --camp-art inline; the active combat scene must replace that image. */
 @S[data-screen=rest] .df-campfire{--camp-art:@BATTLE_BACKDROP !important;min-height:0;border-radius:0;border:0}
 @S[data-role=player][data-screen=rest] .df-campfire{padding:20px 16px}
 @S[data-role=player][data-screen=rest] .df-campfire .camp-location{font-size:13px;letter-spacing:.3em}
