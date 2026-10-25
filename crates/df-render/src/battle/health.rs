@@ -55,27 +55,32 @@ impl Reaction {
         if self.duration_s <= 0.0 || self.frames.len() < 2 || age_s < 0.0 {
             return (0.0, 0.0);
         }
-        let at = if self.looping {
+        let progress = if self.looping {
             (age_s / self.duration_s).fract()
         } else if age_s >= self.duration_s {
             return (0.0, 0.0);
         } else {
             age_s / self.duration_s
         };
-        let at = f64::from(at);
-        let next = self
+        let progress = f64::from(progress);
+        let next_frame_index = self
             .frames
             .iter()
-            .position(|frame| frame.0 >= at)
+            .position(|frame| frame.0 >= progress)
             .unwrap_or(self.frames.len() - 1)
             .max(1);
-        let (from, to) = (self.frames[next - 1], self.frames[next]);
-        let span = (to.0 - from.0).max(f64::EPSILON);
-        let mix = ((at - from.0) / span).clamp(0.0, 1.0);
+        let (previous_frame, next_frame) = (
+            self.frames[next_frame_index - 1],
+            self.frames[next_frame_index],
+        );
+        let frame_span = (next_frame.0 - previous_frame.0).max(f64::EPSILON);
+        let interpolation_share = ((progress - previous_frame.0) / frame_span).clamp(0.0, 1.0);
         let amplitude = f64::from(self.amplitude_m);
         (
-            ((from.1 + (to.1 - from.1) * mix) * amplitude) as f32,
-            ((from.2 + (to.2 - from.2) * mix) * amplitude) as f32,
+            ((previous_frame.1 + (next_frame.1 - previous_frame.1) * interpolation_share)
+                * amplitude) as f32,
+            ((previous_frame.2 + (next_frame.2 - previous_frame.2) * interpolation_share)
+                * amplitude) as f32,
         )
     }
 

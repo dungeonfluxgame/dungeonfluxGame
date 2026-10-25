@@ -29,7 +29,7 @@ use crate::battle::{
     splat::RECORD_WORDS,
 };
 
-const BINS: usize = 1 << 16;
+const DEPTH_BIN_COUNT: usize = 1 << 16;
 const WORKGROUP: u32 = 256;
 const UNIFORM_BYTES: usize = 320 + 512 + 32;
 const CHUNK_PARAM_BYTES: usize = 64;
@@ -183,7 +183,7 @@ pub struct SplatEngine {
     draw_group: GpuBindGroup,
     decode_group: GpuBindGroup,
     targets: Option<SplatTargets>,
-    active: u32,
+    active_splats: u32,
     /// Accumulated coverage a pixel needs before the scan counts as a surface for depth. Above 1
     /// the scan writes no depth at all (used to show what occlusion hides).
     pub depth_threshold: f32,
@@ -477,7 +477,7 @@ impl SplatEngine {
         let cache = buffer(&core, capacity_usize * RECORD_WORDS * 4, BUFFER_STORAGE);
         let keys = buffer(&core, capacity_usize * 4, BUFFER_STORAGE);
         let order = buffer(&core, capacity_usize * 4, BUFFER_STORAGE);
-        let hist = buffer(&core, BINS * 4, BUFFER_STORAGE | BUFFER_COPY_DST);
+        let hist = buffer(&core, DEPTH_BIN_COUNT * 4, BUFFER_STORAGE | BUFFER_COPY_DST);
         let counter = buffer(
             &core,
             16,
@@ -552,7 +552,7 @@ impl SplatEngine {
             draw_group,
             decode_group,
             targets: None,
-            active: 0,
+            active_splats: 0,
             depth_threshold: 0.4,
         })
     }
@@ -563,7 +563,7 @@ impl SplatEngine {
 
     /// Splats currently in the record buffer (before culling).
     pub fn active(&self) -> u32 {
-        self.active
+        self.active_splats
     }
 
     pub fn shared(&self) -> &SharedSplats {
@@ -652,13 +652,13 @@ impl SplatEngine {
                     &js_sys::Uint32Array::from(&words[..count * RECORD_WORDS]),
                 );
             }
-            self.active = count as u32;
+            self.active_splats = count as u32;
         }
         if let Some(plan) = plan {
             self.encode_decode(encoder, &plan, placement);
-            self.active = plan.total.min(self.capacity);
+            self.active_splats = plan.total.min(self.capacity);
         }
-        if self.active == 0 {
+        if self.active_splats == 0 {
             return false;
         }
         self.write_uniforms(frame);
@@ -669,7 +669,7 @@ impl SplatEngine {
             None => Descriptor::new().build(),
         };
         let pass = encoder.begin_compute_pass(&pass_descriptor);
-        let groups = self.active.div_ceil(WORKGROUP);
+        let groups = self.active_splats.div_ceil(WORKGROUP);
         pass.set_compute_bind_group(0, &self.sort_group);
         pass.set_compute_pipeline(&self.pipelines.project);
         pass.dispatch_workgroups(groups, 1, 1);
@@ -729,7 +729,7 @@ impl SplatEngine {
             frame.min_extent_px,
             frame.min_contribution,
             1.0 / 255.0,
-            self.active as f32,
+            self.active_splats as f32,
         ]);
         data.extend_from_slice(&[
             frame.exposure_gain,

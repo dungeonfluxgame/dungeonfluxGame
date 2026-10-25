@@ -169,13 +169,13 @@ async fn load_chunk(
     chunk_layout: &JsValue,
     index: &LodIndex,
     index_url: &str,
-    folder: &str,
-    file: u32,
+    chunk_folder: &str,
+    chunk_index: u32,
 ) -> Result<(), StreamError> {
-    let base = folder_url(index_url, folder);
+    let base = folder_url(index_url, chunk_folder);
     let meta_text = fetch_text(&format!("{base}/meta.json"), MAX_CHUNK_META_BYTES).await?;
     let meta = SogMeta::parse(&meta_text).map_err(|_| StreamError::Chunk)?;
-    if !index.file_ranges_fit_count(file, meta.count) {
+    if !index.file_ranges_fit_count(chunk_index, meta.count) {
         return Err(StreamError::Chunk);
     }
     let (scales, colours) = meta.codebooks().ok_or(StreamError::Chunk)?;
@@ -203,7 +203,7 @@ async fn load_chunk(
         meta.means_range(),
         &books,
     );
-    shared.borrow_mut().chunks.insert(file, chunk);
+    shared.borrow_mut().chunks.insert(chunk_index, chunk);
     Ok(())
 }
 
@@ -220,18 +220,18 @@ fn fetch_order(
         budget: u32::MAX,
         ..limits
     };
-    let mut order = index
+    let mut chunk_order = index
         .select(focus, coarse, Some(usable))
         .files_coarse_first();
-    for file in index
+    for chunk_index in index
         .select(focus, limits, Some(usable))
         .files_coarse_first()
     {
-        if !order.contains(&file) {
-            order.push(file);
+        if !chunk_order.contains(&chunk_index) {
+            chunk_order.push(chunk_index);
         }
     }
-    order
+    chunk_order
 }
 
 fn replan(index: &LodIndex, shared: &SharedSplats, focus: Focus, limits: Limits) -> u32 {
@@ -243,8 +243,8 @@ fn replan(index: &LodIndex, shared: &SharedSplats, focus: Focus, limits: Limits)
             .copied()
             .collect::<std::collections::HashSet<u32>>()
     };
-    let resident = |file: u32| loaded.contains(&file);
-    let selection = index.select(focus, limits, Some(&resident));
+    let is_resident = |chunk_index: u32| loaded.contains(&chunk_index);
+    let selection = index.select(focus, limits, Some(&is_resident));
     let plan = selection.plan(MAX_RANGES);
     let total = plan.total;
     let mut shared = shared.borrow_mut();
@@ -262,9 +262,9 @@ pub async fn stream(
     chunk_layout: JsValue,
     config: StreamConfig,
 ) {
-    let started = js_sys::Date::now();
+    let started_ms = js_sys::Date::now();
     shared.borrow_mut().state = LoadState::Loading;
-    let result = run(&core, &shared, &chunk_layout, &config, started).await;
+    let result = run(&core, &shared, &chunk_layout, &config, started_ms).await;
     if result.is_err() {
         // Chunks already resident keep drawing; a scene with nothing resident falls back.
         let mut shared = shared.borrow_mut();
@@ -279,7 +279,7 @@ async fn run(
     shared: &SharedSplats,
     chunk_layout: &JsValue,
     config: &StreamConfig,
-    started: f64,
+    started_ms: f64,
 ) -> Result<(), StreamError> {
     let text = fetch_text(&config.index_url, MAX_INDEX_BYTES).await?;
     let index = LodIndex::parse(&text).map_err(|_| StreamError::Index)?;
@@ -316,20 +316,22 @@ async fn run(
             coarsest,
             budget,
         };
-        let order = fetch_order(&index, focus, limits, &|file| !unavailable.contains(&file));
-        let wanted = order.len() as u32;
+        let chunk_order = fetch_order(&index, focus, limits, &|chunk_index| {
+            !unavailable.contains(&chunk_index)
+        });
+        let wanted = chunk_order.len() as u32;
         shared.borrow_mut().stats.chunks_wanted = wanted;
-        for file in order {
-            if shared.borrow().chunks.contains_key(&file) {
+        for chunk_index in chunk_order {
+            if shared.borrow().chunks.contains_key(&chunk_index) {
                 continue;
             }
             // A new budget mid-load changes what is worth fetching; start over from the plan.
             if shared.borrow().budget != loaded_budget {
                 break;
             }
-            let folder = index
+            let chunk_folder = index
                 .files()
-                .get(file as usize)
+                .get(chunk_index as usize)
                 .map(|chunk| chunk.folder.clone())
                 .ok_or(StreamError::Index)?;
             if load_chunk(
@@ -338,13 +340,13 @@ async fn run(
                 chunk_layout,
                 &index,
                 &config.index_url,
-                &folder,
-                file,
+                &chunk_folder,
+                chunk_index,
             )
             .await
             .is_err()
             {
-                unavailable.insert(file);
+                unavailable.insert(chunk_index);
                 if shared.borrow().chunks.is_empty() && unavailable.len() > 64 {
                     return Err(StreamError::Chunk);
                 }
@@ -352,12 +354,12 @@ async fn run(
                 break;
             }
             let planned = replan(&index, shared, focus, limits);
-            let now = js_sys::Date::now() - started;
+            let elapsed_ms = js_sys::Date::now() - started_ms;
             {
                 let mut state = shared.borrow_mut();
                 state.stats.chunks_loaded = state.chunks.len() as u32;
                 if planned > 0 && state.stats.first_draw_ms.is_none() {
-                    state.stats.first_draw_ms = Some(now);
+                    state.stats.first_draw_ms = Some(elapsed_ms);
                     state.state = LoadState::Showing;
                 }
             }
@@ -366,16 +368,18 @@ async fn run(
         let settled = {
             let shared = shared.borrow();
             shared.budget == loaded_budget
-                && fetch_order(&index, focus, limits, &|file| !unavailable.contains(&file))
-                    .iter()
-                    .all(|file| shared.chunks.contains_key(file))
+                && fetch_order(&index, focus, limits, &|chunk_index| {
+                    !unavailable.contains(&chunk_index)
+                })
+                .iter()
+                .all(|chunk_index| shared.chunks.contains_key(chunk_index))
         };
         if settled {
             replan(&index, shared, focus, limits);
             {
                 let mut state = shared.borrow_mut();
                 if state.stats.full_detail_ms.is_none() {
-                    state.stats.full_detail_ms = Some(js_sys::Date::now() - started);
+                    state.stats.full_detail_ms = Some(js_sys::Date::now() - started_ms);
                 }
                 state.state = LoadState::Complete;
             }

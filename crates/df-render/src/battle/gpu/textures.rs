@@ -45,11 +45,11 @@ async fn response(url: &str) -> Result<FetchResponse, TextureError> {
     let value = JsFuture::from(sys::fetch(url))
         .await
         .map_err(|_| TextureError::Fetch)?;
-    let response: FetchResponse = value.unchecked_into();
-    if !response.ok() {
+    let fetch_response: FetchResponse = value.unchecked_into();
+    if !fetch_response.ok() {
         return Err(TextureError::Fetch);
     }
-    Ok(response)
+    Ok(fetch_response)
 }
 
 pub async fn fetch_blob(url: &str) -> Result<web_sys::Blob, TextureError> {
