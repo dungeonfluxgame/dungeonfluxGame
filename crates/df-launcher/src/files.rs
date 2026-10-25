@@ -63,16 +63,17 @@ pub fn tail(path: &Path, lines: usize) -> String {
 fn read_tail(path: &Path, lines: usize) -> Result<String, io::Error> {
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
-    let start = length.saturating_sub(TAIL_WINDOW);
+    let window_start_byte = length.saturating_sub(TAIL_WINDOW);
     // The byte before the window says whether the window begins on a line boundary.
-    let before = start.saturating_sub(1);
-    file.seek(SeekFrom::Start(before))?;
+    let preceding_byte_offset = window_start_byte.saturating_sub(1);
+    file.seek(SeekFrom::Start(preceding_byte_offset))?;
     let mut bytes = Vec::new();
-    file.take(length - before).read_to_end(&mut bytes)?;
-    let (starts_mid_line, text) = if start > 0 {
-        let boundary = bytes.first() == Some(&b'\n');
+    file.take(length - preceding_byte_offset)
+        .read_to_end(&mut bytes)?;
+    let (starts_mid_line, text) = if window_start_byte > 0 {
+        let starts_at_line_boundary = bytes.first() == Some(&b'\n');
         let text = String::from_utf8_lossy(bytes.get(1..).unwrap_or_default());
-        (!boundary, text)
+        (!starts_at_line_boundary, text)
     } else {
         (false, String::from_utf8_lossy(&bytes))
     };

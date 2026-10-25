@@ -536,7 +536,8 @@ impl App {
     fn step(&self, game: &SavedGame, step: Step, detail: &str) {
         // Only changes refresh the page; repeated status lines would reload it constantly.
         let unchanged = matches!(&self.lock().phase,
-            Phase::Starting { step: current, detail: shown, .. } if *current == step && shown == detail);
+            Phase::Starting { step: current_step, detail: current_detail, .. }
+                if *current_step == step && current_detail == detail);
         if unchanged {
             return;
         }

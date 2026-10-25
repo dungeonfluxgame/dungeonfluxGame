@@ -43,22 +43,22 @@ impl Form {
 
 fn decode(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut decoded_bytes = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while let Some(&byte) = bytes.get(index) {
         match byte {
-            b'+' => out.push(b' '),
+            b'+' => decoded_bytes.push(b' '),
             b'%' => {
                 let high = hex(*bytes.get(index + 1)?)?;
                 let low = hex(*bytes.get(index + 2)?)?;
-                out.push(high << 4 | low);
+                decoded_bytes.push(high << 4 | low);
                 index += 2;
             }
-            other => out.push(other),
+            other => decoded_bytes.push(other),
         }
         index += 1;
     }
-    String::from_utf8(out).ok()
+    String::from_utf8(decoded_bytes).ok()
 }
 
 fn hex(byte: u8) -> Option<u8> {

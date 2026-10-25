@@ -393,24 +393,24 @@ pub fn reset(config: &mut Config, name: &str) -> Result<String, String> {
 /// The whole file with its comments, from the current values.
 pub fn render(config: &Config) -> Result<String, io::Error> {
     let values = toml::Table::try_from(&config.settings).map_err(io::Error::other)?;
-    let mut out = String::from(
+    let mut rendered_config = String::from(
         "# DungeonFlux configuration, read by the DungeonFlux launcher (dungeonflux.exe).\n\
          # config/dungeonflux.example.toml is the clean copy kept in Git; the launcher creates\n\
          # config/dungeonflux.toml from it and saves Settings there. That copy holds your keys\n\
          # and is ignored by Git. Changes apply the next time a game starts or resumes.\n",
     );
     for (section, comment, fields) in SECTIONS {
-        out.push_str(&format!("\n# {comment}.\n[{section}]\n"));
+        rendered_config.push_str(&format!("\n# {comment}.\n[{section}]\n"));
         for (field, help) in *fields {
             let value = values
                 .get(*field)
                 .ok_or_else(|| io::Error::other(format!("setting {field} has no value")))?;
-            out.push_str(&format!("# {help}\n{field} = {value}\n"));
+            rendered_config.push_str(&format!("# {help}\n{field} = {value}\n"));
         }
         if *section == "keys" {
             for (credential, help) in KEY_COMMENTS {
                 let value = config.keys.get(&credential).map_or("", String::as_str);
-                out.push_str(&format!(
+                rendered_config.push_str(&format!(
                     "# {}: {help}\n{} = {}\n",
                     credential.label(),
                     credential.id(),
@@ -419,7 +419,7 @@ pub fn render(config: &Config) -> Result<String, io::Error> {
             }
         }
     }
-    Ok(out)
+    Ok(rendered_config)
 }
 
 #[cfg(test)]
