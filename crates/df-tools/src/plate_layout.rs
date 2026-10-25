@@ -93,23 +93,29 @@ impl PlateFrame {
     }
 
     /// The source point on screen from a centre in permille of the source picture.
-    pub(crate) fn head_center(&self, x: u32, y: u32) -> (f64, f64) {
+    pub(crate) fn head_center(&self, head_x_permille: u32, head_y_permille: u32) -> (f64, f64) {
         let plate = self.plate();
-        let permille = |value: u32| f64::from(value.min(1000)) / 1000.0;
+        let to_fraction = |value: u32| f64::from(value.min(1000)) / 1000.0;
         (
-            plate.left + permille(x) * plate.width(),
-            plate.top + permille(y) * plate.height(),
+            plate.left + to_fraction(head_x_permille) * plate.width(),
+            plate.top + to_fraction(head_y_permille) * plate.height(),
         )
     }
 
     /// The head box on screen from the layout's centre and size in permille of the source picture.
-    pub(crate) fn head_box(&self, x: u32, y: u32, width: u32, height: u32) -> Rect {
+    pub(crate) fn head_box(
+        &self,
+        head_x_permille: u32,
+        head_y_permille: u32,
+        head_width_permille: u32,
+        head_height_permille: u32,
+    ) -> Rect {
         let plate = self.plate();
-        let permille = |value: u32| f64::from(value.min(1000)) / 1000.0;
-        let (cx, cy) = self.head_center(x, y);
+        let to_fraction = |value: u32| f64::from(value.min(1000)) / 1000.0;
+        let (cx, cy) = self.head_center(head_x_permille, head_y_permille);
         let (half_width, half_height) = (
-            permille(width) * plate.width() / 2.0,
-            permille(height) * plate.height() / 2.0,
+            to_fraction(head_width_permille) * plate.width() / 2.0,
+            to_fraction(head_height_permille) * plate.height() / 2.0,
         );
         Rect::new(
             cx - half_width,

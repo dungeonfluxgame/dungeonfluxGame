@@ -23,7 +23,7 @@ pub(crate) const QUEUE_CAP: usize = 10;
 /// Age of the oldest queued cue beyond which stale cosmetic cues are collapsed.
 pub(crate) const LAG_LIMIT_MS: u64 = 4_000;
 /// Ordinary enemy phases are not catch-up: only more than five queued blows or 30 s of lag.
-const BLOW_QUEUE_CAP: usize = 5;
+const MAXIMUM_QUEUED_BLOWS: usize = 5;
 const BLOW_LAG_LIMIT_MS: u64 = 30_000;
 const SHORT_FLOOR_MS: u32 = 150;
 /// How long a fallen character is held on screen with the final roll visible, so the table
@@ -100,7 +100,7 @@ pub(crate) struct BeatRecord {
 }
 
 /// How many beat records the debug log keeps.
-const BEAT_LOG_CAP: usize = 40;
+const MAXIMUM_BEAT_LOG_ENTRIES: usize = 40;
 
 /// What the browser layer applies.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -309,7 +309,7 @@ impl<D: Clone> StageDirector<D> {
     }
 
     fn record(&mut self, record: BeatRecord) {
-        if self.beat_log.len() >= BEAT_LOG_CAP {
+        if self.beat_log.len() >= MAXIMUM_BEAT_LOG_ENTRIES {
             self.beat_log.pop_front();
         }
         self.beat_log.push_back(record);
@@ -659,7 +659,7 @@ impl<D: Clone> StageDirector<D> {
             .front()
             .is_some_and(|oldest| now_ms.saturating_sub(oldest.queued_ms) > lag_limit);
         let crowded = if combat {
-            blows > BLOW_QUEUE_CAP
+            blows > MAXIMUM_QUEUED_BLOWS
         } else {
             self.queue.len() > QUEUE_CAP
         };
