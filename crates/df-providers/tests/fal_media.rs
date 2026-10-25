@@ -1458,8 +1458,7 @@ async fn a_refused_submit_keeps_the_http_status_and_a_redacted_bounded_body() {
     let error = provider
         .submit_video(&request, owner(&current), future::pending())
         .await
-        .err()
-        .expect("a 422 answer is a refusal");
+        .expect_err("a 422 answer is a refusal");
 
     assert_eq!(
         error.reason,
