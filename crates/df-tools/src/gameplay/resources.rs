@@ -49,10 +49,15 @@
 //! `MusicSet`, `VoiceLine` and `VideoClip` are reserved kinds with their [`Unit`]s: add the spec and
 //! the maker, never a second cache or spend record.
 //!
+//! Ready entries are bounded per kind: only kinds for which [`ResourceKind::evicts_when_idle`] is
+//! true are evicted (least recently used, beyond `READY_ENTRY_BOUND`). Their consumers ask again
+//! and their makers find the output in the owner's store. Failure tombstones are bounded by
+//! `FAILED_TOMBSTONE_BOUND`; an evicted failure is tried again by its next ask.
+//!
 //! # Audit lines
 //!
 //! Every state change is one line through `actor::record_audit_line`:
-//! `RESOURCE <request|ready|failed|invalidated|regenerate|stale> kind=<kind> key=<key>
+//! `RESOURCE <request|ready|failed|invalidated|regenerate|stale|evicted> kind=<kind> key=<key>
 //! subject=<subject> ms=<n> handle=<handle> error=<label>`, and every ledger movement
 //! `SPEND <reserve|commit|refund|reconcile> unit=<unit> amount=<n> reserved=<n> committed=<n>`.
 
@@ -61,7 +66,10 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -114,6 +122,37 @@ impl ResourceKind {
             Self::VoiceLine => "voice_line",
             Self::VideoClip => "video_clip",
         }
+    }
+
+    /// Whether a Ready entry of this kind may be evicted. Only a kind whose consumer asks again
+    /// through [`Hub::get_or_request`] or [`Hub::render`] on each use, and whose maker finds the
+    /// existing output in its own store before spending, is safe: an evicted key is made again by
+    /// its next ask, and nothing is paid twice.
+    ///
+    /// Listed: `MusicSet` (`place_music` re-asks on every plan), the image kinds `Depiction`,
+    /// `ScenePlate`, `PlateEdit` and `ItemCloseUp` (`imagery` renders on every use and the engine
+    /// checks the cache first), and `VoiceLine`, `PlateSegments` and `PlateStaging` (`Kit::produce`
+    /// re-asks on a miss and each maker reads its store first).
+    ///
+    /// Not listed, and why:
+    /// * `AmbientLayer`: a layer is requested only inside the soundscape decision
+    ///   (`place_music/ambience.rs`), while `audio_plan` only polls `ambient_status`. An evicted
+    ///   layer would read as not requested and never come back until the next decision.
+    /// * `CreatorPortrait`: its consumers only poll `status`, and its classifier call is paid once.
+    /// * `CharacterClip`, `VideoClip`: a re-ask after eviction would re-buy a paid generation.
+    /// * `SplatWorld`: its consumer keeps its own places map and never re-asks.
+    pub(in crate::gameplay) const fn evicts_when_idle(self) -> bool {
+        matches!(
+            self,
+            Self::MusicSet
+                | Self::Depiction
+                | Self::ScenePlate
+                | Self::PlateEdit
+                | Self::ItemCloseUp
+                | Self::VoiceLine
+                | Self::PlateSegments
+                | Self::PlateStaging
+        )
     }
 }
 
@@ -352,10 +391,13 @@ fn spend_audit(event: &str, unit: Unit, amount: u64, account: Spend) {
 impl SpendLedger {
     /// Records `amount` of `unit` as held by a call about to be made. Never refused.
     pub(in crate::gameplay) fn reserve(self: &Arc<Self>, unit: Unit, amount: u64) -> Reservation {
-        let mut accounts = locked(&self.accounts);
-        let account = accounts.entry(unit).or_default();
-        account.reserved = account.reserved.saturating_add(amount);
-        spend_audit("reserve", unit, amount, *account);
+        let account = {
+            let mut accounts = locked(&self.accounts);
+            let account = accounts.entry(unit).or_default();
+            account.reserved = account.reserved.saturating_add(amount);
+            *account
+        };
+        spend_audit("reserve", unit, amount, account);
         Reservation {
             ledger: Arc::clone(self),
             unit,
@@ -366,14 +408,17 @@ impl SpendLedger {
 
     /// Corrects the committed total of a unit by `delta` (usage evidence that arrived later).
     pub(in crate::gameplay) fn reconcile(&self, unit: Unit, delta: i64) {
-        let mut accounts = locked(&self.accounts);
-        let account = accounts.entry(unit).or_default();
-        account.committed = if delta >= 0 {
-            account.committed.saturating_add(delta.unsigned_abs())
-        } else {
-            account.committed.saturating_sub(delta.unsigned_abs())
+        let account = {
+            let mut accounts = locked(&self.accounts);
+            let account = accounts.entry(unit).or_default();
+            account.committed = if delta >= 0 {
+                account.committed.saturating_add(delta.unsigned_abs())
+            } else {
+                account.committed.saturating_sub(delta.unsigned_abs())
+            };
+            *account
         };
-        spend_audit("reconcile", unit, delta.unsigned_abs(), *account);
+        spend_audit("reconcile", unit, delta.unsigned_abs(), account);
     }
 
     /// The account of one unit.
@@ -451,10 +496,29 @@ impl Drop for Reservation {
     }
 }
 
+/// The most Ready entries of re-askable kinds (see [`ResourceKind::evicts_when_idle`]) the hub
+/// keeps; the least recently asked beyond it are evicted.
+const READY_ENTRY_BOUND: usize = 1024;
+
+/// The most failed entries the hub keeps as tombstones; the least recently asked beyond it are
+/// evicted. An evicted failure is tried again by its next ask.
+const FAILED_TOMBSTONE_BOUND: usize = 1024;
+
+/// One execution of an entry's generation. A new token is issued each time an entry starts
+/// running; a completion is accepted only while its token is still the entry's active one, so a
+/// generation that outlived its entry (invalidated, then asked again) cannot settle the replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Attempt(u64);
+
+fn start_attempt(issued: &mut u64) -> Attempt {
+    *issued = issued.saturating_add(1);
+    Attempt(*issued)
+}
+
 #[derive(Clone)]
 enum State {
     Queued,
-    InFlight { since: Instant },
+    InFlight { since: Instant, attempt: Attempt },
     Ready(Generated),
     Failed(ResourceFailure),
 }
@@ -463,11 +527,16 @@ struct Entry {
     kind: ResourceKind,
     subject: String,
     chrome: Chrome,
+    /// Builds the generation again. Kept while the entry is queued or failed (a failed entry is
+    /// retried or regenerated by the hub); a ready entry drops it on completion.
     maker: Option<Maker>,
     state: State,
     attempts: u8,
     /// How long the last attempt took.
     elapsed: Option<Duration>,
+    /// The registry clock at the last ask, poll or completion: the least recently used entries
+    /// are evicted first. Atomic so that a read through the shared guard can refresh it.
+    used: AtomicU64,
 }
 
 #[derive(Default)]
@@ -475,6 +544,9 @@ struct Registry {
     entries: BTreeMap<ResourceKey, Entry>,
     limits: BTreeMap<ResourceKind, Limits>,
     validators: BTreeMap<ResourceKind, Validator>,
+    /// The last attempt token issued (see [`Attempt`]).
+    attempts_issued: u64,
+    clock: AtomicU64,
 }
 
 impl Registry {
@@ -483,6 +555,10 @@ impl Registry {
             .get(&kind)
             .copied()
             .unwrap_or(Limits::for_kind(kind))
+    }
+
+    fn tick(&self) -> u64 {
+        self.clock.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// A ready entry whose output has gone is no longer ready.
@@ -499,6 +575,7 @@ pub(in crate::gameplay) struct Job {
     pub(in crate::gameplay) key: ResourceKey,
     pub(in crate::gameplay) run: Generation,
     timeout: Duration,
+    attempt: Attempt,
 }
 
 impl Job {
@@ -510,6 +587,7 @@ impl Job {
         };
         Completed {
             key: self.key,
+            attempt: self.attempt,
             result,
         }
     }
@@ -518,6 +596,7 @@ impl Job {
 /// A finished job, for [`Hub::complete`].
 pub(in crate::gameplay) struct Completed {
     pub(in crate::gameplay) key: ResourceKey,
+    attempt: Attempt,
     pub(in crate::gameplay) result: Result<Generated, ResourceFailure>,
 }
 
@@ -715,11 +794,56 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn audit(state: &str, key: &ResourceKey, entry: &Entry, ms: u128, handle: &str, error: &str) {
-    super::actor::record_audit_line(
-        "gameplay.resource",
-        resource_audit_line(state, key, entry, ms, handle, error),
-    );
+/// Collects one resource audit line while the registry is locked; [`emit`] writes them after.
+fn audit(
+    lines: &mut Vec<String>,
+    state: &str,
+    key: &ResourceKey,
+    entry: &Entry,
+    ms: u128,
+    handle: &str,
+    error: &str,
+) {
+    lines.push(resource_audit_line(state, key, entry, ms, handle, error));
+}
+
+/// Writes collected resource audit lines. Called only after the registry lock is released.
+fn emit(lines: Vec<String>) {
+    for line in lines {
+        super::actor::record_audit_line("gameplay.resource", line);
+    }
+}
+
+/// Drops the least recently used entries that match `candidate` beyond `bound`, never the entry
+/// `keep` (the one completing). Only a candidate's own kind decides whether it may go.
+fn evict_least_recent(
+    registry: &mut Registry,
+    keep: &ResourceKey,
+    bound: usize,
+    candidate: impl Fn(&Entry) -> bool,
+    lines: &mut Vec<String>,
+) {
+    let mut lru: Vec<(u64, ResourceKey)> = registry
+        .entries
+        .iter()
+        .filter(|(_, entry)| candidate(entry))
+        .map(|(key, entry)| (entry.used.load(Ordering::Relaxed), key.clone()))
+        .collect();
+    let Some(excess) = lru.len().checked_sub(bound).filter(|excess| *excess > 0) else {
+        return;
+    };
+    lru.sort_unstable();
+    let victims: Vec<ResourceKey> = lru
+        .into_iter()
+        .map(|(_, key)| key)
+        .filter(|key| key != keep)
+        .take(excess)
+        .collect();
+    for key in victims {
+        if let Some(entry) = registry.entries.remove(&key) {
+            audit(lines, "evicted", &key, &entry, 0, "", "");
+        }
+    }
 }
 
 fn resource_audit_line(
@@ -771,26 +895,47 @@ impl Hub {
         maker: Maker,
     ) -> ResourceStatus {
         let key = ResourceKey::of(spec);
-        let mut registry = locked(&self.registry);
-        if let Some(entry) = registry.entries.get(&key) {
-            if !registry.ready_is_stale(entry) {
-                return Self::status_of(entry);
+        let mut lines = Vec::new();
+        let status = {
+            let mut registry = locked(&self.registry);
+            let clock = registry.tick();
+            let stale = registry
+                .entries
+                .get(&key)
+                .is_some_and(|entry| registry.ready_is_stale(entry));
+            let hit = match registry.entries.get_mut(&key) {
+                Some(entry) if !stale => {
+                    entry.used.store(clock, Ordering::Relaxed);
+                    Some(Self::status_of(entry))
+                }
+                Some(entry) => {
+                    audit(&mut lines, "stale", &key, entry, 0, "", "output_missing");
+                    None
+                }
+                None => None,
+            };
+            match hit {
+                Some(status) => status,
+                None => {
+                    let entry = Entry {
+                        kind: S::KIND,
+                        subject: spec.subject(),
+                        chrome: spec.chrome(),
+                        maker: Some(maker),
+                        state: State::Queued,
+                        attempts: 0,
+                        elapsed: None,
+                        used: AtomicU64::new(clock),
+                    };
+                    audit(&mut lines, "request", &key, &entry, 0, "", "");
+                    let status = Self::status_of(&entry);
+                    registry.entries.insert(key, entry);
+                    self.work_available.notify_one();
+                    status
+                }
             }
-            audit("stale", &key, entry, 0, "", "output_missing");
-        }
-        let entry = Entry {
-            kind: S::KIND,
-            subject: spec.subject(),
-            chrome: spec.chrome(),
-            maker: Some(maker),
-            state: State::Queued,
-            attempts: 0,
-            elapsed: None,
         };
-        audit("request", &key, &entry, 0, "", "");
-        let status = Self::status_of(&entry);
-        registry.entries.insert(key, entry);
-        self.work_available.notify_one();
+        emit(lines);
         status
     }
 
@@ -802,22 +947,27 @@ impl Hub {
     /// A ready entry whose output still exists is returned without running; a permanent failure,
     /// or a transient one past the attempt limit, is returned without running (nothing is spent
     /// again). Two concurrent calls for one key both run; the provider layer coalesces the
-    /// identical request, so it is still made once.
+    /// identical request, so it is still made once. The entry records only the newest attempt: an
+    /// earlier call that finishes after it is superseded and its result is not recorded (its own
+    /// caller still receives it).
     pub(in crate::gameplay) async fn render<S: ResourceSpec>(
         &self,
         spec: &S,
         generation: Generation,
     ) -> Result<Generated, ResourceFailure> {
         let key = ResourceKey::of(spec);
-        let limits;
-        {
+        let mut lines = Vec::new();
+        let (limits, attempt) = {
             let mut registry = locked(&self.registry);
-            limits = registry.limits_of(S::KIND);
+            let limits = registry.limits_of(S::KIND);
+            let clock = registry.tick();
             let stale = registry
                 .entries
                 .get(&key)
                 .is_some_and(|entry| registry.ready_is_stale(entry));
-            if let Some(entry) = registry.entries.get(&key) {
+            let mut running = None;
+            if let Some(entry) = registry.entries.get_mut(&key) {
+                entry.used.store(clock, Ordering::Relaxed);
                 match &entry.state {
                     State::Ready(generated) if !stale => return Ok(generated.clone()),
                     State::Failed(failure)
@@ -825,12 +975,18 @@ impl Hub {
                     {
                         return Err(failure.clone());
                     }
+                    State::InFlight { attempt, .. } => running = Some(*attempt),
                     _ => {}
                 }
                 if stale {
-                    audit("stale", &key, entry, 0, "", "output_missing");
+                    audit(&mut lines, "stale", &key, entry, 0, "", "output_missing");
                 }
             }
+            // Joining an attempt already in flight shares its token: the first result recorded wins.
+            let attempt = match running {
+                Some(attempt) => attempt,
+                None => start_attempt(&mut registry.attempts_issued),
+            };
             let entry = registry
                 .entries
                 .entry(key.clone())
@@ -842,22 +998,28 @@ impl Hub {
                     state: State::Queued,
                     attempts: 0,
                     elapsed: None,
+                    used: AtomicU64::new(clock),
                 });
             if stale {
                 entry.attempts = 0;
             }
-            entry.state = State::InFlight {
-                since: Instant::now(),
-            };
+            if running.is_none() {
+                entry.state = State::InFlight {
+                    since: Instant::now(),
+                    attempt,
+                };
+            }
             entry.attempts = entry.attempts.saturating_add(1);
-            audit("request", &key, entry, 0, "", "");
-        }
+            audit(&mut lines, "request", &key, entry, 0, "", "");
+            (limits, attempt)
+        };
+        emit(lines);
         let started = Instant::now();
         let result = match tokio::time::timeout(limits.timeout, generation).await {
             Ok(result) => result,
             Err(_) => Err(ResourceFailure::TimedOut),
         };
-        self.finish(&key, result.clone(), started.elapsed());
+        self.finish(&key, attempt, result.clone(), started.elapsed());
         result
     }
 
@@ -870,8 +1032,13 @@ impl Hub {
     pub(in crate::gameplay) fn take_jobs(&self, available: usize) -> Vec<Job> {
         let mut registry = locked(&self.registry);
         let limits = registry.limits.clone();
+        let Registry {
+            entries,
+            attempts_issued,
+            ..
+        } = &mut *registry;
         let mut jobs = Vec::new();
-        for (key, entry) in &mut registry.entries {
+        for (key, entry) in entries.iter_mut() {
             if jobs.len() >= available {
                 break;
             }
@@ -881,8 +1048,10 @@ impl Hub {
             let Some(maker) = entry.maker.clone() else {
                 continue;
             };
+            let attempt = start_attempt(attempts_issued);
             entry.state = State::InFlight {
                 since: Instant::now(),
+                attempt,
             };
             entry.attempts = entry.attempts.saturating_add(1);
             jobs.push(Job {
@@ -893,6 +1062,7 @@ impl Hub {
                     .copied()
                     .unwrap_or(Limits::for_kind(entry.kind))
                     .timeout,
+                attempt,
             });
         }
         jobs
@@ -900,6 +1070,7 @@ impl Hub {
 
     /// Records a finished job. A retryable failure is re-queued below the kind's attempt limit;
     /// a permanent one, or one past the limit, stays failed until `regenerate` or `invalidate`.
+    /// A completion whose attempt is no longer the entry's active one is dropped.
     pub(in crate::gameplay) fn complete(&self, completed: Completed) {
         let elapsed = {
             let registry = locked(&self.registry);
@@ -907,35 +1078,88 @@ impl Hub {
                 .entries
                 .get(&completed.key)
                 .and_then(|entry| match entry.state {
-                    State::InFlight { since } => Some(since.elapsed()),
+                    State::InFlight { since, attempt } if attempt == completed.attempt => {
+                        Some(since.elapsed())
+                    }
                     _ => None,
                 })
                 .unwrap_or_default()
         };
-        self.finish(&completed.key, completed.result, elapsed);
+        self.finish(&completed.key, completed.attempt, completed.result, elapsed);
     }
 
     fn finish(
         &self,
         key: &ResourceKey,
+        attempt: Attempt,
         result: Result<Generated, ResourceFailure>,
         took: Duration,
     ) {
-        let mut registry = locked(&self.registry);
+        let lines = {
+            let mut registry = locked(&self.registry);
+            self.settle(&mut registry, key, attempt, result, took)
+        };
+        emit(lines);
+    }
+
+    /// Applies a finished attempt to its entry under the registry lock, and returns the audit lines
+    /// to write once the lock is released.
+    fn settle(
+        &self,
+        registry: &mut Registry,
+        key: &ResourceKey,
+        attempt: Attempt,
+        result: Result<Generated, ResourceFailure>,
+        took: Duration,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
         let limits = registry.limits.clone();
+        let clock = registry.tick();
         let Some(entry) = registry.entries.get_mut(key) else {
             // Invalidated while it ran: the result is stale and is dropped.
-            return;
+            return lines;
         };
-        if !matches!(entry.state, State::InFlight { .. }) {
-            return;
+        match entry.state {
+            State::InFlight {
+                attempt: active, ..
+            } if active == attempt => {}
+            State::InFlight { .. } => {
+                // Invalidated and asked again while this attempt ran: the newer attempt decides.
+                audit(
+                    &mut lines,
+                    "stale",
+                    key,
+                    entry,
+                    took.as_millis(),
+                    "",
+                    "superseded",
+                );
+                return lines;
+            }
+            _ => return lines,
         }
         entry.elapsed = Some(took);
+        entry.used.store(clock, Ordering::Relaxed);
         let ms = took.as_millis();
         match result {
             Ok(generated) => {
-                audit("ready", key, entry, ms, &generated.handle, "");
+                audit(&mut lines, "ready", key, entry, ms, &generated.handle, "");
+                let kind = entry.kind;
                 entry.state = State::Ready(generated);
+                // A ready entry keeps no closure: its next ask brings a maker again.
+                entry.maker = None;
+                // Each kind has its own bound, so one kind's completions never evict another's.
+                evict_least_recent(
+                    registry,
+                    key,
+                    READY_ENTRY_BOUND,
+                    |candidate| {
+                        candidate.kind == kind
+                            && candidate.kind.evicts_when_idle()
+                            && matches!(candidate.state, State::Ready(_))
+                    },
+                    &mut lines,
+                );
             }
             Err(failure) => {
                 let attempts = limits
@@ -943,15 +1167,28 @@ impl Hub {
                     .copied()
                     .unwrap_or(Limits::for_kind(entry.kind))
                     .attempts;
-                audit("failed", key, entry, ms, "", failure.label());
+                audit(&mut lines, "failed", key, entry, ms, "", failure.label());
                 if failure.is_retryable() && entry.attempts < attempts && entry.maker.is_some() {
                     entry.state = State::Queued;
                     self.work_available.notify_one();
                 } else {
+                    // A failed entry keeps only a tombstone: its maker is dropped.
+                    let kind = entry.kind;
                     entry.state = State::Failed(failure);
+                    entry.maker = None;
+                    evict_least_recent(
+                        registry,
+                        key,
+                        FAILED_TOMBSTONE_BOUND,
+                        |candidate| {
+                            candidate.kind == kind && matches!(candidate.state, State::Failed(_))
+                        },
+                        &mut lines,
+                    );
                 }
             }
         }
+        lines
     }
 
     fn status_of(entry: &Entry) -> ResourceStatus {
@@ -964,13 +1201,14 @@ impl Hub {
 
     /// The status of a key; `Fallback` (with the generic nothing chrome) when nothing is known. A
     /// ready entry whose output has gone reads as `Pending` (it is generated again on the next
-    /// ask).
+    /// ask). Reading the status counts as use: it refreshes the entry's idle stamp.
     pub(in crate::gameplay) fn status(&self, key: &ResourceKey) -> ResourceStatus {
         let registry = locked(&self.registry);
         registry
             .entries
             .get(key)
             .map_or(ResourceStatus::Fallback(Neutral::Nothing), |entry| {
+                entry.used.store(registry.tick(), Ordering::Relaxed);
                 if registry.ready_is_stale(entry) {
                     ResourceStatus::Pending(entry.chrome)
                 } else {
@@ -1025,41 +1263,50 @@ impl Hub {
     /// and is then dropped as stale). Returns how many were dropped. This is the only failure
     /// memory there is: nothing below the hub remembers a failure.
     pub(in crate::gameplay) fn invalidate(&self, target: Invalidate<'_>) -> usize {
-        let mut registry = locked(&self.registry);
-        let keys: Vec<ResourceKey> = registry
-            .entries
-            .iter()
-            .filter(|(key, entry)| match &target {
-                Invalidate::Key(wanted) => *wanted == *key,
-                Invalidate::Subject(subject) => entry.subject == *subject,
-            })
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in &keys {
-            if let Some(entry) = registry.entries.remove(key) {
-                audit("invalidated", key, &entry, 0, "", "");
+        let mut lines = Vec::new();
+        let dropped = {
+            let mut registry = locked(&self.registry);
+            let keys: Vec<ResourceKey> = registry
+                .entries
+                .iter()
+                .filter(|(key, entry)| match &target {
+                    Invalidate::Key(wanted) => *wanted == *key,
+                    Invalidate::Subject(subject) => entry.subject == *subject,
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in &keys {
+                if let Some(entry) = registry.entries.remove(key) {
+                    audit(&mut lines, "invalidated", key, &entry, 0, "", "");
+                }
             }
-        }
-        keys.len()
+            keys.len()
+        };
+        emit(lines);
+        dropped
     }
 
-    /// Re-queues a resource now, clearing its failure and attempts (idempotent: one in-flight
-    /// generation per key). Needs the entry's maker, so it works for queued kinds; an
-    /// inline-rendered entry is invalidated instead and its consumer asks again. Returns whether
-    /// a generation was queued.
+    /// Drops a completed resource (a ready entry, a failure tombstone or an inline-rendered entry),
+    /// so its next ask queues it again with a fresh maker. A queued or in-flight resource is left
+    /// alone (idempotent). Completed entries keep no maker, so this never queues a generation
+    /// itself and always returns `false`; the caller asks again. Changing the return type to `()`
+    /// is a recorded follow-up: it needs the call sites in `place_music/resource.rs` and
+    /// `place_music.rs` updated, which belong to another area.
     pub(in crate::gameplay) fn regenerate(&self, key: &ResourceKey) -> bool {
-        let mut registry = locked(&self.registry);
-        let Some(entry) = registry.entries.get_mut(key) else {
-            return false;
-        };
-        if matches!(entry.state, State::Queued | State::InFlight { .. }) || entry.maker.is_none() {
-            return false;
+        let mut lines = Vec::new();
+        {
+            let mut registry = locked(&self.registry);
+            let completed = registry.entries.get(key).is_some_and(|entry| {
+                !matches!(entry.state, State::Queued | State::InFlight { .. })
+            });
+            if completed {
+                if let Some(entry) = registry.entries.remove(key) {
+                    audit(&mut lines, "invalidated", key, &entry, 0, "", "");
+                }
+            }
         }
-        entry.state = State::Queued;
-        entry.attempts = 0;
-        audit("regenerate", key, entry, 0, "", "");
-        self.work_available.notify_one();
-        true
+        emit(lines);
+        false
     }
 }
 
@@ -1199,6 +1446,7 @@ mod tests {
             state: State::Failed(ResourceFailure::Permanent("unavailable")),
             attempts: 1,
             elapsed: Some(Duration::ZERO),
+            used: AtomicU64::new(0),
         };
 
         assert_eq!(
@@ -1269,8 +1517,13 @@ mod tests {
             (rows[0].state, rows[0].last_error.as_str()),
             ("failed", "provider")
         );
-        assert!(hub.regenerate(&key));
+        // A failed entry keeps no maker: regenerate drops the tombstone and the next ask queues it.
+        assert!(!hub.regenerate(&key));
+        assert!(matches!(hub.status(&key), ResourceStatus::Fallback(_)));
+        hub.get_or_request(&wolf(), transient());
+        assert!(matches!(hub.status(&key), ResourceStatus::Pending(_)));
         assert!(!hub.regenerate(&key), "idempotent while queued");
+        assert!(matches!(hub.status(&key), ResourceStatus::Pending(_)));
     }
 
     #[tokio::test]
@@ -1441,5 +1694,463 @@ mod tests {
         run_all(&hub).await;
         assert_eq!(hub.ready(&key), Some(Generated::new("second")));
         assert_eq!(hub.for_subject("character:ant-wolf").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_completion_from_an_invalidated_attempt_never_settles_its_replacement() {
+        let hub = Hub::new();
+        let spec = wolf();
+        let key = ResourceKey::of(&spec);
+        hub.get_or_request(&spec, ok("first"));
+        let superseded = hub.take_jobs(1).remove(0);
+        assert_eq!(hub.invalidate(Invalidate::Key(&key)), 1);
+        hub.get_or_request(&spec, ok("second"));
+        let replacement = hub.take_jobs(1).remove(0);
+        // The invalidated attempt finishes after its replacement has started: it must not settle the key.
+        hub.complete(superseded.execute().await);
+        assert!(
+            matches!(hub.status(&key), ResourceStatus::Pending(_)),
+            "the replacement is still in flight"
+        );
+        hub.complete(replacement.execute().await);
+        assert_eq!(hub.ready(&key), Some(Generated::new("second")));
+    }
+
+    #[tokio::test]
+    async fn a_ready_entry_keeps_no_generation_closure() {
+        let hub = Hub::new();
+        let captured = Arc::new(());
+        let held = Arc::clone(&captured);
+        let maker: Maker = Arc::new(move || {
+            let held = Arc::clone(&held);
+            Box::pin(async move {
+                let _held = held;
+                Ok(Generated::new("ready"))
+            })
+        });
+        hub.get_or_request(&wolf(), maker);
+        run_all(&hub).await;
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&wolf())),
+            Some(Generated::new("ready"))
+        );
+        assert_eq!(
+            Arc::strong_count(&captured),
+            1,
+            "the maker and what it captured are dropped on completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn regenerating_a_ready_entry_drops_it_so_the_next_ask_queues_it() {
+        let hub = Hub::new();
+        hub.get_or_request(&wolf(), ok("first"));
+        run_all(&hub).await;
+        let key = ResourceKey::of(&wolf());
+        assert!(
+            !hub.regenerate(&key),
+            "a ready entry keeps no maker to requeue"
+        );
+        assert!(matches!(hub.status(&key), ResourceStatus::Fallback(_)));
+        hub.get_or_request(&wolf(), ok("second"));
+        run_all(&hub).await;
+        assert_eq!(hub.ready(&key), Some(Generated::new("second")));
+    }
+
+    struct Numbered(usize);
+
+    impl ResourceSpec for Numbered {
+        const KIND: ResourceKind = ResourceKind::MusicSet;
+        const CONTRACT_VERSION: u32 = 1;
+        fn canonical(&self) -> String {
+            format!("{{\"n\":{}}}", self.0)
+        }
+        fn subject(&self) -> String {
+            format!("character:n{}", self.0)
+        }
+        fn chrome(&self) -> Chrome {
+            Neutral::Silhouette
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_ready_entries_are_evicted_past_the_bound_oldest_first() {
+        let hub = Hub::new();
+        // One more ready entry than the bound of 1024: the least recently asked one goes.
+        for index in 0..=1024 {
+            hub.get_or_request(&Numbered(index), ok("ready"));
+            run_all(&hub).await;
+        }
+        let ready = hub
+            .list(None)
+            .iter()
+            .filter(|row| row.state == "ready")
+            .count();
+        assert_eq!(ready, 1024, "ready entries are bounded");
+        assert!(
+            matches!(
+                hub.status(&ResourceKey::of(&Numbered(0))),
+                ResourceStatus::Fallback(_)
+            ),
+            "the oldest idle entry is evicted"
+        );
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(1024))),
+            Some(Generated::new("ready")),
+            "the newest entry stays"
+        );
+    }
+
+    /// A kind whose consumers only poll `status` (its classifier call is paid once) keeps every
+    /// Ready entry, however many there are.
+    struct Polled(usize);
+
+    impl ResourceSpec for Polled {
+        const KIND: ResourceKind = ResourceKind::CreatorPortrait;
+        const CONTRACT_VERSION: u32 = 1;
+        fn canonical(&self) -> String {
+            format!("{{\"p\":{}}}", self.0)
+        }
+        fn subject(&self) -> String {
+            format!("character:p{}", self.0)
+        }
+        fn chrome(&self) -> Chrome {
+            Neutral::Silhouette
+        }
+    }
+
+    #[tokio::test]
+    async fn a_poll_only_kind_keeps_every_ready_entry_past_the_bound() {
+        let hub = Hub::new();
+        for index in 0..=1024 {
+            hub.get_or_request(&Polled(index), ok("ready"));
+            run_all(&hub).await;
+        }
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Polled(0))),
+            Some(Generated::new("ready")),
+            "the oldest poll-only entry survives"
+        );
+        let ready = hub
+            .list(Some(ResourceKind::CreatorPortrait))
+            .iter()
+            .filter(|row| row.state == "ready")
+            .count();
+        assert_eq!(ready, 1025);
+    }
+
+    #[tokio::test]
+    async fn the_completing_entry_is_stamped_fresh_and_never_the_one_evicted() {
+        let hub = Hub::new();
+        // Asked first and completed last: its ask stamp is the oldest in the registry.
+        hub.get_or_request(&Numbered(5000), ok("late"));
+        let late = hub.take_jobs(1).remove(0);
+        for index in 0..1024 {
+            let generation: Generation = Box::pin(async { Ok(Generated::new("ready")) });
+            assert!(hub.render(&Numbered(index), generation).await.is_ok());
+        }
+        hub.complete(late.execute().await);
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(5000))),
+            Some(Generated::new("late")),
+            "the completing entry is fresh"
+        );
+        assert!(
+            matches!(
+                hub.status(&ResourceKey::of(&Numbered(0))),
+                ResourceStatus::Fallback(_)
+            ),
+            "the oldest other entry goes instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn polling_a_ready_entry_refreshes_its_idle_stamp() {
+        let hub = Hub::new();
+        for index in 0..1024 {
+            hub.get_or_request(&Numbered(index), ok("ready"));
+            run_all(&hub).await;
+        }
+        // Numbered(0) is the oldest by ask, but a poll makes it the freshest.
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(0))),
+            Some(Generated::new("ready"))
+        );
+        hub.get_or_request(&Numbered(1024), ok("ready"));
+        run_all(&hub).await;
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(0))),
+            Some(Generated::new("ready")),
+            "the polled entry is kept"
+        );
+        assert!(
+            matches!(
+                hub.status(&ResourceKey::of(&Numbered(1))),
+                ResourceStatus::Fallback(_)
+            ),
+            "the least recently used entry goes"
+        );
+    }
+
+    #[tokio::test]
+    async fn eviction_never_touches_entries_in_flight_queued_or_failed() {
+        let hub = Hub::new();
+        hub.get_or_request(&Numbered(9000), ok("running"));
+        let running = hub.take_jobs(1).remove(0);
+        let refused: Generation = Box::pin(async { Err(ResourceFailure::Permanent("refused")) });
+        assert!(hub.render(&Numbered(9001), refused).await.is_err());
+        hub.get_or_request(&Numbered(9002), ok("queued"));
+        for index in 0..=1024 {
+            let generation: Generation = Box::pin(async { Ok(Generated::new("ready")) });
+            assert!(hub.render(&Numbered(index), generation).await.is_ok());
+        }
+        assert!(matches!(
+            hub.status(&ResourceKey::of(&Numbered(9000))),
+            ResourceStatus::Pending(_)
+        ));
+        assert!(matches!(
+            hub.status(&ResourceKey::of(&Numbered(9001))),
+            ResourceStatus::Failed(ResourceFailure::Permanent("refused"), _)
+        ));
+        assert!(matches!(
+            hub.status(&ResourceKey::of(&Numbered(9002))),
+            ResourceStatus::Pending(_)
+        ));
+        let ready = hub
+            .list(Some(ResourceKind::MusicSet))
+            .iter()
+            .filter(|row| row.state == "ready")
+            .count();
+        assert_eq!(ready, 1024, "only ready entries are bounded");
+        hub.complete(running.execute().await);
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(9000))),
+            Some(Generated::new("running"))
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_tombstones_are_bounded_and_keep_no_maker() {
+        let hub = Hub::new();
+        for index in 0..=1024 {
+            let refused: Generation =
+                Box::pin(async { Err(ResourceFailure::Permanent("refused")) });
+            assert!(hub.render(&Numbered(index), refused).await.is_err());
+        }
+        let failed = hub
+            .list(None)
+            .iter()
+            .filter(|row| row.state == "failed")
+            .count();
+        assert_eq!(failed, 1024, "failure tombstones are bounded");
+        assert!(
+            matches!(
+                hub.status(&ResourceKey::of(&Numbered(0))),
+                ResourceStatus::Fallback(_)
+            ),
+            "the least recently used tombstone goes"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_completion_while_queued_is_dropped() {
+        let hub = Hub::new();
+        let spec = wolf();
+        let key = ResourceKey::of(&spec);
+        hub.get_or_request(&spec, ok("first"));
+        let superseded = hub.take_jobs(1).remove(0);
+        assert_eq!(hub.invalidate(Invalidate::Key(&key)), 1);
+        // Asked again, but not yet taken: the old attempt must not settle the queued key.
+        hub.get_or_request(&spec, ok("second"));
+        hub.complete(superseded.execute().await);
+        assert!(matches!(hub.status(&key), ResourceStatus::Pending(_)));
+        assert_eq!(hub.take_jobs(8).len(), 1, "the replacement is still queued");
+    }
+
+    #[tokio::test]
+    async fn a_render_joining_an_in_flight_attempt_shares_its_token() {
+        let hub = Hub::new();
+        let spec = wolf();
+        let key = ResourceKey::of(&spec);
+        let (release_first, gate_first) = tokio::sync::oneshot::channel::<()>();
+        let first: Generation = Box::pin(async move {
+            let _ = gate_first.await;
+            Ok(Generated::new("first"))
+        });
+        let (_release_second, gate_second) = tokio::sync::oneshot::channel::<()>();
+        let second: Generation = Box::pin(async move {
+            let _ = gate_second.await;
+            Ok(Generated::new("second"))
+        });
+        let mut first_render = std::pin::pin!(hub.render(&spec, first));
+        assert!(futures::poll!(first_render.as_mut()).is_pending());
+        let mut second_render = std::pin::pin!(hub.render(&spec, second));
+        assert!(futures::poll!(second_render.as_mut()).is_pending());
+        release_first.send(()).expect("the first render is waiting");
+        assert_eq!(first_render.await, Ok(Generated::new("first")));
+        assert_eq!(
+            hub.ready(&key),
+            Some(Generated::new("first")),
+            "the joined attempt recorded the first result"
+        );
+    }
+
+    /// One spec type per kind, so a test can fill one kind past its bound.
+    macro_rules! kinded_spec {
+        ($name:ident, $kind:ident) => {
+            struct $name(usize);
+
+            impl ResourceSpec for $name {
+                const KIND: ResourceKind = ResourceKind::$kind;
+                const CONTRACT_VERSION: u32 = 1;
+                fn canonical(&self) -> String {
+                    format!("{{\"n\":{}}}", self.0)
+                }
+                fn subject(&self) -> String {
+                    format!("{}:n{}", ResourceKind::$kind.label(), self.0)
+                }
+                fn chrome(&self) -> Chrome {
+                    Neutral::Silhouette
+                }
+            }
+        };
+    }
+
+    kinded_spec!(DepictionN, Depiction);
+    kinded_spec!(ScenePlateN, ScenePlate);
+    kinded_spec!(PlateEditN, PlateEdit);
+    kinded_spec!(ItemCloseUpN, ItemCloseUp);
+    kinded_spec!(VoiceLineN, VoiceLine);
+    kinded_spec!(PlateSegmentsN, PlateSegments);
+    kinded_spec!(PlateStagingN, PlateStaging);
+    kinded_spec!(AmbientLayerN, AmbientLayer);
+    kinded_spec!(CharacterClipN, CharacterClip);
+    kinded_spec!(VideoClipN, VideoClip);
+
+    /// Renders 1025 entries of one kind, each completing at once.
+    async fn render_past_the_bound<S: ResourceSpec>(hub: &Hub, make: impl Fn(usize) -> S) {
+        for index in 0..=1024 {
+            let generation: Generation = Box::pin(async { Ok(Generated::new("ready")) });
+            assert!(hub.render(&make(index), generation).await.is_ok());
+        }
+    }
+
+    fn ready_of(hub: &Hub, kind: ResourceKind) -> usize {
+        hub.list(Some(kind))
+            .iter()
+            .filter(|row| row.state == "ready")
+            .count()
+    }
+
+    /// An evictable kind keeps at most the bound, evicts its least recently used entry and keeps
+    /// the newest.
+    async fn assert_evicts_past_the_bound<S: ResourceSpec>(make: impl Fn(usize) -> S) {
+        let hub = Hub::new();
+        render_past_the_bound(&hub, &make).await;
+        assert_eq!(
+            ready_of(&hub, S::KIND),
+            1024,
+            "{} ready entries are bounded",
+            S::KIND.label()
+        );
+        assert!(
+            matches!(
+                hub.status(&ResourceKey::of(&make(0))),
+                ResourceStatus::Fallback(_)
+            ),
+            "the least recently used entry goes"
+        );
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&make(1024))),
+            Some(Generated::new("ready")),
+            "the newest entry stays"
+        );
+    }
+
+    /// A kind left off the list keeps every Ready entry.
+    async fn assert_keeps_every_entry<S: ResourceSpec>(make: impl Fn(usize) -> S) {
+        let hub = Hub::new();
+        render_past_the_bound(&hub, &make).await;
+        assert_eq!(
+            ready_of(&hub, S::KIND),
+            1025,
+            "{} entries are not evicted",
+            S::KIND.label()
+        );
+    }
+
+    #[tokio::test]
+    async fn depiction_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(DepictionN).await;
+    }
+
+    #[tokio::test]
+    async fn scene_plate_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(ScenePlateN).await;
+    }
+
+    #[tokio::test]
+    async fn plate_edit_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(PlateEditN).await;
+    }
+
+    #[tokio::test]
+    async fn item_close_up_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(ItemCloseUpN).await;
+    }
+
+    #[tokio::test]
+    async fn voice_line_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(VoiceLineN).await;
+    }
+
+    #[tokio::test]
+    async fn plate_segment_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(PlateSegmentsN).await;
+    }
+
+    #[tokio::test]
+    async fn plate_staging_entries_are_evicted_past_the_bound() {
+        assert_evicts_past_the_bound(PlateStagingN).await;
+    }
+
+    #[tokio::test]
+    async fn ambient_layer_entries_are_not_evicted() {
+        assert_keeps_every_entry(AmbientLayerN).await;
+    }
+
+    #[tokio::test]
+    async fn character_clip_entries_are_not_evicted() {
+        assert_keeps_every_entry(CharacterClipN).await;
+    }
+
+    #[tokio::test]
+    async fn video_clip_entries_are_not_evicted() {
+        assert_keeps_every_entry(VideoClipN).await;
+    }
+
+    #[tokio::test]
+    async fn one_kinds_flood_never_evicts_another_kinds_entries() {
+        let hub = Hub::new();
+        // Five music sets, then a flood of voice lines well past the bound.
+        for index in 0..5 {
+            let generation: Generation = Box::pin(async { Ok(Generated::new("ready")) });
+            assert!(hub.render(&Numbered(index), generation).await.is_ok());
+        }
+        render_past_the_bound(&hub, VoiceLineN).await;
+        assert_eq!(
+            ready_of(&hub, ResourceKind::MusicSet),
+            5,
+            "the other kind is untouched"
+        );
+        assert_eq!(
+            ready_of(&hub, ResourceKind::VoiceLine),
+            1024,
+            "each kind has its own bound"
+        );
+        assert_eq!(
+            hub.ready(&ResourceKey::of(&Numbered(0))),
+            Some(Generated::new("ready"))
+        );
     }
 }
