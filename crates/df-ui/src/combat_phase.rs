@@ -1152,12 +1152,12 @@ mod browser {
                         },
                     )?;
                     if let CombatOfferKind::Choice { selected } = offer.kind {
-                        let state = if selected { "true" } else { "false" };
+                        let aria_state = if selected { "true" } else { "false" };
                         nodes
                             .control
                             .element()
-                            .set_attribute("aria-pressed", state)?;
-                        nodes.root.set_attribute("data-selected", state)?;
+                            .set_attribute("aria-pressed", aria_state)?;
+                        nodes.root.set_attribute("data-selected", aria_state)?;
                     } else {
                         nodes.control.element().remove_attribute("aria-pressed")?;
                         nodes.root.remove_attribute("data-selected")?;

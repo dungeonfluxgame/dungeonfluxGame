@@ -672,120 +672,126 @@ mod tests {
             max_host_offers: 8,
             max_text_bytes: 100,
         };
-        let mut data = view();
-        data.title = "<img src=x onerror=alert(1)>".into();
-        assert_eq!(data.validate(limits), Ok(()));
-        data.members.push(data.members[0].clone());
+        let mut display_view = view();
+        display_view.title = "<img src=x onerror=alert(1)>".into();
+        assert_eq!(display_view.validate(limits), Ok(()));
+        display_view.members.push(display_view.members[0].clone());
         assert_eq!(
-            data.validate(limits),
+            display_view.validate(limits),
             Err(CharacterValidationError::DuplicateId)
         );
-        data.members.pop();
-        data.public_notice = "bad\u{0}text".into();
+        display_view.members.pop();
+        display_view.public_notice = "bad\u{0}text".into();
         assert_eq!(
-            data.validate(limits),
+            display_view.validate(limits),
             Err(CharacterValidationError::InvalidText)
         );
-        data.public_notice.clear();
-        data.members[0].appearance_summary = Some("A silver braid and blue coat".into());
-        assert_eq!(data.validate(limits), Ok(()));
-        data.members[0].appearance_summary = Some("private\nline".into());
+        display_view.public_notice.clear();
+        display_view.members[0].appearance_summary = Some("A silver braid and blue coat".into());
+        assert_eq!(display_view.validate(limits), Ok(()));
+        display_view.members[0].appearance_summary = Some("private\nline".into());
         assert_eq!(
-            data.validate(limits),
+            display_view.validate(limits),
             Err(CharacterValidationError::InvalidText)
         );
-        data.members[0].appearance_summary = Some("x".repeat(101));
+        display_view.members[0].appearance_summary = Some("x".repeat(101));
         assert_eq!(
-            data.validate(limits),
+            display_view.validate(limits),
             Err(CharacterValidationError::ResourceLimit)
         );
-        data.members[0].appearance_summary = None;
+        display_view.members[0].appearance_summary = None;
         assert_eq!(
-            data.validate(CharacterDisplayLimits {
+            display_view.validate(CharacterDisplayLimits {
                 max_members: 0,
                 ..limits
             }),
             Err(CharacterValidationError::ResourceLimit)
         );
-        data.members.clear();
-        data.host_offers.clear();
-        assert_eq!(data.validate(limits), Ok(()));
+        display_view.members.clear();
+        display_view.host_offers.clear();
+        assert_eq!(display_view.validate(limits), Ok(()));
     }
     #[test]
     fn only_advertised_connected_host_offers_emit_input_without_changing_readiness() {
-        let mut data = view();
-        let mut state = DisplayState {
-            view: Some(data.clone()),
+        let mut display_view = view();
+        let mut display_state = DisplayState {
+            view: Some(display_view.clone()),
         };
-        let request = state
+        let request = display_state
             .submission(1, "public-room", "offered-host-action")
             .expect("advertised");
         assert_eq!(request.revision, 1);
         assert_eq!(
-            state.view.as_ref().map(|view| view.readiness),
+            display_state.view.as_ref().map(|view| view.readiness),
             Some(CharacterPublicReadiness::Choosing)
         );
         assert_eq!(
-            state.submission(1, "public-room", "invented"),
+            display_state.submission(1, "public-room", "invented"),
             Err(CharacterValidationError::UnknownSelection)
         );
         for connection in [
             CharacterDisplayConnection::Offline,
             CharacterDisplayConnection::Reconnecting,
         ] {
-            data.connection = connection;
-            data.revision += 1;
-            state.reconcile(&data).expect("current view");
+            display_view.connection = connection;
+            display_view.revision += 1;
+            display_state
+                .reconcile(&display_view)
+                .expect("current view");
             assert_eq!(
-                state.submission(1, "public-room", "offered-host-action"),
+                display_state.submission(1, "public-room", "offered-host-action"),
                 Err(CharacterValidationError::Unavailable)
             );
         }
-        data.connection = CharacterDisplayConnection::Connected;
-        data.host_offers[0].pending = true;
-        data.revision += 1;
-        state.reconcile(&data).expect("pending view");
+        display_view.connection = CharacterDisplayConnection::Connected;
+        display_view.host_offers[0].pending = true;
+        display_view.revision += 1;
+        display_state
+            .reconcile(&display_view)
+            .expect("pending view");
         assert_eq!(
-            state.submission(1, "public-room", "offered-host-action"),
+            display_state.submission(1, "public-room", "offered-host-action"),
             Err(CharacterValidationError::Unavailable)
         );
     }
     #[test]
     fn stale_equal_conflict_generation_offer_and_disposal_boundaries_are_fenced() {
-        let mut data = view();
-        let mut state = DisplayState {
-            view: Some(data.clone()),
+        let mut display_view = view();
+        let mut display_state = DisplayState {
+            view: Some(display_view.clone()),
         };
-        assert_eq!(state.reconcile(&data), Ok(false));
-        let mut conflict = data.clone();
+        assert_eq!(display_state.reconcile(&display_view), Ok(false));
+        let mut conflict = display_view.clone();
         conflict.readiness = CharacterPublicReadiness::Locked;
         assert_eq!(
-            state.reconcile(&conflict),
+            display_state.reconcile(&conflict),
             Err(CharacterValidationError::StaleRevision)
         );
         conflict.revision = 0;
         assert_eq!(
-            state.reconcile(&conflict),
+            display_state.reconcile(&conflict),
             Err(CharacterValidationError::StaleRevision)
         );
-        data.generation = 2;
-        data.public_scope_key = "new-public-room".into();
-        data.revision = 0;
-        assert_eq!(state.reconcile(&data), Ok(true));
+        display_view.generation = 2;
+        display_view.public_scope_key = "new-public-room".into();
+        display_view.revision = 0;
+        assert_eq!(display_state.reconcile(&display_view), Ok(true));
         assert_eq!(
-            state.submission(1, "public-room", "offered-host-action"),
+            display_state.submission(1, "public-room", "offered-host-action"),
             Err(CharacterValidationError::Unavailable)
         );
-        data.host_offers.clear();
-        data.revision += 1;
-        state.reconcile(&data).expect("revoked view");
+        display_view.host_offers.clear();
+        display_view.revision += 1;
+        display_state
+            .reconcile(&display_view)
+            .expect("revoked view");
         assert_eq!(
-            state.submission(2, "new-public-room", "offered-host-action"),
+            display_state.submission(2, "new-public-room", "offered-host-action"),
             Err(CharacterValidationError::UnknownSelection)
         );
-        state.view = None;
+        display_state.view = None;
         assert_eq!(
-            state.reconcile(&data),
+            display_state.reconcile(&display_view),
             Err(CharacterValidationError::Disposed)
         );
     }

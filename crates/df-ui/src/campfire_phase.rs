@@ -291,10 +291,10 @@ mod browser {
             }));
             for (index, control) in controls.iter().enumerate() {
                 actions.append_child(control.element())?;
-                let state = Rc::clone(&fence);
+                let offer_fence = Rc::clone(&fence);
                 control.on_activate(move || {
                     let (selection, callback) = {
-                        let mut fence = state.borrow_mut();
+                        let mut fence = offer_fence.borrow_mut();
                         if !fence.active {
                             return;
                         }
@@ -318,7 +318,7 @@ mod browser {
                     };
                     if let Some(mut callback) = callback {
                         callback(selection);
-                        let mut fence = state.borrow_mut();
+                        let mut fence = offer_fence.borrow_mut();
                         if fence.active {
                             fence.select = Some(callback);
                         }

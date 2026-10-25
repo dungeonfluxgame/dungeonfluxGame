@@ -475,6 +475,7 @@ impl CharacterDraftState {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 fn initial_choice(group: &CharacterGroup) -> Option<(String, String)> {
     group
         .selected
@@ -833,9 +834,9 @@ mod browser {
         state: &Rc<RefCell<CharacterDraftState>>,
     ) -> Result<(), wasm_bindgen::JsValue> {
         let cards = root.query_selector_all("[data-requires-group]")?;
-        for index in 0..cards.length() {
+        for card_index in 0..cards.length() {
             let Some(card) = cards
-                .item(index)
+                .item(card_index)
                 .and_then(|node| node.dyn_into::<Element>().ok())
             else {
                 continue;
@@ -871,9 +872,9 @@ mod browser {
             card.set_attribute("data-selected", "false")?;
         }
         let groups = root.query_selector_all("[data-group-id]")?;
-        for index in 0..groups.length() {
+        for group_index in 0..groups.length() {
             let Some(group) = groups
-                .item(index)
+                .item(group_index)
                 .and_then(|node| node.dyn_into::<Element>().ok())
             else {
                 continue;
@@ -1840,10 +1841,10 @@ mod tests {
     }
     #[test]
     fn a_single_offered_option_is_submitted_as_a_fact() {
-        let mut data = view();
-        data.groups[0].selected = None;
-        data.groups[0].options.truncate(1);
-        let state = CharacterDraftState::create(&data);
+        let mut character_view = view();
+        character_view.groups[0].selected = None;
+        character_view.groups[0].options.truncate(1);
+        let state = CharacterDraftState::create(&character_view);
         let submission = state
             .submission("submit-offer", "Mara".into(), "".into(), None, limits())
             .expect("single option is included");
@@ -1857,9 +1858,9 @@ mod tests {
     }
     #[test]
     fn a_conditionally_visible_single_option_is_submitted_and_restored_after_switching_back() {
-        let mut data = view();
-        data.groups[0].selected = None;
-        let mut state = CharacterDraftState::create(&data);
+        let mut character_view = view();
+        character_view.groups[0].selected = None;
+        let mut state = CharacterDraftState::create(&character_view);
         state.select_only_visible_option("group", &["first".into()]);
         assert_eq!(
             state.choices.get("group").map(String::as_str),
@@ -2004,13 +2005,13 @@ mod tests {
     }
     #[test]
     fn appearance_is_bounded_optional_and_scoped_to_current_offer() {
-        let mut data = view();
-        data.appearance = Some(CharacterAppearanceDraft {
+        let mut character_view = view();
+        character_view.appearance = Some(CharacterAppearanceDraft {
             features: "Silver braid".into(),
             outfit: "Blue travel coat".into(),
         });
-        assert_eq!(data.validate(limits()), Ok(()));
-        let mut state = CharacterDraftState::create(&data);
+        assert_eq!(character_view.validate(limits()), Ok(()));
+        let mut state = CharacterDraftState::create(&character_view);
         let draft = CharacterAppearanceDraft {
             features: "Freckled cheeks".into(),
             outfit: "Green cloak".into(),
@@ -2027,7 +2028,7 @@ mod tests {
         assert_eq!(submitted.appearance, Some(draft.clone()));
         assert_eq!(submitted.revision, 1);
         assert_eq!(state.view.status, CharacterStatus::Editing);
-        let mut invalid = data.clone();
+        let mut invalid = character_view.clone();
         invalid.appearance.as_mut().expect("offered").features = "bad\ntext".into();
         assert_eq!(
             invalid.validate(limits()),
@@ -2052,9 +2053,9 @@ mod tests {
             ),
             Err(CharacterValidationError::ResourceLimit)
         );
-        data.revision += 1;
-        data.appearance = None;
-        state.reconcile(&data).expect("withdrawn");
+        character_view.revision += 1;
+        character_view.appearance = None;
+        state.reconcile(&character_view).expect("withdrawn");
         assert_eq!(
             state
                 .submission(
@@ -2068,17 +2069,17 @@ mod tests {
                 .appearance,
             None
         );
-        data.revision += 1;
-        data.appearance = Some(CharacterAppearanceDraft {
+        character_view.revision += 1;
+        character_view.appearance = Some(CharacterAppearanceDraft {
             features: "Confirmed".into(),
             outfit: "Wool cloak".into(),
         });
-        data.status = CharacterStatus::Locked;
-        state.reconcile(&data).expect("locked view");
-        assert_eq!(state.view.appearance, data.appearance);
-        data.owner_key = "new-owner".into();
-        data.revision = 1;
-        state.reconcile(&data).expect("owner replacement");
+        character_view.status = CharacterStatus::Locked;
+        state.reconcile(&character_view).expect("locked view");
+        assert_eq!(state.view.appearance, character_view.appearance);
+        character_view.owner_key = "new-owner".into();
+        character_view.revision = 1;
+        state.reconcile(&character_view).expect("owner replacement");
         assert_eq!(state.view.owner_key, "new-owner");
         state.dispose();
         assert!(state.view.appearance.is_none());

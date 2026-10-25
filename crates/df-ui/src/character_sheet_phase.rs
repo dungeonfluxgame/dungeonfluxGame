@@ -327,18 +327,18 @@ mod browser {
                 button.set_tab_index(if selected { 0 } else { -1 });
             }
             for (index, panel) in self.panels.iter().enumerate() {
-                hidden(panel, index != self.tab.index())?;
+                set_hidden(panel, index != self.tab.index())?;
             }
             let query = self.filter.trim().to_lowercase();
             let mut found = false;
             for row in self.rows.values() {
                 let matches = query.is_empty() || row.text.contains(&query);
-                hidden(&row.root, !matches)?;
+                set_hidden(&row.root, !matches)?;
                 if matches && row.tab == self.tab {
                     found = true;
                 }
             }
-            hidden(&self.empty, found)?;
+            set_hidden(&self.empty, found)?;
             Ok(())
         }
         fn clear(&mut self) {
@@ -429,8 +429,8 @@ mod browser {
         scrub(element);
         element.set_text_content(text);
     }
-    fn hidden(element: &Element, hide: bool) -> Result<(), SheetError> {
-        if hide {
+    fn set_hidden(element: &Element, is_hidden: bool) -> Result<(), SheetError> {
+        if is_hidden {
             element.set_attribute("hidden", "")?;
         } else {
             element.remove_attribute("hidden")?;
@@ -499,7 +499,7 @@ mod browser {
             let name = node(document, &hero, "h1", "", None)?;
             let subtitle = node(document, &hero, "p", "sheet-subtitle", None)?;
             let art_fallback = node(document, &hero, "p", "sheet-art-fallback", None)?;
-            hidden(&art_fallback, true)?;
+            set_hidden(&art_fallback, true)?;
             let notice = node(document, &root, "p", "sheet-notice", None)?;
             notice.set_attribute("role", "status")?;
             let workspace = node(document, &root, "div", "sheet-workspace", None)?;
@@ -554,77 +554,78 @@ mod browser {
                 empty,
             }));
             for (index, tab) in tabs.iter().enumerate() {
-                let state = Rc::clone(&local);
+                let presentation = Rc::clone(&local);
                 let error_notice = notice.clone();
                 tab.on_activate(move || {
-                    let mut state = state.borrow_mut();
-                    if state.active
+                    let mut presentation = presentation.borrow_mut();
+                    if presentation.active
                         && let Some(tab) = SheetTab::ALL.get(index)
                     {
-                        state.tab = *tab;
-                        if state.apply().is_err() {
+                        presentation.tab = *tab;
+                        if presentation.apply().is_err() {
                             literal(&error_notice, Some("Sheet navigation failed"));
                         }
                     }
                 })?;
             }
-            let state = Rc::clone(&local);
+            let presentation = Rc::clone(&local);
             let filter_notice = notice.clone();
             filter.on_change(move |draft| {
-                let mut state = state.borrow_mut();
-                if !state.active {
+                let mut presentation = presentation.borrow_mut();
+                if !presentation.active {
                     return;
                 }
                 match draft {
                     Ok(value) => {
-                        state.filter = value;
-                        if state.apply().is_err() {
+                        presentation.filter = value;
+                        if presentation.apply().is_err() {
                             literal(&filter_notice, Some("Sheet filter failed"));
                         }
                     }
                     Err(_) => literal(&filter_notice, Some("Sheet filter is too long")),
                 }
             })?;
-            let state = Rc::clone(&local);
+            let presentation = Rc::clone(&local);
             let key_notice = notice.clone();
             let keyboard = Listener::bind(navigation.clone().into(), "keydown", move |event| {
                 let Some(event) = event.dyn_ref::<KeyboardEvent>() else {
                     return;
                 };
-                let mut state = state.borrow_mut();
-                if !state.active {
+                let mut presentation = presentation.borrow_mut();
+                if !presentation.active {
                     return;
                 }
-                let index = state.tab.index();
-                let next = match event.key().as_str() {
-                    "ArrowRight" => (index + 1) % 5,
-                    "ArrowLeft" => (index + 4) % 5,
+                let active_tab_index = presentation.tab.index();
+                let next_tab_index = match event.key().as_str() {
+                    "ArrowRight" => (active_tab_index + 1) % 5,
+                    "ArrowLeft" => (active_tab_index + 4) % 5,
                     "Home" => 0,
                     "End" => 4,
                     _ => return,
                 };
                 event.prevent_default();
-                if let Some(tab) = SheetTab::ALL.get(next) {
-                    state.tab = *tab;
+                if let Some(tab) = SheetTab::ALL.get(next_tab_index) {
+                    presentation.tab = *tab;
                 }
-                let result = state.apply().and_then(|()| {
-                    if let Some(button) = state.buttons.get(next) {
+                let navigation_result = presentation.apply().and_then(|()| {
+                    if let Some(button) = presentation.buttons.get(next_tab_index) {
                         button.focus()?;
                     }
                     Ok(())
                 });
-                if result.is_err() {
+                if navigation_result.is_err() {
                     literal(&key_notice, Some("Sheet navigation failed"));
                 }
             })?;
             let fallback = art_fallback.clone();
             let art_node = art.clone();
-            let state = Rc::clone(&local);
+            let presentation = Rc::clone(&local);
             let art_error = Listener::bind(art.into(), "error", move |_| {
-                if state.borrow().active {
+                if presentation.borrow().active {
                     // The flat ink-and-gold layout is usable without optional artwork.
                     scrub(&art_node);
-                    if hidden(&art_node, true).is_err() || hidden(&fallback, false).is_err() {
+                    if set_hidden(&art_node, true).is_err() || set_hidden(&fallback, false).is_err()
+                    {
                         literal(&fallback, Some("Optional artwork unavailable"));
                     }
                 }
