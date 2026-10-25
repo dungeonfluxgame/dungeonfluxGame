@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use df_types::{RunId, SessionId};
 
-const MAX_REFUSALS: usize = 4096;
-const MAX_RECORD_BYTES: usize = 1024 * 1024;
+const MAXIMUM_REFUSALS: usize = 4096;
+const MAXIMUM_RECORD_BYTES: usize = 1024 * 1024;
 
 /// The authoritative caller's fixed session/run scope. IDs do not confer access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +76,7 @@ impl<ParticipantId: Copy + Eq, OpportunityId: Copy + Eq>
         max_refusals: usize,
         cooldown: Duration,
     ) -> Result<Self, RefusalError> {
-        if max_refusals == 0 || max_refusals > MAX_REFUSALS {
+        if max_refusals == 0 || max_refusals > MAXIMUM_REFUSALS {
             return Err(RefusalError::InvalidCapacity);
         }
         if cooldown.is_zero() {
@@ -85,7 +85,7 @@ impl<ParticipantId: Copy + Eq, OpportunityId: Copy + Eq>
         let record_bytes = size_of::<Refusal<ParticipantId, OpportunityId>>()
             .checked_mul(max_refusals)
             .ok_or(RefusalError::RecordBudget)?;
-        if record_bytes > MAX_RECORD_BYTES {
+        if record_bytes > MAXIMUM_RECORD_BYTES {
             return Err(RefusalError::RecordBudget);
         }
         let mut refusals = Vec::new();
@@ -214,7 +214,7 @@ mod tests {
                 .unwrap();
             let allocated_record_bytes =
                 memory.refusals.capacity() * size_of::<Refusal<[u8; 16385], u16>>();
-            assert!(allocated_record_bytes <= MAX_RECORD_BYTES);
+            assert!(allocated_record_bytes <= MAXIMUM_RECORD_BYTES);
             assert_eq!(memory.refusals.len(), usize::from(opportunity) + 1);
         }
     }

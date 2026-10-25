@@ -7,8 +7,8 @@ use df_model::checkpoint::{
 };
 use df_types::{MemberId, OperationId, RunId, SessionId, SessionRevision};
 
-const MAX_EVENTS: usize = 4096;
-const MAX_RECORD_BYTES: usize = 1024 * 1024;
+const MAXIMUM_EVENTS: usize = 4096;
+const MAXIMUM_RECORD_BYTES: usize = 1024 * 1024;
 
 /// A permitted, committed interaction supplied by the authoritative caller.
 ///
@@ -90,13 +90,14 @@ impl<ParticipantId: Copy + Eq, EventId: Copy + Eq> ActivityWindow<ParticipantId,
         run: RunId,
         limits: ActivityWindowLimits,
     ) -> Result<Self, WindowError> {
-        if limits.max_events == 0 || limits.max_events > MAX_EVENTS || limits.horizon.is_zero() {
+        if limits.max_events == 0 || limits.max_events > MAXIMUM_EVENTS || limits.horizon.is_zero()
+        {
             return Err(WindowError::InvalidLimits);
         }
         let record_bytes = size_of::<AcceptedActivity<ParticipantId, EventId>>()
             .checked_mul(limits.max_events)
             .ok_or(WindowError::RecordBudget)?;
-        if record_bytes > MAX_RECORD_BYTES {
+        if record_bytes > MAXIMUM_RECORD_BYTES {
             return Err(WindowError::RecordBudget);
         }
         let mut events = Vec::new();

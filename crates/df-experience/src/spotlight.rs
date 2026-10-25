@@ -9,8 +9,8 @@ use df_types::MemberId;
 use crate::cooldown::{RefusalEligibility, RefusalError, RefusalMemory, RefusalScope};
 use crate::window::{ActivityWindow, WindowError};
 
-const MAX_PARTICIPANTS: usize = 256;
-const MAX_CANDIDATES: usize = 1024;
+const MAXIMUM_PARTICIPANTS: usize = 256;
+const MAXIMUM_CANDIDATES: usize = 1024;
 
 /// Current caller-verified participation permission, not a persisted preference schema.
 /// The owner supplies the latest explicit opt-in, hook disclosure generation and presence.
@@ -120,9 +120,9 @@ pub fn recommend<EventId: Copy + Eq>(
 ) -> Result<SpotlightOutcome, SpotlightError> {
     let limits = request.limits;
     if limits.max_participants == 0
-        || limits.max_participants > MAX_PARTICIPANTS
+        || limits.max_participants > MAXIMUM_PARTICIPANTS
         || limits.max_candidates == 0
-        || limits.max_candidates > MAX_CANDIDATES
+        || limits.max_candidates > MAXIMUM_CANDIDATES
         || limits.max_recommendations == 0
         || limits.max_recommendations > limits.max_participants
     {
