@@ -92,41 +92,41 @@ pub fn stage_environmental_delta<'a>(
         return Err(EnvironmentalDeltaError::InvalidLimits);
     }
     let state = checkpoint.state();
-    let mut records = 0usize;
-    let mut count = |length: usize| -> Result<(), EnvironmentalDeltaError> {
-        records = records
+    let mut input_record_count = 0usize;
+    let mut count_input_records = |length: usize| -> Result<(), EnvironmentalDeltaError> {
+        input_record_count = input_record_count
             .checked_add(length)
             .filter(|total| *total <= limits.input_records)
             .ok_or(EnvironmentalDeltaError::InputCapacity)?;
         Ok(())
     };
-    count(state.entities.len())?;
-    count(state.facts.len())?;
-    count(state.decisions.len())?;
-    count(state.continuity.environment.len())?;
-    count(state.continuity.scenes.len())?;
-    count(changes.len())?;
+    count_input_records(state.entities.len())?;
+    count_input_records(state.facts.len())?;
+    count_input_records(state.decisions.len())?;
+    count_input_records(state.continuity.environment.len())?;
+    count_input_records(state.continuity.scenes.len())?;
+    count_input_records(changes.len())?;
     if changes.len() > limits.changes {
         return Err(EnvironmentalDeltaError::InputCapacity);
     }
     for fact in &state.facts {
         if let FactValue::ContentEvent { subjects, .. } = &fact.value {
-            count(subjects.len())?;
+            count_input_records(subjects.len())?;
         }
     }
     for decision in &state.decisions {
-        count(decision.facts.len())?;
+        count_input_records(decision.facts.len())?;
     }
     for environment in &state.continuity.environment {
-        count(environment.change_facts.len())?;
+        count_input_records(environment.change_facts.len())?;
     }
     for scene in &state.continuity.scenes {
-        count(scene.source_facts.len())?;
+        count_input_records(scene.source_facts.len())?;
     }
     for change in changes {
-        count(change.expected.change_facts.len())?;
-        count(change.replacement.change_facts.len())?;
-        count(change.geometry.source_facts.len())?;
+        count_input_records(change.expected.change_facts.len())?;
+        count_input_records(change.replacement.change_facts.len())?;
+        count_input_records(change.geometry.source_facts.len())?;
     }
     checkpoint
         .validate_resume(expected_basis, admitted_pins)
@@ -240,11 +240,11 @@ pub fn stage_environmental_delta<'a>(
     replacements
         .try_reserve_exact(changed_count)
         .map_err(|_| EnvironmentalDeltaError::AllocationCapacity)?;
-    let mut bytes = size_of::<EnvironmentalState>()
+    let mut output_bytes = size_of::<EnvironmentalState>()
         .checked_mul(replacements.capacity())
-        .and_then(|bytes| bytes.checked_add(size_of::<EnvironmentalDelta<'_>>()))
+        .and_then(|output_bytes| output_bytes.checked_add(size_of::<EnvironmentalDelta<'_>>()))
         .ok_or(EnvironmentalDeltaError::OutputCapacity)?;
-    if bytes > limits.output_bytes {
+    if output_bytes > limits.output_bytes {
         return Err(EnvironmentalDeltaError::OutputCapacity);
     }
     for change in changes
@@ -262,7 +262,7 @@ pub fn stage_environmental_delta<'a>(
             .checked_mul(replacement.change_facts.len())
             .and_then(|bytes| bytes.checked_add(reference_bytes))
             .ok_or(EnvironmentalDeltaError::OutputCapacity)?;
-        if fact_bytes > limits.output_bytes - bytes {
+        if fact_bytes > limits.output_bytes - output_bytes {
             return Err(EnvironmentalDeltaError::OutputCapacity);
         }
         let definition = replacement.definition.clone();
@@ -270,16 +270,16 @@ pub fn stage_environmental_delta<'a>(
         change_facts
             .try_reserve_exact(replacement.change_facts.len())
             .map_err(|_| EnvironmentalDeltaError::AllocationCapacity)?;
-        let retained = size_of::<FactId>()
+        let retained_bytes = size_of::<FactId>()
             .checked_mul(change_facts.capacity())
             .and_then(|bytes| bytes.checked_add(definition.package.retained_heap_bytes()))
             .and_then(|bytes| bytes.checked_add(definition.entry.retained_heap_bytes()))
             .ok_or(EnvironmentalDeltaError::OutputCapacity)?;
-        if retained > limits.output_bytes - bytes {
+        if retained_bytes > limits.output_bytes - output_bytes {
             return Err(EnvironmentalDeltaError::OutputCapacity);
         }
         change_facts.extend_from_slice(&replacement.change_facts);
-        bytes += retained;
+        output_bytes += retained_bytes;
         replacements.push(EnvironmentalState {
             location: replacement.location,
             definition,
@@ -291,6 +291,6 @@ pub fn stage_environmental_delta<'a>(
         basis: checkpoint.basis(),
         pins: checkpoint.pins(),
         replacements,
-        accounted_output_bytes: bytes,
+        accounted_output_bytes: output_bytes,
     })
 }

@@ -90,33 +90,37 @@ pub fn advance_presentation(
     {
         return Err(PresentationError::InvalidState);
     }
-    let elapsed = now_millis
+    let elapsed_ms = now_millis
         .checked_sub(current.presentation_ticks)
         .ok_or(PresentationError::BackwardsTime)?;
     let mut state = current.clone();
-    let retain = |half_life: u32| 2_f64.powf(-(elapsed as f64) / f64::from(half_life));
-    let inertia_retain = retain(policy.inertia_half_life_millis);
+    let retained_share =
+        |half_life_ms: u32| 2_f64.powf(-(elapsed_ms as f64) / f64::from(half_life_ms));
+    let inertia_retained_share = retained_share(policy.inertia_half_life_millis);
     // Integrate the decaying impulse with the exponential approach to the base. This avoids
     // changing the curve when extra same-phase views sample between committed events.
-    let decay_rate = std::f64::consts::LN_2 / f64::from(policy.decay_half_life_millis);
-    let inertia_rate = std::f64::consts::LN_2 / f64::from(policy.inertia_half_life_millis);
-    let decay_retain = retain(policy.decay_half_life_millis);
+    let decay_rate_per_ms = std::f64::consts::LN_2 / f64::from(policy.decay_half_life_millis);
+    let inertia_rate_per_ms = std::f64::consts::LN_2 / f64::from(policy.inertia_half_life_millis);
+    let decay_retained_share = retained_share(policy.decay_half_life_millis);
     let impulse_curve = if policy.decay_half_life_millis == policy.inertia_half_life_millis {
-        decay_rate * elapsed as f64 * decay_retain
+        decay_rate_per_ms * elapsed_ms as f64 * decay_retained_share
     } else {
-        decay_rate * (inertia_retain - decay_retain) / (decay_rate - inertia_rate)
+        decay_rate_per_ms * (inertia_retained_share - decay_retained_share)
+            / (decay_rate_per_ms - inertia_rate_per_ms)
     };
     state.intensity = (f64::from(previous_target)
-        + (current.intensity as f64 - f64::from(previous_target)) * decay_retain
+        + (current.intensity as f64 - f64::from(previous_target)) * decay_retained_share
         + current.inertia as f64 * impulse_curve)
         .round()
         .clamp(0.0, 1000.0) as i64;
-    state.inertia = (current.inertia as f64 * inertia_retain).round() as i64;
-    let fatigue =
-        (current.fatigue[0].1 as f64 * retain(policy.fatigue_half_life_millis)).round() as u64;
-    let attenuation = 1000 - fatigue * u64::from(policy.fatigue_attenuation_permille) / 1000;
-    let impulse = if input.impulse_permille > 0 {
-        i64::from(input.impulse_permille) * attenuation as i64 / 1000
+    state.inertia = (current.inertia as f64 * inertia_retained_share).round() as i64;
+    let fatigue_permille = (current.fatigue[0].1 as f64
+        * retained_share(policy.fatigue_half_life_millis))
+    .round() as u64;
+    let impulse_attenuation_permille =
+        1000 - fatigue_permille * u64::from(policy.fatigue_attenuation_permille) / 1000;
+    let impulse_permille = if input.impulse_permille > 0 {
+        i64::from(input.impulse_permille) * impulse_attenuation_permille as i64 / 1000
     } else {
         i64::from(input.impulse_permille)
     };
@@ -124,19 +128,19 @@ pub fn advance_presentation(
         state.inertia = state.inertia.min(0);
     }
     // Release cannot undershoot the newly selected calm/rest base and build back upward.
-    let floor = if input.release {
+    let minimum_intensity_permille = if input.release {
         i64::from(input.target_permille)
     } else {
         0
     };
-    state.intensity = (state.intensity + impulse).clamp(floor, 1000);
-    state.inertia = (state.inertia + impulse).clamp(-1000, 1000);
-    state.fatigue[0].1 = if impulse > 0 {
-        fatigue
+    state.intensity = (state.intensity + impulse_permille).clamp(minimum_intensity_permille, 1000);
+    state.inertia = (state.inertia + impulse_permille).clamp(-1000, 1000);
+    state.fatigue[0].1 = if impulse_permille > 0 {
+        fatigue_permille
             .saturating_add(u64::from(policy.fatigue_charge_permille))
             .min(1000)
     } else {
-        fatigue
+        fatigue_permille
     };
     state.presentation_ticks = now_millis;
     let phase = classify_phase(
@@ -150,7 +154,7 @@ pub fn advance_presentation(
 
 fn classify_phase(
     intensity: u16,
-    previous: TempoPhase,
+    previous_phase: TempoPhase,
     release: bool,
     policy: PresentationPolicy,
 ) -> TempoPhase {
@@ -163,18 +167,18 @@ fn classify_phase(
         TempoPhase::Anticipation,
         TempoPhase::Peak,
     ];
-    let mut level = policy
+    let mut intensity_level = policy
         .thresholds
         .iter()
         .filter(|threshold| intensity >= **threshold)
         .count();
-    if let Some(prior) = phases.iter().position(|phase| *phase == previous)
-        && prior > level
+    if let Some(prior) = phases.iter().position(|phase| *phase == previous_phase)
+        && prior > intensity_level
         && intensity.saturating_add(policy.hysteresis_permille) >= policy.thresholds[prior - 1]
     {
-        level = prior;
+        intensity_level = prior;
     }
-    phases[level]
+    phases[intensity_level]
 }
 
 #[cfg(test)]

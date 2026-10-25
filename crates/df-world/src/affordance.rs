@@ -58,8 +58,8 @@ pub fn lookup_affordances<'a>(
         .entities
         .len()
         .checked_add(source_admitted.len())
-        .and_then(|n| n.checked_add(inventory.content.len()))
-        .and_then(|n| n.checked_add(inventory.rules.len()))
+        .and_then(|record_count| record_count.checked_add(inventory.content.len()))
+        .and_then(|record_count| record_count.checked_add(inventory.rules.len()))
         .ok_or(AffordanceLookupError::Capacity)?;
     if limits.input_records == 0
         || limits.candidates == 0
@@ -82,11 +82,11 @@ pub fn lookup_affordances<'a>(
         return Err(AffordanceLookupError::UnknownAction);
     }
     // Admit the complete output and every supplied row before cloning any owned candidate.
-    let mut bytes = size_of::<AffordanceSet<'_>>()
+    let mut output_bytes = size_of::<AffordanceSet<'_>>()
         .checked_add(query.action.package.as_str().len())
-        .and_then(|bytes| bytes.checked_add(query.action.entry.as_str().len()))
+        .and_then(|output_bytes| output_bytes.checked_add(query.action.entry.as_str().len()))
         .ok_or(AffordanceLookupError::Capacity)?;
-    if bytes > limits.output_bytes {
+    if output_bytes > limits.output_bytes {
         return Err(AffordanceLookupError::Capacity);
     }
     let mut count = 0usize;
@@ -110,13 +110,13 @@ pub fn lookup_affordances<'a>(
             return Err(AffordanceLookupError::UnknownSource);
         }
         if let Some(target) = &record.target {
-            let actual = current
+            let current_entity = current
                 .state()
                 .entities
                 .iter()
                 .find(|entity| entity.id == target.id)
                 .ok_or(AffordanceLookupError::UnknownTarget)?;
-            if actual != target {
+            if current_entity != target {
                 return Err(AffordanceLookupError::StaleTarget);
             }
             if !inventory.content.contains(&target.definition) {
@@ -126,13 +126,13 @@ pub fn lookup_affordances<'a>(
         if record.actor != query.actor || record.action != *query.action {
             continue;
         }
-        if let Some(previous) = source_admitted.iter().take(index).find(|previous| {
+        if let Some(previous_match) = source_admitted.iter().take(index).find(|previous| {
             previous.actor == query.actor
                 && previous.action == *query.action
                 && previous.target.as_ref().map(|target| target.id)
                     == record.target.as_ref().map(|target| target.id)
         }) {
-            if previous.source != record.source {
+            if previous_match.source != record.source {
                 return Err(AffordanceLookupError::AmbiguousSource);
             }
             continue;
@@ -144,14 +144,14 @@ pub fn lookup_affordances<'a>(
         }) {
             return Err(AffordanceLookupError::ConflictingTargetPolicy);
         }
-        bytes = bytes
+        output_bytes = output_bytes
             .checked_add(
                 record
                     .retained_bytes()
                     .ok_or(AffordanceLookupError::Capacity)?,
             )
             .ok_or(AffordanceLookupError::Capacity)?;
-        if bytes > limits.output_bytes || count >= limits.candidates {
+        if output_bytes > limits.output_bytes || count >= limits.candidates {
             return Err(AffordanceLookupError::Capacity);
         }
         count += 1;
@@ -172,7 +172,12 @@ pub fn lookup_affordances<'a>(
             matches.push(record.clone());
         }
     }
-    matches.sort_unstable_by_key(|entry| entry.target.as_ref().map(|target| *target.id.as_bytes()));
+    matches.sort_unstable_by_key(|affordance| {
+        affordance
+            .target
+            .as_ref()
+            .map(|target| *target.id.as_bytes())
+    });
     Ok(AffordanceSet {
         basis: current.basis(),
         pins: current.pins(),

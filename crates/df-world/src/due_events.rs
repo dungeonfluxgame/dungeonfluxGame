@@ -6,7 +6,7 @@ use df_model::checkpoint::{
     LogicalTime, ScheduledEvent,
 };
 
-const MAX_QUEUE_EVENTS: usize = 4096;
+const MAXIMUM_QUEUE_EVENTS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DueSelectionLimits {
@@ -80,7 +80,7 @@ pub fn select_due_events<'a>(
     limits: DueSelectionLimits,
 ) -> Result<DueSelection<'a>, DueSelectionError> {
     if limits.queue_events == 0
-        || limits.queue_events > MAX_QUEUE_EVENTS
+        || limits.queue_events > MAXIMUM_QUEUE_EVENTS
         || limits.selected_events == 0
         || limits.selected_events > limits.queue_events
         || limits.output_bytes == 0
@@ -97,15 +97,15 @@ pub fn select_due_events<'a>(
     checkpoint
         .validate_resume(request.expected_basis, admitted_pins)
         .map_err(DueSelectionError::Checkpoint)?;
-    let current = state.logical_time;
-    if current.ticks_per_second == 0
-        || request.target_time.ticks_per_second != current.ticks_per_second
-        || request.target_time.ticks < current.ticks
-        || (request.paused && request.target_time != current)
+    let current_time = state.logical_time;
+    if current_time.ticks_per_second == 0
+        || request.target_time.ticks_per_second != current_time.ticks_per_second
+        || request.target_time.ticks < current_time.ticks
+        || (request.paused && request.target_time != current_time)
         || state
             .schedules
             .iter()
-            .any(|event| event.due.ticks_per_second != current.ticks_per_second)
+            .any(|event| event.due.ticks_per_second != current_time.ticks_per_second)
     {
         return Err(DueSelectionError::InvalidTime);
     }
@@ -120,20 +120,20 @@ pub fn select_due_events<'a>(
         .map_err(|_| DueSelectionError::AllocationCapacity)?;
     ordered.extend(state.schedules.iter());
     ordered.sort_unstable_by_key(|event| (event.due.ticks, event.id));
-    let previous = if let Some(cursor) = &state.continuity.catch_up {
+    let previous_processed_key = if let Some(cursor) = &state.continuity.catch_up {
         if cursor.policy != *request.policy
-            || cursor.time != current
+            || cursor.time != current_time
             || cursor.pending_events.len() > limits.queue_events
         {
             return Err(DueSelectionError::StaleCursor);
         }
-        let key = match cursor.last_processed {
+        let processed_key = match cursor.last_processed {
             Some(id) => {
                 let event = ordered
                     .iter()
                     .find(|event| event.id == id)
                     .ok_or(DueSelectionError::StaleCursor)?;
-                if event.due.ticks > current.ticks {
+                if event.due.ticks > current_time.ticks {
                     return Err(DueSelectionError::StaleCursor);
                 }
                 Some((event.due.ticks, event.id))
@@ -143,20 +143,22 @@ pub fn select_due_events<'a>(
         let remaining = ordered
             .iter()
             .filter(|event| {
-                event.due.ticks <= current.ticks
-                    && key.is_none_or(|key| (event.due.ticks, event.id) > key)
+                event.due.ticks <= current_time.ticks
+                    && processed_key
+                        .is_none_or(|processed_key| (event.due.ticks, event.id) > processed_key)
             })
             .map(|event| event.id);
         if !remaining.eq(cursor.pending_events.iter().copied()) {
             return Err(DueSelectionError::StaleCursor);
         }
-        key
+        processed_key
     } else {
         None
     };
-    let due = |event: &&ScheduledEvent| {
+    let is_due = |event: &&ScheduledEvent| {
         event.due.ticks <= request.target_time.ticks
-            && previous.is_none_or(|key| (event.due.ticks, event.id) > key)
+            && previous_processed_key
+                .is_none_or(|processed_key| (event.due.ticks, event.id) > processed_key)
     };
     let mut events = Vec::new();
     events
@@ -167,45 +169,48 @@ pub fn select_due_events<'a>(
         .try_reserve_exact(state.schedules.len())
         .map_err(|_| DueSelectionError::AllocationCapacity)?;
     let policy = request.policy.clone();
-    let mut bytes = size_of::<DueSelection<'_>>()
+    let mut output_bytes = size_of::<DueSelection<'_>>()
         .checked_add(reference_bytes(&policy)?)
-        .and_then(|bytes| {
+        .and_then(|output_bytes| {
             size_of::<ScheduledEvent>()
                 .checked_mul(events.capacity())
-                .and_then(|records| bytes.checked_add(records))
+                .and_then(|records| output_bytes.checked_add(records))
         })
-        .and_then(|bytes| {
+        .and_then(|output_bytes| {
             size_of::<df_model::checkpoint::RecordId>()
                 .checked_mul(pending_events.capacity())
-                .and_then(|records| bytes.checked_add(records))
+                .and_then(|records| output_bytes.checked_add(records))
         })
         .ok_or(DueSelectionError::OutputCapacity)?;
-    if bytes > limits.output_bytes {
+    if output_bytes > limits.output_bytes {
         return Err(DueSelectionError::OutputCapacity);
     }
     // Individually admitted records must fit an empty selected batch with its cursor.
     for event in &ordered {
-        if reference_bytes(&event.definition)? > limits.output_bytes - bytes {
+        if reference_bytes(&event.definition)? > limits.output_bytes - output_bytes {
             return Err(DueSelectionError::OutputCapacity);
         }
     }
-    let mut last_processed = previous.map(|key| key.1);
-    let mut stopped = request.paused;
-    for event in ordered.iter().copied().filter(due) {
-        let cost = reference_bytes(&event.definition)?;
-        if stopped || events.len() == limits.selected_events || cost > limits.output_bytes - bytes {
-            stopped = true;
+    let mut last_processed_id = previous_processed_key.map(|processed_key| processed_key.1);
+    let mut selection_is_full = request.paused;
+    for event in ordered.iter().copied().filter(is_due) {
+        let event_reference_bytes = reference_bytes(&event.definition)?;
+        if selection_is_full
+            || events.len() == limits.selected_events
+            || event_reference_bytes > limits.output_bytes - output_bytes
+        {
+            selection_is_full = true;
             pending_events.push(event.id);
             continue;
         }
-        let selected = event.clone();
-        let retained = reference_bytes(&selected.definition)?;
-        if retained > limits.output_bytes - bytes {
+        let selected_event = event.clone();
+        let retained_bytes = reference_bytes(&selected_event.definition)?;
+        if retained_bytes > limits.output_bytes - output_bytes {
             return Err(DueSelectionError::OutputCapacity);
         }
-        bytes += retained;
-        last_processed = Some(event.id);
-        events.push(selected);
+        output_bytes += retained_bytes;
+        last_processed_id = Some(event.id);
+        events.push(selected_event);
     }
     Ok(DueSelection {
         basis: checkpoint.basis(),
@@ -213,11 +218,11 @@ pub fn select_due_events<'a>(
         proposed_time: request.target_time,
         events,
         cursor: CatchUpCursor {
-            last_processed,
+            last_processed: last_processed_id,
             pending_events,
             policy,
             time: request.target_time,
         },
-        accounted_output_bytes: bytes,
+        accounted_output_bytes: output_bytes,
     })
 }
