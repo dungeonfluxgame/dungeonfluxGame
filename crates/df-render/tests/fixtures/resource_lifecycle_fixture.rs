@@ -229,7 +229,7 @@ mod browser {
                             && pixel(&fixture.canvas)? == [16, 32, 48, 255] && fixture.token.is_connected(),
                             "selected actual image baseline differs")
                     })?;
-                    let work = owner.borrow().work_bytes();
+                    let work_bytes = owner.borrow().work_bytes();
                     owner.borrow_mut().release(&unselected).map_err(error)?;
                     // No fixture refresh, present or scene update: canonical invalidation
                     // itself must preserve the distinct current selected illustration.
@@ -243,9 +243,13 @@ mod browser {
                             && fixture.token.is_connected(),
                             "unselected canonical invalidation replaced or cleared selected pixels/nodes")?;
                         let lifecycle = owner.borrow();
-                        require(work == 0 && lifecycle.work_bytes() == work && lifecycle.decoded_bytes() == 4
-                            && lifecycle.surface_bytes() == 8 && lifecycle.lease_count() == 1
-                            && lifecycle.resident_bytes() == PNG.len(),
+                        require(
+                            work_bytes == 0
+                                && lifecycle.work_bytes() == work_bytes
+                                && lifecycle.decoded_bytes() == 4
+                                && lifecycle.surface_bytes() == 8
+                                && lifecycle.lease_count() == 1
+                                && lifecycle.resident_bytes() == PNG.len(),
                             "unselected invalidation changed selected work/surface or retained unrelated lease")
                     })?;
                 }
@@ -264,10 +268,13 @@ mod browser {
                     install(&mut owner.borrow_mut(), &key);
                     let mut decode = BrowserImageDecode::start_owned(owner.clone(), &key, decode_limits(), 10_000)
                         .map_err(error)?;
-                    let work = owner.borrow().work_bytes();
-                    require(work != 0, "actual running codec not admitted")?;
+                    let work_bytes = owner.borrow().work_bytes();
+                    require(work_bytes != 0, "actual running codec not admitted")?;
                     owner.borrow_mut().apply_current(scope(), revision(1, 1), &[]).map_err(error)?;
-                    require(owner.borrow().work_bytes() == work, "abort request freed work before terminal codec")?;
+                    require(
+                        owner.borrow().work_bytes() == work_bytes,
+                        "abort request freed work before terminal codec",
+                    )?;
                     require(decode.wait().await.is_err(), "revoked actual codec published")?;
                     require(owner.borrow().work_bytes() == 0 && owner.borrow().decoded_bytes() == 0,
                         "terminal revoked codec retained work or pixels")?;
@@ -278,11 +285,11 @@ mod browser {
                     install(&mut owner.borrow_mut(), &key);
                     let mut decode = BrowserImageDecode::start_owned(owner.clone(), &key, decode_limits(), 10_000)
                         .map_err(error)?;
-                    let work = owner.borrow().work_bytes();
+                    let work_bytes = owner.borrow().work_bytes();
                     let mut replacement = scope();
                     replacement.binding = df_types::ClientBindingId::from_bytes(&[9; 16]).map_err(error)?;
                     owner.borrow_mut().replace_scope(replacement).map_err(error)?;
-                    require(work != 0 && owner.borrow().work_bytes() == work,
+                    require(work_bytes != 0 && owner.borrow().work_bytes() == work_bytes,
                         "scope replacement released still-running codec")?;
                     FIXTURE.with(|slot| {
                         let slot = slot.borrow();
