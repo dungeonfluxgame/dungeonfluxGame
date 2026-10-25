@@ -1,0 +1,52 @@
+# Known df-tools test failures and crashes for development/df-tools-test-matrix.sh.
+#
+# Format, one entry per line: KIND | TEST | OWNER | PANIC_TEXT | NOTE   (see the script header)
+#   crash  a test that crashes or hangs at the matrix stack (32 MiB). Skipped in every shard so it
+#          cannot abort one; PANIC_TEXT is `-`. --strict-known runs it alone and fails if it no
+#          longer crashes. There is no crash entry today: no test crashes at the matrix stack.
+#   fail   a test that fails without crashing. It still runs, and it is tolerated only while its
+#          panic summary (`path:line:col: message ~ left: x ~ right: y`, the `panicked at`
+#          location, its message and the assertion lines after it) contains PANIC_TEXT. Another
+#          message, value or line is reported as DIFFERENT_CAUSE.
+# TEST is a full test name; module prefixes are rejected because they hide whole modules.
+#
+# Rules: every entry names the owner who will fix it. An entry is removed in the commit that fixes
+# the test (the script reports an entry that now passes as STALE; --strict-known makes that fail
+# CI). Nothing is added to hide a new failure: a new entry needs the coordinator's approval, an
+# owner and the cause. Owners are the area owners in artifacts/tmp/agents/COORDINATION.md. A line
+# number in PANIC_TEXT moves when the test file is edited; the owner who edits the file updates the
+# entry in the same commit (the script's DIFFERENT_CAUSE output prints what was expected).
+#
+# Seeded 2026-10-24 from the baseline failures (artifacts/tmp/agents/baseline-tests/failed.txt),
+# keeping only entries whose cause is recorded. Each PANIC_TEXT is the panic summary of a failing
+# run of the 2026-10-24 23:00 working-tree executable (the first entry: N's 21:44 executable),
+# from the file name on, cut at the end of the assertion values where the message is a long prompt.
+# 27 baseline entries were left out on purpose: in that executable they fail with `InvalidCandidate`
+# raised by the shared test harness (beat_script_variety_tests.rs:265, beat_script_runtime.rs:2357),
+# a cross-cutting regression with no owner and no recorded baseline cause. Listing them would
+# tolerate the regression. They show as unexpected failures until it is fixed; an owner whose test
+# still fails for its own cause then adds an entry with that cause.
+
+# At the default 2 MiB test-thread stack this test overflows (exit 127, aborting its whole shard);
+# at the matrix stack it fails this assertion. The probe reports the default-stack crash.
+fail | gameplay::dialogue::navigation_tests::n1_spoken_departure_commits_the_exit_move_and_shows_arrival | N | dialogue_navigation_tests.rs:284:9: assertion `left == right` failed ~ left: "place-mareks-cloth-shop" ~ right: "place-market-street" | the departure does not move the party
+
+fail | gameplay::imagery::tests::a_different_hero_identity_changes_the_drawn_species_presentation_and_canonical_gear | C | imagery_tests.rs:462:5: assertion failed: first_prompt.as_str().contains("canonical held gear: a shortbow") | prompt wording assertion
+fail | gameplay::imagery::tests::every_image_prompt_uses_the_shared_film_look_and_names_no_other_medium | C | imagery_tests.rs:322:13: missing "practical light" in a still frame from a live-action fantasy tv drama | prompt wording assertion
+fail | gameplay::imagery::tests::hero_portrait_cutout_and_expression_prompts_use_only_the_checked_identity_and_held_gear | C | imagery_tests.rs:426:13: missing "canonical held gear: a longbow" in A still frame from a live-action fantasy TV drama | prompt wording assertion
+
+fail | gameplay::living_scenes::canonical::tests::same_place_authored_layouts_coexist_and_select_the_exact_current_room | W2 | canonical.rs:1240:9: assertion `left == right` failed ~ left: 2 ~ right: 3 | layout count assertion
+fail | gameplay::living_scenes::plates::tests::a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_it | W2 | plates_tests.rs:3804:5: assertion `left == right` failed: the neutral face shows the first plate again ~ left: "/gameplay/imagery/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" | plate selection assertion
+fail | gameplay::living_scenes::plates::tests::directed_plate_uses_the_same_references_updates_views_and_keeps_the_base_cached | W2 | plates_tests.rs:2283:9: face refresh | plate refresh assertion
+
+fail | gameplay::npc_dossier_tests::a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_when_restrained | N | npc_dossier_tests.rs:1706:17: assertion `left == right` failed: one repair attempt, no rewording ~ left: 3 ~ right: 2 | repair attempt count
+fail | gameplay::npc_dossier_tests::a_local_question_backfills_before_speech_and_the_same_question_gets_it_from_canon | N | npc_dossier_tests.rs:3876:5: You are an experienced, warm Dungeon Master voicing part of a tabletop fantasy adventure. | REF-069 leave-blank replaces the prepared answer
+fail | gameplay::npc_dossier_tests::a_reply_that_reveals_a_secret_is_refused_and_the_prepared_answer_is_given_instead | N | npc_dossier_tests.rs:1130:5: I'm not sure about that. | REF-069 leave-blank replaces the prepared answer
+fail | gameplay::npc_dossier_tests::a_reply_that_reveals_a_secret_is_refused_the_same_way_when_restrained | N | npc_dossier_tests.rs:1130:5: I'm not sure about that. | REF-069 leave-blank replaces the prepared answer
+fail | gameplay::npc_dossier_tests::an_instruction_in_the_players_line_is_refused_the_same_way_when_restrained | N | npc_dossier_tests.rs:1219:5: assertion `left == right` failed ~ left: 3 ~ right: 2 | repair attempt count
+fail | gameplay::npc_dossier_tests::an_instruction_in_the_players_line_never_changes_the_prompt_and_obeying_it_is_refused | N | npc_dossier_tests.rs:1219:5: assertion `left == right` failed ~ left: 3 ~ right: 2 | repair attempt count
+fail | gameplay::npc_dossier_tests::authored_silence_is_terminal_and_clears_thinking_without_caption_or_speech | N | npc_dossier_tests.rs:3499:5: assertion `left == right` failed ~ left: Spoken ~ right: Unavailable | authored silence is spoken
+fail | gameplay::npc_dossier_tests::recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_page_184 | N | npc_dossier_tests.rs:2632:17: assertion `left == right` failed: "What is in the ledger?" ~ left: "Ledger is a ledger of an old debt." ~ right: "ledger is a ledger of an old debt." | capitalization of the prepared answer
+fail | gameplay::npc_dossier_tests::with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_topic_and_attitude | N | npc_dossier_tests.rs:1254:13: Tell me about your past.: I'm not sure about that. | REF-069 leave-blank replaces the prepared answer
+
+fail | gameplay::resource_adapters::tests::a_call_kind_writes_the_hub_line_format | C | resource_adapters.rs:748:9: RESOURCE ready kind=text key=94062e91fdff61f103f8d99d0d6b5d58 subject=text:probe ms=12 handle=handle-1 error= | hub line format assertion
