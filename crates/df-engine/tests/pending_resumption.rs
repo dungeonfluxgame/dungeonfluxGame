@@ -12,7 +12,7 @@ use pending_fixtures::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
-const BYTES: usize = 1024 * 1024;
+const CHECKPOINT_BYTES: usize = 1024 * 1024;
 fn handler(current: &Checkpoint, input: RulesCommandInput<'_>) -> SuppliedHandler {
     SuppliedHandler {
         candidate: supplied_candidate(current, input),
@@ -69,7 +69,15 @@ fn all_canonical_pending_kinds_use_exact_registered_handler_once() {
             supplied_draws: &supplied,
         };
         let handler = handler(&current, envelope);
-        let result = invoke(envelope, &current, &current, &handler, fence(), BYTES).unwrap();
+        let result = invoke(
+            envelope,
+            &current,
+            &current,
+            &handler,
+            fence(),
+            CHECKPOINT_BYTES,
+        )
+        .unwrap();
         assert_eq!(result, handler.candidate);
         assert_eq!(handler.calls.get(), 1);
         assert!(std::ptr::eq(
@@ -104,7 +112,7 @@ fn all_canonical_pending_kinds_use_exact_registered_handler_once() {
                     &current,
                     &handler,
                     fence(),
-                    BYTES
+                    CHECKPOINT_BYTES
                 ),
                 Err(ResumeError::Command(CommandRejection::Invocation(
                     InvocationError::RollInputMismatch
@@ -122,7 +130,7 @@ fn all_canonical_pending_kinds_use_exact_registered_handler_once() {
                     &current,
                     &handler,
                     fence(),
-                    BYTES
+                    CHECKPOINT_BYTES
                 ),
                 Err(ResumeError::Command(CommandRejection::Invocation(
                     InvocationError::DrawOperationMismatch
@@ -140,7 +148,7 @@ fn all_canonical_pending_kinds_use_exact_registered_handler_once() {
                     &current,
                     &handler,
                     fence(),
-                    BYTES
+                    CHECKPOINT_BYTES
                 ),
                 Err(ResumeError::Command(CommandRejection::Invocation(
                     InvocationError::InvalidDrawInput
@@ -158,14 +166,21 @@ fn all_canonical_pending_kinds_use_exact_registered_handler_once() {
                     &current,
                     &handler,
                     fence(),
-                    BYTES
+                    CHECKPOINT_BYTES
                 ),
                 Err(ResumeError::Command(CommandRejection::Invocation(
                     InvocationError::RollInputMismatch
                 )))
             );
             assert_eq!(
-                invoke(envelope, &result, &result, &handler, fence(), BYTES),
+                invoke(
+                    envelope,
+                    &result,
+                    &result,
+                    &handler,
+                    fence(),
+                    CHECKPOINT_BYTES
+                ),
                 Err(ResumeError::Command(CommandRejection::Invocation(
                     InvocationError::AlreadyAccepted
                 )))
@@ -192,7 +207,7 @@ fn stale_generation_cancel_and_bounds_refuse_before_handler_invocation() {
                 current_generation: 4,
                 ..fence()
             },
-            BYTES,
+            CHECKPOINT_BYTES,
             ResumeError::StaleGeneration,
         ),
         (
@@ -201,7 +216,7 @@ fn stale_generation_cancel_and_bounds_refuse_before_handler_invocation() {
                 admitted_generation: 0,
                 ..fence()
             },
-            BYTES,
+            CHECKPOINT_BYTES,
             ResumeError::StaleGeneration,
         ),
         (
@@ -209,7 +224,7 @@ fn stale_generation_cancel_and_bounds_refuse_before_handler_invocation() {
                 cancel_before_admission: true,
                 ..fence()
             },
-            BYTES,
+            CHECKPOINT_BYTES,
             ResumeError::CancelledBeforeAdmission,
         ),
         (fence(), 1, ResumeError::Capacity),
@@ -274,7 +289,7 @@ fn shared_resource_dependencies_reject_changed_current_basis_before_handler() {
             &prepared,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Command(CommandRejection::Invocation(
             InvocationError::Handler(PreconditionedRejection::Precondition(
@@ -311,7 +326,7 @@ fn shared_source_resolver_refuses_replaced_window_unoffered_response_and_wrong_k
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Response(ResponseError::Admission(
             CommandError::UnofferedResponse
@@ -328,7 +343,7 @@ fn shared_source_resolver_refuses_replaced_window_unoffered_response_and_wrong_k
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Response(ResponseError::Admission(
             CommandError::WrongPendingKind
@@ -348,7 +363,7 @@ fn shared_source_resolver_refuses_replaced_window_unoffered_response_and_wrong_k
             &replaced,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Response(ResponseError::Admission(
             CommandError::StaleWindow
@@ -380,7 +395,7 @@ fn source_handler_refusal_remains_typed_without_candidate_or_input_mutation() {
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Command(CommandRejection::Invocation(
             InvocationError::Handler(PreconditionedRejection::Handler(
@@ -446,7 +461,7 @@ fn retained_ordered_draws_choices_spends_rulings_and_offered_decline_are_preserv
         &current,
         &handler,
         fence(),
-        BYTES,
+        CHECKPOINT_BYTES,
     )
     .unwrap();
     assert_eq!(result.state().draws, current.state().draws);
@@ -487,7 +502,7 @@ fn exact_source_handler_pins_are_required_before_any_mechanics() {
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Command(CommandRejection::Invocation(
             InvocationError::HandlerRulesMismatch
@@ -521,7 +536,7 @@ fn surviving_older_observation_is_admitted_but_retired_epoch_is_refused() {
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         )
         .is_ok()
     );
@@ -538,7 +553,7 @@ fn surviving_older_observation_is_admitted_but_retired_epoch_is_refused() {
             &current,
             &handler,
             fence(),
-            BYTES
+            CHECKPOINT_BYTES
         ),
         Err(ResumeError::Command(CommandRejection::Structural(
             CommandError::StaleRevision

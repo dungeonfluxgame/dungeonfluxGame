@@ -163,8 +163,8 @@ impl<Owner: WitnessSourceOwner> RulesCommandHandler for WitnessGrantHandler<'_, 
             self.limits.witness,
         )
         .map_err(WitnessStagingError::Witness)?;
-        let mut next = self.current_basis;
-        next.revision = next
+        let mut next_basis = self.current_basis;
+        next_basis.revision = next_basis
             .revision
             .next_sequence()
             .map_err(|_| WitnessStagingError::RevisionExhausted)?;
@@ -181,7 +181,7 @@ impl<Owner: WitnessSourceOwner> RulesCommandHandler for WitnessGrantHandler<'_, 
         // Applying knowledge does not redeclare the original accepted fact or rewrite its cause.
         state.decisions.push(AcceptedDecision {
             operation: command.operation,
-            revision: next.revision,
+            revision: next_basis.revision,
             facts: vec![],
             draws: vec![],
             effects: vec![],
@@ -190,7 +190,7 @@ impl<Owner: WitnessSourceOwner> RulesCommandHandler for WitnessGrantHandler<'_, 
         });
         Checkpoint::new(
             current.schema(),
-            next,
+            next_basis,
             current.pins().clone(),
             state,
             ReferenceInventory {
@@ -230,7 +230,9 @@ impl<Owner: WitnessSourceOwner> WitnessGrantHandler<'_, Owner> {
             self.inventory.assets.len(),
         ]
         .into_iter()
-        .try_fold(0usize, |count, next| count.checked_add(next))
+        .try_fold(0usize, |record_count, collection_len| {
+            record_count.checked_add(collection_len)
+        })
         .ok_or(WitnessStagingError::Capacity)?;
         if records > limits.maximum_inventory_records {
             return Err(WitnessStagingError::Capacity);
@@ -240,13 +242,14 @@ impl<Owner: WitnessSourceOwner> WitnessGrantHandler<'_, Owner> {
             .checked_mul(std::mem::size_of::<WitnessEligibility<'_>>())
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<WitnessRegistration>()))
             .ok_or(WitnessStagingError::Capacity)?;
-        let mut add = |bytes: usize| -> Result<(), WitnessStagingError<Owner::Refusal>> {
-            request_bytes = request_bytes
-                .checked_add(bytes)
-                .filter(|bytes| *bytes <= limits.maximum_pass_bytes)
-                .ok_or(WitnessStagingError::Capacity)?;
-            Ok(())
-        };
+        let mut add_request_bytes =
+            |bytes: usize| -> Result<(), WitnessStagingError<Owner::Refusal>> {
+                request_bytes = request_bytes
+                    .checked_add(bytes)
+                    .filter(|bytes| *bytes <= limits.maximum_pass_bytes)
+                    .ok_or(WitnessStagingError::Capacity)?;
+                Ok(())
+            };
         for label in [
             &self.registration.action.package,
             &self.registration.action.entry,
@@ -258,11 +261,11 @@ impl<Owner: WitnessSourceOwner> WitnessGrantHandler<'_, Owner> {
             &self.registration.witness_policy.entry,
             &self.registration.decision_policy,
         ] {
-            add(label.retained_heap_bytes())?;
+            add_request_bytes(label.retained_heap_bytes())?;
         }
         for candidate in eligible {
             if let WitnessRoute::Relationship { permitted_state } = candidate.route {
-                add(permitted_state.retained_heap_bytes())?;
+                add_request_bytes(permitted_state.retained_heap_bytes())?;
             }
         }
         let current_bytes = current

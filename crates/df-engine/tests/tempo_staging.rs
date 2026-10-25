@@ -269,11 +269,11 @@ fn impulse_policy(current: &Checkpoint) -> ImpulsePolicy {
         }],
     }
 }
-fn input(current: &Checkpoint, target: i64, shock: bool) -> PermittedTempoInput {
+fn input(current: &Checkpoint, target_intensity: i64, has_shock: bool) -> PermittedTempoInput {
     PermittedTempoInput {
         expected_basis: current.basis(),
-        target_intensity: target,
-        impulse: shock.then_some(ImpulseEvent {
+        target_intensity,
+        impulse: has_shock.then_some(ImpulseEvent {
             fact: fact_id(),
             at_presentation_ticks: current.state().tempo.presentation_ticks,
         }),
@@ -287,16 +287,16 @@ fn impulse_limits() -> ImpulseLimits {
 }
 fn stage(
     current: &Checkpoint,
-    target: i64,
-    shock: bool,
-    ticks: u64,
+    target_intensity: i64,
+    has_shock: bool,
+    elapsed_ticks: u64,
 ) -> (Checkpoint, ImpulseAdvance) {
     stage_tempo_candidate(
         current,
         current.pins(),
-        request(current, Duration::from_millis(ticks * 100), false),
+        request(current, Duration::from_millis(elapsed_ticks * 100), false),
         (Some(&policy(current)), Some(&impulse_policy(current))),
-        input(current, target, shock),
+        input(current, target_intensity, has_shock),
         (impulse_limits(), checkpoint_limits()),
         ReferenceInventory {
             rules: &[],
