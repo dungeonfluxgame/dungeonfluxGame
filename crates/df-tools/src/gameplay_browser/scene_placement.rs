@@ -14,6 +14,12 @@ pub(crate) struct Placement {
     pub(crate) z_index: u32,
 }
 
+/// A measured size the ratios can use: finite and positive. NaN fails the comparison, so it
+/// must be rejected explicitly or it would place the picture without any crop.
+fn usable(size: Dimensions) -> bool {
+    size.width.is_finite() && size.height.is_finite() && size.width > 0.0 && size.height > 0.0
+}
+
 pub(crate) fn placement(
     anchor_x_permille: u32,
     anchor_y_permille: u32,
@@ -24,10 +30,8 @@ pub(crate) fn placement(
     if anchor_x_permille > 1000
         || anchor_y_permille > 1000
         || depth_permille > 1000
-        || frame.width <= 0.0
-        || frame.height <= 0.0
-        || picture.width <= 0.0
-        || picture.height <= 0.0
+        || !usable(frame)
+        || !usable(picture)
     {
         return None;
     }
@@ -43,6 +47,14 @@ pub(crate) fn placement(
     } else {
         1.0
     };
+    // Finite sizes can still overflow or underflow in a ratio, and the shares divide by these.
+    let ratios = [frame_ratio, picture_ratio, visible_x_share, visible_y_share];
+    if ratios
+        .iter()
+        .any(|ratio| !ratio.is_finite() || *ratio <= 0.0)
+    {
+        return None;
+    }
     let crop_left_share = (1.0 - visible_x_share) / 2.0;
     let crop_top_share = (1.0 - visible_y_share) / 2.0;
     let anchor_x_share = f64::from(anchor_x_permille) / 1000.0;
@@ -95,5 +107,34 @@ mod tests {
     #[test]
     fn invalid_geometry_is_rejected() {
         assert!(placement(1001, 500, 500, TV_16_9, TV_16_9).is_none());
+    }
+
+    #[test]
+    fn non_finite_geometry_is_rejected_rather_than_placed_uncropped() {
+        let nan_frame = Dimensions {
+            width: f64::NAN,
+            height: 1080.0,
+        };
+        let infinite_picture = Dimensions {
+            width: 2000.0,
+            height: f64::INFINITY,
+        };
+        assert!(placement(500, 500, 500, nan_frame, TV_16_9).is_none());
+        assert!(placement(500, 500, 500, TV_16_9, infinite_picture).is_none());
+    }
+
+    #[test]
+    fn finite_sizes_whose_ratio_overflows_or_underflows_are_rejected() {
+        // Each size is finite and positive, but its width-to-height ratio is not usable.
+        let tall_frame = Dimensions {
+            width: 1e300,
+            height: 1e-300,
+        };
+        let tall_picture = Dimensions {
+            width: 1e-300,
+            height: 1e300,
+        };
+        assert!(placement(500, 500, 500, tall_frame, TV_16_9).is_none());
+        assert!(placement(500, 500, 500, TV_16_9, tall_picture).is_none());
     }
 }

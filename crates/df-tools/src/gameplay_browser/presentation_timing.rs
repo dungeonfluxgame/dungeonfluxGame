@@ -1,7 +1,7 @@
 //! Page-owned best-effort presentation capture. Input/render never awaits telemetry.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     rc::{Rc, Weak},
     time::Duration,
@@ -16,12 +16,19 @@ use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen::{JsCast, closure::Closure};
 
 use super::{BrowserChannel, Client, rpc};
+use crate::pending_frames::admit_pending_frame;
 use crate::stage_machines::{ClipState, LineState};
 
 type TimingClient =
     rpc::presentation_telemetry_service_client::PresentationTelemetryServiceClient<BrowserChannel>;
 
-type PaintFrame = (i32, Closure<dyn FnMut(f64)>);
+/// A paint callback the page still holds. `ran` is set when the browser has run it; a frame
+/// that ran no longer counts against the pending-frame cap.
+struct PaintFrame {
+    id: i32,
+    ran: Rc<Cell<bool>>,
+    _callback: Closure<dyn FnMut(f64)>,
+}
 
 struct Capture {
     client: Weak<RefCell<Client>>,
@@ -57,8 +64,8 @@ impl Drop for Capture {
             abort.abort();
         }
         if let Some(window) = web_sys::window() {
-            for (id, _) in &self.frames {
-                let _cancelled = window.cancel_animation_frame(*id);
+            for frame in &self.frames {
+                let _cancelled = window.cancel_animation_frame(frame.id);
             }
         }
         if self.buffer.dropped() != 0 || self.buffer.batch().is_ok() {
@@ -327,13 +334,16 @@ pub(super) fn portrait_display(
         else {
             return;
         };
-        if capture.frames.len() >= df_observe::presentation::MAX_BUFFER_EVENTS {
+        if !admit_pending_frame(&mut capture.frames, |frame| frame.ran.get()) {
             capture.buffer.report_loss(1);
             return;
         }
         let root = root.clone();
         let image = image.clone();
+        let ran = Rc::new(Cell::new(false));
+        let ran_flag = ran.clone();
         let callback = Closure::wrap(Box::new(move |_: f64| {
+            ran_flag.set(true);
             let visible = root
                 .owner_document()
                 .is_some_and(|document| !document.hidden());
@@ -352,7 +362,11 @@ pub(super) fn portrait_display(
             diagnostic(&root, outcome, operation_hash, 0, 0);
         }) as Box<dyn FnMut(f64)>);
         match window.request_animation_frame(callback.as_ref().unchecked_ref()) {
-            Ok(id) => capture.frames.push((id, callback)),
+            Ok(id) => capture.frames.push(PaintFrame {
+                id,
+                ran,
+                _callback: callback,
+            }),
             Err(_) => capture.buffer.report_loss(1),
         }
     });
@@ -1248,7 +1262,10 @@ fn schedule_paint(capture: &mut Capture, weak: Weak<RefCell<Client>>, second: bo
     let Some(window) = web_sys::window() else {
         return;
     };
+    let ran = Rc::new(Cell::new(false));
+    let ran_flag = ran.clone();
     let callback = Closure::wrap(Box::new(move |_: f64| {
+        ran_flag.set(true);
         CAPTURES.with_borrow_mut(|captures| {
             if let Some(capture) = captures
                 .iter_mut()
@@ -1280,7 +1297,11 @@ fn schedule_paint(capture: &mut Capture, weak: Weak<RefCell<Client>>, second: bo
         });
     }) as Box<dyn FnMut(f64)>);
     match window.request_animation_frame(callback.as_ref().unchecked_ref()) {
-        Ok(id) => capture.frames.push((id, callback)),
+        Ok(id) => capture.frames.push(PaintFrame {
+            id,
+            ran,
+            _callback: callback,
+        }),
         Err(_) => {
             capture.buffer.report_loss(1);
             web_sys::console::warn_1(&"Presentation timing paint frame unavailable".into());

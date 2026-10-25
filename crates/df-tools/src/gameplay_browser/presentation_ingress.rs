@@ -17,6 +17,14 @@ use tonic::{Request, Response, Status};
 use super::{Service, actor, credential};
 
 const MAX_PRODUCERS: usize = 128;
+const MAX_PRODUCERS_PER_BINDING: usize = 8;
+/// A producer silent for longer than this may be evicted when the ledger is full. A retry that
+/// arrives inside the horizon is still deduplicated, because such a producer is never evicted.
+const RETRY_HORIZON: Duration = Duration::from_secs(10 * 60);
+/// A binding at its cap may evict its own producer silent for longer than this. A page's retry
+/// deadline is 10 s with a 5 s backoff, so a dead page's slot frees before the seat reloads
+/// again, while a live retry, which is never silent this long, is never evicted.
+const BINDING_RETRY_GRACE: Duration = Duration::from_secs(60);
 const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
 
 pub(super) fn scope_hash(kind: &str, bytes: &[u8]) -> String {
@@ -76,13 +84,24 @@ pub(super) struct PresentationIngress {
 
 #[derive(Default)]
 struct Ledger {
-    // Never evict a producer while this process lives: an old retry must not become new.
+    // A producer idle past its eviction grace may be evicted to admit another; a retry that
+    // arrives after its eviction is accepted as a new producer and logged as a gap.
     producers: HashMap<([u8; 32], [u8; 16]), Accepted>,
 }
 struct Accepted {
     sequence: u64,
     digest: [u8; 32],
     records: usize,
+    role: LocalDemoRole,
+    last_seen_ms: u64,
+}
+
+fn audience_label(role: LocalDemoRole) -> &'static str {
+    if role == LocalDemoRole::Display {
+        "DISPLAY"
+    } else {
+        "PHONE"
+    }
 }
 
 struct TimingUpload<'a> {
@@ -397,23 +416,20 @@ impl Ledger {
         hash.update(dropped.to_le_bytes());
         let digest = hash.finalize().into();
         let key = (binding, producer);
-        if let Some(accepted) = self.producers.get(&key) {
+        if let Some(accepted) = self.producers.get_mut(&key) {
             if sequence == accepted.sequence && digest == accepted.digest {
+                accepted.last_seen_ms = receive_ms;
                 return Ok((accepted.records, true));
             }
             if sequence != accepted.sequence + 1 {
                 return Err(Status::already_exists("timing batch identity conflict"));
             }
-        } else if self.producers.len() == MAX_PRODUCERS {
-            return Err(Status::resource_exhausted("timing producer capacity"));
+        } else {
+            self.make_room(binding, receive_ms, &emit)?;
         }
         let producer = producer.as_slice();
         let producer = scope_hash("display-producer", producer);
-        let audience = if role == LocalDemoRole::Display {
-            "DISPLAY"
-        } else {
-            "PHONE"
-        };
+        let audience = audience_label(role);
         if !self.producers.contains_key(&key) && sequence != 1 {
             emit(
                 "gameplay.presentation_gap",
@@ -453,9 +469,78 @@ impl Ledger {
                 sequence,
                 digest,
                 records: events.len(),
+                role,
+                last_seen_ms: receive_ms,
             },
         );
         Ok((events.len(), false))
+    }
+
+    /// Makes room for a producer the ledger does not hold. A binding at its cap evicts its own
+    /// longest-idle producer past BINDING_RETRY_GRACE; a full ledger evicts the longest-idle
+    /// producer of any binding past RETRY_HORIZON. When none is eligible the upload is refused.
+    fn make_room(
+        &mut self,
+        binding: [u8; 32],
+        now_ms: u64,
+        emit: &impl Fn(&'static str, String, Option<presentation::TimingEvent>, &str),
+    ) -> Result<(), Status> {
+        let bound = self
+            .producers
+            .keys()
+            .filter(|(owner, _)| *owner == binding)
+            .count();
+        if bound >= MAX_PRODUCERS_PER_BINDING {
+            let victim = self.longest_idle(Some(binding), now_ms, BINDING_RETRY_GRACE);
+            self.evict(victim, now_ms, "timing producer binding capacity", emit)?;
+        }
+        if self.producers.len() >= MAX_PRODUCERS {
+            let victim = self.longest_idle(None, now_ms, RETRY_HORIZON);
+            self.evict(victim, now_ms, "timing producer capacity", emit)?;
+        }
+        Ok(())
+    }
+
+    fn longest_idle(
+        &self,
+        binding: Option<[u8; 32]>,
+        now_ms: u64,
+        eligible_after: Duration,
+    ) -> Option<([u8; 32], [u8; 16])> {
+        self.producers
+            .iter()
+            .filter(|((owner, _), _)| binding.is_none_or(|bound| *owner == bound))
+            .map(|(key, accepted)| (now_ms.saturating_sub(accepted.last_seen_ms), *key))
+            .filter(|(idle_ms, _)| u128::from(*idle_ms) > eligible_after.as_millis())
+            .max_by_key(|(idle_ms, _)| *idle_ms)
+            .map(|(_, key)| key)
+    }
+
+    fn evict(
+        &mut self,
+        victim: Option<([u8; 32], [u8; 16])>,
+        now_ms: u64,
+        refusal: &'static str,
+        emit: &impl Fn(&'static str, String, Option<presentation::TimingEvent>, &str),
+    ) -> Result<(), Status> {
+        let Some((key, accepted)) =
+            victim.and_then(|key| self.producers.remove(&key).map(|accepted| (key, accepted)))
+        else {
+            return Err(Status::resource_exhausted(refusal));
+        };
+        let producer = scope_hash("display-producer", &key.1);
+        let seat = df_observe::seat_hash(&key.0);
+        let idle_ms = now_ms.saturating_sub(accepted.last_seen_ms);
+        emit(
+            "gameplay.presentation_producer",
+            format!(
+                "{} producer-evicted producer={producer} seat={seat} idle_ms={idle_ms}",
+                audience_label(accepted.role)
+            ),
+            None,
+            &producer,
+        );
+        Ok(())
     }
 }
 
@@ -630,6 +715,14 @@ mod tests {
 
     static TEST_CORRELATION: OnceLock<ScopeCorrelation> = OnceLock::new();
 
+    fn test_correlation() -> &'static ScopeCorrelation {
+        TEST_CORRELATION.get_or_init(|| ScopeCorrelation {
+            room_id_hash: Some("sha256:test-room".to_owned()),
+            run_id_hash: Some("sha256:test-run".to_owned()),
+            build_id: "build-test".to_owned(),
+        })
+    }
+
     fn upload(bytes: &[u8]) -> TimingUpload<'_> {
         TimingUpload {
             binding: [1; 32],
@@ -638,13 +731,170 @@ mod tests {
             dropped: 0,
             bytes,
             role: LocalDemoRole::Display,
-            correlation: TEST_CORRELATION.get_or_init(|| ScopeCorrelation {
-                room_id_hash: Some("sha256:test-room".to_owned()),
-                run_id_hash: Some("sha256:test-run".to_owned()),
-                build_id: "build-test".to_owned(),
-            }),
+            correlation: test_correlation(),
             receive_unix_ms: 123_456,
         }
+    }
+
+    /// An empty batch that reports one dropped record: it admits a producer without events.
+    fn heartbeat(
+        binding: [u8; 32],
+        producer: [u8; 16],
+        receive_unix_ms: u64,
+    ) -> TimingUpload<'static> {
+        TimingUpload {
+            binding,
+            producer,
+            sequence: 1,
+            dropped: 1,
+            bytes: &[],
+            role: LocalDemoRole::Display,
+            correlation: test_correlation(),
+            receive_unix_ms,
+        }
+    }
+
+    fn silent(_: &'static str, _: String, _: Option<presentation::TimingEvent>, _: &str) {}
+
+    /// Admits `count` producers at once, at most eight per binding, all seen at one time.
+    fn fill(ledger: &mut Ledger, count: usize, receive_unix_ms: u64) {
+        for index in 0..count {
+            let binding = [(index / MAX_PRODUCERS_PER_BINDING) as u8 + 10; 32];
+            let producer = [(index % MAX_PRODUCERS_PER_BINDING) as u8 + 1; 16];
+            ledger
+                .record(heartbeat(binding, producer, receive_unix_ms), silent)
+                .unwrap();
+        }
+    }
+
+    fn refusal(result: Result<(usize, bool), Status>) -> (tonic::Code, String) {
+        let status = result.unwrap_err();
+        (status.code(), status.message().to_owned())
+    }
+
+    #[test]
+    fn an_idle_producer_is_evicted_only_past_the_retry_horizon_and_only_when_needed() {
+        let horizon_ms = RETRY_HORIZON.as_millis() as u64;
+        let mut ledger = Ledger::default();
+        let victim = ([1; 32], [1; 16]);
+        ledger
+            .record(heartbeat(victim.0, victim.1, 0), silent)
+            .unwrap();
+        fill(&mut ledger, MAX_PRODUCERS - 1, horizon_ms / 2);
+        assert_eq!(ledger.producers.len(), MAX_PRODUCERS);
+        let newcomer = ([200; 32], [9; 16]);
+        // Exactly at the horizon the victim is not yet eligible, so the newcomer is refused.
+        let (code, message) =
+            refusal(ledger.record(heartbeat(newcomer.0, newcomer.1, horizon_ms), silent));
+        assert_eq!(code, tonic::Code::ResourceExhausted);
+        assert_eq!(message, "timing producer capacity");
+        assert_eq!(ledger.producers.len(), MAX_PRODUCERS);
+        // Past the horizon the longest-idle producer makes room and every other producer stays.
+        let lines = RefCell::new(Vec::new());
+        let record_line = |_: &'static str,
+                           line: String,
+                           _: Option<presentation::TimingEvent>,
+                           _: &str| { lines.borrow_mut().push(line) };
+        assert_eq!(
+            ledger
+                .record(
+                    heartbeat(newcomer.0, newcomer.1, horizon_ms + 1),
+                    record_line
+                )
+                .unwrap(),
+            (0, false)
+        );
+        assert!(!ledger.producers.contains_key(&victim));
+        assert!(ledger.producers.contains_key(&newcomer));
+        assert_eq!(ledger.producers.len(), MAX_PRODUCERS);
+        let lines = lines.into_inner();
+        // The eviction is logged before the newcomer's own gap line for its dropped record.
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("DISPLAY producer-evicted producer=sha256:"));
+        assert!(lines[0].contains(&format!(" seat={} ", df_observe::seat_hash(&victim.0))));
+        assert!(lines[0].ends_with("idle_ms=600001"));
+        assert!(!lines[0].contains("reason="));
+        assert!(lines[1].contains("dropped_records=1"));
+    }
+
+    #[test]
+    fn active_producers_are_never_evicted_and_a_binding_stops_at_its_cap() {
+        let horizon_ms = RETRY_HORIZON.as_millis() as u64;
+        let mut ledger = Ledger::default();
+        fill(&mut ledger, MAX_PRODUCERS, 0);
+        // Every producer was seen inside the horizon: a newcomer is refused and none is evicted.
+        let (code, _) =
+            refusal(ledger.record(heartbeat([200; 32], [9; 16], horizon_ms - 1), silent));
+        assert_eq!(code, tonic::Code::ResourceExhausted);
+        assert_eq!(ledger.producers.len(), MAX_PRODUCERS);
+        // A binding holding its eight producers refuses a ninth, even with room in the ledger.
+        let mut bound = Ledger::default();
+        fill(&mut bound, MAX_PRODUCERS_PER_BINDING, 0);
+        let binding = [10; 32];
+        let (code, message) = refusal(bound.record(heartbeat(binding, [99; 16], 1), silent));
+        assert_eq!(code, tonic::Code::ResourceExhausted);
+        assert_eq!(message, "timing producer binding capacity");
+        assert_eq!(bound.producers.len(), MAX_PRODUCERS_PER_BINDING);
+        // Past the horizon the binding evicts one of its own producers and keeps its cap.
+        bound
+            .record(heartbeat(binding, [99; 16], horizon_ms + 1), silent)
+            .unwrap();
+        let held = bound
+            .producers
+            .keys()
+            .filter(|(owner, _)| *owner == binding)
+            .count();
+        assert_eq!(held, MAX_PRODUCERS_PER_BINDING);
+    }
+
+    #[test]
+    fn a_retry_inside_the_horizon_is_still_deduplicated_when_the_ledger_is_full() {
+        let horizon_ms = RETRY_HORIZON.as_millis() as u64;
+        let mut ledger = Ledger::default();
+        let page = ([1; 32], [1; 16]);
+        ledger.record(heartbeat(page.0, page.1, 0), silent).unwrap();
+        // The page is the longest idle producer, but still inside the horizon.
+        fill(&mut ledger, MAX_PRODUCERS - 1, horizon_ms - 1_000);
+        let (code, _) =
+            refusal(ledger.record(heartbeat([200; 32], [9; 16], horizon_ms - 1), silent));
+        assert_eq!(code, tonic::Code::ResourceExhausted);
+        assert_eq!(
+            ledger
+                .record(heartbeat(page.0, page.1, horizon_ms - 1), silent)
+                .unwrap(),
+            (0, true)
+        );
+        assert!(ledger.producers.contains_key(&page));
+    }
+
+    #[test]
+    fn a_seat_that_reloads_nine_times_within_minutes_admits_its_newest_page() {
+        let mut ledger = Ledger::default();
+        let seat = [7; 32];
+        // Eight page loads twenty seconds apart fill the seat's cap; each page is then silent.
+        for reload in 0..MAX_PRODUCERS_PER_BINDING as u8 {
+            let page = [reload + 1; 16];
+            let receive_ms = u64::from(reload) * 20_000;
+            ledger
+                .record(heartbeat(seat, page, receive_ms), silent)
+                .unwrap();
+        }
+        // The ninth load at 160 s: the first page has been silent for longer than the grace.
+        let newest = [9; 16];
+        assert_eq!(
+            ledger
+                .record(heartbeat(seat, newest, 160_000), silent)
+                .unwrap(),
+            (0, false)
+        );
+        assert!(ledger.producers.contains_key(&(seat, newest)));
+        assert!(!ledger.producers.contains_key(&(seat, [1; 16])));
+        let held = ledger
+            .producers
+            .keys()
+            .filter(|(owner, _)| *owner == seat)
+            .count();
+        assert_eq!(held, MAX_PRODUCERS_PER_BINDING);
     }
 
     #[test]

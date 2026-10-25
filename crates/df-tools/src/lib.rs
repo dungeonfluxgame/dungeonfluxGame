@@ -29,6 +29,9 @@ mod qualification_verdict;
 mod client_diagnostics;
 mod layout_contract;
 mod music_score;
+// Shared with the browser capture; declared here so the native build compiles its tests.
+#[path = "gameplay_browser/pending_frames.rs"]
+mod pending_frames;
 #[cfg(any(target_arch = "wasm32", test))]
 mod reconnect;
 #[cfg(any(target_arch = "wasm32", test))]

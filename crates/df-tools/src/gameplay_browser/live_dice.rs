@@ -244,12 +244,14 @@ async fn decide_path(clips: &[ReadyClip]) -> DicePath {
     DicePath::CardOnly
 }
 
-/// Resolves `true` on the first of the element's events named `ok`, `false` on error or
-/// after the probe timeout. The one-shot listeners are intentionally forgotten: the probe
-/// runs once per page and both closures drop with their element.
+/// Resolves `true` on the first of the element's events named `ok`, `false` on error, when a
+/// listener cannot be registered, or after the probe timeout. Both one-shot closures are
+/// forgotten, so each probe leaks them until the page unloads. `preload` starts a library load
+/// only while no clip is ready, so the leak is bounded by the number of loads.
 fn once(element: &Element, ok: &str) -> js_sys::Promise {
     js_sys::Promise::new(&mut |resolve: Function, _reject: Function| {
         let settled = Rc::new(RefCell::new(false));
+        let resolve_unlistened = resolve.clone();
         let resolve_failed = resolve.clone();
         let resolve_ok = settled.clone();
         let done = Closure::wrap(Box::new(move |_: web_sys::Event| {
@@ -265,8 +267,19 @@ fn once(element: &Element, ok: &str) -> js_sys::Promise {
                 let _resolved = resolve_failed.call1(&JsValue::NULL, &JsValue::FALSE);
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
-        let _ = element.add_event_listener_with_callback(ok, done.as_ref().unchecked_ref());
-        let _ = element.add_event_listener_with_callback("error", failed.as_ref().unchecked_ref());
+        let listened = element
+            .add_event_listener_with_callback(ok, done.as_ref().unchecked_ref())
+            .and_then(|()| {
+                element.add_event_listener_with_callback("error", failed.as_ref().unchecked_ref())
+            });
+        if let Err(error) = listened {
+            *settled.borrow_mut() = true;
+            web_sys::console::warn_2(
+                &JsValue::from_str("Dice probe listener refused; probe settles as unavailable."),
+                &error,
+            );
+            let _resolved = resolve_unlistened.call1(&JsValue::NULL, &JsValue::FALSE);
+        }
         done.forget();
         failed.forget();
     })

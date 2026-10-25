@@ -14,7 +14,8 @@ use std::{
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::Element;
 const SAMPLE_INTERVAL_MS: u32 = 500;
-const UNCHANGED_REPORT_INTERVAL_MS: f64 = 1000.0;
+const UNCHANGED_REPORT_INTERVAL_MS: u32 = 1000;
+const _: () = assert!(UNCHANGED_REPORT_INTERVAL_MS >= SAMPLE_INTERVAL_MS);
 const MAXIMUM_SCANNED_ELEMENTS: usize = 16384;
 const MISSING_ARIA_VALUE: &str = "__df_layout_aria_missing__";
 thread_local! {
@@ -507,7 +508,7 @@ fn tick() {
         let now = js_sys::Date::now();
         if controller.report_in_flight
             || (!controller.is_dirty
-                && now - controller.last_sent_ms < UNCHANGED_REPORT_INTERVAL_MS)
+                && now - controller.last_sent_ms < f64::from(UNCHANGED_REPORT_INTERVAL_MS))
         {
             return Ok(None);
         }
