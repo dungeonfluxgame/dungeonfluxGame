@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DungeonFlux offen entwickeln: Projekt- und Pilot-Update</title>
+<meta name="description" content="Lerne DungeonFlux kennen, erfahre mehr über den aktuellen Stand des spielbaren Projekts und finde Quellcode, Änderungsprotokoll und Regelumfang während der Vorbereitung des Piloten.">
+<link rel="canonical" href="https://dungeonfluxdnd.com/de/news/2026-10-24-building-in-the-open/">
+<link rel="alternate" hreflang="en" href="https://dungeonfluxdnd.com/news/2026-10-24-building-in-the-open/">
+<link rel="alternate" hreflang="es" href="https://dungeonfluxdnd.com/es/news/2026-10-24-building-in-the-open/">
+<link rel="alternate" hreflang="de" href="https://dungeonfluxdnd.com/de/news/2026-10-24-building-in-the-open/">
+<link rel="alternate" hreflang="fr" href="https://dungeonfluxdnd.com/fr/news/2026-10-24-building-in-the-open/">
+<link rel="alternate" hreflang="x-default" href="https://dungeonfluxdnd.com/news/2026-10-24-building-in-the-open/">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="DungeonFlux">
+<meta property="og:title" content="DungeonFlux offen entwickeln: Projekt- und Pilot-Update">
+<meta property="og:description" content="Lerne DungeonFlux kennen, erfahre mehr über den aktuellen Stand des spielbaren Projekts und finde Quellcode, Änderungsprotokoll und Regelumfang während der Vorbereitung des Piloten.">
+<meta property="og:url" content="https://dungeonfluxdnd.com/de/news/2026-10-24-building-in-the-open/">
+<meta property="og:image" content="https://dungeonfluxdnd.com/assets/og-news.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A rowboat passes a canal-side harbor at dusk">
+<meta property="og:locale" content="de_DE">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:locale:alternate" content="es_ES">
+<meta property="og:locale:alternate" content="fr_FR">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DungeonFlux offen entwickeln: Projekt- und Pilot-Update">
+<meta name="twitter:description" content="Lerne DungeonFlux kennen, erfahre mehr über den aktuellen Stand des spielbaren Projekts und finde Quellcode, Änderungsprotokoll und Regelumfang während der Vorbereitung des Piloten.">
+<meta name="twitter:image" content="https://dungeonfluxdnd.com/assets/og-news.jpg">
+<meta name="twitter:image:alt" content="A rowboat passes a canal-side harbor at dusk">
+<meta property="article:published_time" content="2026-10-24">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "NewsArticle", "headline": "DungeonFlux offen entwickeln: Projekt- und Pilot-Update", "datePublished": "2026-10-24", "author": {"@type": "Organization", "name": "DungeonFlux"}, "image": "https://dungeonfluxdnd.com/assets/og-news.jpg", "mainEntityOfPage": "https://dungeonfluxdnd.com/de/news/2026-10-24-building-in-the-open/"}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Startseite", "item": "https://dungeonfluxdnd.com/de/"}, {"@type": "ListItem", "position": 2, "name": "Neuigkeiten", "item": "https://dungeonfluxdnd.com/de/news/"}, {"@type": "ListItem", "position": 3, "name": "DungeonFlux offen entwickeln: Projekt- und Pilot-Update", "item": "https://dungeonfluxdnd.com/de/news/2026-10-24-building-in-the-open/"}]}</script>
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="/assets/icon-512.png" type="image/png" sizes="512x512">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#000000">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="inner">
+
+<a class="skip" href="#main">Zum Inhalt springen</a>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <a class="mark mark-small" href="/de/" aria-label="DungeonFlux, Startseite"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <nav class="bar-nav" aria-label="Hauptnavigation">
+      <span class="bar-nav-links">
+        <a href="/de/how-it-works/">So funktioniert es</a>
+        <a href="/de/pricing/">Preise</a>
+        <a href="/de/rules/">Regeln</a>
+        <a href="/de/help/">Hilfe</a>
+      </span>
+      <a href="/app/sign-in">Anmelden</a>
+      <a class="cta" href="/app/sign-up">Kostenloses Konto erstellen</a>
+      <details class="language-switcher"><summary aria-label="Sprache: Deutsch">Deutsch</summary><div class="language-options"><ul><li><a href="/news/2026-10-24-building-in-the-open/" lang="en">English</a></li><li><a href="/es/news/2026-10-24-building-in-the-open/" lang="es">Español</a></li><li><a href="/de/news/2026-10-24-building-in-the-open/" lang="de" aria-current="page">Deutsch</a></li><li><a href="/fr/news/2026-10-24-building-in-the-open/" lang="fr">Français</a></li></ul></div></details>
+    </nav>
+  </div>
+</header>
+
+<section class="page-head is-story" aria-labelledby="page-h">
+  <img class="page-head-art" src="/assets/scene-mountain-ruins-snowy-ridge-trek.webp" alt="" width="1672" height="941" fetchpriority="high" decoding="async">
+  <div class="wrap">
+    <h1 id="page-h">DungeonFlux offen entwickeln</h1>
+    <p class="page-lede">Was DungeonFlux ist, wo das Projekt heute steht und wie du die Vorbereitungen für den Piloten im Frühzugang verfolgen kannst.</p>
+  </div>
+</section>
+
+<main id="main">
+<div class="page-body">
+  <div class="wrap">
+    <article class="post">
+      <p class="post-meta"><time datetime="2026-10-24">24. Oktober 2026</time></p>
+      <div class="prose post-body">
+
+<p>DungeonFlux ist ein KI-Dungeon-Master für eine Spielrunde im Wohnzimmer. Das Abenteuer läuft auf einem gemeinsamen Fernseher oder Laptop, und alle treten mit ihrem Smartphone, Tablet oder Laptop bei. Eine Regel-Engine auf dem Server würfelt und wendet Regeln nach dem System Reference Document 5.2.1 an. Eine erzählende KI spricht die Personen, denen ihr begegnet, und beschreibt, was die Würfel entschieden haben.</p>
+<h2>Aktueller Stand</h2>
+<p>Das Spiel lässt sich auf einem Entwicklungsrechner von Anfang bis Ende spielen. Es gibt noch keine veröffentlichte Preisversion, keinen gehosteten Dienst und keine Konten. Wir bereiten einen Piloten im Frühzugang vor, an dem man über den Browser teilnehmen kann. Er ist noch nicht geöffnet, und ein Termin steht nicht fest.</p>
+<p>Das Spiel nutzt einen wachsenden Teil des SRD. Auf der <a href="/de/rules/">Regelseite</a> steht, was bereits, teilweise oder noch nicht umgesetzt ist.</p>
+<h2>Bleib auf dem Laufenden</h2>
+<ul>
+  <li>Der Quellcode ist auf <a href="https://github.com/monstercameron/dungeonfluxGame">GitHub</a>, einschließlich der Projektgeschichte.</li>
+  <li>Das <a href="/de/changelog/">Änderungsprotokoll</a> Änderungsprotokoll fasst nach Datum zusammen, was Spielenden auffällt.</li>
+  <li>Auf dieser Seite erscheinen Neuigkeiten, sobald es etwas Belastbares zu berichten gibt.</li>
+</ul>
+
+      </div>
+      <p class="data-after post-back"><a href="/de/news/">Alle Neuigkeiten</a></p>
+    </article>
+  </div>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <p class="seller-line" data-df="seller-line" hidden></p>
+    <a class="mark mark-small" href="/de/" aria-label="DungeonFlux, Startseite"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <nav class="foot-links" aria-label="Website">
+      <a href="/de/how-it-works/">So funktioniert es</a>
+      <a href="/de/pricing/">Preise</a>
+      <a href="/de/rules/">Unterstützte Regeln</a>
+      <a href="/de/help/">Hilfe</a>
+      <a href="/de/news/">Neuigkeiten</a>
+      <a href="/de/changelog/">Änderungsprotokoll</a>
+      <a href="/de/status/">Status</a>
+      <a href="mailto:support@dungeonfluxdnd.com">Kontakt</a>
+      <a href="https://github.com/monstercameron/dungeonfluxGame">Quellcode auf GitHub</a>
+    </nav>
+    <nav class="foot-links" aria-label="Rechtliche Entwürfe">
+      <span class="foot-group">Entwürfe, noch nicht in Kraft:</span>
+      <a href="/de/legal/terms/">Nutzungsbedingungen</a>
+      <a href="/de/legal/privacy/">Datenschutz</a>
+      <a href="/de/legal/refunds/">Erstattungen</a>
+      <a href="/de/legal/credits/">Guthaben</a>
+      <a href="/de/legal/content/">Inhalte</a>
+    </nav>
+    <p class="fine">DungeonFlux befindet sich im Frühzugang. Dieses Werk enthält Inhalte aus dem System Reference Document 5.2.1 (&ldquo;SRD 5.2.1&rdquo;) von Wizards of the Coast LLC. Verfügbar unter <a href="https://www.dndbeyond.com/srd">dndbeyond.com/srd</a>, lizenziert unter der <a href="https://creativecommons.org/licenses/by/4.0/legalcode">Creative-Commons-Namensnennung 4.0 International-Lizenz</a>. DungeonFlux ist nicht mit Wizards of the Coast verbunden.</p>
+    <!-- TODO(owner): business identity (seller entity, support address) goes here once decided; plan 9.1 item 9. -->
+  </div>
+</footer>
+
+</body>
+</html>

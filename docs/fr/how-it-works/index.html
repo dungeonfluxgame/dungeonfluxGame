@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fonctionnement de DungeonFlux : inviter, jouer et sauvegarder une campagne</title>
+<meta name="description" content="Découvrez comment l’hôte invite le groupe, configure l’écran partagé et permet à chacun de jouer depuis son téléphone. Voyez comment DungeonFlux sauvegarde la campagne pour la prochaine fois.">
+<link rel="canonical" href="https://dungeonfluxdnd.com/fr/how-it-works/">
+<link rel="alternate" hreflang="en" href="https://dungeonfluxdnd.com/how-it-works/">
+<link rel="alternate" hreflang="es" href="https://dungeonfluxdnd.com/es/how-it-works/">
+<link rel="alternate" hreflang="de" href="https://dungeonfluxdnd.com/de/how-it-works/">
+<link rel="alternate" hreflang="fr" href="https://dungeonfluxdnd.com/fr/how-it-works/">
+<link rel="alternate" hreflang="x-default" href="https://dungeonfluxdnd.com/how-it-works/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="DungeonFlux">
+<meta property="og:title" content="Fonctionnement de DungeonFlux : inviter, jouer et sauvegarder une campagne">
+<meta property="og:description" content="Découvrez comment l’hôte invite le groupe, configure l’écran partagé et permet à chacun de jouer depuis son téléphone. Voyez comment DungeonFlux sauvegarde la campagne pour la prochaine fois.">
+<meta property="og:url" content="https://dungeonfluxdnd.com/fr/how-it-works/">
+<meta property="og:image" content="https://dungeonfluxdnd.com/assets/og-how.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="DungeonFlux affiché sur un téléviseur partagé avec un code de salon">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:locale:alternate" content="es_ES">
+<meta property="og:locale:alternate" content="de_DE">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Fonctionnement de DungeonFlux : inviter, jouer et sauvegarder une campagne">
+<meta name="twitter:description" content="Découvrez comment l’hôte invite le groupe, configure l’écran partagé et permet à chacun de jouer depuis son téléphone. Voyez comment DungeonFlux sauvegarde la campagne pour la prochaine fois.">
+<meta name="twitter:image" content="https://dungeonfluxdnd.com/assets/og-how.jpg">
+<meta name="twitter:image:alt" content="DungeonFlux affiché sur un téléviseur partagé avec un code de salon">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Accueil", "item": "https://dungeonfluxdnd.com/"}, {"@type": "ListItem", "position": 2, "name": "Fonctionnement de DungeonFlux : inviter, jouer et sauvegarder une campagne", "item": "https://dungeonfluxdnd.com/how-it-works/"}]}</script>
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="/assets/icon-512.png" type="image/png" sizes="512x512">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#000000">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body class="inner">
+
+<a class="skip" href="#main">Aller au contenu</a>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <a class="mark mark-small" href="/fr/" aria-label="DungeonFlux, accueil"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <nav class="bar-nav" aria-label="Navigation principale">
+      <span class="bar-nav-links">
+        <a href="/fr/how-it-works/" aria-current="page">Fonctionnement</a>
+        <a href="/fr/pricing/">Tarifs</a>
+        <a href="/fr/rules/">Règles</a>
+        <a href="/fr/help/">Aide</a>
+      </span>
+      <a href="/app/sign-in">Se connecter</a>
+      <a class="cta" href="/app/sign-up">Créer un compte gratuit</a>
+      <details class="language-switcher"><summary aria-label="Langue : français">Français</summary><div class="language-options"><ul><li><a href="/how-it-works/" lang="en">English</a></li><li><a href="/es/how-it-works/" lang="es">Español</a></li><li><a href="/de/how-it-works/" lang="de">Deutsch</a></li><li><a href="/fr/how-it-works/" lang="fr" aria-current="page">Français</a></li></ul></div></details>
+    </nav>
+  </div>
+</header>
+
+<section class="page-head is-story" aria-labelledby="page-h">
+  <img class="page-head-art" src="../assets/scene-flooded-hall-party-wading-torchlit.webp" alt="" width="1672" height="941" fetchpriority="high" decoding="async">
+  <div class="wrap">
+    <h1 id="page-h">Comment se déroule une partie sur DungeonFlux</h1>
+    <p class="page-lede">L’hôte prépare la partie, ses amis rejoignent la séance depuis leur téléphone, chacun peut contribuer à la soirée et l’histoire est sauvegardée à la fin. Voici les quatre étapes, dans l’ordre.</p>
+    <p class="fine"><span class="pill pill-early">Pilote en accès anticipé</span> Cette page décrit le pilote hébergé tel qu’il est prévu. Les fonctionnalités seront ajoutées après validation des tests. La page  <a href="/fr/rules/">rules page</a> indique les règles prises en charge.</p>
+  </div>
+</section>
+
+<main id="main">
+<div class="page-body">
+  <div class="wrap">
+    <ol class="flow">
+
+      <li class="flow-step">
+        <p class="flow-num" aria-hidden="true">1</p>
+        <div class="flow-main">
+          <h2>Invitez votre groupe</h2>
+          <p>L’hôte se connecte, crée une campagne et choisit l’aventure, les règles et le nombre de joueurs. La création d’une campagne est gratuite. Il partage ensuite un lien d’invitation, ou les joueurs saisissent le code de salon affiché sur le téléviseur.</p>
+          <p>Chaque joueur se connecte, choisit un personnage ou en reprend un sauvegardé, puis indique qu’il est prêt.</p>
+          <figure class="flow-shot tv">
+            <img src="../assets/ui-tv-title-screen-join-lobby.webp" alt="Écran-titre du téléviseur avec un code de salon, un code QR et les places du groupe sur fond de ville fluviale au clair de lune" width="1672" height="941" loading="lazy">
+          </figure>
+        </div>
+        <aside class="facts" aria-label="Bon à savoir sur les invitations">
+          <p class="facts-title">Bon à savoir</p>
+          <ul>
+            <li>Un joueur peut rejoindre une partie sans rien payer si quelqu’un d’autre la finance.</li>
+            <li>Avant de rejoindre la partie, l’invitation indique uniquement le nom de la campagne, celui de l’hôte et la classification du contenu.</li>
+            <li>Le code de salon permet de rejoindre une partie ; il ne permet pas de prendre la place d’un autre joueur.</li>
+            <li>Le pilote est prévu pour un public adulte et doit d’abord être proposé aux États-Unis. La disponibilité et les règles d’âge restent à confirmer.</li>
+          </ul>
+        </aside>
+      </li>
+
+      <li class="flow-step">
+        <p class="flow-num" aria-hidden="true">2</p>
+        <div class="flow-main">
+          <h2>Financez la partie et fixez un plafond</h2>
+          <p>Le jeu devrait être financé au moyen de crédits de service DungeonFlux.<span data-df="pilot-copy" data-df-state="closed"> À l’ouverture du pilote en accès anticipé, les nouveaux comptes recevront 10 $ de crédit promotionnel pour essayer le jeu, sous réserve des conditions définitives.</span><span data-df="pilot-copy" data-df-state="open" hidden>Les nouveaux comptes reçoivent 10 $ de crédit promotionnel, sous réserve des conditions définitives.</span> Chaque personne à la table peut contribuer et décide du montant de son propre crédit qu’elle souhaite consacrer à la soirée. Le crédit n’est jamais remis à l’hôte.</p>
+          <p>L’hôte fixe le montant maximal que la table peut utiliser par heure et pour toute la séance. L’augmentation du plafond de la table ne modifie jamais le montant autorisé par une personne.</p>
+    <div class="data-wrap" role="region" aria-label="Exemple de partage d’une séance de huit dollars entre trois personnes" tabindex="0">
+      <table class="data">
+        <caption>Exemple : trois personnes partagent une séance de 8 $</caption>
+        <thead><tr><th scope="col">Personne</th><th scope="col" class=num>Contribution</th><th scope="col" class=num>Part sur 8 $</th><th scope="col" class=num>Restitution</th></tr></thead>
+        <tbody>
+        <tr><th scope="row">Hôte</th><td class="num" data-label="Put in">$20.00</td><td class="num" data-label="Share of $8">$4.00</td><td class="num" data-label="Returned">$16.00</td></tr>
+        <tr><th scope="row">Joueur B</th><td class="num" data-label="Put in">$10.00</td><td class="num" data-label="Share of $8">$2.00</td><td class="num" data-label="Returned">$8.00</td></tr>
+        <tr><th scope="row">Joueur C</th><td class="num" data-label="Put in">$10.00</td><td class="num" data-label="Share of $8">$2.00</td><td class="num" data-label="Returned">$8.00</td></tr>
+        </tbody>
+      <tfoot><tr><th scope="row">Total</th><td class="num" data-label="Put in">$40.00</td><td class="num" data-label="Share of $8">$8.00</td><td class="num" data-label="Returned">$32.00</td></tr></tfoot>
+      </table>
+    </div>
+          <p class="fine">Exemple illustratif. Les parts dépendent des montants autorisés par chacun : 20, 10 et 10 donnent respectivement 50 %, 25 % et 25 %. Les sommes inutilisées sont rendues au crédit de chaque personne, pas à l’hôte.</p>
+        </div>
+        <aside class="facts" aria-label="Bon à savoir sur le financement">
+          <p class="facts-title">Bon à savoir</p>
+          <ul>
+            <li>Le temps passé dans le salon avant le lancement par l’hôte n’est pas facturé.</li>
+            <li>Vous pouvez retirer toute partie de votre contribution qui n’est pas déjà réservée pour une opération en cours.</li>
+            <li>Le crédit ne peut être utilisé qu’après confirmation du paiement, et non dès votre retour de la page de paiement.</li>
+            <li>Les tarifs sont indiqués sur la page des <a href="/fr/pricing/">tarifs</a>. Ils sont provisoires et ne sont pas définitifs.</li>
+          </ul>
+        </aside>
+      </li>
+
+      <li class="flow-step">
+        <p class="flow-num" aria-hidden="true">3</p>
+        <div class="flow-main">
+          <h2>Jouez sur le téléviseur et vos téléphones</h2>
+          <p>L’hôte associe le téléviseur à la partie au moyen d’un code temporaire à usage unique. L’aventure se déroule sur l’écran partagé. Les informations privées, comme votre fiche de personnage et vos choix, apparaissent uniquement sur votre téléphone.</p>
+          <p>Dites ou écrivez ce que fait votre personnage. Le moteur de règles lance les dés sur le serveur, le téléviseur affiche les résultats et le maître du donjon raconte ce qu’ils ont décidé. Le téléphone de l’hôte affiche une jauge avec la cagnotte, les sommes réservées aux opérations en cours et le plafond horaire.</p>
+          <figure class="flow-shot tv">
+            <img src="../assets/ui-phone-tavern-persuasion-sheet-screens.webp" alt="Quatre écrans de téléphone : une aubergiste et des choix de dialogue, un test de persuasion réussi, une liste de pistes à examiner et la fiche d’un personnage avec ses actions de combat" width="1672" height="941" loading="lazy">
+            <figcaption>Écrans de téléphone issus de notre maquette en accès anticipé. Le jeu en ligne peut différer.</figcaption>
+          </figure>
+        </div>
+        <aside class="facts" aria-label="Bon à savoir sur le jeu">
+          <p class="facts-title">Bon à savoir</p>
+          <ul>
+            <li>L’utilisation du microphone est facultative. Vous pouvez jouer en écrivant.</li>
+            <li>Le téléviseur peut afficher l’histoire, mais il ne peut ni dépenser de crédit ni accéder aux informations privées des joueurs.</li>
+            <li>La mise en pause est gratuite. Aucun coût ne s’accumule pendant une pause.</li>
+            <li>Si tout le monde est déconnecté, les nouvelles opérations payantes et la facturation doivent s’arrêter rapidement.</li>
+          </ul>
+        </aside>
+      </li>
+
+      <li class="flow-step">
+        <p class="flow-num" aria-hidden="true">4</p>
+        <div class="flow-main">
+          <h2>Sauvegardez, faites le point et revenez</h2>
+          <p>L’écran indique « Sauvegardé » uniquement lorsque votre progression a été enregistrée en lieu sûr. À la fin de la séance, le chronomètre s’arrête, les crédits inutilisés sont rendus à leurs contributeurs et chacun peut consulter son relevé d’utilisation.</p>
+          <p>La prochaine fois, vous reprenez l’histoire avec les mêmes personnages là où vous l’aviez laissée. Si le solde atteint zéro, la partie se met en pause et la campagne reste intacte. L’épuisement du crédit n’entraîne aucune suppression.</p>
+          <figure class="flow-shot tv">
+            <img src="../assets/ui-tv-opening-scene-drowned-lantern-tavern.webp" alt="Le téléviseur affiche l’ouverture de la Lanterne noyée, les portraits du groupe, la narration du maître du donjon et les objectifs de la scène" width="1672" height="941" loading="lazy">
+            <figcaption>Écran de notre maquette en accès anticipé. Le jeu en ligne peut différer.</figcaption>
+          </figure>
+        </div>
+        <aside class="facts" aria-label="Bon à savoir sur la sauvegarde">
+          <p class="facts-title">Bon à savoir</p>
+          <ul>
+            <li>Vous pouvez exporter vos personnages et les éléments de campagne que vous êtes autorisé à consulter.</li>
+            <li>La restauration ou la création d’une branche à partir d’une sauvegarde n’annule jamais les sommes dues ni le travail déjà fourni.</li>
+            <li>Le stockage est limité. Les quotas proposés sont indiqués sur la page des <a href="/fr/pricing/#storage">tarifs</a>.</li>
+          </ul>
+        </aside>
+      </li>
+    </ol>
+
+    <section class="section-block" aria-labelledby="scope-h">
+      <h2 id="scope-h">Ce que comprend le pilote</h2>
+      <div class="prose">
+        <p>La première version devrait proposer une aventure bien testée ou une exploration libre de portée limitée, pour deux à six joueurs selon les résultats des tests. Nous indiquerons la taille maximale de groupe réellement testée sur la page des <a href="/fr/rules/">rules page</a> ; nous ne prétendrons pas avoir testé davantage.</p>
+        <p>Les abonnements, les recharges automatiques, les transferts d’argent entre joueurs et la mise en relation publique ne font pas partie du pilote.</p>
+      </div>
+    </section>
+
+    <div class="cta-band">
+      <h2>Prêt à rejoindre une partie ?</h2>
+      <p><span data-df="pilot-copy" data-df-state="closed">À l’ouverture du pilote en accès anticipé, les nouveaux comptes recevront 10 $ de crédit promotionnel, sous réserve des conditions définitives.</span><span data-df="pilot-copy" data-df-state="open" hidden>Les nouveaux comptes reçoivent 10 $ de crédit promotionnel, sous réserve des conditions définitives.</span> Aucune carte bancaire n’est nécessaire pour commencer.</p>
+      <p class="cta-after"><a class="cta" href="/fr/news/2026-10-24-what-to-expect-from-the-pilot/">À quoi s’attendre du pilote</a></p>
+    </div>
+  </div>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <p class="seller-line" data-df="seller-line" hidden></p>
+    <a class="mark mark-small" href="/fr/" aria-label="DungeonFlux, accueil"><span class="mark-dungeon">Dungeon</span><span class="mark-flux">Flux</span></a>
+    <nav class="foot-links" aria-label="Site">
+      <a href="/fr/how-it-works/">Fonctionnement</a>
+      <a href="/fr/pricing/">Tarifs</a>
+      <a href="/fr/rules/">Règles prises en charge</a>
+      <a href="/fr/help/">Aide</a>
+      <a href="/fr/news/">Actualités</a>
+      <a href="/fr/changelog/">Journal des modifications</a>
+      <a href="/fr/status/">État du service</a>
+      <a href="mailto:support@dungeonfluxdnd.com">Contact</a>
+      <a href="https://github.com/monstercameron/dungeonfluxGame">Code source sur GitHub</a>
+    </nav>
+    <nav class="foot-links" aria-label="Projets de textes juridiques">
+      <span class="foot-group">Projets de textes, pas encore en vigueur :</span>
+      <a href="/fr/legal/terms/">Conditions</a>
+      <a href="/fr/legal/privacy/">Confidentialité</a>
+      <a href="/fr/legal/refunds/">Remboursements</a>
+      <a href="/fr/legal/credits/">Crédits</a>
+      <a href="/fr/legal/content/">Contenu</a>
+    </nav>
+    <p class="fine">DungeonFlux est en accès anticipé. Ce projet comprend du contenu issu du System Reference Document 5.2.1 (« SRD 5.2.1 ») de Wizards of the Coast LLC, disponible sur  <a href="https://www.dndbeyond.com/srd">dndbeyond.com/srd</a>, sous licence <a href="https://creativecommons.org/licenses/by/4.0/legalcode">licence internationale Creative Commons Attribution 4.0</a>. DungeonFlux n’est pas affilié à Wizards of the Coast.</p>
+    <!-- TODO(owner): business identity (seller entity, support address) goes here once decided; plan 9.1 item 9. -->
+  </div>
+</footer>
+
+</body>
+</html>

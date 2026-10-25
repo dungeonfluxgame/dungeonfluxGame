@@ -73,12 +73,63 @@ strong, b { font-weight: 600; }
 .bar-nav a[aria-current="page"] { color: var(--parchment); border-bottom-color: var(--lantern); }
 .bar-nav a.cta { color: #1d1206; background: var(--lantern); padding: 9px 14px; font-size: 16px; border: 0; border-radius: 6px; }
 .bar-nav a.cta:hover { color: #1d1206; background: #f3bd6c; }
+.language-switcher {
+  position: relative;
+  font-family: var(--sans);
+  font-size: 15px;
+}
+.language-switcher summary {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--tallow);
+  list-style: none;
+}
+.language-switcher summary::-webkit-details-marker {
+  display: none;
+}
+.language-switcher summary::after {
+  content: "\2304";
+  margin-left: 5px;
+  color: var(--lantern);
+}
+.language-switcher[open] .language-options {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  right: 0;
+  min-width: 132px;
+  padding: 6px 12px;
+  background: var(--smoke-2);
+  border: 1px solid var(--ash);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px #000a;
+}
+.language-switcher .language-options ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.language-switcher .language-options a {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.language-switcher .language-options a[aria-current="page"] {
+  color: var(--parchment);
+  border-bottom-color: var(--lantern);
+}
 @media (max-width: 640px) {
   .bar-inner { min-height: 0; padding-top: 14px; padding-bottom: 4px; row-gap: 0; }
-  .bar-nav { width: 100%; justify-content: flex-end; gap: 2px 18px; font-size: 16px; }
+  .bar-nav { width: 100%; justify-content: flex-end; gap: 2px 12px; font-size: 16px; }
   .bar-nav-links { flex-basis: 100%; justify-content: space-between; gap: 2px 12px; }
   .bar-nav a { min-height: 44px; display: inline-flex; align-items: center; padding: 0; }
   .bar-nav a.cta { padding: 0 12px; font-size: 15px; }
+  .bar-nav .language-switcher {
+    margin-left: auto;
+  }
 }
 
 /* ---------------------------------------------------------------- home hero: a frame from the show */
@@ -277,7 +328,7 @@ strong, b { font-weight: 600; }
   .section-block > h2 { grid-column: 1; grid-row: 1 / span 30; align-self: start; position: sticky; top: 24px; margin-bottom: 0; }
 }
 
-.prose { max-width: var(--measure); }
+.prose { max-width: var(--measure); overflow-wrap: anywhere; }
 .prose h2 { font-size: clamp(28px, 2.6vw, 36px); margin: 1.8em 0 .6em; }
 .prose h2:first-child { margin-top: 0; }
 .prose h3 { font-size: 24px; margin: 1.4em 0 .5em; }
