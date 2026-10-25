@@ -63,7 +63,7 @@ impl<'a> PerceivedFacts<'a> {
     }
 }
 
-fn consume(remaining: &mut usize, error: PerceptionError) -> Result<(), PerceptionError> {
+fn consume_budget(remaining: &mut usize, error: PerceptionError) -> Result<(), PerceptionError> {
     *remaining = remaining.checked_sub(1).ok_or(error)?;
     Ok(())
 }
@@ -88,16 +88,16 @@ pub fn perceive<'a>(
     let mut scans = limits.maximum_scan_records;
     let mut comparisons = limits.maximum_member_comparisons;
     if let ObserverScope::Member(member) = observer {
-        let mut found = false;
+        let mut is_member = false;
         for link in &state.members {
-            consume(&mut scans, PerceptionError::ScanCapacity)?;
-            consume(&mut comparisons, PerceptionError::ComparisonCapacity)?;
+            consume_budget(&mut scans, PerceptionError::ScanCapacity)?;
+            consume_budget(&mut comparisons, PerceptionError::ComparisonCapacity)?;
             if link.member == member {
-                found = true;
+                is_member = true;
                 break;
             }
         }
-        if !found {
+        if !is_member {
             return Err(PerceptionError::ObserverUnavailable);
         }
     }
@@ -110,22 +110,22 @@ pub fn perceive<'a>(
         .try_reserve_exact(state.facts.len().min(limits.maximum_selected_facts))
         .map_err(|_| PerceptionError::AllocationCapacity)?;
     for fact in &state.facts {
-        let permitted = match (&fact.audience, observer) {
+        let is_permitted = match (&fact.audience, observer) {
             (AudienceScope::Shared, _) => true,
             (AudienceScope::Members(members), ObserverScope::Member(member)) => {
-                let mut included = false;
+                let mut includes_member = false;
                 for recipient in members {
-                    consume(&mut comparisons, PerceptionError::ComparisonCapacity)?;
+                    consume_budget(&mut comparisons, PerceptionError::ComparisonCapacity)?;
                     if *recipient == member {
-                        included = true;
+                        includes_member = true;
                         break;
                     }
                 }
-                included
+                includes_member
             }
             (AudienceScope::Members(_), ObserverScope::Shared) | (AudienceScope::Host, _) => false,
         };
-        if permitted {
+        if is_permitted {
             if facts.len() == limits.maximum_selected_facts {
                 return Err(PerceptionError::ResultCapacity);
             }
@@ -183,8 +183,8 @@ struct ClaimWork {
 
 impl ClaimWork {
     fn visit(&mut self) -> Result<(), PerceptionError> {
-        consume(&mut self.scans, PerceptionError::ScanCapacity)?;
-        consume(&mut self.comparisons, PerceptionError::ComparisonCapacity)
+        consume_budget(&mut self.scans, PerceptionError::ScanCapacity)?;
+        consume_budget(&mut self.comparisons, PerceptionError::ComparisonCapacity)
     }
 
     fn audience_permits(
@@ -196,7 +196,7 @@ impl ClaimWork {
             (AudienceScope::Shared, _) => Ok(true),
             (AudienceScope::Members(members), ObserverScope::Member(member)) => {
                 for recipient in members {
-                    consume(&mut self.comparisons, PerceptionError::ComparisonCapacity)?;
+                    consume_budget(&mut self.comparisons, PerceptionError::ComparisonCapacity)?;
                     if *recipient == member {
                         return Ok(true);
                     }
@@ -219,29 +219,29 @@ fn secret_claim_permits(
     work: &mut ClaimWork,
 ) -> Result<bool, PerceptionError> {
     let mut owner_found = false;
-    let mut permitted = true;
+    let mut is_permitted = true;
     for npc in &state.continuity.npcs {
         work.visit()?;
         for secret in &npc.secrets {
             work.visit()?;
-            let mut linked = false;
+            let mut is_linked = false;
             for id in &secret.claims {
                 work.visit()?;
                 if *id == claim.id {
-                    linked = true;
+                    is_linked = true;
                 }
             }
-            if !linked {
+            if !is_linked {
                 continue;
             }
             if owner_found || secret.holder != claim.holder || npc.entity != secret.holder {
-                permitted = false;
+                is_permitted = false;
             }
             owner_found = true;
-            permitted &= work.audience_permits(&secret.permitted_audience, observer)?;
+            is_permitted &= work.audience_permits(&secret.permitted_audience, observer)?;
         }
     }
-    Ok(permitted)
+    Ok(is_permitted)
 }
 
 fn claim_evidence_permits(
@@ -252,19 +252,19 @@ fn claim_evidence_permits(
 ) -> Result<bool, PerceptionError> {
     for id in &claim.evidence {
         work.visit()?;
-        let mut found = false;
+        let mut has_evidence_fact = false;
         for fact in &state.facts {
             work.visit()?;
             if fact.id != *id {
                 continue;
             }
-            found = true;
+            has_evidence_fact = true;
             if !work.audience_permits(&fact.audience, observer)? {
                 return Ok(false);
             }
             break;
         }
-        if !found {
+        if !has_evidence_fact {
             return Ok(false);
         }
     }
@@ -302,15 +302,15 @@ pub fn perceive_claims<'a>(
         comparisons: limits.maximum_record_comparisons,
     };
     if let ObserverScope::Member(member) = observer {
-        let mut found = false;
+        let mut is_member = false;
         for link in &state.members {
             work.visit()?;
             if link.member == member {
-                found = true;
+                is_member = true;
                 break;
             }
         }
-        if !found {
+        if !is_member {
             return Err(PerceptionError::ObserverUnavailable);
         }
     }
@@ -351,21 +351,21 @@ fn journal_sources_permit(
     }
     for id in &entry.source_facts {
         work.visit()?;
-        let mut found = None;
+        let mut source_fact = None;
         for fact in &state.facts {
             work.visit()?;
             if fact.id == *id {
-                found = Some(fact);
+                source_fact = Some(fact);
                 break;
             }
         }
-        let Some(fact) = found else {
+        let Some(fact) = source_fact else {
             return Ok(false);
         };
         if !work.audience_permits(&fact.audience, observer)? {
             return Ok(false);
         }
-        let mut accepted = false;
+        let mut is_accepted = false;
         for decision in &state.decisions {
             work.visit()?;
             if decision.operation != fact.operation || decision.revision != fact.revision {
@@ -374,15 +374,15 @@ fn journal_sources_permit(
             for accepted_id in &decision.facts {
                 work.visit()?;
                 if *accepted_id == fact.id {
-                    accepted = true;
+                    is_accepted = true;
                     break;
                 }
             }
-            if accepted {
+            if is_accepted {
                 break;
             }
         }
-        if !accepted {
+        if !is_accepted {
             return Ok(false);
         }
     }
@@ -397,15 +397,15 @@ fn journal_claims_permit(
 ) -> Result<bool, PerceptionError> {
     for id in &entry.attributed_claims {
         work.visit()?;
-        let mut found = None;
+        let mut attributed_claim = None;
         for claim in &state.beliefs {
             work.visit()?;
             if claim.id == *id {
-                found = Some(claim);
+                attributed_claim = Some(claim);
                 break;
             }
         }
-        let Some(claim) = found else {
+        let Some(claim) = attributed_claim else {
             return Ok(false);
         };
         if !work.audience_permits(&claim.audience, observer)?
@@ -447,15 +447,15 @@ pub fn perceive_journal<'a>(
         comparisons: maximum_record_comparisons,
     };
     if let ObserverScope::Member(member) = observer {
-        let mut found = false;
+        let mut is_member = false;
         for link in &state.members {
             work.visit()?;
             if link.member == member {
-                found = true;
+                is_member = true;
                 break;
             }
         }
-        if !found {
+        if !is_member {
             return Err(PerceptionError::ObserverUnavailable);
         }
     }
