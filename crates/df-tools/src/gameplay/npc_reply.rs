@@ -47,15 +47,19 @@ use super::{
     table_log::{RollRow, TableLog},
 };
 
-const SPEAKER_DECISION_GUIDANCE: &str = concat!(
-    "Decide what is yours to decide within your role, dossier, and the current scene: you may ",
-    "answer service questions within your role, decide whether to accept actions you control, ",
-    "including whether to buy something, and quote listed items only at prices established in the current facts. ",
+const SPEAKER_AUTHORITY: &str =
+    "Decide what is yours to decide within your role, dossier, and the current scene. ";
+/// The trade allowances: only a line about trade or a question reads them (see `dialogue_mode`).
+const SPEAKER_TRADE_GUIDANCE: &str = concat!(
+    "You may answer service questions within your role, decide whether to accept actions you ",
+    "control, including whether to buy something, and quote listed items only at prices established in the current facts. ",
     "Answer item material, colours, sizes, quality and origin from item_details and the original description; ",
     "do not ask which item when your stock has only one matching item. For unlisted work, either ",
     "quote a modest role-appropriate local fee within one to one hundred thousand copper pieces ",
     "or decline in character with a reason. Skilled hireling labour is two gold a day as an SRD ",
     "reference, not a mandatory flat repair fee. Never defer with a placeholder. ",
+);
+const SPEAKER_KNOWLEDGE_GUIDANCE: &str = concat!(
     "Do not turn a missing prepared answer into professed ",
     "ignorance when the choice is yours. Recognize ownership and current holders from the scene ",
     "facts, but do not invent stock, item prices, or coin transfers, or claim a purchase or paid service ",
@@ -64,12 +68,29 @@ const SPEAKER_DECISION_GUIDANCE: &str = concat!(
     "Never invent unrecorded answers; write none in local_fact. Honor leave_blank in character."
 );
 
+/// What the speaker may decide in this reply. The trade allowances reach it only when the line's
+/// dialogue mode is about trade or a question, or the turn has canonical trade terms, so a flirt,
+/// a threat or a plea is never answered with a price.
+pub(super) fn speaker_decision_guidance(context: &NpcReplyContext) -> String {
+    let trade = context.merchant_trade_scope
+        || context
+            .dialogue_mode
+            .is_none_or(dialogue_mode::DialogueMode::allows_trade);
+    if trade {
+        format!("{SPEAKER_AUTHORITY}{SPEAKER_TRADE_GUIDANCE}{SPEAKER_KNOWLEDGE_GUIDANCE}")
+    } else {
+        format!("{SPEAKER_AUTHORITY}{SPEAKER_KNOWLEDGE_GUIDANCE}")
+    }
+}
+
 #[path = "npc_answer.rs"]
 mod answer;
+mod dialogue_mode;
 #[path = "fact_backfill.rs"]
 pub(super) mod fact_backfill;
 #[path = "local_lore.rs"]
 pub(super) mod local_lore;
+mod person_influence;
 #[path = "npc_room.rs"]
 mod room;
 
@@ -456,12 +477,14 @@ impl HesitantRoll {
 }
 
 /// The skill a hesitant request uses, by the approach's label mapping: Deception and Intimidation
-/// for those approaches, Performance for flattery, otherwise Persuasion (a bargain, a plea).
+/// for those approaches, otherwise Persuasion (a bargain, a plea, praise or charm).
+///
+/// Ruling (2026-10-24): SRD 5.2.1 p. 184 lists Performance for amusing a creature. Flattery and
+/// flirting urge a request through goodwill, which is Persuasion; they are not a performance.
 fn influence_skill(approach: Approach) -> InfluenceSkill {
     match approach {
         Approach::Deception => InfluenceSkill::Deception,
         Approach::Intimidation => InfluenceSkill::Intimidation,
-        Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
         _ => InfluenceSkill::Persuasion,
     }
 }
@@ -838,6 +861,16 @@ pub(super) struct NpcReplyContext {
     pub(super) discount_ask: Option<super::journey::merchant_bargaining::DiscountAsk>,
     /// Set for a foe of an open scene fight: the reply answers a hero's words mid-fight.
     pub(super) fight: Option<FightParley>,
+    /// The conversation mode this reply was read under; `None` before the line is read, and for
+    /// replies that never read one (the opening talk-down), which keep every allowance.
+    dialogue_mode: Option<dialogue_mode::DialogueMode>,
+    /// This visit to the scene: the scene key and the count of place moves before it, set by the
+    /// actor from the checkpoint. A failed urging is held only for the visit it failed in; empty
+    /// when the moves could not be read, and the scene key then stands in.
+    pub(super) scene_visit: String,
+    /// Set when this reply answers a committed confrontation: its outcome is already recorded, so
+    /// the reply may not roll or decide anything new (see `person_influence`).
+    pub(super) confrontation_committed: bool,
 }
 
 impl NpcReplyContext {
@@ -930,6 +963,31 @@ impl NpcReplyContext {
         }
         self.private_reply = on;
         true
+    }
+
+    /// The trade state the caller selected for this turn: canonical terms matched to this hero
+    /// and merchant, and whether the line bargains against a listed price or a live quote.
+    fn trade_turn(&self) -> dialogue_mode::TradeTurn {
+        dialogue_mode::TradeTurn {
+            listed_trade: self.merchant_trade_scope,
+            bargaining: self.discount_ask.is_some()
+                || self.firm_buyback.is_some()
+                || self.pending_quote.is_some(),
+        }
+    }
+
+    /// Reads the line's conversation mode from Jev's approach and focus readings and the turn's
+    /// trade state, gives the reply its facts and logs it.
+    fn read_dialogue_mode(
+        &mut self,
+        approach: Approach,
+        ask: &AskReading,
+    ) -> dialogue_mode::DialogueMode {
+        let mode = dialogue_mode::DialogueMode::read(approach, ask, self.trade_turn());
+        self.facts["dialogue_mode"] = mode.facts(approach);
+        self.dialogue_mode = Some(mode);
+        mode.record(&self.actor_id, &self.hero_name, approach, ask);
+        mode
     }
 
     /// Applies Jev's private-matter reading to the clue release, when the speaker holds one.
@@ -1549,6 +1607,9 @@ impl NpcReplyContext {
             firm_buyback: None,
             discount_ask: None,
             fight: None,
+            dialogue_mode: None,
+            scene_visit: String::new(),
+            confrontation_committed: false,
         })
     }
 
@@ -1754,6 +1815,9 @@ impl NpcReplyContext {
             firm_buyback: None,
             discount_ask: None,
             fight: None,
+            dialogue_mode: None,
+            scene_visit: String::new(),
+            confrontation_committed: false,
         })
     }
 
@@ -2456,6 +2520,7 @@ impl NpcVoice {
         // The clue release follows Jev's private-matter reading; the legacy facts are rewritten.
         context.apply_private_reading(&ask);
         context.facts["player"]["approach"] = json!(approach.label());
+        let mode = context.read_dialogue_mode(approach, &ask);
         if let Some((identity, _)) = answer::identity(&context) {
             context.facts["npc"]["public_identity"] = json!(identity);
         }
@@ -2475,6 +2540,14 @@ impl NpcVoice {
                         .violation(&answer.text)
                         .is_none()
         });
+        // A person without a dossier who is urged to act is judged before the reply is written,
+        // so the reply voices the server's outcome rather than deciding it.
+        let influence = if bounded.is_none() {
+            self.judge_person_influence(&mut context, mode, approach, &ask)
+                .await
+        } else {
+            None
+        };
         let (text, outcome, from_model, fallback) = if let Some(answer) = bounded {
             context.facts["narrative_fact_authoritative_answer"] = json!(true);
             let outcome = if answer.withheld && answer.text.is_empty() {
@@ -2484,15 +2557,26 @@ impl NpcVoice {
             };
             (answer.text, outcome, false, None)
         } else {
-            match self.model_public(&context).await {
-                Ok(text) => (text, ExchangeOutcome::Spoken, true, None),
-                Err(reason) if context.facts["narrative_fact_preparation_unavailable"] == true => (
-                    fact_backfill::UNAVAILABLE_ANSWER.to_owned(),
+            match (self.model_public(&context).await, influence.as_ref()) {
+                (Ok(text), _) => (text, ExchangeOutcome::Spoken, true, None),
+                // The check is already decided and its row will show: its outcome is voiced.
+                (Err(reason), Some(influence)) => (
+                    influence.fallback.to_owned(),
                     ExchangeOutcome::Spoken,
                     false,
                     Some(reason),
                 ),
-                Err(reason) => (
+                (Err(reason), None)
+                    if context.facts["narrative_fact_preparation_unavailable"] == true =>
+                {
+                    (
+                        fact_backfill::UNAVAILABLE_ANSWER.to_owned(),
+                        ExchangeOutcome::Spoken,
+                        false,
+                        Some(reason),
+                    )
+                }
+                (Err(reason), None) => (
                     String::new(),
                     ExchangeOutcome::Unavailable,
                     false,
@@ -2519,6 +2603,21 @@ impl NpcVoice {
         };
         if !context.publication_current() {
             return None;
+        }
+        // Only now, with the reply still current, does a failed urging hold the same urging back;
+        // each check rolled for this reply then shows its row before the person's own line.
+        if influence
+            .as_ref()
+            .is_some_and(|influence| influence.record_failure(&context))
+            && let Some(ledger) = context.acquaintance_ledger.clone()
+        {
+            save_social_ledger(ledger).await;
+        }
+        for row in influence
+            .iter()
+            .flat_map(|influence| influence.roll_rows.iter().cloned())
+        {
+            log.push_check(log.reserve(), context.hero_index, row);
         }
         let mut source_line_sequence = None;
         if private {
@@ -2565,7 +2664,7 @@ impl NpcVoice {
                 proposal.source_line_sequence = source_line_sequence;
                 proposal
             }),
-            influence: None,
+            influence: influence.and_then(|influence| influence.verdict),
         };
         exchange.observe();
         Some(exchange)
@@ -2661,6 +2760,7 @@ impl NpcVoice {
         }
         context.facts["player"]["approach"] = json!(approach.label());
         context.facts["player"]["subject"] = json!(subject.label());
+        context.read_dialogue_mode(approach, &ask);
         if let Some(turn) = context.turn.as_ref() {
             // Only this hero's wrongs; the quoted words are data, never instructions.
             context.facts["grievances"] = json!({
@@ -3372,20 +3472,7 @@ impl NpcVoice {
                 &note,
             );
         }
-        let ledger = turn.ledger.clone();
-        let saved = tokio::task::spawn_blocking(move || ledger.save()).await;
-        if !matches!(saved, Ok(Ok(()))) {
-            let operation = df_observe::OperationContext {
-                trace_parent: String::new(),
-                build: crate::BUILD_ID.to_owned(),
-            };
-            let mut span = df_observe::begin(&operation, "gameplay.social.save");
-            span.event(
-                "social.save_failed",
-                &[("social.error", format!("{saved:?}"))],
-            );
-            span.finish_unmeasured("save_failed");
-        }
+        save_social_ledger(turn.ledger.clone()).await;
         let exchange = Exchange {
             text,
             social_record: Some(recorded.exchange),
@@ -3820,7 +3907,7 @@ impl NpcVoice {
         // from what they already know and invents nothing (REF-069's leave-blank rule); before,
         // the whole reply failed and every free-roam stranger fell silent (2026-10-24).
         fact_backfill::leave_missing_answer_blank(&mut facts);
-        facts["speaker_decision_guidance"] = json!(SPEAKER_DECISION_GUIDANCE);
+        facts["speaker_decision_guidance"] = json!(speaker_decision_guidance(context));
         facts["reply_focus"] = json!(
             "Answer the actual question concretely before any follow-on. Do not repeat your role or self-introduction from recent replies. Add no unrelated directions or stock invitation instead of the answer."
         );
@@ -3911,9 +3998,14 @@ impl NpcVoice {
         result: Option<&InfluenceResult>,
         log: &TableLog,
     ) -> String {
-        match self.prepare_fact_reply(context).await {
-            Ok(facts) => context.facts = facts,
-            Err(_) => self.unavailable_fact_reply(context),
+        // With the text model off the reply is a prepared outcome line that no fact decision can
+        // change, so the narrative fact judge is not asked: it would spend a Jev call and, when it
+        // failed, add a stray "not sure" to a resolved talk-down.
+        if self.storyteller.is_on() {
+            match self.prepare_fact_reply(context).await {
+                Ok(facts) => context.facts = facts,
+                Err(_) => self.unavailable_fact_reply(context),
+            }
         }
         let outcome = match result.map(|result| result.outcome) {
             Some(
@@ -4198,7 +4290,7 @@ impl NpcVoice {
                 "The server's opening_social_outcome is final. Express it; do not decide it again. Never create local facts or reveal withheld knowledge."
             )
         } else {
-            json!(SPEAKER_DECISION_GUIDANCE)
+            json!(speaker_decision_guidance(context))
         };
         redact_unknown_names(&mut facts, &context.unknown_hero_names());
         let values = self
@@ -4237,6 +4329,24 @@ impl NpcVoice {
             return Err(FallbackReason::ReplyRejected);
         }
         Ok(reply)
+    }
+}
+
+/// Saves the social ledger off the async thread and records a failed save; the standing already
+/// changed in memory and the next save writes it again.
+async fn save_social_ledger(ledger: Arc<SocialLedger>) {
+    let saved = tokio::task::spawn_blocking(move || ledger.save()).await;
+    if !matches!(saved, Ok(Ok(()))) {
+        let operation = df_observe::OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&operation, "gameplay.social.save");
+        span.event(
+            "social.save_failed",
+            &[("social.error", format!("{saved:?}"))],
+        );
+        span.finish_unmeasured("save_failed");
     }
 }
 

@@ -66,8 +66,11 @@ pub(super) fn influence_check_plan(
         skill: match approach {
             Approach::Deception => InfluenceSkill::Deception,
             Approach::Intimidation => InfluenceSkill::Intimidation,
-            Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
-            Approach::Question
+            // SRD 5.2.1 p. 184: Performance amuses; praise and charm urging a request are
+            // Persuasion (ruling 2026-10-24, the same as npc_reply's `influence_skill`).
+            Approach::Flattery
+            | Approach::Flirting
+            | Approach::Question
             | Approach::Kindness
             | Approach::Apology
             | Approach::Introduction

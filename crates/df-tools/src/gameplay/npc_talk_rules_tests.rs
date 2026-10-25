@@ -46,8 +46,9 @@ fn influence_uses_the_srd_dc_and_attitude_roll_mode() {
             10,
             Approach::Flirting,
         ),
+        // Charm urging a request is Persuasion; SRD 5.2.1 p. 184 keeps Performance for amusing.
         Some(InfluenceCheckPlan {
-            skill: InfluenceSkill::Performance,
+            skill: InfluenceSkill::Persuasion,
             difficulty_class: 15,
             roll_mode: InfluenceRollMode::Normal,
         })

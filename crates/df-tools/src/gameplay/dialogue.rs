@@ -1246,7 +1246,7 @@ impl Service {
                         target_number: u32::from(result.difficulty_class),
                         against: rpc::RollAgainst::Dc as i32,
                         succeeded: result.outcome == df_rules::influence::InfluenceOutcome::Success,
-                        label: format!("{hero} Â· {}", result.skill.name()),
+                        label: super::table_log::roll_label(&hero, result.skill.name()),
                         kind: rpc::RollKind::Check as i32,
                     }),
                 });
@@ -2485,6 +2485,18 @@ fn observation_thing_label(thing: &str) -> Option<String> {
 
 fn note_scene_title(scene: &super::pack::Scene) -> &str {
     &scene.title
+}
+
+/// This visit to `scene`: the scene key and the count of place moves committed before it. Every
+/// move starts a new visit, so leaving a scene and coming back to the same key is a later visit.
+pub(super) fn scene_visit(
+    current: &df_model::checkpoint::Checkpoint,
+    scene: super::pack::SceneKey,
+) -> Result<String, df_session::submission::RepositoryError> {
+    Ok(format!(
+        "{scene:?}#{}",
+        super::place::entries(current.state())?.len()
+    ))
 }
 
 /// The narrator's answer when the addressed name matches nobody present.
@@ -7474,7 +7486,8 @@ impl Service {
             }
             None => None,
         };
-        // A paid fare whose journey the owner then refused is still answered as the purchase.
+        // A refused journey after a paid fare is answered by `take_ride`'s own failure reply, which
+        // tells the kept fare (A5 R1); the purchase reply speaks only when `take_ride` returns none.
         let shown = paid.is_some();
         Ok(self
             .take_ride(credential, request, ride, shown)
@@ -10307,6 +10320,11 @@ impl actor::Actor {
         }
         if let Some(amount_cp) = hero_trade.coin_gift_cp {
             reply.with_payment(amount_cp);
+        }
+        // Each place move starts a new visit; a failed urging is held only for its own visit.
+        match scene_visit(current, projection.scene) {
+            Ok(visit) => reply.scene_visit = visit,
+            Err(error) => actor::record_unavailable("scene-visit", &format!("{error:?}")),
         }
         let current = self.owner.checkpoint();
         let hero_id = match super::journey::player_entity(member, current)

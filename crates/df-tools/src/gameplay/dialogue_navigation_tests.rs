@@ -230,8 +230,17 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        self.service.actor.stop().unwrap();
-        self.owner.take().unwrap().join().unwrap();
+        let stopped = self.service.actor.stop();
+        let joined = self.owner.take().map(std::thread::JoinHandle::join);
+        // A failing test is already unwinding: panicking again here (on a stopped actor or the
+        // owner thread's own panic) would abort the whole test process instead of failing it.
+        if !std::thread::panicking() {
+            stopped.unwrap();
+            assert!(
+                joined.is_some_and(|joined| joined.is_ok()),
+                "the owner thread panicked"
+            );
+        }
     }
 }
 
@@ -316,22 +325,38 @@ fn n1_spoken_departure_commits_the_exit_move_and_shows_arrival() {
     });
 }
 
+/// RP-35: a departure with no way onward is told in the fiction, not returned as an error: the
+/// hero's line and one outcome line reach the table, the reply is rejected and nobody moves.
+fn assert_told_to_stay(table: &Table, reply: Result<DialogueReply, Status>, opening: &Checkpoint) {
+    let DialogueReply::Raw(response, None) = reply.expect("a refused departure is told") else {
+        panic!("a told refusal")
+    };
+    assert_eq!(
+        response.disposition,
+        rpc::DialogueDisposition::Rejected as i32
+    );
+    assert_eq!(*table.service.updates.borrow(), *opening);
+    let lines = table.service.table_log.lines();
+    assert_eq!(lines.len(), 2, "the hero's line and the outcome");
+    assert_eq!(lines[1].text, response.npc_reply);
+}
+
 #[test]
 fn n1_jev_stay_and_unavailable_do_not_infer_departure_from_words() {
     with_created_place(|opening, _, loaded| {
         let scene = runtime::scene(opening.state()).unwrap();
-        let endpoint = FakeEndpoint::start(vec![answer("o3")]);
+        // The heading judgement (stay), then HS68's name reading of the told hero line (none).
+        let endpoint = FakeEndpoint::start(vec![answer("o3"), answer("o1")]);
         let voice =
             NpcVoice::new(Arc::new(Storyteller::disabled())).with_approach_model(jev(&endpoint));
         let table = Table::start(opening.clone(), loaded.clone(), voice);
         let line = table.line("Let's get out into the street.");
-        assert!(run(table.service.travel_by_line([1; 32], &line, &scene)).is_err());
-        assert_eq!(*table.service.updates.borrow(), opening);
-        assert!(table.service.table_log.lines().is_empty());
-        assert_eq!(endpoint.connections(), 1);
+        let reply = run(table.service.travel_by_line([1; 32], &line, &scene));
+        assert_told_to_stay(&table, reply, &opening);
+        assert_eq!(endpoint.connections(), 2);
         let table = Table::start(opening.clone(), loaded, NpcVoice::silent());
-        assert!(run(table.service.travel_by_line([1; 32], &line, &scene)).is_err());
-        assert_eq!(*table.service.updates.borrow(), opening);
+        let reply = run(table.service.travel_by_line([1; 32], &line, &scene));
+        assert_told_to_stay(&table, reply, &opening);
     });
 }
 
@@ -364,20 +389,20 @@ fn n1_closed_exits_are_not_offered_to_jev() {
         }
         pack::with_test_pack(loaded.clone(), || {
             let scene = runtime::scene(opening.state()).unwrap();
-            let endpoint = FakeEndpoint::start(vec![answer("o2")]);
+            // The heading judgement, then HS68's name reading of the told hero line (none).
+            let endpoint = FakeEndpoint::start(vec![answer("o2"), answer("o1")]);
             let voice = NpcVoice::new(Arc::new(Storyteller::disabled()))
                 .with_approach_model(jev(&endpoint));
             let table = Table::start(opening.clone(), loaded.clone(), voice);
             let line = table.line("Let's get out into the street.");
-            assert!(run(table.service.travel_by_line([1; 32], &line, &scene)).is_err());
-            assert_eq!(endpoint.connections(), 1);
+            let reply = run(table.service.travel_by_line([1; 32], &line, &scene));
+            assert_eq!(endpoint.connections(), 2);
             let body = endpoint.bodies()[0].to_string();
             assert!(
                 !body.contains("street-door"),
                 "closed exits never enter the heading options"
             );
-            assert_eq!(*table.service.updates.borrow(), opening);
-            assert!(table.service.table_log.lines().is_empty());
+            assert_told_to_stay(&table, reply, &opening);
         });
     });
 }
@@ -658,4 +683,52 @@ fn story_input_one_four_and_six_mixed_heroes_reach_the_storyteller_after_opening
             );
         });
     }
+}
+
+/// The real visit identity: a committed move away and back reaches the same scene key as a later
+/// visit, so a failed urging held for the first visit is no longer offered as `same_request`.
+#[test]
+fn a_move_away_and_back_starts_a_new_visit_that_lifts_a_held_urging() {
+    with_created_place(|home, street, _| {
+        let place_id = |current: &Checkpoint| {
+            runtime::scene(current.state())
+                .unwrap()
+                .setting
+                .unwrap()
+                .place_id
+        };
+        let back = place::plan(
+            &street,
+            "Brynn",
+            df_types::OperationId::from_bytes(&[42; 16]).unwrap(),
+            &place_id(&street),
+            place::JOURNEY_EXIT,
+            &place_id(&home),
+            None,
+        )
+        .unwrap_or_else(|_| panic!("the journey home must stage"))
+        .candidate;
+        assert_eq!(place_id(&back), place_id(&home));
+        let home_key = runtime::scene(home.state()).unwrap().key;
+        let back_key = runtime::scene(back.state()).unwrap().key;
+        assert_eq!(back_key, home_key, "the same scene key on both visits");
+        let first = scene_visit(&home, home_key).unwrap();
+        let returned = scene_visit(&back, back_key).unwrap();
+        assert_ne!(first, returned);
+        let ledger = crate::gameplay::social::SocialLedger::none();
+        let member = df_types::MemberId::from_bytes(&[1; 16]).unwrap();
+        ledger.record_person_influence_failure(
+            member,
+            "keeper",
+            &first,
+            "Let me sleep in your store room.",
+        );
+        assert_eq!(
+            ledger
+                .held_person_urging(member, "keeper", &first)
+                .as_deref(),
+            Some("Let me sleep in your store room.")
+        );
+        assert_eq!(ledger.held_person_urging(member, "keeper", &returned), None);
+    });
 }

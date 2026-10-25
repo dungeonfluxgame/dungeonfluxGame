@@ -25,6 +25,8 @@ pub(in crate::gameplay) async fn reply(
         );
         return None;
     }
+    // The confrontation's outcome is committed: the reply voices it and rolls nothing new.
+    context.confrontation_committed = true;
     // Dossier reselection carries `now` into the final listener-safe expression facts.
     context.facts["now"]["committed_confrontation"] = serde_json::json!({
         "npc_id": confrontation.npc_id,

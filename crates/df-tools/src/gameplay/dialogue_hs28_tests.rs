@@ -5,7 +5,9 @@ use crate::gameplay::{
     approach_model::tests::{answer, model as jev},
     beat_script_runtime::{self as runtime, opening_social_tests},
     pack, place,
-    place_creation::tests::{answer as place_answer, people_slot, place_slot, things_slot},
+    place_creation::tests::{
+        answer as place_answer, people_slot, persona_replies, place_slot, things_slot,
+    },
     social::SocialLedger,
     storyteller::{
         Storyteller,
@@ -225,8 +227,17 @@ impl Table {
 }
 impl Drop for Table {
     fn drop(&mut self) {
-        self.service.actor.stop().unwrap();
-        self.owner.take().unwrap().join().unwrap();
+        let stopped = self.service.actor.stop();
+        let joined = self.owner.take().map(std::thread::JoinHandle::join);
+        // A failing test is already unwinding: panicking again here (on a stopped actor or the
+        // owner thread's own panic) would abort the whole test process instead of failing it.
+        if !std::thread::panicking() {
+            stopped.unwrap();
+            assert!(
+                joined.is_some_and(|joined| joined.is_ok()),
+                "the owner thread panicked"
+            );
+        }
     }
 }
 fn run<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -251,11 +262,64 @@ fn silent_voice(endpoint: &FakeEndpoint) -> NpcVoice {
     voice(endpoint, Storyteller::disabled())
 }
 
+/// Whether a Jev request offers a criterion that starts with `prefix`.
+fn offers(body: &serde_json::Value, prefix: &str) -> bool {
+    body["questions"]["q1"]["criteria"]
+        .as_object()
+        .is_some_and(|criteria| {
+            criteria
+                .values()
+                .any(|text| text.as_str().is_some_and(|text| text.starts_with(prefix)))
+        })
+}
+
+/// Whether a Jev request is HS68's reading of a public line for a revealed hero name.
+fn is_name_reading(body: &serde_json::Value) -> bool {
+    offers(body, "none: This public line does not reveal")
+}
+
+/// Jev answering this test's judgements in the scripted order. Since HS68 every public line is
+/// also read for a revealed hero name, and since HS69 every generated person's persona is judged;
+/// those readings answer `none` and `accepted` and are not in the script, so the script and the
+/// counts below cover the judgements the flow under test makes.
+fn scripted_jev(script: Vec<Reply>) -> FakeEndpoint {
+    let script = std::sync::Mutex::new(VecDeque::from(script));
+    let compute: Arc<dyn Fn(&serde_json::Value) -> (u16, serde_json::Value) + Send + Sync> =
+        Arc::new(move |body: &serde_json::Value| {
+            let next = if is_name_reading(body) || offers(body, "accepted: ") {
+                Some(answer("o1"))
+            } else {
+                script
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pop_front()
+            };
+            match next {
+                Some(Reply::Status(status, response)) => (status, response),
+                _ => (500, serde_json::json!({"error": "unscripted"})),
+            }
+        });
+    FakeEndpoint::start(
+        (0..96)
+            .map(|_| Reply::ComputeResponse(compute.clone()))
+            .collect(),
+    )
+}
+
+/// The judgements this test's flow sent Jev, in order, without the name readings.
+fn judgements(endpoint: &FakeEndpoint) -> Vec<serde_json::Value> {
+    endpoint
+        .bodies()
+        .into_iter()
+        .filter(|body| !is_name_reading(body) && !offers(body, "accepted: "))
+        .collect()
+}
+
 #[test]
 fn hs28_talk_down_one_four_six_heroes_commits_before_line_roll_and_offers_travel() {
     for count in [1, 4, 6] {
         with_harbor(|loaded| {
-            let jev = FakeEndpoint::start(vec![answer("o1"), answer("o3"), answer("o2")]);
+            let jev = scripted_jev(vec![answer("o1"), answer("o3"), answer("o2")]);
             let table = Table::start(
                 opening_social_tests::opening(count),
                 loaded,
@@ -315,6 +379,14 @@ fn hs28_talk_down_one_four_six_heroes_commits_before_line_roll_and_offers_travel
                 lines.iter().filter(|line| line.speaker == "Roll").count(),
                 1
             );
+            // The roll card names the hero and skill with the shared separator, never mojibake.
+            let card = lines
+                .iter()
+                .find(|line| line.speaker == "Roll")
+                .and_then(|line| line.roll.as_ref())
+                .expect("the talk-down roll has a card");
+            assert!(card.label.ends_with(" \u{b7} Deception"), "{}", card.label);
+            assert!(!card.label.contains('\u{c2}'), "{}", card.label);
             assert_eq!(
                 lines
                     .iter()
@@ -326,8 +398,8 @@ fn hs28_talk_down_one_four_six_heroes_commits_before_line_roll_and_offers_travel
                 .unwrap()
                 .unwrap();
             assert!(previous.1.unwrap().contains("bring customers"));
-            assert_eq!(jev.connections(), 3);
-            let social_schema = jev.bodies()[1].to_string();
+            assert_eq!(judgements(&jev).len(), 3);
+            let social_schema = judgements(&jev)[1].to_string();
             assert!(social_schema.contains("previous_failed_request"));
             assert!(social_schema.contains("materially"));
         });
@@ -337,7 +409,7 @@ fn hs28_talk_down_one_four_six_heroes_commits_before_line_roll_and_offers_travel
 #[test]
 fn hs28_failure_same_urging_does_not_reroll_changed_offer_can_resolve() {
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![
+        let jev = scripted_jev(vec![
             answer("o1"),
             answer("o3"),
             answer("o2"),
@@ -405,15 +477,15 @@ fn hs28_failure_same_urging_does_not_reroll_changed_offer_can_resolve() {
                 .count(),
             2
         );
-        assert!(jev.bodies()[4].to_string().contains("our good word"));
-        assert_eq!(jev.connections(), 8);
+        assert!(judgements(&jev)[4].to_string().contains("our good word"));
+        assert_eq!(judgements(&jev).len(), 8);
     });
 }
 
 #[test]
 fn hs28_uncertain_social_owner_publishes_no_line_or_roll() {
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![answer("o1"), answer("o3"), answer("o2")]);
+        let jev = scripted_jev(vec![answer("o1"), answer("o3"), answer("o2")]);
         let opening = opening_social_tests::opening(1);
         let table = Table::start(opening.clone(), loaded, silent_voice(&jev), vec![], true);
         assert!(
@@ -432,14 +504,18 @@ fn hs28_uncertain_social_owner_publishes_no_line_or_roll() {
 fn hs28_phone_travel_dispatch_rechecks_canonical_selection_and_publishes_one_arrival() {
     use rpc::action_service_server::ActionService;
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![answer("o1"), answer("o3"), answer("o2")]);
+        let jev = scripted_jev(vec![answer("o1"), answer("o3"), answer("o2")]);
         let mut market = place_slot();
         market["name"] = serde_json::json!("Market Square");
-        let teller_endpoint = FakeEndpoint::start(vec![Reply::Output(place_answer(
-            &market,
-            &people_slot(),
-            &things_slot(),
-        ))]);
+        // Since HS35 Dain answers the talk-down in his own voice through the text model, so the
+        // teller first writes his line; then the market place, and (HS69) one persona for each of
+        // its three people.
+        let mut teller_script = vec![
+            Reply::Output(serde_json::json!({"reply": "Fine. Take the courier and go."})),
+            Reply::Output(place_answer(&market, &people_slot(), &things_slot())),
+        ];
+        teller_script.extend(persona_replies(3));
+        let teller_endpoint = FakeEndpoint::start(teller_script);
         let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
             "../../artifacts/tmp/lanes/HS28/market-cache-{}",
             std::process::id()
@@ -470,7 +546,7 @@ fn hs28_phone_travel_dispatch_rechecks_canonical_selection_and_publishes_one_arr
             if matches!(receipt.outcome, Some(rpc::decision_receipt::Outcome::Rejected(rejection))
                 if rejection.code == rpc::RejectionCode::StaleOffer as i32))
         );
-        assert_eq!(teller_endpoint.connections(), 0);
+        assert_eq!(teller_endpoint.connections(), 1, "only Dain's line so far");
         let mut invalid = request.clone();
         invalid.action_choices[0].option_id = "exit:forged".to_owned();
         let before = table.current();
@@ -506,14 +582,21 @@ fn hs28_phone_travel_dispatch_rechecks_canonical_selection_and_publishes_one_arr
             ))
         ));
         assert_eq!(place::entries(table.current().state()).unwrap().len(), 1);
-        assert_eq!(teller_endpoint.connections(), 1);
+        assert_eq!(
+            teller_endpoint.connections(),
+            5,
+            "Dain's line, one market and its three personas"
+        );
     });
 }
 
 #[test]
 fn hs28_typed_travel_refused_during_threat_and_owner_plan_rechecks_all_move_paths() {
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![answer("o15")]);
+        // Jev reads the line as travel (o15). While the opening talk-down is offered, Jev then
+        // judges whether the heroes themselves depart (HS35 `opening_heroes_depart`): inviting
+        // the courier to walk with them now is a departure (o1), which the threat refuses.
+        let jev = scripted_jev(vec![answer("o15"), answer("o1")]);
         let opening = opening_social_tests::opening(1);
         let table = Table::start(opening.clone(), loaded, silent_voice(&jev), vec![], false);
         let reply = run(table.service.submit_line(
@@ -547,14 +630,14 @@ fn hs28_typed_travel_refused_during_threat_and_owner_plan_rechecks_all_move_path
                 place::PlaceRefusal::TravelBlocked(_)
             ))
         ));
-        assert_eq!(jev.connections(), 1);
+        assert_eq!(judgements(&jev).len(), 2);
     });
 }
 
 #[test]
 fn hs39_dialogue_social_useful_offer_eases_hostile_to_indifferent_before_owner_roll() {
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![answer("o1"), answer("o3"), answer("o4")]);
+        let jev = scripted_jev(vec![answer("o1"), answer("o3"), answer("o4")]);
         let table = Table::start(
             opening_social_tests::opening(6),
             loaded,
@@ -604,7 +687,7 @@ fn hs39_dialogue_social_useful_offer_eases_hostile_to_indifferent_before_owner_r
 #[test]
 fn hs39_dialogue_social_consecutive_refusals_vary_without_retrying_the_same_urging() {
     with_harbor(|loaded| {
-        let jev = FakeEndpoint::start(vec![
+        let jev = scripted_jev(vec![
             answer("o1"),
             answer("o3"),
             answer("o2"),
@@ -675,7 +758,7 @@ fn hs39_dialogue_trade_exhausted_exchange_judgement_is_in_fiction_not_status_err
     .unwrap();
     pack::with_test_pack(loaded.clone(), || {
         let current = opening_social_tests::opening(1);
-        let jev = FakeEndpoint::start(vec![answer("o8")]);
+        let jev = scripted_jev(vec![answer("o8")]);
         let endpoint = FakeEndpoint::start(vec![
             Reply::Output(serde_json::json!({"exchange":"{\"offer\":"})),
             Reply::Output(serde_json::json!({"exchange":"{\"offer\":"})),

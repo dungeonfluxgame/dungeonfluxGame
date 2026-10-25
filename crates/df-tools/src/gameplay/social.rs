@@ -70,6 +70,10 @@ const GRIEVANCE_CHARACTERS: usize = 200;
 const MENDING_EXCHANGES: u8 = 3;
 /// Try-on consents kept per hero and NPC; the oldest is forgotten past this bound.
 const MAXIMUM_TRY_ON_CONSENTS: usize = 8;
+/// Failed urgings kept for people without a dossier, one per hero and person.
+const MAXIMUM_PERSON_INFLUENCE_FAILURES: usize = 256;
+/// Characters of a failed urging's words kept to compare a later urging with.
+const HELD_URGING_CHARACTERS: usize = 300;
 
 /// A Jev-judged handover of coin in a spoken line (see
 /// `approach_model::ApproachModel::judge_coin_handover`). `amount_cp` is the total in copper
@@ -879,6 +883,31 @@ struct SavedFile {
     schema: String,
     adventure_seed: String,
     relationships: Vec<SavedRelationship>,
+    /// Older files have none: no person without a dossier had failed an urging yet.
+    #[serde(default)]
+    person_influence_failures: Vec<SavedInfluenceFailure>,
+}
+
+/// A hesitant Influence check a hero failed against a person without a dossier, the scene visit it
+/// failed in and the hero's words. The same urging is refused without a roll until the visit ends.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SavedInfluenceFailure {
+    member: String,
+    person: String,
+    visit: String,
+    words: String,
+}
+
+/// A failed urging that holds the same urging back (SRD 5.2.1 p. 184: the same request cannot be
+/// urged again for 24 hours; one visit to a scene is the nearest recorded span). A new visit to
+/// the scene, even of the same place, lifts it, and a materially different urging is judged anew.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct HeldUrging {
+    /// The scene visit the check failed in.
+    visit: String,
+    /// The hero's own words, bounded; data for the comparison, never instructions.
+    words: String,
 }
 
 /// Name knowledge is independent of attitude, including people without dossiers.
@@ -963,6 +992,7 @@ pub(super) struct ExchangeRecord {
 pub(super) struct SocialSnapshot {
     acquaintances: BTreeMap<(String, String), Acquaintance>,
     relationships: BTreeMap<(MemberId, String), Relationship>,
+    person_influence_failures: BTreeMap<(MemberId, String), HeldUrging>,
 }
 
 impl SocialSnapshot {
@@ -1013,6 +1043,12 @@ impl SocialSnapshot {
                 bytes = bytes.checked_add(capacity)?;
             }
         }
+        for ((_, person), held) in &self.person_influence_failures {
+            bytes = bytes.checked_add(size_of::<((MemberId, String), HeldUrging)>())?;
+            bytes = bytes.checked_add(person.capacity())?;
+            bytes = bytes.checked_add(held.visit.capacity())?;
+            bytes = bytes.checked_add(held.words.capacity())?;
+        }
         Some(bytes)
     }
 }
@@ -1024,6 +1060,8 @@ pub(super) struct SocialLedger {
     dossiers: Vec<Dossier>,
     adventure_seed: String,
     relationships: Mutex<BTreeMap<(MemberId, String), Relationship>>,
+    /// Each hero's last failed hesitant urging of each person without a dossier.
+    person_influence_failures: Mutex<BTreeMap<(MemberId, String), HeldUrging>>,
     file: Option<PathBuf>,
     /// Serialises saves so the newest snapshot is always the last one written.
     writing: Mutex<()>,
@@ -1043,6 +1081,7 @@ impl SocialLedger {
             dossiers: Vec::new(),
             adventure_seed: String::new(),
             relationships: Mutex::new(BTreeMap::new()),
+            person_influence_failures: Mutex::default(),
             file: None,
             writing: Mutex::new(()),
             latest: Mutex::new(None),
@@ -1060,6 +1099,7 @@ impl SocialLedger {
         let file = directory.map(|directory| directory.join(FILE_NAME));
         let mut relationships = BTreeMap::new();
         let mut acquaintances = BTreeMap::new();
+        let mut person_influence_failures = BTreeMap::new();
         let rooms = scene_state::Rooms::default();
         if let Some(file) = &file {
             match read_saved(file) {
@@ -1129,6 +1169,27 @@ impl SocialLedger {
                         }
                         relationships.insert((member, entry.npc), relationship);
                     }
+                    if saved.person_influence_failures.len() > MAXIMUM_PERSON_INFLUENCE_FAILURES {
+                        return Err(SocialError::Invalid("failed urgings bound"));
+                    }
+                    for entry in saved.person_influence_failures {
+                        let member = member_from_hex(&entry.member)
+                            .ok_or(SocialError::Invalid("member identity"))?;
+                        if entry.person.is_empty()
+                            || entry.person.chars().count() > 240
+                            || entry.visit.chars().count() > 512
+                            || entry.words.chars().count() > HELD_URGING_CHARACTERS
+                        {
+                            return Err(SocialError::Invalid("failed urging bounds"));
+                        }
+                        person_influence_failures.insert(
+                            (member, entry.person),
+                            HeldUrging {
+                                visit: entry.visit,
+                                words: entry.words,
+                            },
+                        );
+                    }
                 }
                 Err(SocialError::Io(io::ErrorKind::NotFound)) => {}
                 Err(error) => return Err(error),
@@ -1140,6 +1201,7 @@ impl SocialLedger {
             dossiers,
             adventure_seed: adventure_seed.to_owned(),
             relationships: Mutex::new(relationships),
+            person_influence_failures: Mutex::new(person_influence_failures),
             file,
             writing: Mutex::new(()),
             latest: Mutex::new(None),
@@ -1215,6 +1277,11 @@ impl SocialLedger {
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone(),
             relationships: self.lock().clone(),
+            person_influence_failures: self
+                .person_influence_failures
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
         }
     }
 
@@ -1228,6 +1295,10 @@ impl SocialLedger {
             .acquaintances
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = snapshot.acquaintances.clone();
+        *self
+            .person_influence_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = snapshot.person_influence_failures.clone();
         {
             let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
             rooms.projections.clear();
@@ -1531,6 +1602,55 @@ impl SocialLedger {
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
         relationship.influence_failed = true;
+    }
+
+    /// The words of this hero's failed hesitant urging of this person without a dossier, when it
+    /// failed in this same scene visit. Jev compares a new urging with them; a failure from an
+    /// earlier visit holds nothing back.
+    pub(super) fn held_person_urging(
+        &self,
+        member: MemberId,
+        person_id: &str,
+        visit: &str,
+    ) -> Option<String> {
+        self.person_influence_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(member, person_id.to_owned()))
+            .filter(|held| held.visit == visit)
+            .map(|held| held.words.clone())
+    }
+
+    /// Records a failed hesitant urging of a person without a dossier, held for this scene visit.
+    /// Call it only once the check's row is published. At the bound, failures from other visits
+    /// are forgotten first, since they no longer hold anything back. The reply's save persists it.
+    pub(super) fn record_person_influence_failure(
+        &self,
+        member: MemberId,
+        person_id: &str,
+        visit: &str,
+        words: &str,
+    ) {
+        let mut failures = self
+            .person_influence_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let key = (member, person_id.to_owned());
+        if !failures.contains_key(&key) && failures.len() >= MAXIMUM_PERSON_INFLUENCE_FAILURES {
+            failures.retain(|_, held| held.visit == visit);
+            if failures.len() >= MAXIMUM_PERSON_INFLUENCE_FAILURES
+                && let Some(first) = failures.keys().next().cloned()
+            {
+                failures.remove(&first);
+            }
+        }
+        failures.insert(
+            key,
+            HeldUrging {
+                visit: visit.to_owned(),
+                words: words.chars().take(HELD_URGING_CHARACTERS).collect(),
+            },
+        );
     }
 
     /// Commits Jev's selected reaction before the reply is formed.
@@ -1984,11 +2104,24 @@ impl SocialLedger {
                 knowledge: knowledge.clone(),
             })
             .collect();
+        let person_influence_failures = self
+            .person_influence_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|((member, person), held)| SavedInfluenceFailure {
+                member: hex(member.as_bytes()),
+                person: person.clone(),
+                visit: held.visit.clone(),
+                words: held.words.clone(),
+            })
+            .collect();
         let bytes = serde_json::to_vec_pretty(&SavedFile {
             acquaintances,
             schema: SCHEMA.to_owned(),
             adventure_seed: self.adventure_seed.clone(),
             relationships,
+            person_influence_failures,
         })
         .map_err(|_| SocialError::Invalid("serialization"))?;
         write_atomically(file, &bytes).map_err(|error| SocialError::Io(error.kind()))

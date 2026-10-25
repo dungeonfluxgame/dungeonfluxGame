@@ -184,8 +184,17 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        self.service.actor.stop().unwrap();
-        self.owner.take().unwrap().join().unwrap();
+        let stopped = self.service.actor.stop();
+        let joined = self.owner.take().map(std::thread::JoinHandle::join);
+        // A failing test is already unwinding: panicking again here (on a stopped actor or the
+        // owner thread's own panic) would abort the whole test process instead of failing it.
+        if !std::thread::panicking() {
+            stopped.unwrap();
+            assert!(
+                joined.is_some_and(|joined| joined.is_ok()),
+                "the owner thread panicked"
+            );
+        }
     }
 }
 
