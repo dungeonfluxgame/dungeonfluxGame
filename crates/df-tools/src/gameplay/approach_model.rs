@@ -1113,7 +1113,7 @@ impl ApproachModel {
                 .await
             }
         };
-        let elapsed = started.elapsed().as_millis();
+        let elapsed_ms = started.elapsed().as_millis();
         // Jev unavailable: the neutral reading (approach other, subject other), audited as such.
         let reading = result
             .as_ref()
@@ -1135,13 +1135,13 @@ impl ApproachModel {
                 ("social.approach", reading.approach.label().to_owned()),
                 ("social.subject", reading.subject.label().to_owned()),
                 ("social.reason", reason.to_owned()),
-                ("social.elapsed_ms", elapsed.to_string()),
+                ("social.elapsed_ms", elapsed_ms.to_string()),
             ],
         );
         span.finish_unmeasured(source);
         log(match result {
             Ok(_) => format!(
-                "APPROACH source=jev label={} subject={} ms={elapsed}",
+                "APPROACH source=jev label={} subject={} ms={elapsed_ms}",
                 reading.approach.label(),
                 reading.subject.label(),
             ),

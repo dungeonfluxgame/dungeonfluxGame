@@ -168,13 +168,13 @@ pub(super) fn wait_seconds(options: &[(String, String)]) -> Result<Option<u64>, 
     if option_value(options, "--until").is_some() {
         return Err("wait takes --for or --until, not both".into());
     }
-    let seconds = value
+    let wait_s = value
         .parse::<u64>()
         .map_err(|_| "--for must be 1 to 86400 seconds")?;
-    if !(1..=86400).contains(&seconds) {
+    if !(1..=86400).contains(&wait_s) {
         return Err("--for must be 1 to 86400 seconds".into());
     }
-    Ok(Some(seconds))
+    Ok(Some(wait_s))
 }
 pub(super) fn help() {
     super::stdout_line(

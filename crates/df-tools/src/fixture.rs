@@ -290,7 +290,7 @@ struct ShapeWitness {
     mode: String,
     messages: usize,
     frames: usize,
-    bytes: usize,
+    total_bytes: usize,
     domain_calls: u32,
     closed: bool,
     failed: bool,
@@ -316,7 +316,7 @@ async fn shape_report(
             shape.mode,
             shape.messages,
             shape.frames,
-            shape.bytes,
+            shape.total_bytes,
             shape.domain_calls,
             shape.closed,
             shape.failed,
@@ -378,7 +378,7 @@ async fn byte_shape(
                 mode: mode.clone(),
                 messages: 0,
                 frames: 0,
-                bytes: 0,
+                total_bytes: 0,
                 domain_calls: 0,
                 closed: false,
                 failed: false,
@@ -390,7 +390,7 @@ async fn byte_shape(
                     tokio::time::timeout(std::time::Duration::from_secs(2), incoming.next()).await;
                 if result.is_ok_and(|message| message.is_some_and(|message| message.is_ok())) {
                     witness.messages = 1;
-                    witness.bytes = 16;
+                    witness.total_bytes = 16;
                     witness.failed = outgoing
                         .send(Message::Text("unsupported text".into()))
                         .await
@@ -463,7 +463,7 @@ async fn byte_shape(
                     }
                     witness.messages = first.len();
                     witness.frames = 1;
-                    witness.bytes = first.len();
+                    witness.total_bytes = first.len();
                 } else if mode == "coalesced" {
                     let second = tokio::time::timeout(
                         std::time::Duration::from_secs(2),
@@ -479,7 +479,7 @@ async fn byte_shape(
                         .map_err(io::Error::other)?;
                     witness.messages = 1;
                     witness.frames = 2;
-                    witness.bytes = combined.len();
+                    witness.total_bytes = combined.len();
                 } else {
                     outgoing
                         .send(Message::Binary(first.clone().into()))
@@ -487,7 +487,7 @@ async fn byte_shape(
                         .map_err(io::Error::other)?;
                     witness.messages = 1;
                     witness.frames = 1;
-                    witness.bytes = first.len();
+                    witness.total_bytes = first.len();
                 }
                 let mut buffer = [0; FRAME_BYTES];
                 loop {
