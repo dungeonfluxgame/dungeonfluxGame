@@ -368,6 +368,23 @@ pub struct ReadyRequest {
     pub operation: String,
 }
 
+/// A seat's hero selection. The campaign service owns readiness and clears it on a change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CharacterChoice {
+    Undecided,
+    Template,
+    Existing,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CharacterRequest {
+    pub choice: CharacterChoice,
+    pub reference: Option<String>,
+    pub operation: String,
+}
+
 /// What the browser said when asked for the microphone, plus the person's own preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

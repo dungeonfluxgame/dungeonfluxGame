@@ -19,9 +19,10 @@ use df_account_app::{
         ReviewDecision, ReviewItem, StatementFilter, StatementsView,
     },
     wire_campaign::{
-        CampaignDraft, CampaignOverview, DashboardView, DisplayChallenge, DisplayRedeemed,
-        DisplayRenewed, DisplayState, InvitationCreated, InvitationKind, InvitePreview,
-        JoinRequested, LobbyView, MicrophoneRequest, PairingLookup, Reason, WizardCatalog,
+        CampaignDraft, CampaignOverview, CharacterRequest, DashboardView, DisplayChallenge,
+        DisplayRedeemed, DisplayRenewed, DisplayState, InvitationCreated, InvitationKind,
+        InvitePreview, JoinRequested, LobbyView, MicrophoneRequest, PairingLookup, Reason,
+        WizardCatalog,
     },
 };
 use df_customer::DeviceLabel;
@@ -306,6 +307,7 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         &self,
         who: &Actor,
         draft_id: &str,
+        step: u8,
         draft: CampaignDraft,
     ) -> impl Future<Output = PortResult<CampaignDraft>> + Send;
 
@@ -368,6 +370,13 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         &self,
         who: &Actor,
         session: SessionId,
+    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
+
+    fn choose_character(
+        &self,
+        who: &Actor,
+        session: SessionId,
+        request: CharacterRequest,
     ) -> impl Future<Output = PortResult<LobbyView>> + Send;
 
     fn set_ready(

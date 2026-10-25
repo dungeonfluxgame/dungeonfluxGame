@@ -20,12 +20,12 @@ use crate::wire::{
     VerifyOutcome,
 };
 use crate::wire_campaign::{
-    ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest, DashboardView,
-    DisplayChallenge, DisplayRedeemed, DisplayStatus, DraftView, InvitationCreated, InvitePreview,
-    JoinAcceptRequest, JoinAccepted, JoinRequested, LobbyOpened, LobbyView, MicrophoneRequest,
-    OperationRequest, PairingApproveRequest, PairingLookup, PairingLookupRequest,
-    PendingInvitation, ReadyRequest, RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest,
-    TokenBody, WizardCatalog,
+    ApproveRequestBody, CampaignCreated, CampaignOverview, CharacterRequest,
+    CreateInvitationRequest, DashboardView, DisplayChallenge, DisplayRedeemed, DisplayStatus,
+    DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest, JoinAccepted, JoinRequested,
+    LobbyOpened, LobbyView, MicrophoneRequest, OperationRequest, PairingApproveRequest,
+    PairingLookup, PairingLookupRequest, PendingInvitation, ReadyRequest, RoomCodeJoinRequest,
+    RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,6 +200,10 @@ pub enum ApiCall {
     },
     Lobby {
         session_id: String,
+    },
+    ChooseCharacter {
+        session_id: String,
+        request: CharacterRequest,
     },
     SetReady {
         session_id: String,
@@ -585,6 +589,13 @@ impl ApiCall {
     fn session_request(&self) -> HttpRequest {
         match self {
             Self::Lobby { session_id } => get(at(&format!("sessions/{session_id}/lobby"))),
+            Self::ChooseCharacter {
+                session_id,
+                request,
+            } => post(
+                at(&format!("sessions/{session_id}/lobby/character")),
+                request,
+            ),
             Self::SetReady {
                 session_id,
                 is_ready,
@@ -737,6 +748,7 @@ impl ApiCall {
             Self::LeaveCampaign { .. } => Reply::Left(read!()),
             Self::OpenLobby { .. } => Reply::LobbyOpened(read!()),
             Self::Lobby { .. }
+            | Self::ChooseCharacter { .. }
             | Self::SetReady { .. }
             | Self::ReportMicrophone { .. }
             | Self::StartSession { .. }

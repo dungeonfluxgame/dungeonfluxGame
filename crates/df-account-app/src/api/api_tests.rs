@@ -205,3 +205,19 @@ fn every_reply_variant_decodes_through_its_call() {
         Reply::Left(Ok(Accepted { accepted: true }))
     );
 }
+
+#[test]
+fn choosing_a_hero_posts_the_typed_choice_and_reads_the_authoritative_lobby() {
+    let call = ApiCall::ChooseCharacter {
+        session_id: "session".to_owned(),
+        request: crate::wire_campaign::CharacterRequest {
+            choice: crate::wire_campaign::CharacterChoice::Template,
+            reference: Some("11".repeat(16)),
+            operation: "operation".to_owned(),
+        },
+    };
+    let request = call.request();
+    assert_eq!(request.method, Method::Post);
+    assert_eq!(request.path, "/app/api/sessions/session/lobby/character");
+    assert!(matches!(call.decode(503, "{}"), Reply::Lobby(Err(_))));
+}

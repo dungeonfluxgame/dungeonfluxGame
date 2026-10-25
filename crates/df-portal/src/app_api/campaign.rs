@@ -10,12 +10,12 @@ use axum::{
 use df_account_app::{
     wire::{Accepted, ErrorCode},
     wire_campaign::{
-        ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest,
-        DashboardView, DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest,
-        JoinAccepted, JoinRequested, LobbyOpened, LobbyView, MicrophoneRequest, OperationRequest,
-        PairingApproveRequest, PairingLookup, PairingLookupRequest, PendingInvitation,
-        ReadyRequest, RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody,
-        WizardCatalog,
+        ApproveRequestBody, CampaignCreated, CampaignOverview, CharacterRequest,
+        CreateInvitationRequest, DashboardView, DraftView, InvitationCreated, InvitePreview,
+        JoinAcceptRequest, JoinAccepted, JoinRequested, LobbyOpened, LobbyView, MicrophoneRequest,
+        OperationRequest, PairingApproveRequest, PairingLookup, PairingLookupRequest,
+        PendingInvitation, ReadyRequest, RoomCodeJoinRequest, RoomCodeLookupRequest,
+        SaveDraftRequest, TokenBody, WizardCatalog,
     },
 };
 use df_customer::{AccountStore, Authenticated, EmailSender};
@@ -108,7 +108,7 @@ pub(super) async fn save_draft<S: AccountStore, M: EmailSender, P: Ports>(
     let draft = state
         .ports
         .campaigns()
-        .save_draft(&who, &draft_id, body.draft)
+        .save_draft(&who, &draft_id, step, body.draft)
         .await?;
     reply(DraftView {
         draft_id,
@@ -290,6 +290,31 @@ pub(super) async fn lobby<S: AccountStore, M: EmailSender, P: Ports>(
             .ports
             .campaigns()
             .lobby(&actor(&caller), session)
+            .await?,
+    )
+}
+
+pub(super) async fn choose_character<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SessionPost(caller): SessionPost,
+    Path(session_id): Path<String>,
+    ApiBody(body): ApiBody<CharacterRequest>,
+) -> ApiResult<LobbyView> {
+    let session = ids::session(&session_id)?;
+    ids::operation(&body.operation)?;
+    if (body.choice != df_account_app::wire_campaign::CharacterChoice::Undecided)
+        != body.reference.is_some()
+    {
+        return Err(ApiFailure::of(ErrorCode::Invalid));
+    }
+    if let Some(reference) = &body.reference {
+        ids::campaign(reference)?;
+    }
+    reply(
+        state
+            .ports
+            .campaigns()
+            .choose_character(&actor(&caller), session, body)
             .await?,
     )
 }

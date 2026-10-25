@@ -374,6 +374,9 @@ impl State {
             .get_mut(&campaign)
             .ok_or(PortError::NotFound)?;
         found.members.retain(|member| member.account != who.account);
+        if let Some(lobby) = found.live_session.and_then(|id| self.lobbies.get_mut(&id)) {
+            lobby.characters.remove(&who.account);
+        }
         Ok(())
     }
 
@@ -389,6 +392,7 @@ impl State {
             Lobby {
                 campaign,
                 ready: Vec::new(),
+                characters: std::collections::HashMap::new(),
                 microphones: std::collections::HashMap::new(),
                 tickets: Vec::new(),
                 has_started: false,
@@ -437,6 +441,13 @@ impl State {
         {
             start_blockers.push(StartBlocker::MemberNotReady);
         }
+        if seated_members.iter().any(|member| {
+            !lobby.characters.get(&member.account).is_some_and(|choice| {
+                *choice != df_account_app::wire_campaign::CharacterChoice::Undecided
+            })
+        }) {
+            start_blockers.push(StartBlocker::CharacterNotChosen);
+        }
         Ok(LobbyView {
             session_id: hex(session.as_bytes()),
             campaign_id: hex(campaign.id.as_bytes()),
@@ -447,7 +458,13 @@ impl State {
                 .iter()
                 .map(|member| LobbyMember {
                     display_name: member.name.clone(),
-                    character_name: Some(format!("{}'s hero", member.name)),
+                    character_name: lobby
+                        .characters
+                        .get(&member.account)
+                        .filter(|choice| {
+                            **choice != df_account_app::wire_campaign::CharacterChoice::Undecided
+                        })
+                        .map(|_| format!("{}'s hero", member.name)),
                     is_ready: lobby.ready.contains(&member.account),
                     microphone: lobby
                         .microphones
@@ -483,6 +500,26 @@ impl State {
         self.lobbies.get_mut(&session).ok_or(PortError::NotFound)
     }
 
+    pub(super) fn choose_character(
+        &mut self,
+        who: &Actor,
+        session: SessionId,
+        request: &df_account_app::wire_campaign::CharacterRequest,
+    ) -> PortResult<LobbyView> {
+        if (request.choice != df_account_app::wire_campaign::CharacterChoice::Undecided)
+            != request.reference.is_some()
+        {
+            return Err(PortError::Forbidden);
+        }
+        if let Some(reference) = &request.reference {
+            CampaignId::from_hex(reference).map_err(|_| PortError::NotFound)?;
+        }
+        let lobby = self.seated_lobby(who, session)?;
+        lobby.characters.insert(who.account, request.choice);
+        lobby.ready.retain(|account| *account != who.account);
+        self.lobby_view(who, session)
+    }
+
     pub(super) fn set_ready(
         &mut self,
         who: &Actor,
@@ -492,6 +529,11 @@ impl State {
         let lobby = self.seated_lobby(who, session)?;
         lobby.ready.retain(|account| *account != who.account);
         if is_ready {
+            if !lobby.characters.get(&who.account).is_some_and(|choice| {
+                *choice != df_account_app::wire_campaign::CharacterChoice::Undecided
+            }) {
+                return Err(because(Reason::StaleRevision));
+            }
             lobby.ready.push(who.account);
         }
         self.lobby_view(who, session)

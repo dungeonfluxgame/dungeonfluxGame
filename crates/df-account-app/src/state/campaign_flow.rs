@@ -11,7 +11,7 @@ use crate::{
     route::Route,
     wire::{ApiError, PacePreset, Refusal},
     wire_campaign::{
-        ApproveRequestBody, CampaignDraft, CampaignOverview, ContentRating,
+        ApproveRequestBody, CampaignDraft, CampaignOverview, CharacterRequest, ContentRating,
         CreateInvitationRequest, FundingModel, HeroChoice, InvitationCreated, InvitationKind,
         InvitePreview, JoinAcceptRequest, JoinMode, JoinRequested, LobbyView, MicrophonePermission,
         MicrophoneRequest, OperationRequest, PairingApproveRequest, PairingLookup,
@@ -426,6 +426,14 @@ impl Model {
                     return Vec::new();
                 };
                 match intent {
+                    Intent::ChooseCharacter { choice, reference } => ApiCall::ChooseCharacter {
+                        session_id,
+                        request: CharacterRequest {
+                            choice,
+                            reference,
+                            operation,
+                        },
+                    },
                     Intent::SetReady(is_ready) => ApiCall::SetReady {
                         session_id,
                         is_ready,

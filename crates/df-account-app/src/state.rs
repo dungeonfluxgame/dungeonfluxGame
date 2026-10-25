@@ -155,6 +155,10 @@ pub enum Intent {
     LeaveCampaign,
     OpenLobby,
     CopyText(String),
+    ChooseCharacter {
+        choice: crate::wire_campaign::CharacterChoice,
+        reference: Option<String>,
+    },
     SetReady(bool),
     EnableMicrophone,
     PreferTyping,

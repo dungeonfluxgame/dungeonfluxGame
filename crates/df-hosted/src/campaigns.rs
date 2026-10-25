@@ -3,128 +3,61 @@
 use df_account_app::{
     wire::PlaySessionsView,
     wire_campaign::{
-        CampaignCard, CampaignDraft, CampaignOverview, CampaignRole, DashboardView, DisplayState,
-        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
-        MicrophoneRequest, PairingLookup, WizardCatalog,
+        CampaignCard, CampaignDraft, CampaignOverview, CampaignRole, CharacterRequest,
+        DashboardView, DisplayState, InvitationCreated, InvitationKind, InvitePreview,
+        JoinRequested, LobbyView, MicrophoneRequest, PairingLookup, WizardCatalog,
     },
 };
 use df_campaign::{
     service::{CampaignService, Ports as ServicePorts},
     store::*,
 };
-use df_customer::{AccountStore, DeviceLabel};
+use df_customer::DeviceLabel;
 use df_portal::app_api::ports::*;
 use df_types::{AccountId, CampaignId, OperationId, SessionId};
 
 pub(crate) struct Campaigns {
     service: CampaignService<Owners>,
+    sessions: crate::campaign_sessions::Sessions,
 }
 struct Owners;
-struct Accounts(df_persistence::account_store::PostgresAccountStore);
-struct Unavailable;
 
 impl ServicePorts for Owners {
     type Store = crate::campaign_store::PgCampaignStore;
-    type Accounts = Accounts;
-    type Sessions = Unavailable;
-    type Funding = Unavailable;
+    type Accounts = crate::campaign_accounts::Accounts;
+    type Sessions = crate::campaign_sessions::Sessions;
+    type Funding = crate::campaign_funding::Funding;
     type Time = df_campaign::clock::SystemClock;
 }
 
-impl AccountDirectory for Accounts {
-    async fn profile(
-        &self,
-        account: AccountId,
-    ) -> df_campaign::errors::StoreResult<Option<AccountProfile>> {
-        let record = self
-            .0
-            .account(account)
-            .await
-            .map_err(|_| df_campaign::errors::StoreError::Unavailable)?;
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        // TODO(S1-02): B/O1 must export the verified account's canonical tenant binding.
-        if record.is_verified {
-            df_observe::record_audit_line(
-                "hosted.tenant_binding_unavailable",
-                "HOSTED tenant_binding_unavailable owner=S1-02".to_owned(),
-            );
-            return Err(df_campaign::errors::StoreError::Unavailable);
-        }
-        Ok(Some(AccountProfile {
-            display_name: record.display_name.map(|name| name.as_str().to_owned()),
-            verified: false,
-            tenant: None,
-            status: match record.status {
-                df_customer::AccountStatus::Active => df_campaign::records::AccountStatus::Active,
-                df_customer::AccountStatus::Closing => df_campaign::records::AccountStatus::Closing,
-                df_customer::AccountStatus::Closed => df_campaign::records::AccountStatus::Closed,
-            },
-        }))
-    }
-}
-impl SessionDirectory for Unavailable {
-    async fn session(
-        &self,
-        _session: SessionId,
-    ) -> df_campaign::errors::StoreResult<Option<SessionFacts>> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-    async fn live_session_of(
-        &self,
-        _campaign: CampaignId,
-    ) -> df_campaign::errors::StoreResult<Option<(SessionId, SessionPhase)>> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-    async fn open_session(
-        &self,
-        _campaign: CampaignId,
-    ) -> df_campaign::errors::StoreResult<(SessionId, SessionPhase)> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-    async fn start_session(
-        &self,
-        _session: SessionId,
-        _campaign: CampaignId,
-        _roster: &[df_campaign::lobby_state::SeatedMember],
-    ) -> df_campaign::errors::StoreResult<()> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-}
-impl FundingDirectory for Unavailable {
-    async fn membership_event(&self, _campaign: CampaignId, _event_seq: u64) {}
-    async fn start_readiness(
-        &self,
-        _campaign: CampaignId,
-        _session: SessionId,
-    ) -> df_campaign::errors::StoreResult<df_campaign::lobby_state::StartReadiness> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-    async fn open_session_funding(
-        &self,
-        _campaign: CampaignId,
-        _session: SessionId,
-    ) -> df_campaign::errors::StoreResult<()> {
-        Err(df_campaign::errors::StoreError::Unavailable)
-    }
-}
 impl Campaigns {
+    async fn campaign_of(&self, session: SessionId) -> PortResult<CampaignId> {
+        self.sessions
+            .session(session)
+            .await
+            .map_err(|_| PortError::Unavailable)?
+            .map(|facts| facts.campaign)
+            .ok_or(PortError::NotFound)
+    }
+
     pub(crate) fn new(
         store: crate::campaign_store::PgCampaignStore,
-        accounts: df_persistence::account_store::PostgresAccountStore,
+        accounts: crate::campaign_accounts::Accounts,
         keys: df_campaign::service::ServiceKeys,
+        sessions: crate::campaign_sessions::Sessions,
+        funding: crate::campaign_funding::Funding,
     ) -> Self {
         Self {
             service: CampaignService::new(
                 store,
-                Accounts(accounts),
-                Unavailable,
-                Unavailable,
+                accounts,
+                sessions.clone(),
+                funding,
                 df_campaign::clock::SystemClock,
                 df_campaign::config::Tunables::default(),
                 keys,
             ),
+            sessions,
         }
     }
 }
@@ -212,30 +145,46 @@ impl CampaignDirectory for Campaigns {
     }
 
     async fn start_draft(&self, who: &Actor) -> PortResult<(String, CampaignDraft)> {
-        let _draft = self
+        let draft = self
             .service
             .start_draft(who.account)
             .await
             .map_err(failure)?;
-        crate::ports::unavailable("S1")
+        Ok((
+            hex(draft.id.as_bytes()),
+            super::campaign_views::draft(draft)?,
+        ))
     }
 
     async fn save_draft(
         &self,
-        _who: &Actor,
-        _draft_id: &str,
-        _draft: CampaignDraft,
+        who: &Actor,
+        draft_id: &str,
+        step: u8,
+        draft: CampaignDraft,
     ) -> PortResult<CampaignDraft> {
-        crate::ports::unavailable("S1")
+        let id = CampaignId::from_hex(draft_id).map_err(|_| PortError::NotFound)?;
+        let data = super::campaign_views::step(step, draft)?;
+        let saved = self
+            .service
+            .save_draft_step(who.account, id, data)
+            .await
+            .map_err(failure)?;
+        super::campaign_views::draft(saved)
     }
 
     async fn finish_draft(
         &self,
-        _who: &Actor,
-        _draft_id: &str,
-        _operation: OperationId,
+        who: &Actor,
+        draft_id: &str,
+        operation: OperationId,
     ) -> PortResult<CampaignId> {
-        crate::ports::unavailable("S1")
+        let id = CampaignId::from_hex(draft_id).map_err(|_| PortError::NotFound)?;
+        self.service
+            .finish_draft(who.account, id, operation)
+            .await
+            .map(|row| row.id)
+            .map_err(failure)
     }
 
     async fn campaign(&self, _who: &Actor, _campaign: CampaignId) -> PortResult<CampaignOverview> {
@@ -283,34 +232,109 @@ impl CampaignDirectory for Campaigns {
         crate::ports::unavailable("S1")
     }
 
-    async fn open_lobby(&self, _who: &Actor, _campaign: CampaignId) -> PortResult<SessionId> {
-        crate::ports::unavailable("S1")
+    async fn open_lobby(&self, who: &Actor, campaign: CampaignId) -> PortResult<SessionId> {
+        self.service
+            .open_lobby(who.account, campaign)
+            .await
+            .map(|(id, _)| id)
+            .map_err(failure)
     }
 
-    async fn lobby(&self, _who: &Actor, _session: SessionId) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
+    async fn lobby(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
+        let campaign = self.campaign_of(session).await?;
+        super::campaign_views::lobby(
+            self.service
+                .lobby_view(who.account, campaign, session)
+                .await
+                .map_err(failure)?,
+        )
+    }
+
+    async fn choose_character(
+        &self,
+        who: &Actor,
+        session: SessionId,
+        request: CharacterRequest,
+    ) -> PortResult<LobbyView> {
+        let campaign = self.campaign_of(session).await?;
+        let choice = match request.choice {
+            df_account_app::wire_campaign::CharacterChoice::Undecided => {
+                df_campaign::lobby::CharacterChoice::Undecided
+            }
+            df_account_app::wire_campaign::CharacterChoice::Template => {
+                df_campaign::lobby::CharacterChoice::Template
+            }
+            df_account_app::wire_campaign::CharacterChoice::Existing => {
+                df_campaign::lobby::CharacterChoice::Existing
+            }
+        };
+        let reference = request
+            .reference
+            .map(|id| {
+                CampaignId::from_hex(&id)
+                    .map(|id| *id.as_bytes())
+                    .map_err(|_| PortError::NotFound)
+            })
+            .transpose()?;
+        self.service
+            .choose_character(who.account, campaign, session, choice, reference)
+            .await
+            .map_err(failure)?;
+        self.lobby(who, session).await
     }
 
     async fn set_ready(
         &self,
-        _who: &Actor,
-        _session: SessionId,
-        _is_ready: bool,
+        who: &Actor,
+        session: SessionId,
+        is_ready: bool,
     ) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
+        let campaign = self.campaign_of(session).await?;
+        self.service
+            .set_ready(who.account, campaign, session, is_ready)
+            .await
+            .map_err(failure)?;
+        self.lobby(who, session).await
     }
 
     async fn report_microphone(
         &self,
-        _who: &Actor,
-        _session: SessionId,
-        _report: MicrophoneRequest,
+        who: &Actor,
+        session: SessionId,
+        report: MicrophoneRequest,
     ) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
+        use df_account_app::wire_campaign::MicrophonePermission;
+        use df_campaign::lobby_state::{MicrophonePreference, MicrophoneReport};
+        let campaign = self.campaign_of(session).await?;
+        self.service
+            .set_microphone(
+                who.account,
+                campaign,
+                session,
+                if report.prefers_typing {
+                    MicrophonePreference::TypedOnly
+                } else {
+                    MicrophonePreference::Ask
+                },
+                match report.permission {
+                    None => MicrophoneReport::Unknown,
+                    Some(MicrophonePermission::Granted) => MicrophoneReport::Granted,
+                    Some(MicrophonePermission::Declined) => MicrophoneReport::Declined,
+                    Some(MicrophonePermission::Unsupported) => MicrophoneReport::Unsupported,
+                },
+            )
+            .await
+            .map_err(failure)?;
+        self.lobby(who, session).await
     }
 
-    async fn start_session(&self, _who: &Actor, _session: SessionId) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
+    async fn start_session(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
+        let campaign = self.campaign_of(session).await?;
+        self.service
+            .start_session(who.account, campaign, session)
+            .await
+            .map_err(failure)?;
+        self.lobby(who, session).await
     }
 
     async fn lookup_display(

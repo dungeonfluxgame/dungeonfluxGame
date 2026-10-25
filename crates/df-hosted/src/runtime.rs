@@ -93,8 +93,23 @@ impl Hosted {
         .map_err(|_| OpenError::Port)?;
         let campaigns = crate::campaigns::Campaigns::new(
             campaign_store,
-            accounts.clone(),
+            crate::campaign_accounts::Accounts::new(
+                accounts.clone(),
+                Connection::open(&config.database, &config.transport)
+                    .await
+                    .map_err(|_| OpenError::Database)?,
+            ),
             config.campaign_keys,
+            crate::campaign_sessions::Sessions::new(
+                Connection::open(&config.database, &config.transport)
+                    .await
+                    .map_err(|_| OpenError::Database)?,
+            ),
+            crate::campaign_funding::Funding::new(
+                Connection::open(&config.database, &config.transport)
+                    .await
+                    .map_err(|_| OpenError::Database)?,
+            ),
         );
         let (service, tasks) =
             start_accounts(config.hosts, config.identity, config.mail, accounts).await?;

@@ -219,6 +219,10 @@ fn session_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApiS
             get(campaign::lobby::<S, M, P>),
         )
         .route(
+            "/app/api/sessions/{session_id}/lobby/character",
+            post(campaign::choose_character::<S, M, P>),
+        )
+        .route(
             "/app/api/sessions/{session_id}/lobby/ready",
             post(campaign::ready::<S, M, P>),
         )

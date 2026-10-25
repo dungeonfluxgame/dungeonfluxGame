@@ -412,6 +412,7 @@ impl Browser<'_> {
             )
             .await;
         assert_eq!(reply.json(), json!("verified"));
+        self.session().await;
         self.sign_in(email, PASSWORD).await
     }
 

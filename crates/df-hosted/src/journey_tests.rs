@@ -38,14 +38,14 @@ impl Fixture {
         .unwrap();
         let token = df_customer::SecretToken::generate().unwrap();
         let suffix = &token.text()[..16];
-        let database = format!("hostedstack_{suffix}");
+        let database = format!("journeywire_{suffix}");
         admin
             .client
             .batch_execute(&format!("CREATE DATABASE {database}"))
             .await
             .unwrap();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/agents/HOSTEDSTACK")
+            .join("../../artifacts/tmp/agents/JOURNEYWIRE")
             .join(&database);
         std::fs::create_dir_all(root.join("bundle")).unwrap();
         std::fs::write(
@@ -84,7 +84,7 @@ impl Fixture {
     }
 
     async fn finish(self) {
-        assert!(self.database.starts_with("hostedstack_"));
+        assert!(self.database.starts_with("journeywire_"));
         assert!(
             self.database
                 .bytes()
@@ -97,7 +97,7 @@ impl Fixture {
             .unwrap();
         let root = self.root.canonicalize().unwrap();
         let permitted = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/agents/HOSTEDSTACK")
+            .join("../../artifacts/tmp/agents/JOURNEYWIRE")
             .canonicalize()
             .unwrap();
         assert!(root.starts_with(permitted));
@@ -330,7 +330,7 @@ async fn real_http_accounts_and_finance_survive_restart_and_campaign_creation_re
 }
 
 #[tokio::test]
-#[ignore = "JOURNEY-01 pending S1-02 tenant binding, S1-03 O1 session facade, S1-04 F readiness and BMONEY Stripe checkout and P/S1 hero selection"]
+#[ignore = "JOURNEY-01 pending account-owner tenant issuance, finance sponsor consent/open-funding hook, runtime owner placement, and STRIPETEST checkout qualification"]
 async fn journey_01_signup_verify_signin_topup_create_campaign_open_lobby_start_session() {
     with_fixture(async |fixture| {
     let hosted = Hosted::open(fixture.config()).await.unwrap();
@@ -376,6 +376,10 @@ async fn journey_01_signup_verify_signin_topup_create_campaign_open_lobby_start_
         .await;
     assert_eq!(status, StatusCode::OK, "{lobby}");
     let session = lobby["session_id"].as_str().unwrap();
+    let operation = browser.operation().await;
+    let (status, chosen) = browser.request("POST", &format!("/app/api/sessions/{session}/lobby/character"),
+        json!({"choice":"template", "reference":"12".repeat(16), "operation":operation})).await;
+    assert_eq!(status, StatusCode::OK, "{chosen}");
     let operation = browser.operation().await;
     assert_eq!(
         browser
@@ -428,7 +432,7 @@ async fn migration_failure_rolls_back_the_wrapped_first_migration_and_reruns_are
         let first = include_str!("../../df-persistence/migrations/0001_game_decisions.sql");
         let error = crate::database::apply(
             &mut connection,
-            &[(1, first), (999, "SELECT hostedstack_missing_function()")],
+            &[(1, first), (999, "SELECT journeywire_missing_function()")],
         )
         .await;
         assert!(matches!(
@@ -467,4 +471,163 @@ async fn with_fixture(test: impl for<'a> AsyncFnOnce(&'a Fixture)) {
     if let Err(payload) = outcome {
         std::panic::resume_unwind(payload);
     }
+}
+
+// The account owner's tenant-creation migration/verification hook is still pending.
+// This fixture provisions its specified binding explicitly, never deriving a tenant from an account.
+async fn provision_tenant(fixture: &Fixture) {
+    let connection = Connection::open(
+        &fixture.url.parse().unwrap(),
+        &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+    )
+    .await
+    .unwrap();
+    connection.client.batch_execute("CREATE TABLE accounts.tenant (tenant_id bytea PRIMARY KEY, owner_account_id bytea NOT NULL UNIQUE REFERENCES accounts.account(account_id)); INSERT INTO accounts.tenant SELECT decode('11121314151617181920212223242526', 'hex'), account_id FROM accounts.account WHERE email_normalized = 'journey@example.test'").await.unwrap();
+}
+
+async fn create_bound_campaign(browser: &mut Browser) -> String {
+    let (status, view) = browser
+        .request("POST", "/app/api/campaigns/drafts", json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let id = view["draft_id"].as_str().unwrap();
+    let draft = json!({"name":"Lantern Road","adventure_id":"bundled","content_rating":"teen","seat_count":1,"hero_choice":"in_lobby","has_voice":false,"pictures":"existing_art_only","pace":"story","custom_ceiling_cents_per_hour":null,"co_hosts_can_invite":false,"co_hosts_can_start":false,"co_hosts_can_export":false,"join_mode":"link_only","funding":"sponsor"});
+    for step in 1..=5 {
+        let (status, body) = browser
+            .request(
+                "PUT",
+                &format!("/app/api/campaigns/drafts/{id}/steps/{step}"),
+                json!({"draft":draft}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "step {step}: {body}");
+    }
+    let operation = browser.operation().await;
+    let request = json!({"operation":operation});
+    let path = format!("/app/api/campaigns/drafts/{id}/finish");
+    let (status, created) = browser.request("POST", &path, request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(browser.request("POST", &path, request).await.1, created);
+    created["campaign_id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn a_bound_tenant_can_create_a_campaign_and_reopen_its_lobby_with_hero_and_ready_persisted() {
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.verified(fixture).await;
+        browser.top_up().await;
+        provision_tenant(fixture).await;
+        let campaign = create_bound_campaign(&mut browser).await;
+        let operation = browser.operation().await;
+        let path = format!("/app/api/campaigns/{campaign}/lobby");
+        let (status, opened) = browser
+            .request("POST", &path, json!({"operation":operation}))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{opened}");
+        let operation = browser.operation().await;
+        assert_eq!(
+            browser
+                .request("POST", &path, json!({"operation":operation}))
+                .await
+                .1,
+            opened
+        );
+        let session = opened["session_id"].as_str().unwrap();
+        let path = format!("/app/api/sessions/{session}/lobby");
+        let operation = browser.operation().await;
+        assert_ne!(
+            browser
+                .request(
+                    "POST",
+                    &format!("{path}/ready"),
+                    json!({"operation":operation})
+                )
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let operation = browser.operation().await;
+        let (status, chosen) = browser
+            .request(
+                "POST",
+                &format!("{path}/character"),
+                json!({"choice":"template", "reference":"12".repeat(16), "operation":operation}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{chosen}");
+        assert!(chosen["members"][0]["character_name"].is_string());
+        let operation = browser.operation().await;
+        let (status, ready) = browser
+            .request(
+                "POST",
+                &format!("{path}/ready"),
+                json!({"operation":operation}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{ready}");
+        assert_eq!(ready["members"][0]["is_ready"], true);
+        assert_eq!(ready["funding_note"], "waiting_for_sponsor");
+        assert!(
+            ready["start_blockers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("funding_not_ready"))
+        );
+        // The $30 wallet is real; it has not been consented/allocated to this session.
+        // A successful balance read must not silently approve sponsorship.
+        drop(browser.router);
+        hosted.shutdown().await;
+        let reopened = Hosted::open(fixture.config()).await.unwrap();
+        browser.router = reopened.router();
+        let (status, view) = browser.request("GET", &path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["members"][0]["is_ready"], true);
+        assert!(view["members"][0]["character_name"].is_string());
+        let connection = Connection::open(&fixture.url.parse().unwrap(), &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly).await.unwrap();
+        let consumed = connection.client.query_one("SELECT f.last_event_seq = c.event_seq AND (SELECT count(*) FROM finance.funding_effect e WHERE e.campaign_id = c.campaign_id) = c.event_seq FROM finance.funding_feed_position f JOIN campaigns.campaign c USING (campaign_id)", &[]).await.unwrap();
+        assert!(consumed.get::<_, bool>(0));
+        drop(connection);
+        drop(browser);
+        reopened.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn session_start_requires_a_live_owner_fence_and_freezes_the_ready_roster() {
+    use df_campaign::lobby_state::SeatedMember;
+    use df_campaign::store::{SessionDirectory, SessionPhase};
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.verified(fixture).await;
+        provision_tenant(fixture).await;
+        let campaign = create_bound_campaign(&mut browser).await;
+        let campaign = df_types::CampaignId::from_hex(&campaign).unwrap();
+        let transport = df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly;
+        let connection = Connection::open(&fixture.url.parse().unwrap(), &transport).await.unwrap();
+        let sessions = crate::campaign_sessions::Sessions::new(connection);
+        let (session, phase) = sessions.open_session(campaign).await.unwrap();
+        assert_eq!(phase, SessionPhase::Lobby);
+        let db = Connection::open(&fixture.url.parse().unwrap(), &transport).await.unwrap();
+        let row = db.client.query_one("SELECT member_id, account_id FROM campaigns.campaign_member WHERE campaign_id = $1", &[&campaign.as_bytes().as_slice()]).await.unwrap();
+        let member = df_types::MemberId::from_bytes(&row.get::<_, Vec<u8>>(0)).unwrap();
+        let account = df_types::AccountId::from_bytes(&row.get::<_, Vec<u8>>(1)).unwrap();
+        db.client.execute("INSERT INTO campaigns.lobby_member (session_id, member_id, campaign_id, character_choice, character_ref, ready, updated_at_ms) VALUES ($1, $2, $3, 'template', $4, true, 1)", &[&session.as_bytes().as_slice(), &member.as_bytes().as_slice(), &campaign.as_bytes().as_slice(), &vec![12_u8; 16]]).await.unwrap();
+        let roster = [SeatedMember { member, account }];
+        assert_eq!(sessions.start_session(session, campaign, &roster).await, Err(df_campaign::errors::StoreError::FenceStale));
+        assert_eq!(sessions.session(session).await.unwrap().unwrap().phase, SessionPhase::Lobby);
+        // Fixture-only O1 owner. The production adapter never inserts or renews this fence.
+        db.client.execute("INSERT INTO df_runtime.campaign_owners (tenant_id, campaign_id, recovery_epoch, claim_seq, state, placement_id, lease_until) SELECT tenant_id, campaign_id, 1, 1, 'serving', $2, clock_timestamp() + interval '1 hour' FROM campaigns.campaign WHERE campaign_id = $1", &[&campaign.as_bytes().as_slice(), &vec![13_u8; 16]]).await.unwrap();
+        sessions.start_session(session, campaign, &roster).await.unwrap();
+        assert_eq!(sessions.session(session).await.unwrap().unwrap().phase, SessionPhase::PreparingFundingOpen);
+        let row = db.client.query_one("SELECT frozen_at_ms IS NOT NULL FROM campaigns.lobby_member WHERE session_id = $1 AND member_id = $2", &[&session.as_bytes().as_slice(), &member.as_bytes().as_slice()]).await.unwrap();
+        assert!(row.get::<_, bool>(0));
+        drop(sessions);
+        drop(db);
+        drop(browser);
+        hosted.shutdown().await;
+    }).await;
 }

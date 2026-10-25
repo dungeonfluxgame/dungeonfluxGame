@@ -768,3 +768,37 @@ fn opening_the_lobby_from_the_campaign_goes_to_the_lobby_screen() {
 
     assert!(matches!(model.screen, Screen::Lobby(_)));
 }
+
+#[test]
+fn choosing_a_hero_uses_one_operation_and_waits_for_the_server_lobby() {
+    use crate::wire_campaign::{CharacterChoice, CharacterRequest};
+    let mut model = lobby_model();
+    let effects = click(
+        &mut model,
+        Intent::ChooseCharacter {
+            choice: CharacterChoice::Template,
+            reference: Some("11".repeat(16)),
+        },
+    );
+    let Some(ApiCall::ChooseCharacter { request, .. }) = first_call(&effects) else {
+        panic!("hero choice request");
+    };
+    assert_eq!(
+        request,
+        &CharacterRequest {
+            choice: CharacterChoice::Template,
+            reference: Some("11".repeat(16)),
+            operation: "op-lobby".to_owned(),
+        }
+    );
+    let Screen::Lobby(screen) = &model.screen else {
+        panic!("lobby");
+    };
+    assert_eq!(screen.action, Submit::Sending);
+    assert!(calls(&click(&mut model, Intent::SetReady(true))).is_empty());
+    let done = deliver(&mut model, Reply::Lobby(Ok(lobby_view(2, false))));
+    assert!(
+        done.iter()
+            .any(|effect| matches!(effect, Effect::IssueOperation { .. }))
+    );
+}

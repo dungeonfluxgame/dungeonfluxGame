@@ -449,9 +449,20 @@ async fn players_ready_up_and_only_the_host_starts_once_everyone_is_ready() {
         .await;
     assert_eq!(blocked.code(), "stale_form");
     let view = host.get(&lobby_path).await.json();
-    assert_eq!(view["start_blockers"], json!(["member_not_ready"]));
+    assert_eq!(
+        view["start_blockers"],
+        json!(["member_not_ready", "character_not_chosen"])
+    );
     assert_eq!(view["can_manage"], json!(true));
     for browser in [&mut host, &mut sam] {
+        let operation = browser.operation().await;
+        let chosen = browser
+            .post(
+                &format!("{lobby_path}/character"),
+                &json!({"choice":"template", "reference":"11".repeat(16), "operation":operation}),
+            )
+            .await;
+        assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.body);
         let operation = browser.operation().await;
         let ready = browser
             .post(&format!("{lobby_path}/ready"), &start(operation))
@@ -506,4 +517,76 @@ async fn the_host_cannot_leave_but_a_player_can() {
         sam.get("/app/api/campaigns").await.json()["campaigns"],
         json!([])
     );
+}
+
+#[tokio::test]
+async fn a_hero_choice_is_guarded_owned_and_clears_ready_before_another_choice() {
+    use super::fixtures::Req;
+    use axum::http::Method;
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(crate::app_api::ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let path = format!("/app/api/sessions/{}/lobby", hex(session.as_bytes()));
+    let operation = host.operation().await;
+    let body = json!({"choice":"template", "reference":"11".repeat(16), "operation":operation});
+    assert_eq!(
+        host.send(
+            Req::new(Method::POST, &format!("{path}/character"))
+                .json(&body)
+                .csrf(None)
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let operation = host.operation().await;
+    assert_ne!(
+        host.post(&format!("{path}/ready"), &json!({"operation":operation}))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let chosen = host.post(&format!("{path}/character"), &body).await;
+    assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.body);
+    assert!(chosen.json()["members"][0]["character_name"].is_string());
+    let operation = host.operation().await;
+    assert_eq!(
+        host.post(&format!("{path}/ready"), &json!({"operation":operation}))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let operation = host.operation().await;
+    let cleared = host
+        .post(
+            &format!("{path}/character"),
+            &json!({"choice":"undecided", "reference":null, "operation":operation}),
+        )
+        .await;
+    assert_eq!(cleared.json()["members"][0]["is_ready"], false);
+    assert!(cleared.json()["members"][0]["character_name"].is_null());
+    let operation = host.operation().await;
+    assert_eq!(
+        host.post(
+            &format!("{path}/character"),
+            &json!({"choice":"template", "reference":null, "operation":operation})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut stranger = harness.browser();
+    stranger.sign_up_verified("stranger@example.test").await;
+    let operation = stranger.operation().await;
+    let denied = stranger
+        .post(
+            &format!("{path}/character"),
+            &json!({"choice":"template", "reference":"11".repeat(16), "operation":operation}),
+        )
+        .await;
+    assert_eq!(denied.status, StatusCode::NOT_FOUND);
 }

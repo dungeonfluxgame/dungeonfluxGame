@@ -2,6 +2,10 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
+mod campaign_accounts;
+mod campaign_funding;
+mod campaign_sessions;
+mod campaign_views;
 mod campaigns;
 mod checkout;
 pub mod config;

@@ -11,8 +11,8 @@ use std::{
 use df_account_app::{
     wire::{DeviceKind, PlaySessionRow, PlaySessionsView},
     wire_campaign::{
-        CampaignDraft, CampaignOverview, CampaignRole, ContentRating, DashboardView,
-        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
+        CampaignDraft, CampaignOverview, CampaignRole, CharacterRequest, ContentRating,
+        DashboardView, InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
         MicrophoneRequest, MicrophoneState, PairingLookup, WizardCatalog,
     },
 };
@@ -81,6 +81,7 @@ pub(super) struct Ticket {
 pub(super) struct Lobby {
     pub campaign: CampaignId,
     pub ready: Vec<AccountId>,
+    pub characters: HashMap<AccountId, df_account_app::wire_campaign::CharacterChoice>,
     pub microphones: HashMap<AccountId, MicrophoneState>,
     pub tickets: Vec<Ticket>,
     pub has_started: bool,
@@ -248,6 +249,7 @@ impl CampaignDirectory for FakeCampaigns {
         &self,
         who: &Actor,
         draft_id: &str,
+        _step: u8,
         draft: CampaignDraft,
     ) -> PortResult<CampaignDraft> {
         self.run(|state, _, _| state.save_draft(who, draft_id, draft))
@@ -311,6 +313,15 @@ impl CampaignDirectory for FakeCampaigns {
 
     async fn lobby(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
         self.run(|state, _, _| state.lobby_view(who, session))
+    }
+
+    async fn choose_character(
+        &self,
+        who: &Actor,
+        session: SessionId,
+        request: CharacterRequest,
+    ) -> PortResult<LobbyView> {
+        self.run(|state, _, _| state.choose_character(who, session, &request))
     }
 
     async fn set_ready(
