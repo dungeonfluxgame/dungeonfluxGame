@@ -1,0 +1,31 @@
+# Build context filter for deploy/images/Dockerfile (context = repository root).
+# Anything that could hold a secret or an unrelated tree stays out of the build context and therefore
+# out of every image layer and build cache.
+.git
+.github
+.env
+.env.*
+**/.env
+**/.env.*
+config/dungeonflux.toml
+config/*.local.toml
+artifacts
+target
+**/target
+development
+planning
+ADR
+docs
+deploy
+infra
+dungeonflux.old
+crates/df-launcher
+**/*.sqlite3
+**/*.sqlite3-wal
+**/*.sqlite3-shm
+**/*.pem
+**/*.key
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform
+**/*.tfvars

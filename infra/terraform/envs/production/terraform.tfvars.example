@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars (gitignored). Only non-secret values belong here. Defaults in variables.tf are the
+# plan's pilot values; override below. Prices are plan values to RECONFIRM at purchase (plan 12.3, 12.4):
+#   Basic 2 vCPU / 4 GiB Droplet        about 24 USD / month   (s-2vcpu-4gb)
+#   Managed PostgreSQL Standard 2 GiB   about 30 USD / month   (db-s-1vcpu-2gb; eligibility is an owner decision)
+#   Spaces subscription                 about 5 USD / month
+#   Droplet daily backup                30 percent of the Droplet price
+#   Bastion (smallest shared CPU)       a few USD / month, not in the plan 12.3 bill
+
+ssh_key_fingerprints   = ["REPLACE_ME:fingerprint"]
+ci_deploy_authorized_keys = ["ssh-ed25519 REPLACE_ME ci-deploy@dungeonflux-production"]
+admin_users = {
+  # one entry per person; FIDO2 keys only (ssh-keygen -t ed25519-sk)
+  # alice = ["sk-ssh-ed25519@openssh.com REPLACE_ME alice@laptop"]
+}
+psql_image = "postgres:18.REPLACE_ME@sha256:REPLACE_ME"   # PostgreSQL 17 or later
+admin_cidrs            = ["REPLACE_ME/32"]
+bucket_prefix          = "REPLACE_ME-production"
+docker_version_pin     = "REPLACE_ME-exact-docker-ce-version"
+containerd_version_pin = "REPLACE_ME-exact-containerd-io-version"
+cors_allowed_origins   = ["https://dungeonfluxdnd.com"]
+
+# Owner checks before the first apply: the account can create the cluster size below, PostgreSQL major version
+# database_engine_version is offered with pgvector, and the Spaces bucket names are free.
+
+# Conservative baseline (plan 12.4) example, commented out:
+# app_droplet_count   = 2
+# database_size       = "REPLACE_WITH_ADVANCED_8GB_SLUG"
+# database_node_count = 2
+
+# Hostnames (decision 32). DNS stays at GoDaddy and the owner enters deploy/dns/records.csv by hand; leave manage_dns false
+# unless DNS is later moved to DigitalOcean.
+public_hostname = "dungeonfluxdnd.com"
+# manage_dns        = true
+# mail_spf_include  = "REPLACE_ME-mail-provider-spf-domain"

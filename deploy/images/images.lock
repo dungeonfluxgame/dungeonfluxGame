@@ -1,0 +1,36 @@
+# Pinned image references: one KEY=value per line, usable as a docker compose --env-file and sourced by
+# deploy/scripts/build-images.sh. Every value MUST carry an exact version tag AND @sha256:<digest>.
+# The digests below are placeholders (TODO-CI): this file was written without registry access. The CI
+# release job resolves each tag to its digest (docker buildx imagetools inspect <tag>), fails if a tag does
+# not exist, and commits the result in a reviewed change (coordinator decision b: GHCR, cosign keyless via
+# GitHub Actions OIDC, the release job commits these digests). Every script that uses an image REFUSES to
+# run while its line still contains TODO-CI. Tags are only the human-readable part; nothing is ever
+# deployed by tag, and no tag here is a floating one (no "latest", no major-only tag).
+
+# Build bases (the Rust version is the one in rust-toolchain.toml).
+RUST_BASE=rust:1.98.1-bookworm@sha256:TODO-CI
+RUNTIME_BASE=gcr.io/distroless/cc-debian12:nonroot@sha256:TODO-CI
+
+# Third-party services used by the staging mirror and the production edge.
+# Staging PostgreSQL mirrors managed PostgreSQL with pgvector. The PostgreSQL major version is
+# configuration (coordinator decision f); the tag below must track it. TODO(CI): confirm the pgvector tag
+# exists for the chosen major when resolving the digest.
+POSTGRES_IMAGE=pgvector/pgvector:0.8.1-pg18@sha256:TODO-CI
+# One-shot psql client that df-deploy runs for role, grant and verification SQL (cloud-init writes it into /etc/dungeonflux/allowed-images from
+# Terraform's psql_image variable, which must equal this line). PostgreSQL 17 or later: Terraform and this file are both validated for it.
+PSQL_IMAGE=postgres:18.1-bookworm@sha256:TODO-CI
+# Object store for the staging mirror (TLS with the staging CA). TODO(CI): MinIO's community image
+# distribution has changed; if this tag is not available, replace it with another S3-compatible server and
+# keep bucket-init.sh, which speaks only the S3 API.
+OBJECT_STORE_IMAGE=quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:TODO-CI
+# Client used by the bucket-init job and the reachability probes (aws cli v2 on Amazon Linux: has bash).
+AWSCLI_IMAGE=amazon/aws-cli:2.22.0@sha256:TODO-CI
+EDGE_IMAGE=caddy:2.10.0-alpine@sha256:TODO-CI
+# TCP forwarder that is the only database path a runtime has (staging and production).
+DBGATE_IMAGE=haproxy:3.0.5-alpine@sha256:TODO-CI
+
+# Built images, written by the CI release job after a push (registry/repository:version@sha256:digest).
+# Compose and the deploy scripts read these lines; they are placeholders until the first CI build.
+CONTROL_PLANE_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-control-plane:0.0.0@sha256:TODO-CI
+CAMPAIGN_RUNTIME_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-campaign-runtime:0.0.0@sha256:TODO-CI
+EGRESS_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-egress:0.0.0@sha256:TODO-CI

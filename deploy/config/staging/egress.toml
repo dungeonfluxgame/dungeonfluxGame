@@ -1,0 +1,65 @@
+# Staging configuration for `df-server egress --config /etc/dungeonflux/egress.toml`: the dispatcher, the
+# only process that holds provider credentials (decision 18). UNVERIFIED PROPOSAL; TODO(O1) owns the schema.
+# Staging runs the in-process fakes (hosted-runtime-research.md 13.9) and its upstream network has no route
+# out, so even a mis-set mode cannot reach a real provider. `live` is refused in staging unless allow_live.
+#
+# Under decision 23 the dispatcher reaches only: PostgreSQL (through the db-gate), the control plane's
+# dispatcher gateway (coordinator ruling a: journal submissions and delivery of fetched provider output), the
+# telemetry ingestor, and the providers (egress-out). It sits on its own `dispatch` network, not the data network.
+
+[instance]
+id = "staging-egress-1"
+environment = "staging"
+
+[listen]
+# Runtimes dial the dispatcher on their slot network only, over mTLS.
+dispatch = ["172.30.11.4:8082", "172.30.12.4:8082"]
+# The health listener is loopback-only: the container healthcheck runs inside the container, so no network carries a
+# plaintext health endpoint of the dispatcher.
+internal = "127.0.0.1:9092"
+
+# The dispatcher's own server certificate, and the CA that runtime client certificates must chain to. Who is
+# calling comes from the client certificate's URI SAN (urn:dungeonflux:placement:<placement id>) and is the
+# placement id the dispatcher re-checks against the database fence; a placement id in a request body is ignored.
+[dispatch_tls]
+certificate_file = "/run/secrets/dispatch_tls_certificate"
+key_file = "/run/secrets/dispatch_tls_key"
+client_ca_file = "/run/secrets/internal_ca_certificate"
+identity = "client_certificate_uri_san"
+uri_san_prefix = "urn:dungeonflux:placement:"
+
+# Outbound to the control plane's dispatcher gateway (internal mTLS), authorized there by this certificate's
+# identity urn:dungeonflux:dispatcher.
+[control_plane]
+address = "172.30.4.3:9093"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "control-plane"
+client_certificate_file = "/run/secrets/dispatcher_client_certificate"
+client_key_file = "/run/secrets/dispatcher_client_key"
+
+[database]
+host = "172.30.4.2"
+port = 5432
+name = "dungeonflux"
+user = "df_egress"
+password_file = "/run/secrets/db_egress_password"
+pool_max = 4
+statement_timeout_ms = 10000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "postgres"
+
+[providers]
+mode = "fake"
+allow_live = false
+# In production the provider key files are listed here and exist only in this role's secrets directory.
+
+[telemetry]
+ingestor = "172.30.4.5:4317"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "ingestor"
+client_certificate_file = "/run/secrets/dispatcher_client_certificate"
+client_key_file = "/run/secrets/dispatcher_client_key"
+spool_dir = "/var/lib/dungeonflux/spool"

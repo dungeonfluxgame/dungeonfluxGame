@@ -1,0 +1,156 @@
+# Production edge on the application Droplet (plan 12.2: only the reverse proxy receives public traffic).
+# STATUS: UNVERIFIED (never run through `caddy validate`). Caddy terminates TLS with automatic certificates
+# for DF_PUBLIC_HOST and forwards to the control plane over the private Docker network. Environment
+# placeholders come from the Caddy container's environment, an env file of NON-SECRET values
+# (deploy/config/edge.env.production.example, edge.env.staging.example): DF_PUBLIC_HOST, DF_ACME_EMAIL,
+# DF_TRUSTED_PROXIES. (Caddy, unlike the game binary, is configured through its own placeholders.)
+#
+# HOSTNAMES (LAUNCH.md decision 32). Production is ONE public origin, https://dungeonfluxdnd.com (DF_PUBLIC_HOST); the
+# staging environment runs this same file with DF_PUBLIC_HOST=staging.dungeonfluxdnd.com. The edge serves, on that
+# one origin: the static docs/ site (the default), /app/ (the browser client), the APIs, /sessions/* and the other
+# control-plane routes listed in @always_dynamic. The www host redirects to the apex: that site block lives in
+# deploy/edge/extra/www-redirect.caddy, which the PRODUCTION deploy copies into /etc/caddy/extra/ (the staging
+# deploy mounts an empty directory). DNS is entered by hand at GoDaddy (deploy/dns/records.csv); agents change none.
+#
+# ROUTING. Paths in @always_dynamic always go to the control plane. For everything else the docs site is tried first:
+# a request whose path (or path/index.html) exists under /srv/docs is served from there (that is also what lets the
+# docs' own /assets/ files coexist with /assets/<capability> media routes: a capability never names a docs file);
+# anything the docs site does not have (portal pages such as the account and billing screens) goes to the control
+# plane. TODO(O1,B,S1,S3): the control plane's real route prefixes; this list is the single place to change them.
+#
+# LOGGING FAILS CLOSED (critic round 1, item 10; O2 design review, plan 13.5). Bearer capabilities appear in
+# URL paths (/assets/<cap>, /media/<cap>, /join/<token>, ...). Instead of listing routes to redact, EVERY logger
+# records only the first path segment ("/assets", "/join", "/") and never a query string, whatever the
+# route, its letter case or a doubled slash. The segment ends at "/", "?", "%" or ";" so an encoded slash
+# (/join%2FTOKEN) or a path parameter (/join;x=TOKEN) cannot carry a token into the log; a request target that does
+# not start with "/" (absolute-form, CONNECT) is logged as an empty string. Referer, Sec-WebSocket-Protocol (tickets
+# may travel there) and the Location response header are never logged. The same filter is attached to the default
+# logger, which also carries http.log.error and handler logs (reverse_proxy errors include the request), not only to
+# the access log. deploy/scripts/check-edge-redaction.sh reads this file and fails if any of that is missing; it also
+# fails if any extra/*.caddy file defines a logger (the www site has none: it only redirects).
+# Capability responses (/assets/*, /media/*; the matcher is case-insensitive) also carry Referrer-Policy: no-referrer.
+#
+# ADMIN API: a unix socket on a tmpfs (mode 0600, reachable only inside the container), so a configuration
+# reload does not drop connections:  caddy reload --config /etc/caddy/Caddyfile --address unix//run/caddy/admin.sock
+# stream_close_delay keeps upgraded WebSocket connections open for a bounded time across a reload. A deploy
+# still drains through the readiness flip and the application's reconnect logic (plan 12.2, 12.6; no session
+# survives a deployment by promise). Heartbeats and backpressure belong to the application protocol.
+# Behind the optional DigitalOcean load balancer, set DF_TRUSTED_PROXIES to the VPC range.
+{
+	admin unix//run/caddy/admin.sock|0600
+	email {$DF_ACME_EMAIL}
+	servers {
+		trusted_proxies static {$DF_TRUSTED_PROXIES:private_ranges}
+		timeouts {
+			read_header 10s
+			idle 120s
+		}
+	}
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "^(/[^/?%;]*)[^?]*([?].*)?$|^[^/].*$" "$1"
+				request>headers>Referer delete
+				request>headers>Sec-WebSocket-Protocol delete
+				resp_headers>Location delete
+			}
+		}
+	}
+}
+
+# The hop to the control plane is TLS on the internal leg (coordinator ruling b): the edge verifies the control plane's
+# certificate against the internal CA (the edge consumer's own secrets directory holds only that public certificate).
+(control_plane) {
+	reverse_proxy https://control-plane:8080 {
+		# Readiness comes from the control plane's READINESS-ONLY listener on the ingress network (port 8084:
+		# GET /healthz/ready and nothing else). The internal listener (metrics, drain) is on the data network, which the
+		# edge cannot reach. Liveness is not used for routing (plan 16.3).
+		health_uri /healthz/ready
+		health_port 8084
+		health_interval 5s
+		health_timeout 2s
+		flush_interval -1
+		stream_close_delay 5m
+		transport http {
+			tls
+			tls_server_name control-plane
+			tls_trust_pool file /run/secrets/internal_ca_certificate
+			dial_timeout 3s
+			response_header_timeout 60s
+		}
+	}
+}
+
+{$DF_PUBLIC_HOST} {
+	encode zstd gzip
+
+	@capability path /assets/* /media/*
+	@always_dynamic path /app /app/* /api/* /sessions/* /join/* /media/* /auth/* /webhooks/*
+	# ACCESS GATE (critic round 1e, item 3). Staging is a PUBLIC name in front of fake identity, so its edge answers 403 to
+	# every client outside DF_ALLOWED_CIDRS (space-separated CIDRs in the edge env file). The firewall stays open so the
+	# certificate authority can validate the name: Caddy answers ACME challenges BEFORE these routes run, so the gate does not
+	# break issuance. Production sets DF_ALLOWED_CIDRS="0.0.0.0/0 ::/0" explicitly; if the variable is missing the default
+	# is loopback only, i.e. the site fails CLOSED. (Behind a load balancer client_ip uses trusted_proxies above.)
+	@denied not client_ip {$DF_ALLOWED_CIDRS:127.0.0.1/32}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	# Deferred (">") so the policy is set after the upstream response and cannot be overridden by it.
+	header @capability >Referrer-Policy "no-referrer"
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "^(/[^/?%;]*)[^?]*([?].*)?$|^[^/].*$" "$1"
+				request>headers>Referer delete
+				request>headers>Sec-WebSocket-Protocol delete
+				resp_headers>Location delete
+			}
+		}
+	}
+
+	handle @denied {
+		respond "Forbidden" 403
+	}
+
+	handle @always_dynamic {
+		import control_plane
+	}
+
+	handle {
+		root * /srv/docs
+		@docs file {
+			try_files {path} {path}/index.html
+		}
+		handle @docs {
+			# Security headers for the static docs site only (the browser client at /app/ sets its own in its own app, S3/O1/P).
+			# The docs use no script at all, so script-src is 'none'; the 4 inline style attributes need style-src-attr; the
+			# Google Fonts origins are allowed ONLY while the fonts are still loaded remotely (remove them when they are
+			# self-hosted). No framing by anyone.
+			header {
+				Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; script-src 'none'; media-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'"
+				X-Frame-Options "DENY"
+			}
+			# /srv/docs is a BUILD OUTPUT (the docs/ tree packaged by the release job and unpacked by the deploy), not the
+			# repository's docs/ directory. Even so the server never serves dotfiles (.nojekyll, .git) or source maps.
+			file_server {
+				hide .* *.map
+			}
+		}
+		handle {
+			import control_plane
+		}
+	}
+}
+
+# Hosts other than the apex (the www redirect in production) are defined in extra/. A glob that matches no file is
+# allowed, which is how the staging deploy runs this file without a www site.
+import /etc/caddy/extra/*.caddy

@@ -1,0 +1,244 @@
+#cloud-config
+# First-boot configuration for a DungeonFlux ${role} Droplet (plan 12.2, 12.5, 12.7). Rendered by
+# infra/terraform/modules/droplet with templatefile(); runs ONCE at creation. STATUS: UNVERIFIED.
+# It installs Docker (app and worker roles), prepares directories, users and one-group-per-consumer secret
+# groups, and installs the root-owned tools: df-secrets-install, df-deploy and df-deploy-ssh. It carries NO secret
+# and no application config: secrets arrive through df-secrets-install onto tmpfs, and releases through df-deploy.
+#
+# WHO CAN DO WHAT (critic rounds 1c and 1d; coordinator rulings b, c and d):
+#  * Nobody who logs in is in the docker group. Docker socket access is host root (a container can bind-mount
+#    /run/dungeonflux and read every consumer's secrets), so containers are started only by root, through
+#    df-deploy, which validates its arguments (round 2 adds cosign verification of the digest).
+#  * CI: one key with the forced command df-deploy-ssh on the dfdeploy account (only "secrets-install" and
+#    "deploy <digest>"), reached through the bastion's dfci account, which may only forward to the application and
+#    worker hosts' SSH port. sudo lets dfdeploy run exactly `df-secrets-install` (no arguments) and
+#    `df-deploy sha256:<digest>`; df-deploy re-checks that it got exactly one argument. Until df-deploy verifies
+#    releases, that key is root-equivalent in effect and is handled as such.
+#  * Humans: one account each (admin_users), sk-ssh-ed25519@openssh.com (FIDO2 hardware key) public keys only,
+#    each installed with verify-required, so a login needs the key's touch AND its PIN. On the bastion and on the
+#    hosts their only sudo rights are `df-secrets-install` (also --audit) and `df-deploy psql ...` (database
+#    administration). They cannot start containers or release. No shared human account exists.
+#  * KEYS ARE ROOT-OWNED FILES: sshd reads /etc/ssh/authorized_keys.d/<user> (owned by root), never a file the user can
+#    edit, so a compromised account cannot add a key for itself. This template runs once. TO REVOKE OR ADD A KEY ON
+#    AN EXISTING HOST there is, until round 2 delivers `df-deploy refresh-keys` (a ROUND 2 BLOCKER), only the
+#    DigitalOcean console (edit the file as root) or replacing the host. Terraform changes do NOT reach a running host.
+# Keep shell variables in $NAME form here: a dollar sign followed by a brace belongs to Terraform.
+%{ if role != "bastion" }
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - jq
+  - age
+  - socat
+  - iptables
+  - unattended-upgrades
+%{ else }
+# The bastion has no outbound 80/443 unless package_mirror_cidrs is set (ruling d), so it installs nothing at first
+# boot and cannot be patched in place: it holds no state and no secret; replace it (terraform taint) to patch it.
+package_update: false
+package_upgrade: false
+%{ endif }
+
+bootcmd:
+%{ if role != "bastion" }
+  # One Unix group per secrets consumer (gids match infra/cloud-init/df-secrets-install.sh and the services'
+  # primary gids). No login account is in any of them, so none can read a secret it pushes.
+  - [cloud-init-per, once, dfs-control-plane, groupadd, -g, "10001", dfs-control-plane]
+  - [cloud-init-per, once, dfs-runtime, groupadd, -g, "10002", dfs-runtime]
+  - [cloud-init-per, once, dfs-dispatcher, groupadd, -g, "10003", dfs-dispatcher]
+  - [cloud-init-per, once, dfs-runner, groupadd, -g, "10004", dfs-runner]
+  - [cloud-init-per, once, dfs-backup, groupadd, -g, "10005", dfs-backup]
+  - [cloud-init-per, once, dfs-monitoring, groupadd, -g, "10006", dfs-monitoring]
+  - [cloud-init-per, once, dfs-billing-worker, groupadd, -g, "10007", dfs-billing-worker]
+  - [cloud-init-per, once, dfs-ingestor, groupadd, -g, "10008", dfs-ingestor]
+  - [cloud-init-per, once, dfs-edge, groupadd, -g, "10010", dfs-edge]
+%{ else }
+  - [cloud-init-per, once, noop, true]
+%{ endif }
+
+# Accounts have NO ssh_authorized_keys here: their keys are the root-owned files written below.
+users:
+%{ if role == "bastion" }
+  # CI reaches the hosts THROUGH the bastion (ssh -J): this account only forwards, it has no shell.
+  - name: dfci
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+%{ else }
+  - name: dfdeploy
+    shell: /bin/bash
+    lock_passwd: true
+%{ endif }
+%{ for name, keys in admin_users }
+  - name: ${name}
+    shell: /bin/bash
+    lock_passwd: true
+%{ endfor }
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-dungeonflux.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u
+      AllowUsers ${allowed_users}
+      MaxAuthTries 3
+      LoginGraceTime 20
+      X11Forwarding no
+%{ if role == "bastion" }
+      AllowTcpForwarding yes
+      PermitTunnel no
+%{ else }
+      AllowTcpForwarding no
+%{ endif }
+
+%{ if role == "bastion" }
+  # dfci may open a tunnel ONLY to the SSH port of an application or worker host (ruling d). permitopen takes literal
+  # addresses (no wildcards), so the private IPs of the hosts are written here by Terraform after they exist.
+  - path: /etc/ssh/authorized_keys.d/dfci
+    permissions: "0644"
+    owner: root:root
+    content: |
+%{ for key in ci_deploy_authorized_keys }
+      restrict,port-forwarding%{ for ip in ssh_target_ips },permitopen="${ip}:22"%{ endfor } ${key}
+%{ endfor }
+%{ else }
+  - path: /etc/ssh/authorized_keys.d/dfdeploy
+    permissions: "0644"
+    owner: root:root
+    content: |
+%{ for key in ci_deploy_authorized_keys }
+      command="/usr/local/sbin/df-deploy-ssh",restrict ${key}
+%{ endfor }
+%{ endif }
+%{ for name, keys in admin_users }
+
+  - path: /etc/ssh/authorized_keys.d/${name}
+    permissions: "0644"
+    owner: root:root
+    content: |
+%{ for key in keys }
+      verify-required ${key}
+%{ endfor }
+%{ endfor }
+%{ if role != "bastion" }
+
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "local",
+        "log-opts": { "max-size": "20m", "max-file": "5" },
+        "live-restore": true,
+        "no-new-privileges": true,
+        "userland-proxy": false,
+        "icc": false,
+        "default-ulimits": { "nofile": { "Name": "nofile", "Hard": 65536, "Soft": 65536 } }
+      }
+
+  # Secrets live on tmpfs only. /run/dungeonflux/docker is DOCKER_CONFIG for registry logins made by df-deploy
+  # (root): the login token goes to memory, never to ~/.docker/config.json on the Droplet disk (it would reach
+  # Droplet backups). Consumer directories under secrets/ are created by df-secrets-install with their own group.
+  - path: /etc/tmpfiles.d/dungeonflux.conf
+    permissions: "0644"
+    content: |
+      d /run/dungeonflux 0755 root root -
+      d /run/dungeonflux/secrets 0755 root root -
+      d /run/dungeonflux/docker 0700 root root -
+
+  # Digest-pinned images df-deploy may run for operator tasks. Releases are added after cosign verification
+  # (round 2). A change here is a change of the pinned psql client (PostgreSQL 17 or later).
+  - path: /etc/dungeonflux/allowed-images
+    permissions: "0644"
+    owner: root:root
+    content: |
+      psql=${psql_image}
+
+  # The ONLY host-name suffix df-deploy psql may relay to (managed PostgreSQL cluster names); written once, root-owned.
+  - path: /etc/dungeonflux/db-host-suffix
+    permissions: "0644"
+    owner: root:root
+    content: |
+      .db.ondigitalocean.com
+
+  - path: /usr/local/sbin/df-secrets-install
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, secrets_install_script)}
+
+  - path: /usr/local/sbin/df-deploy
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, deploy_script)}
+
+  - path: /usr/local/sbin/df-deploy-ssh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, deploy_ssh_script)}
+
+  # Fixed argument patterns (sudoers: "" means no arguments; the wildcard after sha256\: matches the rest of ONE
+  # argument list, which is why df-deploy itself insists on exactly one argument). The CI account can do nothing
+  # else; operators can do database administration and the secrets audit, but cannot release or start containers.
+  - path: /etc/sudoers.d/dungeonflux-deploy
+    permissions: "0440"
+    owner: root:root
+    content: |
+      dfdeploy ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-deploy sha256\:*
+%{ for name, keys in admin_users }
+      ${name} ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-secrets-install --audit, /usr/local/sbin/df-deploy psql *
+%{ endfor }
+
+  - path: /usr/local/sbin/df-bootstrap.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      systemd-tmpfiles --create /etc/tmpfiles.d/dungeonflux.conf
+
+      # Docker Engine from Docker's own apt repository. The signing key fingerprint is verified, not trusted.
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      fingerprint=$(gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | awk -F: '/^fpr:/ {print $10; exit}')
+      if [ "$fingerprint" != "9DC858229FC7DD38854AE2D88D81803C0EBFCD88" ]; then
+        echo "unexpected Docker apt key fingerprint: $fingerprint" >&2
+        exit 1
+      fi
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      # Every Docker package is pinned and then held (package_upgrade above must not move them); the compose
+      # plugin is not installed because no production tool uses it.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce=${docker_version_pin} docker-ce-cli=${docker_version_pin} containerd.io=${containerd_version_pin}
+      apt-mark hold docker-ce docker-ce-cli containerd.io
+      systemctl enable --now docker
+      # NO usermod -aG docker: nobody who logs in may talk to the Docker socket (it is host root).
+
+      # Directories. Writable application state lives on the host disk and is owned by the SERVICE's own uid
+      # (one uid per service: control-plane 10001, dispatcher 10003, ingestor 10008); it is working storage, never
+      # the only copy of anything (plan 12.1). Runtime spools are tmpfs created per slot by the runner with the
+      # slot's own uid (20000 + slot); the ingestor's telemetry store is never shared with a runtime.
+      install -d -o root -g root -m 0755 /opt/dungeonflux /opt/dungeonflux/releases /var/lib/dungeonflux /var/lib/dungeonflux/spool
+      install -d -o 10008 -g 10008 -m 0750 /var/lib/dungeonflux/telemetry
+      install -d -o 10001 -g 10001 -m 0750 /var/lib/dungeonflux/spool/control-plane
+      install -d -o 10003 -g 10003 -m 0750 /var/lib/dungeonflux/spool/dispatcher
+%{ if role == "app" }
+      install -d -o root -g root -m 0755 /opt/dungeonflux/edge /opt/dungeonflux/docs
+%{ endif }
+
+      systemctl reload ssh || systemctl restart ssh
+      touch /var/lib/dungeonflux/.bootstrapped
+%{ endif }
+
+runcmd:
+%{ if role != "bastion" }
+  - [bash, /usr/local/sbin/df-bootstrap.sh]
+%{ else }
+  - [systemctl, reload, ssh]
+%{ endif }

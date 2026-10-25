@@ -1,0 +1,101 @@
+# Staging configuration for `df-server control-plane --config /etc/dungeonflux/control-plane.toml`.
+# One TOML file, no environment variables (hosted-runtime-research.md 8.1, 8.4). Secrets are *_file paths;
+# no value is in this file. STATUS: UNVERIFIED PROPOSAL. TODO(O1): O1 owns the schema (deny_unknown_fields),
+# so the key names below are the S2 reading of section 13 of that document and change when O1 publishes the
+# types. Addresses are the static ones of deploy/compose/staging.compose.yml (172.30.x.y).
+
+[instance]
+id = "staging-app-1"
+environment = "staging"
+
+# FIVE listeners with different audiences (decisions 18 and 23, critic rounds 1 and 1c). Each is bound to ONE
+# network's address, so a process on another network cannot reach it:
+#   public   (ingress)   the browser-facing API, behind the edge
+#   ready    (ingress)   readiness only: answers GET /healthz/ready and nothing else; the edge's health check
+#   internal (data)      metrics, drain, full health: never on the ingress network, so the internet-facing edge cannot reach it
+#   dispatcher_gateway (dispatch network, mTLS) the egress dispatcher's ONLY way back: journal submissions and the delivery of
+#                        fetched provider output; authorized by the dispatcher's certificate identity (coordinator ruling a)
+#   media_gateway (runtime slot networks, mTLS) all media bytes for a runtime; authorized by the placement id in the
+#                        certificate's URI SAN, never by anything in the request
+[listen]
+public = "172.30.1.3:8080"
+ready = "172.30.1.3:8084"
+internal = "172.30.2.4:9090"
+dispatcher_gateway = "172.30.4.3:9093"
+media_gateway = ["172.30.11.3:8083", "172.30.12.3:8083"]
+
+# Every listener below that is not on loopback is TLS (coordinator ruling b: the Caddy-to-control-plane hop is TLS on the
+# internal leg; plaintext health or metrics listeners are allowed only on a network that carries nothing else, and none
+# exists yet: the monitoring network is round 2). The edge verifies this certificate against the internal CA by the name
+# control-plane. No listener binds a wildcard address (deploy/scripts/check-config-policy.sh).
+[listen_tls]
+certificate_file = "/run/secrets/media_gateway_certificate"
+key_file = "/run/secrets/media_gateway_key"
+listeners = ["public", "ready", "internal"]
+
+[database]
+host = "postgres"
+port = 5432
+name = "dungeonflux"
+user = "df_control"
+password_file = "/run/secrets/db_control_password"
+pool_max = 8
+statement_timeout_ms = 30000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "postgres"
+
+# Object storage: only the control plane holds object-store credentials (media gateway, exports).
+[objects]
+endpoint = "https://object-store:9000"
+region = "us-east-1"
+path_style = true
+bucket_prefix = "dfx-stage"
+ca_file = "/run/secrets/object_store_ca_certificate"
+media_access_key_id_file = "/run/secrets/storage_media_access_key_id"
+media_secret_key_file = "/run/secrets/storage_media_secret_key"
+exports_access_key_id_file = "/run/secrets/storage_exports_access_key_id"
+exports_secret_key_file = "/run/secrets/storage_exports_secret_key"
+
+[identity]
+mode = "fake"
+
+[payments]
+mode = "fake"
+
+# Staging never sends real mail or takes a real payment (decision e): fake, or a provider sandbox key.
+[email]
+mode = "fake"
+
+# mTLS (decision 23). The gateways present one certificate from the internal CA and REQUIRE a client certificate from it.
+# Who the caller is comes from the client certificate's URI SAN, never from a request field (critic round 1c, item 2):
+#   urn:dungeonflux:placement:<placement id>   a campaign runtime (media gateway)
+#   urn:dungeonflux:dispatcher                 the egress dispatcher (dispatcher gateway)
+# TODO(O1): who holds the internal CA key and issues per-placement runtime certificates (the runner?).
+[internal_tls]
+ca_file = "/run/secrets/internal_ca_certificate"
+gateway_certificate_file = "/run/secrets/media_gateway_certificate"
+gateway_key_file = "/run/secrets/media_gateway_key"
+client_certificate_file = "/run/secrets/internal_tls_control_certificate"
+client_key_file = "/run/secrets/internal_tls_control_key"
+
+[internal_tls.media_gateway]
+identity = "client_certificate_uri_san"
+uri_san_prefix = "urn:dungeonflux:placement:"
+
+[internal_tls.dispatcher_gateway]
+identity = "client_certificate_uri_san"
+allowed_identities = ["urn:dungeonflux:dispatcher"]
+
+[sessions]
+signing_key_file = "/run/secrets/session_signing_key"
+
+[telemetry]
+ingestor = "172.30.2.8:4317"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "ingestor"
+client_certificate_file = "/run/secrets/internal_tls_control_certificate"
+client_key_file = "/run/secrets/internal_tls_control_key"
+spool_dir = "/var/lib/dungeonflux/spool"

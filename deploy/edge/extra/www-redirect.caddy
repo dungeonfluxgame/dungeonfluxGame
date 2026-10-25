@@ -1,0 +1,6 @@
+# The www host redirects to the apex (LAUNCH.md decision 32). Copied to /etc/caddy/extra/ by the PRODUCTION deploy only.
+# It deliberately defines NO logger (deploy/scripts/check-edge-redaction.sh fails if an extra/*.caddy file has one):
+# a redirect needs no access log, and the global default logger already filters whatever it does write.
+www.{$DF_PUBLIC_HOST} {
+	redir https://{$DF_PUBLIC_HOST}{uri} permanent
+}

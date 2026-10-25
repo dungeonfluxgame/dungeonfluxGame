@@ -1,0 +1,7 @@
+suffix,acl,versioning,expire_days,noncurrent_expire_days,abort_multipart_days,cors,purpose
+public-static,public-read,off,0,0,7,read,Licensed public examples and versioned immutable static assets (plan 13.1 13.2)
+private-media,private,on,0,30,3,none,Campaign and character media; bytes are served only through the control-plane media gateway never by presigned URL (13.2 decision 23)
+uploads-quarantine,private,off,3,0,1,none,Unvalidated uploads and generation intermediates; 24-72 h then deleted (13.4 13.8)
+exports,private,off,7,0,1,none,Account and campaign export archives; short-lived download (13.8 13.11)
+backups,private,on,23,7,1,none,Encrypted logical database exports and object manifests; versioned: 23 days current + 7 days noncurrent = 30 days at most (13.10)
+recovery-journal,private,on,0,0,7,none,Append-only financial and dispatch recovery journal; independent credentials; NOT WORM (13.10 service-operations)

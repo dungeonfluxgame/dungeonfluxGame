@@ -1,0 +1,360 @@
+# Local staging mirror of the production shape (plan 12.1, 12.2; LAUNCH.md decisions 18 and 23).
+# STATUS: UNVERIFIED. `docker compose config` renders it; it has never been started (no Docker daemon on the
+# authoring machine). Use:  deploy/scripts/staging-secrets.sh && deploy/scripts/staging-up.sh up --profile runtime
+#                           deploy/scripts/staging-smoke.sh
+#
+# NETWORK SPLIT (every network except `public` is internal: no route out of Docker):
+#   public      edge only, published on 127.0.0.1
+#   ingress     edge <-> control-plane. The control plane binds its PUBLIC listener and a READINESS-ONLY listener
+#               here. Its internal listener (metrics, drain, full health) is on the data network, not here, so the
+#               internet-facing edge can reach neither /internal/drain nor /metrics.
+#   data        control-plane (internal listener), migrate, ingestor (metrics), postgres, object-store, db-gate.
+#               Neither the edge nor the dispatcher nor a runtime is here.
+#   dispatch    the egress dispatcher's own network: db-gate (PostgreSQL), control-plane (the dispatcher gateway
+#               listener, mTLS, coordinator ruling a) and ingestor (telemetry, mTLS). With egress-out (providers) these
+#               are the only things the dispatcher can reach (decision 23). NOTE: ruling a says the gateway listener is
+#               on "the data network"; S2 put it on a network of its own so the dispatcher cannot also reach the
+#               object store; moving it back is a two-line change.
+#   slot1/2     one network per runtime. A runtime is alone on its slot network with exactly four peers (decision 23):
+#               db-gate (PostgreSQL), egress (dispatcher, mTLS), control-plane (media gateway listener, mTLS) and
+#               ingestor (telemetry, mTLS). Runtimes cannot see each other, postgres, the object store or the edge.
+#   egress-out  the dispatcher's way out to providers; internal here, so staging can never reach a real provider.
+# Static addresses make per-network listener binding possible (deploy/config/staging/*.toml); no listener binds a wildcard
+# address. Every listener that is not on loopback is TLS (ruling b), the edge-to-control-plane hop included; the one plaintext
+# listener left is the ingestor's metrics endpoint on the data network, which moves to a monitoring network of its own in
+# round 2 (ruling e).
+#
+# IDENTITY: every service runs as its own numeric uid (staging.env); each runtime slot has its own uid. A server
+# takes the CALLER's identity from the client certificate's URI SAN (urn:dungeonflux:placement:<id>,
+# urn:dungeonflux:dispatcher, urn:dungeonflux:control-plane), never from a request. Writable state is tmpfs with the
+# service's uid here (production: host directories owned by that uid; runtime spools are tmpfs created per slot).
+# SECRETS: every service mounts ONLY its own directory, read-only, at /run/secrets. CONFIG: one read-only TOML file per
+# role under deploy/config/staging; the hosted binary reads no environment variables. Same hardening as production:
+# read-only root, cap_drop ALL (named additions have a comment), no-new-privileges, limits, no Docker socket, no
+# privileged, no host namespaces, no devices (deploy/scripts/check-compose-policy.sh enforces all of it).
+#
+# TODO(O1): service subcommands, config keys, healthcheck flags and the ingestor subcommand are proposals
+# against hosted-runtime-research.md; the df-server binary and its TLS-to-PostgreSQL support do not exist yet.
+name: dungeonflux-staging
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  restart: unless-stopped
+  logging:
+    driver: local
+    options: { max-size: "20m", max-file: "5" }
+
+networks:
+  public: {}
+  ingress:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.1.0/24 }] }
+  data:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.2.0/24, ip_range: 172.30.2.128/25 }] }
+  egress-out:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.3.0/24 }] }
+  dispatch:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.4.0/24 }] }
+  slot1:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.11.0/24 }] }
+  slot2:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.12.0/24 }] }
+
+volumes:
+  pgdata: {}
+  objdata: {}
+
+services:
+  postgres:
+    <<: *hardened
+    image: ${POSTGRES_IMAGE:?pass --env-file deploy/images/images.lock}
+    networks:
+      data: { ipv4_address: 172.30.2.2 }
+    mem_limit: ${DF_PG_MEM}
+    pids_limit: 256
+    # The upstream entrypoint starts as root and drops to the postgres user, so a few capabilities return.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    environment:
+      POSTGRES_USER: df_admin
+      POSTGRES_DB: dungeonflux
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --auth-host=scram-sha-256"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ${DF_STAGING_SECRETS_DIR}/postgres:/run/secrets:ro
+      - ./postgres-init/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+      - ./postgres-init/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ../db:/opt/dungeonflux/db:ro
+    tmpfs:
+      - /run/postgresql
+      - /tmp
+      - /run/pgtls:mode=0700,uid=999,gid=999
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        install -m 0600 -o postgres -g postgres /run/secrets/pg_server_key /run/pgtls/server.key &&
+        install -m 0644 -o postgres -g postgres /run/secrets/pg_server_certificate /run/pgtls/server.crt &&
+        exec docker-entrypoint.sh postgres
+        -c ssl=on -c ssl_cert_file=/run/pgtls/server.crt -c ssl_key_file=/run/pgtls/server.key
+        -c hba_file=/etc/postgresql/pg_hba.conf -c password_encryption=scram-sha-256
+        -c max_connections=${DF_PG_MAX_CONNECTIONS}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U df_admin -d dungeonflux"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # The only database path a runtime or the dispatcher has: a TCP forwarder on each of their networks (TLS stays
+  # end to end, verify-full with the configured server name).
+  db-gate:
+    <<: *hardened
+    image: ${DBGATE_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_DBGATE}:${DF_UID_DBGATE}"
+    networks:
+      data: { ipv4_address: 172.30.2.7 }
+      dispatch: { ipv4_address: 172.30.4.2 }
+      slot1: { ipv4_address: 172.30.11.2 }
+      slot2: { ipv4_address: 172.30.12.2 }
+    mem_limit: 128m
+    pids_limit: 64
+    volumes:
+      - ./dbgate.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  object-store:
+    <<: *hardened
+    image: ${OBJECT_STORE_IMAGE:?pass --env-file deploy/images/images.lock}
+    networks:
+      data: { ipv4_address: 172.30.2.3 }
+    mem_limit: ${DF_OBJECT_STORE_MEM}
+    pids_limit: 256
+    # TLS with a certificate from the staging CA, like Spaces; the application refuses http:// endpoints.
+    command: ["server", "/data", "--certs-dir", "/run/secrets/certs"]
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/objstore_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/objstore_root_password
+      MINIO_BROWSER: "off"
+    volumes:
+      - objdata:/data
+      - ${DF_STAGING_SECRETS_DIR}/object-store:/run/secrets:ro
+    tmpfs: [/tmp]
+
+  bucket-init:
+    image: ${AWSCLI_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_BUCKET_INIT}:${DF_UID_BUCKET_INIT}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    networks: [data]
+    entrypoint: ["/bin/sh", "/opt/dungeonflux/bucket-init.sh"]
+    # A staging helper, not the game: it may take environment variables.
+    environment:
+      HOME: /tmp
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_CA_BUNDLE: /run/secrets/object_store_ca_certificate
+      DF_OBJECT_ENDPOINT: https://object-store:9000
+      DF_BUCKET_PREFIX: dfx-stage
+      DF_OBJECT_ACCESS_KEY_ID_FILE: /run/secrets/storage_access_key_id
+      DF_OBJECT_SECRET_KEY_FILE: /run/secrets/storage_secret_key
+    volumes:
+      - ./bucket-init.sh:/opt/dungeonflux/bucket-init.sh:ro
+      - ../storage/buckets.csv:/opt/dungeonflux/buckets.csv:ro
+      - ${DF_STAGING_SECRETS_DIR}/bucket-init:/run/secrets:ro
+    tmpfs: [/tmp]
+    depends_on: [object-store]
+
+  migrate:
+    <<: *hardened
+    restart: "no"
+    image: ${CONTROL_PLANE_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_MIGRATE}:${DF_UID_MIGRATE}"
+    networks: [data]
+    mem_limit: 512m
+    pids_limit: 128
+    # TODO(O1): migrate subcommand; connects as df_migrator, never as a serving role.
+    command: ["migrate", "apply", "--config", "/etc/dungeonflux/migrate.toml"]
+    volumes:
+      - ../config/staging/migrate.toml:/etc/dungeonflux/migrate.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/migrate:/run/secrets:ro
+    tmpfs:
+      - /tmp:uid=10009,gid=10009
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Per-host telemetry ingestor (decision 23): the only telemetry path a runtime has, over mTLS; Prometheus (round 3)
+  # scrapes its metrics address on the data network and never a runtime. Records are labelled by the identity in the
+  # client certificate, so a runtime cannot inject another campaign's telemetry.
+  ingestor:
+    <<: *hardened
+    image: ${CONTROL_PLANE_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_INGESTOR}:${DF_GID_INGESTOR}"
+    networks:
+      data: { ipv4_address: 172.30.2.8 }
+      dispatch: { ipv4_address: 172.30.4.5 }
+      slot1: { ipv4_address: 172.30.11.5 }
+      slot2: { ipv4_address: 172.30.12.5 }
+    mem_limit: 512m
+    pids_limit: 128
+    # TODO(O1): ingestor subcommand name (df-telemetry wiring, hosted-runtime-research.md 12).
+    command: ["telemetry-ingestor", "--config", "/etc/dungeonflux/ingestor.toml"]
+    volumes:
+      - ../config/staging/ingestor.toml:/etc/dungeonflux/ingestor.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/ingestor:/run/secrets:ro
+    tmpfs:
+      - /tmp:uid=10008,gid=10008
+      - /var/lib/dungeonflux/telemetry:size=512m,uid=10008,gid=10008
+
+  # The egress dispatcher: the only holder of provider credentials (decision 18). In staging it runs the
+  # in-process fakes and has no route out. Production hardening and signing are round 2.
+  egress:
+    <<: *hardened
+    image: ${EGRESS_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_DISPATCHER}:${DF_GID_DISPATCHER}"
+    networks:
+      dispatch: { ipv4_address: 172.30.4.4 }
+      slot1: { ipv4_address: 172.30.11.4 }
+      slot2: { ipv4_address: 172.30.12.4 }
+      egress-out: { ipv4_address: 172.30.3.2 }
+    mem_limit: ${DF_EGRESS_MEM}
+    pids_limit: 128
+    volumes:
+      - ../config/staging/egress.toml:/etc/dungeonflux/egress.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/dispatcher:/run/secrets:ro
+    tmpfs:
+      - /tmp:uid=10003,gid=10003
+      - /var/lib/dungeonflux/spool:size=256m,uid=10003,gid=10003
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "127.0.0.1:9092", "--signal", "ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-gate: { condition: service_started }
+      ingestor: { condition: service_started }
+
+  control-plane:
+    <<: *hardened
+    image: ${CONTROL_PLANE_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_CONTROL_PLANE}:${DF_GID_CONTROL_PLANE}"
+    networks:
+      ingress: { ipv4_address: 172.30.1.3 }
+      data: { ipv4_address: 172.30.2.4 }
+      dispatch: { ipv4_address: 172.30.4.3 }
+      slot1: { ipv4_address: 172.30.11.3 }
+      slot2: { ipv4_address: 172.30.12.3 }
+    mem_limit: ${DF_CP_MEM}
+    cpus: ${DF_CP_CPUS}
+    pids_limit: ${DF_CP_PIDS}
+    volumes:
+      - ../config/staging/control-plane.toml:/etc/dungeonflux/control-plane.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/control-plane:/run/secrets:ro
+    tmpfs:
+      - /tmp:size=64m,uid=10001,gid=10001
+      - /var/lib/dungeonflux/spool:size=256m,uid=10001,gid=10001
+    healthcheck:
+      # Distroless has no shell or curl: the binary probes itself, on the readiness-only listener.
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/internal_ca_certificate", "--server-name", "control-plane"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      bucket-init: { condition: service_completed_successfully }
+      egress: { condition: service_healthy }
+      ingestor: { condition: service_started }
+
+  edge:
+    <<: *hardened
+    image: ${EDGE_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_EDGE}:${DF_UID_EDGE}"
+    networks:
+      public: {}
+      ingress: { ipv4_address: 172.30.1.2 }
+    mem_limit: 128m
+    pids_limit: 128
+    # The upstream binary carries a file capability for binding low ports; with cap_drop ALL the kernel
+    # refuses to exec it unless the capability stays in the bounding set.
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "127.0.0.1:${DF_STAGING_PORT}:8080"
+    volumes:
+      - ../edge/Caddyfile.staging:/etc/caddy/Caddyfile:ro
+      # The edge's own secrets directory: only the PUBLIC internal CA certificate, to verify the control plane (ruling b).
+      - ${DF_STAGING_SECRETS_DIR}/edge:/run/secrets:ro
+      # The static docs site the edge serves by default (production: the release artifact under /opt/dungeonflux/docs).
+      - ../../docs:/srv/docs:ro
+    tmpfs:
+      - /data:uid=10010,gid=10010
+      - /config:uid=10010,gid=10010
+      - /run/caddy:uid=10010,gid=10010,mode=0700
+    depends_on:
+      control-plane: { condition: service_healthy }
+
+  # Campaign runtimes. In production the trusted runner starts them (plan 12.5), allocates the slot uid
+  # (20000 + slot), and writes the descriptor and the per-placement files (0400, owned by that uid); compose never
+  # does. Two of them, each alone on its own slot network and with its own uid and placement certificate, so the
+  # smoke test can prove one cannot reach or impersonate the other. Enable with:  --profile runtime
+  runtime-1:
+    <<: *hardened
+    profiles: ["runtime"]
+    image: ${CAMPAIGN_RUNTIME_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_RUNTIME_1}:${DF_GID_RUNTIME}"
+    networks:
+      slot1: { ipv4_address: 172.30.11.10 }
+    mem_limit: ${DF_RUNTIME_MEM}
+    cpus: ${DF_RUNTIME_CPUS}
+    pids_limit: ${DF_RUNTIME_PIDS}
+    volumes:
+      - ../config/staging/runtime-1.descriptor.toml:/etc/dungeonflux/descriptor.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/runtime-1:/run/secrets:ro
+    tmpfs:
+      - /tmp:size=512m,uid=20001,gid=10002
+      - /var/lib/dungeonflux/spool:size=256m,uid=20001,gid=10002
+    healthcheck:
+      # TODO(O1): the runtime's own readiness listener.
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.11.10:8081", "--signal", "ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      control-plane: { condition: service_healthy }
+      db-gate: { condition: service_started }
+
+  runtime-2:
+    <<: *hardened
+    profiles: ["runtime"]
+    image: ${CAMPAIGN_RUNTIME_IMAGE:?pass --env-file deploy/images/images.lock}
+    user: "${DF_UID_RUNTIME_2}:${DF_GID_RUNTIME}"
+    networks:
+      slot2: { ipv4_address: 172.30.12.10 }
+    mem_limit: ${DF_RUNTIME_MEM}
+    cpus: ${DF_RUNTIME_CPUS}
+    pids_limit: ${DF_RUNTIME_PIDS}
+    volumes:
+      - ../config/staging/runtime-2.descriptor.toml:/etc/dungeonflux/descriptor.toml:ro
+      - ${DF_STAGING_SECRETS_DIR}/runtime-2:/run/secrets:ro
+    tmpfs:
+      - /tmp:size=512m,uid=20002,gid=10002
+      - /var/lib/dungeonflux/spool:size=256m,uid=20002,gid=10002
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.12.10:8081", "--signal", "ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      control-plane: { condition: service_healthy }
+      db-gate: { condition: service_started }

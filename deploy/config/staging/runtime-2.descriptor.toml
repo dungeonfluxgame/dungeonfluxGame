@@ -1,0 +1,61 @@
+# Second static staging runtime, on its own slot network (172.30.12.0/24), so the reachability smoke check
+# can prove one runtime cannot reach another. See runtime-1.descriptor.toml for the contract and caveats.
+
+[placement]
+campaign = "00000000-0000-0000-0000-000000000011"
+tenant = "00000000-0000-0000-0000-000000000012"
+placement_id = "00000000-0000-0000-0000-000000000013"
+placement_token_file = "/run/secrets/placement_token"
+
+[listen]
+game = "172.30.12.10:8081"
+
+# The game listener authorizes its caller by certificate identity (coordinator ruling c): only the control plane's
+# client certificate (URI SAN urn:dungeonflux:control-plane) may open the tunnel; any other peer on the slot
+# network (dispatcher, ingestor, db-gate) is refused at the handshake.
+[listen_tls]
+certificate_file = "/run/secrets/internal_tls_runtime_certificate"
+key_file = "/run/secrets/internal_tls_runtime_key"
+client_ca_file = "/run/secrets/internal_ca_certificate"
+allowed_identities = ["urn:dungeonflux:control-plane"]
+
+[database]
+host = "172.30.12.2"
+port = 5432
+name = "dungeonflux"
+user = "df_campaign_runtime"
+password_file = "/run/secrets/db_campaign_runtime_password"
+pool_max = 2
+statement_timeout_ms = 10000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "postgres"
+
+[dispatcher]
+address = "172.30.12.4:8082"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "egress"
+client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
+client_key_file = "/run/secrets/internal_tls_runtime_key"
+
+[media_gateway]
+address = "172.30.12.3:8083"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "control-plane"
+client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
+client_key_file = "/run/secrets/internal_tls_runtime_key"
+
+[telemetry]
+ingestor = "172.30.12.5:4317"
+ca_file = "/run/secrets/internal_ca_certificate"
+server_name = "ingestor"
+client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
+client_key_file = "/run/secrets/internal_tls_runtime_key"
+spool_dir = "/var/lib/dungeonflux/spool"
+spool_max_bytes = 268435456
+
+[limits]
+memory_bytes = 1610612736
+pids = 256

@@ -1,0 +1,22 @@
+-- Bootstrap privileges, to be shipped by O1 as the FIRST migration (TODO(O1): migration number and runner
+-- phase; this file is the S2 contract, not an applied migration). It must run AS df_migrator (the migrate step
+-- connects as that role), because ALTER DEFAULT PRIVILEGES without FOR ROLE applies to the objects the current
+-- role creates in the future. Running it as the administrator would configure the wrong role.
+--
+-- The only default-privilege rule: nobody gets EXECUTE on a new function just because they are PUBLIC.
+-- PostgreSQL grants EXECUTE to PUBLIC by default, which would leave SECURITY DEFINER functions such as the
+-- fence checks callable by every role. Each migration that creates a function grants EXECUTE to the specific
+-- role that needs it. There is deliberately NO default grant of SELECT/INSERT/UPDATE/DELETE: each migration
+-- grants exactly the tables a service needs, so a runtime role never silently gets token, ticket, identity or
+-- finance tables, and never UPDATE/DELETE on an append-only ledger or journal.
+--
+-- Pattern every owning migration follows (example only, not executed here):
+--   GRANT USAGE ON SCHEMA df_game TO df_campaign_runtime;
+--   GRANT SELECT, INSERT, UPDATE ON df_game.checkpoints TO df_campaign_runtime;   -- the tables it needs
+--   GRANT INSERT, SELECT ON df_finance.ledger_entries TO df_billing;              -- append-only: no UPDATE/DELETE
+--   REVOKE ALL ON FUNCTION df_runtime.fence_current(uuid, uuid, bigint, bigint, uuid) FROM PUBLIC;
+--   GRANT EXECUTE ON FUNCTION df_runtime.fence_current(uuid, uuid, bigint, bigint, uuid) TO df_campaign_runtime, df_egress;
+--   ALTER TABLE df_game.checkpoints ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+-- deploy/db/verify-privileges.sql checks all of this after the migrations ran.
+
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;

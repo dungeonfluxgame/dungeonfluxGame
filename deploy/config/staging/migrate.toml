@@ -1,0 +1,20 @@
+# Staging configuration for `df-server migrate apply --config /etc/dungeonflux/migrate.toml`. The migrate
+# step is the only user of the df_migrator role. UNVERIFIED PROPOSAL; TODO(O1) owns the schema.
+
+[instance]
+id = "staging-migrate"
+environment = "staging"
+
+[database]
+host = "postgres"
+port = 5432
+name = "dungeonflux"
+user = "df_migrator"
+password_file = "/run/secrets/db_migrator_password"
+pool_max = 1
+statement_timeout_ms = 600000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "postgres"

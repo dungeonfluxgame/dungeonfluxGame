@@ -1,0 +1,37 @@
+# Staging configuration for the per-host telemetry ingestor (df-telemetry; decision 23: the only telemetry path a
+# runtime has, and the only thing Prometheus scrapes, never a runtime). UNVERIFIED PROPOSAL. TODO(O1): the
+# subcommand name, schema and OTLP/metrics ports are O1's; the segment and spool bounds come from
+# planning/service-operations.md (spool 2 GiB, active segment 4 GiB, 30 GiB quota, 7 day retention).
+
+[instance]
+id = "staging-ingestor-1"
+environment = "staging"
+
+[listen]
+# OTLP intake over mTLS on every network a producer lives on: data (control plane), dispatch (the dispatcher) and
+# each runtime slot. A listener never accepts a plaintext connection (critic round 1c, item 2).
+otlp = ["172.30.2.8:4317", "172.30.4.5:4317", "172.30.11.5:4317", "172.30.12.5:4317"]
+# Metrics for Prometheus: data network only, not reachable from a slot.
+metrics = "172.30.2.8:9464"
+
+[tls]
+certificate_file = "/run/secrets/ingestor_tls_certificate"
+key_file = "/run/secrets/ingestor_tls_key"
+client_ca_file = "/run/secrets/internal_ca_certificate"
+
+# Records are labelled by the identity in the client certificate's URI SAN, never by anything the producer sends:
+# urn:dungeonflux:placement:<id>, urn:dungeonflux:dispatcher, urn:dungeonflux:control-plane. A runtime therefore
+# cannot inject or spoof another campaign's telemetry.
+[identity]
+source = "client_certificate_uri_san"
+# EXACT identities for the two fixed services (a prefix match would also admit urn:dungeonflux:dispatcher-x), and a prefix
+# only for placement certificates, whose id varies.
+allowed_identities = ["urn:dungeonflux:dispatcher", "urn:dungeonflux:control-plane"]
+placement_prefix = "urn:dungeonflux:placement:"
+
+[storage]
+dir = "/var/lib/dungeonflux/telemetry"
+spool_max_bytes = 2147483648
+segment_max_bytes = 4294967296
+quota_bytes = 32212254720
+retention_days = 7

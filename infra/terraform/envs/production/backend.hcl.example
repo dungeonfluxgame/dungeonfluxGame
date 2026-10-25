@@ -1,0 +1,4 @@
+# Copy to backend.hcl (gitignored) and fill in. No credentials here.
+bucket    = "REPLACE_ME-terraform-state"
+key       = "dungeonflux/production/terraform.tfstate"
+endpoints = { s3 = "https://nyc3.digitaloceanspaces.com" }
