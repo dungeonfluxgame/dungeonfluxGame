@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
 use crate::image_edit::{jpeg_size, webp_facts};
-use crate::media_container::{EncodedMediaFacts, inspect_png};
+use crate::media_container::{EncodedMediaFacts, inspect_png_off_worker};
 use crate::native_http::{NativeHttp, NativeHttpResponse};
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{
@@ -151,7 +151,7 @@ impl NativeFalImageProvider {
         } else {
             (bytes, format)
         };
-        let (width, height, has_alpha_channel) = facts(format, &bytes)?;
+        let (bytes, (width, height, has_alpha_channel)) = facts(format, bytes).await?;
         if edit.background == ImageBackground::Transparent && !has_alpha_channel {
             return Err(ImageEditError::Output);
         }
@@ -449,22 +449,31 @@ fn first_image(value: &Value) -> Result<(Vec<u8>, ImageFormat), ImageEditError> 
     Ok((bytes, format))
 }
 
-/// Width, height and whether the image carries alpha, read from its own header.
-fn facts(format: ImageFormat, bytes: &[u8]) -> Result<(u32, u32, bool), ImageEditError> {
+/// Width, height and whether the image carries alpha, read from its own header. The PNG scan
+/// runs off the async worker, so the bytes are passed in and returned.
+async fn facts(
+    format: ImageFormat,
+    bytes: Vec<u8>,
+) -> Result<(Vec<u8>, (u32, u32, bool)), ImageEditError> {
     match format {
         ImageFormat::Png => {
-            let EncodedMediaFacts::Png { width, height } =
-                inspect_png(bytes).map_err(|_| ImageEditError::Output)?
+            let (bytes, EncodedMediaFacts::Png { width, height }) = inspect_png_off_worker(bytes)
+                .await
+                .map_err(|_| ImageEditError::Output)?
             else {
                 return Err(ImageEditError::Output);
             };
             let color_type = bytes.get(25).copied().ok_or(ImageEditError::Output)?;
-            Ok((width, height, matches!(color_type, 4 | 6)))
+            Ok((bytes, (width, height, matches!(color_type, 4 | 6))))
         }
-        ImageFormat::Jpeg => jpeg_size(bytes)
-            .map(|(width, height)| (width, height, false))
-            .ok_or(ImageEditError::Output),
-        ImageFormat::Webp => webp_facts(bytes).ok_or(ImageEditError::Output),
+        ImageFormat::Jpeg => {
+            let (width, height) = jpeg_size(&bytes).ok_or(ImageEditError::Output)?;
+            Ok((bytes, (width, height, false)))
+        }
+        ImageFormat::Webp => {
+            let facts = webp_facts(&bytes).ok_or(ImageEditError::Output)?;
+            Ok((bytes, facts))
+        }
     }
 }
 

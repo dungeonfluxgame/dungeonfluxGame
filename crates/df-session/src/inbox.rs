@@ -1,11 +1,16 @@
 use df_model::checkpoint::GameInput;
 use std::collections::VecDeque;
 use std::mem::size_of;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
 pub const MAX_INBOX_ITEMS: usize = 256;
 pub const MAX_INBOX_BYTES: usize = 2 * 1024 * 1024;
+/// Pause before the owner wake runs again when its deadline is still due after the wake and
+/// nothing was admitted. A reducer that keeps a deadline due with no work is a defect; this bound
+/// is a safety net so the owner polls instead of spinning. The first stall of an episode is
+/// reported on the audit line `session.owner_wake_stalled`. Admitted input ends the pause early.
+const STALLED_WAKE_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Heap capacity retained by an owned canonical input or caller-owned envelope. The inbox also
 /// charges the input's inline representation. No client-supplied size is trusted.
@@ -235,8 +240,10 @@ impl<I: ActorInput> ActorLoop<I> {
             reduced_inputs: 0,
             last_sequence: None,
         };
+        // The deadline is recomputed only after the reducer or the wake changed state, then carried.
+        let mut deadline = next_wake(reducer);
+        let mut stall_reported = false;
         loop {
-            let deadline = next_wake(reducer);
             let mut queue = self
                 .shared
                 .queue
@@ -266,6 +273,7 @@ impl<I: ActorInput> ActorLoop<I> {
             {
                 drop(queue);
                 wake(reducer);
+                deadline = next_wake(reducer);
                 queue = self
                     .shared
                     .queue
@@ -273,10 +281,20 @@ impl<I: ActorInput> ActorLoop<I> {
                     .map_err(|_| InboxFailure::Poisoned)?;
                 // One due wake may precede the next FIFO reduction. A callback
                 // that leaves its deadline due must not starve admitted inputs.
-                // With no input, start another turn to obtain the new deadline.
+                // With no input, start another turn with the carried deadline. A deadline still
+                // due after the wake pauses first, so the same wake is not called in a tight loop.
                 if queue.inputs.is_empty() {
                     if !queue.usage.accepting {
                         return Ok(outcome);
+                    }
+                    if deadline.is_some_and(|next| next <= Instant::now()) {
+                        if !stall_reported {
+                            stall_reported = true;
+                            report_stalled_wake(&outcome);
+                        }
+                        self.pause_while_idle(queue)?;
+                    } else {
+                        stall_reported = false;
                     }
                     continue;
                 }
@@ -291,6 +309,8 @@ impl<I: ActorInput> ActorLoop<I> {
             // Neither queue lock nor mutable state reference escapes to producers.
             // Capacity remains charged while the owner reduces this input.
             reducer.reduce(queued.sequence, queued.input);
+            stall_reported = false;
+            deadline = next_wake(reducer);
             let mut queue = self
                 .shared
                 .queue
@@ -302,7 +322,50 @@ impl<I: ActorInput> ActorLoop<I> {
             outcome.last_sequence = Some(queued.sequence);
         }
     }
+
+    /// Waits on the queue while it stays empty and open, for at most one stalled-wake pause.
+    /// The lock is held from the emptiness check to the wait, so an input admitted at any point
+    /// in the owner's wake gap is seen here and ends the pause at once. Returns with the lock
+    /// released.
+    fn pause_while_idle(&self, mut queue: MutexGuard<'_, Queue<I>>) -> Result<(), InboxFailure> {
+        let until = Instant::now() + STALLED_WAKE_PAUSE;
+        while queue.inputs.is_empty() && queue.usage.accepting {
+            let now = Instant::now();
+            if now >= until {
+                break;
+            }
+            queue = self
+                .shared
+                .ready
+                .wait_timeout(queue, until - now)
+                .map_err(|_| InboxFailure::Poisoned)?
+                .0;
+        }
+        Ok(())
+    }
 }
+
+/// One audit line for the first stall of an episode. The correlation key is the admission
+/// sequence last reduced, which names the owner's work stream in the audit log.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_stalled_wake(outcome: &DrainOutcome) {
+    let after = match outcome.last_sequence {
+        Some(sequence) => sequence.0.to_string(),
+        None => "none".to_owned(),
+    };
+    df_observe::record_audit_line(
+        "session.owner_wake_stalled",
+        format!(
+            "OWNER wake stalled after_sequence={after} reduced={} pause_ms={}",
+            outcome.reduced_inputs,
+            STALLED_WAKE_PAUSE.as_millis()
+        ),
+    );
+}
+
+/// The browser build has no audit sink (`df-observe` is native-only), so a stall is only paused.
+#[cfg(target_arch = "wasm32")]
+fn report_stalled_wake(_outcome: &DrainOutcome) {}
 
 impl<I> Drop for ActorLoop<I> {
     fn drop(&mut self) {

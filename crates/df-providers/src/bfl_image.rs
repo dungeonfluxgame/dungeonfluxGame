@@ -1,7 +1,7 @@
 //! Direct FLUX 3 Image. One submit, read-only polling, credential-free pinned delivery.
 //! Schema: https://docs.bfl.ai/api-reference/utility/generate-an-image-with-flux-3
 //! Observed 2026-10-23. Hosted moderation stays at its default; no refusal fallback.
-use crate::media_container::{EncodedMediaFacts, inspect_png};
+use crate::media_container::{EncodedMediaFacts, inspect_png_off_worker};
 use crate::native_http::{NativeHttp, NativeHttpResponse};
 use crate::native_media_fetch::NativeMediaFetch;
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
@@ -212,22 +212,20 @@ impl NativeBflImageProvider {
                             ImageEditError::Transport(error)
                         })?;
                     *stage = "image_validation";
-                    let (width, height, format, has_alpha_channel) = if mime == "image/png" {
-                        let EncodedMediaFacts::Png { width, height } =
-                            inspect_png(&bytes).map_err(|_| ImageEditError::Output)?
+                    let (bytes, width, height, format, has_alpha_channel) = if mime == "image/png" {
+                        let (bytes, EncodedMediaFacts::Png { width, height }) =
+                            inspect_png_off_worker(bytes)
+                                .await
+                                .map_err(|_| ImageEditError::Output)?
                         else {
                             return Err(ImageEditError::Output);
                         };
-                        (
-                            width,
-                            height,
-                            ImageFormat::Png,
-                            matches!(bytes.get(25), Some(4 | 6)),
-                        )
+                        let has_alpha_channel = matches!(bytes.get(25), Some(4 | 6));
+                        (bytes, width, height, ImageFormat::Png, has_alpha_channel)
                     } else {
                         let (width, height) =
                             crate::image_edit::jpeg_size(&bytes).ok_or(ImageEditError::Output)?;
-                        (width, height, ImageFormat::Jpeg, false)
+                        (bytes, width, height, ImageFormat::Jpeg, false)
                     };
                     if width > 4096
                         || height > 4096

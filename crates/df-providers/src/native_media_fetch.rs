@@ -43,12 +43,72 @@ impl FalCdnPin {
     }
 }
 
+/// Bounded keep-alive for the shared media clients: a few idle sockets per host, released after
+/// a short quiet period, so a long-lived owner cannot accumulate sockets.
+const MEDIA_POOL_IDLE_PER_HOST: usize = 4;
+const MEDIA_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(crate) struct NativeMediaFetch {
     limits: NativeHttpLimits,
-    pins: Vec<FalCdnPin>,
     fixture: Option<SocketAddr>,
     bfl: bool,
     observed_status: std::sync::atomic::AtomicU16,
+    /// Loopback fixture transport, present exactly when `fixture` is.
+    fixture_client: Option<reqwest::Client>,
+    /// One entry per validated pin. The pin and the client that resolves only its host are stored
+    /// together, so a lookup by host cannot pair a client with another host's addresses.
+    pinned: Vec<PinnedTransport>,
+}
+
+/// A validated pin with its pooled client. Connections stay alive across the files of one
+/// response, so each file no longer pays for a new client, TLS session or pool.
+struct PinnedTransport {
+    pin: FalCdnPin,
+    client: reqwest::Client,
+}
+
+fn build_pinned(
+    limits: NativeHttpLimits,
+    pins: Vec<FalCdnPin>,
+) -> Result<Vec<PinnedTransport>, NativeHttpRefusal> {
+    pins.into_iter()
+        .map(|pin| {
+            let addresses = pinned_socket_addresses(&pin);
+            let client = media_client(limits, true, Some((&pin.host, &addresses)))?;
+            Ok(PinnedTransport { pin, client })
+        })
+        .collect()
+}
+
+fn pinned_socket_addresses(pin: &FalCdnPin) -> Vec<SocketAddr> {
+    pin.addresses
+        .iter()
+        .map(|address| SocketAddr::new(*address, 443))
+        .collect()
+}
+
+fn media_client(
+    limits: NativeHttpLimits,
+    https_only: bool,
+    resolve: Option<(&str, &[SocketAddr])>,
+) -> Result<reqwest::Client, NativeHttpRefusal> {
+    let mut builder = reqwest::Client::builder()
+        .tls_backend_rustls()
+        .https_only(https_only)
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
+        .connection_verbose(false)
+        .no_proxy()
+        .connect_timeout(limits.connect_timeout)
+        .read_timeout(limits.read_timeout)
+        .timeout(limits.total_timeout)
+        .pool_max_idle_per_host(MEDIA_POOL_IDLE_PER_HOST)
+        .pool_idle_timeout(MEDIA_POOL_IDLE_TIMEOUT);
+    if let Some((host, addresses)) = resolve {
+        builder = builder.resolve_to_addrs(host, addresses);
+    }
+    builder.build().map_err(|_| NativeHttpRefusal::Unknown)
 }
 
 impl NativeMediaFetch {
@@ -71,12 +131,23 @@ impl NativeMediaFetch {
         }
         // Reuse the validated finite native transport bounds without any network operation.
         crate::native_http::NativeHttp::new(limits, fixture.is_some())?;
+        let fixture_client = match fixture {
+            Some(_) => Some(media_client(limits, false, None)?),
+            None => None,
+        };
+        // The explicit fixture transport never consults the pins, so none are retained for it.
+        let pinned = if fixture.is_some() {
+            Vec::new()
+        } else {
+            build_pinned(limits, pins)?
+        };
         Ok(Self {
             limits,
-            pins,
             fixture,
             bfl: false,
             observed_status: std::sync::atomic::AtomicU16::new(0),
+            fixture_client,
+            pinned,
         })
     }
 
@@ -129,16 +200,40 @@ impl NativeMediaFetch {
         if fixture.is_some_and(|socket| !socket.ip().is_loopback() || socket.port() == 0) {
             return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
         }
+        let fixture_client = match fixture {
+            Some(_) => Some(
+                media_client(limits, false, None)
+                    .map_err(|error| (error, "transport_configuration"))?,
+            ),
+            None => None,
+        };
+        let pinned = if fixture.is_some() {
+            Vec::new()
+        } else {
+            build_pinned(
+                limits,
+                vec![FalCdnPin {
+                    host: host.to_owned(),
+                    addresses,
+                }],
+            )
+            .map_err(|error| (error, "transport_configuration"))?
+        };
         Ok(Self {
             limits,
-            pins: vec![FalCdnPin {
-                host: host.to_owned(),
-                addresses,
-            }],
             fixture,
             bfl: true,
             observed_status: std::sync::atomic::AtomicU16::new(0),
+            fixture_client,
+            pinned,
         })
+    }
+
+    /// The pinned pin and client for `host`, when the host was pinned for this owner.
+    fn pinned_transport(&self, host: &str) -> Option<&PinnedTransport> {
+        self.pinned
+            .iter()
+            .find(|transport| transport.pin.host == host)
     }
 
     pub(crate) async fn fetch(
@@ -191,35 +286,27 @@ impl NativeMediaFetch {
         }
         let url = reqwest::Url::parse(locator).map_err(|_| NativeHttpRefusal::InvalidEndpoint)?;
         let host = url.host_str().ok_or(NativeHttpRefusal::InvalidEndpoint)?;
-        let mut builder = reqwest::Client::builder()
-            .tls_backend_rustls()
-            .https_only(self.fixture.is_none())
-            .retry(reqwest::retry::never())
-            .redirect(reqwest::redirect::Policy::none())
-            .referer(false)
-            .connection_verbose(false)
-            .no_proxy()
-            .connect_timeout(self.limits.connect_timeout)
-            .read_timeout(self.limits.read_timeout)
-            .timeout(self.limits.total_timeout);
-        let (target, addresses) = if let Some(address) = self.fixture {
+        let (target, addresses, client) = if let Some(address) = self.fixture {
             // Explicit operator fixture redirects only the transport socket, never the returned public locator.
-            (format!("http://{address}{}", url.path()), vec![address])
-        } else {
-            let pin = self
-                .pins
-                .iter()
-                .find(|pin| pin.host == host)
+            let client = self
+                .fixture_client
+                .as_ref()
                 .ok_or(NativeHttpRefusal::InvalidEndpoint)?;
-            let addresses: Vec<_> = pin
-                .addresses
-                .iter()
-                .map(|address| SocketAddr::new(*address, 443))
-                .collect();
-            builder = builder.resolve_to_addrs(host, &addresses);
-            (locator.to_owned(), addresses)
+            (
+                format!("http://{address}{}", url.path()),
+                vec![address],
+                client,
+            )
+        } else {
+            let transport = self
+                .pinned_transport(host)
+                .ok_or(NativeHttpRefusal::InvalidEndpoint)?;
+            (
+                locator.to_owned(),
+                pinned_socket_addresses(&transport.pin),
+                &transport.client,
+            )
         };
-        let client = builder.build().map_err(|_| NativeHttpRefusal::Unknown)?;
         let duration = deadline.min(self.limits.total_timeout);
         if duration.is_zero() {
             return Err(NativeHttpRefusal::Deadline);
@@ -228,7 +315,7 @@ impl NativeMediaFetch {
             biased;
             () = cancellation => Err(NativeHttpRefusal::Cancelled),
             response = tokio::time::timeout(duration,
-                self.read(&client, &target, &addresses, mime, remaining_bytes)) => {
+                self.read(client, &target, &addresses, mime, remaining_bytes)) => {
                 response.map_err(|_| NativeHttpRefusal::Deadline)?
             }
         }
@@ -405,6 +492,116 @@ mod bfl_tests {
         ] {
             assert!(!strict_bfl_delivery(locator));
         }
+    }
+}
+
+#[cfg(test)]
+mod client_reuse_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    /// A keep-alive fixture: answers every request on each accepted socket with `body` and
+    /// counts accepted sockets. The accept loop is returned so the test can stop it.
+    async fn keep_alive_fixture(
+        body: &'static [u8],
+    ) -> (SocketAddr, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        let accept_loop = tokio::spawn(async move {
+            // Owned connections: aborting the accept loop drops this set and aborts each socket task.
+            let mut connections = tokio::task::JoinSet::new();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                connections.spawn(async move {
+                    let mut pending = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    loop {
+                        while !pending.windows(4).any(|window| window == b"\r\n\r\n") {
+                            match socket.read(&mut chunk).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(read) => pending.extend_from_slice(&chunk[..read]),
+                            }
+                        }
+                        let end = pending.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                        pending.drain(..end);
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                            body.len()
+                        );
+                        if socket.write_all(head.as_bytes()).await.is_err()
+                            || socket.write_all(body).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (address, accepted, accept_loop)
+    }
+
+    /// Two files of one response share one pooled connection. Before the shared client, each
+    /// fetch built its own client and opened its own socket, so this observed two sockets.
+    #[tokio::test]
+    async fn sequential_media_fetches_reuse_one_connection() {
+        let body: &'static [u8] = b"synthetic-media-bytes";
+        let (address, accepted, accept_loop) = keep_alive_fixture(body).await;
+        let limits = crate::ProviderLimits::new(Duration::from_secs(5), 1024, 1024).build();
+        let fetch = NativeMediaFetch::new(limits, Vec::new(), Some(address)).unwrap();
+        let locator = "https://fal.media/files/first.png";
+        for _ in 0..2 {
+            let bytes = fetch
+                .fetch(
+                    locator,
+                    "image/png",
+                    1024,
+                    Duration::from_secs(5),
+                    std::future::pending(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_slice(), body);
+        }
+        accept_loop.abort();
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    }
+
+    /// Each pinned host finds its own pin and that pin's addresses, and an unpinned host finds
+    /// nothing. The client is stored in the same entry as its pin, so the lookup cannot pair a
+    /// client built for one host with another host's addresses.
+    #[test]
+    fn pinned_lookup_pairs_each_host_with_its_own_addresses() {
+        let first: IpAddr = "93.184.216.34".parse().unwrap();
+        let second: IpAddr = "1.1.1.1".parse().unwrap();
+        let pins = vec![
+            FalCdnPin::new("a.fal.media", &[first]).unwrap(),
+            FalCdnPin::new("b.fal.media", &[second]).unwrap(),
+        ];
+        let limits = crate::ProviderLimits::new(Duration::from_secs(5), 1024, 1024).build();
+        let fetch = NativeMediaFetch::new(limits, pins, None).unwrap();
+
+        let second_transport = fetch.pinned_transport("b.fal.media").unwrap();
+        assert_eq!(second_transport.pin.host, "b.fal.media");
+        assert_eq!(
+            pinned_socket_addresses(&second_transport.pin),
+            vec![SocketAddr::new(second, 443)]
+        );
+        let first_transport = fetch.pinned_transport("a.fal.media").unwrap();
+        assert_eq!(first_transport.pin.host, "a.fal.media");
+        assert_eq!(
+            pinned_socket_addresses(&first_transport.pin),
+            vec![SocketAddr::new(first, 443)]
+        );
+        assert!(fetch.pinned_transport("c.fal.media").is_none());
     }
 }
 

@@ -12,7 +12,8 @@ use df_types::{Usage, UsageUnit};
 use serde_json::{Value, json};
 
 use crate::media_container::{
-    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_png, inspect_wave,
+    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_png_off_worker,
+    inspect_wave,
 };
 use crate::native_http::{NativeHttp, NativeHttpResponse};
 use crate::native_media_fetch::{FalCdnPin, NativeMediaFetch};
@@ -856,10 +857,10 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                     Some(&self.id),
                 )
             })?;
-            let facts = match self.expected {
-                ExpectedMedia::Image(_) => inspect_png(&body),
-                ExpectedMedia::Video(_) => inspect_mp4(&body),
-                ExpectedMedia::Sound(_, _) => inspect_wave(&body),
+            let (body, facts) = match self.expected {
+                ExpectedMedia::Image(_) => inspect_png_off_worker(body).await,
+                ExpectedMedia::Video(_) => inspect_mp4(&body).map(|facts| (body, facts)),
+                ExpectedMedia::Sound(_, _) => inspect_wave(&body).map(|facts| (body, facts)),
             }
             .map_err(|r| error(FalMediaReason::Container(r), Some(&self.id)))?;
             let units = validate_output(&self.expected, &file.metadata, facts, &self.id)?;

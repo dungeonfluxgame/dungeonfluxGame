@@ -8,6 +8,8 @@ pub enum MediaContainerRefusal {
     Dimensions,
     Timebase,
     SampleRange,
+    /// The blocking inspection job ended without a result, so the bytes were not judged.
+    Interrupted,
 }
 
 /// Actual container clock; values are never copied from requested duration.
@@ -206,6 +208,28 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         }
     }
     Err(MediaContainerRefusal::Bounds)
+}
+
+/// Runs the PNG chunk scan on tokio's blocking pool. Its CRC pass is linear in the image size
+/// (up to 16 MiB), so it must not hold an async worker. The bytes move into the job and come
+/// back with the facts, so nothing is copied. The caller's await owns the handle; once the
+/// job starts it runs to completion, which is bounded and touches no sockets or game state.
+pub(crate) async fn inspect_png_off_worker(
+    bytes: Vec<u8>,
+) -> Result<(Vec<u8>, EncodedMediaFacts), MediaContainerRefusal> {
+    match tokio::task::spawn_blocking(move || {
+        let facts = inspect_png(&bytes)?;
+        Ok((bytes, facts))
+    })
+    .await
+    {
+        Ok(result) => result,
+        // A panic in the scan is a bug in this module, so it propagates instead of becoming a
+        // refusal of the provider's output.
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // Only runtime shutdown cancels a blocking job, so the bytes were never judged.
+        Err(_) => Err(MediaContainerRefusal::Interrupted),
+    }
 }
 
 pub(crate) fn inspect_wave(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerRefusal> {
@@ -775,7 +799,7 @@ fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerRefusal> {
 
 #[cfg(test)]
 mod crc_tests {
-    use super::crc32;
+    use super::{EncodedMediaFacts, crc32, inspect_png_off_worker};
 
     #[test]
     fn crc32_matches_the_standard_check_value_and_the_png_iend_chunk() {
@@ -791,6 +815,112 @@ mod crc_tests {
         let original = crc32(&chunk);
         chunk[40_000] ^= 0x01;
         assert_ne!(crc32(&chunk), original);
+    }
+
+    /// The previous bit-serial pass, kept only as the oracle for the table and as the "before" timing.
+    fn crc32_bitwise_reference(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for byte in data {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        !crc
+    }
+
+    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::with_capacity(data.len() + 12);
+        chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        let crc = crc32(&chunk[4..]);
+        chunk.extend_from_slice(&crc.to_be_bytes());
+        chunk
+    }
+
+    /// A structurally valid 4096 x 4096 RGB PNG whose IDAT fills the 16 MiB response cap.
+    fn sixteen_mebibyte_png() -> Vec<u8> {
+        let mut header = Vec::with_capacity(13);
+        header.extend_from_slice(&4096u32.to_be_bytes());
+        header.extend_from_slice(&4096u32.to_be_bytes());
+        // 8-bit depth, RGB colour type, deflate, adaptive filtering, no interlace.
+        header.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let image_data = vec![0x5au8; 16 * 1024 * 1024 - 4096];
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(png_chunk(b"IHDR", &header));
+        png.extend(png_chunk(b"IDAT", &image_data));
+        png.extend(png_chunk(b"IEND", &[]));
+        png
+    }
+
+    #[test]
+    fn table_crc_matches_the_bitwise_reference_on_a_sixteen_mebibyte_png() {
+        let png = sixteen_mebibyte_png();
+        assert_eq!(crc32(&png), crc32_bitwise_reference(&png));
+    }
+
+    /// Measurement and behaviour: the 16 MiB scan must not hold the async worker. Before the
+    /// change the scan ran inline, so no heartbeat could tick during it (zero ticks by
+    /// construction); after the change the heartbeat keeps ticking while the scan runs.
+    /// The printed timings are the before/after numbers for the round report.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_sixteen_mebibyte_png_scan_leaves_the_async_worker_free() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        use std::time::Instant;
+
+        let png = sixteen_mebibyte_png();
+        let length = png.len();
+
+        let started = Instant::now();
+        let bitwise_crc = crc32_bitwise_reference(&png);
+        let before_crc = started.elapsed();
+
+        let started = Instant::now();
+        let table_crc = crc32(&png);
+        let after_crc = started.elapsed();
+        assert_eq!(bitwise_crc, table_crc);
+
+        // A task that only yields counts the worker turns it gets while the scan runs elsewhere.
+        // No sleeps: the count is what the worker did, not a wall-clock tick.
+        let turns = Arc::new(AtomicU64::new(0));
+        let heartbeat = {
+            let turns = Arc::clone(&turns);
+            tokio::spawn(async move {
+                loop {
+                    tokio::task::yield_now().await;
+                    turns.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        let started = Instant::now();
+        let (returned, facts) = inspect_png_off_worker(png)
+            .await
+            .expect("the generated PNG is valid");
+        let after_scan = started.elapsed();
+        heartbeat.abort();
+        let observed_turns = turns.load(Ordering::SeqCst);
+
+        eprintln!(
+            "png 16 MiB ({length} bytes): before crc bitwise {before_crc:?} on worker; \
+             after crc table {after_crc:?}; after off-worker scan {after_scan:?} with \
+             {observed_turns} worker turns of other work"
+        );
+        assert_eq!(returned.len(), length);
+        assert_eq!(
+            facts,
+            EncodedMediaFacts::Png {
+                width: 4096,
+                height: 4096
+            }
+        );
+        assert!(
+            observed_turns > 0,
+            "the async worker must run other work during the scan"
+        );
     }
 }
 

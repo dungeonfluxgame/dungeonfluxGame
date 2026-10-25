@@ -513,3 +513,90 @@ fn stop_from_due_owner_wake_cancels_later_wakes_and_drains_admitted_inputs() {
         }
     );
 }
+
+/// A reducer that must never run: this test admits no input.
+struct NoInputReducer;
+
+impl Reducer<GameInput> for NoInputReducer {
+    fn reduce(&mut self, _sequence: AdmissionSequence, _input: GameInput) {
+        panic!("no input is admitted in this test");
+    }
+}
+
+/// A wake whose deadline stays due with nothing admitted used to be called again at once, in a
+/// tight loop that spun the owner thread. Before the pause, five wakes took microseconds; now
+/// each pair of wakes is at least one pause apart.
+#[test]
+fn a_due_wake_that_stays_due_without_input_is_paused_between_calls() {
+    let (handle, actor) = bounded_inbox::<GameInput>();
+    let due = Instant::now();
+    let mut reducer = NoInputReducer;
+    let mut wake_times = Vec::new();
+    let outcome = actor
+        .run_with_owner_wake(
+            &mut reducer,
+            |_| Some(due),
+            |_| {
+                wake_times.push(Instant::now());
+                if wake_times.len() == 5 {
+                    handle.stop().unwrap();
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(outcome.reduced_inputs, 0);
+    assert_eq!(wake_times.len(), 5);
+    // Four gaps of at least the 10 ms pause. The bound is written out, not read from the
+    // constant, so shrinking the pause fails this test instead of weakening it.
+    let minimum = std::time::Duration::from_millis(40);
+    let spread = wake_times[4].duration_since(wake_times[0]);
+    assert!(
+        spread >= minimum,
+        "five stalled wakes spanned {spread:?}, expected at least {minimum:?}"
+    );
+}
+
+/// Records owner turns in order: each wake, then each reduction.
+struct OrderedReducer {
+    handle: InboxHandle<GameInput>,
+    events: Vec<&'static str>,
+}
+
+impl Reducer<GameInput> for OrderedReducer {
+    fn reduce(&mut self, _sequence: AdmissionSequence, _input: GameInput) {
+        self.events.push("reduce");
+        self.handle.stop().unwrap();
+    }
+}
+
+/// An input admitted while the owner schedules its next wake runs outside the queue lock. The
+/// owner must reduce that input before any further wake or idle pause. Before the fix, the owner
+/// released the lock, scheduled, retook it and slept 10 ms with the input queued, so the events
+/// were wake, wake, reduce.
+#[test]
+fn input_admitted_in_the_post_wake_gap_is_reduced_without_a_pause() {
+    let (handle, actor) = bounded_inbox::<GameInput>();
+    let due = Instant::now();
+    // Call 1 schedules the first turn. Call 2 is scheduled right after the first wake.
+    let schedules = std::cell::Cell::new(0usize);
+    let mut reducer = OrderedReducer {
+        handle: handle.clone(),
+        events: Vec::new(),
+    };
+    let outcome = actor
+        .run_with_owner_wake(
+            &mut reducer,
+            |reducer| {
+                let call = schedules.get() + 1;
+                schedules.set(call);
+                if call == 2 {
+                    submit(&reducer.handle, input(1, 0));
+                }
+                Some(due)
+            },
+            |reducer| reducer.events.push("wake"),
+        )
+        .unwrap();
+    assert_eq!(reducer.events, vec!["wake", "reduce"]);
+    assert_eq!(outcome.reduced_inputs, 1);
+}

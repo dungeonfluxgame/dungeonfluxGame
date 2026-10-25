@@ -22,7 +22,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
-use crate::media_container::{EncodedMediaFacts, inspect_png};
+use crate::media_container::{EncodedMediaFacts, inspect_png_off_worker};
 use crate::native_http::NativeHttp;
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
@@ -334,7 +334,7 @@ impl NativeImageEditProvider {
             },
         )
         .map_err(|_| ImageEditError::Output)?;
-        decode(&value, edit)
+        decode(&value, edit).await
     }
 }
 
@@ -486,7 +486,7 @@ fn tokens(value: &Value, path: &[&str]) -> u64 {
         .unwrap_or(0)
 }
 
-fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ImageEditError> {
+async fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ImageEditError> {
     let usage = ImageUsage {
         text_input_tokens: tokens(value, &["usage", "input_tokens_details", "text_tokens"]),
         image_input_tokens: tokens(value, &["usage", "input_tokens_details", "image_tokens"]),
@@ -505,22 +505,27 @@ fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ImageEd
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|_| ImageEditError::Output)?;
-    let (width, height, has_alpha_channel) = match edit.output {
+    let (bytes, width, height, has_alpha_channel) = match edit.output {
         ImageFormat::Png => {
-            let EncodedMediaFacts::Png { width, height } =
-                inspect_png(&bytes).map_err(|_| ImageEditError::Output)?
+            let (bytes, EncodedMediaFacts::Png { width, height }) = inspect_png_off_worker(bytes)
+                .await
+                .map_err(|_| ImageEditError::Output)?
             else {
                 return Err(ImageEditError::Output);
             };
-            // The colour type is byte 25: the ninth byte of the IHDR payload `inspect_png` proved.
+            // The colour type is byte 25: the ninth byte of the IHDR payload the scan proved.
             let color_type = bytes.get(25).copied().ok_or(ImageEditError::Output)?;
-            (width, height, matches!(color_type, 4 | 6))
+            (bytes, width, height, matches!(color_type, 4 | 6))
         }
         ImageFormat::Jpeg => {
             let (width, height) = jpeg_size(&bytes).ok_or(ImageEditError::Output)?;
-            (width, height, false)
+            (bytes, width, height, false)
         }
-        ImageFormat::Webp => webp_facts(&bytes).ok_or(ImageEditError::Output)?,
+        ImageFormat::Webp => {
+            let (width, height, has_alpha_channel) =
+                webp_facts(&bytes).ok_or(ImageEditError::Output)?;
+            (bytes, width, height, has_alpha_channel)
+        }
     };
     if (width, height) != (edit.width, edit.height) {
         return Err(ImageEditError::Output);

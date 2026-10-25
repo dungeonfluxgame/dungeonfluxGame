@@ -26,6 +26,8 @@ pub enum RoleShellError {
     Disposed,
     GenerationExhausted,
     SnapshotMismatch,
+    /// The shared watermark refused a view that the checks above had admitted.
+    ViewRefused(ViewAcceptance),
     InvalidInputIdentifier,
     PlayerJoin(df_player::PlayerJoinError),
     DisplayJoin(df_display::DisplayJoinError),
@@ -56,6 +58,9 @@ impl fmt::Display for RoleShellError {
             }
             Self::SnapshotMismatch => {
                 formatter.write_str("role presentation does not match its accepted snapshot")
+            }
+            Self::ViewRefused(acceptance) => {
+                write!(formatter, "role view admission refused: {acceptance:?}")
             }
             Self::PlayerJoin(error) => fmt::Display::fmt(error, formatter),
             Self::DisplayJoin(error) => fmt::Display::fmt(error, formatter),
@@ -338,9 +343,13 @@ impl RoleShell {
             return Err(error);
         }
         let key = phase.key();
+        // Invariant: the stale, duplicate and binding checks above read this same watermark, so
+        // an accepted view is never refused here. A refusal would leave dispatch fenced with the
+        // slot disabled and no mounted phase, so it fails the presentation closed and keeps the
+        // refused admission as its cause.
         let admission = self.order.accept(binding, revision, ());
         if admission != ViewAcceptance::Applied {
-            return Ok(admission);
+            return Err(self.failed(RoleShellError::ViewRefused(admission)));
         }
         let player = phase.is_player();
         if !replaced && self.suspended_focus.is_some() {
