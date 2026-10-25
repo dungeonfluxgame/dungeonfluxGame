@@ -879,12 +879,15 @@ mod durable_session {
     }
     impl OperationScope for Scope {
         type UncertaintyKey = Scope;
-        fn capture_uncertainty_key(&self, maximum: usize) -> Result<Scope, RepositoryError> {
+        fn capture_uncertainty_key(
+            &self,
+            maximum_retained_bytes: usize,
+        ) -> Result<Scope, RepositoryError> {
             if self
                 .input
                 .retained_bytes()
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Scope>()))
-                .is_none_or(|bytes| bytes > maximum)
+                .and_then(|retained_bytes| retained_bytes.checked_add(std::mem::size_of::<Scope>()))
+                .is_none_or(|retained_bytes| retained_bytes > maximum_retained_bytes)
             {
                 return Err(RepositoryError::Capacity);
             }
@@ -1366,19 +1369,19 @@ mod accepted_time_schedule {
     struct TimeProducer<'a> {
         fixture: &'a Fixture,
         target: LogicalTime,
-        moves: &'a [u8],
+        destination_ids: &'a [u8],
         fault: Fault,
         calls: Cell<usize>,
     }
     impl<'a> TimeProducer<'a> {
-        fn new(fixture: &'a Fixture, moves: &'a [u8]) -> Self {
+        fn new(fixture: &'a Fixture, destination_ids: &'a [u8]) -> Self {
             Self {
                 fixture,
                 target: LogicalTime {
                     ticks: 125,
                     ticks_per_second: 10,
                 },
-                moves,
+                destination_ids,
                 fault: Fault::None,
                 calls: Cell::new(0),
             }
@@ -1415,7 +1418,7 @@ mod accepted_time_schedule {
             let mut state = current.state().clone();
             state.logical_time = self.target;
             let start = state.facts.len();
-            let base_id = 200 + (command.operation.as_bytes()[0] % 10) * 5;
+            let base_fact_id = 200 + (command.operation.as_bytes()[0] % 10) * 5;
             let mut values = Vec::new();
             if !matches!(self.fault, Fault::MissingTime) {
                 let mut before = current.state().logical_time;
@@ -1440,7 +1443,7 @@ mod accepted_time_schedule {
                     ordinal: draw.ordinal,
                 });
             }
-            for destination in self.moves {
+            for destination in self.destination_ids {
                 state
                     .entities
                     .iter_mut()
@@ -1470,7 +1473,7 @@ mod accepted_time_schedule {
             }
             for (ordinal, value) in values.into_iter().enumerate() {
                 state.facts.push(GameFact {
-                    id: fact(base_id + ordinal as u8),
+                    id: fact(base_fact_id + ordinal as u8),
                     revision: basis.revision,
                     operation: command.operation,
                     ordinal: ordinal as u32,

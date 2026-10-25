@@ -249,12 +249,15 @@ pub(super) mod durable {
     impl OperationScope for Scope {
         type UncertaintyKey = Scope;
 
-        fn capture_uncertainty_key(&self, maximum: usize) -> Result<Scope, RepositoryError> {
+        fn capture_uncertainty_key(
+            &self,
+            maximum_retained_bytes: usize,
+        ) -> Result<Scope, RepositoryError> {
             if self
                 .input
                 .retained_bytes()
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Scope>()))
-                .is_none_or(|bytes| bytes > maximum)
+                .and_then(|retained_bytes| retained_bytes.checked_add(std::mem::size_of::<Scope>()))
+                .is_none_or(|retained_bytes| retained_bytes > maximum_retained_bytes)
             {
                 return Err(RepositoryError::Capacity);
             }
