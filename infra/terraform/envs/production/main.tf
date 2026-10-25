@@ -77,6 +77,7 @@ module "app_droplets" {
   psql_image                = var.psql_image
   backups_enabled           = var.droplet_backups_enabled
   docker_version_pin        = var.docker_version_pin
+  compose_version_pin       = var.compose_version_pin
   containerd_version_pin    = var.containerd_version_pin
 
   cosign_certificate_identity      = var.cosign_certificate_identity
@@ -112,6 +113,7 @@ module "worker_droplets" {
   backups_enabled           = var.droplet_backups_enabled
   reserved_ip_enabled       = false
   docker_version_pin        = var.docker_version_pin
+  compose_version_pin       = var.compose_version_pin
   containerd_version_pin    = var.containerd_version_pin
 
   cosign_certificate_identity      = var.cosign_certificate_identity

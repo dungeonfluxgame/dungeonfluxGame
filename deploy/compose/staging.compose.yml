@@ -269,7 +269,7 @@ services:
       - /var/lib/dungeonflux/spool:size=256m,uid=10001,gid=10001
     healthcheck:
       # Distroless has no shell or curl: the binary probes itself, on the readiness-only listener.
-      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/internal_ca_certificate", "--server-name", "control-plane"]
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/service_issuer_certificate", "--server-name", "control-plane"]
       interval: 10s
       timeout: 3s
       retries: 6

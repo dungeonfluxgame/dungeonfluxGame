@@ -171,3 +171,9 @@ variable "release_repository_prefix" {
   type        = string
   default     = ""
 }
+
+variable "compose_version_pin" {
+  description = "Exact version of the docker-compose-plugin apt package, matching the Docker Engine pin (for example 2.29.7-1~ubuntu.24.04~noble). df-stack drives the production stack with it. Required for application and worker roles."
+  type        = string
+  default     = ""
+}

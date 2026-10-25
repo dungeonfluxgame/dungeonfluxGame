@@ -33,7 +33,7 @@
 		transport http {
 			tls
 			tls_server_name control-plane
-			tls_trust_pool file /run/secrets/internal_ca_certificate
+			tls_trust_pool file /run/secrets/service_issuer_certificate
 		}
 	}
 }

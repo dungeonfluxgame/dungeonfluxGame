@@ -1,0 +1,51 @@
+# promtool unit tests for deploy/config/production/alert-rules.yml:  promtool test rules deploy/monitoring/alert-rules.test.yml
+# STATUS: UNVERIFIED (promtool is not installed on the authoring machine; CI runs it).
+rule_files:
+  - ../config/production/alert-rules.yml
+evaluation_interval: 15s
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'df_invariant_violation_total{kind="money_duplication",service="control-plane"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: InvariantViolation
+        exp_alerts:
+          - exp_labels: { severity: p0, kind: money_duplication, service: control-plane }
+            exp_annotations:
+              summary: "Invariant violated: money_duplication (service control-plane)"
+              runbook: "service-operations.md: incident runbook; stop affected paid admission and preserve evidence"
+      - eval_time: 12m
+        alertname: InvariantViolation
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'up{job="ingestor"}'
+        values: '1 1 0 0 0 0'
+      - series: 'df_backup_last_success_timestamp_seconds'
+        values: '0+0x2000'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TelemetryIngestorDown
+        exp_alerts:
+          - exp_labels: { severity: p1, job: ingestor }
+            exp_annotations:
+              summary: "The telemetry ingestor does not answer: every other alert on this host is blind"
+      - eval_time: 1600m
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels: { severity: p1 }
+            exp_annotations:
+              summary: "No successful backup for over 26 hours"
+  - interval: 1m
+    input_series:
+      - series: 'df_backup_offsite_configured'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OffsiteBackupNotConfigured
+        exp_alerts:
+          - exp_labels: { severity: p2 }
+            exp_annotations:
+              summary: "No off-account backup copy is configured: a compromise of the production credentials could reach every copy"

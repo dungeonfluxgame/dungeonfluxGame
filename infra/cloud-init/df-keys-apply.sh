@@ -122,7 +122,7 @@ done
 {
   echo "# Written by df-keys-apply from a signed key set. Do not edit."
   for name in "${admins[@]}"; do
-    printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-secrets-install --audit, /usr/local/sbin/df-deploy psql *\n' "$name"
+    printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/df-secrets-install "", /usr/local/sbin/df-secrets-install --audit, /usr/local/sbin/df-deploy psql *, /usr/local/sbin/df-backup record-drill *\n' "$name"
   done
 } > "$stage/sudoers"
 printf 'AllowUsers dfdeploy %s\n' "${admins[*]}" > "$stage/allowusers"

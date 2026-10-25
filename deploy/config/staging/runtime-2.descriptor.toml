@@ -14,9 +14,13 @@ game = "172.30.12.10:8081"
 # client certificate (URI SAN urn:dungeonflux:control-plane) may open the tunnel; any other peer on the slot
 # network (dispatcher, ingestor, db-gate) is refused at the handshake.
 [listen_tls]
-certificate_file = "/run/secrets/internal_tls_runtime_certificate"
-key_file = "/run/secrets/internal_tls_runtime_key"
+# The SERVER certificate of the game listener comes from the runtime-server issuer (decision 33), SAN urn:dungeonflux:placement-server:<id>;
+# the placement (client) certificate below stays clientAuth only. The caller is the control plane: a fixed identity, so its chain must pass
+# through the SERVICE issuer.
+certificate_file = "/run/secrets/game_listener_certificate"
+key_file = "/run/secrets/game_listener_key"
 client_ca_file = "/run/secrets/internal_ca_certificate"
+client_issuer_file = "/run/secrets/service_issuer_certificate"
 allowed_identities = ["urn:dungeonflux:control-plane"]
 
 [database]
@@ -36,6 +40,7 @@ server_name = "postgres"
 [dispatcher]
 address = "172.30.12.4:8082"
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 server_name = "egress"
 client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
 client_key_file = "/run/secrets/internal_tls_runtime_key"
@@ -43,6 +48,7 @@ client_key_file = "/run/secrets/internal_tls_runtime_key"
 [media_gateway]
 address = "172.30.12.3:8083"
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 server_name = "control-plane"
 client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
 client_key_file = "/run/secrets/internal_tls_runtime_key"
@@ -50,6 +56,7 @@ client_key_file = "/run/secrets/internal_tls_runtime_key"
 [telemetry]
 ingestor = "172.30.12.5:4317"
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 server_name = "ingestor"
 client_certificate_file = "/run/secrets/internal_tls_runtime_certificate"
 client_key_file = "/run/secrets/internal_tls_runtime_key"

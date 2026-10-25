@@ -1,0 +1,25 @@
+# PRODUCTION (and staging-environment) configuration TEMPLATE for `df-server migrate apply --config /etc/dungeonflux/migrate.toml`
+# (round 3b). STATUS: UNVERIFIED PROPOSAL; TODO(O1) owns the schema. Run ONLY by `df-deploy migrate <digest>`, on ONE host, BEFORE the
+# canary of that release: a throwaway container of the staged release's control-plane image, as df_migrator, whose only route to the
+# database is the same locked-down host forwarder `df-deploy psql` uses (the address below is that forwarder's gateway). The role's
+# password is handed to df-deploy on stdin by CI (manifest db_migrator_password is ci-only) and exists for the run in a 0400 file.
+# Migrations are expand-then-contract (the previous binary keeps working on the migrated schema), which is what makes a rollback safe.
+# @NAME@ tokens are filled by `df-deploy release` (see control-plane.toml).
+
+[instance]
+id = "@INSTANCE_ID@-migrate"
+environment = "@ENVIRONMENT@"
+
+[database]
+host = "172.29.250.1"
+port = 5432
+name = "@DB_NAME@"
+user = "df_migrator"
+password_file = "/run/secrets/db_migrator_password"
+pool_max = 1
+statement_timeout_ms = 600000
+
+[database.tls]
+mode = "verify-full"
+ca_file = "/run/secrets/db_ca_certificate"
+server_name = "@DB_SERVER_NAME@"

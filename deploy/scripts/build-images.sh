@@ -53,7 +53,7 @@ if [ "$push" -eq 1 ]; then
 fi
 # shellcheck disable=SC1090
 set -a; . "$lock"; set +a
-for key in RUST_BASE RUNTIME_BASE EDGE_BUILDER_BASE EDGE_BASE; do
+for key in RUST_BASE RUNTIME_BASE EDGE_BUILDER_BASE EDGE_BASE PSQL_IMAGE; do
   value=${!key}
   case "$value" in
     *TODO-CI*|"") echo "images.lock: $key has no pinned digest yet" >&2; exit 1 ;;
@@ -82,6 +82,7 @@ build_target() {
     --build-arg "RUNTIME_BASE=$RUNTIME_BASE"
     --build-arg "EDGE_BUILDER_BASE=$EDGE_BUILDER_BASE"
     --build-arg "EDGE_BASE=$EDGE_BASE"
+    --build-arg "BACKUP_BASE=$PSQL_IMAGE"
     --build-arg "CADDY_VERSION=$CADDY_VERSION"
     --build-arg "CADDY_RATELIMIT_REF=$CADDY_RATELIMIT_REF"
     --build-arg "VCS_REF=$vcs_ref"
@@ -114,3 +115,4 @@ build_target egress EGRESS_IMAGE
 build_target runner RUNNER_IMAGE
 build_target docker-proxy DOCKER_PROXY_IMAGE
 build_target edge EDGE_IMAGE
+build_target backup BACKUP_IMAGE

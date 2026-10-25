@@ -1,0 +1,35 @@
+# Alertmanager (round 3). STATUS: UNVERIFIED (never run through `amtool check-config`; CI should).
+# Plan 16.3: P0 stops affected paid admission and invokes the incident runbook; P1 degrades optional media, pauses blocked billing and
+# communicates status; P2 is tracked and remediated. The receiver is ONE webhook whose URL is a secret file (manifest entry
+# alert_receiver_url, consumer monitoring): the owner decides where it goes (a pager service, a chat webhook). Until the owner has pushed
+# it the file is absent, Alertmanager cannot load this configuration, and the standing check in df-host-metrics reports it (P2).
+route:
+  receiver: owner
+  group_by: [alertname, service]
+  group_wait: 10s
+  group_interval: 2m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="p0"]
+      receiver: owner
+      group_wait: 0s
+      repeat_interval: 5m
+    - matchers: [severity="p1"]
+      receiver: owner
+      repeat_interval: 30m
+    - matchers: [severity="p2"]
+      receiver: owner
+      group_interval: 1h
+      repeat_interval: 12h
+
+receivers:
+  - name: owner
+    webhook_configs:
+      - url_file: /run/secrets/alert_receiver_url
+        send_resolved: true
+
+inhibit_rules:
+  # A P0 on a service silences its P1 and P2 noise while the incident runs.
+  - source_matchers: [severity="p0"]
+    target_matchers: [severity=~"p1|p2"]
+    equal: [alertname]

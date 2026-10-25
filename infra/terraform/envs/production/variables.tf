@@ -321,3 +321,8 @@ variable "edge_allowed_cidrs" {
     error_message = "edge_allowed_cidrs must list at least one valid CIDR (production serves the internet: 0.0.0.0/0 and ::/0 by default)."
   }
 }
+
+variable "compose_version_pin" {
+  description = "Exact docker-compose-plugin version (apt syntax), matching the Docker Engine pin; held after install. Required: df-stack starts the production stack with it."
+  type        = string
+}

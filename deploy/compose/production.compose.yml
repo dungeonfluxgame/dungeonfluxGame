@@ -28,7 +28,9 @@ x-hardened: &hardened
     options: { max-size: "20m", max-file: "5" }
 
 networks:
-  public: {}
+  public:
+    driver_opts:
+      com.docker.network.bridge.name: dfpub0
   # The three networks with a route out are NAT bridges with FIXED NAMES, so the host firewall can address them
   # (infra/cloud-init/df-net-rules.sh: DOCKER-USER drops 169.254.0.0/16, the VPC and every private range from dfctl0 and dfegr0, and lets
   # dfdb0 reach only the cluster's address and port). check-production-policy.sh requires these names.
@@ -41,28 +43,57 @@ networks:
   egress-out:
     driver_opts:
       com.docker.network.bridge.name: dfegr0
+  # Alertmanager's way out to the alert receiver (a webhook); public destinations only (df-net-rules drops every private range).
+  monitor-out:
+    driver_opts:
+      com.docker.network.bridge.name: dfmon0
+  # Every internal network has a fixed bridge name too: the INPUT chain of infra/cloud-init/df-net-rules.sh drops traffic from EVERY bridge to
+  # an address of the host itself, so every bridge must be known by name (dfslot<N> for slot N; a larger host adds a network here and a
+  # [[slots]] table in runner.toml together).
   ingress:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfin0
     ipam: { config: [{ subnet: 172.30.1.0/24 }] }
   data:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfdata0
     ipam: { config: [{ subnet: 172.30.2.0/24 }] }
   dispatch:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfdsp0
     ipam: { config: [{ subnet: 172.30.4.0/24 }] }
+  # The INGESTOR's network: the ingestor and Prometheus only. Nothing else is ever on it, so its plaintext metrics endpoint is acceptable.
   monitoring:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfmn0
     ipam: { config: [{ subnet: 172.30.5.0/24 }] }
   runner-net:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfrun0
     ipam: { config: [{ subnet: 172.30.6.0/24 }] }
+  # Prometheus, Alertmanager and the host textfile exporter. The ingestor is NOT here: a compromised Alertmanager (the one monitoring service
+  # with a route out) must not be one hop from the ingestor's listeners.
+  observe:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfobs0
+    ipam: { config: [{ subnet: 172.30.7.0/24 }] }
   slot1:
     name: df-slot-1
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfslot1
     ipam: { config: [{ subnet: 172.30.11.0/24 }] }
   slot2:
     name: df-slot-2
     internal: true
+    driver_opts:
+      com.docker.network.bridge.name: dfslot2
     ipam: { config: [{ subnet: 172.30.12.0/24 }] }
 
 services:
@@ -159,7 +190,7 @@ services:
       - /tmp:size=64m,uid=10001,gid=10001
       - /var/lib/dungeonflux/spool:size=256m,uid=10001,gid=10001
     healthcheck:
-      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/internal_ca_certificate", "--server-name", "control-plane"]
+      test: ["CMD", "/usr/local/bin/df-server", "healthcheck", "--address", "172.30.1.3:8084", "--signal", "ready", "--ca-file", "/run/secrets/service_issuer_certificate", "--server-name", "control-plane"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -219,6 +250,10 @@ services:
     pids_limit: 64
     command: ["--listen", "/run/proxy/docker.sock", "--docker", "/var/run/docker.sock", "--allowed-images", "/etc/dungeonflux/allowed-images.d/allowed"]
     volumes:
+      # A single-file bind of the daemon socket goes stale if dockerd recreates the socket while this container keeps running. That cannot
+      # happen here: daemon.json has live-restore OFF, so a daemon restart restarts this container too (restart: unless-stopped), and the
+      # docker.service drop-in restarts the proxy and the runner after every daemon start as well. (Mounting a directory instead would
+      # expose all of /var/run, which holds the secrets tmpfs.)
       - /var/run/docker.sock:/var/run/docker.sock
       - /run/dungeonflux/runner:/run/proxy
       # The allow-list DIRECTORY, not the file: df-deploy activate replaces the file by rename, and a single-file bind mount would keep
@@ -258,3 +293,77 @@ services:
     depends_on:
       db-gate: { condition: service_started }
       docker-proxy: { condition: service_started }
+
+  # ---- monitoring (round 3; split in round 3b) -----------------------------------------------------------------------------------------------------------
+  # Prometheus scrapes the telemetry INGESTOR (which re-exports what the control plane, the dispatcher, the runner and the runtimes
+  # push to it) and the host textfile exporter, and nothing else: never a runtime, never another service directly (decision 23). It has
+  # no published port and no route out; its UI is reached by an operator through `docker exec` or a tunnel set up for the occasion.
+  prometheus:
+    <<: *hardened
+    image: ${PROMETHEUS_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_PROMETHEUS}:${DF_UID_PROMETHEUS}"
+    networks:
+      monitoring: { ipv4_address: 172.30.5.3 }
+      observe: { ipv4_address: 172.30.7.3 }
+    mem_limit: ${DF_PROM_MEM}
+    pids_limit: 128
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+      - --web.listen-address=172.30.7.3:9090
+      - --web.enable-lifecycle=false
+    volumes:
+      - /opt/dungeonflux/current/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /opt/dungeonflux/current/config/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - /var/lib/dungeonflux/prometheus:/prometheus
+    tmpfs:
+      - /tmp:size=64m,uid=10014,gid=10014
+    healthcheck:
+      test: ["CMD", "/bin/promtool", "check", "healthy", "--url=http://172.30.7.3:9090"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  # Alertmanager routes P0, P1 and P2 alerts to the receiver whose URL is a SECRET FILE (manifest alert_receiver_url, consumer
+  # monitoring). It is the only monitoring service with a route out (dfmon0, public destinations only).
+  alertmanager:
+    <<: *hardened
+    image: ${ALERTMANAGER_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_ALERTMANAGER}:${DF_GID_ALERTMANAGER}"
+    networks:
+      observe: { ipv4_address: 172.30.7.4 }
+      monitor-out: {}
+    mem_limit: ${DF_ALERTMANAGER_MEM}
+    pids_limit: 64
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=172.30.7.4:9093
+      - --cluster.listen-address=
+    volumes:
+      - /opt/dungeonflux/current/config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - /run/dungeonflux/secrets/monitoring:/run/secrets:ro
+      - /var/lib/dungeonflux/alertmanager:/alertmanager
+    tmpfs:
+      - /tmp:size=16m,uid=10006,gid=10006
+
+  # Host facts Prometheus cannot see from inside the stack: backup status, the restore-drill age and disk use, written as Prometheus text
+  # files by df-host-metrics (root, every minute) and served here. node_exporter with every collector disabled except the textfile one.
+  host-textfile:
+    <<: *hardened
+    image: ${NODE_EXPORTER_IMAGE:?pass --env-file release.lock}
+    user: "${DF_UID_TEXTFILE}:${DF_UID_TEXTFILE}"
+    networks:
+      observe: { ipv4_address: 172.30.7.5 }
+    mem_limit: ${DF_TEXTFILE_MEM}
+    pids_limit: 32
+    command:
+      - --collector.disable-defaults
+      - --collector.textfile
+      - --collector.textfile.directory=/textfile
+      - --web.listen-address=172.30.7.5:9100
+    volumes:
+      - /var/lib/dungeonflux/textfile:/textfile:ro

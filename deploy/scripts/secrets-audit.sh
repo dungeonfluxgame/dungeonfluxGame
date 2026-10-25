@@ -38,6 +38,10 @@ case "$mode" in
     # Decision 18: the dispatcher holds no object-store, identity-minting or payment secret.
     out=$(jq -r '.secrets[] | select(.consumers | index("dispatcher")) | select(.class | IN("storage", "journal", "backup", "payments")) | .name' "$manifest")
     [ -z "$out" ] || finding "the dispatcher is given storage, journal, backup or payment secrets: $out"
+    # Decision 33: the online runtime-server issuer key is held by the control plane and by no other consumer.
+    out=$(jq -r '.secrets[] | select(.name == "runtime_server_issuer_key") | select(.consumers != ["control-plane"] or .delivery != "host") | .name' "$manifest")
+    [ -z "$out" ] || finding "runtime_server_issuer_key must be delivered to the control plane only: $out"
+    [ "$(jq -r '[.secrets[] | select(.name == "runtime_server_issuer_key")] | length' "$manifest")" = 1 ] || finding "runtime_server_issuer_key is missing from the manifest"
     # One consumer, one group, everywhere: the manifest, the installer's group map and the cloud-init groupadd list
     # must agree on every consumer name and gid (critic round 1c, item 9).
     while read -r consumer gid; do

@@ -61,6 +61,7 @@ allow_live = false
 [telemetry]
 ingestor = "172.30.4.5:4317"
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 server_name = "ingestor"
 client_certificate_file = "/run/secrets/dispatcher_client_certificate"
 client_key_file = "/run/secrets/dispatcher_client_key"

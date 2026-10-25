@@ -45,6 +45,7 @@ gid = 10002
 db_password_file = "/run/secrets/db_campaign_runtime_password"
 db_ca_file = "/run/secrets/db_ca_certificate"
 internal_ca_file = "/run/secrets/internal_ca_certificate"
+service_issuer_file = "/run/secrets/service_issuer_certificate"
 
 # The placement issuer: an intermediate CA signed by the internal CA. The runner mints each runtime's client certificate from it
 # (URI SAN urn:dungeonflux:placement:<id>), valid for the placement's lease plus a short margin, never longer than max_lifetime_hours.

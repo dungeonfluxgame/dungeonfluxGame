@@ -87,23 +87,36 @@ done
 # A native openssl on Windows cannot open MSYS paths: work with relative names inside the work directory.
 cd "$work"
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -keyout "ca.key" -out "ca.crt" \
-  -subj "/CN=dungeonflux-staging-ca" >/dev/null 2>&1
+  -subj "/CN=DungeonFlux staging root CA" >/dev/null 2>&1
 
 # Two intermediate CAs under the root, as in production (manifest procedure internal-pki): the SERVICE issuer signs the fixed identities and
 # the server certificates, the PLACEMENT issuer signs only per-placement runtime client certificates. Both are CA:TRUE, pathlen:0.
 make_issuer() { # make_issuer <name>
   local name=$1
-  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=dungeonflux-staging-$name" >/dev/null 2>&1
-  printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n' > "$name.ext"
+  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=DungeonFlux staging issuer $name" >/dev/null 2>&1
+  # The PLACEMENT issuer is limited twice: its EKU is clientAuth only and its name constraints permit no DNS name at all, so even if its key
+  # leaks it can never sign a certificate that verifies as a server (the EKU stops Go and OpenSSL; the constraint stops a verifier that
+  # ignores EKU). Runtime leaves carry URI names only, which a DNS constraint does not touch. The SERVICE issuer is not constrained so.
+  if [ "$name" = runtime-server-issuer ]; then
+    # The RUNTIME-SERVER issuer (decision 33): ONLINE, held by the control plane, it signs each placement's game-listener certificate. serverAuth
+    # only, pathlen:0, and a DNS constraint that permits nothing, so it can sign neither a client certificate nor a certificate for any
+    # service host name; the listener certificates carry URI names only (urn:dungeonflux:placement-server:<id>).
+    printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nextendedKeyUsage=serverAuth\nnameConstraints=critical,permitted;DNS:permit-nothing.invalid\n' > "$name.ext"
+  elif [ "$name" = placement-issuer ]; then
+    printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nextendedKeyUsage=clientAuth\nnameConstraints=critical,permitted;DNS:permit-nothing.invalid\n' > "$name.ext"
+  else
+    printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n' > "$name.ext"
+  fi
   openssl x509 -req -in "$name.csr" -CA "ca.crt" -CAkey "ca.key" -CAcreateserial \
     -out "$name.crt" -days 30 -extfile "$name.ext" >/dev/null 2>&1
 }
 make_issuer service-issuer
 make_issuer placement-issuer
+make_issuer runtime-server-issuer
 
 issue() { # issue <name> <subjectAltName list> <extendedKeyUsage> [issuer name; default: the root]
   local name=$1 sans=$2 usage=$3 signer=${4:-ca}
-  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=$name" >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes -keyout "$name.key" -out "$name.csr" -subj "/CN=DungeonFlux staging leaf $name" >/dev/null 2>&1
   printf 'subjectAltName=%s\nextendedKeyUsage=%s\nbasicConstraints=CA:FALSE\n' "$sans" "$usage" > "$name.ext"
   openssl x509 -req -in "$name.csr" -CA "$signer.crt" -CAkey "$signer.key" -CAcreateserial \
     -out "$name.crt" -days 30 -extfile "$name.ext" >/dev/null 2>&1
@@ -120,8 +133,12 @@ issue dispatch "DNS:egress,IP:172.30.11.4,IP:172.30.12.4" serverAuth service-iss
 issue ingestor "DNS:ingestor,IP:172.30.2.8,IP:172.30.4.5,IP:172.30.11.5,IP:172.30.12.5" serverAuth service-issuer
 issue control-client "URI:urn:dungeonflux:control-plane" clientAuth,serverAuth service-issuer
 issue dispatcher-client "URI:urn:dungeonflux:dispatcher" clientAuth service-issuer
-issue runtime-1-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000003" clientAuth,serverAuth placement-issuer
-issue runtime-2-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000013" clientAuth,serverAuth placement-issuer
+issue runtime-1-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000003" clientAuth placement-issuer
+issue runtime-2-client "URI:urn:dungeonflux:placement:00000000-0000-0000-0000-000000000013" clientAuth placement-issuer
+# The game-listener certificates (decision 33): serverAuth, URI SAN urn:dungeonflux:placement-server:<id>, signed by the runtime-server issuer.
+# In production the control plane signs them at placement time (the runtime keeps its own key); staging pre-issues one per runtime slot.
+issue runtime-1-listener "URI:urn:dungeonflux:placement-server:00000000-0000-0000-0000-000000000003" serverAuth runtime-server-issuer
+issue runtime-2-listener "URI:urn:dungeonflux:placement-server:00000000-0000-0000-0000-000000000013" serverAuth runtime-server-issuer
 cd "$root"
 
 put_file() { cp "$work/$1" "$dir/$2/$3"; }
@@ -137,10 +154,16 @@ put_file ca.crt bucket-init object_store_ca_certificate
 for consumer in control-plane runtime-1 runtime-2 dispatcher ingestor edge; do
   put_file ca.crt "$consumer" internal_ca_certificate
 done
+for consumer in runtime-1 runtime-2 edge; do
+  put_file service-issuer.crt "$consumer" service_issuer_certificate
+done
 for consumer in control-plane dispatcher ingestor; do
   put_file placement-issuer.crt "$consumer" placement_issuer_certificate
   put_file service-issuer.crt "$consumer" service_issuer_certificate
 done
+# The runtime-server issuer: the KEY is the control plane's alone; the certificate is public, for whoever verifies a game listener.
+put_file runtime-server-issuer.crt control-plane runtime_server_issuer_certificate
+put_file runtime-server-issuer.key control-plane runtime_server_issuer_key
 put_file media-gateway.crt control-plane media_gateway_certificate
 put_file media-gateway.key control-plane media_gateway_key
 put_file control-client.crt control-plane internal_tls_control_certificate
@@ -152,6 +175,8 @@ put_file dispatcher-client.key dispatcher dispatcher_client_key
 put_file ingestor.crt ingestor ingestor_tls_certificate
 put_file ingestor.key ingestor ingestor_tls_key
 for n in 1 2; do
+  put_file "runtime-$n-listener.crt" "runtime-$n" game_listener_certificate
+  put_file "runtime-$n-listener.key" "runtime-$n" game_listener_key
   put_file "runtime-$n-client.crt" "runtime-$n" internal_tls_runtime_certificate
   put_file "runtime-$n-client.key" "runtime-$n" internal_tls_runtime_key
 done

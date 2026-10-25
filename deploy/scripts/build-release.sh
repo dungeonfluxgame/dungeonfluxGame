@@ -2,11 +2,11 @@
 # Assemble, publish and sign the RELEASE image and the KEY-SET image that `df-deploy` verifies on a host (round 2). CI only; never run on a
 # production machine. STATUS: UNVERIFIED (no Docker daemon, cosign or registry on the authoring machine); the CI job that calls it is round 3.
 #
-#   deploy/scripts/build-release.sh release --built FILE [--push] [--sign]
+#   deploy/scripts/build-release.sh release --built FILE (--previous-revoked FILE | --first-release) [--push] [--sign]
 #   deploy/scripts/build-release.sh keys [--push] [--sign]
 #
 # release  FILE holds the KEY=repo:version@sha256:digest lines that `deploy/scripts/build-images.sh --push` printed (CONTROL_PLANE_IMAGE,
-#          CAMPAIGN_RUNTIME_IMAGE, EGRESS_IMAGE, RUNNER_IMAGE, DOCKER_PROXY_IMAGE, EDGE_IMAGE). The script adds DBGATE_IMAGE (third party, pinned by digest) from
+#          CAMPAIGN_RUNTIME_IMAGE, EGRESS_IMAGE, RUNNER_IMAGE, DOCKER_PROXY_IMAGE, EDGE_IMAGE, BACKUP_IMAGE). The script adds the third-party images (DBGATE, PROMETHEUS, ALERTMANAGER, NODE_EXPORTER; pinned by digest) from
 #          deploy/images/images.lock, writes release.lock, and packages it with production.compose.yml, production.env, the edge files and the
 #          config TEMPLATES of deploy/config/production into <prefix>-release. Before anything is built it runs the static checks that
 #          need no daemon (config policy; the production compose policy when jq is installed).
@@ -23,11 +23,15 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 mode=${1:-}
 [ -n "$mode" ] && shift || { echo "usage: build-release.sh release --built FILE | keys  [--push] [--sign]" >&2; exit 2; }
 built=""
+previous_revoked=""
+first_release=0
 push=0
 sign=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --built) built=$2; shift 2 ;;
+    --previous-revoked) previous_revoked=$2; shift 2 ;;
+    --first-release) first_release=1; shift ;;
     --push) push=1; shift ;;
     --sign) sign=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -55,11 +59,19 @@ export SOURCE_DATE_EPOCH
 if [ "$mode" = release ]; then
   [ -f "$built" ] || { echo "release needs --built FILE (the lines build-images.sh --push printed)" >&2; exit 2; }
   bash deploy/scripts/check-config-policy.sh
+  # The revocation list only grows: it must be a superset of the PREVIOUS signed release's list (extracted from that release image by the
+  # CI job). A release with neither the previous list nor --first-release is refused.
+  if [ "$first_release" -eq 1 ]; then
+    [ -z "$previous_revoked" ] || { echo "--first-release and --previous-revoked exclude each other" >&2; exit 2; }
+  else
+    [ -n "$previous_revoked" ] || { echo "release needs --previous-revoked FILE (the revoked-images of the previous signed release) or --first-release" >&2; exit 2; }
+    bash deploy/scripts/check-revoked-superset.sh "$previous_revoked" deploy/images/revoked-images
+  fi
   if command -v jq >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then bash deploy/scripts/check-production-policy.sh; else echo "SKIP production compose policy (needs docker and jq)"; fi
 
   lock="$stage/release.lock"
   : > "$lock"
-  for key in CONTROL_PLANE_IMAGE CAMPAIGN_RUNTIME_IMAGE EGRESS_IMAGE RUNNER_IMAGE DOCKER_PROXY_IMAGE EDGE_IMAGE; do
+  for key in CONTROL_PLANE_IMAGE CAMPAIGN_RUNTIME_IMAGE EGRESS_IMAGE RUNNER_IMAGE DOCKER_PROXY_IMAGE EDGE_IMAGE BACKUP_IMAGE; do
     line=$(grep -E "^$key=" "$built" | tail -n 1 || true)
     [ -n "$line" ] || { echo "$built has no $key line" >&2; exit 1; }
     value=${line#*=}
@@ -67,7 +79,7 @@ if [ "$mode" = release ]; then
     if [ -n "$prefix" ] && [[ "$value" != "$family"-* ]]; then echo "$key is not from $family-*: $value" >&2; exit 1; fi
     echo "$line" >> "$lock"
   done
-  for key in DBGATE_IMAGE; do
+  for key in DBGATE_IMAGE PROMETHEUS_IMAGE ALERTMANAGER_IMAGE NODE_EXPORTER_IMAGE; do
     line=$(grep -E "^$key=" deploy/images/images.lock | head -n 1 || true)
     [ -n "$line" ] || { echo "deploy/images/images.lock has no $key" >&2; exit 1; }
     [[ "$line" == *@sha256:[0-9a-f]* && "$line" != *TODO* ]] || { echo "$key has no real digest in images.lock" >&2; exit 1; }
@@ -75,6 +87,7 @@ if [ "$mode" = release ]; then
   done
   install -m 0644 deploy/compose/production.compose.yml "$stage/production.compose.yml"
   install -m 0644 deploy/compose/production.env "$stage/production.env"
+  install -m 0644 deploy/images/revoked-images "$stage/revoked-images"
   install -d "$stage/edge/extra" "$stage/config"
   install -m 0644 deploy/edge/Caddyfile.production "$stage/edge/Caddyfile.production"
   find deploy/edge/extra -type f -print0 | while IFS= read -r -d '' f; do install -m 0644 "$f" "$stage/edge/extra/$(basename "$f")"; done

@@ -1,0 +1,196 @@
+# Alert rules (round 3). STATUS: UNVERIFIED. Never run through `promtool check rules`; deploy/monitoring/alert-rules.test.yml holds
+# `promtool test rules` cases for CI.
+#
+# SEVERITIES follow master-launch-plan 16.3:
+#   p0  money duplication, cross-tenant disclosure, incorrect funding ownership, a leaked secret, corrupted accepted state. Stop affected
+#       paid admission, preserve evidence, run the incident runbook.
+#   p1  widespread failed joins, inability to resume, sustained provider outage, stuck sessions, failed backups, unknown exposure growing
+#       beyond cap. Degrade optional media, pause blocked billing, communicate status.
+#   p2  isolated or recoverable problems, standing reminders. Track and remediate.
+#
+# SERIES. Where O1 has published a series name (hosted-runtime-research.md section 12) the rule uses it. Series that nobody has published
+# are listed at the end as comments, NOT as rules: an alert on a series that may never exist reads as "all quiet".
+# The P0 invariants use ONE convention that S2 asks every domain owner (B, O1, O2, S1) to follow, because the plan's P0 list is made of
+# invariants, not of load: a counter df_invariant_violation_total{kind,service} incremented whenever code detects that an invariant was
+# violated. Kinds: money_duplication, cross_tenant_disclosure, funding_owner_mismatch, state_corruption, secret_exposure.
+# Thresholds are PROPOSALS (plan targets where the plan gives one); the owner tunes them with measurements.
+groups:
+  - name: p0-invariants
+    rules:
+      - alert: InvariantViolation
+        expr: increase(df_invariant_violation_total[5m]) > 0
+        labels: { severity: p0 }
+        annotations:
+          summary: "Invariant violated: {{ $labels.kind }} (service {{ $labels.service }})"
+          runbook: "service-operations.md: incident runbook; stop affected paid admission and preserve evidence"
+      - alert: CommittedWritesLost
+        # O1's failover check found that committed writes were lost (hosted-runtime-research 6.3): the service is halted, state may be wrong.
+        expr: increase(df_failover_checks_total{outcome="regression"}[10m]) > 0
+        labels: { severity: p0 }
+        annotations:
+          summary: "A database failover or restore lost committed writes; the service halted"
+          runbook: "service-operations.md: Restore and failover; run deploy/db/restore-feed-epochs.sql, raise the recovery epoch, then resume"
+
+  - name: p1-service
+    rules:
+      - alert: TelemetryIngestorDown
+        expr: up{job="ingestor"} == 0
+        for: 2m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The telemetry ingestor does not answer: every other alert on this host is blind"
+      - alert: HostExporterDown
+        expr: up{job="host"} == 0
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The host textfile exporter does not answer: backup and disk alerts are blind"
+      - alert: SessionStuck
+        # Plan 16.3: a shallow health endpoint is not proof that the session owner is healthy; progress age is.
+        expr: max by (service) (df_owner_progress_age_seconds) > 60
+        for: 2m
+        labels: { severity: p1 }
+        annotations:
+          summary: "A campaign owner has made no progress for over 60 s"
+      - alert: ReduceStalled
+        expr: max by (service) (df_owner_reduce_in_progress_seconds) > 30
+        for: 1m
+        labels: { severity: p1 }
+        annotations:
+          summary: "A game reduce has been running for over 30 s"
+      - alert: LeaseRenewalFailing
+        expr: increase(df_lease_renew_failures_total[5m]) > 3
+        labels: { severity: p1 }
+        annotations:
+          summary: "Runtimes are failing to renew their lease (they stop at their local lease)"
+      - alert: FailoverCheckNotClean
+        # ASSUMPTION: the clean outcomes are "clean" or "ok". TODO(O1): confirm the label values.
+        expr: increase(df_failover_checks_total{outcome!~"clean|ok|regression"}[15m]) > 0
+        labels: { severity: p1 }
+        annotations:
+          summary: "The failover check reported something other than clean"
+      - alert: FailoverCheckStopped
+        expr: sum(increase(df_failover_checks_total[10m])) == 0
+        for: 10m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The failover check has not run for 20 minutes (a lost-commit failover would go unnoticed)"
+      - alert: DatabaseCommitSlow
+        # Plan target: p95 accepted input to durable decision 150 ms.
+        expr: histogram_quantile(0.95, sum by (le) (rate(df_db_commit_ms_bucket[5m]))) > 150
+        for: 10m
+        labels: { severity: p1 }
+        annotations:
+          summary: "p95 database commit latency over 150 ms for 10 minutes"
+      - alert: SaveLagHigh
+        expr: max by (service) (df_save_lag_ms) > 5000
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "Saves lag the game by over 5 s (recovery would lose that much)"
+      - alert: NoFreeRuntimeSlot
+        expr: sum(df_worker_slots_used) >= sum(df_worker_slots_total) and sum(df_worker_slots_total) > 0
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "Every runtime slot on this host is in use: new campaigns cannot be placed"
+      - alert: IngestBacklogDegraded
+        # service-operations.md: backlog age over 120 s degrades readiness for new campaign and provider admissions.
+        expr: max(df_ingest_backlog_age_seconds) > 120
+        for: 2m
+        labels: { severity: p1 }
+        annotations:
+          summary: "Telemetry ingest backlog older than 120 s (TODO(O1): confirm the series name)"
+      - alert: ServiceSecretsMissing
+        expr: df_host_secrets_present == 0
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "A service's secrets directory is missing or empty on this host ({{ $labels.consumer }}); push it with df-secrets-install"
+
+  - name: p1-storage-and-backup
+    rules:
+      - alert: BackupFailed
+        expr: df_backup_last_run_ok == 0
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The last backup run failed"
+          runbook: "service-operations.md: Backups; journalctl -u df-backup.service"
+      - alert: OffsiteCopyFailed
+        expr: df_backup_offsite_configured == 1 and df_backup_offsite_last_ok == 0
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The off-account backup copy failed (the primary copy may be fine)"
+      - alert: BackupStale
+        # A daily backup older than 26 hours.
+        expr: time() - df_backup_last_success_timestamp_seconds > 93600
+        labels: { severity: p1 }
+        annotations:
+          summary: "No successful backup for over 26 hours"
+      - alert: BackupNeverSucceeded
+        expr: absent(df_backup_last_success_timestamp_seconds)
+        for: 30m
+        labels: { severity: p1 }
+        annotations:
+          summary: "There is no backup status at all (the timer never ran, or the exporter does not see its file)"
+      - alert: DiskPressure
+        expr: df_host_disk_used_ratio{mount="/var/lib/dungeonflux"} > 0.85
+        for: 10m
+        labels: { severity: p1 }
+        annotations:
+          summary: "The state disk is over 85 percent full (telemetry spool, backup staging, Prometheus)"
+      - alert: RuntimeTmpfsPressure
+        # /run holds the secrets and the per-slot files on tmpfs; running out breaks secret installs and sockets for the whole host.
+        expr: df_host_disk_used_ratio{mount="/run"} > 0.8
+        for: 5m
+        labels: { severity: p1 }
+        annotations:
+          summary: "/run is over 80 percent full"
+
+  - name: p2-reminders
+    rules:
+      - alert: SlotsNearlyFull
+        expr: sum(df_worker_slots_used) / sum(df_worker_slots_total) > 0.8
+        for: 15m
+        labels: { severity: p2 }
+        annotations:
+          summary: "Runtime slots are over 80 percent in use"
+      - alert: IngestBacklogWarning
+        expr: max(df_ingest_backlog_age_seconds) > 30
+        for: 5m
+        labels: { severity: p2 }
+        annotations:
+          summary: "Telemetry ingest backlog older than 30 s (TODO(O1): confirm the series name)"
+      - alert: OffsiteBackupNotConfigured
+        # A STANDING reminder, never success: the off-account copy waits on the owner's choice of provider (plan 13.10).
+        expr: df_backup_offsite_configured == 0
+        for: 1h
+        labels: { severity: p2 }
+        annotations:
+          summary: "No off-account backup copy is configured: a compromise of the production credentials could reach every copy"
+      - alert: RestoreDrillOverdue
+        expr: time() - df_restore_drill_last_timestamp_seconds > 35 * 86400
+        labels: { severity: p2 }
+        annotations:
+          summary: "The last restore drill is over 35 days old (recovery targets are unproven until a drill passes)"
+      - alert: RestoreDrillNeverRecorded
+        expr: absent(df_restore_drill_last_timestamp_seconds)
+        for: 1d
+        labels: { severity: p2 }
+        annotations:
+          summary: "No restore drill has ever been recorded on this host"
+      - alert: AlertReceiverNotConfigured
+        expr: df_host_alert_receiver_present == 0
+        for: 1h
+        labels: { severity: p2 }
+        annotations:
+          summary: "The alert receiver URL has not been pushed: alerts go nowhere"
+
+# SERIES NOBODY HAS PUBLISHED YET (no rules until they exist; the owner to ask is named):
+#   provider outage, circuit state per provider (dispatcher, O1)     -> P1 sustained provider outage
+#   webhook inbox backlog, duplicate posting checks (B)              -> P1 (money duplication itself is covered by InvariantViolation)
+#   storage quarantine age, broken asset references (O2)             -> P2 or P1
+#   unknown exposure against the cap (C)                             -> P1 unknown exposure growing beyond cap
+#   failed joins rate (S1, B)                                        -> P1 widespread failed joins

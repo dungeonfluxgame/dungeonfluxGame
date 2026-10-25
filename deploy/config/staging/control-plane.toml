@@ -76,6 +76,7 @@ mode = "fake"
 # TODO(O1): who holds the internal CA key and issues per-placement runtime certificates (the runner?).
 [internal_tls]
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 gateway_certificate_file = "/run/secrets/media_gateway_certificate"
 gateway_key_file = "/run/secrets/media_gateway_key"
 client_certificate_file = "/run/secrets/internal_tls_control_certificate"
@@ -93,12 +94,34 @@ allowed_identities = ["urn:dungeonflux:dispatcher"]
 # A fixed identity only through the service issuer, never through the placement issuer.
 issuer_file = "/run/secrets/service_issuer_certificate"
 
+# The control plane's edge module reaches each runtime's game listener over mTLS on the slot networks (decision 33). It pins the
+# RUNTIME-SERVER issuer for every runtime upstream (never the root, never the service issuer) and checks that the certificate's URI SAN is
+# exactly urn:dungeonflux:placement-server:<id> for the placement id of the directory row it routed to; a certificate for another
+# placement, or one from any other chain, fails the handshake. It presents its own client certificate (a fixed identity).
+[runtime_upstream]
+ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/runtime_server_issuer_certificate"
+expected_identity = "urn:dungeonflux:placement-server:{placement_id}"
+client_certificate_file = "/run/secrets/internal_tls_control_certificate"
+client_key_file = "/run/secrets/internal_tls_control_key"
+
+# The ONLINE runtime-server issuer (decision 33): serverAuth only, pathlen:0. Its private key is held by the control plane and by no other
+# consumer (manifest runtime_server_issuer_key). At placement time the control plane signs the game-listener certificate the runtime asks
+# for (over the placement-authenticated media gateway channel), with exactly one URI SAN, urn:dungeonflux:placement-server:<placement id>,
+# for the placement id taken from the caller's own client certificate, valid for the placement lease plus a short margin.
+[runtime_server_issuer]
+certificate_file = "/run/secrets/runtime_server_issuer_certificate"
+key_file = "/run/secrets/runtime_server_issuer_key"
+uri_san_prefix = "urn:dungeonflux:placement-server:"
+max_lifetime_hours = 24
+
 [sessions]
 signing_key_file = "/run/secrets/session_signing_key"
 
 [telemetry]
 ingestor = "172.30.2.8:4317"
 ca_file = "/run/secrets/internal_ca_certificate"
+server_issuer_file = "/run/secrets/service_issuer_certificate"
 server_name = "ingestor"
 client_certificate_file = "/run/secrets/internal_tls_control_certificate"
 client_key_file = "/run/secrets/internal_tls_control_key"

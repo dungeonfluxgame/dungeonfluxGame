@@ -106,6 +106,62 @@ for f in "${files[@]}"; do
       if ! has '^ready *= *"'; then fail "$name: the edge needs a readiness-only listener of its own"; continue; fi
       ;;
   esac
+  # Every client that verifies a SERVICE server (a section whose ca_file is the internal root) must also pin the service issuer, so a
+  # certificate issued by the placement intermediate (or any other chain under the root) is never accepted as a server.
+  unpinned=$(printf '%s\n' "$code" | awk '
+    function flush() { if (client && !pin) bad = bad (sec == "" ? "(top level)" : sec) " " }
+    /^\[/ { flush(); sec = $0; client = 0; pin = 0; upstream = 0 }
+    /^ca_file[ \t]*=[ \t]*"\/run\/secrets\/internal_ca_certificate"/ { client = 1 }
+    /^server_issuer_file[ \t]*=[ \t]*"\/run\/secrets\/service_issuer_certificate"/ { pin = 1 }
+    /^\[runtime_upstream\]/ { upstream = 1 }
+    /^server_issuer_file[ \t]*=[ \t]*"\/run\/secrets\/runtime_server_issuer_certificate"/ { if (upstream) pin = 1 }
+    END { flush(); print bad }')
+  if [ -n "$unpinned" ]; then fail "$name: section(s) $unpinned verify a service server against the root CA without server_issuer_file = service_issuer_certificate"; continue; fi
+  # ISSUER-TO-IDENTITY-CLASS PAIRING (decision 33). Every receiver accepts a placement identity only through the PLACEMENT issuer and a fixed
+  # identity (control plane, dispatcher, service servers) only through the SERVICE issuer; every client pins the issuer of the server class it
+  # dials (service servers: service issuer; a runtime's game listener: runtime-server issuer). The table is the whole contract; a config that
+  # swaps two entries, or leaves one out, fails.
+  pair() { # pair SECTION KEY CERT
+    local sec
+    sec=$(printf '%s\n' "$code" | awk -v s="[$1]" '/^\[/ { on = ($0 == s) } on')
+    printf '%s\n' "$sec" | grep -q "^$2[[:space:]]*=[[:space:]]*\"/run/secrets/$3\"" || { fail "$name: [$1] must set $2 = $3 (issuer pairing, decision 33)"; return 1; }
+  }
+  pairing_ok=1
+  case "$name" in
+    */control-plane.toml)
+      pair internal_tls.media_gateway issuer_file placement_issuer_certificate || pairing_ok=0
+      pair internal_tls.dispatcher_gateway issuer_file service_issuer_certificate || pairing_ok=0
+      pair runtime_upstream server_issuer_file runtime_server_issuer_certificate || pairing_ok=0
+      pair telemetry server_issuer_file service_issuer_certificate || pairing_ok=0 ;;
+    */egress.toml)
+      pair dispatch_tls placement_issuer_file placement_issuer_certificate || pairing_ok=0
+      pair control_plane server_issuer_file service_issuer_certificate || pairing_ok=0
+      pair telemetry server_issuer_file service_issuer_certificate || pairing_ok=0 ;;
+    */ingestor.toml)
+      pair identity placement_issuer_file placement_issuer_certificate || pairing_ok=0
+      pair identity service_issuer_file service_issuer_certificate || pairing_ok=0 ;;
+    *descriptor.toml)
+      pair listen_tls client_issuer_file service_issuer_certificate || pairing_ok=0
+      pair dispatcher server_issuer_file service_issuer_certificate || pairing_ok=0
+      pair media_gateway server_issuer_file service_issuer_certificate || pairing_ok=0
+      pair telemetry server_issuer_file service_issuer_certificate || pairing_ok=0 ;;
+  esac
+  [ "$pairing_ok" -eq 1 ] || continue
+  # A runtime upstream pins the RUNTIME-SERVER issuer and nothing else, and names the identity it expects (decision 33).
+  if printf '%s\n' "$code" | grep -q '^\[runtime_upstream\]'; then
+    section=$(printf '%s\n' "$code" | awk '/^\[/ { on = ($0 == "[runtime_upstream]") } on')
+    if ! printf '%s\n' "$section" | grep -q '^server_issuer_file[[:space:]]*=[[:space:]]*"/run/secrets/runtime_server_issuer_certificate"'; then
+      fail "$name: [runtime_upstream] must pin runtime_server_issuer_certificate"; continue
+    fi
+    if ! printf '%s\n' "$section" | grep -q '^expected_identity[[:space:]]*=[[:space:]]*"urn:dungeonflux:placement-server:{placement_id}"'; then
+      fail "$name: [runtime_upstream] must check the URI SAN urn:dungeonflux:placement-server:{placement_id}"; continue
+    fi
+  fi
+  # The runtime-server issuer's private key belongs to the control plane alone (decision 33).
+  case "$name" in
+    */control-plane.toml) ;;
+    *) if printf '%s\n' "$code" | grep -q 'runtime_server_issuer_key'; then fail "$name: only the control plane may reference runtime_server_issuer_key"; continue; fi ;;
+  esac
   pass "$name"
 done
 
@@ -132,6 +188,21 @@ for mounted in $(grep -o '/opt/dungeonflux/current/config/[a-z][a-z.-]*' "$root/
   [ -f "$root/deploy/config/production/$(basename "$mounted")" ] || fail "production.compose.yml mounts $mounted but deploy/config/production has no such template"
 done
 if [ "$failures" -eq "$before" ]; then pass "production templates (tokens, no fake mode, payments in test mode, mounted files exist)"; fi
+
+# The same pin for the clients that are not TOML: the edge's upstream trust pool and every container healthcheck that verifies the control
+# plane. They must trust the SERVICE issuer certificate, never the root (which also vouches for the placement intermediate).
+for caddyfile in "$root"/deploy/edge/Caddyfile.*; do
+  [ -f "$caddyfile" ] || continue
+  if grep -E 'tls_trust_pool' "$caddyfile" | grep -vq 'service_issuer_certificate'; then
+    fail "${caddyfile#"$root"/}: the upstream trust pool is not the service issuer certificate"
+  fi
+done
+for compose in "$root"/deploy/compose/*.compose.yml; do
+  [ -f "$compose" ] || continue
+  if grep -E '"healthcheck".*"--ca-file"' "$compose" | grep -vq 'service_issuer_certificate'; then
+    fail "${compose#"$root"/}: a healthcheck verifies the control plane against something other than the service issuer certificate"
+  fi
+done
 
 if [ "$failures" -ne 0 ]; then echo "$failures file(s) violate the config policy"; exit 1; fi
 echo "config policy ok"

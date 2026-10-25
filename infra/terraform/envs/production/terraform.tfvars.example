@@ -44,3 +44,6 @@ cosign_keys_certificate_identity = "https://github.com/OWNER/REPO/.github/workfl
 # Only if the image packages are private: the user that owns the pull token pushed as registry_pull_token.
 # release_registry_user = ""
 acme_email = ""
+
+# The compose plugin that df-stack uses, qualified together with docker_version_pin and containerd_version_pin.
+compose_version_pin = "2.29.7-1~ubuntu.24.04~noble"

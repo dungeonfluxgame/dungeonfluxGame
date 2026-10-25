@@ -1,0 +1,5 @@
+# Image digests that must NEVER be allowed again, one per line (sha256:<64 hex>), normally the campaign-runtime digests of releases that
+# were found to be bad. This file is part of the SIGNED release (deploy/scripts/build-release.sh copies it). `df-deploy activate` records
+# every digest here in the host's /etc/dungeonflux/revoked-images (the union of every revocation the host has ever seen) and refuses any
+# release, and any rollback target, whose allow-list names one of them. Keep it CUMULATIVE: a release that omits an older revocation
+# does not un-revoke it on a host that has seen it, but a fresh host would not know it. Comments and blank lines are ignored.

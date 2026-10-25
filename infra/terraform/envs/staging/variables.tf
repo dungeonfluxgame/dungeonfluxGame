@@ -266,3 +266,8 @@ variable "edge_allowed_cidrs" {
     error_message = "edge_allowed_cidrs must be valid CIDRs; an EMPTY list is allowed in staging and means 403 for everyone (the edge fails closed), but see the note in the description about how Caddy parses an empty DF_ALLOWED_CIDRS."
   }
 }
+
+variable "compose_version_pin" {
+  description = "Exact docker-compose-plugin version (apt syntax), matching the Docker Engine pin; held after install. Required: df-stack starts the production stack with it."
+  type        = string
+}

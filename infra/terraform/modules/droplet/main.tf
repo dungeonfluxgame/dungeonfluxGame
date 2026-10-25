@@ -17,6 +17,10 @@ locals {
     keys_apply_script                = file("${path.module}/../../../cloud-init/df-keys-apply.sh")
     slot_dirs_script                 = file("${path.module}/../../../cloud-init/df-slot-dirs.sh")
     net_rules_script                 = file("${path.module}/../../../cloud-init/df-net-rules.sh")
+    stack_script                     = file("${path.module}/../../../cloud-init/df-stack.sh")
+    backup_script                    = file("${path.module}/../../../cloud-init/df-backup.sh")
+    host_metrics_script              = file("${path.module}/../../../cloud-init/df-host-metrics.sh")
+    compose_version_pin              = var.compose_version_pin
     vpc_cidr                         = var.vpc_cidr
     edge_environment                 = var.edge_environment
     release_registry_user            = var.release_registry_user
@@ -47,9 +51,9 @@ resource "digitalocean_droplet" "this" {
     precondition {
       condition = var.role == "bastion" || (
         var.cosign_certificate_identity != "" && var.cosign_keys_certificate_identity != "" && var.cosign_certificate_identity != var.cosign_keys_certificate_identity &&
-        var.cosign_version != "" && var.cosign_sha256 != "" && var.release_repository_prefix != "" && var.vpc_cidr != ""
+        var.cosign_version != "" && var.cosign_sha256 != "" && var.release_repository_prefix != "" && var.vpc_cidr != "" && var.compose_version_pin != ""
       )
-      error_message = "Application and worker hosts need cosign_certificate_identity, a DIFFERENT cosign_keys_certificate_identity (key sets are signed by their own workflow), cosign_version, cosign_sha256, release_repository_prefix and vpc_cidr: df-deploy verifies every release and key set against them and the host firewall protects the VPC."
+      error_message = "Application and worker hosts need cosign_certificate_identity, a DIFFERENT cosign_keys_certificate_identity (key sets are signed by their own workflow), cosign_version, cosign_sha256, release_repository_prefix, vpc_cidr and compose_version_pin: df-deploy verifies every release and key set against them and the host firewall protects the VPC."
     }
 
     # Cloud-init runs once at creation. Later configuration changes go through the deploy scripts, never by

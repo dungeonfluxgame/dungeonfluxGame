@@ -27,13 +27,21 @@ case "$cmd" in
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
     exec sudo /usr/local/sbin/df-deploy activate "$digest"
     ;;
+  "migrate sha256:"*)
+    digest=${cmd#migrate }
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
+    exec sudo /usr/local/sbin/df-deploy migrate "$digest"   # stdin: the df_migrator password, first line
+    ;;
+  "rollback")
+    exec sudo /usr/local/sbin/df-deploy rollback
+    ;;
   "refresh-keys sha256:"*)
     digest=${cmd#refresh-keys }
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad digest" >&2; exit 2; }
     exec sudo /usr/local/sbin/df-deploy refresh-keys "$digest"
     ;;
   *)
-    echo "df-deploy-ssh: only 'secrets-install', 'release sha256:<digest>', 'activate sha256:<digest>' and 'refresh-keys sha256:<digest>' are allowed" >&2
+    echo "df-deploy-ssh: only 'secrets-install', 'release sha256:<digest>', 'activate sha256:<digest>' and 'migrate sha256:<digest>', 'rollback' and 'refresh-keys sha256:<digest>' are allowed" >&2
     exit 2
     ;;
 esac

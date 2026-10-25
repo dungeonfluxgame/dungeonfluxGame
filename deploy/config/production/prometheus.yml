@@ -1,0 +1,29 @@
+# Prometheus for one application host (round 3). STATUS: UNVERIFIED (never run through `promtool check config`; CI should).
+#
+# WHAT IT SCRAPES, and what it must never scrape (decision 23): the per-host telemetry INGESTOR and the host textfile exporter. Every
+# other process (control plane, dispatcher, runner, runtimes) pushes its metrics to the ingestor, which re-exports them; no scrape
+# ever reaches a runtime or a service directly, so the monitoring network needs no route to the slot, data or dispatch networks.
+# TODO(O1): the ingestor must re-export the pushed series with a `service` label (control-plane, dispatcher, runner, runtime) and, for
+# runtimes, a bounded `slot` label and NOT a campaign or player id; the alert rules below rely on those labels.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["172.30.7.4:9093"]
+
+scrape_configs:
+  - job_name: ingestor
+    static_configs:
+      - targets: ["172.30.5.2:9464"]
+  - job_name: host
+    static_configs:
+      - targets: ["172.30.7.5:9100"]

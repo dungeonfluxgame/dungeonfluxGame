@@ -35,11 +35,17 @@ CADDY_RATELIMIT_REF=TODO-CI
 # TCP forwarder that is the only database path a runtime has (staging and production).
 DBGATE_IMAGE=haproxy:3.0.5-alpine@sha256:TODO-CI
 
+# Monitoring (round 3): third-party images pinned by digest and trusted through the SIGNED release.lock (like the db-gate).
+PROMETHEUS_IMAGE=prom/prometheus:v3.0.1@sha256:TODO-CI
+ALERTMANAGER_IMAGE=prom/alertmanager:v0.28.0@sha256:TODO-CI
+NODE_EXPORTER_IMAGE=prom/node-exporter:v1.8.2@sha256:TODO-CI
+
 # Built images, written by the CI release job after a push (registry/repository:version@sha256:digest).
 # Compose and the deploy scripts read these lines; they are placeholders until the first CI build.
 CONTROL_PLANE_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-control-plane:0.0.0@sha256:TODO-CI
 CAMPAIGN_RUNTIME_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-campaign-runtime:0.0.0@sha256:TODO-CI
 EGRESS_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-egress:0.0.0@sha256:TODO-CI
 EDGE_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-edge:0.0.0@sha256:TODO-CI
+BACKUP_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-backup:0.0.0@sha256:TODO-CI
 RUNNER_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-runner:0.0.0@sha256:TODO-CI
 DOCKER_PROXY_IMAGE=ghcr.io/REPLACE_ME/dungeonflux-docker-proxy:0.0.0@sha256:TODO-CI

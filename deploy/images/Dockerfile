@@ -27,6 +27,7 @@ ARG RUST_BASE
 ARG RUNTIME_BASE
 ARG EDGE_BUILDER_BASE
 ARG EDGE_BASE
+ARG BACKUP_BASE
 
 # ---------------------------------------------------------------------------------------------
 # toolchain: the pinned Rust (rust-toolchain.toml, 1.98.1) plus the one wasm-bindgen the client needs.
@@ -209,3 +210,21 @@ LABEL org.opencontainers.image.title="dungeonflux-edge" \
 COPY --from=build-edge /usr/bin/caddy /usr/bin/caddy
 # COPY does not carry the file capability the stock image sets so that Caddy can bind ports 80 and 443 as a non-root user; set it again.
 RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
+
+# ---------------------------------------------------------------------------------------------
+# backup: the one-shot tools of the nightly backup (df-backup): pg_dump (the PostgreSQL image already has it, at the pinned version),
+# age (encryption to the public recipient) and the aws CLI (S3-compatible upload). It holds no secret and runs only as a throwaway
+# container started by df-backup with the credentials on stdin. UNVERIFIED (never built). The apt packages are not version-pinned:
+# the base image is pinned by digest, the package versions are whatever that base's repositories serve at build time; a reproducible
+# build would vendor them (recorded as a residual).
+FROM ${BACKUP_BASE} AS backup
+ARG VCS_REF=unknown
+ARG SOURCE_URL=unknown
+ARG VERSION=0.0.0
+LABEL org.opencontainers.image.title="dungeonflux-backup" \
+      org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends age awscli ca-certificates \
+    && rm -rf /var/lib/apt/lists/*

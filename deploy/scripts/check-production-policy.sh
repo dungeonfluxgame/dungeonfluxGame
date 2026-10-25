@@ -36,10 +36,10 @@ check_empty() { # check_empty <description> <output of a violation query>
   if [ -z "$2" ]; then pass "$1"; else fail "$1: $2"; fi
 }
 
-check_empty "the only non-internal networks are public, control-out, db-out and egress-out" \
-  "$(q '.networks | to_entries[] | select(.value.internal != true) | select(.key | IN("public","control-out","db-out","egress-out") | not) | .key')"
-check_empty "control-out, db-out and egress-out have the fixed bridge names the host firewall addresses (dfctl0, dfdb0, dfegr0)" \
-  "$(q '{"control-out":"dfctl0","db-out":"dfdb0","egress-out":"dfegr0"} as $want | .networks | to_entries[] | select($want[.key] != null) | select(.value.driver_opts["com.docker.network.bridge.name"] != $want[.key]) | .key')"
+check_empty "the only non-internal networks are public, control-out, db-out, egress-out and monitor-out" \
+  "$(q '.networks | to_entries[] | select(.value.internal != true) | select(.key | IN("public","control-out","db-out","egress-out","monitor-out") | not) | .key')"
+check_empty "EVERY network has the fixed bridge name the host firewall addresses (dfpub0 dfin0 dfdata0 dfdsp0 dfmn0 dfobs0 dfrun0 dfctl0 dfdb0 dfegr0 dfmon0 and dfslot<N>)" \
+  "$(q '{"public":"dfpub0","ingress":"dfin0","data":"dfdata0","dispatch":"dfdsp0","monitoring":"dfmn0","observe":"dfobs0","runner-net":"dfrun0","control-out":"dfctl0","db-out":"dfdb0","egress-out":"dfegr0","monitor-out":"dfmon0"} as $want | .networks | to_entries[] | . as $n | ($want[$n.key] // (if ($n.key | test("^slot[0-9]+$")) then "df" + $n.key else null end)) as $w | select($w == null or ($n.value.driver_opts["com.docker.network.bridge.name"] != $w)) | $n.key')"
 check_empty "the allow-list is mounted as a directory, never as a single file (a rename replaces a file's inode)" \
   "$(q '.services | to_entries[] | . as $s | ($s.value.volumes // [])[] | select(.target | test("allowed-images")) | select(.target != "/etc/dungeonflux/allowed-images.d" or .source != "/etc/dungeonflux/allowed-images.d" or .read_only != true) | $s.key + ":" + .target')"
 check_empty "the slot networks are internal and named df-slot-N" \
@@ -58,7 +58,9 @@ expect_members egress-out "egress"
 expect_members ingress "control-plane,edge"
 expect_members data "control-plane,db-gate,ingestor"
 expect_members dispatch "control-plane,db-gate,egress,ingestor"
-expect_members monitoring "ingestor"
+expect_members monitoring "ingestor,prometheus"
+expect_members observe "alertmanager,host-textfile,prometheus"
+expect_members monitor-out "alertmanager"
 expect_members runner-net "db-gate,runner"
 expect_members slot1 "control-plane,db-gate,egress,ingestor"
 expect_members slot2 "control-plane,db-gate,egress,ingestor"
@@ -66,7 +68,7 @@ check_empty "the docker proxy has no network" \
   "$(q '.services["docker-proxy"] | select(.network_mode != "none" or (.networks != null and (.networks | length) > 0)) | "docker-proxy has a network"')"
 
 check_empty "every service mounts exactly its own secrets directory (read-only) and no other" \
-  "$(q '{"control-plane":"control-plane","egress":"dispatcher","ingestor":"ingestor","edge":"edge","runner":"runner"} as $map
+  "$(q '{"control-plane":"control-plane","egress":"dispatcher","ingestor":"ingestor","edge":"edge","runner":"runner","alertmanager":"monitoring"} as $map
         | .services | to_entries[] | . as $s
         | ([$s.value.volumes[]? | select(.target == "/run/secrets")]) as $m
         | ([$m[] | (.source | split("/") | last)]) as $got
@@ -107,7 +109,7 @@ check_empty "the docker proxy sees the runtime tree READ-ONLY, at the path the b
 check_empty "every bind mount comes from the production host paths" \
   "$(q '.services | to_entries[] | . as $s | ($s.value.volumes // [])[] | select(.type == "bind") | select(.source | test("^(/etc/dungeonflux/|/opt/dungeonflux/|/run/dungeonflux/|/var/lib/dungeonflux/|/var/run/docker\\.sock$)") | not) | $s.key + ":" + .source')"
 check_empty "only the listed writable mounts are writable" \
-  "$(q '{"edge":["/data"],"ingestor":["/var/lib/dungeonflux/telemetry"],"docker-proxy":["/run/proxy","/var/run/docker.sock"],"runner":["/run/dungeonflux/runtime"]} as $rw
+  "$(q '{"edge":["/data"],"ingestor":["/var/lib/dungeonflux/telemetry"],"docker-proxy":["/run/proxy","/var/run/docker.sock"],"runner":["/run/dungeonflux/runtime"],"prometheus":["/prometheus"],"alertmanager":["/alertmanager"]} as $rw
         | .services | to_entries[] | . as $s | ($s.value.volumes // [])[] | select(.read_only != true) | select(. as $v | (($rw[$s.key] // []) | index($v.target)) | not) | $s.key + ":" + .target')"
 
 # Identity: an explicit numeric uid per service.
