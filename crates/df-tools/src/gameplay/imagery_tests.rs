@@ -1148,6 +1148,436 @@ async fn an_oversized_cached_image_is_replaced_before_its_key_is_served() {
     assert_eq!(get(&mut router, key.as_str(), None).await.0, StatusCode::OK);
 }
 
+/// A scene refresh that differs from the others only by a development direction, so each index
+/// is a different picture with its own key.
+fn directed_refresh(index: usize) -> ImageRequest {
+    let mut request = refresh(Mood::Calm);
+    request.prompt = request
+        .prompt
+        .with_development_direction(&format!("direction {index}"));
+    request
+}
+
+#[tokio::test]
+async fn a_hub_cache_hit_after_eviction_serves_the_image_again() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, _dir) = imagery(&fake, "hub-hit-after-eviction");
+    let first = service
+        .generate("place:salt-quay", directed_refresh(0))
+        .await
+        .unwrap();
+    for index in 1..=MAXIMUM_REGISTERED {
+        service
+            .generate("place:salt-quay", directed_refresh(index))
+            .await
+            .unwrap();
+    }
+    assert!(
+        !locked(&service.inner.registry)
+            .by_key
+            .contains_key(first.as_str()),
+        "the bounded registry has forgotten the first key"
+    );
+    let calls = fake.calls();
+    assert_eq!(
+        service
+            .generate("place:salt-quay", directed_refresh(0))
+            .await
+            .unwrap(),
+        first
+    );
+    assert_eq!(
+        fake.calls(),
+        calls,
+        "the hub answers from its cache without a provider call"
+    );
+    let mut router = super::router(service.clone());
+    assert_eq!(
+        get(&mut router, first.as_str(), None).await.0,
+        StatusCode::OK,
+        "a validated cached image is served again after a hub cache hit"
+    );
+    assert!(locked(&service.inner.registry).by_key.len() <= MAXIMUM_REGISTERED);
+}
+
+#[tokio::test]
+async fn the_public_imagery_route_does_not_serve_a_draft_from_the_shared_cache() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (author, dir) = imagery(&fake, "draft-privacy");
+    let draft = author
+        .generate("place:salt-quay", refresh(Mood::Grim))
+        .await
+        .unwrap();
+    // Another instance shares the cache directory but never registered the draft.
+    let public = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        None,
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    let mut router = super::router(public);
+    assert_eq!(
+        get(&mut router, draft.as_str(), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_plate_generated_through_the_hub_yields_its_heads_to_locate_heads() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply as HeadReply};
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
+    let (service, _dir) = imagery(&fake, "locate-through-hub");
+    let Mode::On { engine, .. } = &service.inner.mode else {
+        panic!("enabled fixture")
+    };
+    let endpoint = FakeEndpoint::start(vec![HeadReply::Status(
+        200,
+        serde_json::json!({
+            "choices": [{"message": {"content": "{\"heads\":[{\"id\":\"speaker\",\"left\":0.1,\"top\":0.1,\"right\":0.2,\"bottom\":0.3}]}"}}]
+        }),
+    )]);
+    let locator = NativeHeadLocator::new(
+        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
+        "fake-private",
+        HEAD_LOCATE_DEADLINE,
+    )
+    .unwrap();
+    assert!(engine.locator.set(locator).is_ok());
+    let key = service
+        .generate("place:salt-quay", directed_refresh(0))
+        .await
+        .unwrap();
+    let heads = service
+        .locate_heads(&key, None, &[("speaker", "the adult speaker")])
+        .await
+        .unwrap();
+    assert_eq!(heads.len(), 1);
+}
+
+#[tokio::test]
+async fn a_held_key_is_served_after_more_than_512_newer_registrations() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, _dir) = imagery(&fake, "held-after-512");
+    let held = service
+        .generate("place:salt-quay", directed_refresh(0))
+        .await
+        .unwrap();
+    for index in 1..=MAXIMUM_REGISTERED {
+        service
+            .generate("place:salt-quay", directed_refresh(index))
+            .await
+            .unwrap();
+    }
+    assert!(
+        !locked(&service.inner.registry)
+            .by_key
+            .contains_key(held.as_str()),
+        "the bounded registry has forgotten the held key"
+    );
+    let mut router = super::router(service.clone());
+    assert_eq!(
+        get(&mut router, held.as_str(), None).await.0,
+        StatusCode::OK,
+        "a picture this instance issued stays servable while it is held"
+    );
+}
+
+#[tokio::test]
+async fn a_held_key_from_an_earlier_run_is_served_from_the_manifest_index() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "held-from-earlier-run");
+    let held = service
+        .generate("place:salt-quay", directed_refresh(0))
+        .await
+        .unwrap();
+    for index in 1..=MAXIMUM_REGISTERED {
+        service
+            .generate("place:salt-quay", directed_refresh(index))
+            .await
+            .unwrap();
+    }
+
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&dir),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    assert!(
+        !locked(&restarted.inner.registry)
+            .by_key
+            .contains_key(held.as_str()),
+        "the newest 512 records do not include the held key"
+    );
+    let mut router = super::router(restarted);
+    assert_eq!(
+        get(&mut router, held.as_str(), None).await.0,
+        StatusCode::OK,
+        "the manifest's issued keys include the held key after a restart"
+    );
+}
+
+#[tokio::test]
+async fn an_instances_draft_stays_404_when_it_has_its_own_manifest() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (author, dir) = imagery(&fake, "draft-author");
+    let draft = author
+        .generate("place:salt-quay", refresh(Mood::Grim))
+        .await
+        .unwrap();
+    let own = directory("draft-public-own-manifest");
+    let public = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&own),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    public
+        .generate("place:salt-quay", directed_refresh(7))
+        .await
+        .unwrap();
+    let mut router = super::router(public);
+    assert_eq!(
+        get(&mut router, draft.as_str(), None).await.0,
+        StatusCode::NOT_FOUND,
+        "a draft another instance cached is not issued by this instance"
+    );
+}
+
+#[test]
+fn the_issued_keys_lookup_never_reads_the_cache_for_a_key_it_does_not_hold() {
+    let dir = directory("issued-lookup");
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let held = ImageKey::parse(&format!("{:064x}", 1)).unwrap();
+    let draft = ImageKey::parse(&format!("{:064x}", 2)).unwrap();
+    std::fs::write(
+        cache.join(format!("{}.jpg", draft.as_str())),
+        fake_jpeg(16, 16, 0),
+    )
+    .unwrap();
+    let mut issued = IssuedKeys::default();
+    issued.remember(&held, ImageFormat::Jpeg);
+    assert_eq!(
+        issued.format_of(&draft),
+        None,
+        "a file in the shared cache is not an issued key"
+    );
+    assert_eq!(issued.format_of(&held), Some(ImageFormat::Jpeg));
+}
+
+#[test]
+fn the_issued_keys_index_forgets_the_oldest_key_beyond_its_bound() {
+    let mut issued = IssuedKeys::default();
+    let keys: Vec<ImageKey> = (0..=MAXIMUM_ISSUED_KEYS)
+        .map(|index| ImageKey::parse(&format!("{index:064x}")).unwrap())
+        .collect();
+    for key in &keys {
+        issued.remember(key, ImageFormat::Jpeg);
+    }
+    assert_eq!(issued.formats.len(), MAXIMUM_ISSUED_KEYS);
+    assert_eq!(issued.format_of(&keys[0]), None);
+    assert_eq!(
+        issued.format_of(keys.last().unwrap()),
+        Some(ImageFormat::Jpeg)
+    );
+}
+
+#[tokio::test]
+async fn a_peeked_key_stays_servable_after_512_newer_registrations() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (author, dir) = imagery(&fake, "peeked-author");
+    let peeked = author
+        .generate("place:salt-quay", directed_refresh(0))
+        .await
+        .unwrap();
+    // A second instance over the same cache peeks the picture; it never rendered it.
+    let peeker = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        None,
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    assert_eq!(
+        peeker.peek(&directed_refresh(0)).await,
+        Some(peeked.clone())
+    );
+    for index in 1..=MAXIMUM_REGISTERED {
+        peeker
+            .generate("place:salt-quay", directed_refresh(index))
+            .await
+            .unwrap();
+    }
+    assert!(
+        !locked(&peeker.inner.registry)
+            .by_key
+            .contains_key(peeked.as_str()),
+        "the bounded registry has forgotten the peeked key"
+    );
+    let mut router = super::router(peeker);
+    assert_eq!(
+        get(&mut router, peeked.as_str(), None).await.0,
+        StatusCode::OK,
+        "a peeked picture is served while it is held"
+    );
+}
+
+#[tokio::test]
+async fn another_instances_draft_stays_unreachable_after_peeks_of_other_requests() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (author, dir) = imagery(&fake, "draft-unreachable");
+    let draft = author
+        .generate("place:salt-quay", refresh(Mood::Grim))
+        .await
+        .unwrap();
+    let own = directory("draft-unreachable-public");
+    let public = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&own),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    assert_eq!(
+        public.peek(&directed_refresh(0)).await,
+        None,
+        "a request this instance never rendered finds nothing in the cache"
+    );
+    for index in 1..=MAXIMUM_REGISTERED {
+        public
+            .generate("place:salt-quay", directed_refresh(index))
+            .await
+            .unwrap();
+    }
+    let mut router = super::router(public);
+    assert_eq!(
+        get(&mut router, draft.as_str(), None).await.0,
+        StatusCode::NOT_FOUND,
+        "another instance's draft stays unreachable"
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_larger_than_the_tail_recovers_only_the_newest_records() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "manifest-tail");
+    let oldest = service.render(refresh(Mood::Menacing)).await.unwrap();
+    let newest = service.render(refresh(Mood::Calm)).await.unwrap();
+    let manifest = dir.join("imagery.jsonl");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let records: Vec<&str> = text.lines().collect();
+    assert_eq!(records.len(), 2);
+    // Nine mebibytes of lines that are not records sit between the oldest and the newest record.
+    let filler = format!("{}\n", "a".repeat(1023)).repeat(9 * 1024);
+    std::fs::write(
+        &manifest,
+        format!("{}\n{filler}{}\n", records[0], records[1]),
+    )
+    .unwrap();
+
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&dir),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    let registry = locked(&restarted.inner.registry);
+    assert!(registry.by_key.contains_key(newest.as_str()));
+    assert!(
+        !registry.by_key.contains_key(oldest.as_str()),
+        "a record before the tail the restart reads is not read"
+    );
+}
+
+#[tokio::test]
+async fn only_the_newest_512_manifest_records_register_after_a_restart() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "manifest-newest-512");
+    let mut keys = Vec::new();
+    for index in 0..=MAXIMUM_REGISTERED {
+        keys.push(service.render(directed_refresh(index)).await.unwrap());
+    }
+
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&dir),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    let registry = locked(&restarted.inner.registry);
+    assert_eq!(registry.by_key.len(), MAXIMUM_REGISTERED);
+    assert!(!registry.by_key.contains_key(keys[0].as_str()));
+    assert!(registry.by_key.contains_key(keys[1].as_str()));
+    assert!(
+        registry
+            .by_key
+            .contains_key(keys[MAXIMUM_REGISTERED].as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_record_appended_after_a_torn_line_survives_a_restart() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "torn-manifest");
+    let first = service.render(refresh(Mood::Menacing)).await.unwrap();
+    // A crash mid-write leaves a fragment with no newline at the end of the manifest.
+    let mut manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("imagery.jsonl"))
+        .unwrap();
+    manifest.write_all(b"{\"key\":\"abc").unwrap();
+    let second = service.render(refresh(Mood::Grim)).await.unwrap();
+
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&dir),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    let registry = locked(&restarted.inner.registry);
+    assert!(registry.by_key.contains_key(first.as_str()));
+    assert!(registry.by_key.contains_key(second.as_str()));
+}
+
+#[tokio::test]
+async fn a_manifest_past_four_mebibytes_still_registers_its_records_after_a_restart() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "oversized-manifest");
+    let first_key = service.render(refresh(Mood::Menacing)).await.unwrap();
+    let second_key = service.render(refresh(Mood::Calm)).await.unwrap();
+    let manifest = dir.join("imagery.jsonl");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let records: Vec<&str> = text.lines().collect();
+    assert_eq!(records.len(), 2);
+    // Five mebibytes of lines that are not records, then one line longer than any record, then
+    // the newest record: recovery reads past both bad lines.
+    let filler = format!("{}\n", "a".repeat(1023)).repeat(5 * 1024);
+    let overlong = format!("{}\n", "b".repeat(1024 * 1024));
+    std::fs::write(
+        &manifest,
+        format!("{}\n{filler}{overlong}{}\n", records[0], records[1]),
+    )
+    .unwrap();
+
+    let restarted = imagery_in(
+        &fake,
+        &dir.join("cache"),
+        Some(&dir),
+        Duration::from_secs(5),
+        ContentRating::Mature,
+    );
+    let registry = locked(&restarted.inner.registry);
+    assert!(registry.by_key.contains_key(first_key.as_str()));
+    assert!(registry.by_key.contains_key(second_key.as_str()));
+}
+
 #[tokio::test]
 async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);

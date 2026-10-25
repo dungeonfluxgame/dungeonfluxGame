@@ -146,7 +146,15 @@ pub(in crate::gameplay) const BACKGROUND_IN_FLIGHT: usize = 6;
 const HEADS_IN_FLIGHT: usize = 2;
 const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(1);
 const MAXIMUM_RATE_LIMIT_RETRIES: u32 = 3;
-const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// The longest manifest line that is read whole. A longer line is skipped without being buffered,
+/// and the records on either side of it still load.
+const MAXIMUM_MANIFEST_RECORD_BYTES: u64 = 256 * 1024;
+/// The newest bytes of the manifest a restart reads. The newest `MAXIMUM_REGISTERED` records fit
+/// far inside this, so older lines are never needed.
+const MAXIMUM_MANIFEST_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+/// Most issued keys remembered, so a held picture stays servable after the registry forgets it.
+/// The oldest issued key is forgotten first; each costs one digest and a format.
+const MAXIMUM_ISSUED_KEYS: usize = 65_536;
 /// How long one head-location call may take.
 const HEAD_LOCATE_DEADLINE: Duration = Duration::from_secs(25);
 const CACHE_CONTROL: &str = "private, max-age=86400, immutable";
@@ -521,6 +529,52 @@ impl Registry {
     }
 }
 
+/// The keys this instance issued, as SHA-256 digests with their formats. A held picture is served
+/// through this index after the registry forgets it. It is bounded, holds no paths, and is filled
+/// only from this instance's own manifest and the keys it hands out, never from the shared cache.
+#[derive(Default)]
+struct IssuedKeys {
+    formats: HashMap<[u8; 32], ImageFormat>,
+    /// Insertion order, so the oldest issued key is forgotten first.
+    order: VecDeque<[u8; 32]>,
+}
+
+impl IssuedKeys {
+    fn remember(&mut self, key: &ImageKey, format: ImageFormat) {
+        let Some(digest) = key_digest(key.as_str()) else {
+            return;
+        };
+        if self.formats.insert(digest, format).is_none() {
+            self.order.push_back(digest);
+            if self.order.len() > MAXIMUM_ISSUED_KEYS
+                && let Some(oldest) = self.order.pop_front()
+            {
+                self.formats.remove(&oldest);
+            }
+        }
+    }
+
+    /// The format of a key this instance issued. Only memory is read; the cache never is.
+    fn format_of(&self, key: &ImageKey) -> Option<ImageFormat> {
+        let digest = key_digest(key.as_str())?;
+        self.formats.get(&digest).copied()
+    }
+}
+
+/// The 32 bytes of a lowercase hexadecimal key.
+fn key_digest(key: &str) -> Option<[u8; 32]> {
+    let bytes = key.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let mut digest = [0_u8; 32];
+    for (slot, pair) in digest.iter_mut().zip(pairs) {
+        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(digest)
+}
+
 /// Image calls are recorded in the hub's spend ledger (`Unit::ImageCall`); nothing caps them.
 const IMAGE_UNIT: super::resources::Unit = super::resources::Unit::ImageCall;
 
@@ -552,6 +606,8 @@ struct Engine {
     deadline: Duration,
     cache_dir: PathBuf,
     manifest: Option<PathBuf>,
+    /// Keys this instance issued; see `IssuedKeys`.
+    issued: Mutex<IssuedKeys>,
     ledger: Arc<super::resources::SpendLedger>,
     calls: AtomicU32,
     cache_hits: AtomicU32,
@@ -826,11 +882,10 @@ impl Imagery {
         let Some(locator) = engine.locator.get() else {
             return Err(ImageFailure::Off);
         };
-        let registered = locked(&self.inner.registry)
-            .by_key
-            .get(key.as_str())
-            .copied();
-        let format = registered.ok_or(ImageFailure::InvalidRequest)?.format;
+        let format = self
+            .registered(key.as_str())
+            .ok_or(ImageFailure::InvalidRequest)?
+            .format;
         let (bytes, stored) = engine
             .read_cached(key.as_str(), format)
             .await
@@ -1049,6 +1104,7 @@ impl Imagery {
             deadline: configuration.deadline,
             cache_dir: configuration.cache_dir,
             manifest,
+            issued: Mutex::new(IssuedKeys::default()),
             ledger: Arc::clone(hub.ledger()),
             calls: AtomicU32::new(0),
             cache_hits: AtomicU32::new(0),
@@ -1158,7 +1214,10 @@ impl Imagery {
         &self,
         request: ImageRequest,
     ) -> Result<ImageKey, ImageFailure> {
-        self.render(request).await
+        let format = request.output.format();
+        let key = self.render(request).await?;
+        self.issue(&key, format);
+        Ok(key)
     }
 
     /// The one way to get an image made: describes the request as a typed resource, runs it
@@ -1186,6 +1245,7 @@ impl Imagery {
         use super::resources::{DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec};
         use df_render::art_contract::Neutral;
         let staging_order = request.prompt.staging_order().to_vec();
+        let format = request.output.format();
         let key = self.key_for(&request);
         let key = key.as_str();
         let result = match request.kind {
@@ -1231,6 +1291,7 @@ impl Imagery {
             }
         };
         if let Ok(key) = &result {
+            self.issue(key, format);
             self.keep_plate_staging(key, staging_order).await;
         }
         result
@@ -1278,6 +1339,7 @@ impl Imagery {
                 ResourceFailure::TimedOut => ImageFailure::DeadlineExceeded,
                 _ => ImageFailure::from_label(failure.label()).unwrap_or(ImageFailure::Interrupted),
             })?;
+        self.issue(&key, reference.format);
         // A hub cache hit must also re-register the key in this process's serving registry.
         locked(&self.inner.registry).register(
             &key,
@@ -1297,6 +1359,7 @@ impl Imagery {
         use super::resources::{Generated, Generation, ResourceFailure};
         let started = std::time::Instant::now();
         let kind = request.kind;
+        let format = request.output.format();
         let key = self.key_for(&request);
         let rendered = Arc::new(AtomicBool::new(false));
         let dispatched = Arc::clone(&rendered);
@@ -1318,7 +1381,12 @@ impl Imagery {
             }
         });
         let result = match self.hub().render(&spec, generation).await {
-            Ok(_) => Ok(key.clone()),
+            Ok(_) => {
+                // A hub cache hit makes no provider call, so it registers the key here; the
+                // registry forgets keys beyond its bound, so this is how a key is served again.
+                locked(&self.inner.registry).register(&key, Registered { format });
+                Ok(key.clone())
+            }
             Err(ResourceFailure::TimedOut) => Err(ImageFailure::DeadlineExceeded),
             Err(failure) => Err(locked(&original)
                 .take()
@@ -1385,10 +1453,34 @@ impl Imagery {
         result
     }
 
+    /// The format a key is served in: the registry's, or, once the registry has forgotten a key
+    /// this instance issued, the issued index's, which registers it again. A key this instance
+    /// never issued is `None`, whatever the shared cache holds.
+    fn registered(&self, key: &str) -> Option<Registered> {
+        if let Some(registered) = locked(&self.inner.registry).by_key.get(key).copied() {
+            return Some(registered);
+        }
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return None;
+        };
+        let key = ImageKey::parse(key)?;
+        let format = locked(&engine.issued).format_of(&key)?;
+        locked(&self.inner.registry).register(&key, Registered { format });
+        Some(Registered { format })
+    }
+
+    /// Remembers that this instance handed out `key`, so the registry may forget it and it stays
+    /// servable. Covers provider renders, cache hits, peeks and reviewed photographs; only the
+    /// provider renders are in the manifest, so the rest are not held after a restart.
+    fn issue(&self, key: &ImageKey, format: ImageFormat) {
+        if let Mode::On { engine, .. } = &self.inner.mode {
+            locked(&engine.issued).remember(key, format);
+        }
+    }
+
     /// The bytes of a registered key, read from the cache.
     pub(super) async fn image(&self, key: &str) -> Lookup {
-        let registered = locked(&self.inner.registry).by_key.get(key).copied();
-        let Some(registered) = registered else {
+        let Some(registered) = self.registered(key) else {
             return Lookup::Unregistered;
         };
         let Mode::On { engine, .. } = &self.inner.mode else {
@@ -1410,6 +1502,7 @@ impl Imagery {
         let format = request.output.format();
         engine.cache_has(&key, format).await?;
         locked(&self.inner.registry).register(&key, Registered { format });
+        self.issue(&key, format);
         Some(key)
     }
 }
@@ -1910,7 +2003,9 @@ impl Engine {
     }
 
     /// Appends the provenance of one image to the run-local manifest. A failed append is
-    /// reported to diagnostics and never fails the render.
+    /// reported to diagnostics and never fails the render. Only provider-rendered keys reach the
+    /// manifest: a cache hit, a peeked key and a reviewed photograph are not recorded, so after a
+    /// restart they are served only if they are requested again.
     async fn record(
         &self,
         key: &ImageKey,
@@ -1956,17 +2051,82 @@ impl Engine {
         }
     }
 
-    /// Re-registers the keys an earlier run of this adventure generated and cached, so a display
-    /// that reconnects after a restart can still load the art it was shown.
+    /// Recovers what an earlier run of this adventure generated, from the newest manifest bytes.
+    /// Every recorded key joins the issued index, so a held picture stays servable; the newest
+    /// `MAXIMUM_REGISTERED` cached keys are also registered, so a display that reconnects after a
+    /// restart can load them at once.
     fn register_from_manifest(&self, registry: &mut Registry) {
         let Some(path) = &self.manifest else {
             return;
         };
-        let Some(text) = read_bounded_text(path) else {
+        let Some(reader) = manifest_tail(path) else {
             return;
         };
-        for line in text.lines() {
-            let Ok(entry) = serde_json::from_str::<ManifestLine>(line) else {
+        let newest = {
+            let mut issued = locked(&self.issued);
+            newest_manifest_keys(
+                manifest_records(reader).inspect(|(key, format)| issued.remember(key, *format)),
+            )
+        };
+        for (key, format) in newest {
+            let present = Self::stored_formats(format).iter().any(|found| {
+                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, *found)))
+                    .is_ok_and(|metadata| metadata.is_file())
+            });
+            if present {
+                registry.register(&key, Registered { format });
+            }
+        }
+    }
+}
+
+/// The newest `MAXIMUM_MANIFEST_TAIL_BYTES` of the manifest, starting at a line. `None` unless the
+/// path is a regular manifest file; the open handle is checked, so the bytes read are those of the
+/// file that was checked.
+fn manifest_tail(path: &Path) -> Option<std::io::BufReader<std::fs::File>> {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let file = open_manifest(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let mut reader = std::io::BufReader::new(file);
+    if metadata.len() > MAXIMUM_MANIFEST_TAIL_BYTES {
+        // The line the tail starts in is partial, so it is dropped with the bytes before it.
+        let start = metadata.len() - MAXIMUM_MANIFEST_TAIL_BYTES;
+        reader.seek(SeekFrom::Start(start)).ok()?;
+        reader.skip_until(b'\n').ok()?;
+    }
+    Some(reader)
+}
+
+/// Each record's key and format, oldest first. Lines are read one at a time, so a torn, foreign or
+/// overlong line costs only that record.
+fn manifest_records(
+    mut reader: impl std::io::BufRead,
+) -> impl Iterator<Item = (ImageKey, ImageFormat)> {
+    use std::io::{BufRead, Read};
+    let mut line = Vec::new();
+    std::iter::from_fn(move || {
+        loop {
+            line.clear();
+            let read = reader
+                .by_ref()
+                .take(MAXIMUM_MANIFEST_RECORD_BYTES)
+                .read_until(b'\n', &mut line)
+                .ok()?;
+            if read == 0 {
+                return None;
+            }
+            let overlong = !line.ends_with(b"\n")
+                && u64::try_from(line.len())
+                    .is_ok_and(|length| length == MAXIMUM_MANIFEST_RECORD_BYTES);
+            if overlong {
+                // The rest of this overlong line is skipped without being buffered.
+                reader.skip_until(b'\n').ok()?;
+                continue;
+            }
+            let Ok(entry) = serde_json::from_slice::<ManifestLine>(&line) else {
                 continue;
             };
             let Some(key) = ImageKey::parse(&entry.key) else {
@@ -1977,15 +2137,9 @@ impl Engine {
             } else {
                 ImageFormat::Jpeg
             };
-            let present = Self::stored_formats(format).iter().any(|found| {
-                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, *found)))
-                    .is_ok_and(|metadata| metadata.is_file())
-            });
-            if present {
-                registry.register(&key, Registered { format });
-            }
+            return Some((key, format));
         }
-    }
+    })
 }
 
 /// ART-01: the defect a finished image shows, or `None` when it passes. A judge that cannot answer
@@ -2444,19 +2598,77 @@ fn append_manifest(path: &Path, line: &ManifestLine) -> io::Result<()> {
     use std::io::Write;
     let mut text = serde_json::to_string(line).map_err(io::Error::other)?;
     text.push('\n');
-    std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
-        .open(path)?
-        .write_all(text.as_bytes())
+        .open(path)?;
+    // A record torn by a crash leaves no newline; start a new line so this record stands alone.
+    if ends_mid_line(&mut file) {
+        text.insert(0, '\n');
+    }
+    file.write_all(text.as_bytes())
 }
 
-fn read_bounded_text(path: &Path) -> Option<String> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAXIMUM_MANIFEST_BYTES {
-        return None;
+/// Whether a non-empty manifest ends in a byte other than a newline. A failed probe answers true:
+/// a blank line costs recovery nothing, and the record is still written.
+fn ends_mid_line(file: &mut std::fs::File) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(length) = file.metadata().map(|metadata| metadata.len()) else {
+        return true;
+    };
+    if length == 0 {
+        return false;
     }
-    std::fs::read_to_string(path).ok()
+    let mut last = [0_u8];
+    let probed = file
+        .seek(SeekFrom::End(-1))
+        .and_then(|_| file.read_exact(&mut last));
+    probed.is_err() || last != *b"\n"
+}
+
+/// Opens the manifest for reading. Where the flag values are known, the open itself refuses a
+/// symlink (`O_NOFOLLOW`) and cannot block on a FIFO (`O_NONBLOCK`); elsewhere it opens plainly,
+/// so a link or pipe there is caught only by the caller's handle check. The values are those of
+/// the libc crate 0.2.189, which this crate does not depend on directly.
+fn open_manifest(path: &Path) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+        const FLAGS: i32 = 0x20000 | 0x800;
+        #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+        const FLAGS: i32 = 0x8000 | 0x800;
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+        const FLAGS: i32 = 0x100 | 0x4;
+        #[cfg(not(any(
+            all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")),
+            all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")),
+            target_os = "macos",
+            target_os = "freebsd"
+        )))]
+        const FLAGS: i32 = 0;
+        options.custom_flags(FLAGS);
+    }
+    options.open(path)
+}
+
+/// The newest distinct keys of a record stream, oldest first, at most `MAXIMUM_REGISTERED`. A key
+/// seen again moves to the newest end.
+fn newest_manifest_keys(
+    records: impl Iterator<Item = (ImageKey, ImageFormat)>,
+) -> VecDeque<(ImageKey, ImageFormat)> {
+    let mut recent = VecDeque::new();
+    for (key, format) in records {
+        recent.retain(|(known, _)| known != &key);
+        recent.push_back((key, format));
+        if recent.len() > MAXIMUM_REGISTERED {
+            recent.pop_front();
+        }
+    }
+    recent
 }
 
 /// `GET /gameplay/imagery/{key}`.
