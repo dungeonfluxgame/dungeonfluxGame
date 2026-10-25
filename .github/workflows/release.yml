@@ -13,12 +13,17 @@
 #
 # BEFORE THE FIRST RUN (owner/CI follow-up, recorded in request.md): crates/df-runner needs a binary (the runner image target fails without
 # one); deploy/images/images.lock must have real digests (no TODO-CI) for
-# the base images and CADDY_RATELIMIT_REF; every third-party action below must be pinned to a full commit SHA (the TODO-CI markers);
-# DF_REGISTRY_PREFIX is the repository owner's registry namespace. The signing key is the workflow's OIDC identity: no key is stored.
+# the base images and CADDY_RATELIMIT_REF; DF_REGISTRY_PREFIX is the repository owner's registry namespace. The signing key is the
+# workflow's OIDC identity: no key is stored.
 name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      previous_release_digest:
+        description: "Digest (sha256:...) of the previous signed release image, or 'none' for the very first release. Its revoked-images list must be a subset of this release's."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -39,14 +44,44 @@ jobs:
     environment: release
     permissions:
       contents: read
+      actions: read
       packages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4 # TODO-CI: pin to a commit SHA
+      - name: Verify release environment protection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! environment=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release" 2>/dev/null); then
+            echo "Missing or unreadable GitHub environment: release"
+            exit 1
+          fi
+          missing=0
+          if ! jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and ((.reviewers // []) | length > 0))' <<<"$environment" >/dev/null; then
+            echo "Missing required reviewer protection rule: release"
+            missing=1
+          fi
+          if jq -e '.deployment_branch_policy.protected_branches == true' <<<"$environment" >/dev/null; then
+            :
+          elif jq -e '.deployment_branch_policy.custom_branch_policies == true' <<<"$environment" >/dev/null; then
+            if ! branch_policies=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release/deployment-branch-policies" 2>/dev/null); then
+              echo "Missing main-only deployment restriction: release"
+              missing=1
+            elif ! jq -e '.branch_policies | length == 1 and .[0].name == "main"' <<<"$branch_policies" >/dev/null; then
+              echo "Missing main-only deployment restriction: release"
+              missing=1
+            fi
+          else
+            echo "Missing deployment restriction to protected branches or main: release"
+            missing=1
+          fi
+          exit "$missing"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3 # TODO-CI: pin to a commit SHA
-      - uses: sigstore/cosign-installer@v3 # TODO-CI: pin to a commit SHA
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
       - name: Log in to the registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
       - name: Build, push and sign the images
@@ -59,10 +94,24 @@ jobs:
           edge=$(sed -n "s/^EDGE_IMAGE=//p" "$RUNNER_TEMP/built.txt" | tail -n 1)
           test -n "$edge"
           deploy/scripts/check-edge-image.sh "$edge"
+      - name: Fetch the previous release's revocation list
+        env:
+          PREVIOUS: ${{ inputs.previous_release_digest }}
+        run: |
+          if [ "$PREVIOUS" = none ]; then : > "$RUNNER_TEMP/previous-revoked"; echo first > "$RUNNER_TEMP/first-release"; exit 0; fi
+          case "$PREVIOUS" in sha256:[0-9a-f][0-9a-f]*) ;; *) echo "bad digest"; exit 1 ;; esac
+          ref="ghcr.io/${{ github.repository_owner }}/dungeonflux-release@$PREVIOUS"
+          cosign verify --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
+          cid=$(docker create "$ref" /noop)
+          docker cp "$cid:/release/revoked-images" "$RUNNER_TEMP/previous-revoked"
+          docker rm "$cid" >/dev/null
       - name: Build, push and sign the release image
         env:
           DF_REGISTRY_PREFIX: ghcr.io/${{ github.repository_owner }}
-        run: deploy/scripts/build-release.sh release --built "$RUNNER_TEMP/built.txt" --push --sign | tee "$RUNNER_TEMP/release.txt"
+        run: |
+          if [ -e "$RUNNER_TEMP/first-release" ]; then rev=(--first-release); else rev=(--previous-revoked "$RUNNER_TEMP/previous-revoked"); fi
+          deploy/scripts/build-release.sh release --built "$RUNNER_TEMP/built.txt" "${rev[@]}" --push --sign | tee "$RUNNER_TEMP/release.txt"
       - name: Show the digest
         run: |
           grep "^RELEASE_DIGEST=" "$RUNNER_TEMP/release.txt"
