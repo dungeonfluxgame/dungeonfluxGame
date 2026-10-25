@@ -148,11 +148,15 @@ fn production_requires_verified_tls_and_provider_selections_must_agree() {
 }
 
 #[test]
-fn live_payment_keys_and_configured_but_unimplemented_payments_fail_closed() {
+fn live_payment_keys_fail_closed_and_paired_test_keys_are_accepted() {
     let mut values = environment();
     values.insert(
         "DF_STRIPE_SECRET_KEY".to_owned(),
         "sk_live_fixture_only".to_owned(),
+    );
+    values.insert(
+        "DF_STRIPE_WEBHOOK_SECRET".to_owned(),
+        "whsec_fixture_only".to_owned(),
     );
     assert!(matches!(
         parse(&values),
@@ -162,10 +166,24 @@ fn live_payment_keys_and_configured_but_unimplemented_payments_fail_closed() {
         "DF_STRIPE_SECRET_KEY".to_owned(),
         "sk_test_fixture_only".to_owned(),
     );
-    assert!(matches!(
-        parse(&values),
-        Err(ConfigError::PaymentsNotConfigured)
-    ));
+    assert!(parse(&values).is_ok());
+}
+
+#[test]
+fn demo_accepts_test_checkout_settings_with_real_identity_and_mail_configuration() {
+    let mut values = environment();
+    for (key, value) in [
+        ("DF_PROFILE", "demo"),
+        ("DF_GAMEPLAY_PUBLIC_URL", "https://dungeonfluxdnd.com"),
+        ("DF_WORKOS_CLIENT_ID", "client_fixture"),
+        ("DF_WORKOS_API_KEY", "fixture_only"),
+        ("DF_RESEND_API_KEY", "fixture_only"),
+        ("DF_STRIPE_SECRET_KEY", "sk_test_fixture_only"),
+        ("DF_STRIPE_WEBHOOK_SECRET", "whsec_fixture_only"),
+    ] {
+        values.insert(key.to_owned(), value.to_owned());
+    }
+    assert!(parse(&values).unwrap().stripe.is_some());
 }
 
 #[test]

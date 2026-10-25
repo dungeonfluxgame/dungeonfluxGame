@@ -1,5 +1,6 @@
-//! Development payment fixture persists receipts and settles only through the finance service.
-//! Other profiles refuse until BMONEY exports the durable Stripe adapter.
+//! Hosted checkout persists receipts; only verified processor webhooks settle Stripe purchases.
+
+use std::sync::Arc;
 
 use df_account_app::wire::{CheckoutCreated, CheckoutStatus, CheckoutView, CreditOffers};
 use df_portal::app_api::ports::{CheckoutPort, PortError, PortResult};
@@ -7,17 +8,43 @@ use df_types::{AccountId, CheckoutId, OperationId};
 
 use crate::{config::Profile, database::Connection, finance::Finance};
 
+mod provider;
+mod settings;
+mod stripe;
+mod webhook;
+
+pub(crate) use settings::Settings;
+pub(crate) use webhook::router;
+
+#[derive(Clone)]
 pub(crate) struct Checkout {
-    development: Option<tokio::sync::Mutex<Connection>>,
+    development: Option<Arc<tokio::sync::Mutex<Connection>>>,
+    stripe: Option<Arc<stripe::Stripe>>,
     finance: Finance,
 }
 
 impl Checkout {
-    pub(crate) async fn new(
+    pub(crate) async fn configured(
         profile: Profile,
         connection: Connection,
         finance: Finance,
+        settings: Option<Settings>,
+        origin: &str,
     ) -> PortResult<Self> {
+        if let Some(settings) = settings {
+            let provider = provider::Provider::new(settings, origin).map_err(|error| {
+                error.audit();
+                PortError::Unavailable
+            })?;
+            return Ok(Self {
+                development: None,
+                stripe: Some(Arc::new(stripe::Stripe {
+                    connection: tokio::sync::Mutex::new(connection),
+                    provider,
+                })),
+                finance,
+            });
+        }
         let development = if profile == Profile::Development {
             connection.client.batch_execute(
                 "CREATE TABLE IF NOT EXISTS hosted.development_checkout (\
@@ -25,12 +52,13 @@ impl Checkout {
                  amount_cents integer NOT NULL CHECK(amount_cents > 0), paid boolean NOT NULL DEFAULT false, \
                  UNIQUE(account_id, operation_id))",
             ).await.map_err(|_| PortError::Unavailable)?;
-            Some(tokio::sync::Mutex::new(connection))
+            Some(Arc::new(tokio::sync::Mutex::new(connection)))
         } else {
             None
         };
         Ok(Self {
             development,
+            stripe: None,
             finance,
         })
     }
@@ -66,7 +94,10 @@ impl Checkout {
 impl CheckoutPort for Checkout {
     fn offers(&self) -> CreditOffers {
         CreditOffers {
-            is_test_mode: true,
+            is_test_mode: self
+                .stripe
+                .as_ref()
+                .is_none_or(|stripe| stripe.provider.settings.is_test_mode),
             preset_amounts_cents: vec![1_000, 2_000, 5_000],
             custom_minimum_cents: 500,
             custom_maximum_cents: 50_000,
@@ -79,10 +110,17 @@ impl CheckoutPort for Checkout {
         amount_cents: u32,
         operation: OperationId,
     ) -> PortResult<CheckoutCreated> {
+        let offers = self.offers();
+        if !(offers.custom_minimum_cents..=offers.custom_maximum_cents).contains(&amount_cents) {
+            return Err(PortError::Forbidden);
+        }
+        if let Some(stripe) = &self.stripe {
+            return stripe.create(account, amount_cents, operation).await;
+        }
         let Some(connection) = &self.development else {
             df_observe::record_audit_line(
                 "hosted.payments_not_configured",
-                "HOSTED payments_not_configured owner=BMONEY".to_owned(),
+                "HOSTED payments_not_configured".to_owned(),
             );
             return Err(PortError::Unavailable);
         };
@@ -111,6 +149,9 @@ impl CheckoutPort for Checkout {
     }
 
     async fn status(&self, account: AccountId, checkout: CheckoutId) -> PortResult<CheckoutView> {
+        if let Some(stripe) = &self.stripe {
+            return stripe.status(account, checkout).await;
+        }
         let connection = self
             .development
             .as_ref()
@@ -134,3 +175,6 @@ impl CheckoutPort for Checkout {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

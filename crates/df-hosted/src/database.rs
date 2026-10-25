@@ -221,4 +221,5 @@ const MIGRATIONS: &[(i32, &str)] = &[
         24,
         include_str!("../../df-persistence/migrations/0024_finance_boundary.sql"),
     ),
+    (100, include_str!("../migrations/0100_stripe_checkout.sql")),
 ];

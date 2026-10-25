@@ -37,6 +37,7 @@ pub struct Config {
     pub(crate) proxies: df_portal::TrustedProxies,
     pub(crate) trial_email_key: [u8; 32],
     pub(crate) campaign_keys: df_campaign::service::ServiceKeys,
+    pub(crate) stripe: Option<crate::checkout::Settings>,
 }
 
 /// Configuration failures identify names only; they never retain an environment value.
@@ -72,6 +73,7 @@ impl Config {
             _ => return Err(ConfigError::Invalid("DF_PROFILE")),
         };
         reject_development_ports(&get, profile)?;
+        let stripe = crate::checkout::Settings::parse(&get)?;
         let listen: SocketAddr = present(&get, "DF_PORTAL_LISTEN")
             .unwrap_or_else(|| "127.0.0.1:8099".to_owned())
             .parse()
@@ -197,6 +199,7 @@ impl Config {
             campaign_keys,
             trial_email_key,
             proxies,
+            stripe,
         })
     }
 }
@@ -224,13 +227,6 @@ fn reject_development_ports(
     get: &impl Fn(&str) -> Option<String>,
     profile: Profile,
 ) -> Result<(), ConfigError> {
-    if let Some(key) = present(get, "DF_STRIPE_SECRET_KEY") {
-        if !key.starts_with("sk_test_") {
-            return Err(ConfigError::Invalid("DF_STRIPE_SECRET_KEY"));
-        }
-        // TODO(BMONEY): wire the processor adapter when its durable checkout API is exported.
-        return Err(ConfigError::PaymentsNotConfigured);
-    }
     if let Some(fixture) = present(get, "DF_FIXTURE_BUILD") {
         let allowed = matches!(fixture.as_str(), "off" | "false" | "0")
             || (profile == Profile::Demo

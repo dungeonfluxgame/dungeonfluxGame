@@ -74,6 +74,11 @@ impl Hosted {
             return Err(OpenError::Bundle);
         }
         let (accounts, campaign_store) = open_stores(&config).await?;
+        let payment_mode = match (&config.stripe, config.profile) {
+            (Some(_), _) => "stripe",
+            (None, Profile::Development) => "development",
+            (None, _) => "unconfigured",
+        };
         let finance = crate::finance::Finance::new(
             Connection::open(&config.database, &config.transport)
                 .await
@@ -82,12 +87,14 @@ impl Hosted {
             config.trial_email_key,
         )
         .map_err(|_| OpenError::Port)?;
-        let checkout = crate::checkout::Checkout::new(
+        let checkout = crate::checkout::Checkout::configured(
             config.profile,
             Connection::open(&config.database, &config.transport)
                 .await
                 .map_err(|_| OpenError::Database)?,
             finance.clone(),
+            config.stripe,
+            &config.origin,
         )
         .await
         .map_err(|_| OpenError::Port)?;
@@ -119,12 +126,14 @@ impl Hosted {
             checkout,
             unavailable: crate::ports::Refusing,
         });
+        let payments = crate::checkout::router(ports.checkout.clone());
         let mut app = df_portal::app_api::compose(
             service.clone(),
             PortalOrigin::parse(&config.origin).map_err(|_| OpenError::Origin)?,
             Arc::clone(&ports),
             config.bundle,
-        );
+        )
+        .merge(payments);
         if config.profile == Profile::Development {
             app = app.merge(
                 Router::new()
@@ -145,7 +154,12 @@ impl Hosted {
             .layer(axum::Extension(df_portal::ClientAddressPolicy {
                 proxies: config.proxies,
             }));
-        df_observe::record_audit_line("hosted.composed", "HOSTED composed accounts=postgres finance=postgres campaigns=postgres payments=development_or_unconfigured".to_owned());
+        df_observe::record_audit_line(
+            "hosted.composed",
+            format!(
+                "HOSTED composed accounts=postgres finance=postgres campaigns=postgres payments={payment_mode}"
+            ),
+        );
         Ok(Self {
             app,
             listen: config.listen,

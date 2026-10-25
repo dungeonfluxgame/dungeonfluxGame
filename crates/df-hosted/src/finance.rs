@@ -54,6 +54,27 @@ impl Finance {
         cents: u32,
         reference: &str,
     ) -> PortResult<()> {
+        self.purchase_from(account, cents, "development", reference)
+            .await
+    }
+
+    pub(crate) async fn stripe_purchase(
+        &self,
+        account: AccountId,
+        cents: u32,
+        reference: &str,
+    ) -> PortResult<()> {
+        self.purchase_from(account, cents, "stripe", reference)
+            .await
+    }
+
+    async fn purchase_from(
+        &self,
+        account: AccountId,
+        cents: u32,
+        processor: &str,
+        reference: &str,
+    ) -> PortResult<()> {
         let record = self
             .inner
             .accounts
@@ -64,23 +85,29 @@ impl Finance {
         if !record.is_verified {
             return Err(PortError::Forbidden);
         }
-        self.inner
+        let posting = self
+            .inner
             .service
             .lock()
             .await
             .apply_purchase(df_finance::service::PurchaseCommand {
                 payer: PayerId::from_array(*account.as_bytes()),
-                processor: "development",
+                processor,
                 payment_ref: reference,
                 currency: CurrencyTag::USD,
                 amount_micro_dollars: u64::from(cents) * 10_000,
             })
             .await
             .map_err(finance_error)?;
+        let outcome = if posting.is_some() {
+            "purchase"
+        } else {
+            "purchase_replayed"
+        };
         df_observe::record_audit_line(
             "hosted.purchase_posted",
             format!(
-                "SPEND purchase account={} amount_micro_dollars={}",
+                "SPEND {outcome} account={} processor={processor} operation={reference} amount_micro_dollars={}",
                 df_commerce::finance_ids::hex(account.as_bytes()),
                 u64::from(cents) * 10_000
             ),
