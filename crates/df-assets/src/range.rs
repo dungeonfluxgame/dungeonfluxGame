@@ -120,7 +120,7 @@ pub struct AuthorizedRange<'a, A: AssetReadAuthority, R> {
     purpose: A::Purpose,
     captured: AuthorizedBinding<A::Metadata, A::Basis>,
     range: ByteRange,
-    position: u64,
+    position_bytes: u64,
     reader: R,
     state: StreamState,
 }
@@ -151,11 +151,11 @@ where
         let mut reader = byte_store
             .open_verified(captured.published.object, captured.published.bytes)
             .map_err(RangeError::Store)?;
-        let position = reader
+        let position_bytes = reader
             .seek(SeekFrom::Start(range.start))
             .map_err(StoreError::from)
             .map_err(RangeError::Store)?;
-        if position != range.start {
+        if position_bytes != range.start {
             return Err(RangeError::Store(StoreError::BackingIntegrity));
         }
         let stream = AuthorizedRange {
@@ -166,7 +166,7 @@ where
             purpose: purpose.clone(),
             captured,
             range,
-            position: range.start,
+            position_bytes: range.start,
             reader,
             state: StreamState::Active,
         };
@@ -215,7 +215,7 @@ impl<A: AssetReadAuthority, R: Read + Seek> AuthorizedRange<'_, A, R> {
             self.state = StreamState::Failed;
         }
         match &result {
-            Ok(ChunkOutcome::Bytes(length)) => span.finish("bytes", *length),
+            Ok(ChunkOutcome::Bytes(chunk_bytes)) => span.finish("bytes", *chunk_bytes),
             _ => span.finish_unmeasured(result_status(&result)),
         }
         result
@@ -230,14 +230,14 @@ impl<A: AssetReadAuthority, R: Read + Seek> AuthorizedRange<'_, A, R> {
         if output.is_empty() {
             return Err(RangeError::EmptyOutput);
         }
-        let cap = self.current_chunk_limit()?;
-        let remaining = self.range.end - self.position;
-        let length = usize::try_from(remaining.min(MAX_CHUNK_BYTES as u64))
+        let maximum_chunk_bytes = self.current_chunk_limit()?;
+        let remaining_bytes = self.range.end - self.position_bytes;
+        let chunk_bytes = usize::try_from(remaining_bytes.min(MAX_CHUNK_BYTES as u64))
             .map_err(|_| RangeError::InvalidRange)?
-            .min(cap)
+            .min(maximum_chunk_bytes)
             .min(output.len());
         let mut scratch = [0_u8; MAX_CHUNK_BYTES];
-        if let Err(error) = self.reader.read_exact(&mut scratch[..length]) {
+        if let Err(error) = self.reader.read_exact(&mut scratch[..chunk_bytes]) {
             return if error.kind() == std::io::ErrorKind::UnexpectedEof {
                 Err(RangeError::Incomplete)
             } else {
@@ -245,19 +245,19 @@ impl<A: AssetReadAuthority, R: Read + Seek> AuthorizedRange<'_, A, R> {
             };
         }
         // Private scratch keeps in-flight bytes hidden if access changed during I/O.
-        if length > self.current_chunk_limit()? {
+        if chunk_bytes > self.current_chunk_limit()? {
             return Err(RangeError::StaleBinding);
         }
-        let position = self
-            .position
-            .checked_add(length as u64)
+        let position_bytes = self
+            .position_bytes
+            .checked_add(chunk_bytes as u64)
             .ok_or(RangeError::InvalidRange)?;
-        output[..length].copy_from_slice(&scratch[..length]);
-        self.position = position;
-        if position == self.range.end {
+        output[..chunk_bytes].copy_from_slice(&scratch[..chunk_bytes]);
+        self.position_bytes = position_bytes;
+        if position_bytes == self.range.end {
             self.state = StreamState::Complete;
         }
-        Ok(ChunkOutcome::Bytes(length))
+        Ok(ChunkOutcome::Bytes(chunk_bytes))
     }
 }
 

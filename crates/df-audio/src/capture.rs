@@ -9,8 +9,8 @@ use df_types::{ClientBindingId, MemberId};
 
 use crate::capabilities::select_capture_codec;
 
-const MAX_CAPTURE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_CAPTURE_CHUNKS: u64 = 65_536;
+const MAXIMUM_CAPTURE_BYTES: usize = 32 * 1024 * 1024;
+const MAXIMUM_CAPTURE_CHUNKS: u64 = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureError {
@@ -222,11 +222,11 @@ impl CaptureSession {
             return Err(CaptureError::InvalidLease);
         }
         if limits.maximum_chunks == 0
-            || limits.maximum_chunks > MAX_CAPTURE_CHUNKS
+            || limits.maximum_chunks > MAXIMUM_CAPTURE_CHUNKS
             || limits.maximum_chunk_bytes == 0
             || limits.maximum_total_bytes == 0
             || limits.maximum_chunk_bytes > limits.maximum_total_bytes
-            || limits.maximum_total_bytes > MAX_CAPTURE_BYTES
+            || limits.maximum_total_bytes > MAXIMUM_CAPTURE_BYTES
         {
             return Err(CaptureError::InvalidLimits);
         }
@@ -323,8 +323,8 @@ impl CaptureSession {
         // The session retains the Vec allocation as well as its initialized bytes.
         // Bound the allocation before storing it so a tiny logical chunk cannot
         // smuggle an oversized backing buffer into the session.
-        let chunk_capacity = chunk.bytes.capacity();
-        if chunk_capacity > self.limits.maximum_chunk_bytes {
+        let chunk_capacity_bytes = chunk.bytes.capacity();
+        if chunk_capacity_bytes > self.limits.maximum_chunk_bytes {
             return Err(ChunkRefusal {
                 error: CaptureError::ChunkTooLarge,
                 chunk,
@@ -345,7 +345,7 @@ impl CaptureSession {
                 chunk,
             });
         }
-        let Some(retained_bytes) = self.retained_bytes.checked_add(chunk_capacity) else {
+        let Some(retained_bytes) = self.retained_bytes.checked_add(chunk_capacity_bytes) else {
             return Err(ChunkRefusal {
                 error: CaptureError::CounterOverflow,
                 chunk,
