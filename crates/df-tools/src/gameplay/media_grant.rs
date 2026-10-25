@@ -13,11 +13,12 @@ use std::{
 
 const MAXIMUM_LIFETIME_SECONDS: u64 = 15 * 60;
 const KEY_BYTES: usize = 32;
+const PRINCIPAL_ID_BYTES: usize = 16;
 const SIGNATURE_BYTES: usize = 32;
 const MAXIMUM_ASSET_KEY_BYTES: usize = 256;
 const MAXIMUM_TOKEN_BYTES: usize =
-    2 * (2 + KEY_BYTES + 8 + 2 + MAXIMUM_ASSET_KEY_BYTES + SIGNATURE_BYTES);
-const VERSION: u8 = 1;
+    2 * (2 + PRINCIPAL_ID_BYTES + 8 + 2 + MAXIMUM_ASSET_KEY_BYTES + SIGNATURE_BYTES);
+const VERSION: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -72,7 +73,7 @@ fn encode_token(
     let mut message = Vec::with_capacity(44 + key.len());
     message.push(VERSION);
     message.push(audience as u8);
-    message.extend_from_slice(principal);
+    message.extend_from_slice(&principal_id(secret, principal));
     message.extend_from_slice(&expires_at_unix_seconds.to_be_bytes());
     message.extend_from_slice(&(key.len() as u16).to_be_bytes());
     message.extend_from_slice(key.as_bytes());
@@ -90,7 +91,9 @@ pub(super) fn verify(
     let decoded = token.and_then(hex_decode);
     let secret = secret();
     let valid_signature = match (&decoded, secret) {
-        (Some(bytes), Some(secret)) if bytes.len() >= 2 + KEY_BYTES + 8 + 2 + SIGNATURE_BYTES => {
+        (Some(bytes), Some(secret))
+            if bytes.len() >= 2 + PRINCIPAL_ID_BYTES + 8 + 2 + SIGNATURE_BYTES =>
+        {
             let (message, supplied) = bytes.split_at(bytes.len() - SIGNATURE_BYTES);
             constant_time_equal(&hmac_sha256(secret, message), supplied)
         }
@@ -105,6 +108,7 @@ pub(super) fn verify(
     if !valid_signature {
         return None;
     }
+    let signing_secret = secret?;
     let message_length = bytes.len().checked_sub(SIGNATURE_BYTES)?;
     let message = &bytes[..message_length];
     let mut cursor = 0;
@@ -117,14 +121,19 @@ pub(super) fn verify(
         3 => Audience::Table,
         _ => return None,
     };
-    let principal: [u8; KEY_BYTES] = take(message, &mut cursor, KEY_BYTES)?.try_into().ok()?;
+    let encoded_principal_id = take(message, &mut cursor, PRINCIPAL_ID_BYTES)?;
     let expires_at = u64::from_be_bytes(take(message, &mut cursor, 8)?.try_into().ok()?);
     let key_length = u16::from_be_bytes(take(message, &mut cursor, 2)?.try_into().ok()?) as usize;
     let signed_key = take(message, &mut cursor, key_length)?;
     if cursor != message.len()
         || audience != expected_audience
         || signed_key != key.as_bytes()
-        || credential.is_some_and(|credential| !constant_time_equal(credential, &principal))
+        || credential.is_some_and(|credential| {
+            !constant_time_equal(
+                encoded_principal_id,
+                &principal_id(signing_secret, credential),
+            )
+        })
     {
         return None;
     }
@@ -501,6 +510,15 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     Sha256::digest(outer).into()
 }
 
+fn principal_id(secret: &[u8], principal: &[u8; KEY_BYTES]) -> [u8; PRINCIPAL_ID_BYTES] {
+    let mut message = b"df-media-principal-v2".to_vec();
+    message.extend_from_slice(principal);
+    let digest = hmac_sha256(secret, &message);
+    let mut identifier = [0; PRINCIPAL_ID_BYTES];
+    identifier.copy_from_slice(&digest[..PRINCIPAL_ID_BYTES]);
+    identifier
+}
+
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     let mut difference = (left.len() ^ right.len()) as u8;
     for index in 0..left.len().max(right.len()) {
@@ -568,6 +586,73 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_token_does_not_contain_its_principal_credential() {
+        let principal = [0x5a; KEY_BYTES];
+        let token = sign(
+            "asset-key",
+            Audience::Seat,
+            &principal,
+            unix_seconds().unwrap() + 60,
+        )
+        .unwrap();
+        let decoded = hex_decode(&token).unwrap();
+        assert!(
+            !decoded
+                .windows(principal.len())
+                .any(|bytes| bytes == principal)
+        );
+    }
+
+    #[test]
+    fn a_token_minted_for_one_principal_fails_for_another() {
+        let principal_a = [0x31; KEY_BYTES];
+        let principal_b = [0x32; KEY_BYTES];
+        let token = sign(
+            "asset-key",
+            Audience::Seat,
+            &principal_a,
+            unix_seconds().unwrap() + 60,
+        )
+        .unwrap();
+        assert!(
+            verify(
+                Some(&token),
+                "asset-key",
+                Audience::Seat,
+                Some(&principal_a)
+            )
+            .is_some()
+        );
+        assert!(
+            verify(
+                Some(&token),
+                "asset-key",
+                Audience::Seat,
+                Some(&principal_b)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_validly_signed_old_version_token_is_refused() {
+        let principal = [0x43; KEY_BYTES];
+        let expiry = unix_seconds().unwrap() + 60;
+        let key = "asset-key";
+        let mut message = Vec::with_capacity(44 + key.len());
+        message.push(1);
+        message.push(Audience::Seat as u8);
+        message.extend_from_slice(&principal);
+        message.extend_from_slice(&expiry.to_be_bytes());
+        message.extend_from_slice(&(key.len() as u16).to_be_bytes());
+        message.extend_from_slice(key.as_bytes());
+        let signature = hmac_sha256(secret().unwrap(), &message);
+        message.extend_from_slice(&signature);
+        let old_token = hex_encode(&message);
+        assert!(verify(Some(&old_token), key, Audience::Seat, Some(&principal)).is_none());
     }
 
     #[test]
