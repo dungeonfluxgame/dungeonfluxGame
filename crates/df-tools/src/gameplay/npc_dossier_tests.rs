@@ -245,7 +245,12 @@ fn jev_reply(lines: &[JevLine], body: &Value) -> (u16, Value) {
     };
     let wanted = if asks("recorded") && asks("backfill") {
         Some("recorded")
-    } else if asks("approve") && state.get("recorded_facts").is_some() {
+    } else if criteria
+        .iter()
+        .any(|(_, criterion)| criterion == "No single listed fact answers this question.")
+    {
+        Some("o1")
+    } else if asks("approve") && state.get("reply").is_some() {
         Some("approve")
     } else if asks("flirting") {
         line_of(&state["player_words"]).map(|line| line.approach)
@@ -2632,9 +2637,17 @@ async fn recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_pa
         } else {
             let answer = &dossier.subject_answers[&subject];
             if subjects_seen.insert(subject) {
-                assert_eq!(response, answer.text, "{line:?}");
+                assert_eq!(
+                    response,
+                    super::line_cleanup::normalise(&answer.text, &[]),
+                    "{line:?}"
+                );
             } else {
-                assert_eq!(response, answer.restatement, "{line:?}");
+                assert_eq!(
+                    response,
+                    super::line_cleanup::normalise(&answer.restatement, &[]),
+                    "{line:?}"
+                );
             }
         }
     }
@@ -3486,8 +3499,8 @@ async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_spe
         };
         assert!(player.journey.unwrap().reply_speaker.is_empty());
     }
-    // With every judge off there is no selected authoritative answer. REF-069 keeps the
-    // unknown question unavailable instead of substituting an unselected personal anecdote.
+    // With every judge off, the answer stays a spoken uncertainty rather than an
+    // unselected personal anecdote (b236f1ae).
     let ledger = SocialLedger::open(adventure.dossiers.clone(), "bounded-off", None).unwrap();
     let ask = context(
         &adventure,
@@ -3499,12 +3512,12 @@ async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_spe
         .converse_in_character(ask, &TableLog::new())
         .await
         .unwrap();
-    assert_eq!(exchange.outcome, ExchangeOutcome::Unavailable);
+    assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
     assert_eq!(
         exchange.fallback,
         Some(super::npc_reply::FallbackReason::ModelOff)
     );
-    assert!(exchange.text.is_empty());
+    assert_eq!(exchange.text, "I'm not sure about that.");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3855,8 +3868,9 @@ async fn a_local_question_backfills_before_speech_and_the_same_question_gets_it_
         super::npc_reply::tests::ref069_jev("backfill", "harmless_missing_detail", false);
     let established = "The Lantern Inn stands two streets east of the square.";
     let replies = FakeEndpoint::start(vec![
+        Reply::Output(json!({"questions":json!(["Where is the nearest inn?"]).to_string()})),
         Reply::Output(
-            json!({"fact":json!({"name":"Nearest inn", "content":established}).to_string()}),
+            json!({"fact":json!({"name":"Nearest inn", "content":established,"answer":established}).to_string()}),
         ),
         reply(established, "question"),
         reply(
@@ -3875,7 +3889,7 @@ async fn a_local_question_backfills_before_speech_and_the_same_question_gets_it_
     let first = context(&adventure, &ledger, SceneKey::Opening, question);
     let exchange = voice.converse_in_character(first, &log).await.unwrap();
     assert!(exchange.from_model, "{:?}", exchange.fallback);
-    let first_facts = request_facts(&replies, 1);
+    let first_facts = request_facts(&replies, 2);
     assert!(
         first_facts.contains("\"may_establish_local_fact\":false"),
         "{first_facts}"
@@ -3890,7 +3904,7 @@ async fn a_local_question_backfills_before_speech_and_the_same_question_gets_it_
     let second = context(&adventure, &ledger, SceneKey::Opening, question);
     let exchange = voice.converse_in_character(second, &log).await.unwrap();
     assert!(exchange.from_model, "{:?}", exchange.fallback);
-    let second_facts = request_facts(&replies, 2);
+    let second_facts = request_facts(&replies, 3);
     assert!(second_facts.contains("The Lantern Inn"), "{second_facts}");
     assert!(second_facts.contains(established), "{second_facts}");
     assert_eq!(
@@ -3900,8 +3914,8 @@ async fn a_local_question_backfills_before_speech_and_the_same_question_gets_it_
     );
     assert_eq!(
         replies.connections(),
-        3,
-        "one fact generation and two spoken answers"
+        4,
+        "one question extraction, one fact generation and two spoken answers"
     );
     std::fs::remove_dir_all(cache).unwrap();
 }

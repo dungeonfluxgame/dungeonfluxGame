@@ -12,6 +12,64 @@ use df_model::checkpoint::Checkpoint;
 use df_session::inbox::{AdmissionSequence, Reducer, bounded_inbox};
 use tokio::sync::{Semaphore, watch};
 
+fn opening_endpoint(
+    lines: &[(&'static str, &'static str, &'static str)],
+    willingness: &'static str,
+) -> FakeEndpoint {
+    let lines = lines.to_vec();
+    let compute = Arc::new(move |body: &serde_json::Value| {
+        let criteria = body["questions"]["q1"]["criteria"].as_object().unwrap();
+        let key = |label: &str| {
+            criteria.iter().find_map(|(key, value)| {
+                value
+                    .as_str()
+                    .filter(|text| text.starts_with(&format!("{label}:")))
+                    .map(|_| key.clone())
+            })
+        };
+        let state = &body["state"];
+        let words = state["player_words"]
+            .as_str()
+            .or_else(|| state["hero_words"].as_str());
+        let line = lines.iter().find(|line| Some(line.0) == words);
+        let choice = if key("character-speech").is_some() {
+            line.and_then(|line| key(line.1))
+        } else if key("not_request").is_some() {
+            line.and_then(|line| key(line.2))
+        } else if key("heroes_depart").is_some() {
+            line.and_then(|line| {
+                key(if line.2 == "not_request" {
+                    "heroes_depart"
+                } else {
+                    "social_proposal"
+                })
+            })
+        } else if key("hesitant_indifferent").is_some() {
+            key(willingness)
+        } else if key("not_help").is_some() {
+            key("ally_1")
+        } else if state.get("helper_words").is_some() {
+            key("intimidation")
+        } else {
+            None
+        };
+        match choice {
+            Some(choice) => (
+                200,
+                serde_json::json!({"answers":{"q1":{
+                    "type":"choice","choice":choice,"confidence":0.99
+                }}}),
+            ),
+            None => (500, serde_json::json!({"error":"unavailable"})),
+        }
+    });
+    FakeEndpoint::start(
+        (0..120)
+            .map(|_| crate::gameplay::storyteller::tests::Reply::ComputeResponse(compute.clone()))
+            .collect(),
+    )
+}
+
 struct TestOwner {
     current: Checkpoint,
     updates: watch::Sender<Checkpoint>,
@@ -341,20 +399,31 @@ fn opening_social_authenticated_helper_reaches_actor_and_advantage_is_consumed_o
         )
         .unwrap()
         .checkpoint;
-        let endpoint = crate::gameplay::npc_reply::tests::ref069_existing_facts(vec![
-            answer("o1"),
-            answer("o6"),
-            answer("o2"),
-            answer("o3"),
-            answer("o1"),
-            answer("o5"),
-            answer("o2"),
-            answer("o1"),
-            answer("o5"),
-            answer("o2"),
-            answer("o1"),
-            answer("o2"),
-        ]);
+        let endpoint = opening_endpoint(
+            &[
+                (
+                    "Vale, I will stand at your shoulder and block Dain's retreat while you warn him.",
+                    "hero-speech",
+                    "help",
+                ),
+                (
+                    "Dain, step aside or we will take you to the watch for frightening the boy.",
+                    "character-speech",
+                    "intimidation",
+                ),
+                (
+                    "Dain, step aside or I will call your employer to account in front of the watch.",
+                    "character-speech",
+                    "intimidation",
+                ),
+                (
+                    "Dain, please, step aside, I already asked.",
+                    "character-speech",
+                    "same_request",
+                ),
+            ],
+            "hesitant",
+        );
         let table = Table::new(current, loaded, &endpoint);
         let help = table.line(
             181,
@@ -433,14 +502,21 @@ fn opening_social_authenticated_helper_reaches_actor_and_advantage_is_consumed_o
 #[test]
 fn opening_social_invitation_reaches_influence_before_travel_and_departure_stays_blocked() {
     with_harbor(|loaded| {
-        let endpoint = crate::gameplay::npc_reply::tests::ref069_existing_facts(vec![
-            answer("o15"),
-            answer("o2"),
-            answer("o2"),
-            answer("o4"),
-            answer("o15"),
-            answer("o1"),
-        ]);
+        let endpoint = opening_endpoint(
+            &[
+                (
+                    "Dain, walk with us to the Harbor Inn, first round's mine, and tell your employer the packet went to the watch.",
+                    "travel",
+                    "persuasion",
+                ),
+                (
+                    "We leave Salt Quay now and head for the Harbor Inn.",
+                    "travel",
+                    "not_request",
+                ),
+            ],
+            "hesitant_indifferent",
+        );
         let table = Table::new(runtime::opening_social_tests::opening(2), loaded, &endpoint);
         let line = table.line(185, "Dain, walk with us to the Harbor Inn, first round's mine, and tell your employer the packet went to the watch.");
         run(table.service.submit_line([1; 32], line)).unwrap();

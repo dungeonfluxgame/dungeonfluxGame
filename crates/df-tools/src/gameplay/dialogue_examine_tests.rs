@@ -23,15 +23,47 @@ use tokio::sync::{Semaphore, watch};
 const WORDS: &str =
     "I wander over to the pottery stall and look closely at the glazes on the bowls.";
 const LOOK: &str = "The bowls have a glossy blue glaze, pooling dark around the rims. Sella Voss tends the pottery stall.";
+const COMPLETION_WATCHDOG: Duration = Duration::from_secs(120);
 
 fn operation(byte: u8) -> OperationId {
     OperationId::from_bytes(&[byte; 16]).unwrap()
 }
 
+thread_local! {
+    static CACHES: std::cell::RefCell<Vec<std::path::PathBuf>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+struct CacheScope;
+
+impl Drop for CacheScope {
+    fn drop(&mut self) {
+        CACHES.with_borrow_mut(|paths| {
+            for path in paths.drain(..) {
+                if path.exists() {
+                    let result = std::fs::remove_dir_all(path);
+                    if !std::thread::panicking() {
+                        result.unwrap();
+                    }
+                }
+            }
+        });
+    }
+}
+
 fn cache(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS71")
-        .join(format!("{name}-{}", std::process::id()))
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/TESTSB/tmp")
+        .join(format!("{name}-{}-{sequence}", std::process::id()));
+    if path.exists() {
+        std::fs::remove_dir_all(&path).unwrap();
+    }
+    std::fs::create_dir_all(&path).unwrap();
+    CACHES.with_borrow_mut(|paths| paths.push(path.clone()));
+    path
 }
 
 fn market_slots() -> (Value, Value, Value) {
@@ -115,6 +147,7 @@ fn with_market(test: impl FnOnce(Checkpoint, pack::LoadedPack)) {
 }
 
 fn run(test: impl std::future::Future<Output = ()>) {
+    let _caches = CacheScope;
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -953,7 +986,11 @@ fn hs59_scene_examine_compound_approach_commits_the_spot_and_requests_its_plate(
                 crate::gameplay::imagery::ReferenceStore::new(cache("references")),
                 table.service.social.clone(),
                 ContentRating::Restrained,
-                crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30)),
+                crate::gameplay::living_scenes::Timing {
+                    scene_start_quiet: Duration::ZERO,
+                    roll_quiet: Duration::ZERO,
+                    ..crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30))
+                },
                 true,
                 table.service.updates.clone(),
             );
@@ -1010,7 +1047,7 @@ fn hs59_scene_examine_compound_approach_commits_the_spot_and_requests_its_plate(
                 .unwrap();
             let expected = format!("plate:{}", arrival.setting.as_ref().unwrap().place_id);
             let view = wire::journey_view(&after, LocalDemoRole::Display, native::first()).unwrap();
-            let (image_key, image_bytes) = tokio::time::timeout(Duration::from_secs(10), async {
+            let (image_key, image_bytes) = tokio::time::timeout(COMPLETION_WATCHDOG, async {
                 loop {
                     table.service.living.observe(&view);
                     if let Some(edit) = table
@@ -1024,15 +1061,25 @@ fn hs59_scene_examine_compound_approach_commits_the_spot_and_requests_its_plate(
                     {
                         break (edit.handle, bytes);
                     }
+                    assert!(
+                        table
+                            .service
+                            .living
+                            .list_resources(Some(
+                                crate::gameplay::resources::ResourceKind::PlateEdit
+                            ))
+                            .iter()
+                            .all(|row| row.subject != expected || row.state != "failed")
+                    );
                     wake.changed().await.unwrap();
                 }
             })
             .await
-            .expect("the committed stall and vendor must reach the plate-edit provider");
+            .expect("plate-edit completion watchdog; inspect resource audit on timeout");
             assert!(!image_bytes.is_empty());
             image::load_from_memory(&image_bytes).expect("the framed stall image must decode");
             std::fs::write(
-                cache("plate-evidence").with_extension("json"),
+                cache("plate-evidence").join("plate.json"),
                 json!({
                     "stall_id":framed.id,"vendor":"Sella Voss","image_key":image_key,
                     "plate_edit_subject":expected,"state":"ready",
@@ -1535,7 +1582,11 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
                 ),
                 table.service.social.clone(),
                 ContentRating::Restrained,
-                crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30)),
+                crate::gameplay::living_scenes::Timing {
+                    scene_start_quiet: Duration::ZERO,
+                    roll_quiet: Duration::ZERO,
+                    ..crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30))
+                },
                 true,
                 table.service.updates.clone(),
             );
@@ -1543,7 +1594,7 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
             let initial_view =
                 wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
             table.service.living.observe(&initial_view);
-            tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::time::timeout(COMPLETION_WATCHDOG, async {
                 loop {
                     let mut view = initial_view.clone();
                     table.service.living.apply(&mut view);
@@ -1555,11 +1606,21 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
                     {
                         break;
                     }
+                    assert!(
+                        table
+                            .service
+                            .living
+                            .list_resources(Some(
+                                crate::gameplay::resources::ResourceKind::ScenePlate
+                            ))
+                            .iter()
+                            .all(|row| row.state != "failed")
+                    );
                     wake.changed().await.unwrap();
                 }
             })
             .await
-            .expect("a real fake-provider base plate is presented before the second look");
+            .expect("base-plate completion watchdog; inspect resource audit on timeout");
             let action = rpc::SubmitActionRequest {
                 operation_id: Some(rpc::OperationId {
                     value: Some(operation(step).as_bytes().to_vec()),
@@ -1592,7 +1653,7 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
             assert!(!record.unavailable);
             current = table.service.updates.borrow().clone();
             if succeeds {
-                tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::time::timeout(COMPLETION_WATCHDOG, async {
                     loop {
                         let rows = table.service.living.list_resources(Some(
                             crate::gameplay::resources::ResourceKind::PlateEdit,
@@ -1604,11 +1665,15 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
                         {
                             break;
                         }
+                        assert!(rows.iter().all(|row| {
+                            !row.subject.starts_with(&format!("item-focus:{target}:"))
+                                || row.state != "failed"
+                        }));
                         wake.changed().await.unwrap();
                     }
                 })
                 .await
-                .expect("successful observation commits and queues the second foreground focus");
+                .expect("item-focus completion watchdog; inspect resource audit on timeout");
                 assert!(
                     images.prompt().contains(hidden),
                     "the second focus prompt shows the committed hidden detail"
