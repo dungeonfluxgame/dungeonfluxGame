@@ -6,7 +6,6 @@
 
 mod assets;
 mod campaigns;
-mod campaigns_display;
 mod campaigns_join;
 mod campaigns_rules;
 mod checkout;

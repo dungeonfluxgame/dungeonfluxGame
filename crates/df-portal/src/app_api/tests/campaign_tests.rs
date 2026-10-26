@@ -418,76 +418,6 @@ async fn a_room_code_request_waits_for_the_host_to_approve_or_deny() {
 }
 
 #[tokio::test]
-async fn players_ready_up_and_only_the_host_starts_once_everyone_is_ready() {
-    let harness = Harness::new().await;
-    let (mut host, campaign) = host_with_campaign(&harness).await;
-    let operation = host.operation().await;
-    let opened = host
-        .post(
-            &format!("/app/api/campaigns/{campaign}/lobby"),
-            &json!({"operation": operation}),
-        )
-        .await;
-    let session = opened.json()["session_id"].as_str().unwrap().to_owned();
-    let link = invite(&mut host, &campaign, "player").await["link"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let mut sam = harness.browser();
-    sam.sign_up_verified("sam@example.test").await;
-    accept(&mut sam, Some(&token_of(&link))).await;
-    let start = |operation: String| json!({ "operation": operation });
-    let lobby_path = format!("/app/api/sessions/{session}/lobby");
-    let operation = sam.operation().await;
-    let by_player = sam
-        .post(&format!("{lobby_path}/start"), &start(operation))
-        .await;
-    assert_eq!(by_player.code(), "forbidden");
-    let operation = host.operation().await;
-    let blocked = host
-        .post(&format!("{lobby_path}/start"), &start(operation))
-        .await;
-    assert_eq!(blocked.code(), "stale_form");
-    let view = host.get(&lobby_path).await.json();
-    assert_eq!(
-        view["start_blockers"],
-        json!(["member_not_ready", "character_not_chosen"])
-    );
-    assert_eq!(view["can_manage"], json!(true));
-    for browser in [&mut host, &mut sam] {
-        let operation = browser.operation().await;
-        let chosen = browser
-            .post(
-                &format!("{lobby_path}/character"),
-                &json!({"choice":"template", "reference":"11".repeat(16), "operation":operation}),
-            )
-            .await;
-        assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.body);
-        let operation = browser.operation().await;
-        let ready = browser
-            .post(&format!("{lobby_path}/ready"), &start(operation))
-            .await;
-        assert_eq!(ready.status, StatusCode::OK, "{}", ready.body);
-    }
-    let operation = sam.operation().await;
-    let microphone = sam
-        .post(
-            &format!("{lobby_path}/microphone"),
-            &json!({"prefers_typing": false, "permission": "declined", "operation": operation}),
-        )
-        .await;
-    assert_eq!(
-        microphone.json()["members"][1]["microphone"],
-        json!("declined")
-    );
-    let operation = host.operation().await;
-    let started = host
-        .post(&format!("{lobby_path}/start"), &start(operation))
-        .await;
-    assert_eq!(started.json()["has_started"], json!(true));
-}
-
-#[tokio::test]
 async fn the_host_cannot_leave_but_a_player_can() {
     let harness = Harness::new().await;
     let (mut host, campaign) = host_with_campaign(&harness).await;
@@ -517,78 +447,6 @@ async fn the_host_cannot_leave_but_a_player_can() {
         sam.get("/app/api/campaigns").await.json()["campaigns"],
         json!([])
     );
-}
-
-#[tokio::test]
-async fn a_hero_choice_is_guarded_owned_and_clears_ready_before_another_choice() {
-    use super::fixtures::Req;
-    use axum::http::Method;
-    let harness = Harness::new().await;
-    let (mut host, campaign) = host_with_campaign(&harness).await;
-    let session = harness
-        .ports
-        .campaigns
-        .seed_lobby(crate::app_api::ids::campaign(&campaign).unwrap())
-        .unwrap();
-    let path = format!("/app/api/sessions/{}/lobby", hex(session.as_bytes()));
-    let operation = host.operation().await;
-    let body = json!({"choice":"template", "reference":"11".repeat(16), "operation":operation});
-    assert_eq!(
-        host.send(
-            Req::new(Method::POST, &format!("{path}/character"))
-                .json(&body)
-                .csrf(None)
-        )
-        .await
-        .status,
-        StatusCode::FORBIDDEN
-    );
-    let operation = host.operation().await;
-    assert_ne!(
-        host.post(&format!("{path}/ready"), &json!({"operation":operation}))
-            .await
-            .status,
-        StatusCode::OK
-    );
-    let chosen = host.post(&format!("{path}/character"), &body).await;
-    assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.body);
-    assert!(chosen.json()["members"][0]["character_name"].is_string());
-    let operation = host.operation().await;
-    assert_eq!(
-        host.post(&format!("{path}/ready"), &json!({"operation":operation}))
-            .await
-            .status,
-        StatusCode::OK
-    );
-    let operation = host.operation().await;
-    let cleared = host
-        .post(
-            &format!("{path}/character"),
-            &json!({"choice":"undecided", "reference":null, "operation":operation}),
-        )
-        .await;
-    assert_eq!(cleared.json()["members"][0]["is_ready"], false);
-    assert!(cleared.json()["members"][0]["character_name"].is_null());
-    let operation = host.operation().await;
-    assert_eq!(
-        host.post(
-            &format!("{path}/character"),
-            &json!({"choice":"template", "reference":null, "operation":operation})
-        )
-        .await
-        .status,
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let mut stranger = harness.browser();
-    stranger.sign_up_verified("stranger@example.test").await;
-    let operation = stranger.operation().await;
-    let denied = stranger
-        .post(
-            &format!("{path}/character"),
-            &json!({"choice":"template", "reference":"11".repeat(16), "operation":operation}),
-        )
-        .await;
-    assert_eq!(denied.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -797,5 +655,289 @@ async fn fundingwire_router_records_host_consent_and_cancels_only_for_the_host()
             .await
             .status,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn lobbyfix_play_now_uses_defaults_once_and_keeps_funding_consent_required() {
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("play-now@example.test").await;
+    let operation = host.operation().await;
+    let request = json!({"operation": operation});
+    let first = host.post("/app/api/campaigns/play-now", &request).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    let view = first.json();
+    let repeated = host
+        .post("/app/api/campaigns/play-now", &request)
+        .await
+        .json();
+    assert_eq!(repeated["campaign_id"], view["campaign_id"]);
+    assert_eq!(repeated["lobby"]["session_id"], view["lobby"]["session_id"]);
+    assert_eq!(view["game_unavailable"], true);
+    assert_eq!(view["lobby"]["has_started"], false);
+    assert_eq!(
+        view["lobby"]["start_blockers"],
+        json!(["funding_not_ready"])
+    );
+    let campaign = view["campaign_id"].as_str().unwrap();
+    let settings = host
+        .get(&format!("/app/api/campaigns/{campaign}/settings"))
+        .await
+        .json();
+    let draft = &settings["draft"];
+    assert_eq!(draft["name"], settings["catalog"]["adventures"][0]["name"]);
+    assert_eq!(
+        draft["adventure_id"],
+        settings["catalog"]["adventures"][0]["adventure_id"]
+    );
+    assert_eq!(draft["content_rating"], "teen");
+    assert_eq!(draft["seat_count"], 6);
+    assert_eq!(draft["has_voice"], true);
+    assert_eq!(draft["pictures"], "automatic");
+    assert_eq!(draft["pace"], "immersive");
+    assert_eq!(draft["join_mode"], "link_and_room_code");
+    assert_eq!(draft["funding"], "sponsor");
+    let overview = host.get("/app/api/overview").await.json();
+    assert_eq!(overview["balance"]["allocated_micro_dollars"], 0);
+    assert_eq!(overview["balance"]["reserved_micro_dollars"], 0);
+}
+
+#[tokio::test]
+async fn lobbyfix_settings_save_two_changes_and_reuse_the_hosts_last_rating() {
+    use super::fixtures::Req;
+    use axum::http::Method;
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("settings-now@example.test").await;
+    let operation = host.operation().await;
+    let created = host
+        .post(
+            "/app/api/campaigns/play-now",
+            &json!({"operation": operation}),
+        )
+        .await
+        .json();
+    let campaign = created["campaign_id"].as_str().unwrap();
+    let path = format!("/app/api/campaigns/{campaign}/settings");
+    let mut draft = host.get(&path).await.json()["draft"].clone();
+    draft["name"] = json!("A renamed adventure");
+    draft["content_rating"] = json!("mature");
+    draft["has_voice"] = json!(false);
+    let saved = host
+        .send(Req::new(Method::PUT, &path).json(&json!({"draft": draft})))
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    let read = host.get(&path).await.json();
+    assert_eq!(read["draft"]["name"], "A renamed adventure");
+    assert_eq!(read["draft"]["content_rating"], "mature");
+    assert_eq!(read["draft"]["has_voice"], false);
+    let operation = host.operation().await;
+    let next = host
+        .post(
+            "/app/api/campaigns/play-now",
+            &json!({"operation": operation}),
+        )
+        .await
+        .json();
+    let next = next["campaign_id"].as_str().unwrap();
+    assert_eq!(
+        host.get(&format!("/app/api/campaigns/{next}/settings"))
+            .await
+            .json()["draft"]["content_rating"],
+        "mature"
+    );
+}
+
+#[tokio::test]
+async fn lobbyfix_membership_has_no_game_room_fields_or_input_routes() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(crate::app_api::ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let path = format!("/app/api/sessions/{}/lobby", hex(session.as_bytes()));
+    let view = host.get(&path).await.json();
+    assert_eq!(view["start_blockers"], json!([]));
+    assert!(view.get("displays").is_none());
+    let member = view["members"][0].as_object().unwrap();
+    assert_eq!(member.len(), 2);
+    assert!(member.contains_key("display_name") && member.contains_key("is_me"));
+    for route in [
+        "character",
+        "ready",
+        "unready",
+        "microphone",
+        "display/lookup",
+        "display/approve",
+        "display/unpair-all",
+    ] {
+        let reply = host.post(&format!("{path}/{route}"), &json!({})).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{route}");
+    }
+    for route in ["challenge", "redeem", "renew"] {
+        assert_eq!(
+            host.post(&format!("/app/api/display/{route}"), &json!({}))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[tokio::test]
+async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or_readiness() {
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(crate::app_api::ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let invitation = invite(&mut host, &campaign, "player").await;
+    let mut player = harness.browser();
+    player.sign_up_verified("room-player@example.test").await;
+    accept(
+        &mut player,
+        Some(&token_of(invitation["link"].as_str().unwrap())),
+    )
+    .await;
+    let path = format!("/app/api/sessions/{}/lobby/start", hex(session.as_bytes()));
+    let operation = player.operation().await;
+    assert_eq!(
+        player
+            .post(&path, &json!({"operation": operation}))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    let operation = host.operation().await;
+    let started = host.post(&path, &json!({"operation": operation})).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+    assert_eq!(started.json()["has_started"], true);
+    let unavailable = host
+        .get(&format!(
+            "/app/api/sessions/{}/game",
+            hex(session.as_bytes())
+        ))
+        .await;
+    assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        unavailable
+            .body
+            .contains("The game isn't available right now.")
+    );
+    assert!(unavailable.body.contains("Try again in a few minutes."));
+    assert!(!unavailable.body.contains("DF_GAMEPLAY") && !unavailable.body.contains("/sessions/"));
+    harness.ports.campaigns.seed_game_link(
+        session,
+        format!(
+            "https://game.example.test/sessions/{}/play",
+            hex(session.as_bytes())
+        ),
+    );
+    let opened = player
+        .get(&format!(
+            "/app/api/sessions/{}/game",
+            hex(session.as_bytes())
+        ))
+        .await;
+    assert_eq!(opened.status, StatusCode::TEMPORARY_REDIRECT);
+}
+
+#[tokio::test]
+async fn lobbyfix_play_now_and_settings_preserve_csrf_and_same_origin_guards() {
+    use super::fixtures::Req;
+    use axum::http::Method;
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("csrf-play@example.test").await;
+    let operation = host.operation().await;
+    let request = json!({"operation": operation});
+    assert_eq!(
+        host.send(
+            Req::new(Method::POST, "/app/api/campaigns/play-now")
+                .json(&request)
+                .csrf(None)
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        host.send(
+            Req::new(Method::POST, "/app/api/campaigns/play-now")
+                .json(&request)
+                .origin(Some("https://foreign.example.test"))
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn lobbyfix_a_co_host_cannot_bypass_sponsor_consent_or_read_the_sponsors_wallet() {
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("sponsor-now@example.test").await;
+    let operation = host.operation().await;
+    let created = host
+        .post(
+            "/app/api/campaigns/play-now",
+            &json!({"operation": operation}),
+        )
+        .await
+        .json();
+    let campaign = crate::app_api::ids::campaign(created["campaign_id"].as_str().unwrap()).unwrap();
+    let session = created["lobby"]["session_id"].as_str().unwrap();
+    let mut co_host = harness.browser();
+    co_host.sign_up_verified("co-host-now@example.test").await;
+    harness.ports.campaigns.seed_member(
+        campaign,
+        &actor(&co_host, "Co-host").await,
+        df_account_app::wire_campaign::CampaignRole::CoHost,
+    );
+    let path = format!("/app/api/sessions/{session}/lobby");
+    let view = co_host.get(&path).await.json();
+    assert_eq!(view["can_manage"], true);
+    assert_eq!(view["start_blockers"], json!(["funding_not_ready"]));
+    assert_eq!(view["funding_note"], "waiting_for_sponsor");
+    assert!(!view.to_string().contains("available_micro_dollars"));
+    let operation = co_host.operation().await;
+    assert_eq!(
+        co_host
+            .post(&format!("{path}/start"), &json!({"operation": operation}))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(host.get(&path).await.json()["has_started"], false);
+}
+
+#[tokio::test]
+async fn lobbyfix_a_failure_after_creation_is_unknown_and_retry_opens_the_same_campaign() {
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("partial-play@example.test").await;
+    let operation = host.operation().await;
+    let body = json!({"operation": operation});
+    harness.ports.campaigns.fail_next_open();
+    let partial = host.post("/app/api/campaigns/play-now", &body).await;
+    assert_eq!(partial.code(), "unknown_outcome");
+    let before = host.get("/app/api/campaigns").await.json();
+    assert_eq!(before["campaigns"].as_array().unwrap().len(), 1);
+    let campaign = before["campaigns"][0]["campaign_id"].clone();
+    let retry = host.post("/app/api/campaigns/play-now", &body).await;
+    assert_eq!(retry.status, StatusCode::OK, "{}", retry.body);
+    assert_eq!(retry.json()["campaign_id"], campaign);
+    assert_eq!(
+        host.get("/app/api/campaigns").await.json()["campaigns"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
 }

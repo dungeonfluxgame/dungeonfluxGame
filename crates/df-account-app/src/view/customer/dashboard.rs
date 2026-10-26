@@ -19,6 +19,15 @@ pub(in crate::view) fn dashboard(screen: &DashboardScreen, model: &Model) -> Nod
         content = content.child(verify_prompt(screen, &account.email));
     }
     content
+        .child(error_summary(model.play_now.error()))
+        .child(button(
+            "Play now",
+            Some(Intent::PlayNow),
+            ButtonKind::Primary,
+            model.play_now.is_sending()
+                || model.play_operation.ready().is_none()
+                || !model.account().is_some_and(|account| account.is_verified),
+        ))
         .child(stats_section(screen))
         .child(credit_section(&screen.overview))
         .child(funds_section(screen))
@@ -349,13 +358,6 @@ fn campaigns_content(view: &DashboardView, offset_east_minutes: i32) -> Node {
         );
     }
     let mut actions = el("p").class("actions");
-    if view.can_create {
-        actions = actions.child(link(
-            "Create a campaign",
-            Route::NewCampaign,
-            "btn btn-gilt",
-        ));
-    }
     if !view.campaigns.is_empty() {
         actions = actions.child(link(
             "Join with a room code",

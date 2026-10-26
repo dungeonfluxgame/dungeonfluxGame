@@ -8,7 +8,7 @@ use crate::{
         LineStatus, OperatorCapability, PacePreset, ProviderHealth, Quantity, ReconciliationKind,
         Refusal, ReviewFlag, StatementCategory,
     },
-    wire_campaign::{CampaignRole, ContentRating, MicrophoneState, Reason, StartBlocker},
+    wire_campaign::{CampaignRole, ContentRating, Reason, StartBlocker},
 };
 
 /// What happened, and what the person can do about it.
@@ -232,7 +232,6 @@ pub fn title(screen: &Screen) -> String {
         Screen::Campaign(_) => "Campaign",
         Screen::Lobby(_) => "Lobby",
         Screen::Join(_) => "Join a table",
-        Screen::Display(_) => "Show this screen on your TV",
         Screen::Admin(_) => "Operator console",
         Screen::NotPermitted => "Not available",
         Screen::NeedsSecondFactor => "Second step needed",
@@ -358,22 +357,9 @@ pub const fn reason_problem(reason: Reason) -> Problem {
 pub const fn start_blocker(blocker: StartBlocker) -> &'static str {
     match blocker {
         StartBlocker::NoSeatedMembers => "Nobody has taken a seat yet.",
-        StartBlocker::MemberNotReady => "Not everyone with a seat is ready yet.",
-        StartBlocker::CharacterNotChosen => "Someone with a seat has not chosen a hero.",
-        StartBlocker::DisplayRequiredButUnpaired => "Pair a screen to show the game on.",
         StartBlocker::FundingNotReady => "The table's funding is not ready yet.",
         StartBlocker::SessionNotInLobby => "This session is no longer in the lobby.",
         StartBlocker::CampaignArchived => "This campaign is archived.",
-    }
-}
-
-pub const fn microphone_state(state: MicrophoneState) -> &'static str {
-    match state {
-        MicrophoneState::NotAsked => "Microphone not set up",
-        MicrophoneState::Granted => "Microphone on",
-        MicrophoneState::Declined => "Microphone declined: typing only",
-        MicrophoneState::Unsupported => "No microphone available: typing only",
-        MicrophoneState::Typing => "Typing instead of speaking",
     }
 }
 

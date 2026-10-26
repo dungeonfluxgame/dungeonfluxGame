@@ -3,16 +3,14 @@
 use df_account_app::{
     wire::PlaySessionsView,
     wire_campaign::{
-        CampaignCard, CampaignDraft, CampaignOverview, CampaignRole, CharacterRequest,
-        DashboardView, DisplayState, InvitationCreated, InvitationKind, InvitePreview,
-        JoinRequested, LobbyView, MicrophoneRequest, PairingLookup, WizardCatalog,
+        CampaignCard, CampaignDraft, CampaignOverview, CampaignRole, DashboardView,
+        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView, WizardCatalog,
     },
 };
 use df_campaign::{
     service::{CampaignService, Ports as ServicePorts},
     store::*,
 };
-use df_customer::DeviceLabel;
 use df_portal::app_api::ports::*;
 use df_types::{AccountId, CampaignId, OperationId, SessionId};
 
@@ -76,6 +74,47 @@ fn failure(error: df_campaign::errors::Failure) -> PortError {
 }
 
 impl CampaignDirectory for Campaigns {
+    async fn play_now_campaign(
+        &self,
+        _who: &Actor,
+        _operation: OperationId,
+    ) -> PortResult<CampaignId> {
+        // The content owner's validated catalog has not been connected in the native composition.
+        // Never promote the preview's fixture adventures into a production campaign.
+        crate::ports::unavailable("S1 AdventureCatalog")
+    }
+
+    async fn campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+    ) -> PortResult<df_account_app::wire_campaign::CampaignSettingsView> {
+        let view = self
+            .service
+            .overview(who.account, campaign)
+            .await
+            .map_err(failure)?;
+        Ok(df_account_app::wire_campaign::CampaignSettingsView {
+            draft: super::campaign_views::settings(&view)?,
+            catalog: super::campaign_views::catalog(),
+            can_edit: view.can_edit_settings,
+        })
+    }
+
+    async fn save_campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+        draft: CampaignDraft,
+    ) -> PortResult<df_account_app::wire_campaign::CampaignSettingsView> {
+        let update = super::campaign_views::settings_update(draft, who.account)?;
+        self.service
+            .update_settings(who.account, campaign, update)
+            .await
+            .map_err(failure)?;
+        self.campaign_settings(who, campaign).await
+    }
+
     async fn dashboard(&self, who: &Actor) -> PortResult<DashboardView> {
         let dashboard = self.service.dashboard(who.account).await.map_err(failure)?;
         let mut campaigns = Vec::with_capacity(dashboard.campaigns.len());
@@ -141,7 +180,7 @@ impl CampaignDirectory for Campaigns {
     }
 
     async fn wizard_catalog(&self) -> PortResult<WizardCatalog> {
-        crate::ports::unavailable("S1")
+        Ok(super::campaign_views::catalog())
     }
 
     async fn start_draft(&self, who: &Actor) -> PortResult<(String, CampaignDraft)> {
@@ -187,8 +226,47 @@ impl CampaignDirectory for Campaigns {
             .map_err(failure)
     }
 
-    async fn campaign(&self, _who: &Actor, _campaign: CampaignId) -> PortResult<CampaignOverview> {
-        crate::ports::unavailable("S1")
+    async fn campaign(&self, who: &Actor, campaign: CampaignId) -> PortResult<CampaignOverview> {
+        let view = self
+            .service
+            .overview(who.account, campaign)
+            .await
+            .map_err(failure)?;
+        let live_session_id = match view.session {
+            df_campaign::service::SessionReading::Live(live) => Some(hex(live.session.as_bytes())),
+            df_campaign::service::SessionReading::None => None,
+            _ => return Err(PortError::Unavailable),
+        };
+        let role = |role| match role {
+            df_campaign::roles::CampaignRole::Host => Ok(CampaignRole::Host),
+            df_campaign::roles::CampaignRole::CoHost => Ok(CampaignRole::CoHost),
+            df_campaign::roles::CampaignRole::Player => Ok(CampaignRole::Player),
+            df_campaign::roles::CampaignRole::Contributor => Ok(CampaignRole::Contributor),
+            _ => Err(PortError::Unavailable),
+        };
+        Ok(CampaignOverview {
+            campaign_id: hex(campaign.as_bytes()),
+            name: view.campaign.name,
+            my_role: role(view.me.role)?,
+            can_invite: view.can_invite,
+            can_open_lobby: view.can_start && live_session_id.is_none(),
+            members: view
+                .roster
+                .into_iter()
+                .map(|entry| {
+                    Ok(df_account_app::wire_campaign::MemberRow {
+                        display_name: entry.display_name.unwrap_or_else(|| "Player".to_owned()),
+                        role: role(entry.member.role)?,
+                        is_me: entry.member.account == who.account,
+                    })
+                })
+                .collect::<PortResult<Vec<_>>>()?,
+            invitations: Vec::new(),
+            join_requests: Vec::new(),
+            room_code: df_account_app::wire_campaign::RoomCodeState::Off,
+            live_session_id,
+            last_saved_at_ms: None,
+        })
     }
 
     async fn create_invitation(
@@ -250,84 +328,6 @@ impl CampaignDirectory for Campaigns {
         )
     }
 
-    async fn choose_character(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        request: CharacterRequest,
-    ) -> PortResult<LobbyView> {
-        let campaign = self.campaign_of(session).await?;
-        let choice = match request.choice {
-            df_account_app::wire_campaign::CharacterChoice::Undecided => {
-                df_campaign::lobby::CharacterChoice::Undecided
-            }
-            df_account_app::wire_campaign::CharacterChoice::Template => {
-                df_campaign::lobby::CharacterChoice::Template
-            }
-            df_account_app::wire_campaign::CharacterChoice::Existing => {
-                df_campaign::lobby::CharacterChoice::Existing
-            }
-        };
-        let reference = request
-            .reference
-            .map(|id| {
-                CampaignId::from_hex(&id)
-                    .map(|id| *id.as_bytes())
-                    .map_err(|_| PortError::NotFound)
-            })
-            .transpose()?;
-        self.service
-            .choose_character(who.account, campaign, session, choice, reference)
-            .await
-            .map_err(failure)?;
-        self.lobby(who, session).await
-    }
-
-    async fn set_ready(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        is_ready: bool,
-    ) -> PortResult<LobbyView> {
-        let campaign = self.campaign_of(session).await?;
-        self.service
-            .set_ready(who.account, campaign, session, is_ready)
-            .await
-            .map_err(failure)?;
-        self.lobby(who, session).await
-    }
-
-    async fn report_microphone(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        report: MicrophoneRequest,
-    ) -> PortResult<LobbyView> {
-        use df_account_app::wire_campaign::MicrophonePermission;
-        use df_campaign::lobby_state::{MicrophonePreference, MicrophoneReport};
-        let campaign = self.campaign_of(session).await?;
-        self.service
-            .set_microphone(
-                who.account,
-                campaign,
-                session,
-                if report.prefers_typing {
-                    MicrophonePreference::TypedOnly
-                } else {
-                    MicrophonePreference::Ask
-                },
-                match report.permission {
-                    None => MicrophoneReport::Unknown,
-                    Some(MicrophonePermission::Granted) => MicrophoneReport::Granted,
-                    Some(MicrophonePermission::Declined) => MicrophoneReport::Declined,
-                    Some(MicrophonePermission::Unsupported) => MicrophoneReport::Unsupported,
-                },
-            )
-            .await
-            .map_err(failure)?;
-        self.lobby(who, session).await
-    }
-
     async fn start_session(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
         let campaign = self.campaign_of(session).await?;
         self.service
@@ -335,41 +335,6 @@ impl CampaignDirectory for Campaigns {
             .await
             .map_err(failure)?;
         self.lobby(who, session).await
-    }
-
-    async fn lookup_display(
-        &self,
-        _who: &Actor,
-        _session: SessionId,
-        _code: &str,
-    ) -> PortResult<PairingLookup> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn approve_display(
-        &self,
-        _who: &Actor,
-        _session: SessionId,
-        _pairing_id: &str,
-    ) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn unpair_display(
-        &self,
-        _who: &Actor,
-        _session: SessionId,
-        _ticket_id: &str,
-    ) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn unpair_all_displays(
-        &self,
-        _who: &Actor,
-        _session: SessionId,
-    ) -> PortResult<LobbyView> {
-        crate::ports::unavailable("S1")
     }
 
     async fn join_preview(&self, _token: &str) -> PortResult<InvitePreview> {
@@ -395,26 +360,6 @@ impl CampaignDirectory for Campaigns {
         _code: &str,
         _operation: OperationId,
     ) -> PortResult<JoinRequested> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn display_challenge(&self, _device: DeviceLabel) -> PortResult<IssuedChallenge> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn display_status(&self, _device_secret: &str) -> PortResult<DisplayState> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn display_redeem(&self, _device_secret: &str) -> PortResult<RedeemedTicket> {
-        crate::ports::unavailable("S1")
-    }
-
-    async fn display_renew(
-        &self,
-        _device_secret: &str,
-        _ticket: &str,
-    ) -> PortResult<RenewedTicket> {
         crate::ports::unavailable("S1")
     }
 }

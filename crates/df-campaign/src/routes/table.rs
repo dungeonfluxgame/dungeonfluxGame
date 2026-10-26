@@ -50,10 +50,6 @@ pub enum RouteId {
     CampaignSessions,
     OpenLobby,
     LobbyView,
-    LobbyCharacter,
-    LobbyReady,
-    LobbyUnready,
-    LobbyMicrophone,
     LobbyStart,
     StartDraft,
     GetDraft,
@@ -82,13 +78,6 @@ pub enum RouteId {
     ProposeTransfer,
     AcceptTransfer,
     CancelTransfer,
-    DisplayChallenge,
-    DisplayStatus,
-    DisplayRedeem,
-    DisplayRenew,
-    DisplayLookup,
-    DisplayApprove,
-    DisplayUnpair,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,7 +106,7 @@ const fn spec(
     }
 }
 
-use AuthClass::{Device, Public, PublicWithPresessionCsrf, Session};
+use AuthClass::{Public, Session};
 use Gate::{AnyAccount, HostOnly, HostOrOwner, NotMemberAction, Owner, SelfMember};
 use Verb::{Get, Post, Put};
 
@@ -168,34 +157,6 @@ pub const ROUTES: &[RouteSpec] = &[
         RouteId::LobbyView,
         Get,
         "/campaigns/{campaign}/sessions/{session}/lobby",
-        Session,
-        SelfMember,
-    ),
-    spec(
-        RouteId::LobbyCharacter,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/lobby/character",
-        Session,
-        SelfMember,
-    ),
-    spec(
-        RouteId::LobbyReady,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/lobby/ready",
-        Session,
-        SelfMember,
-    ),
-    spec(
-        RouteId::LobbyUnready,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/lobby/unready",
-        Session,
-        SelfMember,
-    ),
-    spec(
-        RouteId::LobbyMicrophone,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/lobby/microphone",
         Session,
         SelfMember,
     ),
@@ -394,54 +355,5 @@ pub const ROUTES: &[RouteSpec] = &[
         "/campaigns/{campaign}/transfers/{proposal}/cancel",
         Session,
         SelfMember,
-    ),
-    spec(
-        RouteId::DisplayChallenge,
-        Post,
-        "/display/challenge",
-        PublicWithPresessionCsrf,
-        NotMemberAction,
-    ),
-    spec(
-        RouteId::DisplayStatus,
-        Get,
-        "/display/status",
-        Device,
-        NotMemberAction,
-    ),
-    spec(
-        RouteId::DisplayRedeem,
-        Post,
-        "/display/redeem",
-        Device,
-        NotMemberAction,
-    ),
-    spec(
-        RouteId::DisplayRenew,
-        Post,
-        "/display/renew",
-        Device,
-        NotMemberAction,
-    ),
-    spec(
-        RouteId::DisplayLookup,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/display/lookup",
-        Session,
-        START,
-    ),
-    spec(
-        RouteId::DisplayApprove,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/display/approve",
-        Session,
-        START,
-    ),
-    spec(
-        RouteId::DisplayUnpair,
-        Post,
-        "/campaigns/{campaign}/sessions/{session}/display/unpair",
-        Session,
-        START,
     ),
 ];

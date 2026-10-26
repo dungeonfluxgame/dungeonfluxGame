@@ -11,12 +11,11 @@ use crate::{
     route::Route,
     wire::{ApiError, PacePreset, Refusal},
     wire_campaign::{
-        ApproveRequestBody, CampaignDraft, CampaignOverview, CharacterRequest, ContentRating,
+        ApproveRequestBody, CampaignDraft, CampaignOverview, ContentRating,
         CreateInvitationRequest, FundingModel, HeroChoice, InvitationCreated, InvitationKind,
-        InvitePreview, JoinAcceptRequest, JoinMode, JoinRequested, LobbyView, MicrophonePermission,
-        MicrophoneRequest, OperationRequest, PairingApproveRequest, PairingLookup,
-        PairingLookupRequest, PictureDefault, ReadyRequest, RoomCodeJoinRequest,
-        RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
+        InvitePreview, JoinAcceptRequest, JoinMode, JoinRequested, LobbyView, OperationRequest,
+        PictureDefault, RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody,
+        WizardCatalog,
     },
 };
 
@@ -44,6 +43,9 @@ pub struct CampaignScreen {
     pub action: Submit,
     pub created_link: Option<InvitationCreated>,
     pub is_confirming_leave: bool,
+    pub settings: Option<Box<WizardScreen>>,
+    pub settings_error: Option<ApiError>,
+    pub can_edit_settings: bool,
 }
 
 /// A host's answer to a room-code request.
@@ -76,8 +78,6 @@ pub struct LobbyScreen {
     pub lobby: Remote<LobbyView>,
     pub operation: Remote<String>,
     pub action: Submit,
-    pub pairing_code: String,
-    pub lookup: Option<PairingLookup>,
     pub consent_checked: bool,
 }
 
@@ -85,8 +85,8 @@ pub(super) fn empty_draft() -> CampaignDraft {
     CampaignDraft {
         name: String::new(),
         adventure_id: None,
-        content_rating: None,
-        seat_count: 4,
+        content_rating: Some(ContentRating::Teen),
+        seat_count: 6,
         hero_choice: HeroChoice::InLobby,
         has_voice: true,
         pictures: PictureDefault::Automatic,
@@ -166,9 +166,15 @@ impl Model {
                     action: Submit::Idle,
                     created_link: None,
                     is_confirming_leave: false,
+                    settings: None,
+                    settings_error: None,
+                    can_edit_settings: false,
                 });
                 vec![
-                    self.api(ApiCall::Campaign { campaign_id }),
+                    self.api(ApiCall::Campaign {
+                        campaign_id: campaign_id.clone(),
+                    }),
+                    self.api(ApiCall::CampaignSettings { campaign_id }),
                     self.issue_operation(OperationSlot::Primary),
                 ]
             }
@@ -178,8 +184,6 @@ impl Model {
                     lobby: Remote::Loading,
                     operation: Remote::Loading,
                     action: Submit::Idle,
-                    pairing_code: String::new(),
-                    lookup: None,
                     consent_checked: false,
                 });
                 vec![
@@ -388,178 +392,52 @@ impl Model {
     }
 
     fn lobby_intent(&mut self, intent: Intent) -> Vec<Effect> {
+        let opens_game = intent == Intent::StartSession;
         let generation = self.generation;
         let Screen::Lobby(screen) = &mut self.screen else {
             return Vec::new();
         };
-        let session_id = screen.session_id.clone();
-        let call = match intent {
-            Intent::CopyText(text) => return vec![Effect::CopyText(text)],
-            Intent::CancelPairing => {
-                screen.lookup = None;
-                screen.pairing_code.clear();
-                return Vec::new();
-            }
-            Intent::EnableMicrophone => {
-                if screen.action.is_sending() || screen.operation.ready().is_none() {
-                    return Vec::new();
-                }
-                return vec![Effect::RequestMicrophone { generation }];
-            }
-            Intent::ApprovePairing => {
-                let Some(PairingLookup::Found { pairing_id, .. }) = screen.lookup.clone() else {
-                    return Vec::new();
-                };
-                let Some(operation) = take_operation(&mut screen.operation, &mut screen.action)
-                else {
-                    return Vec::new();
-                };
-                ApiCall::ApproveDisplay {
-                    session_id,
-                    request: PairingApproveRequest {
-                        pairing_id,
-                        operation,
-                    },
-                }
-            }
-            intent => {
-                let Some(operation) = take_operation(&mut screen.operation, &mut screen.action)
-                else {
-                    return Vec::new();
-                };
-                match intent {
-                    Intent::ChooseCharacter { choice, reference } => ApiCall::ChooseCharacter {
-                        session_id,
-                        request: CharacterRequest {
-                            choice,
-                            reference,
-                            operation,
-                        },
-                    },
-                    Intent::SetReady(is_ready) => ApiCall::SetReady {
-                        session_id,
-                        is_ready,
-                        request: ReadyRequest { operation },
-                    },
-                    Intent::PreferTyping => ApiCall::ReportMicrophone {
-                        session_id,
-                        request: MicrophoneRequest {
-                            prefers_typing: true,
-                            permission: None,
-                            operation,
-                        },
-                    },
-                    Intent::StartSession => ApiCall::StartSession {
-                        session_id,
-                        request: OperationRequest { operation },
-                    },
-                    Intent::UnpairDisplay { ticket_id } => ApiCall::UnpairDisplay {
-                        session_id,
-                        ticket_id,
-                        request: OperationRequest { operation },
-                    },
-                    Intent::UnpairAllDisplays => ApiCall::UnpairAllDisplays {
-                        session_id,
-                        request: OperationRequest { operation },
-                    },
-                    _ => {
-                        screen.operation = Remote::Ready(operation);
-                        screen.action = Submit::Idle;
-                        return Vec::new();
-                    }
-                }
-            }
-        };
-        vec![Effect::Api { generation, call }]
-    }
-
-    /// The browser answered the microphone request: tell S1 what it said.
-    pub(super) fn microphone_answered(&mut self, permission: MicrophonePermission) -> Vec<Effect> {
-        let generation = self.generation;
-        let Screen::Lobby(screen) = &mut self.screen else {
+        if let Intent::CopyText(text) = intent {
+            return vec![Effect::CopyText(text)];
+        }
+        if !matches!(intent, Intent::StartSession | Intent::CancelLobby) {
             return Vec::new();
-        };
+        }
         let Some(operation) = take_operation(&mut screen.operation, &mut screen.action) else {
             return Vec::new();
         };
-        vec![Effect::Api {
-            generation,
-            call: ApiCall::ReportMicrophone {
-                session_id: screen.session_id.clone(),
-                request: MicrophoneRequest {
-                    prefers_typing: false,
-                    permission: Some(permission),
-                    operation,
-                },
-            },
-        }]
+        let session_id = screen.session_id.clone();
+        let request = OperationRequest { operation };
+        let call = if opens_game {
+            ApiCall::StartSession {
+                session_id,
+                request,
+            }
+        } else {
+            ApiCall::CancelLobby {
+                session_id,
+                request,
+            }
+        };
+        let mut effects = Vec::new();
+        if opens_game {
+            effects.push(Effect::ReserveGameTab);
+        }
+        effects.push(Effect::Api { generation, call });
+        effects
     }
 
     pub(super) fn edit_campaign(&mut self, field: Field, value: &str) -> bool {
+        let editor = match &mut self.screen {
+            Screen::NewCampaign(screen) => Some(screen),
+            Screen::Campaign(screen) if screen.can_edit_settings => screen.settings.as_deref_mut(),
+            _ => None,
+        };
+        if let Some(screen) = editor {
+            return edit_settings_field(screen, field, value);
+        }
         match (&mut self.screen, field) {
-            (Screen::NewCampaign(screen), field) => {
-                let draft = &mut screen.draft;
-                match field {
-                    Field::CampaignName => value.clone_into(&mut draft.name),
-                    Field::Adventure => {
-                        draft.adventure_id = Some(value.to_owned());
-                        // A rating the new adventure does not allow must not stay in the draft.
-                        let allowed = screen.catalog.ready().and_then(|catalog| {
-                            catalog
-                                .adventures
-                                .iter()
-                                .find(|adventure| adventure.adventure_id == value)
-                        });
-                        if let (Some(adventure), Some(rating)) = (allowed, draft.content_rating)
-                            && !adventure.ratings.contains(&rating)
-                        {
-                            draft.content_rating = None;
-                        }
-                    }
-                    Field::Rating => draft.content_rating = rating_from_name(value),
-                    Field::SeatCount => {
-                        if let Ok(seats) = value.parse() {
-                            draft.seat_count = seats;
-                        }
-                    }
-                    Field::Pictures => {
-                        draft.pictures = if value == "existing" {
-                            PictureDefault::ExistingArtOnly
-                        } else {
-                            PictureDefault::Automatic
-                        };
-                    }
-                    Field::PacePreset => {
-                        if let Some(preset) = super::customer_flow::preset_from_name(value) {
-                            draft.pace = preset;
-                        }
-                    }
-                    Field::CustomCeiling => {
-                        value.clone_into(&mut screen.custom_ceiling);
-                        draft.custom_ceiling_cents_per_hour = parse_dollars(value).ok();
-                    }
-                    Field::JoinModeChoice => {
-                        draft.join_mode = if value == "code" {
-                            JoinMode::LinkAndRoomCode
-                        } else {
-                            JoinMode::LinkOnly
-                        };
-                    }
-                    Field::FundingChoice => {
-                        draft.funding = if value == "shared" {
-                            FundingModel::SharedPot
-                        } else {
-                            FundingModel::Sponsor
-                        };
-                    }
-                    _ => return false,
-                }
-                screen.save = Submit::Idle;
-            }
             (Screen::Join(screen), Field::RoomCode) => value.clone_into(&mut screen.code),
-            (Screen::Lobby(screen), Field::PairingCode) => {
-                value.clone_into(&mut screen.pairing_code);
-            }
             _ => return false,
         }
         true
@@ -572,7 +450,12 @@ impl Model {
             }
             return;
         }
-        if let Screen::NewCampaign(screen) = &mut self.screen {
+        let editor = match &mut self.screen {
+            Screen::NewCampaign(screen) => Some(screen),
+            Screen::Campaign(screen) if screen.can_edit_settings => screen.settings.as_deref_mut(),
+            _ => None,
+        };
+        if let Some(screen) = editor {
             match field {
                 Field::HasVoice => screen.draft.has_voice = is_on,
                 Field::CoHostsCanInvite => screen.draft.co_hosts_can_invite = is_on,
@@ -587,6 +470,25 @@ impl Model {
         let generation = self.generation;
         let is_signed_in = self.account().is_some();
         let call = match (&mut self.screen, form) {
+            (Screen::Campaign(screen), Form::CampaignSettings) => {
+                if !screen.can_edit_settings || screen.action.is_sending() {
+                    return Vec::new();
+                }
+                let Some(editor) = screen.settings.as_ref() else {
+                    return Vec::new();
+                };
+                if let Some(refusal) = editor.step_refusal() {
+                    screen.action = Submit::Refused(ApiError::refused(refusal));
+                    return vec![Effect::Focus(FocusTarget::ErrorSummary)];
+                }
+                screen.action = Submit::Sending;
+                ApiCall::SaveCampaignSettings {
+                    campaign_id: screen.campaign_id.clone(),
+                    request: SaveDraftRequest {
+                        draft: editor.draft.clone(),
+                    },
+                }
+            }
             (Screen::Lobby(screen), Form::Action) => {
                 let Some(LobbyView {
                     funding_note: crate::wire_campaign::FundingNote::HostCredit(quote),
@@ -659,28 +561,57 @@ impl Model {
                     code: screen.code.trim().to_owned(),
                 })
             }
-            (Screen::Lobby(screen), Form::PairingLookup) => {
-                if screen.pairing_code.trim().is_empty() {
-                    screen.action = Submit::Refused(ApiError::refused(Refusal::CodeRequired));
-                    return vec![Effect::Focus(FocusTarget::ErrorSummary)];
-                }
-                if screen.action.is_sending() {
-                    return Vec::new();
-                }
-                screen.action = Submit::Sending;
-                ApiCall::LookupDisplay {
-                    session_id: screen.session_id.clone(),
-                    request: PairingLookupRequest {
-                        code: screen.pairing_code.trim().to_owned(),
-                    },
-                }
-            }
             (_, form) => return self.submit_admin(form),
         };
         vec![Effect::Api { generation, call }]
     }
 
     pub(super) fn campaign_reply(&mut self, reply: Reply) -> Vec<Effect> {
+        match reply {
+            Reply::PlayNow(result) => return self.play_now_reply(result),
+            Reply::LobbyCancelled(result) => {
+                return match result {
+                    Ok(_) => self.navigate(Route::Dashboard, History::Push),
+                    Err(error) => self.refused_and_reissue(error),
+                };
+            }
+            Reply::CampaignSettings(result) => {
+                if let Screen::Campaign(screen) = &mut self.screen {
+                    screen.action = Submit::Idle;
+                    match result {
+                        Ok(view) => {
+                            screen.can_edit_settings = view.can_edit;
+                            screen.settings_error = None;
+                            screen.settings = Some(Box::new(WizardScreen {
+                                custom_ceiling: view
+                                    .draft
+                                    .custom_ceiling_cents_per_hour
+                                    .map(|cents| {
+                                        crate::money::cents(u64::from(cents))
+                                            .trim_start_matches('$')
+                                            .to_owned()
+                                    })
+                                    .unwrap_or_default(),
+                                draft: view.draft,
+                                catalog: Remote::Ready(view.catalog),
+                                draft_id: Remote::Ready(screen.campaign_id.clone()),
+                                step: 1,
+                                operation: Remote::Loading,
+                                save: Submit::Idle,
+                            }));
+                        }
+                        Err(error) => {
+                            screen.settings_error = Some(error);
+                            if let Some(editor) = screen.settings.as_mut() {
+                                editor.save = Submit::Refused(error);
+                            }
+                        }
+                    }
+                }
+                return Vec::new();
+            }
+            _ => {}
+        }
         match (reply, &self.screen) {
             (
                 reply @ (Reply::WizardCatalog(_) | Reply::Draft(_) | Reply::CampaignCreated(_)),
@@ -693,7 +624,7 @@ impl Model {
                 | Reply::LobbyOpened(_)),
                 _,
             ) => self.overview_reply(reply),
-            (reply @ (Reply::Lobby(_) | Reply::PairingLookup(_)), _) => self.lobby_reply(reply),
+            (reply @ Reply::Lobby(_), _) => self.lobby_reply(reply),
             (
                 reply @ (Reply::JoinPreview(_)
                 | Reply::JoinHeld(_)
@@ -718,7 +649,7 @@ impl Model {
             Reply::Draft(result) => match result {
                 Ok(view) if screen.draft_id.ready().is_none() => {
                     // A draft in progress resumes where it was left (plan 9.5).
-                    if view.step > 1 {
+                    {
                         screen.step = view.step.min(WIZARD_STEPS);
                         screen.draft = view.draft;
                         screen.custom_ceiling = screen
@@ -828,8 +759,11 @@ impl Model {
                             screen.consent_checked = false;
                         }
                         if was_action {
-                            screen.lookup = None;
-                            screen.pairing_code.clear();
+                            effects.push(Effect::OpenGame(
+                                lobby.has_started.then(|| {
+                                    format!("/app/api/sessions/{}/game", screen.session_id)
+                                }),
+                            ));
                             screen.action = Submit::Idle;
                             effects.push(Effect::IssueOperation {
                                 generation,
@@ -846,19 +780,15 @@ impl Model {
                             });
                         }
                     }
-                    Err(error) if was_action => return self.refused_and_reissue(error),
+                    Err(error) if was_action => {
+                        let mut effects = self.refused_and_reissue(error);
+                        effects.insert(0, Effect::OpenGame(None));
+                        return effects;
+                    }
                     Err(error) => screen.lobby = Remote::Failed(error),
                 }
                 effects
             }
-            Reply::PairingLookup(result) => match result {
-                Ok(lookup) => {
-                    screen.action = Submit::Idle;
-                    screen.lookup = Some(lookup);
-                    vec![Effect::Focus(FocusTarget::Heading)]
-                }
-                Err(error) => refused(&mut screen.action, error),
-            },
             _ => Vec::new(),
         }
     }
@@ -983,4 +913,122 @@ fn take_operation(operation: &mut Remote<String>, submit: &mut Submit) -> Option
 fn refused(submit: &mut Submit, error: ApiError) -> Vec<Effect> {
     *submit = Submit::Refused(error);
     vec![Effect::Focus(FocusTarget::ErrorSummary)]
+}
+
+fn edit_settings_field(screen: &mut WizardScreen, field: Field, value: &str) -> bool {
+    let draft = &mut screen.draft;
+    match field {
+        Field::CampaignName => value.clone_into(&mut draft.name),
+        Field::Adventure => {
+            draft.adventure_id = Some(value.to_owned());
+            // A rating the new adventure does not allow must not stay in the draft.
+            let allowed = screen.catalog.ready().and_then(|catalog| {
+                catalog
+                    .adventures
+                    .iter()
+                    .find(|adventure| adventure.adventure_id == value)
+            });
+            if let (Some(adventure), Some(rating)) = (allowed, draft.content_rating)
+                && !adventure.ratings.contains(&rating)
+            {
+                draft.content_rating = None;
+            }
+        }
+        Field::Rating => draft.content_rating = rating_from_name(value),
+        Field::SeatCount => {
+            if let Ok(seats) = value.parse() {
+                draft.seat_count = seats;
+            }
+        }
+        Field::Pictures => {
+            draft.pictures = if value == "existing" {
+                PictureDefault::ExistingArtOnly
+            } else {
+                PictureDefault::Automatic
+            };
+        }
+        Field::PacePreset => {
+            if let Some(preset) = super::customer_flow::preset_from_name(value) {
+                draft.pace = preset;
+            }
+        }
+        Field::CustomCeiling => {
+            value.clone_into(&mut screen.custom_ceiling);
+            draft.custom_ceiling_cents_per_hour = parse_dollars(value).ok();
+        }
+        Field::JoinModeChoice => {
+            draft.join_mode = if value == "code" {
+                JoinMode::LinkAndRoomCode
+            } else {
+                JoinMode::LinkOnly
+            };
+        }
+        Field::FundingChoice => {
+            draft.funding = if value == "shared" {
+                FundingModel::SharedPot
+            } else {
+                FundingModel::Sponsor
+            };
+        }
+        _ => return false,
+    }
+    screen.save = Submit::Idle;
+
+    true
+}
+
+impl Model {
+    pub(super) fn play_now_intent(&mut self) -> Vec<Effect> {
+        if !self.account().is_some_and(|account| account.is_verified) || self.play_now.is_sending()
+        {
+            return Vec::new();
+        }
+        let Some(operation) = self.play_operation.ready().cloned() else {
+            return Vec::new();
+        };
+        self.play_now = Submit::Sending;
+        vec![
+            Effect::ReserveGameTab,
+            self.api(ApiCall::PlayNow(OperationRequest { operation })),
+        ]
+    }
+
+    fn play_now_reply(
+        &mut self,
+        result: Result<crate::wire_campaign::PlayNowView, ApiError>,
+    ) -> Vec<Effect> {
+        match result {
+            Ok(view) => {
+                self.play_now = Submit::Idle;
+                self.play_operation = Remote::Loading;
+                let started = view.lobby.has_started;
+                let opens_game = started || view.game_unavailable;
+                let session_id = view.lobby.session_id.clone();
+                let mut effects = self.navigate(
+                    if opens_game {
+                        Route::Campaign {
+                            campaign_id: view.campaign_id,
+                        }
+                    } else {
+                        Route::Lobby {
+                            session_id: session_id.clone(),
+                        }
+                    },
+                    History::Push,
+                );
+                effects.push(Effect::OpenGame(
+                    opens_game.then(|| format!("/app/api/sessions/{session_id}/game")),
+                ));
+                effects
+            }
+            Err(error) => {
+                self.play_now = Submit::Refused(error);
+                // Keep the same operation for an unknown outcome: retry cannot create another campaign.
+                vec![
+                    Effect::OpenGame(None),
+                    Effect::Focus(FocusTarget::ErrorSummary),
+                ]
+            }
+        }
+    }
 }

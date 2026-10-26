@@ -29,8 +29,8 @@ use crate::{
 
 pub use crate::throttles::{IpKeys, KeysRefusal, ServiceKeys, ip_keys};
 pub use campaigns::CreateCampaign;
-pub use display::{Challenge, RedeemedTicket};
-pub use lobby::{LobbySeatView, LobbyView, StartOutcome};
+pub use display::{Challenge, DisplayLookup, RedeemedTicket};
+pub use lobby::{LobbySeatView, LobbyView, StartBlocker, StartOutcome};
 pub use views::{
     Dashboard, DashboardEntry, LiveSession, Overview, RosterEntry, SessionReading, Tab,
 };

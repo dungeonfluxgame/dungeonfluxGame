@@ -41,7 +41,10 @@ async fn a_pre_session_cookie_a_display_cookie_or_a_made_up_session_authorizes_n
     let harness = Harness::new().await;
     let mut visitor = harness.browser();
     visitor.session().await;
-    visitor.post("/app/api/display/challenge", &json!({})).await;
+    visitor.cookies.insert(
+        "__Host-df_display_device".to_owned(),
+        "obsolete-device".to_owned(),
+    );
     assert!(visitor.cookie("__Host-df_display_device").is_some());
     visitor
         .cookies

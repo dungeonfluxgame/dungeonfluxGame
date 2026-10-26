@@ -8,7 +8,7 @@ use super::{CampaignService, Ports, refuse};
 use crate::{
     audit::{AuditLine, failure_word},
     errors::{Failure, Outcome, Refusal, StoreError},
-    lobby::{CharacterChoice, LobbySeat, LobbySnapshot, StartBlocker, decide_start},
+    lobby::CharacterChoice,
     lobby_state::{
         LobbyDisplay, LobbyMemberRow, LobbyRows, MicrophonePreference, MicrophoneReport,
         SeatedMember, StartReadiness,
@@ -17,6 +17,28 @@ use crate::{
     roles::Capability,
     store::{AccountDirectory, CampaignStore, FundingDirectory, SessionDirectory, SessionPhase},
 };
+
+/// Website Start admits membership and funding; room readiness is owned by the game (owner 2026-10-26).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartBlocker {
+    CampaignArchived,
+    SessionNotInLobby,
+    NoSeatedMembers,
+    FundingNotReady,
+    RosterInconsistent,
+}
+
+impl StartBlocker {
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::CampaignArchived => "campaign_archived",
+            Self::SessionNotInLobby => "session_not_in_lobby",
+            Self::NoSeatedMembers => "no_seated_members",
+            Self::FundingNotReady => "funding_not_ready",
+            Self::RosterInconsistent => "roster_inconsistent",
+        }
+    }
+}
 
 /// One seated member as the lobby shows them. An unauthorized seated member (a closing or closed
 /// account) is shown as unable to play and is left out of Start.
@@ -142,42 +164,45 @@ impl<P: Ports> CampaignService<P> {
         campaign: &CampaignRow,
         phase: SessionPhase,
         seats: &[LobbySeatView],
-        displays: usize,
+        _displays: usize,
         funding: Option<StartReadiness>,
     ) -> Result<Vec<SeatedMember>, Vec<StartBlocker>> {
-        let facts: Vec<LobbySeat> = seats
+        let mut blockers = Vec::new();
+        if campaign.status != CampaignStatus::Active {
+            blockers.push(StartBlocker::CampaignArchived);
+        }
+        if phase != SessionPhase::Lobby {
+            blockers.push(StartBlocker::SessionNotInLobby);
+        }
+        let roster: Vec<SeatedMember> = seats
             .iter()
-            .map(|seat| LobbySeat {
+            .filter(|seat| seat.authorized)
+            .map(|seat| SeatedMember {
                 member: seat.member.member,
-                authorized: seat.authorized,
-                character: seat.character(),
-                ready: seat.ready(),
+                account: seat.member.account,
             })
             .collect();
-        let snapshot = LobbySnapshot {
-            campaign_active: campaign.status == CampaignStatus::Active,
-            session_in_lobby: phase == SessionPhase::Lobby,
-            seat_capacity: usize::try_from(campaign.seat_count).unwrap_or(usize::MAX),
-            seats: &facts,
-            display_required: self.inner.tunables.start_requires_display,
-            displays_paired: displays,
-            funding_ready: funding.is_some_and(|readiness| readiness.ready),
-        };
-        decide_start(&snapshot).map(|decision| {
-            decision
-                .roster
-                .into_iter()
-                .filter_map(|member| {
-                    seats
-                        .iter()
-                        .find(|seat| seat.member.member == member)
-                        .map(|seat| SeatedMember {
-                            member,
-                            account: seat.member.account,
-                        })
-                })
-                .collect()
-        })
+        if roster.is_empty() {
+            blockers.push(StartBlocker::NoSeatedMembers);
+        }
+        if roster.len() > usize::try_from(campaign.seat_count).unwrap_or(usize::MAX)
+            || roster.iter().enumerate().any(|(index, seat)| {
+                roster
+                    .iter()
+                    .skip(index + 1)
+                    .any(|other| seat.member == other.member || seat.account == other.account)
+            })
+        {
+            blockers.push(StartBlocker::RosterInconsistent);
+        }
+        if !funding.is_some_and(|readiness| readiness.ready) {
+            blockers.push(StartBlocker::FundingNotReady);
+        }
+        if blockers.is_empty() {
+            Ok(roster)
+        } else {
+            Err(blockers)
+        }
     }
 
     /// What every seated member's screen polls. Any authorized active member may read it.

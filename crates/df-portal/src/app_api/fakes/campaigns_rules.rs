@@ -6,8 +6,8 @@ use df_account_app::{
     wire_campaign::{
         AdventureOption, CampaignCard, CampaignDraft, CampaignOverview, CampaignRole,
         ContentRating, DashboardView, FundingModel, HeroChoice, InvitationRow, JoinMode,
-        JoinRequestRow, LobbyMember, LobbyView, MemberRow, MicrophonePermission, MicrophoneRequest,
-        MicrophoneState, PictureDefault, Reason, RoomCodeState, StartBlocker, WizardCatalog,
+        JoinRequestRow, LobbyMember, LobbyView, MemberRow, PictureDefault, Reason, RoomCodeState,
+        StartBlocker, WizardCatalog,
     },
 };
 use df_types::{AccountId, CampaignId, OperationId, SessionId};
@@ -89,6 +89,12 @@ impl State {
             Campaign {
                 id,
                 name: name.to_owned(),
+                settings: CampaignDraft {
+                    name: name.to_owned(),
+                    content_rating: Some(rating),
+                    seat_count: seats,
+                    ..default_draft()
+                },
                 members: vec![Member {
                     account: host.account,
                     name: host.display_name.clone(),
@@ -107,7 +113,11 @@ impl State {
     }
 
     /// The campaign and the caller's membership; anything else is `not_found`.
-    fn membership(&self, who: &Actor, campaign: CampaignId) -> PortResult<(&Campaign, &Member)> {
+    pub(super) fn membership(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+    ) -> PortResult<(&Campaign, &Member)> {
         let found = self.campaigns.get(&campaign).ok_or(PortError::NotFound)?;
         let member = found
             .members
@@ -296,8 +306,13 @@ impl State {
         {
             return Err(PortError::Refused(Refusal::CeilingOutOfRange));
         }
+        validate_settings(&draft)?;
         let has_code = draft.join_mode == JoinMode::LinkAndRoomCode;
         let id = self.create_campaign(who, name, draft.seat_count, rating, has_code, now_ms);
+        if let Some(created) = self.campaigns.get_mut(&id) {
+            created.settings = draft;
+        }
+        self.last_ratings.insert(who.account, rating);
         self.drafts.remove(position);
         self.receipts
             .record(who.account, operation, Receipt::Joined(id));
@@ -374,9 +389,6 @@ impl State {
             .get_mut(&campaign)
             .ok_or(PortError::NotFound)?;
         found.members.retain(|member| member.account != who.account);
-        if let Some(lobby) = found.live_session.and_then(|id| self.lobbies.get_mut(&id)) {
-            lobby.characters.remove(&who.account);
-        }
         Ok(())
     }
 
@@ -391,10 +403,6 @@ impl State {
             session,
             Lobby {
                 campaign,
-                ready: Vec::new(),
-                characters: std::collections::HashMap::new(),
-                microphones: std::collections::HashMap::new(),
-                tickets: Vec::new(),
                 has_started: false,
             },
         );
@@ -407,6 +415,10 @@ impl State {
         campaign: CampaignId,
     ) -> PortResult<SessionId> {
         self.managed(who, campaign)?;
+        if self.fail_next_open {
+            self.fail_next_open = false;
+            return Err(PortError::Unavailable);
+        }
         self.open_lobby_for(campaign).ok_or(PortError::Unavailable)
     }
 
@@ -435,19 +447,6 @@ impl State {
         if seated_members.is_empty() {
             start_blockers.push(StartBlocker::NoSeatedMembers);
         }
-        if seated_members
-            .iter()
-            .any(|member| !lobby.ready.contains(&member.account))
-        {
-            start_blockers.push(StartBlocker::MemberNotReady);
-        }
-        if seated_members.iter().any(|member| {
-            !lobby.characters.get(&member.account).is_some_and(|choice| {
-                *choice != df_account_app::wire_campaign::CharacterChoice::Undecided
-            })
-        }) {
-            start_blockers.push(StartBlocker::CharacterNotChosen);
-        }
         Ok(LobbyView {
             session_id: hex(session.as_bytes()),
             campaign_id: hex(campaign.id.as_bytes()),
@@ -458,106 +457,13 @@ impl State {
                 .iter()
                 .map(|member| LobbyMember {
                     display_name: member.name.clone(),
-                    character_name: lobby
-                        .characters
-                        .get(&member.account)
-                        .filter(|choice| {
-                            **choice != df_account_app::wire_campaign::CharacterChoice::Undecided
-                        })
-                        .map(|_| format!("{}'s hero", member.name)),
-                    is_ready: lobby.ready.contains(&member.account),
-                    microphone: lobby
-                        .microphones
-                        .get(&member.account)
-                        .copied()
-                        .unwrap_or(MicrophoneState::NotAsked),
                     is_me: member.account == who.account,
-                })
-                .collect(),
-            displays: lobby
-                .tickets
-                .iter()
-                .map(|ticket| df_account_app::wire_campaign::DisplayRow {
-                    ticket_id: ticket.ticket_id.clone(),
-                    device: ticket.device,
-                    paired_at_ms: ticket.paired_at_ms,
                 })
                 .collect(),
             funding_note: FundingNote::NoChargeUntilHostStarts,
             has_started: lobby.has_started,
             poll_seconds: LOBBY_POLL_SECONDS,
         })
-    }
-
-    fn seated_lobby(&mut self, who: &Actor, session: SessionId) -> PortResult<&mut Lobby> {
-        let (lobby, _, me) = self.lobby_for(who, session)?;
-        if !me.has_seat() {
-            return Err(PortError::Forbidden);
-        }
-        if lobby.has_started {
-            return Err(because(Reason::StaleRevision));
-        }
-        self.lobbies.get_mut(&session).ok_or(PortError::NotFound)
-    }
-
-    pub(super) fn choose_character(
-        &mut self,
-        who: &Actor,
-        session: SessionId,
-        request: &df_account_app::wire_campaign::CharacterRequest,
-    ) -> PortResult<LobbyView> {
-        if (request.choice != df_account_app::wire_campaign::CharacterChoice::Undecided)
-            != request.reference.is_some()
-        {
-            return Err(PortError::Forbidden);
-        }
-        if let Some(reference) = &request.reference {
-            CampaignId::from_hex(reference).map_err(|_| PortError::NotFound)?;
-        }
-        let lobby = self.seated_lobby(who, session)?;
-        lobby.characters.insert(who.account, request.choice);
-        lobby.ready.retain(|account| *account != who.account);
-        self.lobby_view(who, session)
-    }
-
-    pub(super) fn set_ready(
-        &mut self,
-        who: &Actor,
-        session: SessionId,
-        is_ready: bool,
-    ) -> PortResult<LobbyView> {
-        let lobby = self.seated_lobby(who, session)?;
-        lobby.ready.retain(|account| *account != who.account);
-        if is_ready {
-            if !lobby.characters.get(&who.account).is_some_and(|choice| {
-                *choice != df_account_app::wire_campaign::CharacterChoice::Undecided
-            }) {
-                return Err(because(Reason::StaleRevision));
-            }
-            lobby.ready.push(who.account);
-        }
-        self.lobby_view(who, session)
-    }
-
-    pub(super) fn report_microphone(
-        &mut self,
-        who: &Actor,
-        session: SessionId,
-        report: &MicrophoneRequest,
-    ) -> PortResult<LobbyView> {
-        let lobby = self.seated_lobby(who, session)?;
-        let state = if report.prefers_typing {
-            MicrophoneState::Typing
-        } else {
-            match report.permission {
-                Some(MicrophonePermission::Granted) => MicrophoneState::Granted,
-                Some(MicrophonePermission::Declined) => MicrophoneState::Declined,
-                Some(MicrophonePermission::Unsupported) => MicrophoneState::Unsupported,
-                None => MicrophoneState::NotAsked,
-            }
-        };
-        lobby.microphones.insert(who.account, state);
-        self.lobby_view(who, session)
     }
 
     pub(super) fn start_session(
@@ -594,4 +500,38 @@ pub(super) fn host_name(campaign: &Campaign) -> String {
         .iter()
         .find(|member| member.role == CampaignRole::Host)
         .map_or_else(String::new, |member| member.name.clone())
+}
+
+pub(super) fn validate_settings(draft: &CampaignDraft) -> PortResult<()> {
+    let catalog = State::wizard_catalog();
+    let adventure = catalog
+        .adventures
+        .iter()
+        .find(|adventure| Some(&adventure.adventure_id) == draft.adventure_id.as_ref())
+        .ok_or(PortError::Refused(Refusal::AdventureRequired))?;
+    let rating = draft
+        .content_rating
+        .ok_or(PortError::Refused(Refusal::ContentRatingRequired))?;
+    if !adventure.ratings.contains(&rating) {
+        return Err(PortError::Refused(Refusal::ContentRatingRequired));
+    }
+    if draft.name.trim().is_empty() {
+        return Err(PortError::Refused(Refusal::CampaignNameRequired));
+    }
+    if draft.name.trim().chars().count() > 60 {
+        return Err(PortError::Refused(Refusal::CampaignNameTooLong));
+    }
+    if !(1..=MAXIMUM_SEATS).contains(&draft.seat_count) {
+        return Err(PortError::Refused(Refusal::SeatsOutOfRange));
+    }
+    if draft.pace == PacePreset::Custom {
+        if !draft.custom_ceiling_cents_per_hour.is_some_and(|amount| {
+            (CUSTOM_MINIMUM_CENTS_PER_HOUR..=CUSTOM_MAXIMUM_CENTS_PER_HOUR).contains(&amount)
+        }) {
+            return Err(PortError::Refused(Refusal::CeilingOutOfRange));
+        }
+    } else if draft.custom_ceiling_cents_per_hour.is_some() {
+        return Err(PortError::Refused(Refusal::CeilingOutOfRange));
+    }
+    Ok(())
 }

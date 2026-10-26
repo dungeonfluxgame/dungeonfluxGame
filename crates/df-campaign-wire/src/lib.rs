@@ -110,7 +110,6 @@ pub enum Reason {
     EmailUnverified,
     DraftsFull,
     DraftIncomplete,
-    CharacterNotChosen,
     StartBlocked,
 }
 
@@ -217,57 +216,6 @@ pub enum PairingStateName {
     Expired,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayChallengeResponse {
-    /// The display form `ABCD-EFGH`; the device secret travels in a cookie, never here.
-    pub user_code: String,
-    pub expires_at_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayStatusResponse {
-    pub state: PairingStateName,
-    pub user_code: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayRedeemResponse {
-    pub session_id: String,
-    pub ticket_expires_at_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayRenewResponse {
-    pub ticket_expires_at_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayLookupBody {
-    pub code: String,
-}
-
-/// What the host sees before confirming: creation time, device class and how long it has waited.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayLookupResponse {
-    pub pairing_id: String,
-    pub created_at_ms: u64,
-    pub device_label: DeviceLabel,
-    pub waiting_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayApproveBody {
-    pub pairing_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DisplayCard {
-    pub ticket_id: String,
-    pub device_label: DeviceLabel,
-    pub paired_at_ms: u64,
-    pub expires_at_ms: u64,
-}
-
 /// An empty success body.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Done {}
@@ -329,17 +277,6 @@ pub struct TransferProposeBody {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransferProposed {
     pub proposal_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UnpairBody {
-    /// One ticket, or every ticket of the session when absent.
-    pub ticket_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UnpairResponse {
-    pub revoked: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -604,30 +541,6 @@ pub struct SessionsView {
 
 // ---- The lobby (8.4) -------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CharacterChoiceName {
-    Undecided,
-    Template,
-    Existing,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MicrophonePreferenceName {
-    Ask,
-    TypedOnly,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MicrophoneReportName {
-    Unknown,
-    Granted,
-    Declined,
-    Unsupported,
-}
-
 /// Why Start would be refused, in the order the lobby lists them.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -635,9 +548,6 @@ pub enum StartBlockerName {
     CampaignArchived,
     SessionNotInLobby,
     NoSeatedMembers,
-    CharacterNotChosen,
-    MemberNotReady,
-    DisplayRequiredButUnpaired,
     FundingNotReady,
     RosterInconsistent,
 }
@@ -650,20 +560,7 @@ pub struct LobbySeatView {
     /// False for a seated member whose account is closing or closed: shown as unable to play, and
     /// left out of Start.
     pub can_play: bool,
-    pub character: CharacterChoiceName,
-    /// The characters owner's id for the choice; opaque.
-    pub character_ref: Option<String>,
-    pub ready: bool,
-    pub microphone_preference: MicrophonePreferenceName,
-    pub microphone_report: MicrophoneReportName,
     pub is_you: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LobbyDisplayView {
-    pub ticket_id: String,
-    pub device_label: DeviceLabel,
-    pub expires_at_ms: u64,
 }
 
 /// What the funding owner said, for the lobby's notices.
@@ -682,7 +579,6 @@ pub struct LobbyView {
     pub phase: SessionPhaseName,
     pub seat_count: u32,
     pub seats: Vec<LobbySeatView>,
-    pub displays: Vec<LobbyDisplayView>,
     pub blockers: Vec<StartBlockerName>,
     /// `None` when the funding owner could not be read.
     pub funding: Option<FundingNotice>,
@@ -693,29 +589,6 @@ pub struct LobbyView {
 pub struct LobbyOpened {
     pub session_id: String,
     pub phase: SessionPhaseName,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CharacterBody {
-    pub choice: CharacterChoiceName,
-    /// Required for `template` and `existing`, absent for `undecided`; 32 hex digits.
-    pub character_ref: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct MicrophoneBody {
-    pub preference: MicrophonePreferenceName,
-    pub report: MicrophoneReportName,
-}
-
-/// The answer to a lobby change: the member's own row afterwards.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LobbyMemberChanged {
-    pub character: CharacterChoiceName,
-    pub ready: bool,
-    pub microphone_preference: MicrophonePreferenceName,
-    pub microphone_report: MicrophoneReportName,
-    pub revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -797,5 +670,48 @@ mod tests {
         let body: JoinTokenBody = serde_json::from_str(r#"{"token":"abc","extra":1}"#).unwrap();
         assert_eq!(body.token, "abc");
         assert!(serde_json::from_str::<JoinTokenBody>("{}").is_err());
+    }
+}
+
+#[cfg(test)]
+mod lobbyfix_tests {
+    use super::*;
+
+    #[test]
+    fn lobbyfix_native_lobby_serializes_membership_and_funding_without_game_room_state() {
+        let value = serde_json::to_value(LobbyView {
+            campaign_id: "campaign".to_owned(),
+            session_id: "session".to_owned(),
+            phase: SessionPhaseName::Lobby,
+            seat_count: 6,
+            seats: vec![LobbySeatView {
+                member_id: "member".to_owned(),
+                display_name: Some("Ana".to_owned()),
+                role: RoleName::Host,
+                can_play: true,
+                is_you: true,
+            }],
+            blockers: vec![StartBlockerName::FundingNotReady],
+            funding: Some(FundingNotice {
+                ready: false,
+                waiting_for_sponsor: true,
+                no_charge_until_start: true,
+            }),
+            can_start: true,
+        })
+        .unwrap();
+        assert!(value.get("displays").is_none());
+        let mut keys: Vec<_> = value["seats"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["can_play", "display_name", "is_you", "member_id", "role"]
+        );
+        assert_eq!(value["blockers"], serde_json::json!(["funding_not_ready"]));
     }
 }

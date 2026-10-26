@@ -19,13 +19,10 @@ use df_account_app::{
         ReviewDecision, ReviewItem, StatementFilter, StatementsView,
     },
     wire_campaign::{
-        CampaignDraft, CampaignOverview, CharacterRequest, DashboardView, DisplayChallenge,
-        DisplayRedeemed, DisplayRenewed, DisplayState, InvitationCreated, InvitationKind,
-        InvitePreview, JoinRequested, LobbyView, MicrophoneRequest, PairingLookup, Reason,
-        WizardCatalog,
+        CampaignDraft, CampaignOverview, DashboardView, InvitationCreated, InvitationKind,
+        InvitePreview, JoinRequested, LobbyView, Reason, WizardCatalog,
     },
 };
-use df_customer::DeviceLabel;
 use df_types::{AccountId, CampaignId, CheckoutId, OperationId, SessionId};
 
 /// Why a port call did not produce its value. Maps one to one onto the API envelope.
@@ -102,12 +99,30 @@ pub struct OperatorAct {
 
 /// Finance (F): balances, the trial, funding, statements and the operator ledger.
 pub trait FinancePort: Send + Sync + 'static {
+    /// Registers the host's new session in adapters that need a preview quote.
+    fn prepare_host_session(
+        &self,
+        _account: AccountId,
+        _session: SessionId,
+    ) -> impl Future<Output = PortResult<()>> + Send {
+        async { Ok(()) }
+    }
+
     /// Durably cancels a host's unstarted lobby, then returns its unreserved credit.
     fn cancel_host_lobby(
         &self,
         account: AccountId,
         session: SessionId,
     ) -> impl Future<Output = PortResult<()>> + Send;
+
+    /// Whether a session's optional host-credit agreement is ready, without exposing its wallet.
+    /// Other funding models remain the campaign owner's admission responsibility.
+    fn host_credit_readiness(
+        &self,
+        _session: SessionId,
+    ) -> impl Future<Output = PortResult<Option<bool>>> + Send {
+        async { Ok(None) }
+    }
 
     /// Only the current host sees their own credit and a versioned customer price.
     fn host_credit(
@@ -270,35 +285,41 @@ pub enum RequestDecision {
     Deny,
 }
 
-/// The device secret of a pairing and how long its cookie lives.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeviceSecret {
-    pub secret: String,
-    pub max_age_s: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IssuedChallenge {
-    pub challenge: DisplayChallenge,
-    pub device: DeviceSecret,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RedeemedTicket {
-    pub redeemed: DisplayRedeemed,
-    /// The ticket cookie's value and its remaining life.
-    pub ticket: DeviceSecret,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RenewedTicket {
-    pub renewed: DisplayRenewed,
-    pub ticket: DeviceSecret,
-}
-
 /// Campaigns, invitations, the lobby and display pairing (S1). Every id from the caller is
 /// checked against the caller's membership; a foreign id is `NotFound`.
 pub trait CampaignDirectory: Send + Sync + 'static {
+    /// Creates one campaign per operation using the current catalog and the host's last rating.
+    fn play_now_campaign(
+        &self,
+        who: &Actor,
+        operation: OperationId,
+    ) -> impl Future<Output = PortResult<CampaignId>> + Send;
+
+    fn campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+    ) -> impl Future<Output = PortResult<df_account_app::wire_campaign::CampaignSettingsView>> + Send;
+
+    fn save_campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+        draft: CampaignDraft,
+    ) -> impl Future<Output = PortResult<df_account_app::wire_campaign::CampaignSettingsView>> + Send;
+
+    /// A session-specific runtime link, only after its actual placement is available.
+    fn game_link(
+        &self,
+        who: &Actor,
+        session: SessionId,
+    ) -> impl Future<Output = PortResult<Option<String>>> + Send {
+        async move {
+            self.lobby(who, session).await?;
+            Ok(None)
+        }
+    }
+
     fn dashboard(&self, who: &Actor) -> impl Future<Output = PortResult<DashboardView>> + Send;
 
     /// Play history of one account, newest first, paged by an opaque cursor (S1 owns the data).
@@ -389,62 +410,21 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         campaign: CampaignId,
     ) -> impl Future<Output = PortResult<SessionId>> + Send;
 
+    fn cancel_lobby(
+        &self,
+        _who: &Actor,
+        _session: SessionId,
+    ) -> impl Future<Output = PortResult<()>> + Send {
+        async { Ok(()) }
+    }
+
     fn lobby(
         &self,
         who: &Actor,
         session: SessionId,
     ) -> impl Future<Output = PortResult<LobbyView>> + Send;
 
-    fn choose_character(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        request: CharacterRequest,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
-    fn set_ready(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        is_ready: bool,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
-    fn report_microphone(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        report: MicrophoneRequest,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
     fn start_session(
-        &self,
-        who: &Actor,
-        session: SessionId,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
-    /// Lookup never approves: the host confirms after seeing which device is waiting.
-    fn lookup_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        code: &str,
-    ) -> impl Future<Output = PortResult<PairingLookup>> + Send;
-
-    fn approve_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        pairing_id: &str,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
-    fn unpair_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        ticket_id: &str,
-    ) -> impl Future<Output = PortResult<LobbyView>> + Send;
-
-    fn unpair_all_displays(
         &self,
         who: &Actor,
         session: SessionId,
@@ -472,27 +452,6 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         code: &str,
         operation: OperationId,
     ) -> impl Future<Output = PortResult<JoinRequested>> + Send;
-
-    fn display_challenge(
-        &self,
-        device: DeviceLabel,
-    ) -> impl Future<Output = PortResult<IssuedChallenge>> + Send;
-
-    fn display_status(
-        &self,
-        device_secret: &str,
-    ) -> impl Future<Output = PortResult<DisplayState>> + Send;
-
-    fn display_redeem(
-        &self,
-        device_secret: &str,
-    ) -> impl Future<Output = PortResult<RedeemedTicket>> + Send;
-
-    fn display_renew(
-        &self,
-        device_secret: &str,
-        ticket: &str,
-    ) -> impl Future<Output = PortResult<RenewedTicket>> + Send;
 }
 
 /// What an account may do in the operator console.

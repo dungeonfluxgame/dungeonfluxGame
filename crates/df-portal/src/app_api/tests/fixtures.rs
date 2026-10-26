@@ -283,22 +283,6 @@ impl Req {
         self.content_type = Some(content_type.to_owned());
         self
     }
-
-    pub fn device_header(mut self) -> Self {
-        self.device_header = true;
-        self
-    }
-
-    /// Sends exactly these cookies instead of the browser's jar.
-    pub fn only_cookies(mut self, cookies: &[(&str, &str)]) -> Self {
-        self.cookies = Some(
-            cookies
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                .collect(),
-        );
-        self
-    }
 }
 
 pub struct Browser<'h> {

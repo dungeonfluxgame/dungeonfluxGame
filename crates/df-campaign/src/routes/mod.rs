@@ -9,7 +9,6 @@
 
 mod campaigns;
 mod cookies;
-mod display;
 mod drafts;
 mod guard;
 mod joining;
@@ -111,7 +110,6 @@ async fn dispatch<P: Ports, G: Guard>(
     let ctx = Ctx {
         app: &app,
         params,
-        parts: &parts,
         caller,
         body: bytes,
     };
@@ -131,10 +129,6 @@ async fn handle<P: Ports, G: Guard>(id: RouteId, ctx: &Ctx<'_, P, G>) -> Handled
         RouteId::CampaignSessions => views::sessions(ctx).await,
         RouteId::OpenLobby => lobby::open(ctx).await,
         RouteId::LobbyView => lobby::view(ctx).await,
-        RouteId::LobbyCharacter => lobby::character(ctx).await,
-        RouteId::LobbyReady => lobby::ready(ctx).await,
-        RouteId::LobbyUnready => lobby::unready(ctx).await,
-        RouteId::LobbyMicrophone => lobby::microphone(ctx).await,
         RouteId::LobbyStart => lobby::start(ctx).await,
         RouteId::StartDraft => drafts::start(ctx).await,
         RouteId::GetDraft => drafts::get(ctx).await,
@@ -163,12 +157,5 @@ async fn handle<P: Ports, G: Guard>(id: RouteId, ctx: &Ctx<'_, P, G>) -> Handled
         RouteId::CodeRequest => joining::code_request(ctx).await,
         RouteId::ApproveRequest => joining::approve_request(ctx).await,
         RouteId::DenyRequest => joining::deny_request(ctx).await,
-        RouteId::DisplayChallenge => display::challenge(ctx).await,
-        RouteId::DisplayStatus => display::status(ctx).await,
-        RouteId::DisplayRedeem => display::redeem(ctx).await,
-        RouteId::DisplayRenew => display::renew(ctx).await,
-        RouteId::DisplayLookup => display::lookup(ctx).await,
-        RouteId::DisplayApprove => display::approve(ctx).await,
-        RouteId::DisplayUnpair => display::unpair(ctx).await,
     }
 }

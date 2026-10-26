@@ -234,6 +234,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         31,
         include_str!("../../df-persistence/migrations/0031_host_funding.sql"),
     ),
+    (
+        36,
+        include_str!("../../df-persistence/migrations/0036_campaign_settings.sql"),
+    ),
     (100, include_str!("../migrations/0100_stripe_checkout.sql")),
     (101, include_str!("../migrations/0101_paypal_checkout.sql")),
 ];

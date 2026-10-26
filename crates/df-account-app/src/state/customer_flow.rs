@@ -252,6 +252,7 @@ impl Model {
                 });
                 vec![
                     self.api(ApiCall::Overview),
+                    self.issue_operation(OperationSlot::Primary),
                     self.api(ApiCall::Dashboard),
                     self.api(ApiCall::JoinPending),
                     self.api(ApiCall::AccountStats),
@@ -333,7 +334,10 @@ impl Model {
                     next_cursor: None,
                     more: Submit::Idle,
                 });
-                vec![self.api(ApiCall::PlaySessions { cursor: None })]
+                vec![
+                    self.api(ApiCall::PlaySessions { cursor: None }),
+                    self.issue_operation(OperationSlot::Primary),
+                ]
             }
             Route::Assets => {
                 self.screen = Screen::Assets(AssetsScreen {
@@ -1165,7 +1169,6 @@ impl Model {
                 checkout_id: checkout_id.clone(),
             })],
             Screen::Lobby(_) => self.refresh_lobby(),
-            Screen::Display(_) => self.display_timer(),
             _ => Vec::new(),
         }
     }

@@ -2,13 +2,11 @@
 //! the TV's pairing screen. Each is a function of the screen's state; the server decided every
 //! permission and the page only shows what S1 returned (plan 9.4-9.6; S1 plan 7 and 8).
 
-mod display;
 mod join;
 mod lobby;
 mod overview;
 mod wizard;
 
-pub(super) use display::display;
 pub(super) use join::join;
 pub(super) use lobby::lobby;
 pub(super) use overview::overview;

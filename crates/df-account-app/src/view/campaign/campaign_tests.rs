@@ -2,19 +2,16 @@ use crate::{
     node::{Element, Node},
     route::Route,
     state::{
-        CampaignScreen, DisplayEnd, DisplayPhase, DisplayScreen, Field, Form, Intent, JoinScreen,
-        LobbyScreen, Model, Remote, RequestDecision, Screen, Submit, WizardScreen,
+        CampaignScreen, Field, Form, Intent, JoinScreen, LobbyScreen, Model, Remote,
+        RequestDecision, Screen, Submit, WizardScreen,
     },
     view::view,
-    wire::{
-        AccountView, ApiError, DeviceKind, ErrorCode, PacePreset, PresetOffer, Refusal, SessionView,
-    },
+    wire::{AccountView, ApiError, ErrorCode, PacePreset, PresetOffer, Refusal, SessionView},
     wire_campaign::{
-        AdventureOption, CampaignDraft, CampaignOverview, CampaignRole, ContentRating, DisplayRow,
+        AdventureOption, CampaignDraft, CampaignOverview, CampaignRole, ContentRating,
         FundingModel, FundingNote, HeroChoice, InvitationCreated, InvitationKind, InvitationRow,
         InvitePreview, JoinMode, JoinRequestRow, JoinRequested, LobbyMember, LobbyView, MemberRow,
-        MicrophoneState, PairingLookup, PictureDefault, Reason, RoomCodeState, StartBlocker,
-        WizardCatalog,
+        PictureDefault, Reason, RoomCodeState, StartBlocker, WizardCatalog,
     },
 };
 
@@ -313,16 +310,12 @@ fn step_one_offers_only_the_ratings_the_chosen_adventure_allows() {
 }
 
 #[test]
-fn step_one_asks_for_an_adventure_before_showing_any_rating() {
+fn lobbyfix_content_rating_is_visible_before_an_adventure_is_selected() {
     let mut screen = wizard_screen(1);
     screen.draft.adventure_id = None;
     screen.draft.content_rating = None;
     let tree = wizard_page(screen);
-    assert!(bound(&tree, Field::Rating).is_empty());
-    assert!(
-        tree.text_content()
-            .contains("Choose an adventure to see the content ratings")
-    );
+    assert_eq!(bound(&tree, Field::Rating).len(), 2);
 }
 
 #[test]
@@ -387,10 +380,10 @@ fn a_draft_that_resumes_at_a_later_step_shows_that_step() {
 }
 
 #[test]
-fn step_two_offers_choosing_the_hero_in_the_lobby_and_says_saved_heroes_come_later() {
+fn step_two_says_each_player_chooses_their_hero_in_the_game() {
     let text = wizard_step_page(2).text_content();
-    assert!(text.contains("Choose my hero in the lobby"));
-    assert!(text.contains("saved heroes comes later"));
+    assert!(text.contains("Choose my hero in the game"));
+    assert!(text.contains("in the game's room"));
 }
 
 #[test]
@@ -491,7 +484,7 @@ fn step_five_summarises_every_choice_and_says_creating_is_free() {
         "The Lost Mine",
         "Teen: peril and combat, no gore",
         "4, including you",
-        "Each player chooses a hero in the lobby",
+        "Each player chooses a hero in the game",
         "Spoken narration and character voices",
         "Make new pictures as the story needs them",
         "Immersive: at most $6 an hour (proposed pilot pricing)",
@@ -662,6 +655,9 @@ fn campaign_screen(overview: CampaignOverview) -> CampaignScreen {
         action: Submit::Idle,
         created_link: None,
         is_confirming_leave: false,
+        settings: None,
+        settings_error: None,
+        can_edit_settings: false,
     }
 }
 
@@ -1227,12 +1223,10 @@ fn after_asking_to_join_the_person_is_told_to_wait_for_the_host() {
 
 // ---------------------------------------------------------------- lobby fixtures
 
-fn lobby_member(name: &str, is_me: bool, is_ready: bool) -> LobbyMember {
+fn lobby_member(name: &str, is_me: bool, _is_ready: bool) -> LobbyMember {
     LobbyMember {
         display_name: name.to_owned(),
-        character_name: None,
-        is_ready,
-        microphone: MicrophoneState::NotAsked,
+
         is_me,
     }
 }
@@ -1243,23 +1237,14 @@ fn lobby_data() -> LobbyView {
         campaign_id: "camp-1".to_owned(),
         campaign_name: "Friday table".to_owned(),
         can_manage: true,
-        start_blockers: vec![
-            StartBlocker::MemberNotReady,
-            StartBlocker::CharacterNotChosen,
-        ],
+        start_blockers: vec![StartBlocker::FundingNotReady],
         members: vec![
             LobbyMember {
-                character_name: Some("Mira".to_owned()),
-                microphone: MicrophoneState::Granted,
                 ..lobby_member("Ana", true, true)
             },
             lobby_member("Ben", false, false),
         ],
-        displays: vec![DisplayRow {
-            ticket_id: "tick-1".to_owned(),
-            device: DeviceKind::Desktop,
-            paired_at_ms: 1_790_000_000_000,
-        }],
+
         funding_note: FundingNote::NoChargeUntilHostStarts,
         has_started: false,
         poll_seconds: 3,
@@ -1272,8 +1257,7 @@ fn lobby_screen(lobby: LobbyView) -> LobbyScreen {
         lobby: Remote::Ready(lobby),
         operation: Remote::Ready("operation-1".to_owned()),
         action: Submit::Idle,
-        pairing_code: String::new(),
-        lookup: None,
+
         consent_checked: false,
     }
 }
@@ -1290,7 +1274,7 @@ fn the_lobby_says_it_is_loading_and_has_one_heading() {
     screen.lobby = Remote::Loading;
     let tree = lobby_page(screen);
     assert_one_heading_and_labelled_inputs(&tree);
-    assert!(tree.text_content().contains("Opening the lobby..."));
+    assert!(tree.text_content().contains("Opening the session..."));
 }
 
 #[test]
@@ -1301,22 +1285,6 @@ fn a_failed_lobby_offers_try_again() {
         control(&lobby_page(screen), "Try again").on_click,
         Some(Intent::Retry)
     );
-}
-
-#[test]
-fn the_lobby_lists_each_member_with_hero_readiness_microphone_and_a_you_tag() {
-    let tree = lobby_page(lobby_screen(lobby_data()));
-    assert_one_heading_and_labelled_inputs(&tree);
-    let text = tree.text_content();
-    assert!(text.contains("Lobby: Friday table"));
-    assert!(text.contains("Ana You"));
-    assert!(text.contains("Hero: Mira"));
-    assert!(text.contains("Microphone on"));
-    assert!(text.contains("Ready"));
-    assert!(text.contains("Ben"));
-    assert!(text.contains("No hero yet"));
-    assert!(text.contains("Not ready"));
-    assert!(text.contains("Microphone not set up"));
 }
 
 #[test]
@@ -1340,11 +1308,9 @@ fn the_lobby_funding_note_follows_the_server() {
 fn start_blockers_are_listed_in_words_beside_a_disabled_start_button() {
     let tree = lobby_page(lobby_screen(lobby_data()));
     let text = tree.text_content();
-    assert!(text.contains("Not everyone with a seat is ready yet."));
-    assert!(text.contains("Someone with a seat has not chosen a hero."));
+    assert!(text.contains("funding"));
     let start = control(&tree, "Start the session");
     assert!(is_disabled(start));
-    assert_eq!(start.attribute("aria-describedby"), Some("start-blockers"));
     assert!(
         all_elements(&tree)
             .into_iter()
@@ -1364,21 +1330,6 @@ fn start_is_enabled_when_nothing_blocks_it() {
 }
 
 #[test]
-fn a_member_who_cannot_manage_sees_blockers_but_no_start_or_pairing_controls() {
-    let mut lobby = lobby_data();
-    lobby.can_manage = false;
-    let tree = lobby_page(lobby_screen(lobby));
-    assert!(!has_control(&tree, "Start the session"));
-    assert!(!has_control(&tree, "Look up screen"));
-    assert!(!has_control(&tree, "Unpair"));
-    assert!(bound(&tree, Field::PairingCode).is_empty());
-    assert!(
-        tree.text_content()
-            .contains("Not everyone with a seat is ready yet.")
-    );
-}
-
-#[test]
 fn a_member_who_cannot_manage_waits_for_the_host_when_nothing_blocks() {
     let mut lobby = lobby_data();
     lobby.can_manage = false;
@@ -1386,144 +1337,8 @@ fn a_member_who_cannot_manage_waits_for_the_host_when_nothing_blocks() {
     assert!(
         lobby_page(lobby_screen(lobby))
             .text_content()
-            .contains("Waiting for the host to start the session.")
+            .contains("Waiting for the host to start.")
     );
-}
-
-#[test]
-fn a_ready_member_can_say_they_are_not_ready_and_the_other_way_round() {
-    let tree = lobby_page(lobby_screen(lobby_data()));
-    assert_eq!(
-        control(&tree, "I am not ready").on_click,
-        Some(Intent::SetReady(false))
-    );
-    assert!(!has_control(&tree, "I am ready"));
-
-    let mut lobby = lobby_data();
-    lobby.members[0].is_ready = false;
-    let tree = lobby_page(lobby_screen(lobby));
-    assert_eq!(
-        control(&tree, "I am ready").on_click,
-        Some(Intent::SetReady(true))
-    );
-}
-
-#[test]
-fn a_member_who_has_not_set_up_the_microphone_can_turn_it_on_or_choose_typing() {
-    let mut lobby = lobby_data();
-    lobby.members[0].microphone = MicrophoneState::NotAsked;
-    let tree = lobby_page(lobby_screen(lobby));
-    assert_eq!(
-        control(&tree, "Turn on my microphone").on_click,
-        Some(Intent::EnableMicrophone)
-    );
-    assert_eq!(
-        control(&tree, "I will type instead").on_click,
-        Some(Intent::PreferTyping)
-    );
-    assert!(
-        tree.text_content()
-            .contains("Your browser will ask for permission")
-    );
-}
-
-#[test]
-fn a_member_whose_browser_has_no_microphone_gets_no_microphone_buttons() {
-    let mut lobby = lobby_data();
-    lobby.members[0].microphone = MicrophoneState::Unsupported;
-    let tree = lobby_page(lobby_screen(lobby));
-    assert!(!has_control(&tree, "Turn on my microphone"));
-    assert!(!has_control(&tree, "I will type instead"));
-    assert!(
-        tree.text_content()
-            .contains("No microphone available: typing only")
-    );
-}
-
-#[test]
-fn the_pairing_form_takes_a_code_and_looks_it_up() {
-    let mut screen = lobby_screen(lobby_data());
-    screen.pairing_code = "ABCD-EFGH".to_owned();
-    let tree = lobby_page(screen);
-    assert_one_heading_and_labelled_inputs(&tree);
-    let code = bound(&tree, Field::PairingCode);
-    assert_eq!(code.len(), 1);
-    assert_eq!(code[0].attribute("value"), Some("ABCD-EFGH"));
-    let form = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.on_submit == Some(Intent::Submit(Form::PairingLookup)))
-        .expect("the pairing form");
-    assert_eq!(form.tag, "form");
-    assert_eq!(
-        control(&tree, "Look up screen").attribute("type"),
-        Some("submit")
-    );
-}
-
-#[test]
-fn a_found_screen_must_be_confirmed_after_a_warning_and_can_be_cancelled() {
-    let mut screen = lobby_screen(lobby_data());
-    screen.pairing_code = "ABCD-EFGH".to_owned();
-    screen.lookup = Some(PairingLookup::Found {
-        pairing_id: "pair-1".to_owned(),
-        device: DeviceKind::Tablet,
-        created_at_ms: 1_790_000_000_000,
-        waiting_seconds: 95,
-    });
-    let tree = lobby_page(screen);
-    let text = tree.text_content();
-    assert!(text.contains("Only pair a screen you can see showing this code"));
-    assert!(text.contains("Tablet"));
-    assert!(text.contains("1m 35s"));
-    assert_eq!(
-        control(&tree, "Confirm: pair this screen").on_click,
-        Some(Intent::ApprovePairing)
-    );
-    assert_eq!(
-        control(&tree, "Cancel").on_click,
-        Some(Intent::CancelPairing)
-    );
-    assert!(
-        bound(&tree, Field::PairingCode).is_empty(),
-        "lookup never approves by itself"
-    );
-}
-
-#[test]
-fn an_unknown_pairing_code_is_explained_and_the_form_stays() {
-    let mut screen = lobby_screen(lobby_data());
-    screen.lookup = Some(PairingLookup::NotFound);
-    let tree = lobby_page(screen);
-    assert!(
-        tree.text_content()
-            .contains("No screen is showing that code.")
-    );
-    assert_eq!(bound(&tree, Field::PairingCode).len(), 1);
-    assert!(!has_control(&tree, "Confirm: pair this screen"));
-}
-
-#[test]
-fn paired_screens_can_be_unpaired_one_by_one_or_all_at_once() {
-    let tree = lobby_page(lobby_screen(lobby_data()));
-    assert_eq!(
-        control(&tree, "Unpair").on_click,
-        Some(Intent::UnpairDisplay {
-            ticket_id: "tick-1".to_owned()
-        })
-    );
-    assert_eq!(
-        control(&tree, "Unpair all").on_click,
-        Some(Intent::UnpairAllDisplays)
-    );
-}
-
-#[test]
-fn with_no_paired_screens_there_is_no_unpair_button() {
-    let mut lobby = lobby_data();
-    lobby.displays.clear();
-    let tree = lobby_page(lobby_screen(lobby));
-    assert!(tree.text_content().contains("No screens are paired yet."));
-    assert!(!has_control(&tree, "Unpair all"));
 }
 
 #[test]
@@ -1534,34 +1349,14 @@ fn a_started_session_links_to_the_game_with_a_plain_anchor() {
     assert!(tree.text_content().contains("The session has started"));
     let game = control(&tree, "Open the game");
     assert_eq!(game.tag, "a");
-    assert_eq!(game.attribute("href"), Some("/sessions/sess-1/play"));
+    assert_eq!(
+        game.attribute("href"),
+        Some("/app/api/sessions/sess-1/game")
+    );
     assert_eq!(game.on_click, None, "a full page load, not an intent");
     assert!(!has_control(&tree, "Start the session"));
-    assert!(!tree.text_content().contains("This page updates by itself"));
-}
-
-#[test]
-fn an_action_in_flight_disables_the_lobby_controls() {
-    let mut lobby = lobby_data();
-    lobby.members[0].microphone = MicrophoneState::NotAsked;
-    let mut screen = lobby_screen(lobby);
-    screen.action = Submit::Sending;
-    screen.operation = Remote::Loading;
-    let tree = lobby_page(screen);
-    for label in [
-        "I am not ready",
-        "Turn on my microphone",
-        "Start the session",
-        "Unpair",
-        "Unpair all",
-    ] {
-        let button = control(&tree, label);
-        assert!(is_disabled(button), "{label}");
-    }
-    assert_eq!(
-        control(&tree, "I am not ready").attribute("aria-busy"),
-        Some("true")
-    );
+    assert_eq!(game.attribute("target"), Some("_blank"));
+    assert_eq!(game.attribute("rel"), Some("noopener noreferrer"));
 }
 
 #[test]
@@ -1586,140 +1381,6 @@ fn the_lobby_shows_no_fee_multiplier_or_provider() {
 
 // ---------------------------------------------------------------- display
 
-fn display_page(phase: DisplayPhase) -> Node {
-    view(&with_screen(
-        signed_out(),
-        Screen::Display(DisplayScreen {
-            phase,
-            poll_ms: 2_000,
-        }),
-    ))
-}
-
-#[test]
-fn an_idle_display_explains_itself_and_offers_to_show_a_code() {
-    let tree = display_page(DisplayPhase::Idle);
-    assert_one_heading_and_labelled_inputs(&tree);
-    let heading = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.tag == "h1")
-        .expect("h1");
-    assert_eq!(element_text(heading), "Show this screen on your TV");
-    assert_eq!(
-        control(&tree, "Show pairing code").on_click,
-        Some(Intent::ShowPairingCode)
-    );
-}
-
-#[test]
-fn a_display_asking_for_a_code_says_so() {
-    let tree = display_page(DisplayPhase::Requesting);
-    assert_one_heading_and_labelled_inputs(&tree);
-    assert!(tree.text_content().contains("Getting a code..."));
-    assert!(!has_control(&tree, "Show pairing code"));
-}
-
-#[test]
-fn a_display_showing_a_code_prints_it_large_with_instructions_and_a_live_wait_line() {
-    let tree = display_page(DisplayPhase::Showing {
-        user_code: "ABCD-EFGH".to_owned(),
-        expires_at_ms: 1_800_000_000_000,
-    });
-    assert_one_heading_and_labelled_inputs(&tree);
-    let code = all_elements(&tree)
-        .into_iter()
-        .find(|element| {
-            element
-                .attribute("class")
-                .is_some_and(|class| class.contains("code-box"))
-        })
-        .expect("the code box");
-    assert_eq!(element_text(code), "ABCD-EFGH");
-    let text = tree.text_content();
-    assert!(
-        text.contains("On your phone, open the lobby, choose Pair a display and type this code")
-    );
-    assert!(text.contains("This code stops working in about"));
-    let live = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.attribute("aria-live") == Some("polite"))
-        .expect("a polite live region");
-    assert_eq!(element_text(live), "Waiting for the host to confirm");
-}
-
-#[test]
-fn a_connected_display_says_it_is_opening_the_game_display() {
-    for phase in [
-        DisplayPhase::Redeeming { attempts: 1 },
-        DisplayPhase::Opening,
-    ] {
-        let tree = display_page(phase);
-        assert_one_heading_and_labelled_inputs(&tree);
-        assert!(
-            tree.text_content()
-                .contains("Connected. Opening the game display...")
-        );
-    }
-}
-
-#[test]
-fn an_ended_display_explains_why_and_offers_a_new_code() {
-    let cases = [
-        (DisplayEnd::Expired, "This code expired."),
-        (DisplayEnd::Cancelled, "The pairing was cancelled."),
-        (
-            DisplayEnd::Refused(ApiError::because(
-                ErrorCode::Forbidden,
-                Reason::DisplayLimit,
-            )),
-            "This table already has as many screens paired as it allows.",
-        ),
-        (
-            DisplayEnd::Refused(ApiError::of(ErrorCode::Throttled)),
-            "Too many attempts in a short time.",
-        ),
-    ];
-    for (end, expected) in cases {
-        let tree = display_page(DisplayPhase::Ended(end.clone()));
-        assert_one_heading_and_labelled_inputs(&tree);
-        assert!(tree.text_content().contains(expected), "{end:?}");
-        assert_eq!(
-            control(&tree, "Show a new code").on_click,
-            Some(Intent::ShowPairingCode),
-            "{end:?}"
-        );
-    }
-}
-
-#[test]
-fn the_display_screen_never_shows_a_token_secret_or_cookie() {
-    let phases = [
-        DisplayPhase::Idle,
-        DisplayPhase::Requesting,
-        DisplayPhase::Showing {
-            user_code: "ABCD-EFGH".to_owned(),
-            expires_at_ms: 1_800_000_000_000,
-        },
-        DisplayPhase::Opening,
-        DisplayPhase::Ended(DisplayEnd::Expired),
-    ];
-    for phase in phases {
-        let tree = display_page(phase);
-        let lowered = tree.text_content().to_lowercase();
-        for word in ["token", "secret", "cookie"] {
-            assert!(!lowered.contains(word), "{word}");
-        }
-        for element in all_elements(&tree) {
-            assert_ne!(element.tag, "input", "the TV screen has no inputs");
-        }
-    }
-}
-
-#[test]
-fn the_display_screen_shows_no_fee_multiplier_or_provider() {
-    assert_no_pricing_internals(&display_page(DisplayPhase::Idle).text_content());
-}
-
 #[test]
 fn every_campaign_screen_state_has_exactly_one_heading() {
     let mut pages = vec![
@@ -1735,22 +1396,59 @@ fn every_campaign_screen_state_has_exactly_one_heading() {
 }
 
 #[test]
-fn a_display_code_says_how_long_it_still_works_rounded_up_to_the_minute() {
-    let mut model = with_screen(
-        signed_out(),
-        Screen::Display(DisplayScreen {
-            phase: DisplayPhase::Showing {
-                user_code: "ABCD-EFGH".to_owned(),
-                expires_at_ms: 10_000_000,
-            },
-            poll_ms: 2_000,
-        }),
-    );
-    model.now_ms = 10_000_000 - 9 * 60_000 + 1;
+fn lobbyfix_website_membership_has_no_hero_ready_microphone_or_pairing_controls() {
+    let tree = lobby_page(lobby_screen(lobby_data()));
+    let text = tree.text_content();
+    assert!(text.contains("Ana You") && text.contains("Ben"));
+    for label in [
+        "Hero:",
+        "No hero yet",
+        "Not ready",
+        "Microphone",
+        "Pair a display",
+        "I am ready",
+        "Show pairing code",
+    ] {
+        assert!(!text.contains(label), "{label}");
+    }
+    assert!(has_control(&tree, "Cancel"));
+}
 
-    assert!(
-        view(&model)
-            .text_content()
-            .contains("This code stops working in about 9 minutes.")
+#[test]
+fn lobbyfix_campaign_settings_show_rating_voice_pictures_pace_joining_and_rights_without_headcount()
+{
+    let editor = wizard_screen(1);
+    let tree = super::wizard::settings(&editor, false);
+    assert_eq!(bound(&tree, Field::Rating).len(), 2);
+    for field in [
+        Field::HasVoice,
+        Field::Pictures,
+        Field::PacePreset,
+        Field::JoinModeChoice,
+        Field::FundingChoice,
+        Field::CoHostsCanInvite,
+        Field::CoHostsCanStart,
+        Field::CoHostsCanExport,
+    ] {
+        assert!(!bound(&tree, field).is_empty(), "{field:?}");
+    }
+    assert!(bound(&tree, Field::SeatCount).is_empty());
+    assert!(has_control(&tree, "Save settings"));
+}
+
+#[test]
+fn an_action_in_flight_disables_the_lobby_controls() {
+    let lobby = lobby_data();
+    let mut screen = lobby_screen(lobby);
+    screen.action = Submit::Sending;
+    screen.operation = Remote::Loading;
+    let tree = lobby_page(screen);
+    for label in ["Start the session", "Cancel"] {
+        let button = control(&tree, label);
+        assert!(is_disabled(button), "{label}");
+    }
+    assert_eq!(
+        control(&tree, "Start the session").attribute("aria-busy"),
+        Some("true")
     );
 }

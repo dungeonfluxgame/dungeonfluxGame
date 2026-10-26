@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::wire::{DeviceKind, PacePreset, PresetOffer};
+use crate::wire::{PacePreset, PresetOffer};
 
 /// Why a campaign request was refused. It rides beside the envelope's `code` (S1 plan 7) and every
 /// invitation refusal omits the preview, so a revoked link tells its holder nothing about the table.
@@ -309,7 +309,6 @@ pub struct LobbyView {
     pub can_manage: bool,
     pub start_blockers: Vec<StartBlocker>,
     pub members: Vec<LobbyMember>,
-    pub displays: Vec<DisplayRow>,
     pub funding_note: FundingNote,
     pub has_started: bool,
     /// How often the screen reads the lobby again (S1 `lobby_poll_seconds`).
@@ -319,21 +318,7 @@ pub struct LobbyView {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LobbyMember {
     pub display_name: String,
-    pub character_name: Option<String>,
-    pub is_ready: bool,
-    pub microphone: MicrophoneState,
     pub is_me: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MicrophoneState {
-    NotAsked,
-    Granted,
-    Declined,
-    Unsupported,
-    /// The person chose to type instead of speak.
-    Typing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -369,118 +354,22 @@ pub struct HostConsentRequest {
 #[serde(rename_all = "snake_case")]
 pub enum StartBlocker {
     NoSeatedMembers,
-    MemberNotReady,
-    CharacterNotChosen,
-    DisplayRequiredButUnpaired,
     FundingNotReady,
     SessionNotInLobby,
     CampaignArchived,
 }
 
+/// Defaults are chosen by the campaign owner; funding may still need the host's consent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DisplayRow {
-    pub ticket_id: String,
-    pub device: DeviceKind,
-    pub paired_at_ms: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReadyRequest {
-    pub operation: String,
-}
-
-/// A seat's hero selection. The campaign service owns readiness and clears it on a change.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CharacterChoice {
-    Undecided,
-    Template,
-    Existing,
+pub struct PlayNowView {
+    pub campaign_id: String,
+    pub game_unavailable: bool,
+    pub lobby: LobbyView,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CharacterRequest {
-    pub choice: CharacterChoice,
-    pub reference: Option<String>,
-    pub operation: String,
-}
-
-/// What the browser said when asked for the microphone, plus the person's own preference.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MicrophonePermission {
-    Granted,
-    Declined,
-    Unsupported,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MicrophoneRequest {
-    pub prefers_typing: bool,
-    pub permission: Option<MicrophonePermission>,
-    pub operation: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PairingLookupRequest {
-    pub code: String,
-}
-
-/// Lookup never approves: the host confirms after seeing which device is waiting (S1 8.5).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "result")]
-pub enum PairingLookup {
-    Found {
-        pairing_id: String,
-        device: DeviceKind,
-        created_at_ms: u64,
-        waiting_seconds: u64,
-    },
-    /// Unknown, expired or already used: one answer for all.
-    NotFound,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PairingApproveRequest {
-    pub pairing_id: String,
-    pub operation: String,
-}
-
-/// `POST display/challenge`: the code the TV shows (S1 8.5 step 2).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DisplayChallenge {
-    pub user_code: String,
-    pub expires_at_ms: u64,
-    pub poll_seconds: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DisplayState {
-    Pending,
-    Approved,
-    Expired,
-    Cancelled,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DisplayStatus {
-    pub state: DisplayState,
-}
-
-/// Redemption issues the ticket exactly once and names the session whose display to open.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DisplayRedeemed {
-    pub session_id: String,
-    pub ticket_expires_at_ms: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DisplayRenewed {
-    pub ticket_expires_at_ms: u64,
+pub struct CampaignSettingsView {
+    pub draft: CampaignDraft,
+    pub catalog: WizardCatalog,
+    pub can_edit: bool,
 }

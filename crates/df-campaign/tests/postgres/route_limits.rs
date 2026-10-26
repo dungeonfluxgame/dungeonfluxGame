@@ -12,7 +12,7 @@ use df_campaign::{
     join_invitation::JoinRole,
     records::AccountStatus,
     roles::{Delegation, Delegations},
-    routes::{DEVICE_COOKIE, DEVICE_HEADER, Gate, ROUTES, RouteId, TICKET_COOKIE},
+    routes::{Gate, ROUTES, RouteId},
     service::ServiceKeys,
     store::{CampaignStore, SessionPhase},
 };
@@ -21,10 +21,7 @@ use serde_json::json;
 
 use crate::{
     fixture::{session_id, tenant_id},
-    routes::{
-        ORIGIN, Site, approved_display, create_body, id_text, operation, paired_display,
-        random_hex, redeem_display, shared_keys, table, table_with,
-    },
+    routes::{Site, create_body, id_text, operation, random_hex, shared_keys, table, table_with},
 };
 
 fn ip(last: u8) -> IpAddr {
@@ -176,180 +173,6 @@ async fn creating_invitations_and_changing_members_are_limited_per_account() {
     assert_eq!(seat(false).await.status, StatusCode::OK);
     assert_eq!(seat(true).await.status, StatusCode::OK);
     assert_eq!(seat(false).await.status, StatusCode::TOO_MANY_REQUESTS);
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn display_status_redeem_and_renew_each_have_their_own_limit() {
-    let tunables = Tunables {
-        display_status_limit_per_ip_per_minute: 2,
-        display_redeem_limit_per_pairing_per_hour: 2,
-        display_renew_limit_per_ticket_per_hour: 1,
-        ..Tunables::default()
-    };
-    let site = Site::with_tunables("displaylimits", tunables).await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let (device, ticket) = paired_display(&site, &table, session).await;
-    // Redeem was used once by the helper; one more repeat is allowed, the next is throttled.
-    let headers = |cookie: String| {
-        vec![
-            ("origin", ORIGIN.to_owned()),
-            ("sec-fetch-site", "same-origin".to_owned()),
-            (DEVICE_HEADER, "1".to_owned()),
-            ("cookie", cookie),
-        ]
-    };
-    let both = format!("{device}; {ticket}");
-    let redeem = |cookie: String| {
-        let site = &site;
-        async move {
-            site.send(
-                Method::POST,
-                "/display/redeem",
-                None,
-                Some(&json!({})),
-                &headers(cookie),
-            )
-            .await
-        }
-    };
-    assert_eq!(redeem(both.clone()).await.status, StatusCode::FORBIDDEN);
-    let throttled = redeem(both.clone()).await;
-    assert_eq!(throttled.status, StatusCode::TOO_MANY_REQUESTS);
-    assert!(
-        throttled.cookies.is_empty(),
-        "a throttle never signs a display out"
-    );
-    // Renewal: the first (too early) call is refused by the rules, the second by the limit.
-    let renew = |cookie: String| {
-        let site = &site;
-        async move {
-            site.send(
-                Method::POST,
-                "/display/renew",
-                None,
-                Some(&json!({})),
-                &headers(cookie),
-            )
-            .await
-        }
-    };
-    assert_eq!(renew(both.clone()).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        renew(both.clone()).await.status,
-        StatusCode::TOO_MANY_REQUESTS
-    );
-    // Status: two reads per address per minute.
-    let status = |cookie: String| {
-        let site = &site;
-        async move {
-            site.send(
-                Method::GET,
-                "/display/status",
-                None,
-                None,
-                &[("cookie", cookie)],
-            )
-            .await
-        }
-    };
-    assert_eq!(status(device.clone()).await.status, StatusCode::OK);
-    assert_eq!(status(device.clone()).await.status, StatusCode::OK);
-    assert_eq!(
-        status(device.clone()).await.status,
-        StatusCode::TOO_MANY_REQUESTS
-    );
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn a_refusal_that_leaves_a_good_session_standing_keeps_both_display_cookies() {
-    let site = Site::new("keepcookies").await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let (device, ticket) = paired_display(&site, &table, session).await;
-    let headers = |cookie: String| {
-        vec![
-            ("origin", ORIGIN.to_owned()),
-            ("sec-fetch-site", "same-origin".to_owned()),
-            (DEVICE_HEADER, "1".to_owned()),
-            ("cookie", cookie),
-        ]
-    };
-    let both = format!("{device}; {ticket}");
-    // Renewing early is refused, and the display keeps both cookies.
-    let early = site
-        .send(
-            Method::POST,
-            "/display/renew",
-            None,
-            Some(&json!({})),
-            &headers(both.clone()),
-        )
-        .await;
-    assert_eq!(early.status, StatusCode::FORBIDDEN);
-    assert!(early.cookies.is_empty(), "{:?}", early.cookies);
-    // Repeating the redemption while the ticket cookie is still valid issues nothing and keeps them.
-    let repeat = site
-        .send(
-            Method::POST,
-            "/display/redeem",
-            None,
-            Some(&json!({})),
-            &headers(both.clone()),
-        )
-        .await;
-    assert_eq!(repeat.status, StatusCode::FORBIDDEN);
-    assert!(repeat.cookies.is_empty(), "{:?}", repeat.cookies);
-    // The pairing is intact: the ticket still verifies and the status says so.
-    let status = site
-        .send(
-            Method::GET,
-            "/display/status",
-            None,
-            None,
-            &[("cookie", device.clone())],
-        )
-        .await;
-    assert_eq!(status.body["state"], "redeemed");
-    // Only an ended pairing signs the display out.
-    site.post(
-        &format!(
-            "/campaigns/{}/sessions/{}/display/unpair",
-            id_text(table.campaign.as_bytes()),
-            id_text(session.as_bytes())
-        ),
-        table.host,
-        &json!({"ticket_id": null}),
-    )
-    .await;
-    let ended = site
-        .send(
-            Method::POST,
-            "/display/renew",
-            None,
-            Some(&json!({})),
-            &headers(both),
-        )
-        .await;
-    assert_eq!(ended.status, StatusCode::FORBIDDEN);
-    assert!(
-        ended
-            .cookies
-            .iter()
-            .any(|c| c.starts_with(DEVICE_COOKIE) && c.contains("Max-Age=0"))
-    );
-    assert!(
-        ended
-            .cookies
-            .iter()
-            .any(|c| c.starts_with(TICKET_COOKIE) && c.contains("Max-Age=0"))
-    );
     site.cleanup().await;
 }
 
@@ -539,7 +362,7 @@ async fn a_member_who_left_or_was_removed_gets_the_stranger_answer_from_my_membe
 }
 
 #[tokio::test]
-async fn an_outsider_learns_nothing_about_a_sessions_state_from_the_display_routes() {
+async fn lobbyfix_retired_display_routes_reveal_no_session_state_to_any_membership() {
     let site = Site::new("sessionprivacy").await;
     let table = table(&site).await;
     let campaign = id_text(table.campaign.as_bytes());
@@ -578,7 +401,7 @@ async fn an_outsider_learns_nothing_about_a_sessions_state_from_the_display_rout
             &json!({"pairing_id": pairing}),
         )
         .await;
-    assert_eq!(told.status, StatusCode::CONFLICT);
+    assert_eq!(told.status, StatusCode::NOT_FOUND);
     site.cleanup().await;
 }
 
@@ -760,109 +583,6 @@ async fn the_dev_view_counts_campaigns_by_status_and_reports_throttle_saturation
     site.cleanup().await;
 }
 
-fn display_headers(cookie: String) -> Vec<(&'static str, String)> {
-    vec![
-        ("origin", ORIGIN.to_owned()),
-        ("sec-fetch-site", "same-origin".to_owned()),
-        (DEVICE_HEADER, "1".to_owned()),
-        ("cookie", cookie),
-    ]
-}
-
-fn made_up_cookies() -> String {
-    format!(
-        "{DEVICE_COOKIE}={}; {TICKET_COOKIE}={}",
-        random_hex() + &random_hex(),
-        random_hex() + &random_hex()
-    )
-}
-
-#[tokio::test]
-async fn made_up_cookies_cannot_fill_the_redeem_and_renew_windows_and_a_real_pairing_still_redeems()
-{
-    // The id-keyed maps hold sixteen keys; the address layer would allow a
-    // thousand calls a minute. Counting a window for every cookie the caller invents would fill
-    // them in sixteen calls and stop every display for an hour.
-    let tunables = Tunables {
-        throttle_maximum_keys_account: 16,
-        display_ticket_limit_per_ip_per_minute: 100,
-        ..Tunables::default()
-    };
-    let site = Site::with_tunables("cookieflood", tunables).await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let device = approved_display(&site, &table, session).await;
-    for round in 0..40 {
-        for path in ["/display/redeem", "/display/renew"] {
-            let reply = site
-                .send(
-                    Method::POST,
-                    path,
-                    None,
-                    Some(&json!({})),
-                    &display_headers(made_up_cookies()),
-                )
-                .await;
-            assert_eq!(
-                reply.status,
-                StatusCode::FORBIDDEN,
-                "{path} round {round}: {}",
-                reply.text
-            );
-        }
-    }
-    // The pairing that exists redeems, and its renewal window still works.
-    let redeemed = redeem_display(&site, &device).await;
-    assert_eq!(redeemed.status, StatusCode::OK, "{}", redeemed.text);
-    let view = site.service.dev_campaigns().await.unwrap();
-    for (layer, refused) in view.saturated_refusals {
-        assert_eq!(refused, 0, "layer {layer} refused for a full map");
-    }
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn redeem_and_renew_share_one_address_layer_that_never_signs_a_display_out() {
-    let tunables = Tunables {
-        display_ticket_limit_per_ip_per_minute: 3,
-        ..Tunables::default()
-    };
-    let site = Site::with_tunables("ticketaddress", tunables).await;
-    let call = |path: &'static str| {
-        let site = &site;
-        async move {
-            site.send(
-                Method::POST,
-                path,
-                None,
-                Some(&json!({})),
-                &display_headers(made_up_cookies()),
-            )
-            .await
-        }
-    };
-    assert_eq!(call("/display/redeem").await.status, StatusCode::FORBIDDEN);
-    assert_eq!(call("/display/renew").await.status, StatusCode::FORBIDDEN);
-    assert_eq!(call("/display/redeem").await.status, StatusCode::FORBIDDEN);
-    for path in ["/display/redeem", "/display/renew"] {
-        let throttled = call(path).await;
-        assert_eq!(throttled.status, StatusCode::TOO_MANY_REQUESTS, "{path}");
-        assert!(throttled.cookies.is_empty(), "{path}");
-    }
-    // Another address is not affected.
-    let other = site
-        .send(Method::POST, "/display/redeem", None, Some(&json!({})), &{
-            let mut headers = display_headers(made_up_cookies());
-            headers.push(("x-test-ip", "203.0.113.200".into()));
-            headers
-        })
-        .await;
-    assert_eq!(other.status, StatusCode::FORBIDDEN);
-    site.cleanup().await;
-}
-
 #[tokio::test]
 async fn creating_campaigns_is_limited_per_account_before_any_work() {
     let tunables = Tunables {
@@ -883,46 +603,6 @@ async fn creating_campaigns_is_limited_per_account_before_any_work() {
         "{}",
         third.text
     );
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn a_ticket_cookie_with_the_wrong_device_cannot_spend_the_real_displays_renewal_window() {
-    let tunables = Tunables {
-        display_renew_limit_per_ticket_per_hour: 1,
-        display_ticket_limit_per_ip_per_minute: 100,
-        ..Tunables::default()
-    };
-    let site = Site::with_tunables("wrongdevice", tunables).await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let (device, ticket) = paired_display(&site, &table, session).await;
-    let renew = |cookie: String| {
-        let site = &site;
-        async move {
-            site.send(
-                Method::POST,
-                "/display/renew",
-                None,
-                Some(&json!({})),
-                &display_headers(cookie),
-            )
-            .await
-        }
-    };
-    // Someone who holds only the ticket cookie, with devices of their own choosing.
-    for _ in 0..5 {
-        let other_device = format!("{DEVICE_COOKIE}={}", random_hex() + &random_hex());
-        let stolen = renew(format!("{other_device}; {ticket}")).await;
-        assert_eq!(stolen.status, StatusCode::FORBIDDEN, "{}", stolen.text);
-    }
-    // The real display's one renewal of the hour is still there: refused by the rules (too
-    // early), not by the window; only its second call is throttled.
-    let both = format!("{device}; {ticket}");
-    assert_eq!(renew(both.clone()).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(renew(both).await.status, StatusCode::TOO_MANY_REQUESTS);
     site.cleanup().await;
 }
 

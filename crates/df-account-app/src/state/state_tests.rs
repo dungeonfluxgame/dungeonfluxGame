@@ -11,7 +11,6 @@ mod admin;
 mod auth;
 mod campaign;
 mod customer;
-mod display;
 
 pub(super) fn anonymous() -> SessionView {
     SessionView {

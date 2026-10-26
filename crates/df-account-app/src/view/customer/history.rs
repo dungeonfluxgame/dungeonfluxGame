@@ -27,6 +27,12 @@ fn sessions_content(screen: &PlaySessionsScreen, rows: &[PlaySessionRow], offset
         return el("p")
             .class("empty")
             .text("You have not played a session yet.")
+            .child(button(
+                "Play now",
+                Some(Intent::PlayNow),
+                ButtonKind::Primary,
+                false,
+            ))
             .into();
     }
     let list = el("ul").class("rows").children(rows.iter().map(|row| {

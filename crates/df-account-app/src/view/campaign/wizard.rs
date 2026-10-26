@@ -190,15 +190,14 @@ fn rating_choice(draft: &CampaignDraft, catalog: &WizardCatalog, error: Option<A
             .iter()
             .find(|adventure| adventure.adventure_id == adventure_id)
     });
-    let Some(adventure) = chosen else {
-        return el("p")
-            .class("hint")
-            .attr("id", Field::Rating.name())
-            .text("Choose an adventure to see the content ratings it allows.")
-            .into();
-    };
-    let choices = adventure
-        .ratings
+    let ratings = chosen.map_or(
+        &[
+            crate::wire_campaign::ContentRating::Teen,
+            crate::wire_campaign::ContentRating::Mature,
+        ][..],
+        |adventure| adventure.ratings.as_slice(),
+    );
+    let choices = ratings
         .iter()
         .map(|rating| RadioChoice {
             field: Field::Rating,
@@ -280,11 +279,8 @@ fn heroes() -> Vec<Node> {
     vec![
         el("div")
             .class("panel")
-            .child(el("h3").text("Choose my hero in the lobby"))
-            .child(el("p").text(
-                "Each player picks or creates their hero in the lobby, before the session starts. \
-                 Choosing from saved heroes comes later.",
-            ))
+            .child(el("h3").text("Choose my hero in the game"))
+            .child(el("p").text("Each player picks or creates their hero in the game's room."))
             .into(),
     ]
 }
@@ -524,7 +520,7 @@ fn summary(draft: &CampaignDraft, catalog: &WizardCatalog) -> Vec<Node> {
             "People playing",
             format!("{}, including you", draft.seat_count),
         ),
-        fact("Heroes", "Each player chooses a hero in the lobby"),
+        fact("Heroes", "Each player chooses a hero in the game"),
         fact(
             "Voice",
             if draft.has_voice {
@@ -583,4 +579,34 @@ fn co_host_summary(draft: &CampaignDraft) -> String {
     } else {
         allowed.join(", ")
     }
+}
+
+pub(super) fn settings(screen: &WizardScreen, busy: bool) -> Node {
+    let Some(catalog) = screen.catalog.ready() else {
+        return loading("Loading campaign settings");
+    };
+    let error = screen.save.error();
+    form(Form::CampaignSettings, "Campaign settings")
+        .child(el("h2").text("Campaign settings"))
+        .children(vec![
+            text_field(
+                TextField {
+                    field: Field::CampaignName,
+                    label: "Campaign name",
+                    value: &screen.draft.name,
+                    kind: InputKind::Text,
+                    autocomplete: "off",
+                    hint: None,
+                },
+                error,
+            ),
+            adventure_choice(&screen.draft, catalog, error),
+            rating_choice(&screen.draft, catalog, error),
+        ])
+        .child(el("h3").text("Voice, pictures and pace"))
+        .children(look_and_pace(screen, catalog, error))
+        .child(el("h3").text("Joining and funding"))
+        .children(joining_and_funding(&screen.draft, error))
+        .child(submit_button("Save settings", "Saving...", busy))
+        .into()
 }

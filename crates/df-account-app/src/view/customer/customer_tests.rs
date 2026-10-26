@@ -647,22 +647,35 @@ fn dashboard_with_no_campaigns_shows_the_empty_state_and_a_room_code_link() {
 }
 
 #[test]
-fn dashboard_offers_create_only_to_a_person_who_can_create() {
-    let node = render(Screen::Dashboard(dashboard_screen()));
-    let create = find_link(&node, "Create a campaign").expect("a create link");
-    assert_eq!(create.on_click, Some(Intent::Go(Route::NewCampaign)));
-
-    let mut screen = dashboard_screen();
-    screen.campaigns = Remote::Ready(DashboardView {
-        campaigns: Vec::new(),
-        can_create: false,
+fn dashboard_offers_play_now_only_when_the_account_can_create() {
+    let mut model = model_with(Screen::Dashboard(dashboard_screen()), true);
+    model.play_operation = Remote::Ready("play".to_owned());
+    let tree = view(&model);
+    let play = tree
+        .elements()
+        .into_iter()
+        .find(|element| element.on_click == Some(Intent::PlayNow))
+        .unwrap();
+    assert!(play.attribute("disabled").is_none());
+    assert!(find_link(&tree, "Create a campaign").is_none());
+    model.session = Remote::Ready(SessionView {
+        account: Some(AccountView {
+            email: "ana@example.com".to_owned(),
+            display_name: None,
+            is_verified: false,
+            operator: None,
+        }),
+        csrf: "csrf".to_owned(),
+        google_enabled: false,
+        dev_sign_in: None,
     });
-    let node = render(Screen::Dashboard(screen));
-    assert!(find_link(&node, "Create a campaign").is_none());
-    assert!(has_text(
-        &node,
-        "Creating a campaign needs a verified email address."
-    ));
+    let tree = view(&model);
+    let play = tree
+        .elements()
+        .into_iter()
+        .find(|element| element.on_click == Some(Intent::PlayNow))
+        .unwrap();
+    assert!(play.attribute("disabled").is_some());
 }
 
 #[test]

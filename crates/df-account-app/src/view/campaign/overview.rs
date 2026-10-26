@@ -51,6 +51,14 @@ pub(in crate::view) fn overview(screen: &CampaignScreen, offset_east_minutes: i3
     } else {
         sections = sections.child(members_panel(&overview.members));
     }
+    if let Some(editor) = screen.settings.as_ref()
+        && screen.can_edit_settings
+    {
+        sections = sections.child(super::wizard::settings(editor, screen.action.is_sending()));
+    }
+    if let Some(error) = screen.settings_error {
+        sections = sections.child(failed(error));
+    }
     let mut shell = page_wide(&overview.name, None).child(error_summary(screen.action.error()));
     if let Remote::Failed(error) = &screen.operation {
         shell = shell.child(failed(*error));
@@ -69,13 +77,22 @@ fn play_panel(overview: &CampaignOverview, is_busy: bool) -> Element {
     match (&overview.live_session_id, overview.can_open_lobby) {
         (Some(session_id), _) => panel
             .child(el("p").text("A lobby is open for this campaign."))
-            .child(actions(vec![link(
-                "Go to the lobby",
-                Route::Lobby {
-                    session_id: session_id.clone(),
-                },
-                "btn btn-gilt",
-            )])),
+            .child(actions(vec![
+                link(
+                    "Go to the lobby",
+                    Route::Lobby {
+                        session_id: session_id.clone(),
+                    },
+                    "btn btn-outline",
+                ),
+                el("a")
+                    .class("btn btn-gilt")
+                    .attr("href", format!("/app/api/sessions/{session_id}/game"))
+                    .attr("target", "_blank")
+                    .attr("rel", "noopener noreferrer")
+                    .text("Open the game")
+                    .into(),
+            ])),
         (None, true) => panel
             .child(el("p").text("Open the lobby when the table is ready to gather."))
             .child(actions(vec![button(

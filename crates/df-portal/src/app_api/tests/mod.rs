@@ -6,7 +6,6 @@ mod admin_tests;
 mod auth_tests;
 mod campaign_tests;
 mod customer_tests;
-mod display_tests;
 mod fixtures;
 mod guard_tests;
 mod oauth_tests;

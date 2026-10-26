@@ -121,10 +121,7 @@ pub(super) fn step(number: u8, draft: wire::CampaignDraft) -> PortResult<domain:
 }
 
 pub(super) fn lobby(view: df_campaign::service::LobbyView) -> PortResult<wire::LobbyView> {
-    use df_campaign::{
-        lobby::StartBlocker,
-        lobby_state::{MicrophonePreference, MicrophoneReport},
-    };
+    use df_campaign::service::StartBlocker;
     Ok(wire::LobbyView {
         session_id: df_commerce::finance_ids::hex(view.session.as_bytes()),
         campaign_id: df_commerce::finance_ids::hex(view.campaign.id.as_bytes()),
@@ -137,11 +134,6 @@ pub(super) fn lobby(view: df_campaign::service::LobbyView) -> PortResult<wire::L
                 StartBlocker::CampaignArchived => Ok(wire::StartBlocker::CampaignArchived),
                 StartBlocker::SessionNotInLobby => Ok(wire::StartBlocker::SessionNotInLobby),
                 StartBlocker::NoSeatedMembers => Ok(wire::StartBlocker::NoSeatedMembers),
-                StartBlocker::CharacterNotChosen => Ok(wire::StartBlocker::CharacterNotChosen),
-                StartBlocker::MemberNotReady => Ok(wire::StartBlocker::MemberNotReady),
-                StartBlocker::DisplayRequiredButUnpaired => {
-                    Ok(wire::StartBlocker::DisplayRequiredButUnpaired)
-                }
                 StartBlocker::FundingNotReady => Ok(wire::StartBlocker::FundingNotReady),
                 _ => Err(PortError::Unavailable),
             })
@@ -150,61 +142,12 @@ pub(super) fn lobby(view: df_campaign::service::LobbyView) -> PortResult<wire::L
             .seats
             .into_iter()
             .map(|seat| {
-                let character_name = seat
-                    .character()
-                    .is_chosen()
-                    .then(|| match seat.character() {
-                        df_campaign::lobby::CharacterChoice::Template => {
-                            "Template selected".to_owned()
-                        }
-                        _ => "Hero selected".to_owned(),
-                    });
-                let microphone =
-                    seat.lobby
-                        .as_ref()
-                        .map_or(wire::MicrophoneState::NotAsked, |row| {
-                            if row.microphone_preference == MicrophonePreference::TypedOnly {
-                                return wire::MicrophoneState::Typing;
-                            }
-                            match row.microphone_report {
-                                MicrophoneReport::Unknown => wire::MicrophoneState::NotAsked,
-                                MicrophoneReport::Granted => wire::MicrophoneState::Granted,
-                                MicrophoneReport::Declined => wire::MicrophoneState::Declined,
-                                MicrophoneReport::Unsupported => wire::MicrophoneState::Unsupported,
-                            }
-                        });
-                let is_ready = seat.ready();
                 Ok(wire::LobbyMember {
                     display_name: seat.display_name.unwrap_or_else(|| "Player".to_owned()),
-                    character_name,
-                    is_ready,
-                    microphone,
                     is_me: seat.member.member == view.you,
                 })
             })
             .collect::<PortResult<Vec<_>>>()?,
-        displays: view
-            .displays
-            .into_iter()
-            .map(|display| wire::DisplayRow {
-                ticket_id: df_commerce::finance_ids::hex(display.ticket.as_bytes()),
-                device: match display.label {
-                    df_campaign::records::DeviceLabel::Phone => {
-                        df_account_app::wire::DeviceKind::Phone
-                    }
-                    df_campaign::records::DeviceLabel::Tablet => {
-                        df_account_app::wire::DeviceKind::Tablet
-                    }
-                    df_campaign::records::DeviceLabel::Desktop => {
-                        df_account_app::wire::DeviceKind::Desktop
-                    }
-                    df_campaign::records::DeviceLabel::Unknown => {
-                        df_account_app::wire::DeviceKind::Unknown
-                    }
-                },
-                paired_at_ms: display.issued_at_ms,
-            })
-            .collect(),
         funding_note: if view
             .funding
             .is_some_and(|funding| funding.no_charge_until_start && !funding.waiting_for_sponsor)
@@ -219,4 +162,103 @@ pub(super) fn lobby(view: df_campaign::service::LobbyView) -> PortResult<wire::L
         ),
         poll_seconds: df_campaign::config::Tunables::default().feed_poll_seconds,
     })
+}
+
+pub(super) fn settings_update(
+    draft: wire::CampaignDraft,
+    account: df_types::AccountId,
+) -> PortResult<domain::SettingsUpdate> {
+    let domain::DraftStepData::About {
+        name,
+        adventure_kind,
+        content_rating,
+        seat_count,
+    } = step(1, draft.clone())?
+    else {
+        return Err(PortError::Forbidden);
+    };
+    let domain::DraftStepData::Table {
+        voice_default,
+        picture_default,
+        spend_preset,
+        custom_hourly_micro_dollars,
+        session_ceiling_micro_dollars,
+    } = step(3, draft.clone())?
+    else {
+        return Err(PortError::Forbidden);
+    };
+    let domain::DraftStepData::Joining {
+        default_co_host_delegations,
+        room_codes,
+        funding_model,
+    } = step(4, draft)?
+    else {
+        return Err(PortError::Forbidden);
+    };
+    Ok(domain::SettingsUpdate {
+        name,
+        content_rating,
+        seat_count,
+        room_codes,
+        default_co_host_delegations,
+        settings: domain::CampaignSettings {
+            adventure_kind,
+            voice_default,
+            picture_default,
+            spend_preset,
+            custom_hourly_micro_dollars,
+            session_ceiling_micro_dollars,
+            funding_model,
+            sponsor: domain::sponsor_of(funding_model, account),
+        },
+    })
+}
+
+pub(super) fn settings(view: &df_campaign::service::Overview) -> PortResult<wire::CampaignDraft> {
+    let row = &view.campaign;
+    let settings = &view.settings;
+    draft(domain::DraftRow {
+        id: row.id,
+        owner: row.owner,
+        tenant: row.tenant,
+        name: row.name.clone(),
+        adventure_kind: settings.adventure_kind.clone(),
+        content_rating: row.content_rating,
+        seat_count: row.seat_count,
+        room_codes: row.room_codes,
+        default_co_host_delegations: row.default_co_host_delegations,
+        voice_default: settings.voice_default,
+        picture_default: settings.picture_default,
+        spend_preset: settings.spend_preset,
+        custom_hourly_micro_dollars: settings.custom_hourly_micro_dollars,
+        session_ceiling_micro_dollars: settings.session_ceiling_micro_dollars,
+        funding_model: settings.funding_model,
+        sponsor: settings.sponsor,
+        step: 5,
+        revision: row.revision,
+        created_at_ms: row.created_at_ms,
+        expires_at_ms: 0,
+    })
+}
+
+pub(super) fn catalog() -> wire::WizardCatalog {
+    wire::WizardCatalog {
+        adventures: Vec::new(),
+        maximum_seats: 6,
+        presets: [
+            PacePreset::Story,
+            PacePreset::Immersive,
+            PacePreset::Cinematic,
+            PacePreset::Custom,
+        ]
+        .into_iter()
+        .map(|preset| df_account_app::wire::PresetOffer {
+            preset,
+            ceiling_cents_per_hour: None,
+        })
+        .collect(),
+        is_proposed_pricing: true,
+        custom_minimum_cents_per_hour: 100,
+        custom_maximum_cents_per_hour: 5_000,
+    }
 }

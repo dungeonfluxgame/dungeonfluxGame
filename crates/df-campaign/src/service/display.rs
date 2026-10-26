@@ -4,7 +4,6 @@
 
 use std::net::IpAddr;
 
-use df_campaign_wire::DisplayLookupResponse;
 use df_types::{AccountId, CampaignId, SessionId};
 
 use super::{CampaignService, Ports, refuse};
@@ -30,6 +29,14 @@ fn may_count_renew_attempt(failure: Failure) -> bool {
             TicketRefusal::Revoked | TicketRefusal::WrongDevice
         )) | Failure::Store(_)
     )
+}
+
+/// A waiting game display challenge, without any browser or device credential.
+pub struct DisplayLookup {
+    pub pairing_id: String,
+    pub created_at_ms: u64,
+    pub device_label: DeviceLabel,
+    pub waiting_ms: u64,
 }
 
 /// A device secret and its pairing, as the display receives them.
@@ -135,7 +142,7 @@ impl<P: Ports> CampaignService<P> {
         actor: AccountId,
         campaign: CampaignId,
         code: &str,
-    ) -> Outcome<DisplayLookupResponse> {
+    ) -> Outcome<DisplayLookup> {
         self.require_full_capability(actor, campaign, Capability::StartOrPauseSession)
             .await?;
         if !self.code_gate(ip, Some(actor)) {
@@ -155,7 +162,7 @@ impl<P: Ports> CampaignService<P> {
             .actor(actor)
             .reason("ok")
             .emit("display.looked_up");
-        Ok(DisplayLookupResponse {
+        Ok(DisplayLookup {
             pairing_id: pairing.id.text(),
             created_at_ms: pairing.created_at_ms,
             device_label: pairing.device_label,

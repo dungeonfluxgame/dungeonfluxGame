@@ -89,48 +89,6 @@ fn a_search_query_is_percent_encoded_into_the_path() {
 }
 
 #[test]
-fn every_post_has_a_json_body_and_the_csrf_guard() {
-    for call in [
-        ApiCall::SignOut,
-        ApiCall::ResendVerification,
-        ApiCall::RevokeOtherSessions,
-        ApiCall::StartDraft,
-        ApiCall::DisplayChallenge,
-    ] {
-        let request = call.request();
-        assert_eq!(request.method, Method::Post);
-        assert_eq!(request.body.as_deref(), Some("{}"));
-        assert_eq!(request.guard, Guard::Csrf, "{call:?}");
-    }
-}
-
-#[test]
-fn reads_carry_no_guard_and_no_body() {
-    for call in [
-        ApiCall::Session,
-        ApiCall::Overview,
-        ApiCall::Dashboard,
-        ApiCall::JoinPending,
-        ApiCall::DisplayStatus,
-        ApiCall::Lobby {
-            session_id: "5e".to_owned(),
-        },
-    ] {
-        let request = call.request();
-        assert_eq!(request.method, Method::Get, "{call:?}");
-        assert_eq!(request.guard, Guard::None, "{call:?}");
-        assert_eq!(request.body, None, "{call:?}");
-    }
-}
-
-#[test]
-fn display_redeem_uses_the_device_guard_not_a_csrf_token() {
-    let request = ApiCall::DisplayRedeem.request();
-    assert_eq!(request.method, Method::Post);
-    assert_eq!(request.guard, Guard::Device);
-}
-
-#[test]
 fn saving_a_wizard_step_is_a_put_to_that_step() {
     let call = ApiCall::SaveDraft {
         draft_id: "d1".to_owned(),
@@ -169,31 +127,40 @@ fn an_invitation_token_travels_in_the_body_and_never_in_the_path() {
 }
 
 #[test]
-fn ready_and_unready_are_separate_endpoints() {
-    let request = |is_ready| {
-        ApiCall::SetReady {
+fn every_post_has_a_json_body_and_the_csrf_guard() {
+    for call in [
+        ApiCall::SignOut,
+        ApiCall::ResendVerification,
+        ApiCall::RevokeOtherSessions,
+        ApiCall::StartDraft,
+    ] {
+        let request = call.request();
+        assert_eq!(request.method, Method::Post);
+        assert_eq!(request.body.as_deref(), Some("{}"));
+        assert_eq!(request.guard, Guard::Csrf, "{call:?}");
+    }
+}
+
+#[test]
+fn reads_carry_no_guard_and_no_body() {
+    for call in [
+        ApiCall::Session,
+        ApiCall::Overview,
+        ApiCall::Dashboard,
+        ApiCall::JoinPending,
+        ApiCall::Lobby {
             session_id: "5e".to_owned(),
-            is_ready,
-            request: ReadyRequest {
-                operation: "op".to_owned(),
-            },
-        }
-        .request()
-        .path
-    };
-    assert_eq!(request(true), "/app/api/sessions/5e/lobby/ready");
-    assert_eq!(request(false), "/app/api/sessions/5e/lobby/unready");
+        },
+    ] {
+        let request = call.request();
+        assert_eq!(request.method, Method::Get, "{call:?}");
+        assert_eq!(request.guard, Guard::None, "{call:?}");
+        assert_eq!(request.body, None, "{call:?}");
+    }
 }
 
 #[test]
 fn every_reply_variant_decodes_through_its_call() {
-    let call = ApiCall::DisplayStatus;
-    assert_eq!(
-        call.decode(200, r#"{"state":"approved"}"#),
-        Reply::DisplayStatus(Ok(crate::wire_campaign::DisplayStatus {
-            state: crate::wire_campaign::DisplayState::Approved
-        }))
-    );
     assert_eq!(
         ApiCall::LeaveCampaign {
             campaign_id: "c".to_owned(),
@@ -204,20 +171,4 @@ fn every_reply_variant_decodes_through_its_call() {
         .decode(200, r#"{"accepted":true}"#),
         Reply::Left(Ok(Accepted { accepted: true }))
     );
-}
-
-#[test]
-fn choosing_a_hero_posts_the_typed_choice_and_reads_the_authoritative_lobby() {
-    let call = ApiCall::ChooseCharacter {
-        session_id: "session".to_owned(),
-        request: crate::wire_campaign::CharacterRequest {
-            choice: crate::wire_campaign::CharacterChoice::Template,
-            reference: Some("11".repeat(16)),
-            operation: "operation".to_owned(),
-        },
-    };
-    let request = call.request();
-    assert_eq!(request.method, Method::Post);
-    assert_eq!(request.path, "/app/api/sessions/session/lobby/character");
-    assert!(matches!(call.decode(503, "{}"), Reply::Lobby(Err(_))));
 }

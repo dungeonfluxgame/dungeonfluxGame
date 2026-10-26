@@ -85,7 +85,6 @@ fn public_routes() -> Vec<Route> {
         Route::Join {
             token: Some("0a".to_owned()),
         },
-        Route::Display,
         Route::NotFound,
     ]
 }

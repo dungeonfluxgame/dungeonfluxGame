@@ -23,7 +23,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use js_sys::{Array, Date, Function, Object, Promise, Reflect};
+use js_sys::{Date, Function, Promise, Reflect};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
@@ -41,7 +41,6 @@ use crate::{
     route::Route,
     state::{Effect, FocusTarget, Model, Msg, OperationSlot},
     view,
-    wire_campaign::MicrophonePermission,
 };
 
 /// How long a request may wait for an answer before it counts as lost (plan 11: a mutation then
@@ -198,6 +197,7 @@ struct App {
     dom: Dom,
     state: RefCell<State>,
     listeners: RefCell<Vec<Listener>>,
+    game_tab: RefCell<Option<Window>>,
     /// True from the first message of a dispatch to the focus move after its render.
     is_dispatching: Cell<bool>,
     this: Weak<App>,
@@ -227,6 +227,7 @@ impl App {
                 location_key,
             }),
             listeners: RefCell::new(Vec::new()),
+            game_tab: RefCell::new(None),
             is_dispatching: Cell::new(false),
             this: this.clone(),
             window,
@@ -479,6 +480,42 @@ impl App {
             Effect::PushUrl(path) => self.change_history(&path, true),
             Effect::ReplaceUrl(path) => self.change_history(&path, false),
             Effect::Leave(url) => self.leave(&url),
+            Effect::ReserveGameTab => {
+                match self
+                    .window
+                    .open_with_url_and_target("about:blank", "_blank")
+                {
+                    Ok(Some(tab)) => {
+                        if tab.set_opener(&JsValue::NULL).is_err() {
+                            refused("game_tab_opener");
+                        }
+                        if let Some(document) = tab.document() {
+                            document.set_title("DungeonFlux");
+                            if let Some(body) = document.body() {
+                                body.set_text_content(Some("Opening the game..."));
+                            }
+                        }
+                        *self.game_tab.borrow_mut() = Some(tab);
+                    }
+                    _ => refused("game_tab_open"),
+                }
+            }
+            Effect::OpenGame(url) => {
+                if let Some(tab) = self.game_tab.borrow_mut().take() {
+                    match url {
+                        Some(url) => {
+                            if tab.location().set_href(&url).is_err() {
+                                refused("game_tab_navigate");
+                            }
+                        }
+                        None => {
+                            if tab.close().is_err() {
+                                refused("game_tab_close");
+                            }
+                        }
+                    }
+                }
+            }
             Effect::CancelPending => self.cancel_pending(),
             Effect::After {
                 generation,
@@ -491,7 +528,6 @@ impl App {
             Effect::DownloadCsv { filename, content } => {
                 download_text(&self.window, &filename, &content)
             }
-            Effect::RequestMicrophone { generation } => self.request_microphone(generation),
         }
     }
 
@@ -666,42 +702,6 @@ impl App {
             refused("navigation");
         }
     }
-
-    fn request_microphone(&self, generation: u64) {
-        let promise = match begin_microphone(&self.window) {
-            Ok(promise) => promise,
-            Err(permission) => {
-                if permission == MicrophonePermission::Declined {
-                    refused("microphone");
-                }
-                self.enqueue(vec![Msg::MicrophoneAnswered {
-                    generation,
-                    permission,
-                }]);
-                return;
-            }
-        };
-        let this = self.this.clone();
-        spawn_local(async move {
-            let permission = match JsFuture::from(promise).await {
-                Ok(stream) => {
-                    release_microphone(&stream);
-                    MicrophonePermission::Granted
-                }
-                Err(_) => {
-                    refused("microphone");
-                    MicrophonePermission::Declined
-                }
-            };
-            if let Some(app) = this.upgrade() {
-                app.drop_retired();
-                app.dispatch(Msg::MicrophoneAnswered {
-                    generation,
-                    permission,
-                });
-            }
-        });
-    }
 }
 
 fn is_plain_left_click(event: &MouseEvent) -> bool {
@@ -824,39 +824,6 @@ fn download_text(window: &Window, filename: &str, content: &str) {
         anchor.click();
     }
     let _ = web_sys::Url::revoke_object_url(&url);
-}
-
-/// Asks for the microphone; `Err` is the answer when it cannot even be asked.
-fn begin_microphone(window: &Window) -> Result<Promise, MicrophonePermission> {
-    let devices = Reflect::get(&window.navigator(), &JsValue::from_str("mediaDevices"))
-        .ok()
-        .filter(JsValue::is_object)
-        .ok_or(MicrophonePermission::Unsupported)?;
-    let has_capture = Reflect::get(&devices, &JsValue::from_str("getUserMedia"))
-        .is_ok_and(|function| function.is_function());
-    if !has_capture {
-        return Err(MicrophonePermission::Unsupported);
-    }
-    let constraints = Object::new();
-    Reflect::set(&constraints, &JsValue::from_str("audio"), &JsValue::TRUE)
-        .map_err(|_| MicrophonePermission::Unsupported)?;
-    call_method(&devices, "getUserMedia", Some(&constraints))
-        .map_err(|_| MicrophonePermission::Declined)?
-        .dyn_into::<Promise>()
-        .map_err(|_| MicrophonePermission::Unsupported)
-}
-
-/// The app only asks whether the microphone may be used; the game asks again when it needs it.
-fn release_microphone(stream: &JsValue) {
-    let Ok(tracks) = call_method(stream, "getTracks", None) else {
-        refused("microphone");
-        return;
-    };
-    for track in Array::from(&tracks).iter() {
-        if call_method(&track, "stop", None).is_err() {
-            refused("microphone");
-        }
-    }
 }
 
 fn read_location(window: &Window) -> Location {

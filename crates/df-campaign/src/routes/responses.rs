@@ -6,7 +6,6 @@ use df_campaign_wire as wire;
 use http::{HeaderValue, StatusCode, header};
 use serde::Serialize;
 
-use super::cookies::{DEVICE_COOKIE, TICKET_COOKIE, clear_cookie};
 use super::guard::GuardRefusal;
 use crate::{
     display_pairing::{PairingRefusal, TicketRefusal},
@@ -91,7 +90,7 @@ pub fn refusal_reason(refusal: Refusal) -> (StatusCode, wire::Reason) {
         Refusal::EmailUnverified => (StatusCode::FORBIDDEN, R::EmailUnverified),
         Refusal::DraftsFull => (StatusCode::CONFLICT, R::DraftsFull),
         Refusal::DraftIncomplete => (StatusCode::CONFLICT, R::DraftIncomplete),
-        Refusal::CharacterNotChosen => (StatusCode::CONFLICT, R::CharacterNotChosen),
+        Refusal::CharacterNotChosen => (StatusCode::CONFLICT, R::InvalidInput),
         Refusal::Throttled => (StatusCode::TOO_MANY_REQUESTS, R::Throttled),
     }
 }
@@ -162,17 +161,6 @@ pub fn ends_display_pairing(failure: Failure) -> bool {
     }
 }
 
-/// A display flow refusal; it clears both display cookies only when it ends the pairing.
-pub(super) fn display_failure_response(failure: Failure) -> Failed {
-    let ends = ends_display_pairing(failure);
-    let mut response = failure_response(failure);
-    if ends {
-        append_cookie(&mut response, &clear_cookie(DEVICE_COOKIE));
-        append_cookie(&mut response, &clear_cookie(TICKET_COOKIE));
-    }
-    response
-}
-
 pub(super) fn guard_response(refusal: GuardRefusal) -> Response {
     *match refusal {
         GuardRefusal::Unauthenticated => {
@@ -182,11 +170,5 @@ pub(super) fn guard_response(refusal: GuardRefusal) -> Response {
         GuardRefusal::Unavailable => {
             refused(StatusCode::SERVICE_UNAVAILABLE, wire::Reason::Unavailable)
         }
-    }
-}
-
-pub(super) fn append_cookie(response: &mut Response, cookie: &str) {
-    if let Ok(value) = HeaderValue::from_str(cookie) {
-        response.headers_mut().append(header::SET_COOKIE, value);
     }
 }

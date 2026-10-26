@@ -686,6 +686,38 @@ fn per_campaign_of(lines: &[StatementLine]) -> Vec<CampaignSpend> {
 }
 
 impl FinancePort for FakeFinance {
+    async fn host_credit_readiness(&self, session: SessionId) -> PortResult<Option<bool>> {
+        let state = lock(&self.state);
+        if state.cancelled_host_sessions.contains(&session) {
+            return Ok(Some(false));
+        }
+        Ok(state
+            .host_sessions
+            .get(&session)
+            .map(|(_, quote)| quote.is_fundable))
+    }
+
+    async fn prepare_host_session(&self, account: AccountId, session: SessionId) -> PortResult<()> {
+        let overview = self.overview_now(account, true);
+        let available = overview
+            .balance
+            .purchased_available_micro_dollars
+            .saturating_add(overview.balance.promotional_available_micro_dollars);
+        lock(&self.state).host_sessions.entry(session).or_insert((
+            account,
+            df_account_app::wire_campaign::HostCreditView {
+                price_version: [1; 16],
+                hourly_micro_dollars: 8_000_000,
+                available_micro_dollars: available,
+                cap_micro_dollars: 8_000_000,
+                terms_version: 1,
+                consented_at_ms: None,
+                is_fundable: false,
+            },
+        ));
+        Ok(())
+    }
+
     async fn cancel_host_lobby(&self, account: AccountId, session: SessionId) -> PortResult<()> {
         let mut state = lock(&self.state);
         let (host, _) = state

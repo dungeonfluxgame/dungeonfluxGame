@@ -151,7 +151,10 @@ pub(super) async fn finish_creation(
         return Err(Failure::Store(StoreError::Retryable));
     }
     match q::read_campaign(tx, id).await? {
-        Some(created) => Ok(created),
+        Some(created) => {
+            save_rating_preference(tx, owner, created.content_rating, now_ms).await?;
+            Ok(created)
+        }
         None => Err(Failure::Store(StoreError::InvalidRecord)),
     }
 }
@@ -416,5 +419,76 @@ pub(super) async fn session_started(
     // The lobby is frozen under the same campaign lock every lobby change takes, so a change
     // either lands before the freeze or is refused after it.
     q::freeze_lobby(tx, session, campaign, now_ms).await?;
+    Ok(())
+}
+
+pub(super) async fn update_settings(
+    tx: &Tx<'_>,
+    tunables: &Tunables,
+    actor: AccountId,
+    campaign: CampaignId,
+    update: df_campaign::draft::SettingsUpdate,
+    now_ms: u64,
+) -> Outcome<()> {
+    update.validate(tunables).map_err(Failure::Refused)?;
+    if q::lock_account(tx, actor).await? != AccountStatus::Active {
+        return refuse(Refusal::AccountClosing);
+    }
+    let row = locked_campaign(tx, campaign).await?;
+    super::shared::require_active(&row)?;
+    let member = active_actor(tx, campaign, actor).await?;
+    if member.role != CampaignRole::Host {
+        return refuse(Refusal::NotAllowed);
+    }
+    let seats = tx.query_one("SELECT count(*) FROM campaigns.campaign_member WHERE campaign_id = $1 AND status = 'active' AND holds_seat", &[&campaign.as_bytes().as_slice()]).await?;
+    let seats: i64 = seats.try_get(0).map_err(|_| StoreError::InvalidRecord)?;
+    if seats > i64::from(update.seat_count) {
+        return refuse(Refusal::SeatsFull);
+    }
+    let settings = &update.settings;
+    let rating = match update.content_rating {
+        df_campaign::records::ContentRating::Gentle => "gentle",
+        df_campaign::records::ContentRating::Standard => "standard",
+        df_campaign::records::ContentRating::Mature => "mature",
+    };
+    let hourly = settings
+        .custom_hourly_micro_dollars
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| StoreError::InvalidRecord)?;
+    let ceiling = settings
+        .session_ceiling_micro_dollars
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| StoreError::InvalidRecord)?;
+    tx.execute("UPDATE campaigns.campaign SET name = $2, content_rating = $3, seat_count = $4, room_codes = $5, default_co_host_delegations = $6, adventure_kind = $7, voice_default = $8, picture_default = $9, spend_preset = $10, custom_hourly_micro_dollars = $11, session_ceiling_micro_dollars = $12, funding_model = $13, sponsor_account_id = $14, revision = revision + 1 WHERE campaign_id = $1", &[
+        &campaign.as_bytes().as_slice(), &update.name.trim(), &rating,
+        &i32::try_from(update.seat_count).map_err(|_| StoreError::InvalidRecord)?,
+        &update.room_codes.text(), &i16::from(update.default_co_host_delegations.bits()),
+        &settings.adventure_kind, &settings.voice_default.text(), &settings.picture_default.text(),
+        &settings.spend_preset.text(), &hourly, &ceiling, &settings.funding_model.text(),
+        &settings.sponsor.map(|id| id.as_bytes().to_vec()),
+    ]).await?;
+    save_rating_preference(tx, actor, update.content_rating, now_ms).await?;
+    emit(
+        tx,
+        campaign,
+        NewEvent::campaign(EventKind::SettingsChanged, Some(member.member)),
+        now_ms,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn save_rating_preference(
+    tx: &Tx<'_>,
+    account: AccountId,
+    rating: df_campaign::records::ContentRating,
+    now_ms: u64,
+) -> Outcome<()> {
+    tx.execute("INSERT INTO campaigns.account_preferences (account_id, content_rating, chosen_at_ms) VALUES ($1, $2, $3) ON CONFLICT (account_id) DO UPDATE SET content_rating = EXCLUDED.content_rating, chosen_at_ms = EXCLUDED.chosen_at_ms", &[
+        &account.as_bytes().as_slice(), &super::rows::content_rating_text(rating),
+        &i64::try_from(now_ms).map_err(|_| StoreError::InvalidRecord)?,
+    ]).await?;
     Ok(())
 }

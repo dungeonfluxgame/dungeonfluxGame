@@ -11,15 +11,13 @@ fn screen(note: FundingNote) -> LobbyScreen {
             can_manage: true,
             start_blockers: vec![StartBlocker::FundingNotReady],
             members: Vec::new(),
-            displays: Vec::new(),
             funding_note: note,
             has_started: false,
             poll_seconds: 3,
         }),
         operation: Remote::Ready("operation".into()),
         action: Submit::Idle,
-        pairing_code: String::new(),
-        lookup: None,
+
         consent_checked: false,
     }
 }

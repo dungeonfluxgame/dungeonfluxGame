@@ -110,6 +110,11 @@ pub(super) async fn schedule_archived_deletions(
     tx.require_timeout(timeout_ms(tunables)).await?;
     // An unfinished wizard has no members and no events; it goes with the account.
     q::delete_drafts_of(tx, account).await?;
+    tx.execute(
+        "DELETE FROM campaigns.account_preferences WHERE account_id = $1",
+        &[&account.as_bytes().as_slice()],
+    )
+    .await?;
     // The notice is never shorter than the configured minimum, whatever the caller asked for.
     let delete_after_ms =
         delete_after_ms.max(now_ms.saturating_add(tunables.closure_archived_delete_notice_ms()));

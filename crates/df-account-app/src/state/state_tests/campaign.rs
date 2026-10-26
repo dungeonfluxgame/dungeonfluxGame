@@ -5,8 +5,7 @@ use crate::{
     wire_campaign::{
         AdventureOption, ApproveRequestBody, CampaignCreated, CampaignOverview, CampaignRole,
         ContentRating, DraftView, FundingNote, InvitePreview, JoinAcceptRequest, JoinAccepted,
-        LobbyOpened, LobbyView, MemberRow, MicrophonePermission, MicrophoneRequest,
-        OperationRequest, PairingApproveRequest, PairingLookup, PendingInvitation, Reason,
+        LobbyOpened, LobbyView, MemberRow, OperationRequest, PendingInvitation, Reason,
         RoomCodeLookupRequest, RoomCodeState, SaveDraftRequest, TokenBody, WizardCatalog,
     },
 };
@@ -79,6 +78,9 @@ fn an_unverified_account_starts_no_draft() {
 #[test]
 fn step_one_refuses_each_missing_piece_in_order_without_a_request() {
     let mut model = wizard();
+    if let Screen::NewCampaign(screen) = &mut model.screen {
+        screen.draft.content_rating = None;
+    }
     let mut refusals = Vec::new();
     for fill in [
         None,
@@ -577,7 +579,7 @@ fn lobby_view(poll_seconds: u32, has_started: bool) -> LobbyView {
         can_manage: true,
         start_blockers: Vec::new(),
         members: Vec::new(),
-        displays: Vec::new(),
+
         funding_note: FundingNote::NoChargeUntilHostStarts,
         has_started,
         poll_seconds,
@@ -629,132 +631,6 @@ fn an_open_lobby_reads_itself_again_after_the_poll_interval_and_a_started_one_st
 }
 
 #[test]
-fn a_lobby_action_does_not_start_a_second_polling_chain() {
-    let mut model = lobby_model();
-
-    click(&mut model, Intent::SetReady(true));
-    let effects = deliver(&mut model, Reply::Lobby(Ok(lobby_view(5, false))));
-
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::After { .. }))
-    );
-}
-
-#[test]
-fn ready_and_not_ready_are_separate_requests_with_one_operation_id_each() {
-    let mut model = lobby_model();
-
-    let ready = click(&mut model, Intent::SetReady(true));
-
-    let Some(ApiCall::SetReady {
-        is_ready, request, ..
-    }) = first_call(&ready)
-    else {
-        panic!("a ready request");
-    };
-    assert!(*is_ready);
-    assert_eq!(request.operation, "op-lobby");
-    assert!(calls(&click(&mut model, Intent::SetReady(false))).is_empty());
-}
-
-#[test]
-fn the_microphone_is_asked_of_the_browser_and_the_answer_is_reported_to_the_server() {
-    let mut model = lobby_model();
-
-    let asked = click(&mut model, Intent::EnableMicrophone);
-    let generation = model.generation;
-    let reported = model.update(Msg::MicrophoneAnswered {
-        generation,
-        permission: MicrophonePermission::Declined,
-    });
-
-    assert_eq!(asked, vec![Effect::RequestMicrophone { generation }]);
-    assert_eq!(
-        first_call(&reported),
-        Some(&ApiCall::ReportMicrophone {
-            session_id: "5e".to_owned(),
-            request: MicrophoneRequest {
-                prefers_typing: false,
-                permission: Some(MicrophonePermission::Declined),
-                operation: "op-lobby".to_owned(),
-            },
-        })
-    );
-}
-
-#[test]
-fn choosing_to_type_reports_the_preference_without_asking_the_browser() {
-    let mut model = lobby_model();
-
-    let effects = click(&mut model, Intent::PreferTyping);
-
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::RequestMicrophone { .. }))
-    );
-    let Some(ApiCall::ReportMicrophone { request, .. }) = first_call(&effects) else {
-        panic!("a report");
-    };
-    assert!(request.prefers_typing);
-    assert_eq!(request.permission, None);
-}
-
-#[test]
-fn a_display_is_looked_up_first_and_paired_only_after_the_host_confirms() {
-    let mut model = lobby_model();
-    type_into(&mut model, Field::PairingCode, " ABCD-EFGH ");
-
-    let lookup = submit(&mut model, Form::PairingLookup);
-    assert!(calls(&click(&mut model, Intent::ApprovePairing)).is_empty());
-    deliver(
-        &mut model,
-        Reply::PairingLookup(Ok(PairingLookup::Found {
-            pairing_id: "p1".to_owned(),
-            device: crate::wire::DeviceKind::Desktop,
-            created_at_ms: 1,
-            waiting_seconds: 20,
-        })),
-    );
-    let approved = click(&mut model, Intent::ApprovePairing);
-
-    assert!(matches!(
-        first_call(&lookup),
-        Some(ApiCall::LookupDisplay { .. })
-    ));
-    assert_eq!(
-        first_call(&approved),
-        Some(&ApiCall::ApproveDisplay {
-            session_id: "5e".to_owned(),
-            request: PairingApproveRequest {
-                pairing_id: "p1".to_owned(),
-                operation: "op-lobby".to_owned(),
-            },
-        })
-    );
-}
-
-#[test]
-fn cancelling_a_pairing_forgets_the_code_and_the_lookup() {
-    let mut model = lobby_model();
-    type_into(&mut model, Field::PairingCode, "ABCD-EFGH");
-    deliver(
-        &mut model,
-        Reply::PairingLookup(Ok(PairingLookup::NotFound)),
-    );
-
-    click(&mut model, Intent::CancelPairing);
-
-    let Screen::Lobby(screen) = &model.screen else {
-        panic!("lobby");
-    };
-    assert_eq!(screen.pairing_code, "");
-    assert_eq!(screen.lookup, None);
-}
-
-#[test]
 fn opening_the_lobby_from_the_campaign_goes_to_the_lobby_screen() {
     let mut model = campaign_model();
     click(&mut model, Intent::OpenLobby);
@@ -767,40 +643,6 @@ fn opening_the_lobby_from_the_campaign_goes_to_the_lobby_screen() {
     );
 
     assert!(matches!(model.screen, Screen::Lobby(_)));
-}
-
-#[test]
-fn choosing_a_hero_uses_one_operation_and_waits_for_the_server_lobby() {
-    use crate::wire_campaign::{CharacterChoice, CharacterRequest};
-    let mut model = lobby_model();
-    let effects = click(
-        &mut model,
-        Intent::ChooseCharacter {
-            choice: CharacterChoice::Template,
-            reference: Some("11".repeat(16)),
-        },
-    );
-    let Some(ApiCall::ChooseCharacter { request, .. }) = first_call(&effects) else {
-        panic!("hero choice request");
-    };
-    assert_eq!(
-        request,
-        &CharacterRequest {
-            choice: CharacterChoice::Template,
-            reference: Some("11".repeat(16)),
-            operation: "op-lobby".to_owned(),
-        }
-    );
-    let Screen::Lobby(screen) = &model.screen else {
-        panic!("lobby");
-    };
-    assert_eq!(screen.action, Submit::Sending);
-    assert!(calls(&click(&mut model, Intent::SetReady(true))).is_empty());
-    let done = deliver(&mut model, Reply::Lobby(Ok(lobby_view(2, false))));
-    assert!(
-        done.iter()
-            .any(|effect| matches!(effect, Effect::IssueOperation { .. }))
-    );
 }
 
 fn host_quote() -> crate::wire_campaign::HostCreditView {
@@ -852,4 +694,79 @@ fn fundinghook_a_sponsored_player_cannot_submit_a_host_consent() {
     let mut model = lobby_model();
     model.update(Msg::Toggle(Field::FundingChoice, true));
     assert!(click(&mut model, Intent::Submit(Form::Action)).is_empty());
+}
+
+#[test]
+fn lobbyfix_play_now_has_one_request_without_any_wizard_fields() {
+    let mut model = booted(Route::Dashboard, signed_in(true));
+    issue(&mut model, OperationSlot::Primary, "play-once");
+    let effects = click(&mut model, Intent::PlayNow);
+    assert!(effects.contains(&Effect::ReserveGameTab));
+    assert_eq!(
+        calls(&effects),
+        vec![&ApiCall::PlayNow(OperationRequest {
+            operation: "play-once".to_owned()
+        })]
+    );
+    assert!(matches!(model.screen, Screen::Dashboard(_)));
+    assert!(click(&mut model, Intent::PlayNow).is_empty());
+    deliver(
+        &mut model,
+        Reply::PlayNow(Err(ApiError::of(ErrorCode::UnknownOutcome))),
+    );
+    let retry = click(&mut model, Intent::PlayNow);
+    assert_eq!(first_call(&retry), first_call(&effects));
+}
+
+#[test]
+fn lobbyfix_unavailable_game_opens_a_new_tab_and_keeps_campaign_settings_in_the_account_tab() {
+    let mut model = booted(Route::Dashboard, signed_in(true));
+    issue(&mut model, OperationSlot::Primary, "play-once");
+    click(&mut model, Intent::PlayNow);
+    let effects = deliver(
+        &mut model,
+        Reply::PlayNow(Ok(crate::wire_campaign::PlayNowView {
+            campaign_id: "0c".to_owned(),
+            game_unavailable: true,
+            lobby: lobby_view(5, false),
+        })),
+    );
+    assert!(effects.contains(&Effect::OpenGame(Some(
+        "/app/api/sessions/5e/game".to_owned()
+    ))));
+    assert!(matches!(model.screen, Screen::Campaign(_)));
+    assert_eq!(model.play_operation, Remote::Loading);
+    assert!(
+        !calls(&effects)
+            .iter()
+            .any(|call| matches!(call, ApiCall::StartDraft | ApiCall::WizardCatalog))
+    );
+}
+
+#[test]
+fn lobbyfix_a_start_refused_or_blocked_after_the_click_closes_its_reserved_tab() {
+    for result in [
+        Ok(lobby_view(5, false)),
+        Err(ApiError::of(ErrorCode::Forbidden)),
+    ] {
+        let mut model = lobby_model();
+        let click = click(&mut model, Intent::StartSession);
+        assert!(click.contains(&Effect::ReserveGameTab));
+        let effects = deliver(&mut model, Reply::Lobby(result));
+        assert!(effects.contains(&Effect::OpenGame(None)));
+    }
+}
+
+#[test]
+fn a_lobby_action_does_not_start_a_second_polling_chain() {
+    let mut model = lobby_model();
+
+    click(&mut model, Intent::StartSession);
+    let effects = deliver(&mut model, Reply::Lobby(Ok(lobby_view(5, false))));
+
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::After { .. }))
+    );
 }

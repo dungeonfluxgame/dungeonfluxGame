@@ -439,3 +439,34 @@ mod tests {
         assert_eq!(sponsor_of(FundingModel::SharedPot, owner), None);
     }
 }
+
+/// Host-edited campaign defaults; finance still owns admission and consent for each session.
+#[derive(Clone, Debug)]
+pub struct SettingsUpdate {
+    pub name: String,
+    pub content_rating: ContentRating,
+    pub seat_count: u32,
+    pub room_codes: RoomCodes,
+    pub default_co_host_delegations: Delegations,
+    pub settings: CampaignSettings,
+}
+
+impl SettingsUpdate {
+    pub fn validate(&self, tunables: &Tunables) -> Result<(), Refusal> {
+        DraftStepData::About {
+            name: self.name.clone(),
+            adventure_kind: self.settings.adventure_kind.clone(),
+            content_rating: self.content_rating,
+            seat_count: self.seat_count,
+        }
+        .validate(tunables)?;
+        DraftStepData::Table {
+            voice_default: self.settings.voice_default,
+            picture_default: self.settings.picture_default,
+            spend_preset: self.settings.spend_preset,
+            custom_hourly_micro_dollars: self.settings.custom_hourly_micro_dollars,
+            session_ceiling_micro_dollars: self.settings.session_ceiling_micro_dollars,
+        }
+        .validate(tunables)
+    }
+}

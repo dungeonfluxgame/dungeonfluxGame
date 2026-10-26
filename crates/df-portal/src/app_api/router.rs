@@ -7,12 +7,12 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{get, post, put},
+    routing::{any, get, post, put},
 };
 use df_customer::{AccountStore, EmailSender};
 
 use super::{
-    admin, auth, campaign, customer, display,
+    admin, auth, campaign, customer,
     guard::{MAXIMUM_BODY_BYTES, api_headers},
     oauth,
     ports::Ports,
@@ -174,6 +174,15 @@ fn campaign_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApi
     Router::new()
         .route("/app/api/campaigns", get(campaign::dashboard::<S, M, P>))
         .route(
+            "/app/api/campaigns/play-now",
+            post(campaign::play_now::<S, M, P>),
+        )
+        .route(
+            "/app/api/campaigns/{campaign_id}/settings",
+            get(campaign::campaign_settings::<S, M, P>)
+                .put(campaign::save_campaign_settings::<S, M, P>),
+        )
+        .route(
             "/app/api/campaigns/new",
             get(campaign::wizard_catalog::<S, M, P>),
         )
@@ -226,24 +235,12 @@ fn campaign_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApi
 fn session_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApiState<S, M, P>> {
     Router::new()
         .route(
+            "/app/api/sessions/{session_id}/game",
+            get(campaign::game::<S, M, P>),
+        )
+        .route(
             "/app/api/sessions/{session_id}/lobby",
             get(campaign::lobby::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/character",
-            post(campaign::choose_character::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/ready",
-            post(campaign::ready::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/unready",
-            post(campaign::unready::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/microphone",
-            post(campaign::microphone::<S, M, P>),
         )
         .route(
             "/app/api/sessions/{session_id}/lobby/start",
@@ -256,22 +253,6 @@ fn session_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApiS
         .route(
             "/app/api/sessions/{session_id}/lobby/cancel",
             post(campaign::cancel_host_lobby::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/display/lookup",
-            post(campaign::lookup_display::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/display/approve",
-            post(campaign::approve_display::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/display/unpair-all",
-            post(campaign::unpair_all_displays::<S, M, P>),
-        )
-        .route(
-            "/app/api/sessions/{session_id}/lobby/display/{ticket_id}/unpair",
-            post(campaign::unpair_display::<S, M, P>),
         )
 }
 
@@ -299,13 +280,6 @@ fn join_and_display_routes<S: AccountStore, M: EmailSender, P: Ports>()
             "/app/api/join/code/request",
             post(campaign::code_request::<S, M, P>),
         )
-        .route(
-            "/app/api/display/challenge",
-            post(display::challenge::<S, M, P>),
-        )
-        .route("/app/api/display/status", get(display::status::<S, M, P>))
-        .route("/app/api/display/redeem", post(display::redeem::<S, M, P>))
-        .route("/app/api/display/renew", post(display::renew::<S, M, P>))
 }
 
 /// The JSON API alone, for composition that serves the bundle itself.
@@ -313,6 +287,12 @@ pub fn api_router<S: AccountStore, M: EmailSender, P: Ports>(
     state: AppApiState<S, M, P>,
 ) -> Router {
     account_routes::<S, M, P>()
+        .route(
+            "/app/api/{*missing}",
+            any(|| async {
+                super::guard::ApiFailure::of(df_account_app::wire::ErrorCode::NotFound)
+            }),
+        )
         .merge(admin_routes::<S, M, P>())
         .merge(campaign_routes::<S, M, P>())
         .merge(session_routes::<S, M, P>())

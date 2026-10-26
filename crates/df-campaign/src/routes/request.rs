@@ -3,7 +3,7 @@
 
 use df_campaign_wire as wire;
 use df_types::{AccountId, CampaignId, MemberId, OperationId, SessionId};
-use http::{StatusCode, request::Parts};
+use http::StatusCode;
 use serde::de::DeserializeOwned;
 
 use super::{
@@ -21,7 +21,7 @@ use crate::{
 pub(super) struct Ctx<'a, P: Ports, G: Guard> {
     pub(super) app: &'a App<P, G>,
     pub(super) params: Vec<(String, String)>,
-    pub(super) parts: &'a Parts,
+
     pub(super) caller: Caller,
     pub(super) body: Vec<u8>,
 }

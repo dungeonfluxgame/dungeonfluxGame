@@ -10,12 +10,10 @@ use axum::{
 use df_account_app::{
     wire::{Accepted, ErrorCode},
     wire_campaign::{
-        ApproveRequestBody, CampaignCreated, CampaignOverview, CharacterRequest,
-        CreateInvitationRequest, DashboardView, DraftView, InvitationCreated, InvitePreview,
-        JoinAcceptRequest, JoinAccepted, JoinRequested, LobbyOpened, LobbyView, MicrophoneRequest,
-        OperationRequest, PairingApproveRequest, PairingLookup, PairingLookupRequest,
-        PendingInvitation, ReadyRequest, RoomCodeJoinRequest, RoomCodeLookupRequest,
-        SaveDraftRequest, TokenBody, WizardCatalog,
+        ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest,
+        DashboardView, DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest,
+        JoinAccepted, JoinRequested, LobbyOpened, LobbyView, OperationRequest, PendingInvitation,
+        RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
     },
 };
 use df_customer::{AccountStore, Authenticated, EmailSender};
@@ -300,6 +298,18 @@ async fn lobby_reply<S: AccountStore, M: EmailSender, P: Ports>(
     mut view: LobbyView,
 ) -> ApiResult<LobbyView> {
     if !view.has_started
+        && state.ports.finance().host_credit_readiness(session).await? == Some(false)
+    {
+        if !view
+            .start_blockers
+            .contains(&df_account_app::wire_campaign::StartBlocker::FundingNotReady)
+        {
+            view.start_blockers
+                .push(df_account_app::wire_campaign::StartBlocker::FundingNotReady);
+        }
+        view.funding_note = df_account_app::wire_campaign::FundingNote::WaitingForSponsor;
+    }
+    if !view.has_started
         && let Some(quote) = state
             .ports
             .finance()
@@ -337,6 +347,11 @@ pub(super) async fn cancel_host_lobby<S: AccountStore, M: EmailSender, P: Ports>
         .finance()
         .cancel_host_lobby(caller.account.id, session)
         .await?;
+    state
+        .ports
+        .campaigns()
+        .cancel_lobby(&actor(&caller), session)
+        .await?;
     reply(ACCEPTED)
 }
 
@@ -370,81 +385,6 @@ pub(super) async fn consent_host_credit<S: AccountStore, M: EmailSender, P: Port
     lobby_reply(&state, &caller, session, view).await
 }
 
-pub(super) async fn choose_character<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<CharacterRequest>,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    if (body.choice != df_account_app::wire_campaign::CharacterChoice::Undecided)
-        != body.reference.is_some()
-    {
-        return Err(ApiFailure::of(ErrorCode::Invalid));
-    }
-    if let Some(reference) = &body.reference {
-        ids::campaign(reference)?;
-    }
-    let view = state
-        .ports
-        .campaigns()
-        .choose_character(&actor(&caller), session, body)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
-async fn set_ready<S: AccountStore, M: EmailSender, P: Ports>(
-    state: AppApiState<S, M, P>,
-    caller: Authenticated,
-    session_id: String,
-    body: ReadyRequest,
-    is_ready: bool,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    let view = state
-        .ports
-        .campaigns()
-        .set_ready(&actor(&caller), session, is_ready)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
-pub(super) async fn ready<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<ReadyRequest>,
-) -> ApiResult<LobbyView> {
-    set_ready(state, caller, session_id, body, true).await
-}
-
-pub(super) async fn unready<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<ReadyRequest>,
-) -> ApiResult<LobbyView> {
-    set_ready(state, caller, session_id, body, false).await
-}
-
-pub(super) async fn microphone<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<MicrophoneRequest>,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    let view = state
-        .ports
-        .campaigns()
-        .report_microphone(&actor(&caller), session, body)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
 pub(super) async fn start_session<S: AccountStore, M: EmailSender, P: Ports>(
     State(state): State<AppApiState<S, M, P>>,
     SessionPost(caller): SessionPost,
@@ -453,74 +393,20 @@ pub(super) async fn start_session<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
+    let before = state
+        .ports
+        .campaigns()
+        .lobby(&actor(&caller), session)
+        .await?;
+    if !before.can_manage
+        || state.ports.finance().host_credit_readiness(session).await? == Some(false)
+    {
+        return Err(ApiFailure::of(ErrorCode::Forbidden));
+    }
     let view = state
         .ports
         .campaigns()
         .start_session(&actor(&caller), session)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
-pub(super) async fn lookup_display<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<PairingLookupRequest>,
-) -> ApiResult<PairingLookup> {
-    let session = ids::session(&session_id)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .lookup_display(&actor(&caller), session, &body.code)
-            .await?,
-    )
-}
-
-pub(super) async fn approve_display<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<PairingApproveRequest>,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    let view = state
-        .ports
-        .campaigns()
-        .approve_display(&actor(&caller), session, &body.pairing_id)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
-pub(super) async fn unpair_display<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path((session_id, ticket_id)): Path<(String, String)>,
-    ApiBody(body): ApiBody<OperationRequest>,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    let view = state
-        .ports
-        .campaigns()
-        .unpair_display(&actor(&caller), session, &ticket_id)
-        .await?;
-    lobby_reply(&state, &caller, session, view).await
-}
-
-pub(super) async fn unpair_all_displays<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(session_id): Path<String>,
-    ApiBody(body): ApiBody<OperationRequest>,
-) -> ApiResult<LobbyView> {
-    let session = ids::session(&session_id)?;
-    ids::operation(&body.operation)?;
-    let view = state
-        .ports
-        .campaigns()
-        .unpair_all_displays(&actor(&caller), session)
         .await?;
     lobby_reply(&state, &caller, session, view).await
 }
@@ -619,4 +505,195 @@ pub(super) async fn code_request<S: AccountStore, M: EmailSender, P: Ports>(
             .code_request(&actor(&caller), &body.code, operation)
             .await?,
     )
+}
+
+pub(super) async fn play_now<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SessionPost(caller): SessionPost,
+    ApiBody(body): ApiBody<OperationRequest>,
+) -> ApiResult<df_account_app::wire_campaign::PlayNowView> {
+    let who = verified_actor(&caller)?;
+    let operation = ids::operation(&body.operation)?;
+    let campaign = state
+        .ports
+        .campaigns()
+        .play_now_campaign(&who, operation)
+        .await?;
+    let session = state
+        .ports
+        .campaigns()
+        .open_lobby(&who, campaign)
+        .await
+        .map_err(|error| launch_after_creation_failed(campaign, error))?;
+    state
+        .ports
+        .finance()
+        .prepare_host_session(who.account, session)
+        .await
+        .map_err(|error| launch_after_creation_failed(campaign, error))?;
+    let view = state
+        .ports
+        .campaigns()
+        .lobby(&who, session)
+        .await
+        .map_err(|error| launch_after_creation_failed(campaign, error))?;
+    let mut view = view;
+    if let Some(quote) = state
+        .ports
+        .finance()
+        .host_credit(who.account, session)
+        .await
+        .map_err(|error| launch_after_creation_failed(campaign, error))?
+    {
+        view.funding_note = df_account_app::wire_campaign::FundingNote::HostCredit(quote);
+        if !quote.is_fundable {
+            view.start_blockers
+                .push(df_account_app::wire_campaign::StartBlocker::FundingNotReady);
+        }
+    }
+    if !view.has_started && view.start_blockers.is_empty() {
+        view = state
+            .ports
+            .campaigns()
+            .start_session(&who, session)
+            .await
+            .map_err(|error| launch_after_creation_failed(campaign, error))?;
+    }
+    df_observe::record_audit_line(
+        "portal.play_now",
+        format!(
+            "SESSION play_now session={} status={}",
+            ids::hex(session.as_bytes()),
+            if view.has_started {
+                "started"
+            } else {
+                "funding_required"
+            }
+        ),
+    );
+    let game_unavailable = state
+        .ports
+        .campaigns()
+        .game_link(&who, session)
+        .await
+        .map_err(|error| launch_after_creation_failed(campaign, error))?
+        .is_none();
+    reply(df_account_app::wire_campaign::PlayNowView {
+        campaign_id: ids::hex(campaign.as_bytes()),
+        game_unavailable,
+        lobby: view,
+    })
+}
+
+pub(super) async fn campaign_settings<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SignedIn(caller): SignedIn,
+    Path(campaign): Path<String>,
+) -> ApiResult<df_account_app::wire_campaign::CampaignSettingsView> {
+    reply(
+        state
+            .ports
+            .campaigns()
+            .campaign_settings(&actor(&caller), ids::campaign(&campaign)?)
+            .await?,
+    )
+}
+
+pub(super) async fn save_campaign_settings<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SessionPost(caller): SessionPost,
+    Path(campaign): Path<String>,
+    ApiBody(body): ApiBody<SaveDraftRequest>,
+) -> ApiResult<df_account_app::wire_campaign::CampaignSettingsView> {
+    let campaign = ids::campaign(&campaign)?;
+    let view = state
+        .ports
+        .campaigns()
+        .save_campaign_settings(&actor(&caller), campaign, body.draft)
+        .await?;
+    df_observe::record_audit_line(
+        "portal.campaign_settings_saved",
+        format!(
+            "CAMPAIGN settings_changed campaign={}",
+            ids::hex(campaign.as_bytes())
+        ),
+    );
+    reply(view)
+}
+
+/// A stable account link always terminates in the actual runtime or a plain player message.
+pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SignedIn(caller): SignedIn,
+    Path(session_id): Path<String>,
+) -> Result<axum::response::Response, ApiFailure> {
+    use axum::response::IntoResponse;
+    let session = ids::session(&session_id)?;
+    let view = state
+        .ports
+        .campaigns()
+        .lobby(&actor(&caller), session)
+        .await?;
+    if !view.has_started {
+        df_observe::record_audit_line(
+            "portal.game_unavailable",
+            format!("SESSION game_unavailable session={session_id} reason=session_not_started"),
+        );
+        return Ok(game_unavailable());
+    }
+    let reason = match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        state.ports.campaigns().game_link(&actor(&caller), session),
+    )
+    .await
+    {
+        Ok(Ok(Some(destination))) => {
+            let valid = destination
+                .parse::<axum::http::Uri>()
+                .ok()
+                .is_some_and(|uri| {
+                    matches!(uri.scheme_str(), Some("http" | "https"))
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+            if valid {
+                return Ok(axum::response::Redirect::temporary(&destination).into_response());
+            }
+            "invalid_session_link"
+        }
+        Ok(Ok(None)) => {
+            if std::env::var_os("DF_GAMEPLAY_PUBLIC_URL").is_some() {
+                "placement_missing"
+            } else {
+                "origin_missing"
+            }
+        }
+        Ok(Err(_)) => "runtime_unavailable",
+        Err(_) => "runtime_deadline",
+    };
+    df_observe::record_audit_line(
+        "portal.game_unavailable",
+        format!("SESSION game_unavailable session={session_id} reason={reason}"),
+    );
+    Ok(game_unavailable())
+}
+
+fn game_unavailable() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::response::Html(r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DungeonFlux</title><main><h1>The game isn't available right now.</h1><p>Try again in a few minutes.</p></main></html>"#)).into_response()
+}
+
+fn launch_after_creation_failed(
+    campaign: df_types::CampaignId,
+    error: super::ports::PortError,
+) -> ApiFailure {
+    df_observe::record_audit_line(
+        "portal.play_now_partial",
+        format!(
+            "SESSION play_now_partial campaign={} reason={error:?}",
+            ids::hex(campaign.as_bytes())
+        ),
+    );
+    ApiFailure::of(ErrorCode::UnknownOutcome)
 }

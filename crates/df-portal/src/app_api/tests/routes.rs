@@ -21,6 +21,8 @@ pub fn customer_reads() -> Vec<String> {
         "settings",
         "campaigns",
         "campaigns/new",
+        &format!("campaigns/{ID}/settings"),
+        &format!("sessions/{ID}/game"),
         &format!("campaigns/{ID}"),
         &format!("sessions/{ID}/lobby"),
     ]
@@ -37,7 +39,6 @@ pub fn customer_posts() -> Vec<(String, Value)> {
         "custom_ceiling_cents_per_hour": null, "co_hosts_can_invite": false,
         "co_hosts_can_start": true, "co_hosts_can_export": false, "join_mode": "link_only",
         "funding": "sponsor"});
-    let microphone = json!({"prefers_typing": true, "permission": null, "operation": OPERATION});
     vec![
         ("sign-out".into(), json!({})),
         ("verify-email/resend".into(), json!({})),
@@ -65,6 +66,7 @@ pub fn customer_posts() -> Vec<(String, Value)> {
             json!({"password": "x", "operation": OPERATION}),
         ),
         ("campaigns/drafts".into(), json!({})),
+        ("campaigns/play-now".into(), operation.clone()),
         (format!("campaigns/drafts/{ID}/finish"), operation.clone()),
         (
             format!("campaigns/{ID}/invitations"),
@@ -73,18 +75,7 @@ pub fn customer_posts() -> Vec<(String, Value)> {
         (format!("campaigns/{ID}/lobby"), operation.clone()),
         (format!("campaigns/{ID}/leave"), operation.clone()),
         (format!("campaigns/{ID}/code/rotate"), operation.clone()),
-        (format!("sessions/{ID}/lobby/ready"), operation.clone()),
-        (format!("sessions/{ID}/lobby/microphone"), microphone),
         (format!("sessions/{ID}/lobby/start"), operation.clone()),
-        (
-            format!("sessions/{ID}/lobby/display/lookup"),
-            json!({"code": "ABCD-EFGH"}),
-        ),
-        (
-            format!("sessions/{ID}/lobby/display/approve"),
-            json!({"pairing_id": "pair-1", "operation": OPERATION}),
-        ),
-        (format!("sessions/{ID}/lobby/display/unpair-all"), operation),
         (
             "join/accept".into(),
             json!({"token": null, "operation": OPERATION}),

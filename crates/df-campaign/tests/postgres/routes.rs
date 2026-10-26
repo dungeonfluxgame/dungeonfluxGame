@@ -17,8 +17,8 @@ use df_campaign::{
     records::AccountStatus,
     roles::{CampaignRole, Capability, Delegations, authorize},
     routes::{
-        App, AuthClass, Caller, DEVICE_COOKIE, DEVICE_HEADER, Gate, Guard, GuardRefusal, ROUTES,
-        RouteId, RouteSpec, TICKET_COOKIE, Verb, router,
+        App, AuthClass, Caller, DEVICE_COOKIE, Gate, Guard, GuardRefusal, ROUTES, RouteId,
+        RouteSpec, TICKET_COOKIE, Verb, router,
     },
     secrets::hex,
     service::{CampaignService, Ports, ServiceKeys},
@@ -303,19 +303,6 @@ async fn malformed_and_unknown_invites_check_verification_before_lookup_and_matc
     site.cleanup().await;
 }
 
-async fn display_state(site: &Site, cookie: String) -> Value {
-    site.send(
-        Method::GET,
-        "/display/status",
-        None,
-        None,
-        &[("cookie", cookie)],
-    )
-    .await
-    .body["state"]
-        .clone()
-}
-
 type Identity = (&'static str, AccountId, Option<(CampaignRole, Delegations)>);
 
 pub fn id_text(bytes: &[u8; 16]) -> String {
@@ -428,9 +415,7 @@ fn sample_body(route: &RouteSpec, campaign_name: &str) -> Option<Value> {
     Some(match route.id {
         CreateCampaign => create_body("Another"),
         StartDraft => json!({}),
-        OpenLobby | LobbyStart | LobbyReady | LobbyUnready => json!({}),
-        LobbyCharacter => json!({"choice": "undecided", "character_ref": null}),
-        LobbyMicrophone => json!({"preference": "ask", "report": "unknown"}),
+        OpenLobby | LobbyStart => json!({}),
         SaveDraftStep => {
             json!({"name": "Another", "adventure_kind": "bundled", "content_rating": "standard", "seat_count": 4})
         }
@@ -449,13 +434,9 @@ fn sample_body(route: &RouteSpec, campaign_name: &str) -> Option<Value> {
         ProposeTransfer => {
             json!({"kind": "host", "to_member": random_hex(), "old_host_becomes": null})
         }
-        DisplayLookup => json!({"code": "ABCD-EFGH"}),
-        DisplayApprove => json!({"pairing_id": random_hex()}),
-        DisplayUnpair => json!({"ticket_id": null}),
-        DisplayRedeem | DisplayRenew | DisplayChallenge => json!({}),
         Unarchive | RevokeInvitation | RotateCode | DenyRequest | RemoveMember | AllowRejoin
-        | DemoteCoHost | Leave | AcceptTransfer | CancelTransfer | MyMembership | DisplayStatus
-        | GetDraft | Dashboard | Overview | CampaignSettings | CampaignSessions | LobbyView => {
+        | DemoteCoHost | Leave | AcceptTransfer | CancelTransfer | MyMembership | GetDraft
+        | Dashboard | Overview | CampaignSettings | CampaignSessions | LobbyView => {
             return None;
         }
     })
@@ -527,74 +508,31 @@ async fn every_session_route_refuses_a_request_with_no_session() {
     site.cleanup().await;
 }
 
-/// Drives the real routes to pair one display: returns the two cookie pairs a TV would hold.
+/// The game-owned service supplies a valid ticket; website routes never issue one.
 pub(crate) async fn paired_display(
     site: &Site,
     table: &Table,
     session: SessionId,
 ) -> (String, String) {
-    let device = approved_display(site, table, session).await;
-    let redeem = redeem_display(site, &device).await;
-    assert_eq!(redeem.status, StatusCode::OK, "{}", redeem.text);
-    let ticket = cookie_pair(&redeem, TICKET_COOKIE).expect("the ticket cookie is set");
-    (device, ticket)
-}
-
-/// The display's redeem call with only its device cookie.
-pub(crate) async fn redeem_display(site: &Site, cookies: &str) -> Response {
-    site.send(
-        Method::POST,
-        "/display/redeem",
-        None,
-        Some(&json!({})),
-        &[
-            ("origin", ORIGIN.into()),
-            ("sec-fetch-site", "same-origin".into()),
-            (DEVICE_HEADER, "1".into()),
-            ("cookie", cookies.to_owned()),
-        ],
-    )
-    .await
-}
-
-/// A challenge the host has looked up and approved but the display has not yet redeemed: returns
-/// the device cookie pair.
-pub(crate) async fn approved_display(site: &Site, table: &Table, session: SessionId) -> String {
+    let ip = "203.0.113.80".parse().unwrap();
     let challenge = site
-        .send(
-            Method::POST,
-            "/display/challenge",
-            None,
-            Some(&json!({})),
-            &[("x-presession", "1".into())],
-        )
-        .await;
-    assert_eq!(challenge.status, StatusCode::OK, "{}", challenge.text);
-    let device = cookie_pair(&challenge, DEVICE_COOKIE).expect("the device cookie is set");
-    let code = challenge.body["user_code"].as_str().unwrap().to_owned();
-    let path = format!(
-        "/campaigns/{}/sessions/{}/display",
-        id_text(table.campaign.as_bytes()),
-        id_text(session.as_bytes())
-    );
-    let lookup = site
-        .post(
-            &format!("{path}/lookup"),
-            table.host,
-            &json!({"code": code}),
-        )
-        .await;
-    assert_eq!(lookup.status, StatusCode::OK, "{}", lookup.text);
-    let pairing_id = lookup.body["pairing_id"].as_str().unwrap().to_owned();
-    let approve = site
-        .post(
-            &format!("{path}/approve"),
-            table.host,
-            &json!({"pairing_id": pairing_id}),
-        )
-        .await;
-    assert_eq!(approve.status, StatusCode::OK, "{}", approve.text);
-    device
+        .service
+        .begin_display_pairing(ip, df_campaign::records::DeviceLabel::Desktop)
+        .await
+        .unwrap();
+    site.service
+        .approve_display_pairing(table.host, table.campaign, session, challenge.pairing.id)
+        .await
+        .unwrap();
+    let ticket = site
+        .service
+        .redeem_display_ticket(ip, &challenge.device_secret, None)
+        .await
+        .unwrap();
+    (
+        format!("{DEVICE_COOKIE}={}", challenge.device_secret),
+        format!("{TICKET_COOKIE}={}", ticket.ticket_secret),
+    )
 }
 
 #[tokio::test]
@@ -701,7 +639,7 @@ async fn every_route_admits_exactly_the_roles_the_matrix_allows() {
         ("outsider", table.outsider, None),
     ];
     let mut next_account = 30_u8;
-    let mut next_pairing = 0_u32;
+
     let routes: Vec<&RouteSpec> = ROUTES
         .iter()
         .filter(|route| matches!(route.gate, Gate::Capability(_)))
@@ -717,7 +655,7 @@ async fn every_route_admits_exactly_the_roles_the_matrix_allows() {
                 ("campaign", campaign.clone()),
                 ("session", id_text(session.as_bytes())),
             ];
-            let mut body = sample_body(route, "The Sunken Bell");
+            let body = sample_body(route, "The Sunken Bell");
             next_account += 1;
             let target = site.person(next_account).await;
             let target_member: MemberId = match route.id {
@@ -772,29 +710,6 @@ async fn every_route_admits_exactly_the_roles_the_matrix_allows() {
                         .await
                         .unwrap();
                     ids.push(("request", request.id.text()));
-                }
-                RouteId::DisplayLookup | RouteId::DisplayApprove => {
-                    next_pairing += 1;
-                    let pairing = world
-                        .store
-                        .begin_pairing(
-                            df_campaign::store::NewPairing {
-                                device_digest: digest_of(&format!("matrix-device-{next_pairing}")),
-                                device_label: df_campaign::records::DeviceLabel::Desktop,
-                                ip_key: digest_of(&format!("matrix-ip-{next_pairing}")),
-                                ip_key_loose: digest_of(&format!("matrix-loose-{next_pairing}")),
-                                user_code: format!("MTRX{next_pairing:04}"),
-                            },
-                            600_000,
-                            world.now(),
-                        )
-                        .await
-                        .unwrap();
-                    body = Some(if route.id == RouteId::DisplayLookup {
-                        json!({"code": format!("MTRX{next_pairing:04}")})
-                    } else {
-                        json!({"pairing_id": id_text(pairing.id.as_bytes())})
-                    });
                 }
                 _ => {}
             }
@@ -1308,328 +1223,6 @@ async fn a_room_code_flow_over_the_routes_always_ends_in_approval() {
 }
 
 // ---- Display over the routes -----------------------------------------------------------------
-
-#[tokio::test]
-async fn display_cookies_carry_the_documented_max_age_and_are_cleared_at_terminal_states() {
-    let site = Site::new("cookies").await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let challenge = site
-        .send(
-            Method::POST,
-            "/display/challenge",
-            None,
-            Some(&json!({})),
-            &[("x-presession", "1".into())],
-        )
-        .await;
-    assert_eq!(
-        max_age(&challenge, DEVICE_COOKIE),
-        Some(24 * 3_600),
-        "display_pairing_maximum_hours"
-    );
-    let device = cookie_pair(&challenge, DEVICE_COOKIE).unwrap();
-    let cookie_flags = challenge.cookies[0].clone();
-    assert!(
-        cookie_flags.contains("HttpOnly")
-            && cookie_flags.contains("Secure")
-            && cookie_flags.contains("SameSite=Strict")
-    );
-    assert!(
-        !challenge.text.contains(device.split('=').nth(1).unwrap()),
-        "the secret is never in the body"
-    );
-
-    assert_eq!(display_state(&site, device.clone()).await, "pending");
-
-    // The challenge itself needs the pre-session token.
-    let no_token = site
-        .send(
-            Method::POST,
-            "/display/challenge",
-            None,
-            Some(&json!({})),
-            &[],
-        )
-        .await;
-    assert_eq!(no_token.status, StatusCode::FORBIDDEN);
-
-    // Pair it, then read the ticket cookie's life.
-    let path = format!(
-        "/campaigns/{}/sessions/{}/display",
-        id_text(table.campaign.as_bytes()),
-        id_text(session.as_bytes())
-    );
-    let code = challenge.body["user_code"].as_str().unwrap().to_owned();
-    let lookup = site
-        .post(
-            &format!("{path}/lookup"),
-            table.host,
-            &json!({"code": code}),
-        )
-        .await;
-    let pairing = lookup.body["pairing_id"].as_str().unwrap().to_owned();
-    site.post(
-        &format!("{path}/approve"),
-        table.host,
-        &json!({"pairing_id": pairing}),
-    )
-    .await;
-    let redeem_headers = |cookie: String| {
-        vec![
-            ("origin", ORIGIN.to_owned()),
-            ("sec-fetch-site", "same-origin".to_owned()),
-            (DEVICE_HEADER, "1".to_owned()),
-            ("cookie", cookie),
-        ]
-    };
-    let redeem = site
-        .send(
-            Method::POST,
-            "/display/redeem",
-            None,
-            Some(&json!({})),
-            &redeem_headers(device.clone()),
-        )
-        .await;
-    assert_eq!(redeem.status, StatusCode::OK, "{}", redeem.text);
-    assert_eq!(
-        max_age(&redeem, TICKET_COOKIE),
-        Some(12 * 3_600),
-        "the ticket's remaining life"
-    );
-    let ticket = cookie_pair(&redeem, TICKET_COOKIE).unwrap();
-
-    // Renewal inside the last hour extends the same ticket and refreshes the cookie.
-    site.world.clock.advance_ms(11 * 3_600_000 + 30 * 60_000);
-    let both = format!("{device}; {ticket}");
-    let renewed = site
-        .send(
-            Method::POST,
-            "/display/renew",
-            None,
-            Some(&json!({})),
-            &redeem_headers(both.clone()),
-        )
-        .await;
-    assert_eq!(renewed.status, StatusCode::OK, "{}", renewed.text);
-    assert_eq!(max_age(&renewed, TICKET_COOKIE), Some(12 * 3_600));
-
-    // Unpairing ends it: the next renew is refused neutrally and clears both cookies.
-    let unpaired = site
-        .post(
-            &format!("{path}/unpair"),
-            table.host,
-            &json!({"ticket_id": null}),
-        )
-        .await;
-    assert_eq!(unpaired.body["revoked"], 1);
-    let refused = site
-        .send(
-            Method::POST,
-            "/display/renew",
-            None,
-            Some(&json!({})),
-            &redeem_headers(both),
-        )
-        .await;
-    assert_eq!(refused.status, StatusCode::FORBIDDEN);
-    assert_eq!(refused.body, json!({"reason": "display_neutral"}));
-    assert_eq!(max_age(&refused, DEVICE_COOKIE), Some(0));
-    assert_eq!(max_age(&refused, TICKET_COOKIE), Some(0));
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn redeem_and_renew_are_refused_without_origin_or_with_another_site_and_change_nothing() {
-    let site = Site::new("redeemcsrf").await;
-    let table = table(&site).await;
-    let session = session_id(1);
-    site.sessions
-        .set(session, table.campaign, SessionPhase::Lobby);
-    let challenge = site
-        .send(
-            Method::POST,
-            "/display/challenge",
-            None,
-            Some(&json!({})),
-            &[("x-presession", "1".into())],
-        )
-        .await;
-    let device = cookie_pair(&challenge, DEVICE_COOKIE).unwrap();
-    let path = format!(
-        "/campaigns/{}/sessions/{}/display",
-        id_text(table.campaign.as_bytes()),
-        id_text(session.as_bytes())
-    );
-    let lookup = site
-        .post(
-            &format!("{path}/lookup"),
-            table.host,
-            &json!({"code": challenge.body["user_code"]}),
-        )
-        .await;
-    site.post(
-        &format!("{path}/approve"),
-        table.host,
-        &json!({"pairing_id": lookup.body["pairing_id"]}),
-    )
-    .await;
-    let good = vec![
-        ("origin", ORIGIN.to_owned()),
-        ("sec-fetch-site", "same-origin".to_owned()),
-        (DEVICE_HEADER, "1".to_owned()),
-        ("cookie", device.clone()),
-    ];
-    let variants: Vec<Vec<(&str, String)>> = vec![
-        good.iter()
-            .filter(|(name, _)| *name != "origin")
-            .cloned()
-            .collect(),
-        good.iter()
-            .map(|(n, v)| {
-                if *n == "origin" {
-                    (*n, "https://evil.example.test".to_owned())
-                } else {
-                    (*n, v.clone())
-                }
-            })
-            .collect(),
-        good.iter()
-            .map(|(n, v)| {
-                if *n == "sec-fetch-site" {
-                    (*n, "cross-site".to_owned())
-                } else {
-                    (*n, v.clone())
-                }
-            })
-            .collect(),
-        good.iter()
-            .filter(|(name, _)| *name != DEVICE_HEADER)
-            .cloned()
-            .collect(),
-        good.iter()
-            .filter(|(name, _)| *name != "cookie")
-            .cloned()
-            .collect(),
-    ];
-    for headers in variants {
-        let response = site
-            .send(
-                Method::POST,
-                "/display/redeem",
-                None,
-                Some(&json!({})),
-                &headers,
-            )
-            .await;
-        assert_eq!(response.status, StatusCode::FORBIDDEN);
-        assert_eq!(response.body, json!({"reason": "csrf_refused"}));
-        assert!(
-            response.cookies.is_empty(),
-            "a refused request changes no cookie"
-        );
-    }
-    // A non-JSON content type is refused too.
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri("/display/redeem");
-    for (name, value) in &good {
-        request = request.header(*name, value.as_str());
-    }
-    let plain = site
-        .router
-        .clone()
-        .oneshot(
-            request
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(plain.status(), StatusCode::FORBIDDEN);
-    // Nothing was redeemed: the pairing is still approved, and an absent Sec-Fetch-Site works.
-    assert_eq!(
-        site.send(
-            Method::GET,
-            "/display/status",
-            None,
-            None,
-            &[("cookie", device.clone())]
-        )
-        .await
-        .body["state"],
-        "approved"
-    );
-    let without_site: Vec<(&str, String)> = good
-        .iter()
-        .filter(|(name, _)| *name != "sec-fetch-site")
-        .cloned()
-        .collect();
-    let redeemed = site
-        .send(
-            Method::POST,
-            "/display/redeem",
-            None,
-            Some(&json!({})),
-            &without_site,
-        )
-        .await;
-    assert_eq!(redeemed.status, StatusCode::OK, "{}", redeemed.text);
-    site.cleanup().await;
-}
-
-#[tokio::test]
-async fn a_session_of_another_campaign_or_an_ended_one_cannot_take_a_display() {
-    let site = Site::new("sessionscope").await;
-    let table = table(&site).await;
-    let other = site.world.campaign(table.host, 4).await.id;
-    let foreign_session = session_id(2);
-    let ended_session = session_id(3);
-    let own_session = session_id(4);
-    site.sessions
-        .set(foreign_session, other, SessionPhase::Lobby);
-    site.sessions
-        .set(ended_session, table.campaign, SessionPhase::Ended);
-    site.sessions
-        .set(own_session, table.campaign, SessionPhase::Lobby);
-    let campaign = id_text(table.campaign.as_bytes());
-    let pairing = random_hex();
-    for (session, expected) in [
-        (session_id(9), StatusCode::NOT_FOUND),
-        (foreign_session, StatusCode::NOT_FOUND),
-        (ended_session, StatusCode::CONFLICT),
-    ] {
-        let response = site
-            .post(
-                &format!(
-                    "/campaigns/{campaign}/sessions/{}/display/approve",
-                    id_text(session.as_bytes())
-                ),
-                table.host,
-                &json!({"pairing_id": pairing}),
-            )
-            .await;
-        assert_eq!(response.status, expected, "{}", response.text);
-    }
-    // An unreadable session directory fails closed for unpairing.
-    site.sessions.fail_reads(true);
-    let unreadable = site
-        .post(
-            &format!(
-                "/campaigns/{campaign}/sessions/{}/display/unpair",
-                id_text(own_session.as_bytes())
-            ),
-            table.host,
-            &json!({"ticket_id": null}),
-        )
-        .await;
-    assert_eq!(unreadable.status, StatusCode::SERVICE_UNAVAILABLE);
-    site.cleanup().await;
-}
 
 // ---- Service-level rules ---------------------------------------------------------------------
 

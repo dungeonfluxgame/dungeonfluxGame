@@ -177,7 +177,7 @@ impl SessionDirectory for Sessions {
         if active.is_none() {
             return Err(StoreError::InvalidRecord);
         }
-        let rows = tx.query("SELECT m.member_id, m.account_id FROM campaigns.campaign_member m JOIN campaigns.lobby_member l USING (campaign_id, member_id) JOIN accounts.account b ON b.account_id = m.account_id WHERE m.campaign_id = $1 AND l.session_id = $2 AND m.status = 'active' AND m.holds_seat AND b.status = 'active' AND l.ready AND l.character_choice <> 'undecided' ORDER BY m.member_id", &[&campaign.as_bytes().as_slice(), &session.as_bytes().as_slice()]).await.map_err(query_error)?;
+        let rows = tx.query("SELECT m.member_id, m.account_id FROM campaigns.campaign_member m JOIN accounts.account b ON b.account_id = m.account_id WHERE m.campaign_id = $1 AND m.status = 'active' AND m.holds_seat AND b.status = 'active' ORDER BY m.member_id", &[&campaign.as_bytes().as_slice()]).await.map_err(query_error)?;
         let total = tx.query_one("SELECT count(*) FROM campaigns.campaign_member m JOIN accounts.account b USING (account_id) WHERE m.campaign_id = $1 AND m.status = 'active' AND m.holds_seat AND b.status = 'active'", &[&campaign.as_bytes().as_slice()]).await.map_err(query_error)?;
         let total: i64 = total.try_get(0).map_err(|_| StoreError::InvalidRecord)?;
         if rows.len() != roster.len() || usize::try_from(total) != Ok(roster.len()) {

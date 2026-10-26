@@ -412,3 +412,106 @@ async fn save_all_unlimited(site: &Site, owner: df_types::AccountId, draft: &str
             .unwrap();
     }
 }
+
+#[tokio::test]
+async fn lobbyfix_native_settings_are_durable_host_only_and_remember_the_hosts_own_rating() {
+    use df_campaign::{
+        draft::{
+            CampaignSettings, FundingModel, PictureDefault, SettingsUpdate, SpendPreset,
+            VoiceDefault,
+        },
+        records::{ContentRating, EventKind, RoomCodes},
+        roles::Delegations,
+        store::CampaignStore,
+    };
+    let world = crate::fixture::World::new("lobbyfix_settings").await;
+    let host = world.account(1).await;
+    let player = world.account(2).await;
+    let campaign = world.campaign(host, 6).await;
+    world
+        .join(
+            campaign.id,
+            host,
+            player,
+            df_campaign::join_invitation::JoinRole::Player,
+        )
+        .await;
+    let update = SettingsUpdate {
+        name: "Renamed voyage".to_owned(),
+        content_rating: ContentRating::Mature,
+        seat_count: 6,
+        room_codes: RoomCodes::WithApproval,
+        default_co_host_delegations: Delegations::NONE,
+        settings: CampaignSettings {
+            adventure_kind: "bundled".to_owned(),
+            voice_default: VoiceDefault::Off,
+            picture_default: PictureDefault::Automatic,
+            spend_preset: SpendPreset::Immersive,
+            custom_hourly_micro_dollars: None,
+            session_ceiling_micro_dollars: None,
+            funding_model: FundingModel::NamedSponsor,
+            sponsor: Some(host),
+        },
+    };
+    assert!(
+        world
+            .store
+            .update_settings(
+                player,
+                campaign.id,
+                update.clone(),
+                crate::fixture::START_MS
+            )
+            .await
+            .is_err()
+    );
+    world
+        .store
+        .update_settings(host, campaign.id, update, crate::fixture::START_MS)
+        .await
+        .unwrap();
+    let persisted = world
+        .store
+        .campaign_overview(host, campaign.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.campaign.name, "Renamed voyage");
+    assert_eq!(persisted.campaign.content_rating, ContentRating::Mature);
+    assert_eq!(persisted.settings.voice_default, VoiceDefault::Off);
+    assert_eq!(persisted.settings.spend_preset, SpendPreset::Immersive);
+    assert!(
+        world
+            .events(campaign.id)
+            .await
+            .iter()
+            .any(|event| event.kind == EventKind::SettingsChanged)
+    );
+    let preference: String = world
+        .db
+        .admin
+        .client
+        .query_one(
+            "SELECT content_rating FROM campaigns.account_preferences WHERE account_id = $1",
+            &[&host.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(preference, "mature");
+    let other = world.account(3).await;
+    world.campaign(other, 6).await;
+    let preference: String = world
+        .db
+        .admin
+        .client
+        .query_one(
+            "SELECT content_rating FROM campaigns.account_preferences WHERE account_id = $1",
+            &[&host.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(preference, "mature");
+    world.cleanup().await;
+}

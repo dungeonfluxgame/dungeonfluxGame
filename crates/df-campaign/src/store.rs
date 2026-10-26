@@ -329,6 +329,20 @@ pub trait CampaignStore: Send + Sync + 'static {
         campaign: CampaignId,
     ) -> impl Future<Output = StoreResult<Option<OverviewRows>>> + Send;
 
+    fn update_settings(
+        &self,
+        _actor: AccountId,
+        _campaign: CampaignId,
+        _update: crate::draft::SettingsUpdate,
+        _now_ms: u64,
+    ) -> impl Future<Output = Outcome<()>> + Send {
+        async {
+            Err(crate::errors::Failure::Store(
+                crate::errors::StoreError::Unavailable,
+            ))
+        }
+    }
+
     // The lobby (8.4). Reads are plain statements; changes lock account, campaign, lobby row.
 
     /// The seated members with their lobby rows and the live displays of a session; `None` for a

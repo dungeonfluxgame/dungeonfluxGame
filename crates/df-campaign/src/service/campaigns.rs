@@ -27,6 +27,31 @@ pub struct CreateCampaign {
 }
 
 impl<P: Ports> CampaignService<P> {
+    pub async fn update_settings(
+        &self,
+        account: AccountId,
+        campaign: CampaignId,
+        update: crate::draft::SettingsUpdate,
+    ) -> Outcome<()> {
+        self.change_allowed(account)?;
+        update
+            .validate(&self.inner.tunables)
+            .map_err(crate::errors::Failure::Refused)?;
+        let result = self
+            .inner
+            .store
+            .update_settings(account, campaign, update, self.now_ms())
+            .await;
+        self.audit_campaign(
+            "settings_changed",
+            "campaign.settings_changed",
+            campaign,
+            account,
+            &result,
+        );
+        result
+    }
+
     pub async fn create_campaign(
         &self,
         account: AccountId,

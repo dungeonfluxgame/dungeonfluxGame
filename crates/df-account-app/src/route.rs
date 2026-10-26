@@ -47,8 +47,7 @@ pub enum Route {
     Join {
         token: Option<String>,
     },
-    /// The TV or laptop that shows the pairing code (S1 8.5).
-    Display,
+
     Admin(AdminRoute),
     NotFound,
 }
@@ -117,7 +116,7 @@ impl Route {
                 session_id: (*id).to_owned(),
             },
             ["join"] => Self::Join { token: token() },
-            ["display"] => Self::Display,
+            ["display"] => Self::NotFound,
             ["admin"] => Self::Admin(AdminRoute::Summary),
             ["admin", "accounts"] => Self::Admin(AdminRoute::Accounts),
             ["admin", "accounts", id] if is_identifier(id) => Self::Admin(AdminRoute::Account {
@@ -160,7 +159,6 @@ impl Route {
             Self::Campaign { campaign_id } => return format!("{APP_BASE}/campaigns/{campaign_id}"),
             Self::Lobby { session_id } => return format!("{APP_BASE}/sessions/{session_id}/lobby"),
             Self::Join { .. } => "join",
-            Self::Display => "display",
             Self::Admin(admin) => return format!("{APP_BASE}/admin{}", admin.tail()),
         };
         if tail.is_empty() {
@@ -195,7 +193,6 @@ impl Route {
             Self::Campaign { .. } => "campaign",
             Self::Lobby { .. } => "lobby",
             Self::Join { .. } => "join",
-            Self::Display => "display",
             Self::Admin(_) => "admin",
             Self::NotFound => "not_found",
         }
@@ -217,7 +214,6 @@ impl Route {
             | Self::VerifyEmail { .. }
             | Self::ResetPassword { .. }
             | Self::Join { .. }
-            | Self::Display
             | Self::SignedOut
             | Self::NotFound => Audience::Anyone,
             Self::SignUp | Self::SignIn | Self::ForgotPassword => Audience::SignedOut,
@@ -304,7 +300,6 @@ mod tests {
                 session_id: "5e".to_owned(),
             },
             Route::Join { token: None },
-            Route::Display,
             Route::Admin(AdminRoute::Summary),
             Route::Admin(AdminRoute::Accounts),
             Route::Admin(AdminRoute::Account {

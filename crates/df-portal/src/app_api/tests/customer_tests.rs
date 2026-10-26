@@ -550,7 +550,7 @@ async fn no_customer_reply_names_a_table_fee_a_multiplier_a_markup_or_a_provider
             json!({"kind": "contributor", "operation": operations[2]}),
         ),
         (
-            format!("sessions/{session}/lobby/ready"),
+            format!("sessions/{session}/lobby/start"),
             json!({"operation": operations[3]}),
         ),
         (

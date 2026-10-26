@@ -10,7 +10,6 @@ mod admin_flow;
 mod auth_flow;
 mod campaign_flow;
 mod customer_flow;
-mod display_flow;
 mod integration_flow;
 pub use integration_flow::{
     IntegrationField, IntegrationIntent, IntegrationScreen, SharingScreen, TokensScreen,
@@ -30,7 +29,6 @@ pub use customer_flow::{
     DashboardScreen, FundingScreen, MAXIMUM_STATEMENT_LINES, PaceEdit, PlaySessionsScreen,
     SettingsScreen, StatementsScreen,
 };
-pub use display_flow::{DISPLAY_REDEEM_ATTEMPTS, DisplayEnd, DisplayPhase, DisplayScreen};
 
 use crate::{
     api::{ApiCall, Reply},
@@ -159,22 +157,10 @@ pub enum Intent {
     AskLeave,
     LeaveCampaign,
     OpenLobby,
+    PlayNow,
+    CancelLobby,
     CopyText(String),
-    ChooseCharacter {
-        choice: crate::wire_campaign::CharacterChoice,
-        reference: Option<String>,
-    },
-    SetReady(bool),
-    EnableMicrophone,
-    PreferTyping,
     StartSession,
-    ApprovePairing,
-    CancelPairing,
-    UnpairDisplay {
-        ticket_id: String,
-    },
-    UnpairAllDisplays,
-    ShowPairingCode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,7 +185,7 @@ pub enum Form {
     Action,
     WizardStep,
     CreateCampaign,
-    PairingLookup,
+    CampaignSettings,
     CodeLookup,
 }
 
@@ -394,11 +380,6 @@ pub enum Msg {
     TimerFired {
         generation: u64,
     },
-    /// What the browser answered when asked for the microphone.
-    MicrophoneAnswered {
-        generation: u64,
-        permission: crate::wire_campaign::MicrophonePermission,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +406,9 @@ pub enum Effect {
     ReplaceUrl(String),
     /// Leave the app for this address (the hosted checkout page).
     Leave(String),
+    /// Reserve on the click, then navigate after the guarded request completes.
+    ReserveGameTab,
+    OpenGame(Option<String>),
     /// Abort every request still in flight and clear timers (navigation).
     CancelPending,
     After {
@@ -433,10 +417,6 @@ pub enum Effect {
     },
     Focus(FocusTarget),
     Title(String),
-    /// Ask the browser for microphone permission (and release it at once; the game asks again).
-    RequestMicrophone {
-        generation: u64,
-    },
     /// Put this text on the clipboard (the once-shown invitation link).
     CopyText(String),
     CopySecret(crate::wire_integration::SecretReveal),
@@ -475,7 +455,6 @@ pub enum Screen {
     Campaign(CampaignScreen),
     Lobby(LobbyScreen),
     Join(JoinScreen),
-    Display(DisplayScreen),
     Admin(AdminScreen),
     /// Signed in, but the server does not grant this account the operator console.
     NotPermitted,
@@ -503,6 +482,8 @@ pub struct Model {
     pub notice: Option<Notice>,
     after_sign_in: Option<Route>,
     sent_to: Option<String>,
+    pub play_now: Submit,
+    pub play_operation: Remote<String>,
 }
 
 impl Default for Model {
@@ -517,6 +498,8 @@ impl Default for Model {
             notice: None,
             after_sign_in: None,
             sent_to: None,
+            play_now: Submit::Idle,
+            play_operation: Remote::Loading,
         }
     }
 }
@@ -572,14 +555,9 @@ impl Model {
                 Vec::new()
             }
             Msg::TimerFired { generation } if generation == self.generation => self.timer_fired(),
-            Msg::MicrophoneAnswered {
-                generation,
-                permission,
-            } if generation == self.generation => self.microphone_answered(permission),
-            Msg::Replied { .. }
-            | Msg::OperationIssued { .. }
-            | Msg::TimerFired { .. }
-            | Msg::MicrophoneAnswered { .. } => Vec::new(),
+            Msg::Replied { .. } | Msg::OperationIssued { .. } | Msg::TimerFired { .. } => {
+                Vec::new()
+            }
         }
     }
 
@@ -604,6 +582,7 @@ impl Model {
                 self.notice = None;
                 self.navigate(route, History::Push)
             }
+            Intent::PlayNow => self.play_now_intent(),
             Intent::Retry => {
                 if matches!(self.screen, Screen::BootFailed(_)) {
                     self.screen = Screen::Booting;
@@ -623,7 +602,6 @@ impl Model {
             Intent::Submit(form) => self.submit(form),
             other => match &self.screen {
                 Screen::Admin(_) => self.admin_intent(other),
-                Screen::Display(_) => self.display_intent(other),
                 _ => self.customer_intent(other),
             },
         }
@@ -649,7 +627,7 @@ impl Model {
             | Form::Action
             | Form::WizardStep
             | Form::CreateCampaign
-            | Form::PairingLookup
+            | Form::CampaignSettings
             | Form::CodeLookup => self.submit_customer(form),
         };
         if effects.is_empty() && self.has_refused_form() {
@@ -704,7 +682,12 @@ impl Model {
         match (&mut self.screen, slot) {
             (Screen::SignUp(form), _) => form.operation = operation,
             (Screen::AddCredit(form), _) => form.operation = operation,
-            (Screen::Dashboard(screen), _) => screen.join_operation = operation,
+            (Screen::Dashboard(_) | Screen::PlaySessions(_), OperationSlot::Primary) => {
+                self.play_operation = operation
+            }
+            (Screen::Dashboard(screen), OperationSlot::Secondary) => {
+                screen.join_operation = operation
+            }
             (Screen::NewCampaign(screen), _) => screen.operation = operation,
             (Screen::Campaign(screen), _) => screen.operation = operation,
             (Screen::Lobby(screen), _) => screen.operation = operation,
@@ -759,9 +742,6 @@ impl Model {
             | Reply::Providers(_)
             | Reply::ReviewQueue(_)
             | Reply::Audit(_)) => self.admin_reply(reply),
-            reply @ (Reply::DisplayChallenge(_)
-            | Reply::DisplayStatus(_)
-            | Reply::DisplayRedeemed(_)) => self.display_reply(reply),
             reply => self.customer_reply(reply),
         }
     }
@@ -782,18 +762,10 @@ impl Model {
                     self.notice = Some(Notice::EmailVerified);
                     return self.navigate(Route::Dashboard, History::Push);
                 }
-                if let Some(effects) = self.display_session_refreshed() {
-                    return effects;
-                }
                 // A refresh after a change (verification, profile): the screen stays.
                 Vec::new()
             }
-            Err(error) if self.screen != Screen::Booting => {
-                if self.display_session_failed(error) {
-                    return vec![Effect::Focus(FocusTarget::ErrorSummary)];
-                }
-                Vec::new()
-            }
+            Err(_error) if self.screen != Screen::Booting => Vec::new(),
             Err(error) => {
                 self.session = Remote::Failed(error);
                 self.screen = Screen::BootFailed(error);
@@ -913,7 +885,6 @@ impl Model {
                 }
                 self.enter_admin(admin)
             }
-            Route::Display => self.enter_display(),
             Route::Dashboard
             | Route::AddCredit
             | Route::CreditReturn { .. }
@@ -980,6 +951,8 @@ fn reply_error(reply: &Reply) -> Option<ApiError> {
         Reply::ReviewQueue(result) => of(result),
         Reply::Audit(result) => of(result),
         Reply::Dashboard(result) => of(result),
+        Reply::PlayNow(result) => of(result),
+        Reply::CampaignSettings(result) => of(result),
         Reply::WizardCatalog(result) => of(result),
         Reply::Draft(result) => of(result),
         Reply::CampaignCreated(result) => of(result),
@@ -989,13 +962,10 @@ fn reply_error(reply: &Reply) -> Option<ApiError> {
         Reply::Left(result) | Reply::JoinHeld(result) => of(result),
         Reply::LobbyOpened(result) => of(result),
         Reply::Lobby(result) => of(result),
-        Reply::PairingLookup(result) => of(result),
+        Reply::LobbyCancelled(result) => of(result),
         Reply::JoinPreview(result) => of(result),
         Reply::Joined(result) => of(result),
         Reply::CodeRequested(result) => of(result),
-        Reply::DisplayChallenge(result) => of(result),
-        Reply::DisplayStatus(result) => of(result),
-        Reply::DisplayRedeemed(result) => of(result),
     }
 }
 

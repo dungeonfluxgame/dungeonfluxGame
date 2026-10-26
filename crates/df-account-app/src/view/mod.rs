@@ -70,7 +70,6 @@ fn screen(model: &Model) -> Node {
         Screen::Campaign(screen) => campaign::overview(screen, model.offset_east_minutes),
         Screen::Lobby(screen) => campaign::lobby(screen, model.offset_east_minutes),
         Screen::Join(screen) => campaign::join(screen, model),
-        Screen::Display(screen) => campaign::display(screen, model.now_ms),
         Screen::Admin(screen) => admin::console(screen, model),
         Screen::NotPermitted => message_page(
             "This page is for DungeonFlux operators",

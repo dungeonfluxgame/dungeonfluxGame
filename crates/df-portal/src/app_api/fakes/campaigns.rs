@@ -9,20 +9,18 @@ use std::{
 };
 
 use df_account_app::{
-    wire::{DeviceKind, PlaySessionRow, PlaySessionsView},
+    wire::{PlaySessionRow, PlaySessionsView},
     wire_campaign::{
-        CampaignDraft, CampaignOverview, CampaignRole, CharacterRequest, ContentRating,
-        DashboardView, InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
-        MicrophoneRequest, MicrophoneState, PairingLookup, WizardCatalog,
+        CampaignDraft, CampaignOverview, CampaignRole, ContentRating, DashboardView,
+        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView, WizardCatalog,
     },
 };
-use df_customer::{Clock, DeviceLabel};
+use df_customer::Clock;
 use df_types::{AccountId, CampaignId, OperationId, SessionId};
 
 use super::{Receipts, fresh_hex, lock};
 use crate::app_api::ports::{
-    Actor, CampaignDirectory, FundingTarget, IssuedChallenge, PortError, PortResult,
-    RedeemedTicket, RenewedTicket, RequestDecision,
+    Actor, CampaignDirectory, FundingTarget, PortError, PortResult, RequestDecision,
 };
 
 #[derive(Clone)]
@@ -62,6 +60,7 @@ pub(super) struct JoinRequest {
 pub(super) struct Campaign {
     pub id: CampaignId,
     pub name: String,
+    pub settings: CampaignDraft,
     pub members: Vec<Member>,
     pub invitations: Vec<Invitation>,
     pub requests: Vec<JoinRequest>,
@@ -72,43 +71,9 @@ pub(super) struct Campaign {
     pub last_saved_at_ms: Option<u64>,
 }
 
-pub(super) struct Ticket {
-    pub ticket_id: String,
-    pub device: DeviceKind,
-    pub paired_at_ms: u64,
-}
-
 pub(super) struct Lobby {
     pub campaign: CampaignId,
-    pub ready: Vec<AccountId>,
-    pub characters: HashMap<AccountId, df_account_app::wire_campaign::CharacterChoice>,
-    pub microphones: HashMap<AccountId, MicrophoneState>,
-    pub tickets: Vec<Ticket>,
     pub has_started: bool,
-}
-
-pub(super) enum PairState {
-    Pending,
-    Approved {
-        session: SessionId,
-    },
-    Redeemed {
-        session: SessionId,
-        ticket: String,
-        expires_at_ms: u64,
-    },
-    Cancelled,
-}
-
-pub(super) struct Pairing {
-    pub id: String,
-    pub user_code: String,
-    pub device_secret: String,
-    pub device: DeviceKind,
-    pub created_at_ms: u64,
-    pub expires_at_ms: u64,
-    pub state: PairState,
-    pub ticket_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -123,8 +88,10 @@ pub(super) struct State {
     pub campaigns: HashMap<CampaignId, Campaign>,
     pub lobbies: HashMap<SessionId, Lobby>,
     pub drafts: Vec<(String, AccountId, CampaignDraft)>,
-    pub pairings: Vec<Pairing>,
     pub receipts: Receipts<Receipt>,
+    pub last_ratings: HashMap<AccountId, ContentRating>,
+    pub game_links: HashMap<SessionId, String>,
+    pub fail_next_open: bool,
     /// Play history per account, newest first (seeded; S1's real adapter reads its store).
     pub play_sessions: Vec<(AccountId, PlaySessionRow)>,
 }
@@ -146,6 +113,18 @@ impl FakeCampaigns {
 
     fn run<T>(&self, work: impl FnOnce(&mut State, &Self, u64) -> PortResult<T>) -> PortResult<T> {
         work(&mut lock(&self.state), self, self.clock.now_ms())
+    }
+
+    pub fn fail_next_open(&self) {
+        lock(&self.state).fail_next_open = true;
+    }
+
+    /// Registers a fixture runtime's already placed session link.
+    pub fn seed_game_link(&self, session: SessionId, link: String) {
+        let mut state = lock(&self.state);
+        if state.lobbies.contains_key(&session) {
+            state.game_links.insert(session, link);
+        }
     }
 
     /// Creates an active campaign hosted by `host` and returns its id.
@@ -200,6 +179,96 @@ impl FakeCampaigns {
 }
 
 impl CampaignDirectory for FakeCampaigns {
+    async fn game_link(&self, who: &Actor, session: SessionId) -> PortResult<Option<String>> {
+        self.run(|state, _, _| {
+            state.lobby_for(who, session)?;
+            Ok(state.game_links.get(&session).cloned())
+        })
+    }
+
+    async fn play_now_campaign(
+        &self,
+        who: &Actor,
+        operation: OperationId,
+    ) -> PortResult<CampaignId> {
+        self.run(|state, _, now_ms| {
+            if let Some(Receipt::Joined(campaign)) = state.receipts.replay(who.account, operation) {
+                return Ok(campaign);
+            }
+            let catalog = State::wizard_catalog();
+            let adventure = catalog.adventures.first().ok_or(PortError::Unavailable)?;
+            let mut draft = super::campaigns_rules::default_draft();
+            draft.name = adventure.name.clone();
+            draft.adventure_id = Some(adventure.adventure_id.clone());
+            draft.content_rating = Some(
+                state
+                    .last_ratings
+                    .get(&who.account)
+                    .copied()
+                    .unwrap_or(ContentRating::Teen),
+            );
+            draft.seat_count = catalog.maximum_seats;
+            draft.pace = df_account_app::wire::PacePreset::Immersive;
+            draft.join_mode = df_account_app::wire_campaign::JoinMode::LinkAndRoomCode;
+            let (id, _) = state.start_draft(who);
+            state.save_draft(who, &id, draft)?;
+            state.finish_draft(who, &id, operation, now_ms)
+        })
+    }
+
+    async fn campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+    ) -> PortResult<df_account_app::wire_campaign::CampaignSettingsView> {
+        self.run(|state, _, _| {
+            let (found, me) = state.membership(who, campaign)?;
+            Ok(df_account_app::wire_campaign::CampaignSettingsView {
+                draft: found.settings.clone(),
+                catalog: State::wizard_catalog(),
+                can_edit: me.role == CampaignRole::Host,
+            })
+        })
+    }
+
+    async fn save_campaign_settings(
+        &self,
+        who: &Actor,
+        campaign: CampaignId,
+        draft: CampaignDraft,
+    ) -> PortResult<df_account_app::wire_campaign::CampaignSettingsView> {
+        self.run(|state, _, _| {
+            let (_, me) = state.membership(who, campaign)?;
+            if me.role != CampaignRole::Host {
+                return Err(PortError::Forbidden);
+            }
+            super::campaigns_rules::validate_settings(&draft)?;
+            let rating = draft.content_rating.ok_or(PortError::Refused(
+                df_account_app::wire::Refusal::ContentRatingRequired,
+            ))?;
+            let found = state.managed(who, campaign)?;
+            if draft.seat_count < super::campaigns_rules::seated(found) {
+                return Err(PortError::Refused(
+                    df_account_app::wire::Refusal::SeatsOutOfRange,
+                ));
+            }
+            found.name = draft.name.trim().to_owned();
+            found.rating = rating;
+            found.seats = draft.seat_count;
+            if draft.join_mode == df_account_app::wire_campaign::JoinMode::LinkAndRoomCode {
+                if found.room_code.is_none() {
+                    found.room_code = Some(fresh_code());
+                }
+            } else {
+                found.room_code = None;
+            }
+            found.settings = draft;
+            state.last_ratings.insert(who.account, rating);
+            Ok(())
+        })?;
+        self.campaign_settings(who, campaign).await
+    }
+
     async fn dashboard(&self, who: &Actor) -> PortResult<DashboardView> {
         self.run(|state, _, _| Ok(state.dashboard(who)))
     }
@@ -311,70 +380,27 @@ impl CampaignDirectory for FakeCampaigns {
         self.run(|state, _, _| state.open_lobby_as(who, campaign))
     }
 
+    async fn cancel_lobby(&self, who: &Actor, session: SessionId) -> PortResult<()> {
+        self.run(|state, _, _| {
+            let (lobby, campaign, member) = state.lobby_for(who, session)?;
+            if !member.can_manage() || lobby.has_started {
+                return Err(PortError::Forbidden);
+            }
+            let campaign = campaign.id;
+            state.lobbies.remove(&session);
+            if let Some(campaign) = state.campaigns.get_mut(&campaign) {
+                campaign.live_session = None;
+            }
+            Ok(())
+        })
+    }
+
     async fn lobby(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
         self.run(|state, _, _| state.lobby_view(who, session))
     }
 
-    async fn choose_character(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        request: CharacterRequest,
-    ) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.choose_character(who, session, &request))
-    }
-
-    async fn set_ready(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        is_ready: bool,
-    ) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.set_ready(who, session, is_ready))
-    }
-
-    async fn report_microphone(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        report: MicrophoneRequest,
-    ) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.report_microphone(who, session, &report))
-    }
-
     async fn start_session(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
         self.run(|state, _, _| state.start_session(who, session))
-    }
-
-    async fn lookup_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        code: &str,
-    ) -> PortResult<PairingLookup> {
-        self.run(|state, _, now_ms| state.lookup_display(who, session, code, now_ms))
-    }
-
-    async fn approve_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        pairing_id: &str,
-    ) -> PortResult<LobbyView> {
-        self.run(|state, _, now_ms| state.approve_display(who, session, pairing_id, now_ms))
-    }
-
-    async fn unpair_display(
-        &self,
-        who: &Actor,
-        session: SessionId,
-        ticket_id: &str,
-    ) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.unpair_display(who, session, Some(ticket_id)))
-    }
-
-    async fn unpair_all_displays(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.unpair_display(who, session, None))
     }
 
     async fn join_preview(&self, token: &str) -> PortResult<InvitePreview> {
@@ -401,34 +427,6 @@ impl CampaignDirectory for FakeCampaigns {
         operation: OperationId,
     ) -> PortResult<JoinRequested> {
         self.run(|state, _, now_ms| state.request_by_code(who, code, operation, now_ms))
-    }
-
-    async fn display_challenge(&self, device: DeviceLabel) -> PortResult<IssuedChallenge> {
-        self.run(|state, _, now_ms| Ok(state.issue_challenge(device, now_ms)))
-    }
-
-    async fn display_status(
-        &self,
-        device_secret: &str,
-    ) -> PortResult<df_account_app::wire_campaign::DisplayState> {
-        self.run(|state, _, now_ms| state.pairing_status(device_secret, now_ms))
-    }
-
-    async fn display_redeem(&self, device_secret: &str) -> PortResult<RedeemedTicket> {
-        self.run(|state, _, now_ms| state.redeem_pairing(device_secret, now_ms))
-    }
-
-    async fn display_renew(&self, device_secret: &str, ticket: &str) -> PortResult<RenewedTicket> {
-        self.run(|state, _, now_ms| state.renew_ticket(device_secret, ticket, now_ms))
-    }
-}
-
-pub(super) fn device_kind(label: DeviceLabel) -> DeviceKind {
-    match label {
-        DeviceLabel::Phone => DeviceKind::Phone,
-        DeviceLabel::Tablet => DeviceKind::Tablet,
-        DeviceLabel::Desktop => DeviceKind::Desktop,
-        DeviceLabel::Unknown => DeviceKind::Unknown,
     }
 }
 

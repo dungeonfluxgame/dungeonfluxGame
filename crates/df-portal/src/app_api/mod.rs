@@ -12,7 +12,6 @@ mod admin;
 mod auth;
 mod campaign;
 mod customer;
-mod display;
 mod ids;
 mod oauth;
 mod router;

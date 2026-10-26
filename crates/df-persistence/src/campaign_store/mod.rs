@@ -207,6 +207,19 @@ async fn finish<T>(tx: conn::Tx<'static>, result: Outcome<T>) -> Outcome<T> {
 }
 
 impl CampaignStore for PgCampaignStore {
+    async fn update_settings(
+        &self,
+        actor: AccountId,
+        campaign: CampaignId,
+        update: df_campaign::draft::SettingsUpdate,
+        now_ms: u64,
+    ) -> Outcome<()> {
+        let tx = self.begin().await?;
+        let result =
+            campaigns::update_settings(&tx, &self.tunables, actor, campaign, update, now_ms).await;
+        finish(tx, result).await
+    }
+
     async fn member_snapshot(
         &self,
         account: AccountId,

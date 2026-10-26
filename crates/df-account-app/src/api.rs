@@ -22,11 +22,9 @@ use crate::wire::{
     VerifyOutcome,
 };
 use crate::wire_campaign::{
-    ApproveRequestBody, CampaignCreated, CampaignOverview, CharacterRequest,
-    CreateInvitationRequest, DashboardView, DisplayChallenge, DisplayRedeemed, DisplayStatus,
+    ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest, DashboardView,
     DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest, JoinAccepted, JoinRequested,
-    LobbyOpened, LobbyView, MicrophoneRequest, OperationRequest, PairingApproveRequest,
-    PairingLookup, PairingLookupRequest, PendingInvitation, ReadyRequest, RoomCodeJoinRequest,
+    LobbyOpened, LobbyView, OperationRequest, PendingInvitation, RoomCodeJoinRequest,
     RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
 };
 
@@ -160,6 +158,14 @@ pub enum ApiCall {
     },
     Audit,
     Dashboard,
+    PlayNow(OperationRequest),
+    CampaignSettings {
+        campaign_id: String,
+    },
+    SaveCampaignSettings {
+        campaign_id: String,
+        request: SaveDraftRequest,
+    },
     JoinPending,
     WizardCatalog,
     StartDraft,
@@ -204,20 +210,11 @@ pub enum ApiCall {
     Lobby {
         session_id: String,
     },
-    ChooseCharacter {
-        session_id: String,
-        request: CharacterRequest,
-    },
-    SetReady {
-        session_id: String,
-        is_ready: bool,
-        request: ReadyRequest,
-    },
-    ReportMicrophone {
-        session_id: String,
-        request: MicrophoneRequest,
-    },
     StartSession {
+        session_id: String,
+        request: OperationRequest,
+    },
+    CancelLobby {
         session_id: String,
         request: OperationRequest,
     },
@@ -225,31 +222,11 @@ pub enum ApiCall {
         session_id: String,
         request: crate::wire_campaign::HostConsentRequest,
     },
-    LookupDisplay {
-        session_id: String,
-        request: PairingLookupRequest,
-    },
-    ApproveDisplay {
-        session_id: String,
-        request: PairingApproveRequest,
-    },
-    UnpairDisplay {
-        session_id: String,
-        ticket_id: String,
-        request: OperationRequest,
-    },
-    UnpairAllDisplays {
-        session_id: String,
-        request: OperationRequest,
-    },
     JoinPreview(TokenBody),
     JoinHold(TokenBody),
     JoinAccept(JoinAcceptRequest),
     CodeLookup(RoomCodeLookupRequest),
     CodeRequest(RoomCodeJoinRequest),
-    DisplayChallenge,
-    DisplayStatus,
-    DisplayRedeem,
 }
 
 /// A decoded answer; `Err` is the server's typed refusal or a transport failure.
@@ -306,6 +283,8 @@ pub enum Reply {
     ReviewQueue(Result<Vec<ReviewItem>, ApiError>),
     Audit(Result<Vec<AuditRow>, ApiError>),
     Dashboard(Result<DashboardView, ApiError>),
+    PlayNow(Result<crate::wire_campaign::PlayNowView, ApiError>),
+    CampaignSettings(Result<crate::wire_campaign::CampaignSettingsView, ApiError>),
     JoinPending(Result<PendingInvitation, ApiError>),
     WizardCatalog(Result<WizardCatalog, ApiError>),
     Draft(Result<DraftView, ApiError>),
@@ -315,14 +294,11 @@ pub enum Reply {
     Left(Result<Accepted, ApiError>),
     LobbyOpened(Result<LobbyOpened, ApiError>),
     Lobby(Result<LobbyView, ApiError>),
-    PairingLookup(Result<PairingLookup, ApiError>),
+    LobbyCancelled(Result<Accepted, ApiError>),
     JoinPreview(Result<InvitePreview, ApiError>),
     JoinHeld(Result<Accepted, ApiError>),
     Joined(Result<JoinAccepted, ApiError>),
     CodeRequested(Result<JoinRequested, ApiError>),
-    DisplayChallenge(Result<DisplayChallenge, ApiError>),
-    DisplayStatus(Result<DisplayStatus, ApiError>),
-    DisplayRedeemed(Result<DisplayRedeemed, ApiError>),
 }
 
 fn get(path: String) -> HttpRequest {
@@ -354,15 +330,6 @@ fn post_empty(path: String) -> HttpRequest {
         path,
         body: Some("{}".to_owned()),
         guard: Guard::Csrf,
-    }
-}
-
-fn post_device(path: String) -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        path,
-        body: Some("{}".to_owned()),
-        guard: Guard::Device,
     }
 }
 
@@ -529,6 +496,18 @@ impl ApiCall {
     fn campaign_request(&self) -> HttpRequest {
         match self {
             Self::Dashboard => get(at("campaigns")),
+            Self::PlayNow(request) => post(at("campaigns/play-now"), request),
+            Self::CampaignSettings { campaign_id } => {
+                get(at(&format!("campaigns/{campaign_id}/settings")))
+            }
+            Self::SaveCampaignSettings {
+                campaign_id,
+                request,
+            } => send(
+                Method::Put,
+                at(&format!("campaigns/{campaign_id}/settings")),
+                request,
+            ),
             Self::JoinPending => get(at("join/pending")),
             Self::WizardCatalog => get(at("campaigns/new")),
             Self::StartDraft => post_empty(at("campaigns/drafts")),
@@ -597,29 +576,11 @@ impl ApiCall {
 
     fn session_request(&self) -> HttpRequest {
         match self {
+            Self::CancelLobby {
+                session_id,
+                request,
+            } => post(at(&format!("sessions/{session_id}/lobby/cancel")), request),
             Self::Lobby { session_id } => get(at(&format!("sessions/{session_id}/lobby"))),
-            Self::ChooseCharacter {
-                session_id,
-                request,
-            } => post(
-                at(&format!("sessions/{session_id}/lobby/character")),
-                request,
-            ),
-            Self::SetReady {
-                session_id,
-                is_ready,
-                request,
-            } => {
-                let verb = if *is_ready { "ready" } else { "unready" };
-                post(at(&format!("sessions/{session_id}/lobby/{verb}")), request)
-            }
-            Self::ReportMicrophone {
-                session_id,
-                request,
-            } => post(
-                at(&format!("sessions/{session_id}/lobby/microphone")),
-                request,
-            ),
             Self::StartSession {
                 session_id,
                 request,
@@ -631,45 +592,11 @@ impl ApiCall {
                 at(&format!("sessions/{session_id}/lobby/funding/consent")),
                 request,
             ),
-            Self::LookupDisplay {
-                session_id,
-                request,
-            } => post(
-                at(&format!("sessions/{session_id}/lobby/display/lookup")),
-                request,
-            ),
-            Self::ApproveDisplay {
-                session_id,
-                request,
-            } => post(
-                at(&format!("sessions/{session_id}/lobby/display/approve")),
-                request,
-            ),
-            Self::UnpairDisplay {
-                session_id,
-                ticket_id,
-                request,
-            } => post(
-                at(&format!(
-                    "sessions/{session_id}/lobby/display/{ticket_id}/unpair"
-                )),
-                request,
-            ),
-            Self::UnpairAllDisplays {
-                session_id,
-                request,
-            } => post(
-                at(&format!("sessions/{session_id}/lobby/display/unpair-all")),
-                request,
-            ),
             Self::JoinPreview(body) => post(at("join/preview"), body),
             Self::JoinHold(body) => post(at("join/hold"), body),
             Self::JoinAccept(body) => post(at("join/accept"), body),
             Self::CodeLookup(body) => post(at("join/code/lookup"), body),
             Self::CodeRequest(body) => post(at("join/code/request"), body),
-            Self::DisplayChallenge => post_empty(at("display/challenge")),
-            Self::DisplayStatus => get(at("display/status")),
-            Self::DisplayRedeem => post_device(at("display/redeem")),
             _ => unreachable!("every call is matched by `request`, `campaign_request` or here"),
         }
     }
@@ -755,6 +682,10 @@ impl ApiCall {
         }
         match self {
             Self::Dashboard => Reply::Dashboard(read!()),
+            Self::PlayNow(_) => Reply::PlayNow(read!()),
+            Self::CampaignSettings { .. } | Self::SaveCampaignSettings { .. } => {
+                Reply::CampaignSettings(read!())
+            }
             Self::JoinPending => Reply::JoinPending(read!()),
             Self::WizardCatalog => Reply::WizardCatalog(read!()),
             Self::StartDraft | Self::SaveDraft { .. } => Reply::Draft(read!()),
@@ -766,23 +697,14 @@ impl ApiCall {
             Self::CreateInvitation { .. } => Reply::InvitationCreated(read!()),
             Self::LeaveCampaign { .. } => Reply::Left(read!()),
             Self::OpenLobby { .. } => Reply::LobbyOpened(read!()),
-            Self::Lobby { .. }
-            | Self::ConsentHostFunding { .. }
-            | Self::ChooseCharacter { .. }
-            | Self::SetReady { .. }
-            | Self::ReportMicrophone { .. }
-            | Self::StartSession { .. }
-            | Self::ApproveDisplay { .. }
-            | Self::UnpairDisplay { .. }
-            | Self::UnpairAllDisplays { .. } => Reply::Lobby(read!()),
-            Self::LookupDisplay { .. } => Reply::PairingLookup(read!()),
+            Self::CancelLobby { .. } => Reply::LobbyCancelled(read!()),
+            Self::Lobby { .. } | Self::ConsentHostFunding { .. } | Self::StartSession { .. } => {
+                Reply::Lobby(read!())
+            }
             Self::JoinPreview(_) | Self::CodeLookup(_) => Reply::JoinPreview(read!()),
             Self::JoinHold(_) => Reply::JoinHeld(read!()),
             Self::JoinAccept(_) => Reply::Joined(read!()),
             Self::CodeRequest(_) => Reply::CodeRequested(read!()),
-            Self::DisplayChallenge => Reply::DisplayChallenge(read!()),
-            Self::DisplayStatus => Reply::DisplayStatus(read!()),
-            Self::DisplayRedeem => Reply::DisplayRedeemed(read!()),
             _ => unreachable!("every account call is matched in `decode`"),
         }
     }

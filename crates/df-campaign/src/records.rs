@@ -505,10 +505,11 @@ pub enum EventKind {
     DeleteScheduled,
     DeleteCancelled,
     DisplayTicketRevoked,
+    SettingsChanged,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Joined,
         Self::Rejoined,
         Self::Left,
@@ -526,6 +527,7 @@ impl EventKind {
         Self::DeleteScheduled,
         Self::DeleteCancelled,
         Self::DisplayTicketRevoked,
+        Self::SettingsChanged,
     ];
 
     pub const fn text(self) -> &'static str {
@@ -547,6 +549,7 @@ impl EventKind {
             Self::DeleteScheduled => "delete_scheduled",
             Self::DeleteCancelled => "delete_cancelled",
             Self::DisplayTicketRevoked => "display_ticket_revoked",
+            Self::SettingsChanged => "settings_changed",
         }
     }
 
@@ -569,6 +572,7 @@ impl EventKind {
             | Self::OwnershipTransferred => EventScope::Member,
             Self::DisplayTicketRevoked => EventScope::Ticket,
             Self::InvitationsRevoked
+            | Self::SettingsChanged
             | Self::Archived
             | Self::Unarchived
             | Self::DeleteRequested
@@ -587,7 +591,8 @@ impl EventKind {
             | Self::RejoinAllowed
             | Self::InvitationsRevoked
             | Self::Unarchived
-            | Self::DeleteCancelled => Some(false),
+            | Self::DeleteCancelled
+            | Self::SettingsChanged => Some(false),
             Self::Left
             | Self::Removed
             | Self::Archived
