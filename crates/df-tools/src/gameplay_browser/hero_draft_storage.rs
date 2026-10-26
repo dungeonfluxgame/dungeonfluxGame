@@ -197,6 +197,30 @@ mod tests {
         );
     }
     #[test]
+    fn phone_draft_round_trips_every_creator_choice() {
+        let mut draft = draft();
+        let expected = [
+            ("alignment", "lawful-good"),
+            ("language-1", "elvish"),
+            ("language-2", "orc"),
+            ("skill-1", "acrobatics"),
+            ("skill-2", "survival"),
+            ("gaming-set", "dice"),
+            ("build-package", "melee-stalwart"),
+        ];
+        let mut selection = draft.selection().unwrap();
+        selection.choices = expected
+            .iter()
+            .map(|(group_id, option_id)| rpc::JourneyChoice {
+                group_id: (*group_id).into(),
+                option_id: (*option_id).into(),
+            })
+            .collect();
+        draft.selection = selection.encode_to_vec();
+        let restored = StoredDraft::decode(&draft.encode().unwrap()).unwrap();
+        assert_eq!(restored.selection().unwrap().choices, selection.choices);
+    }
+    #[test]
     fn loaded_draft_origin_survives_accept_and_reload_but_is_scoped_to_its_seat() {
         let draft = draft();
         let restored = StoredDraft::decode(&draft.encode().unwrap()).unwrap();

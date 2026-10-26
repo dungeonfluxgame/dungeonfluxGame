@@ -3137,6 +3137,21 @@ pub(super) fn archer_equipment()
 -> Result<Vec<EquipmentRow>, df_rules::local_journey::JourneyRuleError> {
     Ok(archer_package()?.equipment.clone())
 }
+
+/// The starting package whose expanded choices are all among `choices`, if one matches.
+pub(super) fn package_id_for_choices(choices: &[(&str, &str)]) -> Option<String> {
+    build_packages().ok()?.into_iter().find_map(|package| {
+        package
+            .choices
+            .iter()
+            .all(|(group, option)| {
+                choices.iter().any(|(saved_group, saved_option)| {
+                    saved_group == group && saved_option == option
+                })
+            })
+            .then_some(package.id)
+    })
+}
 pub(super) fn validate_character(
     name: &str,
     choices: &[(&str, &str)],

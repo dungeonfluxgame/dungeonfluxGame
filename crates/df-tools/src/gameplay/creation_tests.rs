@@ -1015,11 +1015,48 @@ fn stalwart_then_every_package_with_maximal_creator_identity_fits_and_saves_loss
                     assert_eq!(recovered.name, ["Brakka", "Sigrun"][index]);
                     assert_eq!(recovered.identity, Some(identity.clone()));
                     assert_eq!(recovered.portrait_scenery, scenery);
-                    assert_eq!(recovered.design.len(), 3);
-                    assert!(recovered.design.iter().all(|choice| matches!(
-                        choice.group_id.as_str(),
-                        "species" | "class" | "background"
-                    )));
+                    let mut expected = PHONE_SHARED.to_vec();
+                    expected.push((
+                        "build-package",
+                        ["melee-stalwart", second_package.option_id.as_str()][index],
+                    ));
+                    assert_eq!(recovered.design.len(), expected.len());
+                    for (group_id, option_id) in &expected {
+                        assert!(
+                            recovered.design.iter().any(|choice| {
+                                choice.group_id == *group_id && choice.option_id == *option_id
+                            }),
+                            "saved hero lost {group_id}={option_id}: {:?}",
+                            recovered.design
+                        );
+                    }
+                    // A hero committed before creator records stored every choice keeps
+                    // the choices on its committed character, package included.
+                    if index == 0 {
+                        let mut stripped = current.state().clone();
+                        for character in &mut stripped.characters {
+                            character.choices.retain(|choice| {
+                                !choice
+                                    .offer
+                                    .as_str()
+                                    .starts_with("identity-portrait:creator-v1:")
+                            });
+                        }
+                        let stripped = model::checkpoint(current.basis(), stripped).unwrap();
+                        let legacy = super::super::hero_library::snapshot(&stripped, member)
+                            .unwrap()
+                            .hero
+                            .unwrap();
+                        for (group_id, option_id) in &expected {
+                            assert!(
+                                legacy.design.iter().any(|choice| {
+                                    choice.group_id == *group_id && choice.option_id == *option_id
+                                }),
+                                "legacy hero lost {group_id}={option_id}: {:?}",
+                                legacy.design
+                            );
+                        }
+                    }
                 }
             }
         }

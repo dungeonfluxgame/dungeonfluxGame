@@ -276,12 +276,7 @@ pub(super) fn identity_choices(
     };
     let mut record = rpc::LibraryHeroIdentity {
         name: selection.name.clone(),
-        design: selection
-            .choices
-            .iter()
-            .filter(|choice| matches!(choice.group_id.as_str(), "species" | "class" | "background"))
-            .cloned()
-            .collect(),
+        design: selection.choices.clone(),
         identity: selection.identity.clone(),
         portrait_scenery: selection.portrait_scenery.clone(),
         private_backstory: String::new(),
@@ -313,6 +308,75 @@ pub(super) fn identity_choices(
     }
     Ok(choices)
 }
+fn is_saved_choice_group(group: &str) -> bool {
+    group == "build-package"
+        || df_rules::local_journey::BUILD_GROUPS.contains(&group)
+        || df_rules::species::is_choice_group(group)
+}
+
+/// A creator record written before every choice was stored holds only part of the
+/// design; the committed character still carries the rest, with the starting
+/// package expanded into its array, equipment and style choices.
+fn restore_committed_choices(
+    hero: &mut rpc::LibraryHeroIdentity,
+    character: &df_model::checkpoint::CharacterState,
+) {
+    let mut committed: Vec<rpc::JourneyChoice> = character
+        .choices
+        .iter()
+        .filter(|choice| is_saved_choice_group(choice.offer.as_str()))
+        .map(|choice| rpc::JourneyChoice {
+            group_id: choice.offer.as_str().to_owned(),
+            option_id: choice.selected.as_str().to_owned(),
+        })
+        .collect();
+    let mut has_package = hero
+        .design
+        .iter()
+        .chain(committed.iter())
+        .any(|choice| choice.group_id == "build-package");
+    if !has_package {
+        let pairs = committed
+            .iter()
+            .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
+            .collect::<Vec<_>>();
+        if let Some(package) = super::pack::package_id_for_choices(&pairs) {
+            committed.push(rpc::JourneyChoice {
+                group_id: "build-package".into(),
+                option_id: package,
+            });
+            has_package = true;
+        }
+    }
+    if has_package {
+        committed.retain(|choice| {
+            !matches!(
+                choice.group_id.as_str(),
+                "array" | "equipment" | "style-masteries"
+            )
+        });
+    }
+    if has_package {
+        hero.design.retain(|choice| {
+            !matches!(
+                choice.group_id.as_str(),
+                "array" | "equipment" | "style-masteries"
+            )
+        });
+    }
+    for choice in committed {
+        if !hero
+            .design
+            .iter()
+            .any(|saved| saved.group_id == choice.group_id)
+        {
+            hero.design.push(choice);
+        }
+    }
+    hero.design
+        .sort_by(|left, right| left.group_id.cmp(&right.group_id));
+}
+
 pub(super) struct SeatSnapshot {
     pub(super) seat: Vec<u8>,
     pub(super) hero: Option<rpc::LibraryHeroIdentity>,
@@ -387,7 +451,7 @@ pub(super) fn snapshot(
             ),
             design: choices
                 .into_iter()
-                .filter(|(group, _)| matches!(group.as_str(), "species" | "class" | "background"))
+                .filter(|(group, _)| is_saved_choice_group(group))
                 .map(|(group_id, option_id)| rpc::JourneyChoice {
                     group_id,
                     option_id,
@@ -398,6 +462,7 @@ pub(super) fn snapshot(
     } else {
         rpc::LibraryHeroIdentity::decode(bytes.as_slice()).map_err(|_| unavailable())?
     };
+    restore_committed_choices(&mut hero, character);
     if character
         .choices
         .iter()
@@ -984,7 +1049,7 @@ mod tests {
         assert!(!portrait_matches(&edited, &original));
     }
     #[test]
-    fn library_snapshot_reads_the_committed_seat_and_preserves_identity_only() {
+    fn library_snapshot_reads_the_committed_seat_and_preserves_identity_and_choices() {
         let initial = super::super::model::initial().unwrap();
         let mut state = initial.state().clone();
         let member = state.characters[0].owner;
@@ -1034,15 +1099,69 @@ mod tests {
         assert_eq!(saved.name, "CommittedHero");
         assert_eq!(saved.identity, Some(identity));
         assert_eq!(saved.portrait_scenery, selection.portrait_scenery);
-        assert_eq!(saved.design.len(), 3);
-        assert!(
-            !saved
-                .design
-                .iter()
-                .any(|choice| matches!(choice.group_id.as_str(), "equipment" | "array"))
-        );
+        let mut expected = selection.choices.clone();
+        expected.sort_by(|left, right| left.group_id.cmp(&right.group_id));
+        assert_eq!(saved.design, expected);
         let other = df_types::MemberId::from_bytes(&[0x79; 16]).unwrap();
         assert!(snapshot(&committed, other).unwrap().hero.is_none());
+    }
+
+    #[test]
+    fn a_saved_hero_restores_every_creator_choice_not_only_species_class_and_background() {
+        let initial = super::super::model::initial().unwrap();
+        let mut state = initial.state().clone();
+        let member = state.characters[0].owner;
+        let identity = super::super::hero_identity::Identity::from_menus(&[])
+            .unwrap()
+            .to_rpc();
+        let expected = [
+            ("species", "dwarf"),
+            ("class", "fighter-1"),
+            ("background", "soldier"),
+            ("alignment", "lawful-good"),
+            ("language-1", "elvish"),
+            ("language-2", "orc"),
+            ("skill-1", "acrobatics"),
+            ("skill-2", "survival"),
+            ("gaming-set", "dice"),
+            ("build-package", "melee-stalwart"),
+        ];
+        let selection = rpc::CharacterSelection {
+            name: "Brannoc".into(),
+            identity: Some(identity),
+            choices: expected
+                .iter()
+                .map(|(group_id, option_id)| rpc::JourneyChoice {
+                    group_id: (*group_id).into(),
+                    option_id: (*option_id).into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        state.characters[0].choices = identity_choices(Some(&selection))
+            .unwrap()
+            .into_iter()
+            .map(|(offer, selected)| df_model::checkpoint::AcceptedChoice {
+                participant: member,
+                offer,
+                selected,
+                source: super::super::model::rule().unwrap(),
+            })
+            .collect();
+        let committed = super::super::model::checkpoint(initial.basis(), state).unwrap();
+        let saved = snapshot(&committed, member).unwrap().hero.unwrap();
+        let restored = rpc::LibraryHeroIdentity::decode(saved.encode_to_vec().as_slice()).unwrap();
+        for (group_id, option_id) in expected {
+            assert!(
+                restored
+                    .design
+                    .iter()
+                    .any(|choice| { choice.group_id == group_id && choice.option_id == option_id }),
+                "saved hero lost {group_id}={option_id}: {:?}",
+                restored.design
+            );
+        }
+        assert_eq!(restored.design.len(), expected.len());
     }
 
     #[test]
