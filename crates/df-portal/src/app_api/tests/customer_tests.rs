@@ -517,7 +517,6 @@ async fn no_customer_reply_names_a_table_fee_a_multiplier_a_markup_or_a_provider
         "statements",
         "settings",
         "campaigns",
-        "campaigns/new",
         "join/pending",
     ];
     for read in reads {
@@ -544,7 +543,6 @@ async fn no_customer_reply_names_a_table_fee_a_multiplier_a_markup_or_a_provider
             "credit/checkouts".to_owned(),
             json!({"amount_cents": 2_000, "operation": operations[1]}),
         ),
-        ("campaigns/drafts".to_owned(), json!({})),
         (
             format!("campaigns/{campaign}/invitations"),
             json!({"kind": "contributor", "operation": operations[2]}),

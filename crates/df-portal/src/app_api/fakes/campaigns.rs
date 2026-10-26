@@ -12,7 +12,7 @@ use df_account_app::{
     wire::{PlaySessionRow, PlaySessionsView},
     wire_campaign::{
         CampaignDraft, CampaignOverview, CampaignRole, ContentRating, DashboardView,
-        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView, WizardCatalog,
+        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
     },
 };
 use df_customer::Clock;
@@ -87,7 +87,6 @@ pub(super) enum Receipt {
 pub(super) struct State {
     pub campaigns: HashMap<CampaignId, Campaign>,
     pub lobbies: HashMap<SessionId, Lobby>,
-    pub drafts: Vec<(String, AccountId, CampaignDraft)>,
     pub receipts: Receipts<Receipt>,
     pub last_ratings: HashMap<AccountId, ContentRating>,
     pub game_links: HashMap<SessionId, df_account_app::wire_campaign::GameLinks>,
@@ -241,24 +240,34 @@ impl CampaignDirectory for FakeCampaigns {
             if let Some(Receipt::Joined(campaign)) = state.receipts.replay(who.account, operation) {
                 return Ok(campaign);
             }
-            let catalog = State::wizard_catalog();
-            let adventure = catalog.adventures.first().ok_or(PortError::Unavailable)?;
-            let mut draft = super::campaigns_rules::default_draft();
-            draft.name = adventure.name.clone();
-            draft.adventure_id = Some(adventure.adventure_id.clone());
-            draft.content_rating = Some(
+            let mut settings = super::campaigns_rules::default_draft();
+            settings.name = "The Broken Seal".to_owned();
+            settings.adventure_id = Some("harbor-journey".to_owned());
+            settings.content_rating = Some(
                 state
                     .last_ratings
                     .get(&who.account)
                     .copied()
                     .unwrap_or(ContentRating::Teen),
             );
-            draft.seat_count = catalog.maximum_seats;
-            draft.pace = df_account_app::wire::PacePreset::Immersive;
-            draft.join_mode = df_account_app::wire_campaign::JoinMode::LinkAndRoomCode;
-            let (id, _) = state.start_draft(who);
-            state.save_draft(who, &id, draft)?;
-            state.finish_draft(who, &id, operation, now_ms)
+            settings.seat_count = 6;
+            settings.pace = df_account_app::wire::PacePreset::Immersive;
+            settings.join_mode = df_account_app::wire_campaign::JoinMode::LinkAndRoomCode;
+            let campaign = state.create_campaign(
+                who,
+                &settings.name,
+                settings.seat_count,
+                settings.content_rating.ok_or(PortError::Unavailable)?,
+                true,
+                now_ms,
+            );
+            if let Some(created) = state.campaigns.get_mut(&campaign) {
+                created.settings = settings;
+            }
+            state
+                .receipts
+                .record(who.account, operation, Receipt::Joined(campaign));
+            Ok(campaign)
         })
     }
 
@@ -350,33 +359,6 @@ impl CampaignDirectory for FakeCampaigns {
 
     async fn closure_blockers(&self, account: AccountId) -> PortResult<Vec<String>> {
         self.run(|state, _, _| Ok(state.hosted_names(account)))
-    }
-
-    async fn wizard_catalog(&self) -> PortResult<WizardCatalog> {
-        Ok(State::wizard_catalog())
-    }
-
-    async fn start_draft(&self, who: &Actor) -> PortResult<(String, CampaignDraft)> {
-        self.run(|state, _, _| Ok(state.start_draft(who)))
-    }
-
-    async fn save_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        _step: u8,
-        draft: CampaignDraft,
-    ) -> PortResult<CampaignDraft> {
-        self.run(|state, _, _| state.save_draft(who, draft_id, draft))
-    }
-
-    async fn finish_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        operation: OperationId,
-    ) -> PortResult<CampaignId> {
-        self.run(|state, _, now_ms| state.finish_draft(who, draft_id, operation, now_ms))
     }
 
     async fn campaign(&self, who: &Actor, campaign: CampaignId) -> PortResult<CampaignOverview> {

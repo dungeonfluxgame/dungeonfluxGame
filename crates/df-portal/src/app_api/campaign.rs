@@ -10,10 +10,10 @@ use axum::{
 use df_account_app::{
     wire::{Accepted, ErrorCode},
     wire_campaign::{
-        ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest,
-        DashboardView, DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest,
-        JoinAccepted, JoinRequested, LobbyOpened, LobbyView, OperationRequest, PendingInvitation,
-        RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
+        ApproveRequestBody, CampaignOverview, CreateInvitationRequest, DashboardView,
+        InvitationCreated, InvitePreview, JoinAcceptRequest, JoinAccepted, JoinRequested,
+        LobbyOpened, LobbyView, OperationRequest, PendingInvitation, RoomCodeJoinRequest,
+        RoomCodeLookupRequest, SaveDraftRequest, TokenBody,
     },
 };
 use df_customer::{AccountStore, Authenticated, EmailSender};
@@ -25,8 +25,8 @@ use std::{
 
 use super::{
     guard::{
-        ApiBody, ApiFailure, ApiResult, JOIN_COOKIE, Nothing, Reply, SameSite, SessionPost,
-        SignedIn, VisitorPost, clear_secret_cookie, reply, secret_cookie,
+        ApiBody, ApiFailure, ApiResult, JOIN_COOKIE, Reply, SameSite, SessionPost, SignedIn,
+        VisitorPost, clear_secret_cookie, reply, secret_cookie,
     },
     ids,
     ports::{Actor, CampaignDirectory, FinancePort, Ports, RequestDecision},
@@ -37,8 +37,6 @@ use crate::security::cookie;
 /// The invitation a person was holding stays for an hour (S1 8.2).
 const JOIN_COOKIE_MAX_AGE_S: u64 = 60 * 60;
 const ACCEPTED: Accepted = Accepted { accepted: true };
-/// The create wizard has five steps (S1 8.1).
-const WIZARD_STEPS: std::ops::RangeInclusive<u8> = 1..=5;
 const MAXIMUM_UNAVAILABLE_AUDIT_SESSIONS: usize = 1_024;
 const UNAVAILABLE_AUDIT_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -77,67 +75,6 @@ pub(super) async fn dashboard<S: AccountStore, M: EmailSender, P: Ports>(
     SignedIn(caller): SignedIn,
 ) -> ApiResult<DashboardView> {
     reply(state.ports.campaigns().dashboard(&actor(&caller)).await?)
-}
-
-pub(super) async fn wizard_catalog<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SignedIn(_caller): SignedIn,
-) -> ApiResult<WizardCatalog> {
-    reply(state.ports.campaigns().wizard_catalog().await?)
-}
-
-pub(super) async fn start_draft<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    ApiBody(_nothing): ApiBody<Nothing>,
-) -> ApiResult<DraftView> {
-    let who = verified_actor(&caller)?;
-    let (draft_id, draft) = state.ports.campaigns().start_draft(&who).await?;
-    reply(DraftView {
-        draft_id,
-        step: *WIZARD_STEPS.start(),
-        draft,
-    })
-}
-
-pub(super) async fn save_draft<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path((draft_id, step)): Path<(String, u8)>,
-    ApiBody(body): ApiBody<SaveDraftRequest>,
-) -> ApiResult<DraftView> {
-    let who = verified_actor(&caller)?;
-    if !WIZARD_STEPS.contains(&step) {
-        return Err(ApiFailure::of(ErrorCode::NotFound));
-    }
-    let draft = state
-        .ports
-        .campaigns()
-        .save_draft(&who, &draft_id, step, body.draft)
-        .await?;
-    reply(DraftView {
-        draft_id,
-        step,
-        draft,
-    })
-}
-
-pub(super) async fn finish_draft<S: AccountStore, M: EmailSender, P: Ports>(
-    State(state): State<AppApiState<S, M, P>>,
-    SessionPost(caller): SessionPost,
-    Path(draft_id): Path<String>,
-    ApiBody(body): ApiBody<OperationRequest>,
-) -> ApiResult<CampaignCreated> {
-    let who = verified_actor(&caller)?;
-    let operation = ids::operation(&body.operation)?;
-    let campaign = state
-        .ports
-        .campaigns()
-        .finish_draft(&who, &draft_id, operation)
-        .await?;
-    reply(CampaignCreated {
-        campaign_id: ids::hex(campaign.as_bytes()),
-    })
 }
 
 pub(super) async fn campaign<S: AccountStore, M: EmailSender, P: Ports>(

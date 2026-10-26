@@ -20,7 +20,7 @@ use df_account_app::{
     },
     wire_campaign::{
         CampaignDraft, CampaignOverview, DashboardView, InvitationCreated, InvitationKind,
-        InvitePreview, JoinRequested, LobbyView, Reason, WizardCatalog,
+        InvitePreview, JoinRequested, LobbyView, Reason,
     },
 };
 use df_types::{AccountId, CampaignId, CheckoutId, OperationId, SessionId};
@@ -353,28 +353,6 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         &self,
         account: AccountId,
     ) -> impl Future<Output = PortResult<Vec<String>>> + Send;
-
-    fn wizard_catalog(&self) -> impl Future<Output = PortResult<WizardCatalog>> + Send;
-
-    fn start_draft(
-        &self,
-        who: &Actor,
-    ) -> impl Future<Output = PortResult<(String, CampaignDraft)>> + Send;
-
-    fn save_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        step: u8,
-        draft: CampaignDraft,
-    ) -> impl Future<Output = PortResult<CampaignDraft>> + Send;
-
-    fn finish_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        operation: OperationId,
-    ) -> impl Future<Output = PortResult<CampaignId>> + Send;
 
     fn campaign(
         &self,

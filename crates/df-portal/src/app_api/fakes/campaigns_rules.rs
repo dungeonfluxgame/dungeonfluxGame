@@ -10,10 +10,10 @@ use df_account_app::{
         StartBlocker, WizardCatalog,
     },
 };
-use df_types::{AccountId, CampaignId, OperationId, SessionId};
+use df_types::{AccountId, CampaignId, SessionId};
 
 use super::{
-    campaigns::{Campaign, Lobby, Member, Receipt, State, fresh_code},
+    campaigns::{Campaign, Lobby, Member, State, fresh_code},
     fresh_hex,
 };
 use crate::app_api::{
@@ -22,7 +22,6 @@ use crate::app_api::{
 };
 
 const MAXIMUM_SEATS: u8 = 6;
-const MAXIMUM_DRAFTS: usize = 32;
 const LOBBY_POLL_SECONDS: u32 = 3;
 const CUSTOM_MINIMUM_CENTS_PER_HOUR: u32 = 100;
 const CUSTOM_MAXIMUM_CENTS_PER_HOUR: u32 = 5_000;
@@ -232,84 +231,6 @@ impl State {
             custom_minimum_cents_per_hour: CUSTOM_MINIMUM_CENTS_PER_HOUR,
             custom_maximum_cents_per_hour: CUSTOM_MAXIMUM_CENTS_PER_HOUR,
         }
-    }
-
-    pub(super) fn start_draft(&mut self, who: &Actor) -> (String, CampaignDraft) {
-        let draft_id = fresh_hex();
-        if self.drafts.len() >= MAXIMUM_DRAFTS {
-            self.drafts.remove(0);
-        }
-        self.drafts
-            .push((draft_id.clone(), who.account, default_draft()));
-        (draft_id, default_draft())
-    }
-
-    pub(super) fn save_draft(
-        &mut self,
-        who: &Actor,
-        draft_id: &str,
-        draft: CampaignDraft,
-    ) -> PortResult<CampaignDraft> {
-        let stored = self
-            .drafts
-            .iter_mut()
-            .find(|(id, account, _)| id == draft_id && *account == who.account)
-            .ok_or(PortError::NotFound)?;
-        stored.2 = draft.clone();
-        Ok(draft)
-    }
-
-    pub(super) fn finish_draft(
-        &mut self,
-        who: &Actor,
-        draft_id: &str,
-        operation: OperationId,
-        now_ms: u64,
-    ) -> PortResult<CampaignId> {
-        if let Some(Receipt::Joined(first)) = self.receipts.replay(who.account, operation) {
-            return Ok(first);
-        }
-        let position = self
-            .drafts
-            .iter()
-            .position(|(id, account, _)| id == draft_id && *account == who.account)
-            .ok_or(PortError::NotFound)?;
-        let draft = self.drafts[position].2.clone();
-        let name = draft.name.trim();
-        if name.is_empty() {
-            return Err(PortError::Refused(Refusal::CampaignNameRequired));
-        }
-        if name.chars().count() > 60 {
-            return Err(PortError::Refused(Refusal::CampaignNameTooLong));
-        }
-        if draft.adventure_id.is_none() {
-            return Err(PortError::Refused(Refusal::AdventureRequired));
-        }
-        let rating = draft
-            .content_rating
-            .ok_or(PortError::Refused(Refusal::ContentRatingRequired))?;
-        if !(1..=MAXIMUM_SEATS).contains(&draft.seat_count) {
-            return Err(PortError::Refused(Refusal::SeatsOutOfRange));
-        }
-        let custom_is_valid = draft.custom_ceiling_cents_per_hour.is_some_and(|ceiling| {
-            (CUSTOM_MINIMUM_CENTS_PER_HOUR..=CUSTOM_MAXIMUM_CENTS_PER_HOUR).contains(&ceiling)
-        });
-        if (draft.pace == PacePreset::Custom) != draft.custom_ceiling_cents_per_hour.is_some()
-            || (draft.pace == PacePreset::Custom && !custom_is_valid)
-        {
-            return Err(PortError::Refused(Refusal::CeilingOutOfRange));
-        }
-        validate_settings(&draft)?;
-        let has_code = draft.join_mode == JoinMode::LinkAndRoomCode;
-        let id = self.create_campaign(who, name, draft.seat_count, rating, has_code, now_ms);
-        if let Some(created) = self.campaigns.get_mut(&id) {
-            created.settings = draft;
-        }
-        self.last_ratings.insert(who.account, rating);
-        self.drafts.remove(position);
-        self.receipts
-            .record(who.account, operation, Receipt::Joined(id));
-        Ok(id)
     }
 
     pub(super) fn overview(

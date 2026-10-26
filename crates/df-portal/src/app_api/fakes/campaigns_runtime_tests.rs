@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_api::ports::CampaignDirectory;
 use axum::{Json, Router, extract::State, routing::post};
+use df_account_app::wire_campaign::{ContentRating, FundingModel, JoinMode, PictureDefault};
 use df_campaign::session_link::runtime_protocol::{
     ALLOCATION_PATH, Allocated, Allocation, LaunchSecret, Refusal,
 };
@@ -13,7 +14,7 @@ use std::{
 };
 
 #[tokio::test]
-async fn play_now_uses_the_shipped_harbor_adventure_title_and_id() {
+async fn play_now_uses_the_shipped_campaign_defaults() {
     let campaigns = FakeCampaigns::new("http://127.0.0.1:8099", Arc::new(df_customer::SystemClock));
     let who = Actor {
         account: df_types::AccountId::from_bytes(&[1; 16]).unwrap(),
@@ -21,10 +22,6 @@ async fn play_now_uses_the_shipped_harbor_adventure_title_and_id() {
         is_verified: true,
     };
 
-    let catalog = campaigns.wizard_catalog().await.unwrap();
-    assert_eq!(catalog.adventures.len(), 1);
-    assert_eq!(catalog.adventures[0].adventure_id, "harbor-journey");
-    assert_eq!(catalog.adventures[0].name, "The Broken Seal");
     let campaign = campaigns
         .play_now_campaign(&who, df_types::OperationId::from_bytes(&[2; 16]).unwrap())
         .await
@@ -36,6 +33,16 @@ async fn play_now_uses_the_shipped_harbor_adventure_title_and_id() {
         settings.draft.adventure_id.as_deref(),
         Some("harbor-journey")
     );
+    assert_eq!(settings.draft.content_rating, Some(ContentRating::Teen));
+    assert_eq!(settings.draft.seat_count, 6);
+    assert!(settings.draft.has_voice);
+    assert_eq!(settings.draft.pictures, PictureDefault::Automatic);
+    assert_eq!(
+        settings.draft.pace,
+        df_account_app::wire::PacePreset::Immersive
+    );
+    assert_eq!(settings.draft.join_mode, JoinMode::LinkAndRoomCode);
+    assert_eq!(settings.draft.funding, FundingModel::Sponsor);
 }
 
 #[derive(Clone)]

@@ -20,7 +20,6 @@ pub fn customer_reads() -> Vec<String> {
         "statements",
         "settings",
         "campaigns",
-        "campaigns/new",
         &format!("campaigns/{ID}/settings"),
         &format!("sessions/{ID}/game"),
         &format!("campaigns/{ID}"),
@@ -34,11 +33,6 @@ pub fn customer_reads() -> Vec<String> {
 /// Customer mutations that need a signed-in caller.
 pub fn customer_posts() -> Vec<(String, Value)> {
     let operation = json!({ "operation": OPERATION });
-    let draft = json!({"name": "x", "adventure_id": null, "content_rating": null, "seat_count": 4,
-        "hero_choice": "in_lobby", "has_voice": true, "pictures": "automatic", "pace": "story",
-        "custom_ceiling_cents_per_hour": null, "co_hosts_can_invite": false,
-        "co_hosts_can_start": true, "co_hosts_can_export": false, "join_mode": "link_only",
-        "funding": "sponsor"});
     vec![
         ("sign-out".into(), json!({})),
         ("verify-email/resend".into(), json!({})),
@@ -65,9 +59,7 @@ pub fn customer_posts() -> Vec<(String, Value)> {
             "settings/close".into(),
             json!({"password": "x", "operation": OPERATION}),
         ),
-        ("campaigns/drafts".into(), json!({})),
         ("campaigns/play-now".into(), operation.clone()),
-        (format!("campaigns/drafts/{ID}/finish"), operation.clone()),
         (
             format!("campaigns/{ID}/invitations"),
             json!({"kind": "player", "operation": OPERATION}),
@@ -85,7 +77,6 @@ pub fn customer_posts() -> Vec<(String, Value)> {
             "join/code/request".into(),
             json!({"code": "ABCD-EFGH", "operation": OPERATION}),
         ),
-        ("campaigns/drafts/x/steps/1".into(), json!({"draft": draft})),
     ]
     .into_iter()
     .map(|(tail, body)| (api(&tail), body))

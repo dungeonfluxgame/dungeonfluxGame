@@ -90,101 +90,36 @@ async fn another_accounts_campaign_and_lobby_are_not_found_exactly_like_missing_
 }
 
 #[tokio::test]
-async fn the_wizard_creates_a_campaign_from_a_saved_draft_once_per_operation() {
+async fn removed_wizard_endpoints_are_not_found_for_a_signed_in_account() {
     let harness = Harness::new().await;
     let mut host = harness.browser();
-    host.sign_up_verified("robin@example.test").await;
-    let catalog = host.get("/app/api/campaigns/new").await.json();
-    assert_eq!(catalog["maximum_seats"], json!(6));
-    let draft = host
-        .post("/app/api/campaigns/drafts", &json!({}))
-        .await
-        .json();
-    let draft_id = draft["draft_id"].as_str().unwrap().to_owned();
-    assert_eq!(draft["step"], json!(1));
-    let mut body = draft["draft"].clone();
-    let finish = |operation: String| json!({ "operation": operation });
-    let operation = host.operation().await;
-    let incomplete = host
-        .post(
-            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
-            &finish(operation),
-        )
-        .await;
+    host.sign_up_verified("wizard-removed@example.test").await;
     assert_eq!(
-        incomplete.json()["refusal"],
-        json!("campaign_name_required")
+        host.get("/app/api/campaigns/new").await.status,
+        StatusCode::NOT_FOUND
     );
-    body["name"] = json!("The Lantern Road");
-    body["adventure_id"] = json!("harbor-journey");
-    body["content_rating"] = json!("teen");
-    for step in 1..=5 {
-        let saved = host
-            .send(
-                super::fixtures::Req::new(
-                    axum::http::Method::PUT,
-                    &format!("/app/api/campaigns/drafts/{draft_id}/steps/{step}"),
-                )
-                .json(&json!({ "draft": body })),
-            )
-            .await;
-        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
-        assert_eq!(saved.json()["step"], json!(step));
+    assert_eq!(
+        host.post("/app/api/campaigns/drafts", &json!({}))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    for path in [
+        "/app/api/campaigns/drafts/11111111111111111111111111111111/steps/1",
+        "/app/api/campaigns/drafts/11111111111111111111111111111111/finish",
+    ] {
+        let request = if path.ends_with("/finish") {
+            super::fixtures::Req::new(axum::http::Method::POST, path)
+                .json(&json!({"operation": host.operation().await}))
+        } else {
+            super::fixtures::Req::new(axum::http::Method::PUT, path).json(&json!({}))
+        };
+        assert_eq!(
+            host.send(request).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
     }
-    let operation = host.operation().await;
-    let created = host
-        .post(
-            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
-            &finish(operation.clone()),
-        )
-        .await;
-    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
-    let again = host
-        .post(
-            &format!("/app/api/campaigns/drafts/{draft_id}/finish"),
-            &finish(operation),
-        )
-        .await;
-    assert_eq!(again.json(), created.json());
-    let dashboard = host.get("/app/api/campaigns").await.json();
-    assert_eq!(dashboard["campaigns"].as_array().unwrap().len(), 1);
-    assert_eq!(dashboard["campaigns"][0]["role"], json!("host"));
-    let out_of_range = host
-        .send(
-            super::fixtures::Req::new(
-                axum::http::Method::PUT,
-                &format!("/app/api/campaigns/drafts/{draft_id}/steps/6"),
-            )
-            .json(&json!({ "draft": body })),
-        )
-        .await;
-    assert_eq!(out_of_range.code(), "not_found");
-}
-
-#[tokio::test]
-async fn an_unverified_account_cannot_start_a_draft() {
-    let harness = Harness::new().await;
-    let mut browser = harness.browser();
-    browser.session().await;
-    let operation = browser.operation().await;
-    browser
-        .post(
-            "/app/api/sign-up",
-            &json!({"email": "robin@example.test", "password": super::fixtures::PASSWORD,
-                "is_adult": true, "accepts_terms": true,
-                "terms_version": df_account_app::wire::CURRENT_TERMS_VERSION,
-                "operation": operation}),
-        )
-        .await;
-    browser
-        .sign_in("robin@example.test", super::fixtures::PASSWORD)
-        .await;
-    assert_eq!(
-        browser.get("/app/api/campaigns").await.json()["can_create"],
-        json!(false)
-    );
-    let reply = browser.post("/app/api/campaigns/drafts", &json!({})).await;
-    assert_eq!(reply.code(), "not_verified");
 }
 
 #[tokio::test]

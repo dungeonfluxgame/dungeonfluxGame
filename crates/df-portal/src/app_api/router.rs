@@ -7,7 +7,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{any, get, post, put},
+    routing::{any, get, post},
 };
 use df_customer::{AccountStore, EmailSender};
 
@@ -178,25 +178,13 @@ fn campaign_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApi
             post(campaign::play_now::<S, M, P>),
         )
         .route(
+            "/app/api/campaigns/drafts",
+            any(|| async { axum::http::StatusCode::NOT_FOUND }),
+        )
+        .route(
             "/app/api/campaigns/{campaign_id}/settings",
             get(campaign::campaign_settings::<S, M, P>)
                 .put(campaign::save_campaign_settings::<S, M, P>),
-        )
-        .route(
-            "/app/api/campaigns/new",
-            get(campaign::wizard_catalog::<S, M, P>),
-        )
-        .route(
-            "/app/api/campaigns/drafts",
-            post(campaign::start_draft::<S, M, P>),
-        )
-        .route(
-            "/app/api/campaigns/drafts/{draft_id}/steps/{step}",
-            put(campaign::save_draft::<S, M, P>),
-        )
-        .route(
-            "/app/api/campaigns/drafts/{draft_id}/finish",
-            post(campaign::finish_draft::<S, M, P>),
         )
         .route(
             "/app/api/campaigns/{campaign_id}",
