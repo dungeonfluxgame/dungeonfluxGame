@@ -152,7 +152,7 @@ impl References {
         }
     }
 
-    fn select(&mut self, target: Target, source: Source, revision: &str) {
+    fn select(&mut self, target: Target, source: Source, revision: &str) -> bool {
         let binding = digest(
             format!(
                 "canonical-reference-v1|{}|{target:?}|{revision}",
@@ -177,7 +177,7 @@ impl References {
                 entry.status = Status::Queued;
                 diagnostic(&entry.work, "queued", None, None);
             }
-            return;
+            return false;
         }
         let work = Work {
             target: target.clone(),
@@ -195,6 +195,7 @@ impl References {
                 started: None,
             },
         );
+        true
     }
 
     #[cfg(test)]
@@ -259,16 +260,6 @@ impl References {
             return;
         }
         let canon = self.committed_canon(None, Some(&member.id));
-        if !matches!(
-            member.gender,
-            Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
-        ) || member.age.is_none()
-        {
-            super::super::actor::record_audit_line(
-                "gameplay.imagery",
-                format!("IMAGERY presentation_missing person={}", member.id),
-            );
-        }
         let mut revision_content = serde_json::json!({
             "id": member.id,
             "name": member.name,
@@ -286,7 +277,7 @@ impl References {
             revision_content["canon"] = serde_json::json!(canon);
         }
         let revision = digest(revision_content.to_string().as_bytes());
-        self.select(
+        let selected = self.select(
             target,
             Source::Cast {
                 member: member.clone(),
@@ -294,6 +285,17 @@ impl References {
             },
             &revision,
         );
+        if selected
+            && (!matches!(
+                member.gender,
+                Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
+            ) || member.age.is_none())
+        {
+            super::super::actor::record_audit_line(
+                "gameplay.imagery",
+                format!("IMAGERY presentation_missing person={}", member.id),
+            );
+        }
     }
 
     /// Writes one `ART resolve` line per subject and source: what a view first found for it.
@@ -1349,16 +1351,6 @@ impl References {
                 [member] => (member.gender, member.age),
                 _ => (None, None),
             };
-            if !matches!(
-                gender,
-                Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
-            ) || age.is_none()
-            {
-                super::super::actor::record_audit_line(
-                    "gameplay.imagery",
-                    format!("IMAGERY presentation_missing person={}", person.id),
-                );
-            }
             let canon = self.committed_canon(None, Some(&person.id));
             let mut revision_content = serde_json::json!({
                 "id": person.id,
@@ -1379,7 +1371,7 @@ impl References {
                 revision_content["age"] = serde_json::json!(age);
             }
             let revision = digest(revision_content.to_string().as_bytes());
-            self.select(
+            let selected = self.select(
                 Target::Npc(person.id.clone()),
                 Source::Npc {
                     person: person.clone(),
@@ -1391,6 +1383,17 @@ impl References {
                 },
                 &revision,
             );
+            if selected
+                && (!matches!(
+                    gender,
+                    Some(pack::Gender::He | pack::Gender::She | pack::Gender::They)
+                ) || age.is_none())
+            {
+                super::super::actor::record_audit_line(
+                    "gameplay.imagery",
+                    format!("IMAGERY presentation_missing person={}", person.id),
+                );
+            }
         }
     }
 }
@@ -1430,3 +1433,106 @@ impl LivingScenes {
 #[cfg(test)]
 #[path = "canonical_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod presentation_diagnostics_tests {
+    use super::*;
+
+    fn warning_count(person: &str) -> usize {
+        crate::gameplay::actor::audit_lines_containing(&format!(
+            "IMAGERY presentation_missing person={person} "
+        ))
+        .len()
+    }
+
+    #[test]
+    fn missing_cast_presentation_is_reported_once_per_selected_revision() {
+        let mut references = References {
+            scope: "plate-serve-cast".to_owned(),
+            ..Default::default()
+        };
+        let mut member = Member {
+            id: "plate-serve-missing-cast".to_owned(),
+            role: CharacterRole::Contact,
+            life_stage: LifeStage::Adult,
+            gender: None,
+            age: None,
+            name: "Oren".to_owned(),
+            sprite: String::new(),
+            dossier_id: None,
+            opposes: false,
+            starting_attitude: None,
+        };
+        for _ in 0..20 {
+            references.admit_cast(&member);
+        }
+        assert_eq!(warning_count(&member.id), 1);
+        member.age = Some(pack::Age::Adult);
+        references.admit_cast(&member);
+        references.admit_cast(&member);
+        assert_eq!(warning_count(&member.id), 2);
+        member.gender = Some(pack::Gender::They);
+        references.admit_cast(&member);
+        assert_eq!(warning_count(&member.id), 2);
+        member.age = None;
+        references.admit_cast(&member);
+        assert_eq!(warning_count(&member.id), 3);
+    }
+
+    #[test]
+    fn missing_scene_person_presentation_is_reported_once_per_selected_revision() {
+        use crate::gameplay::adventure::scene_model::StartingAttitude;
+
+        let mut references = References {
+            scope: "plate-serve-room".to_owned(),
+            ..Default::default()
+        };
+        let mut model = SceneModel {
+            services: Vec::new(),
+            witnessed_thefts: Vec::new(),
+            inventory_version: 1,
+            time_of_day: "morning".to_owned(),
+            weather: "clear".to_owned(),
+            people: vec![ScenePerson {
+                id: "plate-serve-missing-person".to_owned(),
+                name: "Oren".to_owned(),
+                role: "merchant".to_owned(),
+                description: "A merchant at the counter".to_owned(),
+                relation_to_speaker: String::new(),
+                position: "at the counter".to_owned(),
+                aliases: Vec::new(),
+                is_background: false,
+                present_in: Vec::new(),
+                attitude: StartingAttitude::Friendly,
+                attitudes: Default::default(),
+                knowledge: Vec::new(),
+                wants: String::new(),
+                persona: None,
+                coin_cp: 0,
+                passive_perception: 10,
+            }],
+            things: Vec::new(),
+            ways_out: Vec::new(),
+            offers: Vec::new(),
+        };
+        for _ in 0..20 {
+            references.admit_room_with_asset_and_context(
+                "plate-serve-place",
+                &model,
+                &[],
+                true,
+                (None, Some("layout"), None),
+            );
+        }
+        assert_eq!(warning_count(&model.people[0].id), 1);
+        model.people[0].description.push_str(" with a blue cap");
+        references.admit_room_with_asset_and_context(
+            "plate-serve-place",
+            &model,
+            &[],
+            true,
+            (None, Some("layout"), None),
+        );
+        assert_eq!(warning_count(&model.people[0].id), 2);
+    }
+}
