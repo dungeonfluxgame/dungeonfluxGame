@@ -2343,6 +2343,7 @@ mod tests {
 
     #[test]
     fn created_place_people_have_canonical_assault_offers_rosters_and_srd_resource_bounds() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_created_shop(|| {
             let street = created_street(false);
             let state = street.state();
@@ -2352,6 +2353,7 @@ mod tests {
                 [
                     ("market-street-hobb".to_owned(), "Hobb".to_owned()),
                     ("market-street-wenna".to_owned(), "Wenna".to_owned()),
+                    ("market-street-yara".to_owned(), "Yara".to_owned()),
                 ]
             );
             assert!(attackable(state, &scene, "Perrin").unwrap().is_none());
@@ -2363,7 +2365,10 @@ mod tests {
             let friendly = plan_with(state, &scene, "Hobb", &|_| Attitude::Friendly).unwrap();
             assert_eq!(ids(&friendly.out), ["market-street-wenna"]);
             let other = plan_with(state, &scene, "Wenna", &|_| Attitude::Hostile).unwrap();
-            assert_eq!(ids(&other.fleers), ["market-street-hobb"]);
+            assert_eq!(
+                ids(&other.fleers),
+                ["market-street-hobb", "market-street-yara"]
+            );
             let people = combatants_in(state).unwrap();
             assert!(
                 people
@@ -2371,10 +2376,11 @@ mod tests {
                     .any(|(id, source)| id == &hobb.id && source.id == "commoner")
             );
             let bounds = created_resources(state).unwrap();
-            assert_eq!(bounds.len(), 2 * 19);
+            assert_eq!(bounds.len(), 3 * 19);
             for (id, block) in [
                 ("market-street-hobb", "commoner"),
                 ("market-street-wenna", "guard"),
+                ("market-street-yara", "commoner"),
             ] {
                 let entity = person_entity(id).unwrap();
                 let source = creature_for(Some(block)).unwrap();
@@ -2406,13 +2412,17 @@ mod tests {
 
     #[test]
     fn legacy_created_people_stage_commoner_combat_with_deterministic_snapshots() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_created_shop(|| {
             for legacy in [true, false] {
                 let street = created_street(legacy);
                 let scene = beat_script_runtime::scene(street.state()).unwrap();
                 let plan =
                     plan_with(street.state(), &scene, "Wenna", &|_| Attitude::Indifferent).unwrap();
-                assert_eq!(ids(&plan.fleers), ["market-street-hobb"]);
+                assert_eq!(
+                    ids(&plan.fleers),
+                    ["market-street-hobb", "market-street-yara"]
+                );
                 let request = assault_request(&street, 41, &plan.target.id, Some(&plan.roster()));
                 let GameInput::Game(command) =
                     wire::journey_input(&request, native::first(), &street).unwrap()
@@ -2474,12 +2484,9 @@ mod tests {
                 );
                 assert!(opening_narration(&state).unwrap().contains("Hobb flees"));
                 assert!(!opening_narration(&state).unwrap().contains("Marek"));
-                // Checkpoint/recovery owners must supply this same canonical inventory. This
-                // exercises that boundary without pretending their static inventory is wired.
                 let mut inventory = model::recovery().unwrap();
-                inventory
-                    .resources
-                    .extend(created_resources(&state).unwrap());
+                // d9f725cf made character resources state-dependent, as recovery's resolver is.
+                inventory.resources = resources_for(&state).unwrap();
                 let frozen = Checkpoint::new(
                     street.schema(),
                     street.basis(),
@@ -2754,6 +2761,7 @@ mod tests {
     #[test]
     fn the_fight_ends_when_the_foes_are_down_and_the_scene_returns_to_the_same_freeplay_beat_with_no_xp()
      {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_shop(|| {
             let story = opening();
             let purses = gold(&story);

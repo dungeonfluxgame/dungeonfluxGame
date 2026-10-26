@@ -343,6 +343,24 @@ thread_local! {
     /// A test's own setting and battle scene, so tests of one process do not share the global.
     static TEST_FIGHT_OVERRIDE: std::cell::RefCell<Option<TestFight>> = const { std::cell::RefCell::new(None) };
     static TEST_SCENE_OVERRIDE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    static AUTOMATIC_ENEMY_TURNS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores the enclosing fixture's enemy-policy setting when its scope ends.
+#[cfg(test)]
+pub(in crate::gameplay::journey) struct AutomaticEnemyTurns(bool);
+
+#[cfg(test)]
+impl Drop for AutomaticEnemyTurns {
+    fn drop(&mut self) {
+        AUTOMATIC_ENEMY_TURNS.with(|automatic| automatic.set(self.0));
+    }
+}
+
+/// Pins the fixture's enemy policy independently of concurrent development-control tests.
+#[cfg(test)]
+pub(in crate::gameplay::journey) fn automatic_enemy_turns() -> AutomaticEnemyTurns {
+    AutomaticEnemyTurns(AUTOMATIC_ENEMY_TURNS.with(|automatic| automatic.replace(true)))
 }
 
 #[cfg(test)]
@@ -1518,6 +1536,8 @@ fn enemy_turns(
         // A held NPC's turn waits for the CLI: the battle stays stored with this NPC active until
         // `dev npc act` or a released hold resolves it. The hold is read before the policy runs.
         let held = super::super::dev_control::npc::held(&name(state, canonical(state, actor)?)?);
+        #[cfg(test)]
+        let held = held && !AUTOMATIC_ENEMY_TURNS.with(std::cell::Cell::get);
         let Some(action) = super::super::dev_control::npc::choose_turn(held, || {
             policy(
                 current,
@@ -4845,6 +4865,7 @@ pub(super) mod tests {
 
     #[test]
     fn six_heroes_and_four_enemies_have_distinct_spawns_ids_and_resolve_a_full_round() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_live(|| {
             let opening = super::super::tests::table_story(MAXIMUM_PARTY);
             let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -4989,6 +5010,7 @@ pub(super) mod tests {
 
     #[test]
     fn three_scouts_opening_on_the_salt_quay_start_their_fight() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_live(|| {
             let dialogue = dialogue_checkpoint(true, false).unwrap();
             let bytes = scene_bytes("salt-quay").unwrap();
@@ -5595,6 +5617,7 @@ pub(super) mod tests {
     }
     #[test]
     fn mixed_build_live_actions_replay_bytes_and_midfight_checkpoint_resume_to_victory_rest() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
             "../../../../../content/harbor-journey/tuning.json"
         ))
@@ -5878,6 +5901,7 @@ pub(super) mod tests {
 
     #[test]
     fn help_attack_offers_every_ally_with_every_foe_in_reach_of_the_helper_srd_2024_help() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         // SRD 2024 Help (Attack): the helper must be within 5 feet of the foe; the ally is any
         // other living hero. The offered pairs are exactly what the rules resolve.
         with_live(|| {
@@ -6300,6 +6324,7 @@ pub(super) mod tests {
     #[test]
     fn canonical_harbor_default_three_bandits_last_three_to_five_rounds_and_all_action_labels_are_safe()
      {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         let loaded = pack::load_from_bytes(
             include_bytes!("../../../../../content/harbor-journey/pack.json"),
             include_bytes!("../../../../../content/harbor-journey/tuning.json"),
@@ -6388,6 +6413,7 @@ pub(super) mod tests {
     /// line picks are deterministic in the recorded fight data.
     #[test]
     fn a_recorded_fight_says_the_same_lines_twice() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use df_persistence::local_demo_scope::{DISPLAY, LocalDemoRole as R};
         type SpokenLines = Vec<(i32, u32, String, String)>;
 
@@ -6846,6 +6872,7 @@ pub(super) mod tests {
     #[test]
     fn canonical_live_default_seed_sample_records_source_enemy_attacks_and_typical_three_to_five_rounds()
      {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         let loaded = pack::load_from_bytes(
             include_bytes!("../../../../../content/harbor-journey/pack.json"),
             include_bytes!("../../../../../content/harbor-journey/tuning.json"),
@@ -6981,6 +7008,7 @@ pub(super) mod tests {
     #[test]
     fn tactical_terminal_provenance_refuses_forged_cause_outcome_resource_source_and_unaccepted_event()
      {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_live(|| {
             let (current, _, _) = play_fight(fight(true), 8, None, None);
             let terminal = current
@@ -7029,6 +7057,7 @@ pub(super) mod tests {
 
     #[test]
     fn current_tactical_profile_preserves_e01_fixture_scenes_and_noncanonical_fight_replay() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use super::super::super::beat_script_variety_tests as fixture;
         let fixtures: [(&[u8], &[&str]); 4] = [
             (
@@ -7124,6 +7153,7 @@ pub(super) mod tests {
     #[test]
     fn submitted_archer_shot_uses_cover_consumes_ammunition_and_empty_quiver_removes_longbow_offer()
     {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -7386,6 +7416,7 @@ pub(super) mod tests {
     /// SRD 5.2.1 p. 14: Disengage avoids opportunity attacks; a legal enemy Reaction attacks.
     #[test]
     fn submitted_disengage_prevents_source_opportunity_window_and_enemy_policy_attacks() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -7569,6 +7600,7 @@ pub(super) mod tests {
     /// on the submitted attack, while an unarmed declaration defaults to KO.
     #[test]
     fn submitted_melee_attack_records_knockout_choice_and_brawl_default() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -7674,6 +7706,7 @@ pub(super) mod tests {
 
     #[test]
     fn declared_scene_target_opens_with_the_unarmed_strike_first() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -7723,6 +7756,7 @@ pub(super) mod tests {
 
     #[test]
     fn move_options_warn_when_the_path_provokes_opportunity_attacks() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -7888,6 +7922,7 @@ pub(super) mod tests {
     /// its expiry is the ordinary decline: Brakka lets the enemy pass and its turn resumes.
     #[test]
     fn an_expired_reaction_window_declines_the_offer_and_resumes_the_enemy_turn() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let (current, first) = pending_hero_reaction();
@@ -8090,6 +8125,7 @@ pub(super) mod tests {
     /// has no recorded deadline, and the owner gives it a whole window from when it loads.
     #[test]
     fn a_checkpoint_without_a_reaction_window_decodes_with_the_offer_pending() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_live(|| {
             let (current, first) = pending_hero_reaction();
             let saved = snapshot(current.state()).unwrap();
@@ -8123,6 +8159,7 @@ pub(super) mod tests {
     #[test]
     fn submitted_enemy_lethality_reaches_defeat_and_timed_dying_saves_without_universal_rest_revival()
      {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -8354,6 +8391,7 @@ pub(super) mod tests {
     /// then rest or move on.
     #[test]
     fn a_won_fight_with_a_dying_hero_resolves_on_the_table_without_a_dead_end() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         use rpc::GameplayActionKind as K;
         pack::with_test_pack(live_generated_pack(), || {
             let won = victory_with_a_dying_hero();
@@ -8603,6 +8641,7 @@ pub(super) mod tests {
     }
     #[test]
     fn r2_level_five_pair_completes_ogre_and_troll_fights_with_source_stats() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         with_live(|| {
             for (foe, hp) in [("ogre", 68), ("troll", 94)] {
                 TEST_LEVEL_OVERRIDE.with(|own| own.set(Some(5)));

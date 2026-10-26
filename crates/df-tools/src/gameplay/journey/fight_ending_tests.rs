@@ -179,6 +179,46 @@ fn assert_player_offers_are_accepted(current: &Checkpoint, member: MemberId) {
     };
     for (index, offer) in player.offers.iter().enumerate() {
         let kind = K::try_from(offer.action_kind).expect("listed action kind");
+        // d9d96b95 routes the opening conversation through raw dialogue, never native Submit.
+        if kind == K::Unspecified {
+            assert_eq!(
+                Some(offer.clone()),
+                wire::opening_talk_offer(current).unwrap()
+            );
+            assert_eq!(offer.input_groups.len(), 1);
+            assert_eq!(offer.input_groups[0].group_id, "dialogue-addressee");
+            assert_eq!(offer.input_groups[0].options.len(), 1);
+            assert_eq!(offer.input_groups[0].options[0].option_id, "bandit");
+            assert_eq!(
+                wire::action_offer_rejection(current, member, kind, &offer.offer_id, &[]).unwrap(),
+                Some(rpc::RejectionCode::StaleOffer),
+            );
+            continue;
+        }
+        // 50aea37c admits travel through Service's place-move route, not the chapter handler.
+        if kind == K::Travel {
+            assert_eq!(Some(offer.clone()), wire::travel_offer(current).unwrap());
+            assert_eq!(offer.input_groups.len(), 1);
+            assert_eq!(offer.input_groups[0].group_id, "travel");
+            let admitted = crate::gameplay::place_move::travel_options(current).unwrap();
+            assert!(!admitted.is_empty());
+            assert_eq!(
+                offer.input_groups[0]
+                    .options
+                    .iter()
+                    .map(|option| option.option_id.as_str())
+                    .collect::<Vec<_>>(),
+                admitted
+                    .iter()
+                    .map(|option| option.id.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                wire::action_offer_rejection(current, member, kind, &offer.offer_id, &[]).unwrap(),
+                Some(rpc::RejectionCode::StaleOffer),
+            );
+            continue;
+        }
         let choices = offer
             .input_groups
             .iter()
@@ -769,6 +809,7 @@ fn a_conversation_cannot_be_entered_from_a_fight_and_a_fight_cannot_be_reentered
 /// path or carries a written internal reason in the table.
 #[test]
 fn every_listed_player_offer_is_accepted_when_taken_across_the_played_path() {
+    let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
     let _process_state = tactical::development_tests::process_state_test_scope();
     use session_machine::{Event, SessionState};
     live(|| {

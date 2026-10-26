@@ -6787,6 +6787,7 @@ mod tests {
 
     #[test]
     fn one_to_six_heroes_finish_the_courier_fight_and_receive_the_inn_invitation() {
+        let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
         for count in 1..=MAXIMUM_PARTY {
             let opening = table_story(count);
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -6830,7 +6831,19 @@ mod tests {
                     .unwrap();
                 current = stage_with_supplier(
                     &current,
-                    &input(&current, member, operation, "greatsword-attack", vec![]),
+                    &input(
+                        &current,
+                        member,
+                        operation,
+                        "greatsword-attack",
+                        vec![
+                            (
+                                model::label("savage-attacker").unwrap(),
+                                model::label("no").unwrap(),
+                            ),
+                            (model::label("graze").unwrap(), model::label("no").unwrap()),
+                        ],
+                    ),
                     &mut |sides| Ok(sides),
                 )
                 .unwrap();

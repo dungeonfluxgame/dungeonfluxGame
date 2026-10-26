@@ -99,12 +99,15 @@ fn scenes() -> Vec<(SceneKey, bool, Checkpoint)> {
 
 #[test]
 fn shipped_views_match_previous_text_fixtures_for_every_scene() {
+    let _enemy_turns = crate::gameplay::journey::tactical::automatic_enemy_turns();
     // This frozen fixture captures the pre-wiring literals, independently of the editable pack.
     let previous = pack::load_from_bytes(PREVIOUS_PACK, TUNING).unwrap();
-    let baseline: Vec<_> = scenes()
-        .iter()
-        .map(|(_, _, checkpoint)| player(checkpoint))
-        .collect();
+    let baseline: Vec<_> = pack::with_test_pack(previous.clone(), || {
+        scenes()
+            .iter()
+            .map(|(_, _, checkpoint)| player(checkpoint))
+            .collect()
+    });
     let shipped = pack::load_from_bytes(
         include_bytes!("../../../../../content/harbor-journey/pack.json"),
         TUNING,
@@ -125,6 +128,8 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
             // a2327cdd and 613839eb replaced the old art and attached authored geography.
             // Preserve complete parity for the other fields, and pin the new metadata below.
             let mut expected_view = expected_view.clone();
+            // 50aea37c gives the authored cast its canonical names.
+            expected_view.journey.as_mut().unwrap().speaker = shipped_scene.speaker.clone();
             // REF-063 intentionally expands the creator's playable catalog. Its complete
             // authored offer is checked by pack_tests; this fixture pins the story fields.
             if let Some(creation) = actual
@@ -154,6 +159,30 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
             }
             let expected_scene = expected_view.scene.as_mut().unwrap();
             expected_scene.scene_asset = shipped_scene.asset.clone();
+            // 67d54be1 added audience-safe scene contents to the wire projection.
+            if let Some(room) = living_scene::snapshot(checkpoint.state(), shipped_scene).unwrap() {
+                expected_scene.scene_contents_json = room.model.public_contents().unwrap();
+                // f744013b adds permanent and temporary owned inventory to the phone sheet.
+                if let Some(sheet) = expected_view
+                    .journey
+                    .as_mut()
+                    .unwrap()
+                    .own_character
+                    .as_mut()
+                {
+                    let who = player_entity(MemberId::from_bytes(&MEMBERS[0]).unwrap(), checkpoint)
+                        .unwrap();
+                    let owner = canonical_actor_ref(checkpoint.state(), who).unwrap();
+                    sheet.owned_items = living_scene::owned_items(
+                        checkpoint.state(),
+                        &room.model,
+                        &shipped_scene.setting.as_ref().unwrap().place_id,
+                        &owner,
+                        checkpoint.basis().revision.sequence(),
+                    )
+                    .unwrap();
+                }
+            }
             if let Some(setting) = &shipped_scene.setting {
                 expected_scene.place = setting.name.clone();
                 expected_scene.location_id = setting.place_id.clone();
@@ -178,31 +207,31 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                 key,
                 SceneKey::Opening | SceneKey::DialogueSeal | SceneKey::DialogueEscort
             ) {
-                // 6299d7f2 added source-bound observations of the shipped scene's cast.
-                expected_view.offers.push(rpc::GameplayActionOffer {
-                    offer_id: "journey-1-1".to_owned(),
-                    action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
-                    label: "Look around".to_owned(),
-                    destinations: Vec::new(),
-                    input_groups: vec![rpc::JourneyGroup {
-                        group_id: "finding".to_owned(),
+                // 50aea37c and 6a7b9504 expose people, things and exits without party gear.
+                let observation_index = expected_view
+                    .offers
+                    .iter()
+                    .position(|offer| {
+                        offer.action_kind == rpc::GameplayActionKind::Unspecified as i32
+                    })
+                    .unwrap_or(expected_view.offers.len());
+                expected_view.offers.insert(
+                    observation_index,
+                    rpc::GameplayActionOffer {
+                        offer_id: "journey-1-1".to_owned(),
+                        action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
                         label: "Look around".to_owned(),
-                        options: shipped_scene
-                            .cast
-                            .iter()
-                            .map(|person| rpc::JourneyOption {
-                                option_id: format!("watch-{}", person.id),
-                                label: format!("Watch {}", person.name),
-                                description: format!(
-                                    "Watch {} for a change in expression or manner.",
-                                    person.name
-                                ),
-                                requires_group: String::new(),
-                                requires_options: Vec::new(),
-                            })
-                            .collect(),
-                    }],
-                });
+                        destinations: Vec::new(),
+                        input_groups: vec![rpc::JourneyGroup {
+                            group_id: "attempt-thing".to_owned(),
+                            label: "What catches your eye?".to_owned(),
+                            options: wire::observation_options(
+                                &crate::gameplay::beat_script_runtime::scene(checkpoint.state())
+                                    .unwrap(),
+                            ),
+                        }],
+                    },
+                );
             }
             let split = !shipped_scene.rules_note.is_empty() && !*rested;
             let tactical_text_changed =
@@ -220,7 +249,7 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
             assert_eq!(scene.title, fixture.title);
             assert_eq!(scene.scene_asset, shipped_scene.asset);
             let journey = actual.journey.as_ref().unwrap();
-            assert_eq!(journey.speaker, fixture.speaker);
+            assert_eq!(journey.speaker, shipped_scene.speaker);
             assert_eq!(journey.dialogue, fixture.dialogue);
             let text = if *rested {
                 fixture
