@@ -8,7 +8,8 @@ use crate::{
     node::{Element, Node, el},
     route::Route,
     state::{PlayScreen, Remote, SLOW_START_POLLS},
-    view::{failed, link, loading, page_wide},
+    view::{ButtonKind, button, failed, link, loading, page_wide},
+    wire::ErrorCode,
 };
 
 pub(in crate::view) fn play(screen: &PlayScreen) -> Node {
@@ -19,6 +20,18 @@ pub(in crate::view) fn play(screen: &PlayScreen) -> Node {
                 .into();
         }
         Remote::Failed(error) => {
+            if error.code == ErrorCode::NotFound {
+                return page_wide("This game is no longer open", None)
+                    .child(
+                        el("p").text("This session may have ended or the link may be out of date."),
+                    )
+                    .child(actions(vec![link(
+                        "Back to your games",
+                        Route::Dashboard,
+                        "btn btn-gilt",
+                    )]))
+                    .into();
+            }
             return page_wide("Your game", None).child(failed(*error)).into();
         }
         Remote::Ready(launch) => launch,
@@ -50,10 +63,10 @@ pub(in crate::view) fn play(screen: &PlayScreen) -> Node {
     } else if screen.polling_timed_out {
         panel("We couldn't start your game")
             .child(el("p").text("Try again to check whether your game is ready."))
-            .child(actions(vec![super::super::button(
+            .child(actions(vec![button(
                 "Try again",
                 Some(crate::state::Intent::Retry),
-                super::super::ButtonKind::Primary,
+                ButtonKind::Primary,
                 false,
             )]))
     } else {

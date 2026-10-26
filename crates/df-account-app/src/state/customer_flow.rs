@@ -16,7 +16,7 @@ use crate::{
         PlaySessionRow, ProfileRequest, Refusal, RevokeSessionRequest, SetPaceRequest,
         SettingsView, StatementFilter, StatementLine,
     },
-    wire_campaign::{DashboardView, PendingInvitation},
+    wire_campaign::{CampaignRole, DashboardView, LobbyView, PendingInvitation, WizardCatalog},
 };
 
 /// Statement lines kept on screen; older pages stop loading at this bound.
@@ -29,6 +29,8 @@ pub const CHECKOUT_POLL_DELAYS_MS: [u32; 8] =
 pub struct DashboardScreen {
     pub overview: Remote<OverviewView>,
     pub campaigns: Remote<DashboardView>,
+    pub play_now_catalog: Remote<WizardCatalog>,
+    pub resume_lobby: Remote<LobbyView>,
     /// The invitation remembered in the join cookie, offered after signing in (S1 P-3).
     pub pending: Remote<PendingInvitation>,
     pub resend: Submit,
@@ -241,6 +243,8 @@ impl Model {
                 self.screen = Screen::Dashboard(DashboardScreen {
                     overview: Remote::Loading,
                     campaigns: Remote::Loading,
+                    play_now_catalog: Remote::Loading,
+                    resume_lobby: Remote::Failed(ApiError::of(ErrorCode::NotFound)),
                     pending: Remote::Loading,
                     resend: Submit::Idle,
                     is_resent: false,
@@ -254,6 +258,7 @@ impl Model {
                     self.api(ApiCall::Overview),
                     self.issue_operation(OperationSlot::Primary),
                     self.api(ApiCall::Dashboard),
+                    self.api(ApiCall::WizardCatalog),
                     self.api(ApiCall::JoinPending),
                     self.api(ApiCall::AccountStats),
                     self.api(ApiCall::Assets {
@@ -857,7 +862,31 @@ impl Model {
                 Vec::new()
             }
             (Reply::Dashboard(result), Screen::Dashboard(screen)) => {
+                let resume_session_id = result.as_ref().ok().and_then(|view| {
+                    view.campaigns
+                        .iter()
+                        .find(|campaign| {
+                            campaign.role == CampaignRole::Host
+                                && !campaign.is_archived
+                                && campaign.live_session_id.is_some()
+                        })
+                        .and_then(|campaign| campaign.live_session_id.clone())
+                });
                 screen.campaigns = Remote::from_result(result);
+                if let Some(session_id) = resume_session_id {
+                    screen.resume_lobby = Remote::Loading;
+                    vec![self.api(ApiCall::Lobby { session_id })]
+                } else {
+                    screen.resume_lobby = Remote::Failed(ApiError::of(ErrorCode::NotFound));
+                    Vec::new()
+                }
+            }
+            (Reply::Lobby(result), Screen::Dashboard(screen)) => {
+                screen.resume_lobby = Remote::from_result(result);
+                Vec::new()
+            }
+            (Reply::WizardCatalog(result), Screen::Dashboard(screen)) => {
+                screen.play_now_catalog = Remote::from_result(result);
                 Vec::new()
             }
             (Reply::CreditOffers(result), Screen::AddCredit(form)) => {

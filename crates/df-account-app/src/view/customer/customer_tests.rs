@@ -14,7 +14,8 @@ use crate::{
         SessionFunding, SessionView, SettingsView, StatementCategory, StatementLine, TrialView,
     },
     wire_campaign::{
-        CampaignCard, CampaignRole, ContentRating, DashboardView, InvitePreview, PendingInvitation,
+        CampaignCard, CampaignRole, ContentRating, DashboardView, FundingNote, HostCreditView,
+        InvitePreview, LobbyView, PendingInvitation, WizardCatalog,
     },
 };
 
@@ -114,6 +115,33 @@ fn dashboard_screen() -> DashboardScreen {
                 card("Mines", None, true),
             ],
             can_create: true,
+        }),
+        play_now_catalog: Remote::Ready(WizardCatalog {
+            adventures: Vec::new(),
+            maximum_seats: 4,
+            presets: preset_offers(),
+            is_proposed_pricing: false,
+            custom_minimum_cents_per_hour: 100,
+            custom_maximum_cents_per_hour: 5000,
+        }),
+        resume_lobby: Remote::Ready(LobbyView {
+            session_id: "session-1".to_owned(),
+            campaign_id: "campaign-Keep".to_owned(),
+            campaign_name: "Keep".to_owned(),
+            can_manage: true,
+            start_blockers: Vec::new(),
+            members: Vec::new(),
+            funding_note: FundingNote::HostCredit(HostCreditView {
+                price_version: [1; 16],
+                hourly_micro_dollars: 8_000_000,
+                available_micro_dollars: 50_000_000,
+                cap_micro_dollars: 25_000_000,
+                terms_version: 1,
+                consented_at_ms: None,
+                is_fundable: true,
+            }),
+            has_started: false,
+            poll_seconds: 3,
         }),
         pending: Remote::Ready(PendingInvitation { preview: None }),
         resend: Submit::Idle,
@@ -630,6 +658,123 @@ fn dashboard_lists_campaigns_with_resume_lobby_or_open_and_an_archived_tag() {
     assert!(words.contains("Your role: Host."));
     assert!(words.contains("4 players."));
     assert!(words.contains("Last played 25 Oct 2026, 01:05."));
+}
+
+#[test]
+fn dashboard_puts_resume_first_and_shows_the_catalog_price_and_limit() {
+    let mut model = model_with(Screen::Dashboard(dashboard_screen()), true);
+    model.play_operation = Remote::Ready("play".to_owned());
+    let node = view(&model);
+    let resume = find_link(&node, "Resume Keep").expect("top resume action");
+    assert_eq!(
+        resume.on_click,
+        Some(Intent::Go(Route::Lobby {
+            session_id: "session-1".to_owned()
+        }))
+    );
+    assert!(
+        node.text_content()
+            .contains("Table price: up to $8.00 per active hour")
+            && node
+                .text_content()
+                .contains("Spending limit: $25.00 for this session")
+            && node
+                .text_content()
+                .contains("Charged only while the game runs")
+    );
+    let links = node.elements();
+    let resume_position = links
+        .iter()
+        .position(|element| element.attribute("aria-label") == Some("Resume Keep"))
+        .expect("resume link position");
+    let play_position = links
+        .iter()
+        .position(|element| element.on_click == Some(Intent::PlayNow))
+        .expect("play button position");
+    assert!(resume_position < play_position);
+}
+
+#[test]
+fn dashboard_reserves_the_top_resume_action_for_the_host() {
+    let mut campaign = card("Keep", Some("session-1"), false);
+    campaign.role = CampaignRole::Player;
+    let mut screen = dashboard_screen();
+    screen.campaigns = Remote::Ready(DashboardView {
+        campaigns: vec![campaign],
+        can_create: true,
+    });
+    let node = render(Screen::Dashboard(screen));
+    assert!(find_link(&node, "Resume Keep").is_none());
+}
+
+#[test]
+fn new_play_now_uses_the_default_pace_from_the_pricing_catalog() {
+    let mut screen = dashboard_screen();
+    screen.campaigns = Remote::Ready(DashboardView {
+        campaigns: Vec::new(),
+        can_create: true,
+    });
+    let node = render(Screen::Dashboard(screen));
+    let text = node.text_content();
+    assert!(text.contains("Table price: up to $3.00 per active hour"));
+    assert!(text.contains("Spending limit: $3.00 per active hour"));
+}
+
+#[test]
+fn dashboard_shows_one_monthly_spend_figure() {
+    let text = render(Screen::Dashboard(dashboard_screen())).text_content();
+    assert_eq!(text.matches("Used this month").count(), 1);
+    assert!(!text.contains("Spent this month"));
+}
+
+#[test]
+fn dashboard_disables_play_now_until_the_price_is_available() {
+    let mut model = model_with(Screen::Dashboard(dashboard_screen()), true);
+    model.play_operation = Remote::Ready("play".to_owned());
+    if let Screen::Dashboard(screen) = &mut model.screen {
+        screen.campaigns = Remote::Ready(DashboardView {
+            campaigns: Vec::new(),
+            can_create: true,
+        });
+        screen.play_now_catalog = Remote::Loading;
+    }
+    let node = view(&model);
+    assert!(
+        find_button(&node, "Play now")
+            .is_some_and(|button| { button.attribute("disabled").is_some() })
+    );
+    assert!(
+        node.text_content()
+            .contains("Checking the table price. Play now will be available when it is ready.")
+    );
+}
+
+#[test]
+fn asset_rows_show_a_kind_placeholder_for_missing_and_failed_thumbnails() {
+    for thumbnail_url in [None, Some("/missing-thumb".to_owned())] {
+        let node = render(Screen::Assets(crate::state::AssetsScreen {
+            assets: Remote::Ready(vec![crate::wire::AssetRow {
+                asset_id: "asset-1".to_owned(),
+                kind: crate::wire::AssetKind::Portrait,
+                campaign_id: None,
+                campaign_name: None,
+                created_at_ms: WHEN_MS,
+                size_bytes: 10,
+                thumbnail_url,
+                hold_state: crate::wire::AssetHoldState::Ready,
+            }]),
+            next_cursor: None,
+            total: 1,
+            kind: None,
+            campaign: String::new(),
+            more: Submit::Idle,
+        }));
+        assert!(node.elements().iter().any(|element| {
+            element.attribute("class") == Some("asset-thumb-placeholder")
+                && Node::Element((*element).clone()).text_content() == "P"
+        }));
+        assert!(node.elements().iter().all(|element| element.tag != "img"));
+    }
 }
 
 #[test]

@@ -92,29 +92,16 @@ fn screen(model: &Model) -> Node {
 
 fn top_bar(model: &Model) -> Node {
     let account = model.account();
-    let mut nav = el("nav").class("bar-nav").attr("aria-label", "Account");
-    if let Some(account) = account {
-        let current = &model.route;
-        let items = [
-            ("Overview", Route::Dashboard),
-            ("Play sessions", Route::PlaySessions),
-            ("Assets", Route::Assets),
-            ("Funds", Route::Funding),
-            ("Statements", Route::Statements),
-            ("Your account", Route::Settings),
-            ("Security", Route::Security),
-        ];
-        for (label, route) in items {
-            nav = nav.child(nav_link(label, route, current));
-        }
-        if account.operator.is_some() {
-            nav = nav.child(nav_link(
-                "Operator console",
-                Route::Admin(AdminRoute::Summary),
-                current,
-            ));
-        }
-    }
+    let desktop_nav = account_nav(model, "bar-nav bar-nav-desktop");
+    let mobile_nav: Node = if account.is_some() {
+        el("details")
+            .class("bar-menu")
+            .child(el("summary").text("Menu"))
+            .child(account_nav(model, "bar-nav"))
+            .into()
+    } else {
+        el("span").class("bar-menu").into()
+    };
     let actions = match account {
         Some(account) => el("div")
             .class("bar-actions")
@@ -147,10 +134,37 @@ fn top_bar(model: &Model) -> Node {
             el("div")
                 .class("bar-inner")
                 .child(brand())
-                .child(nav)
+                .child(desktop_nav)
+                .child(mobile_nav)
                 .child(actions),
         )
         .into()
+}
+
+fn account_nav(model: &Model, class: &str) -> Node {
+    let mut nav = el("nav").class(class).attr("aria-label", "Account");
+    if let Some(account) = model.account() {
+        let items = [
+            ("Overview", Route::Dashboard),
+            ("Play sessions", Route::PlaySessions),
+            ("Assets", Route::Assets),
+            ("Funds", Route::Funding),
+            ("Statements", Route::Statements),
+            ("Your account", Route::Settings),
+            ("Security", Route::Security),
+        ];
+        for (label, route) in items {
+            nav = nav.child(nav_link(label, route, &model.route));
+        }
+        if account.operator.is_some() {
+            nav = nav.child(nav_link(
+                "Operator console",
+                Route::Admin(AdminRoute::Summary),
+                &model.route,
+            ));
+        }
+    }
+    nav.into()
 }
 
 fn brand() -> Node {

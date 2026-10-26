@@ -1413,6 +1413,26 @@ fn a_game_start_timeout_shows_a_retry_action() {
 }
 
 #[test]
+fn an_unknown_or_ended_game_links_back_to_the_dashboard_without_retry() {
+    let screen = PlayScreen {
+        session_id: "sess-missing".to_owned(),
+        launch: Remote::Failed(ApiError::of(ErrorCode::NotFound)),
+        waiting_polls: 0,
+        waiting_elapsed_ms: 0,
+        next_poll_delay_ms: 0,
+        polling_timed_out: false,
+    };
+    let tree = view(&with_screen(signed_in(true), Screen::Play(screen)));
+    assert!(tree.text_content().contains("This game is no longer open"));
+    assert!(tree.text_content().contains("This session may have ended"));
+    assert_eq!(
+        control(&tree, "Back to your games").on_click,
+        Some(Intent::Go(Route::Dashboard))
+    );
+    assert!(!has_control(&tree, "Try again"));
+}
+
+#[test]
 fn a_refused_lobby_action_shows_the_error_summary() {
     let mut screen = lobby_screen(lobby_data());
     screen.action = Submit::Refused(ApiError::because(

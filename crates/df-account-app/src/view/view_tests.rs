@@ -343,6 +343,21 @@ fn the_bar_offers_sign_in_and_sign_up_to_visitors_and_sign_out_to_members() {
 }
 
 #[test]
+fn account_navigation_has_a_collapsed_mobile_menu_for_members() {
+    let tree = view(&opened(Route::Dashboard, true, false));
+    assert!(elements(&tree).iter().any(|element| {
+        element.tag == "details" && element.attribute("class") == Some("bar-menu")
+    }));
+    assert!(elements(&tree).iter().any(|element| {
+        element.tag == "summary" && Node::Element((*element).clone()).text_content() == "Menu"
+    }));
+    let css = include_str!("../../web/css/base.css");
+    assert!(css.contains(".bar-menu {\n  display: none;"));
+    assert!(css.contains(".bar-inner {\n    min-height: 0;\n    padding-top: 14px;\n    padding-bottom: 8px;\n    flex-wrap: nowrap;"));
+    assert!(css.contains(".bar-nav-desktop {\n    display: none;"));
+}
+
+#[test]
 fn the_current_section_is_marked_in_the_navigation() {
     let tree = view(&opened(Route::Statements, true, false));
 
@@ -352,5 +367,8 @@ fn the_current_section_is_marked_in_the_navigation() {
         .map(|element| Node::Element(element.clone()).text_content())
         .collect();
 
-    assert_eq!(current, vec!["Statements".to_owned()]);
+    assert_eq!(
+        current,
+        vec!["Statements".to_owned(), "Statements".to_owned()]
+    );
 }

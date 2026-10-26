@@ -256,6 +256,10 @@ li::marker {
   flex: 1 1 auto;
 }
 
+.bar-menu {
+  display: none;
+}
+
 .nav-link {
   color: var(--tallow);
   text-decoration: none;
@@ -302,13 +306,62 @@ li::marker {
     min-height: 0;
     padding-top: 14px;
     padding-bottom: 8px;
+    flex-wrap: nowrap;
+    gap: 8px;
   }
 
-  .bar-nav {
-    order: 3;
-    width: 100%;
-    gap: 0 18px;
+  .bar-nav-desktop {
+    display: none;
+  }
+
+  .bar-menu {
+    display: block;
+    position: relative;
+    order: 2;
+    margin-left: auto;
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+
+  .bar-menu > summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 8px 10px;
+    color: var(--parchment);
+    border: 1px solid var(--tallow);
+    border-radius: 6px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .bar-menu > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .bar-menu > .bar-nav {
+    position: absolute;
+    z-index: 10;
+    top: calc(100% + 8px);
+    right: 0;
+    width: max-content;
+    min-width: 12rem;
+    padding: 8px 14px;
+    background: var(--black);
+    border: 1px solid var(--ash);
+    border-radius: var(--radius);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  }
+
+  .bar-menu .nav-link {
+    display: flex;
+    padding: 6px 0;
     font-size: 16px;
+  }
+
+  .bar-actions {
+    order: 3;
+    margin-left: auto;
   }
 
   .bar-who {

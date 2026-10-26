@@ -9,6 +9,9 @@ use crate::{
         SessionFunding, SetPaceRequest, SettingsView, StatementCategory, StatementLine,
         StatementsView,
     },
+    wire_campaign::{
+        CampaignCard, CampaignRole, DashboardView, FundingNote, HostCreditView, LobbyView,
+    },
 };
 
 fn offers() -> CreditOffers {
@@ -84,10 +87,70 @@ fn the_dashboard_asks_for_balance_campaigns_and_a_remembered_invitation_together
         deliver(&mut model, Reply::Session(Ok(signed_in(true))))
     };
 
-    let wanted = [ApiCall::Overview, ApiCall::Dashboard, ApiCall::JoinPending];
+    let wanted = [
+        ApiCall::Overview,
+        ApiCall::Dashboard,
+        ApiCall::WizardCatalog,
+        ApiCall::JoinPending,
+    ];
     for call in &wanted {
         assert!(calls(&model_effects).contains(&call), "{call:?}");
     }
+}
+
+#[test]
+fn the_dashboard_loads_the_quote_for_its_live_game_before_play_now() {
+    let mut model = booted(Route::Dashboard, signed_in(true));
+    let effects = deliver(
+        &mut model,
+        Reply::Dashboard(Ok(DashboardView {
+            campaigns: vec![CampaignCard {
+                campaign_id: "0c".to_owned(),
+                name: "The Drowned Lantern".to_owned(),
+                role: CampaignRole::Host,
+                host_name: "Ana".to_owned(),
+                party_size: 4,
+                last_played_at_ms: None,
+                last_saved_at_ms: None,
+                live_session_id: Some("5e".to_owned()),
+                is_archived: false,
+            }],
+            can_create: true,
+        })),
+    );
+    assert_eq!(
+        first_call(&effects),
+        Some(&ApiCall::Lobby {
+            session_id: "5e".to_owned()
+        })
+    );
+
+    deliver(
+        &mut model,
+        Reply::Lobby(Ok(LobbyView {
+            session_id: "5e".to_owned(),
+            campaign_id: "0c".to_owned(),
+            campaign_name: "The Drowned Lantern".to_owned(),
+            can_manage: true,
+            start_blockers: Vec::new(),
+            members: Vec::new(),
+            funding_note: FundingNote::HostCredit(HostCreditView {
+                price_version: [1; 16],
+                hourly_micro_dollars: 8_000_000,
+                available_micro_dollars: 50_000_000,
+                cap_micro_dollars: 25_000_000,
+                terms_version: 1,
+                consented_at_ms: None,
+                is_fundable: true,
+            }),
+            has_started: false,
+            poll_seconds: 3,
+        })),
+    );
+    let Screen::Dashboard(screen) = model.screen else {
+        panic!("dashboard remains open while its game quote loads");
+    };
+    assert!(matches!(screen.resume_lobby, Remote::Ready(_)));
 }
 
 #[test]

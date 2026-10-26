@@ -10,7 +10,7 @@ use crate::{
     route::Route,
     state::{DashboardScreen, Intent, Model, Remote},
     wire::{OverviewView, TrialView},
-    wire_campaign::{CampaignCard, DashboardView, InvitePreview},
+    wire_campaign::{CampaignCard, CampaignRole, DashboardView, FundingNote, InvitePreview},
 };
 
 pub(in crate::view) fn dashboard(screen: &DashboardScreen, model: &Model) -> Node {
@@ -18,19 +18,25 @@ pub(in crate::view) fn dashboard(screen: &DashboardScreen, model: &Model) -> Nod
     if let Some(account) = model.account().filter(|account| !account.is_verified) {
         content = content.child(verify_prompt(screen, &account.email));
     }
+    if let Some(card) = resumable_campaign(&screen.campaigns) {
+        content = content.child(resume_action(card));
+    }
     content
         .child(error_summary(model.play_now.error()))
         .child(button(
             "Play now",
             Some(Intent::PlayNow),
-            ButtonKind::Primary,
+            if resumable_campaign(&screen.campaigns).is_some() {
+                ButtonKind::Secondary
+            } else {
+                ButtonKind::Primary
+            },
             model.play_now.is_sending()
                 || model.play_operation.ready().is_none()
+                || play_now_price(screen).is_none()
                 || !model.account().is_some_and(|account| account.is_verified),
         ))
-        .child(el("p").class("hint").text(
-            "Play now starts a table on your credit, at most the hourly price of its pace. You can change the pace or end the session on the campaign page.",
-        ))
+        .child(play_now_price_line(screen))
         .child(stats_section(screen))
         .child(credit_section(&screen.overview))
         .child(funds_section(screen))
@@ -74,10 +80,6 @@ fn stats_section(screen: &DashboardScreen) -> Node {
                 .child(item("Players hosted", stats.players_hosted.to_string()))
                 .child(item("Assets generated", stats.assets_generated.to_string()))
                 .child(item(
-                    "Spent this month",
-                    money::charge(stats.spent_this_month_micro_dollars),
-                ))
-                .child(item(
                     "Spent in total",
                     money::charge(stats.spent_lifetime_micro_dollars),
                 ))
@@ -88,6 +90,105 @@ fn stats_section(screen: &DashboardScreen) -> Node {
                 .into()
         }))
         .into()
+}
+
+fn resumable_campaign(campaigns: &Remote<DashboardView>) -> Option<&CampaignCard> {
+    campaigns.ready()?.campaigns.iter().find(|campaign| {
+        campaign.role == CampaignRole::Host
+            && !campaign.is_archived
+            && campaign.live_session_id.is_some()
+    })
+}
+
+fn resume_action(card: &CampaignCard) -> Node {
+    let Some(session_id) = &card.live_session_id else {
+        return el("span").into();
+    };
+    el("p")
+        .class("dashboard-resume")
+        .child(row_link(
+            &format!("Resume {}", card.name),
+            format!("Resume {}", card.name),
+            Route::Lobby {
+                session_id: session_id.clone(),
+            },
+            "btn btn-gilt",
+        ))
+        .into()
+}
+
+fn play_now_price(screen: &DashboardScreen) -> Option<(u64, u64, bool)> {
+    if resumable_campaign(&screen.campaigns).is_some() {
+        match &screen.resume_lobby {
+            Remote::Ready(lobby) => {
+                if let FundingNote::HostCredit(quote) = lobby.funding_note {
+                    return Some((quote.hourly_micro_dollars, quote.cap_micro_dollars, true));
+                }
+                return None;
+            }
+            Remote::Failed(error) if error.code == crate::wire::ErrorCode::NotFound => {}
+            Remote::Loading | Remote::Failed(_) => return None,
+        }
+    }
+    let cents_per_hour = screen
+        .play_now_catalog
+        .ready()?
+        .presets
+        .iter()
+        .find_map(|offer| {
+            if offer.preset == crate::wire::PacePreset::Story {
+                offer.ceiling_cents_per_hour
+            } else {
+                None
+            }
+        })?;
+    let hourly_micro_dollars = u64::from(cents_per_hour) * 10_000;
+    Some((hourly_micro_dollars, hourly_micro_dollars, false))
+}
+
+fn play_now_price_line(screen: &DashboardScreen) -> Node {
+    let Some((hourly_micro_dollars, limit_micro_dollars, is_session_limit)) =
+        play_now_price(screen)
+    else {
+        if let Some(error) = play_now_price_error(screen) {
+            return failed(error);
+        }
+        return el("p")
+            .class("hint")
+            .text("Checking the table price. Play now will be available when it is ready.")
+            .into();
+    };
+    let limit = if is_session_limit {
+        format!(
+            "Spending limit: {} for this session.",
+            money::charge(limit_micro_dollars)
+        )
+    } else {
+        format!(
+            "Spending limit: {} per active hour.",
+            money::charge(limit_micro_dollars)
+        )
+    };
+    el("p")
+        .class("play-now-price")
+        .text(format!(
+            "Table price: up to {} per active hour. {limit} Charged only while the game runs.",
+            money::charge(hourly_micro_dollars)
+        ))
+        .into()
+}
+
+fn play_now_price_error(screen: &DashboardScreen) -> Option<crate::wire::ApiError> {
+    if resumable_campaign(&screen.campaigns).is_some()
+        && let Remote::Failed(error) = &screen.resume_lobby
+        && error.code != crate::wire::ErrorCode::NotFound
+    {
+        return Some(*error);
+    }
+    if let Remote::Failed(error) = &screen.play_now_catalog {
+        return Some(*error);
+    }
+    None
 }
 
 fn funds_section(screen: &DashboardScreen) -> Node {

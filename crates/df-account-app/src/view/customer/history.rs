@@ -182,16 +182,26 @@ fn asset_row(row: &AssetRow, offset: i32) -> Node {
             .class("row-title")
             .text(copy::asset_kind_name(row.kind)),
     );
-    if let Some(url) = &row.thumbnail_url {
-        main = main.child(
-            el("img")
-                .class("asset-thumb")
-                .attr("src", url.clone())
-                .attr("alt", "")
-                .attr("width", "96")
-                .attr("height", "96"),
-        );
-    }
+    let initial = match row.kind {
+        AssetKind::Portrait => "P",
+        AssetKind::Scene => "S",
+        AssetKind::Music => "M",
+        AssetKind::Video => "V",
+    };
+    let placeholder = el("span")
+        .class("asset-thumb-placeholder")
+        .attr("aria-hidden", "true")
+        .text(initial);
+    let thumbnail = if let Some(url) = &row.thumbnail_url {
+        el("object")
+            .class("asset-thumb")
+            .attr("data", url.clone())
+            .attr("aria-hidden", "true")
+            .child(placeholder)
+    } else {
+        placeholder
+    };
+    main = main.child(thumbnail);
     let campaign = row.campaign_name.as_deref().unwrap_or("No campaign");
     main = main.child(el("span").class("row-meta").text(format!(
         "{campaign}. Made {}. {} bytes. {}.",
