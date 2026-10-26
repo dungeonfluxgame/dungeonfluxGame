@@ -1257,7 +1257,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                         }
                     })?
                     .into_inner();
-            status(&owned.borrow(), "Connected Â· server owns the saved game");
+            status(&owned.borrow(), "Connected · server owns the saved game");
             while let Some(view) = view_delivery::wait_for_view(stream.message())
                 .await
                 .map_err(|status| {
@@ -2807,7 +2807,7 @@ fn creation_group_description(group: &rpc::JourneyGroup) -> String {
     if description.is_empty() {
         label
     } else {
-        format!("{label} Â· {description}")
+        format!("{label} · {description}")
     }
 }
 fn creation_group_label(group_id: &str, label: &str) -> String {
@@ -2819,14 +2819,14 @@ fn creation_group_label(group_id: &str, label: &str) -> String {
 
 fn creation_option_label(group_id: &str, label: &str) -> String {
     if group_id == "build-package" {
-        if label.starts_with("Stalwart Â·") {
-            return "Stalwart Â· Chain mail, greatsword, flail, 8 javelins".to_owned();
+        if label.starts_with("Stalwart ·") {
+            return "Stalwart · Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
-        if label.starts_with("Vanguard Â·") {
-            return "Vanguard Â· Chain mail, greatsword, flail, 8 javelins".to_owned();
+        if label.starts_with("Vanguard ·") {
+            return "Vanguard · Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
         if label.contains("Fighter B") || label.starts_with("Longbow and Archery") {
-            return "Archer Â· Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
+            return "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
                 .to_owned();
         }
     }
@@ -3748,7 +3748,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         if role == "display" {
             "Your shared adventure"
         } else {
-            "Your story Â· your choices"
+            "Your story · your choices"
         },
     )?;
     node(
@@ -3783,7 +3783,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
             "div",
             "party-member",
             &format!(
-                "{} Â· {}",
+                "{} · {}",
                 member.name,
                 if member.character_ready {
                     "Ready"
@@ -4571,24 +4571,24 @@ mod tests {
     #[test]
     fn melee_creation_packages_keep_their_names_and_show_the_scores_they_are_sent() {
         assert_eq!(
-            creation_option_label("build-package", "Stalwart Â· Greatsword and Defense"),
-            "Stalwart Â· Chain mail, greatsword, flail, 8 javelins"
+            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
+            "Stalwart · Chain mail, greatsword, flail, 8 javelins"
         );
         // The scores come from the server, which owns them; the page shows them as sent.
         assert_eq!(
-            creation_option_description("build-package", "STR 17 Â· DEX 13 Â· CON 15"),
-            "STR 17 Â· DEX 13 Â· CON 15"
+            creation_option_description("build-package", "STR 17 · DEX 13 · CON 15"),
+            "STR 17 · DEX 13 · CON 15"
         );
         assert_eq!(
-            creation_option_label("build-package", "Vanguard Â· Greatsword and Defense"),
-            "Vanguard Â· Chain mail, greatsword, flail, 8 javelins"
+            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
+            "Vanguard · Chain mail, greatsword, flail, 8 javelins"
         );
         assert_eq!(
             creation_option_label(
                 "build-package",
-                "Longbow and Archery Â· Fighter B + Soldier B"
+                "Longbow and Archery · Fighter B + Soldier B"
             ),
-            "Archer Â· Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
+            "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
         );
         assert_eq!(
             creation_option_label("portrait", "Second hero"),
@@ -4620,17 +4620,17 @@ mod tests {
             equipment_label
         );
         assert_eq!(
-            creation_option_label("build-package", "Stalwart Â· Greatsword and Defense"),
+            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
             stalwart_package
         );
         assert_eq!(
-            creation_option_label("build-package", "Vanguard Â· Greatsword and Defense"),
+            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
             vanguard_package
         );
         assert_eq!(
             creation_option_label(
                 "build-package",
-                "Longbow and Archery Â· Fighter B + Soldier B"
+                "Longbow and Archery · Fighter B + Soldier B"
             ),
             archer_package
         );
@@ -4649,7 +4649,7 @@ mod tests {
         let single = super::rpc::JourneyGroup {
             group_id: "class".to_owned(),
             options: vec![super::rpc::JourneyOption {
-                label: "Fighter Â· level 1".to_owned(),
+                label: "Fighter · level 1".to_owned(),
                 description: "Choose a Fighting Style and call on Second Wind.".to_owned(),
                 ..Default::default()
             }],
@@ -4657,7 +4657,7 @@ mod tests {
         };
         assert_eq!(
             creation_group_description(&single),
-            "Fighter Â· level 1 Â· Choose a Fighting Style and call on Second Wind."
+            "Fighter · level 1 · Choose a Fighting Style and call on Second Wind."
         );
 
         let no_description = super::rpc::JourneyGroup {
