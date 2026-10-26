@@ -1,0 +1,9 @@
+{
+  "price_version_id": "c0572026102500010000000000000001",
+  "effective_date": "2026-10-25",
+  "prices": [
+    { "name": "Story", "micro_dollars_per_hour": 3000000 },
+    { "name": "Immersive", "micro_dollars_per_hour": 8000000 },
+    { "name": "Cinematic", "micro_dollars_per_hour": 20000000 }
+  ]
+}
