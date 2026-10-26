@@ -174,6 +174,9 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
             display_path(play_root.join("display-tuning.css")),
         ),
     ];
+    if std::env::var_os("DF_RUNTIME_LAUNCH_SECRET").is_some() {
+        environment.push(("DF_RUNTIME_SUPERVISOR".into(), "1".into()));
+    }
     if let Some(public) = &launch.network.public_url {
         environment.push(("DF_GAMEPLAY_PUBLIC_URL".into(), public.clone()));
     }

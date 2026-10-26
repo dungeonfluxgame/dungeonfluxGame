@@ -1,4 +1,5 @@
-//! Single-room campaign attachment. The game owner issues every seat grant; routing is disposable.
+//! Campaign attachment and opt-in local process placement.
+//! Each gameplay owner issues its seat grants; routing state is disposable.
 use super::{PageState, actor, room};
 use axum::{
     Json, Router,
@@ -39,6 +40,8 @@ struct LaunchState {
     generation: Arc<str>,
     code: Arc<str>,
     slot: Arc<Mutex<Option<Slot>>>,
+    supervisor: Option<Arc<supervisor::Supervisor>>,
+    room_join: bool,
 }
 
 pub(super) fn secret_from_environment() -> Result<Option<LaunchSecret>, std::io::Error> {
@@ -73,6 +76,12 @@ pub(super) fn router(
     let Some(secret) = secret else {
         return Ok(Router::new());
     };
+    let is_child = std::env::var_os("DF_RUNTIME_CHILD").is_some();
+    let supervisor = if is_child || std::env::var_os("DF_RUNTIME_SUPERVISOR").is_none() {
+        None
+    } else {
+        Some(Arc::new(supervisor::Supervisor::new(secret.clone())?))
+    };
     let state = LaunchState {
         actor,
         page,
@@ -87,6 +96,8 @@ pub(super) fn router(
         .into(),
         code: super::journey::room_code().into(),
         slot: Arc::new(Mutex::new(None)),
+        supervisor,
+        room_join: is_child,
     };
     Ok(routes(state))
 }
@@ -147,6 +158,9 @@ async fn allocate(
     }
     allocation.roster.sort_by_key(|seat| seat.member);
     allocation.display_tickets.sort();
+    if let Some(supervisor) = &state.supervisor {
+        return supervisor.allocate(allocation).await;
+    }
     // This lock serializes attachment only, never the game owner. A cancelled request retains
     // the reserved slot and exact join proofs, so a retry reconciles the same owner operations.
     let mut slot = state.slot.lock().await;
@@ -188,7 +202,7 @@ async fn allocate(
         return refusal(Refusal::Unavailable);
     };
     for seat in &mut slot.seats {
-        if seat.joined.is_none() {
+        if seat.joined.is_none() && !state.room_join {
             match join(&state.actor, seat.request.clone()).await {
                 Ok(joined) => seat.joined = Some(joined),
                 Err(_) => return refusal(Refusal::Unavailable),
@@ -208,6 +222,7 @@ async fn allocate(
         Json(Allocated {
             code: state.code.to_string(),
             generation: state.generation.to_string(),
+            links: None,
         })
         .into_response(),
     )
@@ -394,6 +409,8 @@ fn private(mut response: Response) -> Response {
     );
     response
 }
+
+mod supervisor;
 
 #[cfg(test)]
 mod harness;

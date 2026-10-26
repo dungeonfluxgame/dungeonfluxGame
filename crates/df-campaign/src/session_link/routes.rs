@@ -22,20 +22,23 @@ use crate::{
     store::{CampaignStore, SessionDirectory, SessionPhase},
 };
 
+/// Current authority for a relay; outages and revocation both close it without forwarding data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TunnelAuthorization {
+pub enum TunnelAuthorization {
     Authorized,
     Revoked,
     Unavailable,
 }
 
+/// Owned callback rechecking current login and membership throughout an upgraded relay.
 #[derive(Clone)]
-pub(super) struct TunnelRevalidator {
+pub struct TunnelRevalidator {
     check: Arc<dyn Fn() -> BoxFuture<'static, TunnelAuthorization> + Send + Sync>,
 }
 
 impl TunnelRevalidator {
-    pub(super) fn new(
+    /// The relay bounds each check and drops it on disconnect, timeout or cancellation.
+    pub fn new(
         check: impl Fn() -> BoxFuture<'static, TunnelAuthorization> + Send + Sync + 'static,
     ) -> Self {
         Self {

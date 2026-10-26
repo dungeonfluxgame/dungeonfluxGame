@@ -71,6 +71,8 @@ impl Harness {
             generation: Arc::from("gamelaunch-test-generation"),
             code: super::super::journey::room_code().into(),
             slot: Arc::new(Mutex::new(None)),
+            supervisor: None,
+            room_join: false,
         };
         Self {
             state,

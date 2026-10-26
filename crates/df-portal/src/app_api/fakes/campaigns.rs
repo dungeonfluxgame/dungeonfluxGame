@@ -93,6 +93,8 @@ pub(super) struct State {
     pub game_links: HashMap<SessionId, df_account_app::wire_campaign::GameLinks>,
     /// A local preview's one running game, used for every started session without its own links.
     pub local_game: Option<df_account_app::wire_campaign::GameLinks>,
+    #[cfg(feature = "test-fakes")]
+    pub launcher_urls: HashMap<SessionId, String>,
     pub fail_next_open: bool,
     /// Play history per account, newest first (seeded; S1's real adapter reads its store).
     pub play_sessions: Vec<(AccountId, PlaySessionRow)>,
@@ -102,6 +104,8 @@ pub struct FakeCampaigns {
     pub(super) origin: String,
     clock: Arc<dyn Clock>,
     state: Mutex<State>,
+    #[cfg(feature = "test-fakes")]
+    pub(super) runtime: Mutex<Option<Arc<super::campaigns_runtime::LocalRuntime>>>,
 }
 
 impl FakeCampaigns {
@@ -110,10 +114,15 @@ impl FakeCampaigns {
             origin: origin.to_owned(),
             clock,
             state: Mutex::new(State::default()),
+            #[cfg(feature = "test-fakes")]
+            runtime: Mutex::new(None),
         }
     }
 
-    fn run<T>(&self, work: impl FnOnce(&mut State, &Self, u64) -> PortResult<T>) -> PortResult<T> {
+    pub(super) fn run<T>(
+        &self,
+        work: impl FnOnce(&mut State, &Self, u64) -> PortResult<T>,
+    ) -> PortResult<T> {
         work(&mut lock(&self.state), self, self.clock.now_ms())
     }
 
@@ -197,6 +206,8 @@ impl CampaignDirectory for FakeCampaigns {
         who: &Actor,
         session: SessionId,
     ) -> PortResult<Option<df_account_app::wire_campaign::GameLinks>> {
+        #[cfg(feature = "test-fakes")]
+        self.allocate_runtime(who, session).await?;
         self.run(|state, _, _| {
             state.lobby_for(who, session)?;
             Ok(state
@@ -421,7 +432,10 @@ impl CampaignDirectory for FakeCampaigns {
     }
 
     async fn start_session(&self, who: &Actor, session: SessionId) -> PortResult<LobbyView> {
-        self.run(|state, _, _| state.start_session(who, session))
+        let lobby = self.run(|state, _, _| state.start_session(who, session))?;
+        #[cfg(feature = "test-fakes")]
+        self.allocate_runtime(who, session).await?;
+        Ok(lobby)
     }
 
     async fn join_preview(&self, token: &str) -> PortResult<InvitePreview> {

@@ -780,6 +780,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "df-account-app",
+ "df-campaign",
  "df-customer",
  "df-google",
  "df-observe",

@@ -1211,14 +1211,19 @@ impl App {
     }
 
     /// Attaches to a server started elsewhere for this session only (`--connect`, or the
-    /// Connect button in developer mode). Nothing is saved and the server is never stopped.
+    /// Connect button in developer mode). A supervisor-provided run record uses the normal
+    /// running-game view and save/stop path; an ordinary attachment leaves the server external.
     /// `always_show` opens the display even when settings say not to (the `--connect` flag).
-    pub fn connect_to(&self, url: &str, always_show: bool) -> Result<(), String> {
+    pub fn connect_to(self: &Arc<Self>, url: &str, always_show: bool) -> Result<(), String> {
         if !self.startable() {
             return Ok(());
         }
         let origin = crate::settings::external_origin(url)?;
         log::event("ACTION_CONNECT", format!("origin={}", log::value(&origin)));
+        if let Ok(record) = std::env::var("DF_RUNTIME_LAUNCHER_RECORD") {
+            return self.attach_runtime(&origin, &record);
+        }
+
         let host = origin
             .split_once("://")
             .map(|(_, rest)| rest)
@@ -1262,6 +1267,22 @@ impl App {
         } else {
             self.show_display_per_settings(&format!("{origin}/gameplay/display"));
         }
+        Ok(())
+    }
+
+    fn attach_runtime(self: &Arc<Self>, origin: &str, record: &str) -> Result<(), String> {
+        let run: RunRecord = toml::from_str(record)
+            .map_err(|_| "The session launcher could not read its running game.".to_owned())?;
+        if !run.display_url.starts_with(&format!("{origin}/"))
+            || !run.player_url.starts_with(&format!("{origin}/"))
+            || !platform::process_is(run.pid, &run.server_exe)
+        {
+            return Err("The session's game is unavailable.".to_owned());
+        }
+        self.write_run(&run)
+            .map_err(|_| "The session launcher could not retain its game.".to_owned())?;
+        self.set_phase(Phase::Running(run.clone()));
+        self.spawn_monitor(run);
         Ok(())
     }
 
@@ -1562,6 +1583,57 @@ mod tests {
             other => panic!("unexpected phase {other:?}"),
         }
         assert!(!data.join(RUN_FILE).exists());
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn a_placed_session_uses_the_running_launcher_and_rejects_another_origin() {
+        let data = std::env::temp_dir().join(format!("df-launcher-placed-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let app = App::new(
+            data.clone(),
+            data.join("dungeonflux.toml"),
+            false,
+            Box::new(|_| {}),
+        );
+        let run = RunRecord {
+            game: SavedGame {
+                database: "df_gameplay_demo_rtlocal_test".into(),
+                name: "Your game".into(),
+                adventure: Adventure::Harbor,
+                created: 1,
+                last_played: chrono::Utc::now().timestamp(),
+                played_seconds: 0,
+            },
+            pid: std::process::id(),
+            server_exe: std::env::current_exe().unwrap(),
+            stop_dir: data.join("stop"),
+            log: data.join("game.log"),
+            display_url: "http://127.0.0.1:45678/gameplay/display".into(),
+            player_url: "http://127.0.0.1:45678/gameplay/player?room=BADEFO".into(),
+            postgres_started: false,
+            play_root: data.clone(),
+            postgres_bin: data.clone(),
+            database_port: 55911,
+            stopping: false,
+            status_token: None,
+            dev_control: None,
+        };
+        let record = toml::to_string(&run).unwrap();
+        assert!(
+            app.attach_runtime("http://127.0.0.1:45679", &record)
+                .is_err()
+        );
+        app.attach_runtime("http://127.0.0.1:45678", &record)
+            .unwrap();
+        assert!(matches!(app.snapshot().phase, Phase::Running(_)));
+        let page = crate::ui::handle(&app, "GET", "/", &[]);
+        let body = String::from_utf8(page.body).unwrap();
+        assert!(body.contains("BADEFO"));
+        assert!(body.contains("Stop and save"));
+        assert!(!body.contains("Developer mode: the game"));
+        assert_eq!(app.read_run().unwrap().player_url, run.player_url);
+        app.set_phase(Phase::Idle { notice: None });
         std::fs::remove_dir_all(data).unwrap();
     }
 }

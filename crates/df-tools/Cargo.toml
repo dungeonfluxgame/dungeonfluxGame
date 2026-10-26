@@ -38,7 +38,7 @@ getrandom = "=0.2.17"
 df-intent = { path = "../df-intent" }
 axum = { version = "0.8", features = ["ws"] }
 tonic = { workspace = true, features = ["transport", "router"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "signal", "process"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["fs"] }
 df-api = { path = "../df-api" }

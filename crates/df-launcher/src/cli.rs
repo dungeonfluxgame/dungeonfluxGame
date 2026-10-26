@@ -57,6 +57,17 @@ Developer options:
   --ui-preview <127.0.0.1:port>  Serve the launcher pages over loopback HTTP, no window.
   --connect <http://host:port>   Open the window attached to a server started elsewhere.
   --show-display                 Open the window with the running game's table display.
+
+Local account preview runtime:
+  Set DF_RUNTIME_LAUNCH_SECRET in the environment before `start` (32-256 ASCII
+  graphic characters). The existing start command also serves local session
+  allocations, each in its own game process and database. It prints RUNTIME with
+  the loopback origin and secret source, never the secret. Set that origin as
+  DF_PREVIEW_RUNTIME_ORIGIN and pass the same DF_RUNTIME_LAUNCH_SECRET environment
+  to account_app_preview. Retain the launcher's configuration for game settings.
+  DF_RUNTIME_LAUNCHER_EXE may select dungeonflux.exe when it is not beside the server.
+  Direct df-transport-fixture runs also need DF_RUNTIME_SUPERVISOR=1.
+  Stop the runtime with `stop`; its session processes stop with it.
 ";
 
 const PHASES: [&str; 6] = [
@@ -376,6 +387,11 @@ fn started(outcome: Result<RunRecord, Box<Failure>>, flags: &Flags) -> Result<()
         message
     })?;
     print_run("READY", &run);
+    if std::env::var_os("DF_RUNTIME_LAUNCH_SECRET").is_some()
+        && let Some(origin) = runtime_origin(&run.display_url)
+    {
+        println!("RUNTIME origin={origin} secret_source=environment:DF_RUNTIME_LAUNCH_SECRET");
+    }
     if flags.open_display {
         let _ = open::that_detached(&run.display_url);
     }
@@ -406,6 +422,12 @@ fn started(outcome: Result<RunRecord, Box<Failure>>, flags: &Flags) -> Result<()
     }
     // The game keeps running after this process exits (REF-005).
     Ok(())
+}
+
+fn runtime_origin(display_url: &str) -> Option<String> {
+    let authority = display_url.strip_prefix("http://")?.split('/').next()?;
+    let port = authority.rsplit(':').next()?.parse::<u16>().ok()?;
+    Some(format!("http://127.0.0.1:{port}"))
 }
 
 #[cfg(test)]

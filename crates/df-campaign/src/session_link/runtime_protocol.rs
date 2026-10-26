@@ -5,6 +5,9 @@ use sha2::Sha256;
 
 use super::Placement;
 
+/// The authenticated composition supplies a current authority check for each relay.
+pub use super::routes::{TunnelAuthorization, TunnelRevalidator};
+
 pub const ALLOCATION_PATH: &str = "/gameplay/internal/allocate";
 pub const ENTRY_PATH: &str = "/gameplay/internal/entry";
 pub const SECRET_HEADER: &str = "x-df-runtime-launch";
@@ -54,6 +57,17 @@ impl From<&Placement> for Allocation {
 pub struct Allocated {
     pub code: String,
     pub generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<LocalLinks>,
+}
+
+/// Local development handoff to the actual launcher and its game process.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalLinks {
+    pub launcher_url: String,
+    pub display_url: String,
+    pub player_url: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

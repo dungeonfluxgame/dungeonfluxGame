@@ -8,6 +8,8 @@ mod assets;
 mod campaigns;
 mod campaigns_join;
 mod campaigns_rules;
+#[cfg(feature = "test-fakes")]
+mod campaigns_runtime;
 mod checkout;
 mod extras;
 mod finance;

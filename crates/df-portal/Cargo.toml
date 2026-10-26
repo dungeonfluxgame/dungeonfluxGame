@@ -8,6 +8,7 @@ publish = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 df-customer = { path = "../df-customer" }
+df-campaign = { path = "../df-campaign", features = ["routes"], optional = true }
 df-account-app = { path = "../df-account-app" }
 df-observe = { path = "../df-observe" }
 df-types = { path = "../df-types" }
@@ -29,7 +30,7 @@ tower = { version = "0.5", features = ["util"] }
 
 [features]
 dev-routes = []
-test-fakes = ["df-customer/test-fakes"]
+test-fakes = ["df-customer/test-fakes", "dep:df-campaign"]
 
 [[example]]
 name = "account_app_preview"

@@ -313,11 +313,14 @@ fn tunnel_app(
             "/sessions/{}/tunnel",
             super::super::hex(placement.session.as_bytes())
         ),
-        get(move |request: axum::extract::Request| {
+        get(move |mut request: axum::extract::Request| {
             let runtime = runtime.clone();
             let placement = placement.clone();
             let room = room.clone();
             async move {
+                request.extensions_mut().insert(TunnelRevalidator::new(|| {
+                    Box::pin(async { TunnelAuthorization::Authorized })
+                }));
                 runtime
                     .serve(&placement, &room, audience, Surface::Tunnel, request)
                     .await

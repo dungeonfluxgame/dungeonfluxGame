@@ -1,15 +1,16 @@
 //! A loopback preview of the account web app for browser checks: the built bundle plus the JSON
-//! API over the in-memory account store, the development outbox and the fake ports. Nothing
-//! persists, no mail is sent and no money moves.
+//! API over the in-memory account store, the development outbox and the fake ports. Accounts
+//! and payments are disposable; configured gameplay runtimes retain their own saves.
 //!
 //! `cargo run -p df-portal --example account_app_preview --features test-fakes -- [bundle directory] [port] [site directory] [--dev-accounts]`
 //!
 //! The bundle directory defaults to `artifacts/build/account-app-web`; port 0 (the default) picks
 //! a free port. The site directory defaults to `docs`. The server prints its address and process id
 //! when it is ready, and stops cleanly on ctrl-c or when its standard input closes (set
-//! `DF_PREVIEW_IGNORE_STDIN=1` to run detached with no standard input). Set `DF_PREVIEW_GAME_DISPLAY`
-//! and `DF_PREVIEW_GAME_PLAYER` to a running local game's display and player links (the ones
-//! `dungeonflux.exe start` prints) and every started session's pre-game page offers them.
+//! `DF_PREVIEW_IGNORE_STDIN=1` to run detached with no standard input). Set
+//! `DF_PREVIEW_RUNTIME_ORIGIN` to the runtime origin printed by `dungeonflux.exe start`, and
+//! supply the same `DF_RUNTIME_LAUNCH_SECRET` environment. Start places each session separately;
+//! the account hands off to that session's actual game launcher.
 //!
 //! Test accounts, all with the test password printed in the banner: a customer (verified, trial
 //! plus purchased credit, a hosted campaign with an open lobby, statement lines), an operator
@@ -75,7 +76,7 @@ fn stdin_closed() -> tokio::sync::oneshot::Receiver<()> {
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use df_customer::{
         BuiltInCommonPasswords, CustomerConfig, CustomerService, DevOutbox, HashingParameters,
@@ -144,23 +145,22 @@ async fn main() -> std::io::Result<()> {
     let google = df_google::fake::FakeGoogle::new(&origin_text);
     let service = service.with_google(google.clone(), google_accounts);
     let ports = Arc::new(FakePorts::new(&origin_text, Arc::new(SystemClock)));
-    let local_game = |name: &str| std::env::var(name).ok().filter(|link| !link.is_empty());
-    if let (Some(display_url), Some(player_url)) = (
-        local_game("DF_PREVIEW_GAME_DISPLAY"),
-        local_game("DF_PREVIEW_GAME_PLAYER"),
-    ) {
-        let room_code = player_url
-            .split_once("room=")
-            .map(|(_, code)| code.split('&').next().unwrap_or_default().to_owned())
-            .filter(|code| !code.is_empty());
-        println!("started sessions use the local game at {display_url}");
-        ports
-            .campaigns
-            .use_local_game(df_account_app::wire_campaign::GameLinks {
-                display_url,
-                player_url,
-                room_code,
-            });
+    if let Ok(origin) = std::env::var("DF_PREVIEW_RUNTIME_ORIGIN") {
+        let address = origin
+            .strip_prefix("http://")
+            .unwrap_or(&origin)
+            .trim_end_matches('/')
+            .parse::<SocketAddr>()
+            .map_err(other)?;
+        let secret = std::env::var("DF_RUNTIME_LAUNCH_SECRET")
+            .map_err(|_| other("DF_RUNTIME_LAUNCH_SECRET is required for the preview runtime"))?;
+        let secret = df_campaign::session_link::runtime_protocol::LaunchSecret::new(&secret)
+            .map_err(|_| other("invalid DF_RUNTIME_LAUNCH_SECRET"))?;
+        ports.campaigns.use_runtime(
+            df_campaign::session_link::HttpRuntime::new(address, secret, Duration::from_secs(2))
+                .map_err(other)?,
+        );
+        println!("local session runtime configured at {address}; secret source: environment");
     }
     let seeded = seed::seed(&service, &outbox, &ports, TEST_PASSWORD).await?;
     if dev_accounts_enabled {
@@ -179,7 +179,7 @@ async fn main() -> std::io::Result<()> {
             ports,
         }))
         .fallback(site::fallback)
-        .layer(axum::Extension(Arc::new(PathBuf::from(site_directory))));
+        .layer(axum::Extension(Arc::new(site_directory)));
     if dev_accounts_enabled {
         app = dev_routes::with_dev_accounts(
             app,
@@ -348,3 +348,7 @@ async fn set_google_fixture(
     }
     axum::response::Redirect::to("/dev/google").into_response()
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "account_app_preview/runtime_tests.rs"]
+mod runtime_tests;

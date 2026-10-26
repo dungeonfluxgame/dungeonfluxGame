@@ -118,6 +118,43 @@ impl HttpRuntime {
         format!("http://{}{path}", self.address)
     }
 
+    /// Allocates the same room as RuntimeLauncher, retaining a local per-session launcher handoff.
+    pub async fn allocate_with_links(
+        &self,
+        placement: &Placement,
+    ) -> Result<(Room, Option<LocalLinks>), RuntimeError> {
+        let mut allocation = Allocation::from(placement);
+        allocation
+            .display_tickets
+            .push(self.display_ticket(placement));
+        let response = self
+            .client
+            .post(self.url(ALLOCATION_PATH))
+            .header(SECRET_HEADER, self.secret.header_value())
+            .json(&allocation)
+            .send()
+            .await
+            .map_err(|_| RuntimeError::Unavailable)?;
+        let status = response.status();
+        let bytes = bounded_body(response, MAXIMUM_ALLOCATION_BYTES).await?;
+        if !status.is_success() {
+            return match serde_json::from_slice::<Refusal>(&bytes) {
+                Ok(Refusal::Occupied) => Err(RuntimeError::Occupied),
+                Ok(Refusal::InvalidPlacement) => Err(RuntimeError::InvalidReply),
+                _ => Err(RuntimeError::Unavailable),
+            };
+        }
+        let room: Allocated =
+            serde_json::from_slice(&bytes).map_err(|_| RuntimeError::InvalidReply)?;
+        Ok((
+            Room {
+                code: room.code,
+                run_identity: room.generation,
+            },
+            room.links,
+        ))
+    }
+
     fn display_ticket(&self, placement: &Placement) -> [u8; 16] {
         let mut identity = [0; 32];
         identity[..16].copy_from_slice(placement.campaign.as_bytes());
@@ -262,33 +299,9 @@ fn record_tunnel_refusal() {
 
 impl RuntimeLauncher for HttpRuntime {
     async fn allocate(&self, placement: &Placement) -> Result<Room, RuntimeError> {
-        let mut allocation = Allocation::from(placement);
-        allocation
-            .display_tickets
-            .push(self.display_ticket(placement));
-        let response = self
-            .client
-            .post(self.url(ALLOCATION_PATH))
-            .header(SECRET_HEADER, self.secret.header_value())
-            .json(&allocation)
-            .send()
+        self.allocate_with_links(placement)
             .await
-            .map_err(|_| RuntimeError::Unavailable)?;
-        let status = response.status();
-        let bytes = bounded_body(response, MAXIMUM_ALLOCATION_BYTES).await?;
-        if !status.is_success() {
-            return match serde_json::from_slice::<Refusal>(&bytes) {
-                Ok(Refusal::Occupied) => Err(RuntimeError::Occupied),
-                Ok(Refusal::InvalidPlacement) => Err(RuntimeError::InvalidReply),
-                _ => Err(RuntimeError::Unavailable),
-            };
-        }
-        let room: Allocated =
-            serde_json::from_slice(&bytes).map_err(|_| RuntimeError::InvalidReply)?;
-        Ok(Room {
-            code: room.code,
-            run_identity: room.generation,
-        })
+            .map(|(room, _)| room)
     }
 
     async fn serve(
