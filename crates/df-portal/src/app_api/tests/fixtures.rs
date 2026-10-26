@@ -113,6 +113,14 @@ impl Reply {
 
 impl Harness {
     pub async fn new() -> Self {
+        Self::configured(false).await
+    }
+
+    pub async fn with_google() -> Self {
+        Self::configured(true).await
+    }
+
+    async fn configured(google: bool) -> Self {
         let mail = RecordingMail::default();
         let clock = FakeClock::at(START_MS);
         let hosts = HostConfig::new(
@@ -125,6 +133,7 @@ impl Harness {
             .unwrap(),
             LinkStyle::App,
         );
+        let store = MemoryAccountStore::default();
         let (service, tasks) = CustomerService::start(
             CustomerConfig {
                 hosts,
@@ -136,13 +145,18 @@ impl Harness {
                 provider_signup_floor: Duration::ZERO,
                 dev_allow_local_passwords_on_https: false,
             },
-            MemoryAccountStore::default(),
+            store.clone(),
             mail.clone(),
             Arc::new(clock.clone()),
             Arc::new(BuiltInCommonPasswords),
         )
         .await
         .unwrap();
+        let service = if google {
+            service.with_google(super::oauth_tests::Provider::new(), store)
+        } else {
+            service
+        };
         let ports = Arc::new(FakePorts::new(ORIGIN, Arc::new(clock.clone())));
         let bundle = Bundle::create();
         let state = AppApiState::new(

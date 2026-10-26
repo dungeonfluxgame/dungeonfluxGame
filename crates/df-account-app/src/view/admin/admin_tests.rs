@@ -39,6 +39,7 @@ const ALL_CAPABILITIES: [OperatorCapability; 6] = [
 fn operator_model(capabilities: &[OperatorCapability], screen: AdminScreen) -> Model {
     let mut model = Model::default();
     model.session = Remote::Ready(SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: Some(AccountView {
             email: "operator@example.com".to_owned(),
@@ -521,6 +522,7 @@ fn an_area_outside_the_capabilities_says_so_instead_of_showing_data() {
 fn a_signed_in_person_without_operator_access_gets_the_not_permitted_page() {
     let mut model = full_model(AdminScreen::Summary(Remote::Loading));
     model.session = Remote::Ready(SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: Some(AccountView {
             email: "a@example.com".to_owned(),

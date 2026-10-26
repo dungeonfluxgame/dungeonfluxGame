@@ -15,6 +15,7 @@ mod display;
 
 pub(super) fn anonymous() -> SessionView {
     SessionView {
+        google_enabled: false,
         csrf: "csrf-anonymous".to_owned(),
         account: None,
         dev_sign_in: None,
@@ -23,6 +24,7 @@ pub(super) fn anonymous() -> SessionView {
 
 pub(super) fn signed_in(is_verified: bool) -> SessionView {
     SessionView {
+        google_enabled: false,
         csrf: "csrf-member".to_owned(),
         account: Some(AccountView {
             email: "ana@example.test".to_owned(),

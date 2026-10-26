@@ -46,6 +46,17 @@ fn sessions_content(screen: &PlaySessionsScreen, rows: &[PlaySessionRow], offset
                 row.players,
                 money::charge(row.spent_micro_dollars)
             )))
+            .child(if row.ended_at_ms.is_some() {
+                link(
+                    "Share session",
+                    Route::Share {
+                        session_id: row.session_id.clone(),
+                    },
+                    "button",
+                )
+            } else {
+                el("span").into()
+            })
             .into()
     }));
     let mut content = el("div").child(list);

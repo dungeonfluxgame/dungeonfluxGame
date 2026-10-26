@@ -5,6 +5,8 @@
 //! typed `Reply`. A mutation whose answer never arrives is `UnknownOutcome` (look before
 //! repeating), a read that fails is `Unavailable` (plan 11).
 
+pub mod integration;
+
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::wire::{
@@ -82,6 +84,7 @@ pub enum JoinDecision {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiCall {
+    Integration(integration::Call),
     Session,
     Operation,
     SignUp(SignUpRequest),
@@ -218,6 +221,10 @@ pub enum ApiCall {
         session_id: String,
         request: OperationRequest,
     },
+    ConsentHostFunding {
+        session_id: String,
+        request: crate::wire_campaign::HostConsentRequest,
+    },
     LookupDisplay {
         session_id: String,
         request: PairingLookupRequest,
@@ -251,6 +258,7 @@ pub enum ApiCall {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
+    Integration(integration::Answer),
     Session(Result<SessionView, ApiError>),
     Operation(Result<OperationView, ApiError>),
     SignedUp(Result<Accepted, ApiError>),
@@ -378,6 +386,7 @@ fn encode_component(text: &str) -> String {
 impl ApiCall {
     pub fn request(&self) -> HttpRequest {
         match self {
+            Self::Integration(call) => call.request(),
             Self::Session => get(at("session")),
             Self::Operation => get(at("operation")),
             Self::SignUp(body) => post(at("sign-up"), body),
@@ -615,6 +624,13 @@ impl ApiCall {
                 session_id,
                 request,
             } => post(at(&format!("sessions/{session_id}/lobby/start")), request),
+            Self::ConsentHostFunding {
+                session_id,
+                request,
+            } => post(
+                at(&format!("sessions/{session_id}/lobby/funding/consent")),
+                request,
+            ),
             Self::LookupDisplay {
                 session_id,
                 request,
@@ -664,6 +680,9 @@ impl ApiCall {
 
     /// Reads the server's answer.
     pub fn decode(&self, status: u16, body: &str) -> Reply {
+        if let Self::Integration(call) = self {
+            return Reply::Integration(call.decode(status, body));
+        }
         let is_mutation = self.is_mutation();
         macro_rules! read {
             () => {
@@ -748,6 +767,7 @@ impl ApiCall {
             Self::LeaveCampaign { .. } => Reply::Left(read!()),
             Self::OpenLobby { .. } => Reply::LobbyOpened(read!()),
             Self::Lobby { .. }
+            | Self::ConsentHostFunding { .. }
             | Self::ChooseCharacter { .. }
             | Self::SetReady { .. }
             | Self::ReportMicrophone { .. }

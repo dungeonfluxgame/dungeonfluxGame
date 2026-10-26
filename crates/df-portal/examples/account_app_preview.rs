@@ -120,6 +120,7 @@ async fn main() -> std::io::Result<()> {
         LinkStyle::App,
     );
     let (tunables, _fallbacks) = Tunables::parse(RELAXED_LIMITS);
+    let google_accounts = MemoryAccountStore::default();
     let (service, tasks) = CustomerService::start(
         CustomerConfig {
             hosts,
@@ -131,13 +132,15 @@ async fn main() -> std::io::Result<()> {
             provider_signup_floor: Duration::ZERO,
             dev_allow_local_passwords_on_https: false,
         },
-        MemoryAccountStore::default(),
+        google_accounts.clone(),
         Arc::clone(&outbox),
         Arc::new(SystemClock),
         Arc::new(BuiltInCommonPasswords),
     )
     .await
     .map_err(other)?;
+    let google = df_google::fake::FakeGoogle::new(&origin_text);
+    let service = service.with_google(google.clone(), google_accounts);
     let ports = Arc::new(FakePorts::new(&origin_text, Arc::new(SystemClock)));
     let seeded = seed::seed(&service, &outbox, &ports, TEST_PASSWORD).await?;
     if dev_accounts_enabled {
@@ -150,6 +153,7 @@ async fn main() -> std::io::Result<()> {
         Arc::clone(&ports),
     );
     let mut app = router(state, &bundle)
+        .merge(google_controls(google, origin_text.clone()))
         .merge(dev_routes::router(dev_routes::DevState {
             outbox: Arc::clone(&outbox),
             ports,
@@ -217,3 +221,110 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct GoogleControl {
+    google: df_google::fake::FakeGoogle,
+    origin: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoogleFixture {
+    subject: String,
+    email: String,
+    outcome: GoogleOutcome,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GoogleOutcome {
+    Normal,
+    Canceled,
+    EmailNotVerified,
+    Unavailable,
+    Malformed,
+    ReauthenticationRequired,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn google_controls(google: df_google::fake::FakeGoogle, origin: String) -> axum::Router {
+    axum::Router::new()
+        .route(
+            "/dev/google",
+            axum::routing::get(google_fixture_page).post(set_google_fixture),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(4096))
+        .with_state(GoogleControl { google, origin })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn google_fixture_page(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !peer.ip().is_loopback() {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+    axum::response::Html(concat!(
+        "<!doctype html><html lang=en><meta charset=utf-8><title>Local Google fake</title>",
+        "<main><h1>Local Google fake</h1><p>Only synthetic example.test identities; no Google request is made.</p>",
+        "<form method=post action=/dev/google>",
+        "<p><label>Google subject <input name=subject value=fake-google-subject required></label></p>",
+        "<p><label>Email <input name=email value=google@example.test required></label></p>",
+        "<p><label>Next result <select name=outcome>",
+        "<option value=normal>Normal</option><option value=canceled>Canceled</option>",
+        "<option value=email_not_verified>Email not verified</option>",
+        "<option value=unavailable>Provider unavailable</option><option value=malformed>Malformed response</option>",
+        "<option value=reauthentication_required>Missing fresh auth_time</option></select></label></p>",
+        "<button>Set fixture</button></form><p><a href=/app/sign-up>Sign up</a> <a href=/app/sign-in>Sign in</a> <a href=/app/settings>Settings</a></p></main></html>"
+    )).into_response()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn set_google_fixture(
+    axum::extract::State(state): axum::extract::State<GoogleControl>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Form(form): axum::extract::Form<GoogleFixture>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use df_customer::OAuthFailure;
+    if !peer.ip().is_loopback()
+        || headers
+            .get(axum::http::header::ORIGIN)
+            .is_none_or(|value| value.as_bytes() != state.origin.as_bytes())
+        || headers
+            .get("sec-fetch-site")
+            .is_some_and(|value| value.as_bytes() != b"same-origin")
+    {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+    if !form.email.ends_with("@example.test")
+        || state
+            .google
+            .set_identity(&form.subject, &form.email)
+            .is_err()
+    {
+        return axum::http::StatusCode::UNPROCESSABLE_ENTITY.into_response();
+    }
+    let outcome = match form.outcome {
+        GoogleOutcome::Normal => Ok(()),
+        GoogleOutcome::Canceled => state.google.cancel_next_authorization(),
+        GoogleOutcome::EmailNotVerified => state
+            .google
+            .fail_next_exchange(OAuthFailure::EmailNotVerified),
+        GoogleOutcome::Unavailable => state.google.fail_next_exchange(OAuthFailure::Unavailable),
+        GoogleOutcome::Malformed => state.google.fail_next_exchange(OAuthFailure::Malformed),
+        GoogleOutcome::ReauthenticationRequired => state
+            .google
+            .fail_next_exchange(OAuthFailure::FreshAuthenticationRequired),
+    };
+    if outcome.is_err() {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    axum::response::Redirect::to("/dev/google").into_response()
+}

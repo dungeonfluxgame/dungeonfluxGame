@@ -14,6 +14,7 @@ mod campaign;
 mod customer;
 mod display;
 mod ids;
+mod oauth;
 mod router;
 mod session;
 mod state;

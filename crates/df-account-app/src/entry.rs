@@ -42,7 +42,7 @@ fn clean_address(location: &Location, route: &Route) -> String {
 pub fn boot(host: &mut impl Host) {
     let location = host.location();
     let route = Route::parse(&location.path, &location.query, &location.fragment);
-    if !location.fragment.is_empty() || route.carries_token() {
+    if !location.fragment.is_empty() || route.carries_token() || route == Route::GoogleWelcome {
         host.replace_state(&clean_address(&location, &route));
     }
     host.install_panic_hook();

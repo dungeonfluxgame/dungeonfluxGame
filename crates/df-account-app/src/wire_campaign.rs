@@ -341,6 +341,28 @@ pub enum MicrophoneState {
 pub enum FundingNote {
     NoChargeUntilHostStarts,
     WaitingForSponsor,
+    HostCredit(HostCreditView),
+}
+
+/// Finance's customer-safe host quote; amounts are exact USD micro-dollars.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostCreditView {
+    pub price_version: [u8; 16],
+    pub hourly_micro_dollars: u64,
+    pub available_micro_dollars: u64,
+    pub cap_micro_dollars: u64,
+    pub terms_version: i32,
+    pub consented_at_ms: Option<i64>,
+    pub is_fundable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConsentRequest {
+    pub price_version: [u8; 16],
+    pub cap_micro_dollars: u64,
+    pub terms_version: i32,
+    pub operation: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

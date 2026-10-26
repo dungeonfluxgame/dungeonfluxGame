@@ -177,3 +177,15 @@
 .blockers li {
   color: var(--ember);
 }
+
+.secret-reveal {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.integration-controls {
+  border: 0;
+  padding: 0;
+  min-inline-size: 0;
+}

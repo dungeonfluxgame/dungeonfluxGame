@@ -96,6 +96,9 @@ pub fn refusal_message(refusal: Refusal) -> &'static str {
         Refusal::WrongPassword => {
             "That email and password do not match an account. Check both and try again."
         }
+        Refusal::ReauthenticationRequired => {
+            "Confirm it is you with Google in Sign-in methods, then try again within five minutes."
+        }
         Refusal::AdultRequired => "DungeonFlux is for adults. Confirm that you are 18 or older.",
         Refusal::TermsRequired => "Accept the terms and privacy notice to create an account.",
         Refusal::DisplayNameTooLong => "Use a display name of 40 characters or fewer.",
@@ -141,6 +144,7 @@ pub fn refusal_field(refusal: Refusal) -> Option<Field> {
         Refusal::ContentRatingRequired => Field::Rating,
         Refusal::SeatsOutOfRange => Field::SeatCount,
         Refusal::AmountOutOfRange
+        | Refusal::ReauthenticationRequired
         | Refusal::ReasonRequired
         | Refusal::ReasonTooLong
         | Refusal::SupportCaseRequired
@@ -205,6 +209,7 @@ pub fn refused_form_error(model: &Model) -> Option<ApiError> {
 /// The browser tab title for a screen.
 pub fn title(screen: &Screen) -> String {
     let name = match screen {
+        Screen::Integration(_) => "Integrations",
         Screen::Booting => "Loading",
         Screen::BootFailed(_) => "Cannot reach DungeonFlux",
         Screen::Landing => "Get $10 of free play",

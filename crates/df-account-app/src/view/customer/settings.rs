@@ -8,41 +8,61 @@ use crate::view::{
 use crate::{
     copy, money,
     node::{Element, Node, el},
-    state::{Field, Form, Intent, Remote, SettingsScreen},
+    state::{Field, Form, Intent, Model, Remote, SettingsScreen},
     wire::{ApiError, ClosureBlocker, Refusal, SettingsView},
 };
 
-pub(in crate::view) fn settings(screen: &SettingsScreen, offset_east_minutes: i32) -> Node {
+pub(in crate::view) fn settings(screen: &SettingsScreen, model: &Model) -> Node {
     page("Account settings", None)
         .child(remote(
             &screen.settings,
             "Loading your settings",
-            |settings| settings_content(screen, settings, offset_east_minutes),
+            |settings| settings_content(screen, settings, model),
         ))
         .into()
 }
 
-fn settings_content(
-    screen: &SettingsScreen,
-    settings: &SettingsView,
-    offset_east_minutes: i32,
-) -> Node {
+fn settings_content(screen: &SettingsScreen, settings: &SettingsView, model: &Model) -> Node {
     el("div")
         .class("settings")
-        .child(account_details_section(settings, offset_east_minutes))
+        .child(account_details_section(settings, model.offset_east_minutes))
+        .child(sign_in_methods(settings, model))
         .child(profile_section(screen, settings))
-        .child(email_section(screen))
-        .child(password_section(screen))
+        .child(crate::view::link(
+            "Developer tokens",
+            crate::route::Route::DeveloperTokens,
+            "button",
+        ))
+        .child(
+            if settings
+                .sign_in_methods
+                .contains(&crate::wire::SignInMethod::Password)
+            {
+                email_section(screen)
+            } else {
+                el("div")
+            },
+        )
+        .child(
+            if settings
+                .sign_in_methods
+                .contains(&crate::wire::SignInMethod::Password)
+            {
+                password_section(screen)
+            } else {
+                el("div")
+            },
+        )
         .child(preferences_section(screen))
-        .child(export_section(screen))
-        .child(devices_section(screen, settings, offset_east_minutes))
+        .child(export_section(screen, settings))
+        .child(devices_section(screen, settings, model.offset_east_minutes))
         .child(close_section(screen, settings))
         .into()
 }
 
 fn account_details_section(settings: &SettingsView, offset: i32) -> Element {
     let consent = |label: &str, value: String| fact(label, value);
-    let mut facts_list = vec![
+    let facts_list = vec![
         fact("Email address", settings.email.clone()),
         fact(
             "Display name",
@@ -114,7 +134,6 @@ fn account_details_section(settings: &SettingsView, offset: i32) -> Element {
             },
         ),
     ];
-    facts_list.push(fact("Connect Google", "Coming soon".to_owned()));
     el("section")
         .class("section settings-section")
         .attr("aria-labelledby", "account-details-title")
@@ -124,15 +143,61 @@ fn account_details_section(settings: &SettingsView, offset: i32) -> Element {
                 .text("Your account"),
         )
         .child(facts(facts_list))
+}
+
+fn sign_in_methods(settings: &SettingsView, model: &Model) -> Element {
+    use crate::view::google;
+    use crate::wire::SignInMethod;
+    let linked = settings.sign_in_methods.contains(&SignInMethod::Google);
+    let password = settings.sign_in_methods.contains(&SignInMethod::Password);
+    let mut section = el("section")
+        .class("section settings-section")
+        .attr("aria-labelledby", "sign-in-methods-title")
         .child(
-            el("p").class("actions").child(
-                el("button")
-                    .class("btn btn-outline")
-                    .attr("type", "button")
-                    .flag("disabled", true)
-                    .text("Connect Google — coming soon"),
-            ),
-        )
+            el("h2")
+                .attr("id", "sign-in-methods-title")
+                .text("Sign-in methods"),
+        );
+    if linked {
+        section = section.child(el("p").text("Google is linked to your account."));
+        if google::enabled(model) {
+            section = section.child(google::form(model, "reauthenticate")
+                .child(el("p").text("Confirm with Google before exporting data or closing your account. Close within five minutes; leave the password field empty."))
+                .child(google::button(false)));
+        }
+        if password {
+            section = section.child(
+                el("form")
+                    .class("form google-form")
+                    .attr("method", "post")
+                    .attr("action", "/app/api/oauth/google/unlink")
+                    .attr("data-df-oauth", "google")
+                    .attr("aria-label", "Unlink Google")
+                    .child(google::hidden("csrf", model.csrf()))
+                    .child(google::password("google-unlink-password"))
+                    .child(
+                        el("button")
+                            .class("btn btn-outline")
+                            .attr("type", "submit")
+                            .text("Unlink Google"),
+                    ),
+            );
+        } else {
+            section = section.child(
+                el("p").text("Google is your only sign-in method, so it cannot be removed."),
+            );
+        }
+    } else if google::enabled(model) && password {
+        section = section.child(
+            google::form(model, "link")
+                .child(el("p").text(
+                    "Enter your current password, then confirm your Google account to link it.",
+                ))
+                .child(google::password("google-link-password"))
+                .child(google::button(false)),
+        );
+    }
+    section
 }
 
 fn form_section(
@@ -279,7 +344,7 @@ fn preferences_section(screen: &SettingsScreen) -> Element {
     )
 }
 
-fn export_section(screen: &SettingsScreen) -> Element {
+fn export_section(screen: &SettingsScreen, settings: &SettingsView) -> Element {
     form_section(
         "export-title",
         "Download my data",
@@ -291,7 +356,7 @@ fn export_section(screen: &SettingsScreen) -> Element {
         }),
         form(Form::Export, "Download my data")
             .child(error_summary(screen.export.error()))
-            .child(text_field(
+            .child(if settings.sign_in_methods.contains(&crate::wire::SignInMethod::Password) { text_field(
                 TextField {
                     field: Field::ExportPassword,
                     label: "Your password",
@@ -301,7 +366,7 @@ fn export_section(screen: &SettingsScreen) -> Element {
                     hint: None,
                 },
                 screen.export.error(),
-            ))
+            ) } else { el("p").text("Confirm with Google in Sign-in methods above before requesting your data.").into() })
             .child(submit_button(
                 "Request download",
                 "Requesting download",
@@ -496,7 +561,7 @@ fn close_section(screen: &SettingsScreen, settings: &SettingsView) -> Element {
                 screen.close_understood,
                 error,
             ))
-            .child(close_password_field(screen, error))
+            .child(if settings.sign_in_methods.contains(&crate::wire::SignInMethod::Password) { close_password_field(screen, error) } else { el("p").text("Confirm with Google in Sign-in methods above, then close within five minutes.").into() })
             .child(match &screen.close_operation {
                 Remote::Failed(error) => failed(*error),
                 Remote::Loading => button("Close my account", None, ButtonKind::Destructive, true),

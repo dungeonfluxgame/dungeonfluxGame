@@ -14,9 +14,14 @@ df-types = { path = "../df-types" }
 axum = { version = "0.8", default-features = false, features = ["form", "json", "query", "http1", "tokio", "matched-path"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+base64 = "=0.22.1"
+sha2 = "=0.11.0"
+subtle = "=2.6.1"
+opentelemetry = { version = "=0.31.0", default-features = false, features = ["trace"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "net"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-google = { path = "../df-google", features = ["test-fakes"] }
 df-customer = { path = "../df-customer", features = ["test-fakes"] }
 http-body-util.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal"] }

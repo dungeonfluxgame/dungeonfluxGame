@@ -147,6 +147,7 @@ pub(super) async fn sign_out<S: AccountStore, M: EmailSender, P: Ports>(
     state.service.logout(&caller, client).await?;
     let (secret, cookie) = presession_for_visitor(None)?;
     let mut answer = Reply::new(SessionView {
+        google_enabled: state.service.google_enabled(),
         csrf: secret.form_token(CSRF_FORM),
         account: None,
         dev_sign_in: None,

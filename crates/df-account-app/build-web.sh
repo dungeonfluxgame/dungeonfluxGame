@@ -4,6 +4,8 @@
 # OUT overrides the output directory (default artifacts/build/account-app-web). The finished bundle
 # replaces the old one atomically: the old directory is renamed aside, the staged one renamed into
 # place, then the old one removed, so a server never sees a half-written bundle.
+# If the bundled rust-lld cannot execute, set CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER to an
+# installed wasm-ld executable, for example: CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER='C:/Program Files/LLVM/bin/wasm-ld.exe'.
 set -euo pipefail
 
 R=/c/Users/mreca/Desktop/dungeonfluxGame
@@ -14,8 +16,7 @@ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-C:/Users/mreca/Desktop/dungeonfluxGa
 export RUSTUP_HOME=C:/Users/mreca/Desktop/dungeonfluxGame/artifacts/cache/rustup
 export CARGO_HOME=C:/Users/mreca/Desktop/dungeonfluxGame/artifacts/cache/cargo
 export CARGO_BUILD_JOBS=2
-# The size profile for the browser module. Cargo reads these over the root Cargo.toml, which this
-# script never edits; set the same values in a root [profile.release] to make them permanent.
+# Apply size settings to this browser build without changing native release defaults.
 export CARGO_PROFILE_RELEASE_OPT_LEVEL=${CARGO_PROFILE_RELEASE_OPT_LEVEL:-z}
 export CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-true}
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-1}
@@ -51,7 +52,9 @@ mkdir -p "$stage/assets"
 if command -v wasm-opt >/dev/null 2>&1; then
   # The feature flags are what rustc emits for wasm32-unknown-unknown by default, plus GC
   # type merging (Chrome/Edge 119+, Firefox 120+, Safari 18.4+), which the size budget needs.
-  if wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+  # Unlimited single-caller inlining grows the large view and reply dispatchers.
+  if wasm-opt -Oz --one-caller-inline-max-function-size=32 \
+    --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
     --enable-mutable-globals --enable-reference-types --enable-multivalue --enable-gc \
     "$stage/assets/account_app_bg.wasm" -o "$stage/assets/account_app_bg.opt.wasm"; then
     mv "$stage/assets/account_app_bg.opt.wasm" "$stage/assets/account_app_bg.wasm"
@@ -71,15 +74,14 @@ printf 'import init from "/app/assets/account_app.js";\ninit({ module_or_path: "
   > "$stage/assets/boot.js"
 
 cp $APP/web/index.html "$stage/index.html"
+cp $APP/web/google-g.svg "$stage/assets/google-g.svg"
 cp docs/assets/establishing-harbor-canal-rowboat-bridge.webp "$stage/assets/landing.webp"
 
 # 4. Size budget.
 size=$(stat -c %s "$stage/assets/account_app_bg.wasm")
 echo "build-web: account_app_bg.wasm $size bytes (budget $BUDGET_BYTES)"
 if [ "$size" -gt "$BUDGET_BYTES" ]; then
-  echo "build-web: OVER BUDGET. In the root Cargo.toml add" >&2
-  echo "  [profile.release] opt-level = \"s\", lto = true, codegen-units = 1, panic = \"abort\"" >&2
-  echo "  (or a dedicated profile used only for this crate) and rebuild." >&2
+  echo "build-web: OVER BUDGET. Inspect the wasm profile overrides and use Twiggy to locate size regressions." >&2
   fail "wasm exceeds the $BUDGET_BYTES byte budget"
 fi
 

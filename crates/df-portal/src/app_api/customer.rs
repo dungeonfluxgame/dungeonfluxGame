@@ -410,6 +410,13 @@ pub(super) async fn settings<S: AccountStore, M: EmailSender, P: Ports>(
         .extras()
         .export_status(caller.account.id)
         .await?;
+    let mut sign_in_methods = Vec::new();
+    if state.service.has_password_method(&caller).await? {
+        sign_in_methods.push(SignInMethod::Password);
+    }
+    if state.service.google_is_linked(&caller).await? {
+        sign_in_methods.push(SignInMethod::Google);
+    }
     reply(SettingsView {
         email: caller
             .account
@@ -444,7 +451,7 @@ pub(super) async fn settings<S: AccountStore, M: EmailSender, P: Ports>(
             AccountStatus::Active => ClosureState::Open,
             AccountStatus::Closing | AccountStatus::Closed => ClosureState::Closing,
         },
-        sign_in_methods: vec![SignInMethod::Password],
+        sign_in_methods,
         email_preferences: preferences,
         export_status,
     })
@@ -559,11 +566,8 @@ pub(super) async fn request_export<S: AccountStore, M: EmailSender, P: Ports>(
     ApiBody(body): ApiBody<ExportRequest>,
 ) -> ApiResult<ExportView> {
     let operation = ids::operation(&body.operation)?;
-    match state
-        .service
-        .export(&caller, Reauthentication::Password(&body.password), client)
-        .await?
-    {
+    let proof = sensitive_proof(&state, &caller, &body.password).await?;
+    match state.service.export(&caller, proof, client).await? {
         ExportResult::Document(_) => {}
         ExportResult::NotReauthenticated => return Err(refused(Refusal::WrongPassword)),
         ExportResult::Throttled => return Err(ApiFailure::of(ErrorCode::Throttled)),
@@ -671,7 +675,7 @@ pub(super) async fn close_account<S: AccountStore, M: EmailSender, P: Ports>(
     {
         return Err(ApiFailure::of(ErrorCode::Invalid));
     }
-    let proof = Reauthentication::Password(&body.password);
+    let proof = sensitive_proof(&state, &caller, &body.password).await?;
     match state.service.close(&caller, proof).await? {
         CloseResult::Closed { delete_after_ms } => Ok(Reply::new(ClosedView { delete_after_ms })
             .with_cookie(clear_secret_cookie(SESSION_COOKIE, SameSite::Lax))),
@@ -679,4 +683,18 @@ pub(super) async fn close_account<S: AccountStore, M: EmailSender, P: Ports>(
         CloseResult::NotReauthenticated => Err(refused(Refusal::WrongPassword)),
         CloseResult::Throttled => Err(ApiFailure::of(ErrorCode::Throttled)),
     }
+}
+
+async fn sensitive_proof<'a, S: AccountStore, M: EmailSender, P: Ports>(
+    state: &AppApiState<S, M, P>,
+    caller: &df_customer::Authenticated,
+    password: &'a str,
+) -> Result<Reauthentication<'a>, ApiFailure> {
+    if password.is_empty() && state.service.google_is_linked(caller).await? {
+        if !state.service.has_fresh_google_proof(caller).await? {
+            return Err(refused(Refusal::ReauthenticationRequired));
+        }
+        return Ok(Reauthentication::RecentSignIn);
+    }
+    Ok(Reauthentication::Password(password))
 }

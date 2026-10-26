@@ -802,3 +802,54 @@ fn choosing_a_hero_uses_one_operation_and_waits_for_the_server_lobby() {
             .any(|effect| matches!(effect, Effect::IssueOperation { .. }))
     );
 }
+
+fn host_quote() -> crate::wire_campaign::HostCreditView {
+    crate::wire_campaign::HostCreditView {
+        price_version: [7; 16],
+        hourly_micro_dollars: 3_000_000,
+        available_micro_dollars: 10_000_000,
+        cap_micro_dollars: 3_000_000,
+        terms_version: 1,
+        consented_at_ms: None,
+        is_fundable: false,
+    }
+}
+
+#[test]
+fn fundinghook_consent_requires_an_explicit_tick_and_posts_the_displayed_version() {
+    let mut model = lobby_model();
+    let mut lobby = lobby_view(3, false);
+    lobby.funding_note = FundingNote::HostCredit(host_quote());
+    deliver(&mut model, Reply::Lobby(Ok(lobby)));
+    assert!(click(&mut model, Intent::Submit(Form::Action)).is_empty());
+    model.update(Msg::Toggle(Field::FundingChoice, true));
+    let effects = click(&mut model, Intent::Submit(Form::Action));
+    assert!(
+        matches!(first_call(&effects),Some(ApiCall::ConsentHostFunding { request, .. })
+        if request.price_version == [7;16] && request.cap_micro_dollars == 3_000_000
+        && request.terms_version == 1)
+    );
+    assert!(click(&mut model, Intent::Submit(Form::Action)).is_empty());
+}
+
+#[test]
+fn fundinghook_a_changed_quote_clears_the_previous_tick() {
+    let mut model = lobby_model();
+    let mut lobby = lobby_view(3, false);
+    lobby.funding_note = FundingNote::HostCredit(host_quote());
+    deliver(&mut model, Reply::Lobby(Ok(lobby.clone())));
+    model.update(Msg::Toggle(Field::FundingChoice, true));
+    let mut changed = host_quote();
+    changed.price_version = [8; 16];
+    lobby.funding_note = FundingNote::HostCredit(changed);
+    deliver(&mut model, Reply::Lobby(Ok(lobby)));
+    assert!(click(&mut model, Intent::Submit(Form::Action)).is_empty());
+    assert!(matches!(&model.screen,Screen::Lobby(screen) if !screen.consent_checked));
+}
+
+#[test]
+fn fundinghook_a_sponsored_player_cannot_submit_a_host_consent() {
+    let mut model = lobby_model();
+    model.update(Msg::Toggle(Field::FundingChoice, true));
+    assert!(click(&mut model, Intent::Submit(Form::Action)).is_empty());
+}

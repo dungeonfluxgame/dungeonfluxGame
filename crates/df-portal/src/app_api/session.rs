@@ -27,6 +27,7 @@ pub(super) async fn signed_in_view<S: AccountStore, M: EmailSender, P: Ports>(
             has_second_factor: grant.has_second_factor,
         });
     Ok(SessionView {
+        google_enabled: state.service.google_enabled(),
         csrf: caller.csrf.form_token(CSRF_FORM),
         account: Some(AccountView {
             email: caller
@@ -55,6 +56,7 @@ pub(super) async fn get_session<S: AccountStore, M: EmailSender, P: Ports>(
     }
     let (secret, cookie) = presession_for_visitor(visitor.presession)?;
     let view = SessionView {
+        google_enabled: state.service.google_enabled(),
         csrf: secret.form_token(CSRF_FORM),
         account: None,
         dev_sign_in: None,

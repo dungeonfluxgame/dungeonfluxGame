@@ -78,6 +78,7 @@ pub struct LobbyScreen {
     pub action: Submit,
     pub pairing_code: String,
     pub lookup: Option<PairingLookup>,
+    pub consent_checked: bool,
 }
 
 pub(super) fn empty_draft() -> CampaignDraft {
@@ -179,6 +180,7 @@ impl Model {
                     action: Submit::Idle,
                     pairing_code: String::new(),
                     lookup: None,
+                    consent_checked: false,
                 });
                 vec![
                     self.api(ApiCall::Lobby { session_id }),
@@ -564,6 +566,12 @@ impl Model {
     }
 
     pub(super) fn toggle_campaign(&mut self, field: Field, is_on: bool) {
+        if let Screen::Lobby(screen) = &mut self.screen {
+            if field == Field::FundingChoice {
+                screen.consent_checked = is_on;
+            }
+            return;
+        }
         if let Screen::NewCampaign(screen) = &mut self.screen {
             match field {
                 Field::HasVoice => screen.draft.has_voice = is_on,
@@ -579,6 +587,32 @@ impl Model {
         let generation = self.generation;
         let is_signed_in = self.account().is_some();
         let call = match (&mut self.screen, form) {
+            (Screen::Lobby(screen), Form::Action) => {
+                let Some(LobbyView {
+                    funding_note: crate::wire_campaign::FundingNote::HostCredit(quote),
+                    ..
+                }) = screen.lobby.ready()
+                else {
+                    return Vec::new();
+                };
+                if !screen.consent_checked || quote.consented_at_ms.is_some() {
+                    return Vec::new();
+                }
+                let quote = *quote;
+                let Some(operation) = take_operation(&mut screen.operation, &mut screen.action)
+                else {
+                    return Vec::new();
+                };
+                ApiCall::ConsentHostFunding {
+                    session_id: screen.session_id.clone(),
+                    request: crate::wire_campaign::HostConsentRequest {
+                        price_version: quote.price_version,
+                        cap_micro_dollars: quote.cap_micro_dollars,
+                        terms_version: quote.terms_version,
+                        operation,
+                    },
+                }
+            }
             (Screen::NewCampaign(screen), Form::WizardStep) => {
                 let Some(draft_id) = screen.draft_id.ready().cloned() else {
                     return Vec::new();
@@ -788,6 +822,11 @@ impl Model {
                 let mut effects = Vec::new();
                 match result {
                     Ok(lobby) => {
+                        if screen.lobby.ready().map(|old| old.funding_note)
+                            != Some(lobby.funding_note)
+                        {
+                            screen.consent_checked = false;
+                        }
                         if was_action {
                             screen.lookup = None;
                             screen.pairing_code.clear();

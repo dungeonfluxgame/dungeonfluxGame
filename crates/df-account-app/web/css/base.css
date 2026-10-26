@@ -33,6 +33,35 @@
   --radius-large: 10px;
   --gap: 16px;
   --target: 44px;
+  --google-surface: #fff;
+  --google-ink: #1f1f1f;
+  --google-border: #747775;
+}
+
+.google-form {
+  margin-block: var(--gap);
+}
+
+.google-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: var(--target);
+  padding: 10px 12px;
+  border: 1px solid var(--google-border);
+  border-radius: 4px;
+  background: var(--google-surface);
+  color: var(--google-ink);
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.google-button:disabled {
+  opacity: .6;
+  cursor: default;
 }
 
 *,

@@ -223,6 +223,27 @@ pub fn check_shape(headers: &HeaderMap, origin: &str) -> Result<(), Refused> {
     if !has_json_content_type(headers) {
         return Err(Refused::ContentType);
     }
+    check_origin(headers, origin)
+}
+
+/// Native OAuth forms navigate the top-level page while retaining the ordinary origin policy.
+pub(super) fn check_form_shape(headers: &HeaderMap, origin: &str) -> Result<(), Refused> {
+    if !header_text(headers, "content-type").is_some_and(|value| {
+        value.split(';').next().is_some_and(|media| {
+            media
+                .trim()
+                .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        })
+    }) {
+        return Err(Refused::ContentType);
+    }
+    if origin_matches(headers, origin) != Some(true) {
+        return Err(Refused::Origin);
+    }
+    check_origin(headers, origin)
+}
+
+fn check_origin(headers: &HeaderMap, origin: &str) -> Result<(), Refused> {
     if matches!(
         header_text(headers, "sec-fetch-site"),
         Some("cross-site" | "same-site")

@@ -21,6 +21,7 @@ pub enum Route {
     },
     SignedOut,
     Dashboard,
+    GoogleWelcome,
     AddCredit,
     CreditReturn {
         checkout: Option<String>,
@@ -30,6 +31,10 @@ pub enum Route {
     PlaySessions,
     Assets,
     Settings,
+    DeveloperTokens,
+    Share {
+        session_id: String,
+    },
     Security,
     NewCampaign,
     Campaign {
@@ -86,6 +91,9 @@ impl Route {
             ["forgot-password"] => Self::ForgotPassword,
             ["reset-password"] => Self::ResetPassword { token: token() },
             ["signed-out"] => Self::SignedOut,
+            ["dashboard"] if parameter(query, "welcome").as_deref() == Some("1") => {
+                Self::GoogleWelcome
+            }
             ["dashboard"] | ["campaigns"] => Self::Dashboard,
             ["credit"] => Self::AddCredit,
             ["credit", "return"] => Self::CreditReturn {
@@ -96,6 +104,10 @@ impl Route {
             ["sessions"] => Self::PlaySessions,
             ["assets"] => Self::Assets,
             ["settings"] => Self::Settings,
+            ["settings", "developer-tokens"] => Self::DeveloperTokens,
+            ["sessions", id, "share"] if is_identifier(id) => Self::Share {
+                session_id: (*id).to_owned(),
+            },
             ["security"] => Self::Security,
             ["campaigns", "new"] => Self::NewCampaign,
             ["campaigns", id] if is_identifier(id) => Self::Campaign {
@@ -130,7 +142,7 @@ impl Route {
             Self::ForgotPassword => "forgot-password",
             Self::ResetPassword { .. } => "reset-password",
             Self::SignedOut => "signed-out",
-            Self::Dashboard => "dashboard",
+            Self::Dashboard | Self::GoogleWelcome => "dashboard",
             Self::AddCredit => "credit",
             Self::CreditReturn { checkout: Some(id) } => {
                 return format!("{APP_BASE}/credit/return?checkout={id}");
@@ -141,6 +153,8 @@ impl Route {
             Self::PlaySessions => "sessions",
             Self::Assets => "assets",
             Self::Settings => "settings",
+            Self::DeveloperTokens => "settings/developer-tokens",
+            Self::Share { session_id } => return format!("{APP_BASE}/sessions/{session_id}/share"),
             Self::Security => "security",
             Self::NewCampaign => "campaigns/new",
             Self::Campaign { campaign_id } => return format!("{APP_BASE}/campaigns/{campaign_id}"),
@@ -166,7 +180,7 @@ impl Route {
             Self::ForgotPassword => "forgot_password",
             Self::ResetPassword { .. } => "reset_password",
             Self::SignedOut => "signed_out",
-            Self::Dashboard => "dashboard",
+            Self::Dashboard | Self::GoogleWelcome => "dashboard",
             Self::AddCredit => "add_credit",
             Self::CreditReturn { .. } => "credit_return",
             Self::Funding => "funding",
@@ -175,6 +189,8 @@ impl Route {
             Self::Assets => "assets",
             Self::Settings => "settings",
             Self::Security => "security",
+            Self::DeveloperTokens => "developer_tokens",
+            Self::Share { .. } => "share",
             Self::NewCampaign => "new_campaign",
             Self::Campaign { .. } => "campaign",
             Self::Lobby { .. } => "lobby",
@@ -206,6 +222,7 @@ impl Route {
             | Self::NotFound => Audience::Anyone,
             Self::SignUp | Self::SignIn | Self::ForgotPassword => Audience::SignedOut,
             Self::Dashboard
+            | Self::GoogleWelcome
             | Self::AddCredit
             | Self::CreditReturn { .. }
             | Self::Funding
@@ -213,6 +230,8 @@ impl Route {
             | Self::PlaySessions
             | Self::Assets
             | Self::Settings
+            | Self::DeveloperTokens
+            | Self::Share { .. }
             | Self::Security
             | Self::NewCampaign
             | Self::Campaign { .. }

@@ -312,6 +312,15 @@ impl App {
     }
 
     fn on_submit(&self, event: &Event) {
+        if event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            .is_some_and(|element| {
+                element.get_attribute("data-df-oauth").as_deref() == Some("google")
+            })
+        {
+            return;
+        }
         // Always ours: a page reload would lose the form.
         event.prevent_default();
         if self.is_dispatching.get() {
@@ -478,6 +487,7 @@ impl App {
             Effect::Focus(target) => *focus = Some(target),
             Effect::Title(title) => self.dom.set_title(&title),
             Effect::CopyText(text) => copy_text(&self.window, &text),
+            Effect::CopySecret(secret) => copy_text(&self.window, &secret.0),
             Effect::DownloadCsv { filename, content } => {
                 download_text(&self.window, &filename, &content)
             }

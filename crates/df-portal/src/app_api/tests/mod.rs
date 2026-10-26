@@ -9,5 +9,6 @@ mod customer_tests;
 mod display_tests;
 mod fixtures;
 mod guard_tests;
+mod oauth_tests;
 mod routes;
 mod static_tests;

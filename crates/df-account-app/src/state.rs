@@ -11,6 +11,8 @@ mod auth_flow;
 mod campaign_flow;
 mod customer_flow;
 mod display_flow;
+mod integration_flow;
+pub use integration_flow::{IntegrationField, IntegrationIntent, IntegrationScreen, SharingScreen, TokensScreen};
 
 pub use admin_flow::{
     AccountScreen, ActionTarget, AdminScreen, CreditGrantForm, ReasonAction, RefundForm,
@@ -96,6 +98,7 @@ pub enum Notice {
 /// What the person asked for by clicking or submitting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Intent {
+    Integration(IntegrationIntent),
     Go(Route),
     /// Load the current screen again after a failure.
     Retry,
@@ -201,6 +204,7 @@ pub enum Form {
 /// Every editable field. The DOM carries `name()`; nothing else identifies a field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Field {
+    Integration(IntegrationField),
     Email,
     Password,
     Confirmation,
@@ -338,11 +342,15 @@ impl Field {
             Self::StatementTo => "statement-to",
             Self::AssetKindFilter => "asset-kind",
             Self::AssetCampaignFilter => "asset-campaign",
+            Self::Integration(field) => field.name(),
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        FIELDS.into_iter().find(|field| field.name() == name)
+        FIELDS
+            .into_iter()
+            .chain(IntegrationField::ALL.map(Field::Integration))
+            .find(|field| field.name() == name)
     }
 }
 
@@ -429,6 +437,7 @@ pub enum Effect {
     },
     /// Put this text on the clipboard (the once-shown invitation link).
     CopyText(String),
+    CopySecret(crate::wire_integration::SecretReveal),
     /// Download a text file generated in the browser (the statements CSV).
     DownloadCsv {
         filename: String,
@@ -441,6 +450,7 @@ pub enum Effect {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Screen {
+    Integration(Box<IntegrationScreen>),
     Booting,
     BootFailed(ApiError),
     Landing,
@@ -587,6 +597,7 @@ impl Model {
 
     fn intent(&mut self, intent: Intent) -> Vec<Effect> {
         match intent {
+            Intent::Integration(intent) => self.integration_intent(intent),
             Intent::Go(route) => {
                 self.notice = None;
                 self.navigate(route, History::Push)
@@ -646,12 +657,27 @@ impl Model {
     }
 
     fn edit(&mut self, field: Field, value: String) {
+        if self.edit_integration(field, &value) {
+            return;
+        }
         if !self.edit_auth(field, &value) && !self.edit_customer(field, &value) {
             self.edit_admin(field, value);
         }
     }
 
     fn toggle(&mut self, field: Field, is_on: bool) {
+        if let (Screen::Integration(screen), Field::Integration(field)) = (&mut self.screen, field)
+        {
+            if let IntegrationScreen::Share(s) = &mut **screen {
+                if s.submit.is_sending() {return;}
+                match field {
+                    IntegrationField::Indexing => s.indexing = is_on,
+                    IntegrationField::Embeds => s.embeds = is_on,
+                    _ => {}
+                }
+            }
+            return;
+        }
         match (&mut self.screen, field) {
             (Screen::SignUp(form), Field::IsAdult) => form.is_adult = is_on,
             (Screen::SignUp(form), Field::AcceptsTerms) => form.accepts_terms = is_on,
@@ -711,6 +737,7 @@ impl Model {
             return self.session_ended();
         }
         match reply {
+            Reply::Integration(answer) => self.integration_reply(answer),
             Reply::Session(result) => self.session_loaded(result),
             Reply::SignedOut(result) => self.signed_out(result),
             reply @ (Reply::SignedUp(_)
@@ -847,6 +874,12 @@ impl Model {
     fn enter(&mut self) -> Vec<Effect> {
         let route = self.route.clone();
         match route {
+            Route::DeveloperTokens | Route::Share { .. } => self.enter_integration(route),
+            Route::GoogleWelcome => {
+                self.notice = Some(Notice::EmailVerified);
+                self.route = Route::Dashboard;
+                self.enter_customer(Route::Dashboard)
+            }
             Route::Landing => {
                 self.screen = Screen::Landing;
                 Vec::new()
@@ -908,6 +941,7 @@ fn reply_error(reply: &Reply) -> Option<ApiError> {
         result.as_ref().err().copied()
     }
     match reply {
+        Reply::Integration(answer) => answer.error(),
         Reply::Session(result) | Reply::SignedIn(result) | Reply::SignedOut(result) => of(result),
         Reply::Operation(result) => of(result),
         Reply::SignedUp(result)

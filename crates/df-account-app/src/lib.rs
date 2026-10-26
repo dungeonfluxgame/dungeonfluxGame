@@ -21,6 +21,8 @@ pub mod state;
 pub mod view;
 pub mod wire;
 pub mod wire_campaign;
+pub mod wire_integration;
+pub mod wire_share;
 
 #[cfg(target_arch = "wasm32")]
 mod dom;

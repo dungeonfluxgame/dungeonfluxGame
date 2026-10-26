@@ -8,6 +8,8 @@ mod admin;
 mod auth;
 mod campaign;
 mod customer;
+mod google;
+mod integration;
 
 use crate::{
     copy,
@@ -45,11 +47,12 @@ pub fn view(model: &Model) -> Node {
 
 fn screen(model: &Model) -> Node {
     match &model.screen {
+        Screen::Integration(screen) => integration::view(screen),
         Screen::Booting => page_loading("Opening your account"),
         Screen::BootFailed(error) => failed_page("We could not reach DungeonFlux", *error),
         Screen::Landing => auth::landing(),
-        Screen::SignUp(form) => auth::sign_up(form),
-        Screen::SignIn(form) => auth::sign_in(form),
+        Screen::SignUp(form) => auth::sign_up(form, model),
+        Screen::SignIn(form) => auth::sign_in(form, model),
         Screen::VerifyPending(screen) => auth::verify_pending(screen, model),
         Screen::VerifyConfirm(screen) => auth::verify_confirm(screen, model),
         Screen::Forgot(form) => auth::forgot(form),
@@ -62,7 +65,7 @@ fn screen(model: &Model) -> Node {
         Screen::Statements(screen) => customer::statements(screen, model.offset_east_minutes),
         Screen::PlaySessions(screen) => customer::play_sessions(screen, model.offset_east_minutes),
         Screen::Assets(screen) => customer::assets(screen, model.offset_east_minutes),
-        Screen::Settings(screen) => customer::settings(screen, model.offset_east_minutes),
+        Screen::Settings(screen) => customer::settings(screen, model),
         Screen::NewCampaign(screen) => campaign::wizard(screen, model),
         Screen::Campaign(screen) => campaign::overview(screen, model.offset_east_minutes),
         Screen::Lobby(screen) => campaign::lobby(screen, model.offset_east_minutes),

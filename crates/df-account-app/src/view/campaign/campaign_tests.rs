@@ -23,6 +23,7 @@ const SECRET_TOKEN: &str = "TOKEN-abc123xyz-secret";
 fn signed_in(is_verified: bool) -> Model {
     let mut model = Model::default();
     model.session = Remote::Ready(SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: Some(AccountView {
             email: "ana@example.com".to_owned(),
@@ -38,6 +39,7 @@ fn signed_in(is_verified: bool) -> Model {
 fn signed_out() -> Model {
     let mut model = Model::default();
     model.session = Remote::Ready(SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: None,
         dev_sign_in: None,
@@ -1272,6 +1274,7 @@ fn lobby_screen(lobby: LobbyView) -> LobbyScreen {
         action: Submit::Idle,
         pairing_code: String::new(),
         lookup: None,
+        consent_checked: false,
     }
 }
 

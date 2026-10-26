@@ -13,6 +13,7 @@ use crate::{
 
 fn session(is_signed_in: bool, is_operator: bool) -> SessionView {
     SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: is_signed_in.then(|| AccountView {
             email: "ana@example.test".to_owned(),

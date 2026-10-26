@@ -2,6 +2,13 @@
 //! screen file that restates a token's value as a literal (coding style 10).
 
 const SITE: &str = include_str!("../../../docs/styles.css");
+
+#[test]
+fn native_oauth_forms_keep_the_origin_header_without_referring_account_paths() {
+    let shell = include_str!("../web/index.html");
+    assert!(shell.contains("<meta name=\"referrer\" content=\"strict-origin\">"));
+    assert!(!shell.contains("<meta name=\"referrer\" content=\"no-referrer\">"));
+}
 const BASE: &str = include_str!("../web/css/base.css");
 const PARTIALS: [(&str, &str); 3] = [
     ("customer.css", include_str!("../web/css/customer.css")),

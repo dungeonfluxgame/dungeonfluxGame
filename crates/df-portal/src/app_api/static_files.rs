@@ -24,7 +24,7 @@ const CONTENT_SECURITY_POLICY: &str = concat!(
     "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; ",
     "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; ",
     "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; ",
-    "form-action 'self'"
+    "form-action 'self' https://accounts.google.com"
 );
 const INDEX_FILE: &str = "index.html";
 const ASSETS_PREFIX: &str = "assets/";
@@ -71,7 +71,7 @@ fn file_response(status: StatusCode, content_type: &'static str, bytes: Vec<u8>)
     );
     headers.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static("strict-origin"),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,

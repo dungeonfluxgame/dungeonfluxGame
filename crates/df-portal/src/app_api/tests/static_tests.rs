@@ -6,7 +6,7 @@ const SHELL_MARKER: &str = "<div id=\"app\">";
 const EXPECTED_CSP: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; \
     style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; \
     img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; \
-    form-action 'self'";
+    form-action 'self' https://accounts.google.com";
 
 async fn fetch(harness: &Harness, path: &str) -> Reply {
     harness.browser().get(path).await
@@ -19,7 +19,7 @@ fn assert_hardened(reply: &Reply, path: &str) {
         EXPECTED_CSP,
         "{path}"
     );
-    assert_eq!(headers[header::REFERRER_POLICY], "no-referrer", "{path}");
+    assert_eq!(headers[header::REFERRER_POLICY], "strict-origin", "{path}");
     assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "{path}");
     assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{path}");
     assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{path}");

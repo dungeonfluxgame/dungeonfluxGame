@@ -106,7 +106,7 @@ fn step(title: &str, body: &str) -> Node {
         .into()
 }
 
-pub(super) fn sign_up(form_state: &SignUpForm) -> Node {
+pub(super) fn sign_up(form_state: &SignUpForm, model: &Model) -> Node {
     let error = form_state.submit.error();
     let body = match &form_state.operation {
         Remote::Failed(error) => failed(*error),
@@ -148,18 +148,43 @@ pub(super) fn sign_up(form_state: &SignUpForm) -> Node {
             ))
             .into(),
     };
-    page(
+    let mut section = page(
         "Create your account",
         Some("Verify your email afterwards and we add $10 of free play."),
     )
-    .child(body)
-    .child(
-        el("p")
-            .class("aside")
-            .text("Already have an account? ")
-            .child(link("Sign in", Route::SignIn, "")),
-    )
-    .into()
+    .child(body);
+    if super::google::enabled(model) {
+        section = section.child(
+            super::google::form(model, "sign_up")
+                .child(super::google::hidden(
+                    "is_adult",
+                    if form_state.is_adult { "true" } else { "false" },
+                ))
+                .child(super::google::hidden(
+                    "accepts_terms",
+                    if form_state.accepts_terms {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ))
+                .child(super::google::hidden(
+                    "terms_version",
+                    crate::wire::CURRENT_TERMS_VERSION,
+                ))
+                .child(super::google::button(
+                    !form_state.is_adult || !form_state.accepts_terms,
+                )),
+        );
+    }
+    section
+        .child(
+            el("p")
+                .class("aside")
+                .text("Already have an account? ")
+                .child(link("Sign in", Route::SignIn, "")),
+        )
+        .into()
 }
 
 fn terms_checkbox(is_checked: bool, error: Option<crate::wire::ApiError>) -> Node {
@@ -192,7 +217,7 @@ fn terms_checkbox(is_checked: bool, error: Option<crate::wire::ApiError>) -> Nod
         .into()
 }
 
-pub(super) fn sign_in(form_state: &SignInForm) -> Node {
+pub(super) fn sign_in(form_state: &SignInForm, model: &Model) -> Node {
     let error = form_state.submit.error();
     let mut section = page("Sign in", None).child(
         form(Form::SignIn, "Sign in")
@@ -230,6 +255,10 @@ pub(super) fn sign_in(form_state: &SignInForm) -> Node {
                 "",
             ))),
     );
+    if super::google::enabled(model) {
+        section = section
+            .child(super::google::form(model, "sign_in").child(super::google::button(false)));
+    }
     if !form_state.dev_sign_in.is_empty() {
         let choices = form_state
             .dev_sign_in

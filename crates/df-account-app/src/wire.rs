@@ -62,6 +62,7 @@ pub enum Refusal {
     PasswordCommon,
     PasswordMismatch,
     WrongPassword,
+    ReauthenticationRequired,
     AdultRequired,
     TermsRequired,
     DisplayNameTooLong,
@@ -120,6 +121,8 @@ impl ApiError {
 /// Who is signed in, and the CSRF token for this session or anonymous visit.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionView {
+    #[serde(default)]
+    pub google_enabled: bool,
     pub csrf: String,
     pub account: Option<AccountView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

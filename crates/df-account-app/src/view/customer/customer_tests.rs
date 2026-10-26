@@ -26,6 +26,7 @@ const WHEN_MS: u64 = 1_792_890_300_000;
 fn model_with(screen: Screen, is_verified: bool) -> Model {
     let mut model = Model::default();
     model.session = Remote::Ready(SessionView {
+        google_enabled: false,
         csrf: "csrf".to_owned(),
         account: Some(AccountView {
             email: "ana@example.com".to_owned(),
@@ -1788,8 +1789,7 @@ fn the_new_screens_name_what_they_show_in_plain_words() {
         "Change password",
         "Email choices",
         "Download my data",
-        "Connect Google",
-        "Coming soon",
+        "Sign-in methods",
     ] {
         assert!(words.contains(label), "settings misses {label}: {words}");
     }

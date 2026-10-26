@@ -1,0 +1,31 @@
+:root {
+    --share-ink: #25303d;
+    --share-paper: #f7f5ef;
+    --share-space: 1rem;
+}
+body {
+    font: 1.1rem system-ui;
+    max-width: 44rem;
+    margin: calc(2 * var(--share-space)) auto;
+    padding: var(--share-space);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    color: var(--share-ink);
+    background: var(--share-paper);
+}
+body.dark {
+    --share-ink: #ece5d3;
+    --share-paper: #18202d;
+}
+h1 {
+    line-height: 1.2;
+}
+a {
+    color: inherit;
+}
+@media (prefers-color-scheme: dark) {
+    body.auto {
+        --share-ink: #ece5d3;
+        --share-paper: #18202d;
+    }
+}

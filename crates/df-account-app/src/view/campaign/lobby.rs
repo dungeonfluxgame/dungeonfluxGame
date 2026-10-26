@@ -2,13 +2,16 @@
 //! readiness and microphone, and the host's start and display pairing (plan 9.6; S1 8.4, 8.5).
 
 use super::{actions, is_busy, panel, pill, row_button};
+#[cfg(test)]
+#[path = "funding_tests.rs"]
+mod funding_tests;
 use crate::{
     copy, money,
     node::{Element, Node, el},
     state::{Field, Form, Intent, LobbyScreen, Remote},
     view::{
-        ButtonKind, InputKind, TextField, button, error_summary, fact, facts, failed, form,
-        loading, page_wide, submit_button, text_field,
+        ButtonKind, InputKind, TextField, button, checkbox, error_summary, fact, facts, failed,
+        form, loading, page_wide, submit_button, text_field,
     },
     wire_campaign::{
         DisplayRow, FundingNote, LobbyMember, LobbyView, MicrophoneState, PairingLookup,
@@ -31,9 +34,11 @@ pub(in crate::view) fn lobby(screen: &LobbyScreen, offset_east_minutes: i32) -> 
     if lobby.has_started {
         sections = sections.child(started_panel(&screen.session_id));
     }
-    sections = sections
-        .child(members_panel(lobby))
-        .child(funding_panel(lobby.funding_note));
+    sections = sections.child(members_panel(lobby)).child(funding_panel(
+        lobby.funding_note,
+        screen,
+        is_busy,
+    ));
     if let Some(me) = lobby.members.iter().find(|member| member.is_me) {
         sections = sections.child(own_controls_panel(me, is_busy));
     }
@@ -107,12 +112,54 @@ fn member_row(member: &LobbyMember) -> Node {
         .into()
 }
 
-fn funding_panel(note: FundingNote) -> Element {
+fn funding_panel(note: FundingNote, screen: &LobbyScreen, is_busy: bool) -> Element {
     let sentence = match note {
         FundingNote::NoChargeUntilHostStarts => {
             "No charge until the host starts, except setup jobs you approved."
         }
         FundingNote::WaitingForSponsor => "Waiting for the sponsor's funding approval.",
+        FundingNote::HostCredit(quote) => {
+            let mut cost = panel("Use your credit")
+                .child(el("p").text(format!(
+                    "Table price: {} per table-hour, at most. Available credit: {}.",
+                    money::charge(quote.hourly_micro_dollars),
+                    money::balance(quote.available_micro_dollars)
+                )))
+                .child(el("p").text("No charge until you start the session."));
+            if quote.consented_at_ms.is_some() {
+                cost = cost.child(el("p").text(format!(
+                    "Credit use approved, up to {} for this session.",
+                    money::charge(quote.cap_micro_dollars)
+                )));
+            } else {
+                cost = cost.child(
+                    el("div")
+                        .class("stack")
+                        .child(checkbox(
+                            Field::FundingChoice,
+                            &format!(
+                                "Use my credit for this session, up to {}",
+                                money::charge(quote.cap_micro_dollars)
+                            ),
+                            screen.consent_checked,
+                            screen.action.error(),
+                        ))
+                        .child(button(
+                            "Confirm credit use",
+                            Some(Intent::Submit(Form::Action)),
+                            ButtonKind::Primary,
+                            is_busy || !screen.consent_checked,
+                        )),
+                );
+            }
+            if !quote.is_fundable && quote.available_micro_dollars < quote.cap_micro_dollars {
+                cost =
+                    cost.child(el("p").text("Add credit to cover the first hour before starting."));
+            } else if quote.consented_at_ms.is_none() {
+                cost = cost.child(el("p").text("Approve use of your credit before starting."));
+            }
+            return cost;
+        }
     };
     panel("Cost").child(el("p").text(sentence))
 }
