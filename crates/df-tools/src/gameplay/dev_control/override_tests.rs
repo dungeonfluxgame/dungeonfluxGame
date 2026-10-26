@@ -836,10 +836,16 @@ fn roleplay_routes_inspect_without_committing_or_registering_voice() {
                     .body(axum::body::Body::empty())
                     .unwrap();
                 let response = router.clone().as_service().call(request).await.unwrap();
-                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let status = response.status();
                 let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
                     .await
                     .unwrap();
+                assert_eq!(
+                    status,
+                    StatusCode::OK,
+                    "{path}: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
                 let document: Value = serde_json::from_slice(&bytes).unwrap();
                 if key == "array" {
                     assert!(document.is_array(), "{path}: {document}");

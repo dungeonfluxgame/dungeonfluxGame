@@ -143,14 +143,17 @@ pub(super) async fn read(
         .get("name")
         .ok_or_else(|| bad_request("social needs ?name=<npc>"))?;
     let checkpoint = state.service.updates.borrow().clone();
-    if let Some(document) = state
-        .social
-        .development_opening_social(
-            &checkpoint,
-            requested,
-            params.get("hero").map(String::as_str),
-        )
-        .map_err(|_| failed("opening social standing unavailable"))?
+    let is_opening_enforcer =
+        requested.eq_ignore_ascii_case("bandit") || requested.eq_ignore_ascii_case("Dain Rusk");
+    if is_opening_enforcer
+        && let Some(document) = state
+            .social
+            .development_opening_social(
+                &checkpoint,
+                requested,
+                params.get("hero").map(String::as_str),
+            )
+            .map_err(|_| failed("opening social standing unavailable"))?
     {
         let mut document = document;
         let npc_key = state

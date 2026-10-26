@@ -458,7 +458,7 @@ async fn unregistered_paths_and_methods_are_not_served() {
     let table = table(&site).await;
     let campaign = id_text(table.campaign.as_bytes());
     let probes = [
-        (Method::GET, "/campaigns".to_owned()),
+        (Method::GET, format!("/campaigns/{campaign}/unregistered")),
         (Method::DELETE, format!("/campaigns/{campaign}/archive")),
         (Method::PUT, "/campaigns".to_owned()),
         (Method::GET, "/nothing".to_owned()),
@@ -650,6 +650,10 @@ async fn every_route_admits_exactly_the_roles_the_matrix_allows() {
             unreachable!()
         };
         for (index, (label, account, standing)) in identities.iter().enumerate() {
+            if route.id == RouteId::LobbyStart {
+                site.sessions
+                    .set(session, table.campaign, SessionPhase::Lobby);
+            }
             // A fresh target for every attempt, prepared by a person who may prepare it.
             let mut ids = vec![
                 ("campaign", campaign.clone()),

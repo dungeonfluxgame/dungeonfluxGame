@@ -580,7 +580,7 @@ mod tests {
         npc_reply::{NpcReplyContext, StoryFacts},
         place_creation::tests as fixtures,
         social::SocialLedger,
-        storyteller::tests::{FakeEndpoint, Reply, teller},
+        storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller},
         wire,
     };
     use df_persistence::local_demo_scope::LocalDemoRole;
@@ -789,7 +789,7 @@ mod tests {
         use tokio::sync::{Semaphore, watch};
 
         let endpoint = endpoint();
-        let directory = cache("service");
+        let directory = cache_directory("free-roam-service");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

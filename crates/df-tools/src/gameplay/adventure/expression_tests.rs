@@ -143,6 +143,7 @@ async fn express_with(
 ) -> (
     GeneratedAdventure,
     Result<(GeneratedAdventure, ModelExpression), Declined>,
+    u64,
 ) {
     let tables = tables();
     let baseline = baseline(&tables);
@@ -156,7 +157,12 @@ async fn express_with(
         &storyteller,
     )
     .await;
-    (baseline, outcome)
+    let usage_tokens = storyteller
+        .usage_log()
+        .iter()
+        .map(|usage| u64::try_from(usage.total_tokens).unwrap())
+        .sum();
+    (baseline, outcome, usage_tokens)
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -253,7 +259,7 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
     let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-mixed");
 
-    let (baseline, outcome) = express_with(&endpoint, &cache).await;
+    let (baseline, outcome, usage_tokens) = express_with(&endpoint, &cache).await;
 
     let (generated, model) = outcome.unwrap();
     let place = baseline.facts["loc.name"].clone();
@@ -289,10 +295,7 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
             .contains(&"opening_narration: forbidden_term".to_owned())
     );
     assert_eq!(model.model, "gpt-test-model");
-    assert_eq!(
-        model.tokens,
-        140 * u64::try_from(endpoint.connections()).unwrap()
-    );
+    assert_eq!(model.tokens, usage_tokens);
     // The rules sentences and the rest of the pack are exactly the pattern adventure's.
     let rules = |adventure: &GeneratedAdventure| {
         adventure
@@ -324,7 +327,7 @@ async fn generated_beat_offer_labels_keep_their_deterministic_action_text() {
     );
     let cache = cache_directory("expression-beat-labels");
 
-    let (baseline, outcome) = express_with(&endpoint, &cache).await;
+    let (baseline, outcome, _) = express_with(&endpoint, &cache).await;
 
     let (generated, model) = outcome.unwrap();
     let baseline_script = baseline.pack.beat_script.as_ref().unwrap();
@@ -354,7 +357,7 @@ async fn the_final_adventure_reloads_and_records_the_model_slots() {
     let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-record");
 
-    let (_, outcome) = express_with(&endpoint, &cache).await;
+    let (_, outcome, _) = express_with(&endpoint, &cache).await;
 
     let (generated, model) = outcome.unwrap();
     let documents = generated
@@ -419,7 +422,7 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
     let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-request");
 
-    let (baseline, outcome) = express_with(&endpoint, &cache).await;
+    let (baseline, outcome, _) = express_with(&endpoint, &cache).await;
 
     let _ = outcome.unwrap();
     let bodies = endpoint.bodies();
@@ -471,7 +474,7 @@ async fn a_failing_or_off_storyteller_leaves_the_pattern_adventure_to_the_caller
     );
     let cache = cache_directory("expression-failure");
 
-    let (_, outcome) = express_with(&endpoint, &cache).await;
+    let (_, outcome, _) = express_with(&endpoint, &cache).await;
 
     assert!(matches!(outcome, Err(Declined::Storyteller(_))));
     let tables = tables();
@@ -765,7 +768,7 @@ async fn a_partially_failing_provider_keeps_the_groups_that_arrived() {
     let endpoint = FakeEndpoint::start(script);
     let cache = cache_directory("expression-partial-failure");
 
-    let (_, outcome) = express_with(&endpoint, &cache).await;
+    let (_, outcome, _) = express_with(&endpoint, &cache).await;
 
     let (_, model) = outcome.unwrap();
     assert!(

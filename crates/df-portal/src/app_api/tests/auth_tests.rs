@@ -147,6 +147,7 @@ async fn verification_accepts_the_token_in_the_body_only() {
         )
         .await;
     assert_eq!(in_body.json(), json!("verified"));
+    visitor.session().await;
     let again = visitor
         .post(
             "/app/api/verify-email",
