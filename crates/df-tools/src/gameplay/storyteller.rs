@@ -2046,7 +2046,16 @@ fn provider_reason_label(reason: &TextResponseError) -> &'static str {
         TextResponseError::SchemaConfigurationMismatch => "schema_configuration_mismatch",
         TextResponseError::Owner(_) => "owner",
         TextResponseError::Transport(_) => "transport",
-        TextResponseError::Supplier(_) => "supplier",
+        TextResponseError::Supplier(class) => match class {
+            ProviderFailureClass::InvalidRequest => "supplier_invalid_request",
+            ProviderFailureClass::Denied => "supplier_denied",
+            ProviderFailureClass::Capacity => "supplier_capacity",
+            ProviderFailureClass::Unavailable => "supplier_unavailable",
+            ProviderFailureClass::Contract => "supplier_contract",
+            ProviderFailureClass::Cancelled => "supplier_cancelled",
+            ProviderFailureClass::Deadline => "supplier_deadline",
+            ProviderFailureClass::Unknown => "supplier_unknown",
+        },
         TextResponseError::Contract { reason, .. } => match reason {
             TextResponseContract::Json => "contract_json",
             TextResponseContract::Usage => "contract_usage",

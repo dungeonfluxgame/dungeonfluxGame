@@ -743,22 +743,55 @@ fn parse_output(json: &Value, schema: &TextOutputSchema) -> Result<Value, TextRe
 }
 
 fn classify_supplier_status(status: u16, json: &Value) -> ProviderFailureClass {
-    let code = json
-        .get("error")
+    let error = json.get("error");
+    let code = error
         .and_then(|error| error.get("code"))
         .and_then(Value::as_str);
+    let kind = error
+        .and_then(|error| error.get("type"))
+        .and_then(Value::as_str);
+    // An account with no credit or quota left: waiting does not clear it (as image_edit.rs).
+    let out_of_credit = [code, kind].into_iter().flatten().any(|reason| {
+        matches!(
+            reason,
+            "insufficient_quota" | "billing_hard_limit_reached" | "credit_balance_exhausted"
+        )
+    });
     match status {
         400 | 422 => ProviderFailureClass::InvalidRequest,
         401 | 403 => ProviderFailureClass::Denied,
+        429 if out_of_credit => ProviderFailureClass::Denied,
         429 if code == Some("rate_limit_exceeded") => ProviderFailureClass::Capacity,
-        429 if matches!(
-            code,
-            Some("insufficient_quota" | "billing_hard_limit_reached")
-        ) =>
-        {
-            ProviderFailureClass::Denied
-        }
         503 => ProviderFailureClass::Unavailable,
         _ => ProviderFailureClass::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_account_out_of_credit_is_denied_not_retried_as_capacity() {
+        for error in [
+            json!({"code": "credit_balance_exhausted", "type": "insufficient_quota"}),
+            json!({"code": "insufficient_quota"}),
+            json!({"code": "billing_hard_limit_reached"}),
+            json!({"code": null, "type": "insufficient_quota"}),
+        ] {
+            assert_eq!(
+                classify_supplier_status(429, &json!({ "error": error })),
+                ProviderFailureClass::Denied
+            );
+        }
+        assert_eq!(
+            classify_supplier_status(429, &json!({"error": {"code": "rate_limit_exceeded"}})),
+            ProviderFailureClass::Capacity
+        );
+        assert_eq!(
+            classify_supplier_status(429, &json!({})),
+            ProviderFailureClass::Unknown
+        );
     }
 }

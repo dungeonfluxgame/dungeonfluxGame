@@ -1531,7 +1531,11 @@ fn a_provider_contract_failure_is_labelled_by_the_part_of_the_contract_that_fail
     );
     assert_eq!(
         provider_reason_label(&TextResponseError::Supplier(ProviderFailureClass::Capacity)),
-        "supplier"
+        "supplier_capacity"
+    );
+    assert_eq!(
+        provider_reason_label(&TextResponseError::Supplier(ProviderFailureClass::Denied)),
+        "supplier_denied"
     );
 }
 
