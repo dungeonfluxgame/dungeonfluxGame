@@ -614,12 +614,24 @@ pub(crate) fn scene_art_admitted(path: &str) -> bool {
     )
 }
 
-// PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
-// hexadecimal key, nothing else. Only these reach CSS or `src` besides local assets.
+// PLAY-L01: only same-origin generated-image paths reach CSS or `src` besides local assets.
 pub(crate) fn imagery_url(path: &str) -> Option<String> {
-    let key = path.strip_prefix("/gameplay/imagery/")?;
-    let plain = key.len() == 64 && key.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
-    plain.then(|| path.to_owned())
+    path.strip_prefix("/gameplay/imagery/")?;
+    art_contract::player_hero_image(path).map(str::to_owned)
+}
+
+fn figure_mask_url(plate: &str, mask: &str, index: u32) -> Option<String> {
+    let plate_path = plate.split_once('?').map_or(plate, |(path, _)| path);
+    let (mask_path, query) = mask
+        .split_once('?')
+        .map_or((mask, None), |(path, query)| (path, Some(query)));
+    if mask_path != format!("{plate_path}/figure/{index}") {
+        return None;
+    }
+    if let Some(query) = query {
+        imagery_url(&format!("{plate_path}?{query}"))?;
+    }
+    Some(mask.to_owned())
 }
 
 /// PLAY-V09: what the server says about the scene's plate (one composed picture of the scene).
@@ -782,6 +794,155 @@ mod figure_mask_anchor_tests {
     use crate::plate_layout::{PlateFrame, Rect};
 
     #[test]
+    fn signed_plate_masks_keep_their_own_grants_only_for_the_same_key_and_index() {
+        use super::{plate_of, rpc};
+        let bare = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let valid = format!("{bare}/figure/7?g=beef");
+        let mut scene = rpc::GameplayScene {
+            plate_state: rpc::PlateState::Ready as i32,
+            live_plate: format!("{bare}?g=abcd"),
+            plate_layout: Some(rpc::PlateLayout {
+                bubble_side: rpc::PlateSide::Right as i32,
+                figure_masks: vec![rpc::PlateFigureMask {
+                    person: Some(rpc::plate_figure_mask::Person::HeroIndex(0)),
+                    source_width: 400,
+                    source_height: 200,
+                    right: 100,
+                    bottom: 100,
+                    free_side: rpc::PlateSide::Left as i32,
+                    mask_index: 7,
+                    mask_url: valid.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            plate_of(&scene).layout.unwrap().figure_masks[0].mask_url,
+            valid
+        );
+        for rejected in [
+            format!("{bare}/figure/8?g=beef"),
+            format!("/gameplay/imagery/{}/figure/7?g=beef", "b".repeat(64)),
+            format!("{bare}/figure/7?g="),
+            format!("{bare}/figure/7?g=beef&other=1"),
+            format!("{bare}/figure/7?g=beef#frag"),
+            format!("{bare}?g=abcd/figure/7"),
+        ] {
+            scene.plate_layout.as_mut().unwrap().figure_masks[0].mask_url = rejected;
+            assert!(
+                plate_of(&scene).layout.unwrap().figure_masks[0]
+                    .mask_url
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn signed_imagery_reaches_plate_set_and_live_hero_presentation_unchanged() {
+        use super::{PlateState, cast_of, imagery_url, plate_of, rpc, set_picture};
+        let path = format!("/gameplay/imagery/{}?g=abcdef", "a".repeat(64));
+        let scene = rpc::GameplayScene {
+            live_plate: path.clone(),
+            plate_state: rpc::PlateState::Ready as i32,
+            ..Default::default()
+        };
+        let journey = rpc::JourneyView {
+            party: vec![rpc::PartyMemberView {
+                name: "Hero".into(),
+                character_ready: true,
+                portrait: path.clone(),
+                ..Default::default()
+            }],
+            live_faces: vec![rpc::LiveFace {
+                name: "Hero".into(),
+                sprite: path.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(imagery_url(&path).as_deref(), Some(path.as_str()));
+        assert_eq!(set_picture(&path).as_deref(), Some(path.as_str()));
+        let plate = plate_of(&scene);
+        assert_eq!(plate.state, PlateState::Ready);
+        assert_eq!(plate.url.as_deref(), Some(path.as_str()));
+        assert_eq!(
+            cast_of(&journey, &scene)[0].live_sprite.as_deref(),
+            Some(path.as_str())
+        );
+    }
+
+    #[test]
+    fn signed_plate_and_faces_merge_at_the_same_revision() {
+        use super::rpc;
+        use rpc::view_message::Audience;
+        let path = format!("/gameplay/imagery/{}?g=abcd", "a".repeat(64));
+        let mut shown = rpc::ViewMessage {
+            audience: Some(Audience::Display(rpc::DisplayGameplayView {
+                scene: Some(rpc::GameplayScene::default()),
+                journey: Some(rpc::JourneyView {
+                    party: vec![rpc::PartyMemberView {
+                        name: "Hero".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let mut incoming = shown.clone();
+        let Some(Audience::Display(display)) = incoming.audience.as_mut() else {
+            panic!("display")
+        };
+        let scene = display.scene.as_mut().unwrap();
+        scene.live_plate = path.clone();
+        scene.plate_state = rpc::PlateState::Ready as i32;
+        display
+            .journey
+            .as_mut()
+            .unwrap()
+            .live_faces
+            .push(rpc::LiveFace {
+                name: "Hero".into(),
+                sprite: path.clone(),
+                battle_sprite: path.clone(),
+            });
+        assert_eq!(crate::live_art::refusal_reason(&shown, &incoming), None);
+        assert!(crate::live_art::merge_art(&mut shown, &incoming));
+        let Some(Audience::Display(display)) = shown.audience else {
+            panic!("display")
+        };
+        assert_eq!(display.scene.unwrap().live_plate, path);
+        let journey = display.journey.unwrap();
+        assert_eq!(journey.live_faces[0].sprite, path);
+        assert_eq!(journey.live_faces[0].battle_sprite, path);
+    }
+
+    #[test]
+    fn malformed_imagery_paths_never_reach_the_plate_or_set() {
+        use super::{PlateState, imagery_url, plate_of, rpc, set_picture};
+        let bare = format!("/gameplay/imagery/{}", "a".repeat(64));
+        for path in [
+            format!("https://foreign.invalid{bare}?g=abcd"),
+            format!("{bare}?g="),
+            format!("{bare}?g=ab&g=cd"),
+            format!("{bare}?g=abcd#frag"),
+            format!("{bare}/../secret?g=abcd"),
+        ] {
+            assert!(imagery_url(&path).is_none(), "{path}");
+            assert!(set_picture(&path).is_none(), "{path}");
+            let scene = rpc::GameplayScene {
+                plate_state: rpc::PlateState::Ready as i32,
+                live_plate: path,
+                ..Default::default()
+            };
+            assert_eq!(plate_of(&scene).state, PlateState::Failed);
+        }
+    }
+
+    #[test]
     fn figure_masks_wire_projection_keeps_a_hero_without_a_head_and_rejects_unknown_actors() {
         use super::{PlatePerson, plate_of, rpc};
         let mut scene = rpc::GameplayScene {
@@ -928,11 +1089,10 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
                         inferred: figure.inferred,
                         mask_index: figure.mask_index,
                         mask_url: url
-                            .as_ref()
-                            .filter(|plate| {
-                                figure.mask_url == format!("{plate}/figure/{}", figure.mask_index)
+                            .as_deref()
+                            .and_then(|plate| {
+                                figure_mask_url(plate, &figure.mask_url, figure.mask_index)
                             })
-                            .map(|_| figure.mask_url.clone())
                             .unwrap_or_default(),
                     })
                 })

@@ -273,14 +273,35 @@ pub(super) fn sign_gameplay_url(
     *value = format!("{prefix}{key}?g={token}");
 }
 
+fn sign_image_url(
+    value: &mut String,
+    principal_audience: PrincipalAudience,
+    principal: &[u8; KEY_BYTES],
+) {
+    sign_gameplay_url(value, "/gameplay/imagery/", principal_audience, principal);
+    sign_gameplay_url(
+        value,
+        "/gameplay/creator-portrait/",
+        principal_audience,
+        principal,
+    );
+}
+
 fn sign_image_mask_url(
     value: &mut String,
     principal_audience: PrincipalAudience,
     principal: &[u8; KEY_BYTES],
 ) {
+    if principal_audience == PrincipalAudience::Display
+        && value.starts_with("/gameplay/creator-portrait/")
+    {
+        value.clear();
+        return;
+    }
     let Some(path) = value.strip_prefix("/gameplay/imagery/") else {
         return;
     };
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
     let Some((key, suffix)) = path.split_once('/') else {
         return;
     };
@@ -325,12 +346,7 @@ pub(super) fn sign_view(
             }
         }
         crate::gameplay::rpc::view_message::Audience::Display(view) => {
-            sign_gameplay_url(
-                &mut view.scene_asset,
-                "/gameplay/imagery/",
-                principal_audience,
-                principal,
-            );
+            sign_image_url(&mut view.scene_asset, principal_audience, principal);
             if let Some(scene) = view.scene.as_mut() {
                 sign_scene(scene, principal_audience, principal);
             }
@@ -339,32 +355,12 @@ pub(super) fn sign_view(
             }
             if let Some(graph) = view.scene_graph.as_mut() {
                 if let Some(set) = graph.set.as_mut() {
-                    sign_gameplay_url(
-                        &mut set.asset,
-                        "/gameplay/imagery/",
-                        principal_audience,
-                        principal,
-                    );
-                    sign_gameplay_url(
-                        &mut set.fallback_asset,
-                        "/gameplay/imagery/",
-                        principal_audience,
-                        principal,
-                    );
+                    sign_image_url(&mut set.asset, principal_audience, principal);
+                    sign_image_url(&mut set.fallback_asset, principal_audience, principal);
                 }
                 for actor in &mut graph.actors {
-                    sign_gameplay_url(
-                        &mut actor.art,
-                        "/gameplay/imagery/",
-                        principal_audience,
-                        principal,
-                    );
-                    sign_gameplay_url(
-                        &mut actor.fallback_art,
-                        "/gameplay/imagery/",
-                        principal_audience,
-                        principal,
-                    );
+                    sign_image_url(&mut actor.art, principal_audience, principal);
+                    sign_image_url(&mut actor.fallback_art, principal_audience, principal);
                 }
             }
         }
@@ -382,13 +378,7 @@ fn sign_scene(
         &mut scene.live_backdrop,
         &mut scene.live_plate,
     ] {
-        sign_gameplay_url(value, "/gameplay/imagery/", principal_audience, principal);
-        sign_gameplay_url(
-            value,
-            "/gameplay/creator-portrait/",
-            principal_audience,
-            principal,
-        );
+        sign_image_url(value, principal_audience, principal);
     }
     sign_gameplay_url(
         &mut scene.scene_video_path,
@@ -402,20 +392,51 @@ fn sign_scene(
             &mut actor.portrait,
             &mut actor.live_sprite,
         ] {
-            sign_gameplay_url(value, "/gameplay/imagery/", principal_audience, principal);
-            sign_gameplay_url(
-                value,
-                "/gameplay/creator-portrait/",
-                principal_audience,
-                principal,
-            );
+            sign_image_url(value, principal_audience, principal);
         }
     }
+    for item in scene.item.iter_mut().chain(&mut scene.hand_items) {
+        sign_image_url(&mut item.image_path, principal_audience, principal);
+    }
+    sign_mural(
+        &mut scene.scene_contents_json,
+        principal_audience,
+        principal,
+    );
     if let Some(layout) = scene.plate_layout.as_mut() {
         for mask in &mut layout.figure_masks {
             sign_image_mask_url(&mut mask.mask_url, principal_audience, principal);
         }
     }
+}
+
+fn sign_mural(
+    contents: &mut String,
+    principal_audience: PrincipalAudience,
+    principal: &[u8; KEY_BYTES],
+) {
+    if !contents.contains("\"party_mural\"") {
+        return;
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(contents) else {
+        return;
+    };
+    let Some(url) = value
+        .get_mut("party_mural")
+        .and_then(|mural| mural.get_mut("url"))
+    else {
+        return;
+    };
+    let Some(path) = url.as_str() else {
+        return;
+    };
+    let mut signed = path.to_owned();
+    sign_image_url(&mut signed, principal_audience, principal);
+    if signed == path {
+        return;
+    }
+    *url = serde_json::Value::String(signed);
+    *contents = value.to_string();
 }
 
 fn sign_journey(
@@ -430,47 +451,21 @@ fn sign_journey(
         principal,
     );
     for member in &mut journey.party {
-        sign_gameplay_url(
-            &mut member.portrait,
-            "/gameplay/imagery/",
-            principal_audience,
-            principal,
-        );
-        sign_gameplay_url(
-            &mut member.portrait,
-            "/gameplay/creator-portrait/",
-            principal_audience,
-            principal,
-        );
+        sign_image_url(&mut member.portrait, principal_audience, principal);
+    }
+    for face in &mut journey.live_faces {
+        sign_image_url(&mut face.sprite, principal_audience, principal);
+        sign_image_url(&mut face.battle_sprite, principal_audience, principal);
     }
     if let Some(character) = journey.own_character.as_mut() {
-        sign_gameplay_url(
-            &mut character.portrait_uri,
-            "/gameplay/imagery/",
-            principal_audience,
-            principal,
-        );
-        sign_gameplay_url(
-            &mut character.portrait_uri,
-            "/gameplay/creator-portrait/",
-            principal_audience,
-            principal,
-        );
+        sign_image_url(&mut character.portrait_uri, principal_audience, principal);
+        for item in &mut character.owned_items {
+            sign_image_url(&mut item.image_path, principal_audience, principal);
+        }
     }
     if let Some(combat) = journey.combat.as_mut() {
         for member in &mut combat.participants {
-            sign_gameplay_url(
-                &mut member.portrait,
-                "/gameplay/imagery/",
-                principal_audience,
-                principal,
-            );
-            sign_gameplay_url(
-                &mut member.portrait,
-                "/gameplay/creator-portrait/",
-                principal_audience,
-                principal,
-            );
+            sign_image_url(&mut member.portrait, principal_audience, principal);
         }
         for outcome in combat
             .outcomes
@@ -499,12 +494,7 @@ fn sign_journey(
             principal_audience,
             principal,
         );
-        sign_gameplay_url(
-            &mut kill_shot.still_path,
-            "/gameplay/imagery/",
-            principal_audience,
-            principal,
-        );
+        sign_image_url(&mut kill_shot.still_path, principal_audience, principal);
     }
     for line in &mut journey.table_log {
         sign_voice_url(&mut line.audio_url, principal_audience, principal);
@@ -979,6 +969,380 @@ mod tests {
             )
             .is_some()
         );
+    }
+
+    #[test]
+    fn display_view_signs_live_faces_items_and_mural_without_exposing_creator_portraits() {
+        use crate::gameplay::rpc::{self, view_message::Audience as ViewAudience};
+        let key = "a".repeat(64);
+        let path = format!("/gameplay/imagery/{key}");
+        let portrait = format!("/gameplay/creator-portrait/{}", "b".repeat(64));
+        let mut view = rpc::ViewMessage {
+            audience: Some(ViewAudience::Display(rpc::DisplayGameplayView {
+                scene_asset: portrait.clone(),
+                scene_graph: Some(rpc::DisplaySceneGraph {
+                    set: Some(rpc::DisplaySceneSet {
+                        asset: portrait.clone(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                scene: Some(rpc::GameplayScene {
+                    plate_layout: Some(rpc::PlateLayout {
+                        figure_masks: vec![rpc::PlateFigureMask {
+                            mask_url: portrait.clone(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    item: Some(rpc::SceneItemCard {
+                        image_path: path.clone(),
+                        ..Default::default()
+                    }),
+                    hand_items: vec![rpc::SceneItemCard {
+                        image_path: path.clone(),
+                        ..Default::default()
+                    }],
+                    scene_contents_json: serde_json::json!({
+                        "weather": "rain",
+                        "party_mural": {"state": "ready", "url": path, "key": key}
+                    })
+                    .to_string(),
+                    ..Default::default()
+                }),
+                journey: Some(rpc::JourneyView {
+                    own_character: Some(rpc::CharacterSheet {
+                        owned_items: vec![rpc::SceneItemCard {
+                            image_path: path.clone(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    live_faces: vec![
+                        rpc::LiveFace {
+                            sprite: path.clone(),
+                            battle_sprite: path.clone(),
+                            ..Default::default()
+                        },
+                        rpc::LiveFace {
+                            sprite: portrait.clone(),
+                            battle_sprite: portrait,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        sign_view(&mut view, true, &[7; KEY_BYTES]);
+        let Some(ViewAudience::Display(display)) = view.audience else {
+            panic!("display")
+        };
+        assert!(display.scene_asset.is_empty());
+        assert!(display.scene_graph.unwrap().set.unwrap().asset.is_empty());
+        let scene = display.scene.unwrap();
+        assert!(
+            scene.plate_layout.as_ref().unwrap().figure_masks[0]
+                .mask_url
+                .is_empty()
+        );
+        let contents: serde_json::Value = serde_json::from_str(&scene.scene_contents_json).unwrap();
+        assert_eq!(contents["weather"], "rain");
+        let mural = contents["party_mural"]["url"].as_str().unwrap();
+        let journey = display.journey.unwrap();
+        for value in [
+            scene.item.unwrap().image_path,
+            scene.hand_items[0].image_path.clone(),
+            mural.to_owned(),
+            journey.own_character.as_ref().unwrap().owned_items[0]
+                .image_path
+                .clone(),
+            journey.live_faces[0].sprite.clone(),
+            journey.live_faces[0].battle_sprite.clone(),
+        ] {
+            let uri: Uri = value.parse().unwrap();
+            assert!(
+                verify_request(
+                    &HeaderMap::new(),
+                    &uri,
+                    &key,
+                    Audience::Imagery,
+                    &[PrincipalAudience::Display]
+                )
+                .is_some()
+            );
+        }
+        assert!(journey.live_faces[1].sprite.is_empty());
+        assert!(journey.live_faces[1].battle_sprite.is_empty());
+    }
+
+    #[test]
+    fn player_view_signs_own_portrait_and_both_live_face_images_for_the_seat() {
+        use crate::gameplay::rpc::{self, view_message::Audience as ViewAudience};
+        let image_key = "a".repeat(64);
+        let portrait_key = "b".repeat(64);
+        let image = format!("/gameplay/imagery/{image_key}");
+        let portrait = format!("/gameplay/creator-portrait/{portrait_key}");
+        let mut view = rpc::ViewMessage {
+            audience: Some(ViewAudience::Player(rpc::PlayerGameplayView {
+                journey: Some(rpc::JourneyView {
+                    own_character: Some(rpc::CharacterSheet {
+                        portrait_uri: portrait,
+                        ..Default::default()
+                    }),
+                    live_faces: vec![rpc::LiveFace {
+                        sprite: image.clone(),
+                        battle_sprite: image,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        sign_view(&mut view, false, &[3; KEY_BYTES]);
+        let Some(ViewAudience::Player(player)) = view.audience else {
+            panic!("player")
+        };
+        let journey = player.journey.unwrap();
+        let character = journey.own_character.unwrap();
+        for (path, key, audience) in [
+            (&character.portrait_uri, &portrait_key, Audience::Portrait),
+            (&journey.live_faces[0].sprite, &image_key, Audience::Imagery),
+            (
+                &journey.live_faces[0].battle_sprite,
+                &image_key,
+                Audience::Imagery,
+            ),
+        ] {
+            assert!(
+                verify_request(
+                    &HeaderMap::new(),
+                    &path.parse().unwrap(),
+                    key,
+                    audience,
+                    &[PrincipalAudience::Seat]
+                )
+                .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn new_views_refresh_expired_plate_and_mask_grants_without_nested_queries() {
+        use crate::gameplay::rpc::{self, view_message::Audience as ViewAudience};
+        let principal = [7; KEY_BYTES];
+        let key = "a".repeat(64);
+        let expired = encode_token(
+            &key,
+            Audience::Imagery,
+            PrincipalAudience::Display,
+            &principal,
+            unix_seconds().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            verify(
+                Some(&expired),
+                &key,
+                Audience::Imagery,
+                &[PrincipalAudience::Display],
+                Some(&principal),
+            )
+            .is_none()
+        );
+        let bare = format!("/gameplay/imagery/{key}");
+        let mut view = rpc::ViewMessage {
+            audience: Some(ViewAudience::Display(rpc::DisplayGameplayView {
+                scene: Some(rpc::GameplayScene {
+                    live_plate: format!("{bare}?g={expired}"),
+                    plate_state: rpc::PlateState::Ready as i32,
+                    plate_layout: Some(rpc::PlateLayout {
+                        bubble_side: rpc::PlateSide::Right as i32,
+                        figure_masks: vec![rpc::PlateFigureMask {
+                            person: Some(rpc::plate_figure_mask::Person::HeroIndex(0)),
+                            source_width: 100,
+                            source_height: 100,
+                            right: 100,
+                            bottom: 100,
+                            free_side: rpc::PlateSide::Left as i32,
+                            mask_index: 2,
+                            mask_url: format!("{bare}/figure/2?g={expired}"),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        sign_view(&mut view, true, &principal);
+        let Some(ViewAudience::Display(display)) = view.audience else {
+            panic!("display")
+        };
+        let scene = display.scene.unwrap();
+        let plate = crate::presentation::plate_of(&scene);
+        let mask = plate.layout.unwrap().figure_masks[0].mask_url.clone();
+        assert_eq!(
+            mask,
+            scene.plate_layout.as_ref().unwrap().figure_masks[0].mask_url
+        );
+        for value in [&scene.live_plate, &mask] {
+            assert_eq!(value.matches('?').count(), 1);
+            let uri: Uri = value.parse().unwrap();
+            assert!(
+                verify_request(
+                    &HeaderMap::new(),
+                    &uri,
+                    &key,
+                    Audience::Imagery,
+                    &[PrincipalAudience::Display]
+                )
+                .is_some()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_plate_reaches_presentation_and_the_session_imagery_route() {
+        use crate::gameplay::{
+            imagery::{
+                self, ImageKind, ImageRequest, OutputSpec, PlaceFacts, ReferenceImage,
+                scene_refresh, tests::DirectionFixture,
+            },
+            rpc::{self, view_message::Audience as ViewAudience},
+            scene_mood::{Look, Mood},
+            startup_configuration::ContentRating,
+        };
+        use axum::http::{Request, StatusCode};
+        use bytes::Bytes;
+        use df_providers::ImageFormat;
+        use tonic::codegen::Service;
+
+        struct CacheDirectory {
+            root: std::path::PathBuf,
+            path: std::path::PathBuf,
+        }
+
+        impl Drop for CacheDirectory {
+            fn drop(&mut self) {
+                if let Ok(path) = self.path.canonicalize()
+                    && path != self.root
+                    && path.starts_with(&self.root)
+                {
+                    std::fs::remove_dir_all(path).unwrap();
+                }
+            }
+        }
+
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/lanes/IMGURL/tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let mut nonce = [0; 16];
+        getrandom::getrandom(&mut nonce).unwrap();
+        let cache = CacheDirectory {
+            path: root.join(format!("plate-{:032x}", u128::from_le_bytes(nonce))),
+            root,
+        };
+        std::fs::create_dir(&cache.path).unwrap();
+        let fixture = DirectionFixture::new(&cache.path);
+        let place = PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh").unwrap();
+        let key = fixture
+            .imagery
+            .generate(
+                "plate:imgurl",
+                ImageRequest {
+                    kind: ImageKind::ScenePlate,
+                    references: vec![ReferenceImage::new(
+                        ImageFormat::Webp,
+                        Bytes::from_static(b"RIFFbackdrop"),
+                    )],
+                    prompt: scene_refresh(
+                        ContentRating::Restrained,
+                        &place,
+                        Look::of(Mood::Menacing),
+                    ),
+                    output: OutputSpec {
+                        width: 1024,
+                        height: 640,
+                        transparent: false,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(fixture.calls(), 1);
+        let expected = std::fs::read(cache.path.join(format!("{}.jpg", key.as_str()))).unwrap();
+        let bare = key.path();
+        let mut view = rpc::ViewMessage {
+            audience: Some(ViewAudience::Display(rpc::DisplayGameplayView {
+                scene: Some(rpc::GameplayScene {
+                    live_plate: bare.clone(),
+                    plate_state: rpc::PlateState::Ready.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        sign_view(&mut view, true, &[7; KEY_BYTES]);
+        let Some(ViewAudience::Display(display)) = view.audience else {
+            panic!("display")
+        };
+        let scene = display.scene.unwrap();
+        let plate = crate::presentation::plate_of(&scene);
+        assert_eq!(plate.state, crate::presentation::PlateState::Ready);
+        let url = plate.url.unwrap();
+        assert_eq!(url, scene.live_plate);
+        let mut router = imagery::router(fixture.imagery.clone());
+        let get = |url: String| {
+            Request::builder()
+                .uri(url)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let response = Service::call(&mut router, get(url)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 6 * 1024 * 1024)
+                .await
+                .unwrap(),
+            expected
+        );
+        let wrong = sign(
+            key.as_str(),
+            Audience::Voice,
+            PrincipalAudience::Display,
+            &[7; KEY_BYTES],
+            unix_seconds().unwrap() + 60,
+        )
+        .unwrap();
+        let missing_key = "f".repeat(64);
+        let missing = sign(
+            &missing_key,
+            Audience::Imagery,
+            PrincipalAudience::Display,
+            &[7; KEY_BYTES],
+            unix_seconds().unwrap() + 60,
+        )
+        .unwrap();
+        for url in [
+            bare.clone(),
+            format!("{bare}?g=00"),
+            format!("{bare}?g={wrong}"),
+            format!("/gameplay/imagery/{missing_key}?g={missing}"),
+        ] {
+            assert_eq!(
+                Service::call(&mut router, get(url)).await.unwrap().status(),
+                StatusCode::NOT_FOUND
+            );
+        }
     }
 
     #[test]

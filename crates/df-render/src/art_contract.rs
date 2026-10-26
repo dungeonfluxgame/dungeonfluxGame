@@ -298,9 +298,18 @@ impl Token {
 /// A server-published personal hero image. Seat numbers and library art are never identities.
 /// Creator bytes are checked by their serving boundary; canonical bytes by the imagery cache.
 pub fn player_hero_image(reference: &str) -> Option<&str> {
-    let key = reference
+    let suffix = reference
         .strip_prefix("/gameplay/imagery/")
         .or_else(|| reference.strip_prefix("/gameplay/creator-portrait/"))?;
+    let (key, query) = suffix
+        .split_once('?')
+        .map_or((suffix, None), |(key, query)| (key, Some(query)));
+    if let Some(query) = query {
+        let grant = query.strip_prefix("g=")?;
+        if grant.is_empty() || !grant.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+    }
     (key.len() == 64
         && key
             .bytes()
@@ -593,6 +602,41 @@ impl Subject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_images_accept_only_bare_or_singly_granted_same_origin_paths() {
+        for prefix in ["/gameplay/imagery/", "/gameplay/creator-portrait/"] {
+            let bare = format!("{prefix}{}", "a1".repeat(32));
+            for path in [
+                bare.clone(),
+                format!("{bare}?g=01abcdef"),
+                format!("{bare}?g=01ABCDEF"),
+            ] {
+                assert_eq!(player_hero_image(&path), Some(path.as_str()), "{path}");
+            }
+            for suffix in [
+                "?g=",
+                "?g=xyz",
+                "?g=01&x=1",
+                "?g=01&g=02",
+                "?g=01#frag",
+                "?other=01",
+                "#frag",
+                "/../secret",
+                "?g=01?g=02",
+            ] {
+                let path = format!("{bare}{suffix}");
+                assert!(player_hero_image(&path).is_none(), "{path}");
+            }
+            for path in [
+                format!("https://foreign.invalid{bare}?g=01"),
+                format!("{prefix}{}?g=01", "A".repeat(64)),
+                format!("{prefix}{}?g=01", "a".repeat(63)),
+            ] {
+                assert!(player_hero_image(&path).is_none(), "{path}");
+            }
+        }
+    }
 
     #[test]
     fn player_images_are_personal_server_paths_and_never_stock_characters() {
