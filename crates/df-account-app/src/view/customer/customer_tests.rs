@@ -741,32 +741,104 @@ fn dashboard_keeps_play_now_available_without_a_wizard_catalog() {
     );
 }
 
-#[test]
-fn asset_rows_show_a_kind_placeholder_for_missing_and_failed_thumbnails() {
-    for thumbnail_url in [None, Some("/missing-thumb".to_owned())] {
-        let node = render(Screen::Assets(crate::state::AssetsScreen {
-            assets: Remote::Ready(vec![crate::wire::AssetRow {
-                asset_id: "asset-1".to_owned(),
-                kind: crate::wire::AssetKind::Portrait,
-                campaign_id: None,
-                campaign_name: None,
-                created_at_ms: WHEN_MS,
-                size_bytes: 10,
-                thumbnail_url,
-                hold_state: crate::wire::AssetHoldState::Ready,
-            }]),
-            next_cursor: None,
-            total: 1,
-            kind: None,
-            campaign: String::new(),
-            more: Submit::Idle,
-        }));
-        assert!(node.elements().iter().any(|element| {
-            element.attribute("class") == Some("asset-thumb-placeholder")
-                && Node::Element((*element).clone()).text_content() == "P"
-        }));
-        assert!(node.elements().iter().all(|element| element.tag != "img"));
+fn asset_row(kind: crate::wire::AssetKind, thumbnail_url: Option<&str>) -> crate::wire::AssetRow {
+    crate::wire::AssetRow {
+        asset_id: "asset-1".to_owned(),
+        kind,
+        campaign_id: None,
+        campaign_name: None,
+        created_at_ms: WHEN_MS,
+        size_bytes: 10,
+        thumbnail_url: thumbnail_url.map(str::to_owned),
+        hold_state: crate::wire::AssetHoldState::Ready,
     }
+}
+
+#[test]
+fn asset_rows_render_images_over_kind_initials_and_keep_missing_fallbacks() {
+    let url = "/app/media/thumb/asset-1";
+    for (kind, initial) in [
+        (crate::wire::AssetKind::Portrait, "P"),
+        (crate::wire::AssetKind::Scene, "S"),
+        (crate::wire::AssetKind::Music, "M"),
+        (crate::wire::AssetKind::Video, "V"),
+    ] {
+        for thumbnail_url in [None, Some(url)] {
+            let node = render(Screen::Assets(crate::state::AssetsScreen {
+                assets: Remote::Ready(vec![asset_row(kind, thumbnail_url)]),
+                next_cursor: None,
+                total: 1,
+                kind: None,
+                campaign: String::new(),
+                more: Submit::Idle,
+            }));
+            let elements = node.elements();
+            let tile = elements
+                .iter()
+                .find(|element| element.attribute("class") == Some("asset-thumb-placeholder"))
+                .expect("asset thumbnail fallback");
+            assert_eq!(tile.attribute("aria-hidden"), Some("true"));
+            assert_eq!(element_text(tile), initial);
+            assert_eq!(tile.children[0].text_content(), initial);
+            let image = elements.iter().find(|element| element.tag == "img");
+            if let Some(url) = thumbnail_url {
+                let image = image.expect("asset thumbnail image");
+                assert_eq!(image.attribute("src"), Some(url));
+                assert_eq!(image.attribute("alt"), Some(""));
+                assert_eq!(image.attribute("class"), Some("asset-thumb"));
+                assert_eq!(tile.children[1], Node::Element((*image).clone()));
+            } else {
+                assert!(image.is_none());
+                assert_eq!(tile.children.len(), 1);
+            }
+            assert!(elements.iter().all(|element| element.tag != "object"));
+        }
+    }
+}
+
+#[test]
+fn dashboard_assets_render_a_thumbnail_without_plugin_elements() {
+    let url = "/app/media/thumb/asset-1";
+    let mut dashboard = dashboard_screen();
+    dashboard.latest_assets = Remote::Ready(crate::wire::AssetsView {
+        assets: vec![asset_row(crate::wire::AssetKind::Portrait, Some(url))],
+        next_cursor: None,
+        total: 1,
+    });
+    let node = render(Screen::Dashboard(dashboard));
+    let elements = node.elements();
+    assert!(
+        elements
+            .iter()
+            .any(|element| { element.tag == "img" && element.attribute("src") == Some(url) })
+    );
+    assert!(elements.iter().any(|element| {
+        element.attribute("class") == Some("asset-thumb-placeholder")
+            && element_text(element) == "P"
+    }));
+    assert!(elements.iter().all(|element| element.tag != "object"));
+}
+
+#[test]
+fn asset_thumbnail_styles_stack_the_image_over_the_fallback() {
+    let css = include_str!("../../../web/css/customer.css");
+    let rule = |selector: &str| {
+        css.split_once(selector)
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(declarations, _)| declarations)
+            .expect("thumbnail style")
+    };
+    let tile = rule(".asset-thumb-placeholder {");
+    assert!(tile.contains("display: inline-grid;"));
+    assert!(tile.contains("place-items: center;"));
+    assert!(tile.contains("width: 96px;"));
+    assert!(tile.contains("height: 96px;"));
+    assert!(tile.contains("overflow: hidden;"));
+    assert!(rule(".asset-thumb-placeholder > * {").contains("grid-area: 1 / 1;"));
+    let image = rule(".asset-thumb {");
+    assert!(image.contains("width: 100%;"));
+    assert!(image.contains("height: 100%;"));
+    assert!(image.contains("object-fit: cover;"));
 }
 
 #[test]
