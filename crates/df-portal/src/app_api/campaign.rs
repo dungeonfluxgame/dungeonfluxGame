@@ -17,6 +17,11 @@ use df_account_app::{
     },
 };
 use df_customer::{AccountStore, Authenticated, EmailSender};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 use super::{
     guard::{
@@ -34,6 +39,8 @@ const JOIN_COOKIE_MAX_AGE_S: u64 = 60 * 60;
 const ACCEPTED: Accepted = Accepted { accepted: true };
 /// The create wizard has five steps (S1 8.1).
 const WIZARD_STEPS: std::ops::RangeInclusive<u8> = 1..=5;
+const MAXIMUM_UNAVAILABLE_AUDIT_SESSIONS: usize = 1_024;
+const UNAVAILABLE_AUDIT_INTERVAL: Duration = Duration::from_secs(60);
 
 fn actor(caller: &Authenticated) -> Actor {
     let display_name = caller
@@ -725,11 +732,12 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
         .campaigns()
         .lobby(&actor(&caller), session)
         .await?;
-    // The game counts as reachable once the session is placed (its table and player links exist);
-    // the account then hands off to the game launcher, never to the screens themselves.
-    let mut launcher_url = None;
-    let reason = if !lobby.has_started {
-        "session_not_started"
+    let configured_launcher_url = std::env::var("DF_GAME_LAUNCHER_URL").ok();
+    // The account hands off to the game launcher, never to the screens themselves.
+    let (reason, launcher_url) = if !lobby.has_started {
+        ("session_not_started", None)
+    } else if !lobby.can_manage {
+        ("member_cannot_manage", None)
     } else {
         match tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -740,30 +748,30 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
             Ok(Ok(Some(found)))
                 if is_game_url(&found.display_url) && is_game_url(&found.player_url) =>
             {
-                match game_launcher_url() {
-                    Some(url) => {
-                        launcher_url = Some(url);
-                        "ready"
-                    }
-                    None => "launcher_missing",
+                match game_launcher_url(
+                    lobby.can_manage,
+                    lobby.has_started,
+                    true,
+                    configured_launcher_url.as_deref(),
+                ) {
+                    Some(url) => ("ready", Some(url)),
+                    None => ("launcher_missing", None),
                 }
             }
-            Ok(Ok(Some(_))) => "invalid_session_link",
-            Ok(Ok(None)) => "placement_missing",
-            Ok(Err(_)) => "runtime_unavailable",
-            Err(_) => "runtime_deadline",
+            Ok(Ok(Some(_))) => ("invalid_session_link", None),
+            Ok(Ok(None)) => ("placement_missing", None),
+            Ok(Err(_)) => ("runtime_unavailable", None),
+            Err(_) => ("runtime_deadline", None),
         }
     };
-    if launcher_url.is_none() {
-        df_observe::record_audit_line(
-            "portal.game_unavailable",
-            format!("SESSION game_unavailable session={session_id} reason={reason}"),
-        );
+    if lobby.can_manage && launcher_url.is_none() {
+        record_game_unavailable(&session_id, reason, Instant::now());
     }
     reply(df_account_app::wire_campaign::GameLaunchView {
         session_id,
         campaign_name: lobby.campaign_name,
         has_started: lobby.has_started,
+        can_manage: lobby.can_manage,
         launcher_url,
         poll_seconds: lobby.poll_seconds,
     })
@@ -771,10 +779,75 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
 
 /// This deployment's game launcher (the desktop launcher's screen, served to the browser), from
 /// DF_GAME_LAUNCHER_URL. Hosted sessions get a per-session launcher address with their placement.
-fn game_launcher_url() -> Option<String> {
-    std::env::var("DF_GAME_LAUNCHER_URL")
-        .ok()
-        .filter(|url| is_game_url(url))
+pub(super) fn game_launcher_url(
+    can_manage: bool,
+    has_started: bool,
+    links_ready: bool,
+    configured_url: Option<&str>,
+) -> Option<String> {
+    if can_manage && has_started && links_ready {
+        configured_url
+            .filter(|url| is_game_url(url))
+            .map(str::to_owned)
+    } else {
+        None
+    }
+}
+
+fn record_game_unavailable(session_id: &str, reason: &str, now: Instant) {
+    static LAST_UNAVAILABLE: OnceLock<Mutex<GameUnavailableAudits>> = OnceLock::new();
+    let mut audits = LAST_UNAVAILABLE
+        .get_or_init(|| Mutex::new(GameUnavailableAudits(HashMap::new())))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !audits.should_record(session_id, reason, now) {
+        return;
+    }
+    drop(audits);
+    df_observe::record_audit_line(
+        "portal.game_unavailable",
+        format!("SESSION game_unavailable session={session_id} reason={reason}"),
+    );
+}
+
+pub(super) struct GameUnavailableAudits(HashMap<String, (String, Instant)>);
+
+impl GameUnavailableAudits {
+    #[cfg(test)]
+    pub(super) fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(super) fn should_record(&mut self, session_id: &str, reason: &str, now: Instant) -> bool {
+        let should_record = self
+            .0
+            .get(session_id)
+            .is_none_or(|(previous_reason, recorded_at)| {
+                previous_reason != reason
+                    || now.saturating_duration_since(*recorded_at) >= UNAVAILABLE_AUDIT_INTERVAL
+            });
+        if !should_record {
+            return false;
+        }
+        if !self.0.contains_key(session_id)
+            && self.0.len() >= MAXIMUM_UNAVAILABLE_AUDIT_SESSIONS
+            && let Some(oldest_session) = self
+                .0
+                .iter()
+                .min_by_key(|(_, (_, recorded_at))| *recorded_at)
+                .map(|(session, _)| session.clone())
+        {
+            self.0.remove(&oldest_session);
+        }
+        self.0
+            .insert(session_id.to_owned(), (reason.to_owned(), now));
+        true
+    }
 }
 
 /// Only an absolute http(s) address without credentials may be handed to the browser.

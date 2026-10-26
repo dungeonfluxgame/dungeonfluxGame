@@ -88,10 +88,16 @@ pub struct PlayScreen {
     pub launch: Remote<crate::wire_campaign::GameLaunchView>,
     /// How many times the page has asked while the started game was not reachable yet.
     pub waiting_polls: u32,
+    pub waiting_elapsed_ms: u32,
+    pub next_poll_delay_ms: u32,
+    pub polling_timed_out: bool,
 }
 
-/// After this many unanswered checks (about two minutes) the page says the game is slow to start.
-pub const SLOW_START_POLLS: u32 = 40;
+/// After about two minutes of unanswered checks the page says the game is slow to start.
+pub const SLOW_START_POLLS: u32 = 6;
+/// Maximum elapsed time before launcher polling stops and offers a manual retry.
+pub const MAXIMUM_GAME_START_WAIT_MS: u32 = 10 * 60 * 1_000;
+const MAXIMUM_GAME_START_POLL_DELAY_MS: u32 = 30_000;
 
 pub(super) fn empty_draft() -> CampaignDraft {
     CampaignDraft {
@@ -208,6 +214,9 @@ impl Model {
                     session_id: session_id.clone(),
                     launch: Remote::Loading,
                     waiting_polls: 0,
+                    waiting_elapsed_ms: 0,
+                    next_poll_delay_ms: 0,
+                    polling_timed_out: false,
                 });
                 vec![self.api(ApiCall::GameLaunch { session_id })]
             }
@@ -1010,15 +1019,29 @@ impl Model {
         };
         match result {
             Ok(view) => {
-                // Keep asking while a started game is not reachable yet; a ready game, or a session
-                // that has not started (its session page starts it), holds still.
-                let waiting = view.has_started && view.launcher_url.is_none();
-                let delay_ms = view.poll_seconds.saturating_mul(1_000).max(1_000);
-                if waiting {
+                let waiting = view.has_started && view.can_manage && view.launcher_url.is_none();
+                if waiting && screen.next_poll_delay_ms == 0 {
+                    screen.next_poll_delay_ms = view.poll_seconds.saturating_mul(1_000).max(1_000);
+                }
+                let delay_ms = if waiting && !screen.polling_timed_out {
+                    screen
+                        .next_poll_delay_ms
+                        .min(MAXIMUM_GAME_START_WAIT_MS.saturating_sub(screen.waiting_elapsed_ms))
+                } else {
+                    0
+                };
+                if delay_ms > 0 {
+                    screen.waiting_elapsed_ms = screen.waiting_elapsed_ms.saturating_add(delay_ms);
                     screen.waiting_polls = screen.waiting_polls.saturating_add(1);
+                    screen.next_poll_delay_ms = screen
+                        .next_poll_delay_ms
+                        .saturating_mul(2)
+                        .min(MAXIMUM_GAME_START_POLL_DELAY_MS);
+                } else if waiting {
+                    screen.polling_timed_out = true;
                 }
                 screen.launch = Remote::Ready(view);
-                if waiting {
+                if delay_ms > 0 {
                     vec![Effect::After {
                         generation,
                         delay_ms,
@@ -1035,12 +1058,17 @@ impl Model {
     }
 
     pub(super) fn refresh_play(&mut self) -> Vec<Effect> {
-        let Screen::Play(screen) = &self.screen else {
-            return Vec::new();
+        let session_id = {
+            let Screen::Play(screen) = &mut self.screen else {
+                return Vec::new();
+            };
+            if screen.waiting_elapsed_ms >= MAXIMUM_GAME_START_WAIT_MS {
+                screen.polling_timed_out = true;
+                return Vec::new();
+            }
+            screen.session_id.clone()
         };
-        vec![self.api(ApiCall::GameLaunch {
-            session_id: screen.session_id.clone(),
-        })]
+        vec![self.api(ApiCall::GameLaunch { session_id })]
     }
 
     fn play_now_reply(

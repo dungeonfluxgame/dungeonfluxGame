@@ -43,6 +43,22 @@ pub(in crate::view) fn play(screen: &PlayScreen) -> Node {
             "btn btn-outline",
         )])),
     };
+    let body = if launch.has_started && !launch.can_manage {
+        panel("The host runs the table").child(
+            el("p").text("Join from the table screen with the room code the host shares with you."),
+        )
+    } else if screen.polling_timed_out {
+        panel("We couldn't start your game")
+            .child(el("p").text("Try again to check whether your game is ready."))
+            .child(actions(vec![super::super::button(
+                "Try again",
+                Some(crate::state::Intent::Retry),
+                super::super::ButtonKind::Primary,
+                false,
+            )]))
+    } else {
+        body
+    };
     page_wide(&launch.campaign_name, None).child(body).into()
 }
 

@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 use super::fixtures::{Browser, Harness, ORIGIN};
 use crate::app_api::{ids::hex, ports::Actor};
@@ -948,6 +949,73 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
     assert!(!text.contains("/display") && !text.contains("/player") && !text.contains("ABCDEF"));
     // No launcher address is configured in this harness, so there is nothing to open yet.
     assert_eq!(opened["launcher_url"], Value::Null);
+}
+
+#[test]
+fn a_configured_launcher_address_is_only_returned_to_a_session_manager() {
+    let address = "https://launcher.example.test";
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(false, true, true, Some(address)),
+        None
+    );
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(true, true, true, Some(address)),
+        Some(address.to_owned())
+    );
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(true, false, true, Some(address)),
+        None
+    );
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(true, true, false, Some(address)),
+        None
+    );
+}
+
+#[test]
+fn game_unavailable_audits_repeat_only_when_the_reason_changes_or_a_minute_passes() {
+    let now = Instant::now();
+    let mut audits = crate::app_api::campaign::GameUnavailableAudits::new();
+    assert!(audits.should_record("session-a", "runtime_unavailable", now));
+    assert!(!audits.should_record(
+        "session-a",
+        "runtime_unavailable",
+        now + Duration::from_secs(59)
+    ));
+    assert!(audits.should_record(
+        "session-a",
+        "runtime_deadline",
+        now + Duration::from_secs(59)
+    ));
+    assert!(audits.should_record(
+        "session-a",
+        "runtime_deadline",
+        now + Duration::from_secs(119)
+    ));
+}
+
+#[test]
+fn game_unavailable_audit_memory_evicts_the_oldest_session_at_its_bound() {
+    let now = Instant::now();
+    let mut audits = crate::app_api::campaign::GameUnavailableAudits::new();
+    for index in 0..1_024 {
+        assert!(audits.should_record(
+            &format!("session-{index}"),
+            "placement_missing",
+            now + Duration::from_secs(index)
+        ));
+    }
+    assert!(audits.should_record(
+        "session-new",
+        "placement_missing",
+        now + Duration::from_secs(2_000)
+    ));
+    assert_eq!(audits.len(), 1_024);
+    assert!(audits.should_record(
+        "session-0",
+        "placement_missing",
+        now + Duration::from_secs(2_001)
+    ));
 }
 
 #[tokio::test]

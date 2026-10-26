@@ -2,16 +2,16 @@ use crate::{
     node::{Element, Node},
     route::Route,
     state::{
-        CampaignScreen, Field, Form, Intent, JoinScreen, LobbyScreen, Model, Remote,
+        CampaignScreen, Field, Form, Intent, JoinScreen, LobbyScreen, Model, PlayScreen, Remote,
         RequestDecision, Screen, Submit, WizardScreen,
     },
     view::view,
     wire::{AccountView, ApiError, ErrorCode, PacePreset, PresetOffer, Refusal, SessionView},
     wire_campaign::{
         AdventureOption, CampaignDraft, CampaignOverview, CampaignRole, ContentRating,
-        FundingModel, FundingNote, HeroChoice, InvitationCreated, InvitationKind, InvitationRow,
-        InvitePreview, JoinMode, JoinRequestRow, JoinRequested, LobbyMember, LobbyView, MemberRow,
-        PictureDefault, Reason, RoomCodeState, StartBlocker, WizardCatalog,
+        FundingModel, FundingNote, GameLaunchView, HeroChoice, InvitationCreated, InvitationKind,
+        InvitationRow, InvitePreview, JoinMode, JoinRequestRow, JoinRequested, LobbyMember,
+        LobbyView, MemberRow, PictureDefault, Reason, RoomCodeState, StartBlocker, WizardCatalog,
     },
 };
 
@@ -1353,6 +1353,63 @@ fn a_started_session_links_to_the_pre_game_launcher() {
     assert!(!has_control(&tree, "Start the session"));
     // The launcher page opens in this tab; it opens the table and player screens in new ones.
     assert_eq!(game.attribute("target"), None);
+}
+
+#[test]
+fn a_started_session_hides_the_launcher_link_from_a_member() {
+    let mut lobby = lobby_data();
+    lobby.has_started = true;
+    lobby.can_manage = false;
+    let tree = lobby_page(lobby_screen(lobby));
+    assert!(tree.text_content().contains("The session has started"));
+    assert!(!has_control(&tree, "Open the game"));
+}
+
+#[test]
+fn a_member_is_told_to_join_from_the_table_screen() {
+    let screen = PlayScreen {
+        session_id: "sess-1".to_owned(),
+        launch: Remote::Ready(GameLaunchView {
+            session_id: "sess-1".to_owned(),
+            campaign_name: "Friday table".to_owned(),
+            has_started: true,
+            can_manage: false,
+            launcher_url: None,
+            poll_seconds: 3,
+        }),
+        waiting_polls: 0,
+        waiting_elapsed_ms: 0,
+        next_poll_delay_ms: 0,
+        polling_timed_out: false,
+    };
+    let tree = view(&with_screen(signed_in(true), Screen::Play(screen)));
+    let text = tree.text_content();
+    assert!(text.contains("The host runs the table"));
+    assert!(
+        text.contains("Join from the table screen with the room code the host shares with you.")
+    );
+}
+
+#[test]
+fn a_game_start_timeout_shows_a_retry_action() {
+    let screen = PlayScreen {
+        session_id: "sess-1".to_owned(),
+        launch: Remote::Ready(GameLaunchView {
+            session_id: "sess-1".to_owned(),
+            campaign_name: "Friday table".to_owned(),
+            has_started: true,
+            can_manage: true,
+            launcher_url: None,
+            poll_seconds: 3,
+        }),
+        waiting_polls: 6,
+        waiting_elapsed_ms: crate::state::MAXIMUM_GAME_START_WAIT_MS,
+        next_poll_delay_ms: 30_000,
+        polling_timed_out: true,
+    };
+    let tree = view(&with_screen(signed_in(true), Screen::Play(screen)));
+    assert!(tree.text_content().contains("We couldn't start your game"));
+    assert_eq!(control(&tree, "Try again").on_click, Some(Intent::Retry));
 }
 
 #[test]

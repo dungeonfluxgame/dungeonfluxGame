@@ -26,7 +26,7 @@ pub(in crate::view) fn lobby(screen: &LobbyScreen, _offset_east_minutes: i32) ->
     let busy = is_busy(screen.action, &screen.operation);
     let mut sections = el("div").class("stack");
     if lobby.has_started {
-        sections = sections.child(started_panel(&screen.session_id));
+        sections = sections.child(started_panel(&screen.session_id, lobby.can_manage));
     }
     sections = sections.child(members_panel(lobby));
     // The pre-start cost wording ("No charge until ...") is wrong once the session runs.
@@ -65,14 +65,18 @@ pub(in crate::view) fn lobby(screen: &LobbyScreen, _offset_east_minutes: i32) ->
         .into()
 }
 
-fn started_panel(session_id: &str) -> Element {
-    panel("The session has started").child(actions(vec![link(
-        "Open the game",
-        Route::Play {
-            session_id: session_id.to_owned(),
-        },
-        "btn btn-gilt",
-    )]))
+fn started_panel(session_id: &str, can_manage: bool) -> Element {
+    let mut started = panel("The session has started");
+    if can_manage {
+        started = started.child(actions(vec![link(
+            "Open the game",
+            Route::Play {
+                session_id: session_id.to_owned(),
+            },
+            "btn btn-gilt",
+        )]));
+    }
+    started
 }
 
 fn members_panel(lobby: &LobbyView) -> Element {

@@ -770,6 +770,7 @@ fn launch_view(launcher_url: Option<&str>) -> crate::wire_campaign::GameLaunchVi
         session_id: "5e".to_owned(),
         campaign_name: "The Drowned Lantern".to_owned(),
         has_started: true,
+        can_manage: true,
         launcher_url: launcher_url.map(str::to_owned),
         poll_seconds: 3,
     }
@@ -813,6 +814,7 @@ fn the_launcher_says_a_slow_start_is_slow_and_keeps_asking() {
         panic!("still on the launcher page");
     };
     assert_eq!(screen.waiting_polls, crate::state::SLOW_START_POLLS);
+    assert!(!screen.polling_timed_out);
 }
 
 #[test]
@@ -840,6 +842,68 @@ fn the_launcher_asks_again_until_the_game_is_reachable_then_holds_still() {
             .iter()
             .any(|effect| matches!(effect, Effect::After { .. }))
     );
+}
+
+#[test]
+fn the_launcher_doubles_poll_delay_to_thirty_seconds_and_stops_after_ten_minutes() {
+    let mut model = booted(
+        Route::Play {
+            session_id: "5e".to_owned(),
+        },
+        signed_in(true),
+    );
+    let expected_delays = [3_000, 6_000, 12_000, 24_000, 30_000];
+    for expected_delay_ms in expected_delays {
+        let effects = deliver(&mut model, Reply::GameLaunch(Ok(launch_view(None))));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::After { delay_ms, .. } if *delay_ms == expected_delay_ms
+        )));
+        let tick = model.update(Msg::TimerFired {
+            generation: model.generation,
+        });
+        assert!(tick.iter().any(|effect| matches!(
+            effect,
+            Effect::Api {
+                call: ApiCall::GameLaunch { .. },
+                ..
+            }
+        )));
+    }
+    loop {
+        let effects = deliver(&mut model, Reply::GameLaunch(Ok(launch_view(None))));
+        let delay_ms = effects.iter().find_map(|effect| match effect {
+            Effect::After { delay_ms, .. } => Some(*delay_ms),
+            _ => None,
+        });
+        let Some(delay_ms) = delay_ms else {
+            break;
+        };
+        assert!(delay_ms <= 30_000);
+        let tick = model.update(Msg::TimerFired {
+            generation: model.generation,
+        });
+        if matches!(&model.screen, Screen::Play(screen) if screen.waiting_elapsed_ms == crate::state::MAXIMUM_GAME_START_WAIT_MS)
+        {
+            assert!(tick.is_empty());
+            break;
+        }
+        assert!(tick.iter().any(|effect| matches!(
+            effect,
+            Effect::Api {
+                call: ApiCall::GameLaunch { .. },
+                ..
+            }
+        )));
+    }
+    let Screen::Play(screen) = &model.screen else {
+        panic!("still on the launcher page");
+    };
+    assert_eq!(
+        screen.waiting_elapsed_ms,
+        crate::state::MAXIMUM_GAME_START_WAIT_MS
+    );
+    assert!(screen.polling_timed_out);
 }
 
 #[test]

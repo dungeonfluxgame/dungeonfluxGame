@@ -368,6 +368,7 @@ pub struct GameLaunchView {
     pub session_id: String,
     pub campaign_name: String,
     pub has_started: bool,
+    pub can_manage: bool,
     pub launcher_url: Option<String>,
     pub poll_seconds: u32,
 }
