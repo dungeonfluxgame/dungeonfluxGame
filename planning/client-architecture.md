@@ -33,7 +33,11 @@ Starting a game always goes through these four surfaces, in this order:
 
 Rules that follow from it: heroes, readiness, microphones and display pairing belong to the
 game (launcher, display and player), never to the website; the website never offers its own
-copy of the launcher or of the game's lobby. Hosted play keeps the same four surfaces: Start
+copy of the launcher or of the game's lobby. Gameplay settings (content rating, storyteller,
+narration voices, music, pictures, video, table pace) live only in the launcher's Settings; the
+website has no campaign creation wizard and asks no gameplay questions (owner order 2026-10-26:
+the wizard and the campaign page's gameplay settings were deleted as false pages). Play now
+creates or resumes the host's campaign with defaults. Hosted play keeps the same four surfaces: Start
 places the session on a game server (RTLOCAL/RTHOSTED) and the account hands off to that
 session's launcher.
 
