@@ -33,7 +33,6 @@ pub(in crate::view) fn dashboard(screen: &DashboardScreen, model: &Model) -> Nod
             },
             model.play_now.is_sending()
                 || model.play_operation.ready().is_none()
-                || play_now_price(screen).is_none()
                 || !model.account().is_some_and(|account| account.is_verified),
         ))
         .child(play_now_price_line(screen))
@@ -124,38 +123,31 @@ fn play_now_price(screen: &DashboardScreen) -> Option<(u64, u64, bool)> {
                 if let FundingNote::HostCredit(quote) = lobby.funding_note {
                     return Some((quote.hourly_micro_dollars, quote.cap_micro_dollars, true));
                 }
-                return None;
             }
-            Remote::Failed(error) if error.code == crate::wire::ErrorCode::NotFound => {}
-            Remote::Loading | Remote::Failed(_) => return None,
+            Remote::Loading | Remote::Failed(_) => {}
         }
     }
-    let cents_per_hour = screen
-        .play_now_catalog
-        .ready()?
-        .presets
-        .iter()
-        .find_map(|offer| {
-            if offer.preset == crate::wire::PacePreset::Story {
-                offer.ceiling_cents_per_hour
-            } else {
-                None
-            }
-        })?;
-    let hourly_micro_dollars = u64::from(cents_per_hour) * 10_000;
-    Some((hourly_micro_dollars, hourly_micro_dollars, false))
+    None
 }
 
 fn play_now_price_line(screen: &DashboardScreen) -> Node {
     let Some((hourly_micro_dollars, limit_micro_dollars, is_session_limit)) =
         play_now_price(screen)
     else {
+        if resumable_campaign(&screen.campaigns).is_none() {
+            return el("p")
+                .class("play-now-price")
+                .text(
+                    "Play now starts or resumes your campaign. Game settings live in the launcher.",
+                )
+                .into();
+        }
         if let Some(error) = play_now_price_error(screen) {
             return failed(error);
         }
         return el("p")
             .class("hint")
-            .text("Checking the table price. Play now will be available when it is ready.")
+            .text("Checking the table price.")
             .into();
     };
     let limit = if is_session_limit {
@@ -183,9 +175,6 @@ fn play_now_price_error(screen: &DashboardScreen) -> Option<crate::wire::ApiErro
         && let Remote::Failed(error) = &screen.resume_lobby
         && error.code != crate::wire::ErrorCode::NotFound
     {
-        return Some(*error);
-    }
-    if let Remote::Failed(error) = &screen.play_now_catalog {
         return Some(*error);
     }
     None
@@ -386,13 +375,12 @@ fn invitation_panel(
     preview: &InvitePreview,
     offset_east_minutes: i32,
 ) -> Node {
-    let mut details = format!("Content: {}.", copy::rating_name(preview.content_rating));
-    if let Some(at_ms) = preview.scheduled_at_ms {
-        details.push_str(&format!(
-            " Planned for {}.",
+    let details = preview.scheduled_at_ms.map(|at_ms| {
+        format!(
+            "Planned for {}.",
             money::date_time(at_ms, offset_east_minutes)
-        ));
-    }
+        )
+    });
     let is_sending = screen.join.is_sending();
     let join = match &screen.join_operation {
         Remote::Failed(error) => failed(*error),
@@ -413,7 +401,7 @@ fn invitation_panel(
             is_sending,
         ),
     };
-    el("section")
+    let mut panel = el("section")
         .class("panel panel-warn invitation")
         .attr("aria-labelledby", "invitation-title")
         .child(
@@ -424,8 +412,11 @@ fn invitation_panel(
         .child(el("p").text(format!(
             "You were invited to {} by {}. Join?",
             preview.campaign_name, preview.host_name
-        )))
-        .child(el("p").class("row-meta").text(details))
+        )));
+    if let Some(details) = details {
+        panel = panel.child(el("p").class("row-meta").text(details));
+    }
+    panel
         .child(error_summary(screen.join.error()))
         .child(join)
         .into()

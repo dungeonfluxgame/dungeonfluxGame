@@ -66,7 +66,6 @@ fn screen(model: &Model) -> Node {
         Screen::PlaySessions(screen) => customer::play_sessions(screen, model.offset_east_minutes),
         Screen::Assets(screen) => customer::assets(screen, model.offset_east_minutes),
         Screen::Settings(screen) => customer::settings(screen, model),
-        Screen::NewCampaign(screen) => campaign::wizard(screen, model),
         Screen::Campaign(screen) => campaign::overview(screen, model.offset_east_minutes),
         Screen::Lobby(screen) => campaign::lobby(screen, model.offset_east_minutes),
         Screen::Play(screen) => campaign::play(screen),
@@ -199,10 +198,9 @@ fn same_section(link: &Route, current: &Route) -> bool {
         (Route::Admin(_), Route::Admin(_)) => true,
         (Route::Funding, Route::AddCredit | Route::CreditReturn { .. }) => true,
         (Route::AddCredit, Route::CreditReturn { .. }) => true,
-        (
-            Route::Dashboard,
-            Route::Campaign { .. } | Route::Lobby { .. } | Route::NewCampaign | Route::Join { .. },
-        ) => true,
+        (Route::Dashboard, Route::Campaign { .. } | Route::Lobby { .. } | Route::Join { .. }) => {
+            true
+        }
         _ => link == current,
     }
 }

@@ -16,7 +16,7 @@ use crate::{
         PlaySessionRow, ProfileRequest, Refusal, RevokeSessionRequest, SetPaceRequest,
         SettingsView, StatementFilter, StatementLine,
     },
-    wire_campaign::{CampaignRole, DashboardView, LobbyView, PendingInvitation, WizardCatalog},
+    wire_campaign::{CampaignRole, DashboardView, LobbyView, PendingInvitation},
 };
 
 /// Statement lines kept on screen; older pages stop loading at this bound.
@@ -29,7 +29,6 @@ pub const CHECKOUT_POLL_DELAYS_MS: [u32; 8] =
 pub struct DashboardScreen {
     pub overview: Remote<OverviewView>,
     pub campaigns: Remote<DashboardView>,
-    pub play_now_catalog: Remote<WizardCatalog>,
     pub resume_lobby: Remote<LobbyView>,
     /// The invitation remembered in the join cookie, offered after signing in (S1 P-3).
     pub pending: Remote<PendingInvitation>,
@@ -243,7 +242,6 @@ impl Model {
                 self.screen = Screen::Dashboard(DashboardScreen {
                     overview: Remote::Loading,
                     campaigns: Remote::Loading,
-                    play_now_catalog: Remote::Loading,
                     resume_lobby: Remote::Failed(ApiError::of(ErrorCode::NotFound)),
                     pending: Remote::Loading,
                     resend: Submit::Idle,
@@ -258,7 +256,6 @@ impl Model {
                     self.api(ApiCall::Overview),
                     self.issue_operation(OperationSlot::Primary),
                     self.api(ApiCall::Dashboard),
-                    self.api(ApiCall::WizardCatalog),
                     self.api(ApiCall::JoinPending),
                     self.api(ApiCall::AccountStats),
                     self.api(ApiCall::Assets {
@@ -398,8 +395,7 @@ impl Model {
                     self.issue_operation(OperationSlot::Secondary),
                 ]
             }
-            Route::NewCampaign
-            | Route::Campaign { .. }
+            Route::Campaign { .. }
             | Route::Lobby { .. }
             | Route::Play { .. }
             | Route::Join { .. } => self.enter_campaign(route),
@@ -883,10 +879,6 @@ impl Model {
             }
             (Reply::Lobby(result), Screen::Dashboard(screen)) => {
                 screen.resume_lobby = Remote::from_result(result);
-                Vec::new()
-            }
-            (Reply::WizardCatalog(result), Screen::Dashboard(screen)) => {
-                screen.play_now_catalog = Remote::from_result(result);
                 Vec::new()
             }
             (Reply::CreditOffers(result), Screen::AddCredit(form)) => {

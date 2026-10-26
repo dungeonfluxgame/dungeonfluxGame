@@ -1,38 +1,24 @@
-//! Campaign screens over S1's JSON API (decision 29): the create wizard, a campaign's members and
-//! invitations, joining by link or room code, and the lobby with display pairing (plan 9.4-9.6;
-//! S1 plan 8.1-8.5). S1 enforces every rule; the app shows what S1 returns.
+//! Campaign membership, invitations, joining, and the lobby over S1's JSON API. S1 enforces every
+//! rule; the app shows what S1 returns.
 
 use super::{
     Effect, Field, FocusTarget, Form, History, Intent, Model, OperationSlot, Remote, Screen, Submit,
 };
 use crate::{
     api::{ApiCall, JoinDecision, Reply},
-    money::parse_dollars,
     route::Route,
-    wire::{ApiError, PacePreset, Refusal},
+    wire::{ApiError, Refusal},
     wire_campaign::{
-        ApproveRequestBody, CampaignDraft, CampaignOverview, ContentRating,
-        CreateInvitationRequest, FundingModel, HeroChoice, InvitationCreated, InvitationKind,
-        InvitePreview, JoinAcceptRequest, JoinMode, JoinRequested, LobbyView, OperationRequest,
-        PictureDefault, RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody,
-        WizardCatalog,
+        ApproveRequestBody, CampaignDraft, CampaignOverview, CreateInvitationRequest, FundingModel,
+        InvitationCreated, InvitationKind, InvitePreview, JoinAcceptRequest, JoinMode,
+        JoinRequested, LobbyView, OperationRequest, RoomCodeJoinRequest, RoomCodeLookupRequest,
+        SaveDraftRequest, TokenBody,
     },
 };
 
-/// The wizard's steps (plan 9.5): basics, heroes, look and pace, joining and funding, summary.
-pub const WIZARD_STEPS: u8 = 5;
-/// Longest campaign name the wizard accepts before S1 checks it again.
-pub const MAXIMUM_CAMPAIGN_NAME_CHARS: usize = 60;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WizardScreen {
-    pub catalog: Remote<WizardCatalog>,
-    pub draft_id: Remote<String>,
-    pub step: u8,
+pub struct CampaignSettingsScreen {
     pub draft: CampaignDraft,
-    pub custom_ceiling: String,
-    pub operation: Remote<String>,
-    pub save: Submit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,7 +29,7 @@ pub struct CampaignScreen {
     pub action: Submit,
     pub created_link: Option<InvitationCreated>,
     pub is_confirming_leave: bool,
-    pub settings: Option<Box<WizardScreen>>,
+    pub settings: Option<Box<CampaignSettingsScreen>>,
     pub settings_error: Option<ApiError>,
     pub can_edit_settings: bool,
 }
@@ -99,83 +85,9 @@ pub const SLOW_START_POLLS: u32 = 6;
 pub const MAXIMUM_GAME_START_WAIT_MS: u32 = 10 * 60 * 1_000;
 const MAXIMUM_GAME_START_POLL_DELAY_MS: u32 = 30_000;
 
-pub(super) fn empty_draft() -> CampaignDraft {
-    CampaignDraft {
-        name: String::new(),
-        adventure_id: None,
-        content_rating: Some(ContentRating::Teen),
-        seat_count: 6,
-        hero_choice: HeroChoice::InLobby,
-        has_voice: true,
-        pictures: PictureDefault::Automatic,
-        pace: PacePreset::Immersive,
-        custom_ceiling_cents_per_hour: None,
-        co_hosts_can_invite: true,
-        co_hosts_can_start: false,
-        co_hosts_can_export: false,
-        join_mode: JoinMode::LinkOnly,
-        funding: FundingModel::Sponsor,
-    }
-}
-
-fn rating_from_name(name: &str) -> Option<ContentRating> {
-    [ContentRating::Teen, ContentRating::Mature]
-        .into_iter()
-        .find(|rating| crate::copy::rating_value(*rating) == name)
-}
-
-impl WizardScreen {
-    /// What blocks leaving the current step, checked before S1 checks it again.
-    fn step_refusal(&self) -> Option<Refusal> {
-        let draft = &self.draft;
-        let catalog = self.catalog.ready()?;
-        match self.step {
-            1 if draft.name.trim().is_empty() => Some(Refusal::CampaignNameRequired),
-            1 if draft.name.trim().chars().count() > MAXIMUM_CAMPAIGN_NAME_CHARS => {
-                Some(Refusal::CampaignNameTooLong)
-            }
-            1 if draft.adventure_id.is_none() => Some(Refusal::AdventureRequired),
-            1 if draft.content_rating.is_none() => Some(Refusal::ContentRatingRequired),
-            1 if draft.seat_count == 0 || draft.seat_count > catalog.maximum_seats => {
-                Some(Refusal::SeatsOutOfRange)
-            }
-            3 if draft.pace == PacePreset::Custom => {
-                let range =
-                    catalog.custom_minimum_cents_per_hour..=catalog.custom_maximum_cents_per_hour;
-                match draft.custom_ceiling_cents_per_hour {
-                    Some(cents) if range.contains(&cents) => None,
-                    _ => Some(Refusal::CeilingOutOfRange),
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
 impl Model {
     pub(super) fn enter_campaign(&mut self, route: Route) -> Vec<Effect> {
         match route {
-            Route::NewCampaign => {
-                let is_verified = self.account().is_some_and(|account| account.is_verified);
-                self.screen = Screen::NewCampaign(WizardScreen {
-                    catalog: Remote::Loading,
-                    draft_id: Remote::Loading,
-                    step: 1,
-                    draft: empty_draft(),
-                    custom_ceiling: String::new(),
-                    operation: Remote::Loading,
-                    save: Submit::Idle,
-                });
-                // An unverified account cannot start a draft (S1 decision 12); the screen says so.
-                if !is_verified {
-                    return Vec::new();
-                }
-                vec![
-                    self.api(ApiCall::WizardCatalog),
-                    self.api(ApiCall::StartDraft),
-                    self.issue_operation(OperationSlot::Primary),
-                ]
-            }
             Route::Campaign { campaign_id } => {
                 self.screen = Screen::Campaign(CampaignScreen {
                     campaign_id: campaign_id.clone(),
@@ -192,7 +104,9 @@ impl Model {
                     self.api(ApiCall::Campaign {
                         campaign_id: campaign_id.clone(),
                     }),
-                    self.api(ApiCall::CampaignSettings { campaign_id }),
+                    self.api(ApiCall::CampaignSettings {
+                        campaign_id: campaign_id.clone(),
+                    }),
                     self.issue_operation(OperationSlot::Primary),
                 ]
             }
@@ -251,7 +165,6 @@ impl Model {
             Screen::Join(_) => self.join_intent(intent),
             Screen::Lobby(_) => self.lobby_intent(intent),
             Screen::Campaign(_) => self.overview_intent(intent),
-            Screen::NewCampaign(_) => self.wizard_intent(intent),
             Screen::Dashboard(_) => match intent {
                 Intent::AcceptPendingInvitation => self.accept_pending_invitation(),
                 Intent::CopyText(text) => vec![Effect::CopyText(text)],
@@ -261,20 +174,6 @@ impl Model {
                 Intent::CopyText(text) => vec![Effect::CopyText(text)],
                 _ => Vec::new(),
             },
-        }
-    }
-
-    fn wizard_intent(&mut self, intent: Intent) -> Vec<Effect> {
-        let Screen::NewCampaign(screen) = &mut self.screen else {
-            return Vec::new();
-        };
-        match intent {
-            Intent::WizardBack => {
-                screen.step = screen.step.saturating_sub(1).max(1);
-                screen.save = Submit::Idle;
-                vec![Effect::Focus(FocusTarget::Heading)]
-            }
-            _ => Vec::new(),
         }
     }
 
@@ -452,13 +351,29 @@ impl Model {
     }
 
     pub(super) fn edit_campaign(&mut self, field: Field, value: &str) -> bool {
-        let editor = match &mut self.screen {
-            Screen::NewCampaign(screen) => Some(screen),
-            Screen::Campaign(screen) if screen.can_edit_settings => screen.settings.as_deref_mut(),
-            _ => None,
-        };
-        if let Some(screen) = editor {
-            return edit_settings_field(screen, field, value);
+        if let Screen::Campaign(screen) = &mut self.screen
+            && screen.can_edit_settings
+            && let Some(settings) = screen.settings.as_mut()
+        {
+            match field {
+                Field::JoinModeChoice => {
+                    settings.draft.join_mode = if value == "code" {
+                        JoinMode::LinkAndRoomCode
+                    } else {
+                        JoinMode::LinkOnly
+                    };
+                    return true;
+                }
+                Field::FundingChoice => {
+                    settings.draft.funding = if value == "shared" {
+                        FundingModel::SharedPot
+                    } else {
+                        FundingModel::Sponsor
+                    };
+                    return true;
+                }
+                _ => {}
+            }
         }
         match (&mut self.screen, field) {
             (Screen::Join(screen), Field::RoomCode) => value.clone_into(&mut screen.code),
@@ -474,17 +389,14 @@ impl Model {
             }
             return;
         }
-        let editor = match &mut self.screen {
-            Screen::NewCampaign(screen) => Some(screen),
-            Screen::Campaign(screen) if screen.can_edit_settings => screen.settings.as_deref_mut(),
-            _ => None,
-        };
-        if let Some(screen) = editor {
+        if let Screen::Campaign(screen) = &mut self.screen
+            && screen.can_edit_settings
+            && let Some(settings) = screen.settings.as_mut()
+        {
             match field {
-                Field::HasVoice => screen.draft.has_voice = is_on,
-                Field::CoHostsCanInvite => screen.draft.co_hosts_can_invite = is_on,
-                Field::CoHostsCanStart => screen.draft.co_hosts_can_start = is_on,
-                Field::CoHostsCanExport => screen.draft.co_hosts_can_export = is_on,
+                Field::CoHostsCanInvite => settings.draft.co_hosts_can_invite = is_on,
+                Field::CoHostsCanStart => settings.draft.co_hosts_can_start = is_on,
+                Field::CoHostsCanExport => settings.draft.co_hosts_can_export = is_on,
                 _ => {}
             }
         }
@@ -498,18 +410,14 @@ impl Model {
                 if !screen.can_edit_settings || screen.action.is_sending() {
                     return Vec::new();
                 }
-                let Some(editor) = screen.settings.as_ref() else {
+                let Some(settings) = screen.settings.as_ref() else {
                     return Vec::new();
                 };
-                if let Some(refusal) = editor.step_refusal() {
-                    screen.action = Submit::Refused(ApiError::refused(refusal));
-                    return vec![Effect::Focus(FocusTarget::ErrorSummary)];
-                }
                 screen.action = Submit::Sending;
                 ApiCall::SaveCampaignSettings {
                     campaign_id: screen.campaign_id.clone(),
                     request: SaveDraftRequest {
-                        draft: editor.draft.clone(),
+                        draft: settings.draft.clone(),
                     },
                 }
             }
@@ -539,39 +447,6 @@ impl Model {
                     },
                 }
             }
-            (Screen::NewCampaign(screen), Form::WizardStep) => {
-                let Some(draft_id) = screen.draft_id.ready().cloned() else {
-                    return Vec::new();
-                };
-                if screen.save.is_sending() {
-                    return Vec::new();
-                }
-                if let Some(refusal) = screen.step_refusal() {
-                    screen.save = Submit::Refused(ApiError::refused(refusal));
-                    return vec![Effect::Focus(FocusTarget::ErrorSummary)];
-                }
-                screen.save = Submit::Sending;
-                ApiCall::SaveDraft {
-                    draft_id,
-                    step: screen.step,
-                    request: SaveDraftRequest {
-                        draft: screen.draft.clone(),
-                    },
-                }
-            }
-            (Screen::NewCampaign(screen), Form::CreateCampaign) => {
-                let Some(draft_id) = screen.draft_id.ready().cloned() else {
-                    return Vec::new();
-                };
-                let Some(operation) = take_operation(&mut screen.operation, &mut screen.save)
-                else {
-                    return Vec::new();
-                };
-                ApiCall::FinishDraft {
-                    draft_id,
-                    request: OperationRequest { operation },
-                }
-            }
             (Screen::Join(screen), Form::CodeLookup) if is_signed_in => {
                 if screen.code.trim().is_empty() {
                     screen.submit = Submit::Refused(ApiError::refused(Refusal::CodeRequired));
@@ -593,12 +468,6 @@ impl Model {
     pub(super) fn campaign_reply(&mut self, reply: Reply) -> Vec<Effect> {
         match reply {
             Reply::PlayNow(result) => return self.play_now_reply(result),
-            Reply::LobbyCancelled(result) => {
-                return match result {
-                    Ok(_) => self.navigate(Route::Dashboard, History::Push),
-                    Err(error) => self.refused_and_reissue(error),
-                };
-            }
             Reply::CampaignSettings(result) => {
                 if let Screen::Campaign(screen) = &mut self.screen {
                     screen.action = Submit::Idle;
@@ -606,41 +475,23 @@ impl Model {
                         Ok(view) => {
                             screen.can_edit_settings = view.can_edit;
                             screen.settings_error = None;
-                            screen.settings = Some(Box::new(WizardScreen {
-                                custom_ceiling: view
-                                    .draft
-                                    .custom_ceiling_cents_per_hour
-                                    .map(|cents| {
-                                        crate::money::cents(u64::from(cents))
-                                            .trim_start_matches('$')
-                                            .to_owned()
-                                    })
-                                    .unwrap_or_default(),
-                                draft: view.draft,
-                                catalog: Remote::Ready(view.catalog),
-                                draft_id: Remote::Ready(screen.campaign_id.clone()),
-                                step: 1,
-                                operation: Remote::Loading,
-                                save: Submit::Idle,
-                            }));
+                            screen.settings =
+                                Some(Box::new(CampaignSettingsScreen { draft: view.draft }));
                         }
-                        Err(error) => {
-                            screen.settings_error = Some(error);
-                            if let Some(editor) = screen.settings.as_mut() {
-                                editor.save = Submit::Refused(error);
-                            }
-                        }
+                        Err(error) => screen.settings_error = Some(error),
                     }
                 }
                 return Vec::new();
             }
+            Reply::LobbyCancelled(result) => {
+                return match result {
+                    Ok(_) => self.navigate(Route::Dashboard, History::Push),
+                    Err(error) => self.refused_and_reissue(error),
+                };
+            }
             _ => {}
         }
         match (reply, &self.screen) {
-            (
-                reply @ (Reply::WizardCatalog(_) | Reply::Draft(_) | Reply::CampaignCreated(_)),
-                _,
-            ) => self.wizard_reply(reply),
             (
                 reply @ (Reply::Campaign(_)
                 | Reply::InvitationCreated(_)
@@ -658,58 +509,6 @@ impl Model {
                 | Reply::JoinPending(_)),
                 _,
             ) => self.join_reply(reply),
-            _ => Vec::new(),
-        }
-    }
-
-    fn wizard_reply(&mut self, reply: Reply) -> Vec<Effect> {
-        let Screen::NewCampaign(screen) = &mut self.screen else {
-            return Vec::new();
-        };
-        match reply {
-            Reply::WizardCatalog(result) => {
-                screen.catalog = Remote::from_result(result);
-                Vec::new()
-            }
-            Reply::Draft(result) => match result {
-                Ok(view) if screen.draft_id.ready().is_none() => {
-                    // A draft in progress resumes where it was left (plan 9.5).
-                    {
-                        screen.step = view.step.min(WIZARD_STEPS);
-                        screen.draft = view.draft;
-                        screen.custom_ceiling = screen
-                            .draft
-                            .custom_ceiling_cents_per_hour
-                            .map(|cents| {
-                                crate::money::cents(u64::from(cents))
-                                    .trim_start_matches('$')
-                                    .to_owned()
-                            })
-                            .unwrap_or_default();
-                    }
-                    screen.draft_id = Remote::Ready(view.draft_id);
-                    Vec::new()
-                }
-                Ok(_) => {
-                    screen.save = Submit::Idle;
-                    screen.step = (screen.step + 1).min(WIZARD_STEPS);
-                    vec![Effect::Focus(FocusTarget::Heading)]
-                }
-                Err(error) if screen.draft_id.ready().is_none() => {
-                    screen.draft_id = Remote::Failed(error);
-                    Vec::new()
-                }
-                Err(error) => refused(&mut screen.save, error),
-            },
-            Reply::CampaignCreated(result) => match result {
-                Ok(created) => self.navigate(
-                    Route::Campaign {
-                        campaign_id: created.campaign_id,
-                    },
-                    History::Push,
-                ),
-                Err(error) => self.refused_and_reissue(error),
-            },
             _ => Vec::new(),
         }
     }
@@ -896,7 +695,6 @@ impl Model {
     /// new id so the person can send it again.
     fn refused_and_reissue(&mut self, error: ApiError) -> Vec<Effect> {
         let submit = match &mut self.screen {
-            Screen::NewCampaign(screen) => &mut screen.save,
             Screen::Campaign(screen) => &mut screen.action,
             Screen::Lobby(screen) => &mut screen.action,
             Screen::Join(screen) => &mut screen.submit,
@@ -935,68 +733,6 @@ fn take_operation(operation: &mut Remote<String>, submit: &mut Submit) -> Option
 fn refused(submit: &mut Submit, error: ApiError) -> Vec<Effect> {
     *submit = Submit::Refused(error);
     vec![Effect::Focus(FocusTarget::ErrorSummary)]
-}
-
-fn edit_settings_field(screen: &mut WizardScreen, field: Field, value: &str) -> bool {
-    let draft = &mut screen.draft;
-    match field {
-        Field::CampaignName => value.clone_into(&mut draft.name),
-        Field::Adventure => {
-            draft.adventure_id = Some(value.to_owned());
-            // A rating the new adventure does not allow must not stay in the draft.
-            let allowed = screen.catalog.ready().and_then(|catalog| {
-                catalog
-                    .adventures
-                    .iter()
-                    .find(|adventure| adventure.adventure_id == value)
-            });
-            if let (Some(adventure), Some(rating)) = (allowed, draft.content_rating)
-                && !adventure.ratings.contains(&rating)
-            {
-                draft.content_rating = None;
-            }
-        }
-        Field::Rating => draft.content_rating = rating_from_name(value),
-        Field::SeatCount => {
-            if let Ok(seats) = value.parse() {
-                draft.seat_count = seats;
-            }
-        }
-        Field::Pictures => {
-            draft.pictures = if value == "existing" {
-                PictureDefault::ExistingArtOnly
-            } else {
-                PictureDefault::Automatic
-            };
-        }
-        Field::PacePreset => {
-            if let Some(preset) = super::customer_flow::preset_from_name(value) {
-                draft.pace = preset;
-            }
-        }
-        Field::CustomCeiling => {
-            value.clone_into(&mut screen.custom_ceiling);
-            draft.custom_ceiling_cents_per_hour = parse_dollars(value).ok();
-        }
-        Field::JoinModeChoice => {
-            draft.join_mode = if value == "code" {
-                JoinMode::LinkAndRoomCode
-            } else {
-                JoinMode::LinkOnly
-            };
-        }
-        Field::FundingChoice => {
-            draft.funding = if value == "shared" {
-                FundingModel::SharedPot
-            } else {
-                FundingModel::Sponsor
-            };
-        }
-        _ => return false,
-    }
-    screen.save = Submit::Idle;
-
-    true
 }
 
 impl Model {

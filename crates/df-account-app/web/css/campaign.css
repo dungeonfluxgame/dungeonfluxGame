@@ -1,37 +1,5 @@
-/* Campaign screens: the create wizard, overview, join, lobby and the TV's pairing screen.
+/* Campaign screens: overview, join, lobby and the TV's pairing screen.
    Concatenated after base.css; it only adds rules for what base.css does not already style. */
-
-/* ---------------------------------------------------------------- wizard */
-
-.wizard-steps {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  margin: 0 0 28px;
-  padding: 0;
-  font-family: var(--sans);
-  font-size: 16px;
-  color: var(--tallow);
-}
-
-.wizard-step {
-  padding: 4px 0;
-  border-bottom: 2px solid transparent;
-}
-
-/* The current step is bold and underlined as well as named: never colour alone. */
-.wizard-step.is-current {
-  font-weight: 600;
-  color: var(--parchment);
-  border-bottom-color: var(--lantern);
-}
-
-@media (max-width: 640px) {
-  .wizard-steps {
-    flex-direction: column;
-  }
-}
 
 .form > h2 {
   margin: 0;

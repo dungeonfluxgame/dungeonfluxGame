@@ -1,6 +1,6 @@
-//! The JSON shapes the app reads from S1's campaign API (decision 29; S1 plan sections 7 and 8):
-//! the dashboard, the create wizard, campaign overview and invitations, joining, the lobby and
-//! display pairing. S1 owns the endpoints and every rule behind them; these types are the proposed
+//! JSON shapes shared with S1's campaign API (decision 29; S1 plan sections 7 and 8):
+//! dashboard, campaign membership, invitations, joining, lobby and display pairing. S1 owns every
+//! endpoint and rule behind them; these types are the proposed
 //! contract, served by a fake until S1's `df-campaign-wire` crate lands (TODO(S1): replace this
 //! module with that crate's types). Paths live under `/app/api/campaigns`, `/app/api/sessions`,
 //! `/app/api/join` and `/app/api/display`.
@@ -124,7 +124,7 @@ pub struct JoinRequested {
     pub campaign_name: String,
 }
 
-/// What the wizard offers (S1 8.1); presets are F's catalog, labelled proposed until approved.
+/// Defaults and preset offers used by server-owned campaign creation (S1 8.1).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WizardCatalog {
     pub adventures: Vec<AdventureOption>,
@@ -144,7 +144,7 @@ pub struct AdventureOption {
     pub rules_text: String,
 }
 
-/// The whole draft; each wizard step saves it (plan 9.5: a draft saves between steps).
+/// Campaign defaults and business settings persisted by the campaign service.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CampaignDraft {

@@ -21,9 +21,8 @@ pub use admin_flow::{
 };
 pub use auth_flow::{ForgotForm, ResetForm, SignInForm, SignUpForm, VerifyConfirm, VerifyPending};
 pub use campaign_flow::{
-    CampaignScreen, JoinScreen, LobbyScreen, MAXIMUM_CAMPAIGN_NAME_CHARS,
-    MAXIMUM_GAME_START_WAIT_MS, PlayScreen, RequestDecision, SLOW_START_POLLS, WIZARD_STEPS,
-    WizardScreen,
+    CampaignScreen, CampaignSettingsScreen, JoinScreen, LobbyScreen, MAXIMUM_GAME_START_WAIT_MS,
+    PlayScreen, RequestDecision, SLOW_START_POLLS,
 };
 pub use customer_flow::{
     AllocateEdit, AmountChoice, AssetsScreen, CHECKOUT_POLL_DELAYS_MS, CreditForm, CreditReturn,
@@ -145,7 +144,6 @@ pub enum Intent {
     /// Ask the host to approve a room-code request.
     AskToJoin,
     ClearCodeLookup,
-    WizardBack,
     CreateInvitation(crate::wire_campaign::InvitationKind),
     RevokeInvitation {
         invitation_id: String,
@@ -184,8 +182,6 @@ pub enum Form {
     Refund,
     Goodwill,
     Action,
-    WizardStep,
-    CreateCampaign,
     CampaignSettings,
     CodeLookup,
 }
@@ -212,12 +208,6 @@ pub enum Field {
     CreditReason,
     SupportCase,
     ActionReason,
-    CampaignName,
-    Adventure,
-    Rating,
-    SeatCount,
-    HasVoice,
-    Pictures,
     CoHostsCanInvite,
     CoHostsCanStart,
     CoHostsCanExport,
@@ -239,7 +229,7 @@ pub enum Field {
     AssetCampaignFilter,
 }
 
-const FIELDS: [Field; 43] = [
+const FIELDS: [Field; 37] = [
     Field::Email,
     Field::Password,
     Field::Confirmation,
@@ -258,12 +248,6 @@ const FIELDS: [Field; 43] = [
     Field::CreditReason,
     Field::SupportCase,
     Field::ActionReason,
-    Field::CampaignName,
-    Field::Adventure,
-    Field::Rating,
-    Field::SeatCount,
-    Field::HasVoice,
-    Field::Pictures,
     Field::CoHostsCanInvite,
     Field::CoHostsCanStart,
     Field::CoHostsCanExport,
@@ -306,12 +290,6 @@ impl Field {
             Self::CreditReason => "credit-reason",
             Self::SupportCase => "support-case",
             Self::ActionReason => "action-reason",
-            Self::CampaignName => "campaign-name",
-            Self::Adventure => "adventure",
-            Self::Rating => "content-rating",
-            Self::SeatCount => "seat-count",
-            Self::HasVoice => "has-voice",
-            Self::Pictures => "pictures",
             Self::CoHostsCanInvite => "co-hosts-can-invite",
             Self::CoHostsCanStart => "co-hosts-can-start",
             Self::CoHostsCanExport => "co-hosts-can-export",
@@ -449,7 +427,6 @@ pub enum Screen {
     PlaySessions(PlaySessionsScreen),
     Assets(AssetsScreen),
     Settings(SettingsScreen),
-    NewCampaign(WizardScreen),
     Campaign(CampaignScreen),
     Lobby(LobbyScreen),
     Play(PlayScreen),
@@ -624,8 +601,6 @@ impl Model {
             | Form::Refund
             | Form::Goodwill
             | Form::Action
-            | Form::WizardStep
-            | Form::CreateCampaign
             | Form::CampaignSettings
             | Form::CodeLookup => self.submit_customer(form),
         };
@@ -687,7 +662,6 @@ impl Model {
             (Screen::Dashboard(screen), OperationSlot::Secondary) => {
                 screen.join_operation = operation
             }
-            (Screen::NewCampaign(screen), _) => screen.operation = operation,
             (Screen::Campaign(screen), _) => screen.operation = operation,
             (Screen::Lobby(screen), _) => screen.operation = operation,
             (Screen::Join(screen), _) => screen.operation = operation,
@@ -893,7 +867,6 @@ impl Model {
             | Route::Assets
             | Route::Settings
             | Route::Security
-            | Route::NewCampaign
             | Route::Campaign { .. }
             | Route::Lobby { .. }
             | Route::Play { .. }
@@ -953,9 +926,6 @@ fn reply_error(reply: &Reply) -> Option<ApiError> {
         Reply::Dashboard(result) => of(result),
         Reply::PlayNow(result) => of(result),
         Reply::CampaignSettings(result) => of(result),
-        Reply::WizardCatalog(result) => of(result),
-        Reply::Draft(result) => of(result),
-        Reply::CampaignCreated(result) => of(result),
         Reply::Campaign(result) => of(result),
         Reply::JoinPending(result) => of(result),
         Reply::InvitationCreated(result) => of(result),

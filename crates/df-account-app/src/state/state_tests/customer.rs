@@ -87,12 +87,7 @@ fn the_dashboard_asks_for_balance_campaigns_and_a_remembered_invitation_together
         deliver(&mut model, Reply::Session(Ok(signed_in(true))))
     };
 
-    let wanted = [
-        ApiCall::Overview,
-        ApiCall::Dashboard,
-        ApiCall::WizardCatalog,
-        ApiCall::JoinPending,
-    ];
+    let wanted = [ApiCall::Overview, ApiCall::Dashboard, ApiCall::JoinPending];
     for call in &wanted {
         assert!(calls(&model_effects).contains(&call), "{call:?}");
     }

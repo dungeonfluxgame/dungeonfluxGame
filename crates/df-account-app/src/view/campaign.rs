@@ -1,24 +1,20 @@
-//! The campaign screens: the create wizard, a campaign's overview, joining a table, the lobby and
-//! the TV's pairing screen. Each is a function of the screen's state; the server decided every
-//! permission and the page only shows what S1 returned (plan 9.4-9.6; S1 plan 7 and 8).
+//! The campaign overview, joining, lobby and TV pairing screens. Each is a function of screen
+//! state; the server decides every permission and the page only shows what S1 returns.
 
 mod join;
 mod lobby;
 mod overview;
 mod play;
-mod wizard;
-
-pub(super) use join::join;
-pub(super) use lobby::lobby;
-pub(super) use overview::overview;
-pub(super) use play::play;
-pub(super) use wizard::wizard;
 
 use super::ButtonKind;
 use crate::{
     node::{Element, Node, el},
     state::{Intent, Remote, Submit},
 };
+pub(super) use join::join;
+pub(super) use lobby::lobby;
+pub(super) use overview::overview;
+pub(super) use play::play;
 
 /// A control must wait while its request is out, and until the screen holds the one-use
 /// operation id the request needs (a click without one would do nothing).

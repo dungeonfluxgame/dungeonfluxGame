@@ -86,10 +86,6 @@ fn preview_panel(preview: &InvitePreview, offset_east_minutes: i32) -> Node {
             money::date_time(at_ms, offset_east_minutes),
         ));
     }
-    rows.push(fact(
-        "Content rating",
-        copy::rating_name(preview.content_rating),
-    ));
     panel(&format!("You are invited to {}", preview.campaign_name))
         .child(facts(rows))
         .into()

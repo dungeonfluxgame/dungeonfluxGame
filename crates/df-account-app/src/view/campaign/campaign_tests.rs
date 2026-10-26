@@ -2,16 +2,16 @@ use crate::{
     node::{Element, Node},
     route::Route,
     state::{
-        CampaignScreen, Field, Form, Intent, JoinScreen, LobbyScreen, Model, PlayScreen, Remote,
-        RequestDecision, Screen, Submit, WizardScreen,
+        CampaignScreen, CampaignSettingsScreen, Field, Form, Intent, JoinScreen, LobbyScreen,
+        Model, PlayScreen, Remote, RequestDecision, Screen, Submit,
     },
     view::view,
-    wire::{AccountView, ApiError, ErrorCode, PacePreset, PresetOffer, Refusal, SessionView},
+    wire::{AccountView, ApiError, ErrorCode, PacePreset, SessionView},
     wire_campaign::{
-        AdventureOption, CampaignDraft, CampaignOverview, CampaignRole, ContentRating,
-        FundingModel, FundingNote, GameLaunchView, HeroChoice, InvitationCreated, InvitationKind,
-        InvitationRow, InvitePreview, JoinMode, JoinRequestRow, JoinRequested, LobbyMember,
-        LobbyView, MemberRow, PictureDefault, Reason, RoomCodeState, StartBlocker, WizardCatalog,
+        CampaignDraft, CampaignOverview, CampaignRole, ContentRating, FundingModel, FundingNote,
+        GameLaunchView, HeroChoice, InvitationCreated, InvitationKind, InvitationRow,
+        InvitePreview, JoinMode, JoinRequestRow, JoinRequested, LobbyMember, LobbyView, MemberRow,
+        PictureDefault, Reason, RoomCodeState, StartBlocker,
     },
 };
 
@@ -135,474 +135,6 @@ fn assert_token_nowhere(tree: &Node) {
         for (name, value) in &element.attributes {
             assert!(!value.contains(SECRET_TOKEN), "token in attribute {name}");
         }
-    }
-}
-
-// ---------------------------------------------------------------- wizard fixtures
-
-fn catalog() -> WizardCatalog {
-    WizardCatalog {
-        adventures: vec![
-            AdventureOption {
-                adventure_id: "lost-mine".to_owned(),
-                name: "The Lost Mine".to_owned(),
-                summary: "A short first adventure.".to_owned(),
-                ratings: vec![ContentRating::Teen, ContentRating::Mature],
-                rules_text: "Standard 2024 fifth-edition rules.".to_owned(),
-            },
-            AdventureOption {
-                adventure_id: "teen-only".to_owned(),
-                name: "The Lantern Road".to_owned(),
-                summary: "A gentle road story.".to_owned(),
-                ratings: vec![ContentRating::Teen],
-                rules_text: "Standard 2024 fifth-edition rules.".to_owned(),
-            },
-        ],
-        maximum_seats: 6,
-        presets: vec![
-            PresetOffer {
-                preset: PacePreset::Story,
-                ceiling_cents_per_hour: Some(300),
-            },
-            PresetOffer {
-                preset: PacePreset::Immersive,
-                ceiling_cents_per_hour: Some(600),
-            },
-            PresetOffer {
-                preset: PacePreset::Cinematic,
-                ceiling_cents_per_hour: Some(1200),
-            },
-            PresetOffer {
-                preset: PacePreset::Custom,
-                ceiling_cents_per_hour: None,
-            },
-        ],
-        is_proposed_pricing: true,
-        custom_minimum_cents_per_hour: 100,
-        custom_maximum_cents_per_hour: 5000,
-    }
-}
-
-fn draft() -> CampaignDraft {
-    CampaignDraft {
-        name: "Friday table".to_owned(),
-        adventure_id: Some("lost-mine".to_owned()),
-        content_rating: Some(ContentRating::Teen),
-        seat_count: 4,
-        hero_choice: HeroChoice::InLobby,
-        has_voice: true,
-        pictures: PictureDefault::Automatic,
-        pace: PacePreset::Immersive,
-        custom_ceiling_cents_per_hour: None,
-        co_hosts_can_invite: true,
-        co_hosts_can_start: false,
-        co_hosts_can_export: false,
-        join_mode: JoinMode::LinkOnly,
-        funding: FundingModel::Sponsor,
-    }
-}
-
-fn wizard_screen(step: u8) -> WizardScreen {
-    WizardScreen {
-        catalog: Remote::Ready(catalog()),
-        draft_id: Remote::Ready("draft-1".to_owned()),
-        step,
-        draft: draft(),
-        custom_ceiling: String::new(),
-        operation: Remote::Ready("operation-1".to_owned()),
-        save: Submit::Idle,
-    }
-}
-
-fn wizard_page(screen: WizardScreen) -> Node {
-    view(&with_screen(signed_in(true), Screen::NewCampaign(screen)))
-}
-
-fn wizard_step_page(step: u8) -> Node {
-    wizard_page(wizard_screen(step))
-}
-
-// ---------------------------------------------------------------- wizard
-
-#[test]
-fn an_unverified_account_is_asked_to_verify_and_gets_no_wizard_form() {
-    let model = with_screen(signed_in(false), Screen::NewCampaign(wizard_screen(1)));
-    let tree = view(&model);
-    assert_one_heading_and_labelled_inputs(&tree);
-    assert!(tree.text_content().contains("Create a campaign"));
-    assert!(
-        tree.text_content()
-            .contains("Verify your email to create a campaign")
-    );
-    assert_eq!(count_tag(&tree, "form"), 0);
-    assert_eq!(
-        control(&tree, "Go to your dashboard").on_click,
-        Some(Intent::Go(Route::Dashboard))
-    );
-}
-
-#[test]
-fn the_wizard_says_it_is_loading_until_the_catalog_and_draft_are_ready() {
-    let mut screen = wizard_screen(1);
-    screen.catalog = Remote::Loading;
-    let tree = wizard_page(screen);
-    assert_one_heading_and_labelled_inputs(&tree);
-    assert!(
-        tree.text_content()
-            .contains("Getting your campaign ready...")
-    );
-    assert_eq!(count_tag(&tree, "form"), 0);
-}
-
-#[test]
-fn a_failed_wizard_catalog_offers_try_again() {
-    let mut screen = wizard_screen(1);
-    screen.catalog = Remote::Failed(ApiError::of(ErrorCode::Unavailable));
-    let tree = wizard_page(screen);
-    assert_one_heading_and_labelled_inputs(&tree);
-    assert_eq!(control(&tree, "Try again").on_click, Some(Intent::Retry));
-}
-
-#[test]
-fn a_failed_draft_offers_try_again_and_no_form() {
-    let mut screen = wizard_screen(1);
-    screen.draft_id = Remote::Failed(ApiError::of(ErrorCode::Busy));
-    let tree = wizard_page(screen);
-    assert!(has_control(&tree, "Try again"));
-    assert_eq!(count_tag(&tree, "form"), 0);
-}
-
-#[test]
-fn step_one_binds_name_adventure_rating_and_seat_count() {
-    let tree = wizard_step_page(1);
-    assert_one_heading_and_labelled_inputs(&tree);
-    assert_eq!(bound(&tree, Field::CampaignName).len(), 1);
-    assert_eq!(bound(&tree, Field::Adventure).len(), 2);
-    assert_eq!(bound(&tree, Field::Rating).len(), 2);
-    let seats = bound(&tree, Field::SeatCount);
-    assert_eq!(seats.len(), 1);
-    assert_eq!(seats[0].tag, "select");
-    let options = seats[0].children.len();
-    assert_eq!(options, 6, "one option for each of 1..=maximum_seats");
-    assert!(
-        tree.text_content()
-            .contains("How many people will play, including you?")
-    );
-}
-
-#[test]
-fn step_one_shows_each_adventure_summary_and_rules_text() {
-    let text = wizard_step_page(1).text_content();
-    assert!(text.contains("The Lost Mine"));
-    assert!(text.contains("A short first adventure."));
-    assert!(text.contains("Standard 2024 fifth-edition rules."));
-}
-
-#[test]
-fn step_one_offers_only_the_ratings_the_chosen_adventure_allows() {
-    let mut screen = wizard_screen(1);
-    screen.draft.adventure_id = Some("teen-only".to_owned());
-    let tree = wizard_page(screen);
-    let ratings = bound(&tree, Field::Rating);
-    assert_eq!(ratings.len(), 1);
-    assert_eq!(ratings[0].attribute("value"), Some("teen"));
-    assert!(!tree.text_content().contains("Mature"));
-}
-
-#[test]
-fn lobbyfix_content_rating_is_visible_before_an_adventure_is_selected() {
-    let mut screen = wizard_screen(1);
-    screen.draft.adventure_id = None;
-    screen.draft.content_rating = None;
-    let tree = wizard_page(screen);
-    assert_eq!(bound(&tree, Field::Rating).len(), 2);
-}
-
-#[test]
-fn step_one_checks_the_current_choices() {
-    let tree = wizard_step_page(1);
-    let checked: Vec<&str> = bound(&tree, Field::Adventure)
-        .into_iter()
-        .filter(|radio| radio.attribute("checked").is_some())
-        .filter_map(|radio| radio.attribute("value"))
-        .collect();
-    assert_eq!(checked, vec!["lost-mine"]);
-}
-
-#[test]
-fn a_seat_count_outside_the_range_shows_a_choose_a_number_placeholder() {
-    let mut screen = wizard_screen(1);
-    screen.draft.seat_count = 9;
-    let tree = wizard_page(screen);
-    assert!(tree.text_content().contains("Choose a number"));
-}
-
-#[test]
-fn the_wizard_shows_only_the_current_step() {
-    let step_two = wizard_step_page(2);
-    assert!(bound(&step_two, Field::CampaignName).is_empty());
-    assert!(bound(&step_two, Field::PacePreset).is_empty());
-    assert!(bound(&step_two, Field::FundingChoice).is_empty());
-    let step_three = wizard_step_page(3);
-    assert!(bound(&step_three, Field::CampaignName).is_empty());
-    assert!(!bound(&step_three, Field::PacePreset).is_empty());
-    assert!(bound(&step_three, Field::FundingChoice).is_empty());
-    let step_four = wizard_step_page(4);
-    assert!(bound(&step_four, Field::PacePreset).is_empty());
-    assert!(!bound(&step_four, Field::FundingChoice).is_empty());
-}
-
-#[test]
-fn the_step_indicator_names_the_current_step_in_an_ordered_list() {
-    let tree = wizard_step_page(2);
-    let list = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.tag == "ol")
-        .expect("an ordered list of steps");
-    assert_eq!(list.children.len(), 5);
-    let current: Vec<&Element> = all_elements(&tree)
-        .into_iter()
-        .filter(|element| element.attribute("aria-current") == Some("step"))
-        .collect();
-    assert_eq!(current.len(), 1);
-    assert_eq!(current[0].tag, "li");
-    assert_eq!(element_text(current[0]), "Step 2 of 5: Heroes");
-}
-
-#[test]
-fn a_draft_that_resumes_at_a_later_step_shows_that_step() {
-    let tree = wizard_step_page(4);
-    assert!(
-        tree.text_content()
-            .contains("Step 4 of 5: Joining and funding")
-    );
-    assert!(tree.text_content().contains("1. Basics (done)"));
-}
-
-#[test]
-fn step_two_says_each_player_chooses_their_hero_in_the_game() {
-    let text = wizard_step_page(2).text_content();
-    assert!(text.contains("Choose my hero in the game"));
-    assert!(text.contains("in the game's room"));
-}
-
-#[test]
-fn step_three_binds_voice_pictures_and_pace() {
-    let tree = wizard_step_page(3);
-    assert_one_heading_and_labelled_inputs(&tree);
-    let voice = bound(&tree, Field::HasVoice);
-    assert_eq!(voice.len(), 1);
-    assert_eq!(voice[0].attribute("type"), Some("checkbox"));
-    assert!(voice[0].attribute("checked").is_some());
-    let pictures: Vec<&str> = bound(&tree, Field::Pictures)
-        .into_iter()
-        .filter_map(|radio| radio.attribute("value"))
-        .collect();
-    assert_eq!(pictures, vec!["automatic", "existing"]);
-    let pace: Vec<&str> = bound(&tree, Field::PacePreset)
-        .into_iter()
-        .filter_map(|radio| radio.attribute("value"))
-        .collect();
-    assert_eq!(pace, vec!["story", "immersive", "cinematic", "custom"]);
-}
-
-#[test]
-fn step_three_shows_only_the_hourly_ceiling_as_the_price_and_the_proposed_label() {
-    let text = wizard_step_page(3).text_content();
-    assert!(text.contains("Proposed pilot pricing"));
-    assert!(text.contains("At most $3 an hour."));
-    assert!(text.contains("At most $6 an hour."));
-    assert!(text.contains("At most $12 an hour."));
-    assert_no_pricing_internals(&text);
-}
-
-#[test]
-fn step_three_drops_the_proposed_label_once_pricing_is_approved() {
-    let mut screen = wizard_screen(3);
-    if let Remote::Ready(catalog) = &mut screen.catalog {
-        catalog.is_proposed_pricing = false;
-    }
-    assert!(
-        !wizard_page(screen)
-            .text_content()
-            .contains("Proposed pilot pricing")
-    );
-}
-
-#[test]
-fn step_three_reveals_the_custom_ceiling_only_for_the_custom_pace() {
-    assert!(bound(&wizard_step_page(3), Field::CustomCeiling).is_empty());
-    let mut screen = wizard_screen(3);
-    screen.draft.pace = PacePreset::Custom;
-    screen.custom_ceiling = "7.50".to_owned();
-    let tree = wizard_page(screen);
-    let ceiling = bound(&tree, Field::CustomCeiling);
-    assert_eq!(ceiling.len(), 1);
-    assert_eq!(ceiling[0].attribute("value"), Some("7.50"));
-    assert!(tree.text_content().contains("Between $1 and $50 an hour."));
-    assert_one_heading_and_labelled_inputs(&tree);
-}
-
-#[test]
-fn step_four_binds_the_co_host_defaults_join_mode_and_funding() {
-    let tree = wizard_step_page(4);
-    assert_one_heading_and_labelled_inputs(&tree);
-    for field in [
-        Field::CoHostsCanInvite,
-        Field::CoHostsCanStart,
-        Field::CoHostsCanExport,
-    ] {
-        let boxes = bound(&tree, field);
-        assert_eq!(boxes.len(), 1);
-        assert_eq!(boxes[0].attribute("type"), Some("checkbox"));
-    }
-    let join: Vec<&str> = bound(&tree, Field::JoinModeChoice)
-        .into_iter()
-        .filter_map(|radio| radio.attribute("value"))
-        .collect();
-    assert_eq!(join, vec!["link", "code"]);
-    let funding: Vec<&str> = bound(&tree, Field::FundingChoice)
-        .into_iter()
-        .filter_map(|radio| radio.attribute("value"))
-        .collect();
-    assert_eq!(funding, vec!["sponsor", "shared"]);
-    let text = tree.text_content();
-    assert!(text.contains("I will sponsor this table"));
-    assert!(text.contains("A room code always needs your approval."));
-}
-
-#[test]
-fn step_five_summarises_every_choice_and_says_creating_is_free() {
-    let mut screen = wizard_screen(5);
-    screen.draft.co_hosts_can_start = true;
-    screen.draft.join_mode = JoinMode::LinkAndRoomCode;
-    let tree = wizard_page(screen);
-    assert_one_heading_and_labelled_inputs(&tree);
-    let text = tree.text_content();
-    for expected in [
-        "Friday table",
-        "The Lost Mine",
-        "Teen: peril and combat, no gore",
-        "4, including you",
-        "Each player chooses a hero in the game",
-        "Spoken narration and character voices",
-        "Make new pictures as the story needs them",
-        "Immersive: at most $6 an hour (proposed pilot pricing)",
-        "invite people, start sessions",
-        "Invitation link and room code",
-        "I will sponsor this table",
-        "Creating a campaign is free. Nothing is charged until a session starts.",
-    ] {
-        assert!(
-            text.contains(expected),
-            "summary lacks {expected:?}: {text}"
-        );
-    }
-    assert_no_pricing_internals(&text);
-}
-
-#[test]
-fn step_five_creates_the_campaign_with_its_own_form_and_no_continue_button() {
-    let tree = wizard_step_page(5);
-    let form = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.tag == "form")
-        .expect("a form");
-    assert_eq!(form.on_submit, Some(Intent::Submit(Form::CreateCampaign)));
-    let create = control(&tree, "Create campaign");
-    assert_eq!(create.attribute("type"), Some("submit"));
-    assert!(!is_disabled(create));
-    assert!(!has_control(&tree, "Save and continue"));
-}
-
-#[test]
-fn step_five_waits_for_the_operation_id_before_creating() {
-    let mut screen = wizard_screen(5);
-    screen.operation = Remote::Loading;
-    let tree = wizard_page(screen);
-    assert!(is_disabled(control(&tree, "Create campaign")));
-}
-
-#[test]
-fn steps_one_to_four_save_and_continue_through_the_step_form() {
-    for step in 1..=4 {
-        let tree = wizard_step_page(step);
-        let form = all_elements(&tree)
-            .into_iter()
-            .find(|element| element.tag == "form")
-            .expect("a form");
-        assert_eq!(
-            form.on_submit,
-            Some(Intent::Submit(Form::WizardStep)),
-            "step {step}"
-        );
-        assert_eq!(
-            control(&tree, "Save and continue").attribute("type"),
-            Some("submit")
-        );
-        assert!(!has_control(&tree, "Create campaign"), "step {step}");
-    }
-}
-
-#[test]
-fn back_appears_from_step_two_and_goes_back() {
-    assert!(!has_control(&wizard_step_page(1), "Back"));
-    for step in 2..=5 {
-        let tree = wizard_step_page(step);
-        assert_eq!(
-            control(&tree, "Back").on_click,
-            Some(Intent::WizardBack),
-            "step {step}"
-        );
-    }
-}
-
-#[test]
-fn a_refused_wizard_step_links_the_summary_to_the_field_and_marks_it() {
-    let mut screen = wizard_screen(1);
-    screen.save = Submit::Refused(ApiError::refused(Refusal::CampaignNameRequired));
-    let tree = wizard_page(screen);
-    let link = all_elements(&tree)
-        .into_iter()
-        .find(|element| element.tag == "a" && element.attribute("href") == Some("#campaign-name"))
-        .expect("the summary links to the name field");
-    assert_eq!(element_text(link), "Give your campaign a name.");
-    let name = bound(&tree, Field::CampaignName);
-    assert_eq!(name[0].attribute("aria-invalid"), Some("true"));
-}
-
-#[test]
-fn a_refused_seat_count_marks_the_select() {
-    let mut screen = wizard_screen(1);
-    screen.save = Submit::Refused(ApiError::refused(Refusal::SeatsOutOfRange));
-    let tree = wizard_page(screen);
-    assert_eq!(
-        bound(&tree, Field::SeatCount)[0].attribute("aria-invalid"),
-        Some("true")
-    );
-}
-
-#[test]
-fn a_saving_step_cannot_be_sent_twice() {
-    let mut screen = wizard_screen(1);
-    screen.save = Submit::Sending;
-    let tree = wizard_page(screen);
-    let saving = control(&tree, "Saving...");
-    assert!(is_disabled(saving));
-    assert_eq!(saving.attribute("aria-busy"), Some("true"));
-}
-
-#[test]
-fn every_wizard_step_has_one_heading_and_labelled_inputs() {
-    for step in 1..=5 {
-        assert_one_heading_and_labelled_inputs(&wizard_step_page(step));
-    }
-}
-
-#[test]
-fn no_wizard_step_shows_a_fee_a_multiplier_or_a_provider() {
-    for step in 1..=5 {
-        assert_no_pricing_internals(&wizard_step_page(step).text_content());
     }
 }
 
@@ -991,14 +523,15 @@ fn join_page(model: Model, screen: JoinScreen) -> Node {
 // ---------------------------------------------------------------- join
 
 #[test]
-fn an_invitation_preview_shows_only_name_host_time_and_rating() {
+fn an_invitation_preview_shows_name_host_and_time_without_a_rating() {
     let tree = join_page(signed_in(true), join_screen(Some(SECRET_TOKEN)));
     assert_one_heading_and_labelled_inputs(&tree);
     let text = tree.text_content();
     assert!(text.contains("You are invited to Friday table"));
     assert!(text.contains("Host Ana"));
     assert!(text.contains("Planned for"));
-    assert!(text.contains("Mature: darker themes and stronger violence"));
+    assert!(!text.contains("Content rating"));
+    assert!(!text.contains("Mature"));
 }
 
 #[test]
@@ -1456,13 +989,12 @@ fn the_lobby_shows_no_fee_multiplier_or_provider() {
 
 #[test]
 fn every_campaign_screen_state_has_exactly_one_heading() {
-    let mut pages = vec![
+    let pages = vec![
         overview_page(campaign_screen(overview_data())),
         lobby_page(lobby_screen(lobby_data())),
         join_page(signed_in(true), join_screen(None)),
         join_page(signed_out(), join_screen(Some(SECRET_TOKEN))),
     ];
-    pages.extend((1..=5).map(wizard_step_page));
     for tree in pages {
         assert_one_heading_and_labelled_inputs(&tree);
     }
@@ -1488,24 +1020,46 @@ fn lobbyfix_website_membership_has_no_hero_ready_microphone_or_pairing_controls(
 }
 
 #[test]
-fn lobbyfix_campaign_settings_show_rating_voice_pictures_pace_joining_and_rights_without_headcount()
-{
-    let editor = wizard_screen(1);
-    let tree = super::wizard::settings(&editor, false);
-    assert_eq!(bound(&tree, Field::Rating).len(), 2);
+fn campaign_settings_keep_funding_and_co_host_permissions_without_gameplay_controls() {
+    let mut screen = campaign_screen(overview_data());
+    screen.can_edit_settings = true;
+    screen.settings = Some(Box::new(CampaignSettingsScreen {
+        draft: CampaignDraft {
+            name: "Friday table".to_owned(),
+            adventure_id: None,
+            content_rating: Some(ContentRating::Teen),
+            seat_count: 6,
+            hero_choice: HeroChoice::InLobby,
+            has_voice: true,
+            pictures: PictureDefault::Automatic,
+            pace: PacePreset::Immersive,
+            custom_ceiling_cents_per_hour: None,
+            co_hosts_can_invite: true,
+            co_hosts_can_start: false,
+            co_hosts_can_export: false,
+            join_mode: JoinMode::LinkAndRoomCode,
+            funding: FundingModel::SharedPot,
+        },
+    }));
+    let tree = overview_page(screen);
     for field in [
-        Field::HasVoice,
-        Field::Pictures,
-        Field::PacePreset,
-        Field::JoinModeChoice,
         Field::FundingChoice,
+        Field::JoinModeChoice,
         Field::CoHostsCanInvite,
         Field::CoHostsCanStart,
         Field::CoHostsCanExport,
     ] {
         assert!(!bound(&tree, field).is_empty(), "{field:?}");
     }
-    assert!(bound(&tree, Field::SeatCount).is_empty());
+    for label in [
+        "Content rating",
+        "Voice",
+        "Pictures",
+        "Table pace",
+        "Hourly maximum",
+    ] {
+        assert!(!tree.text_content().contains(label), "{label}");
+    }
     assert!(has_control(&tree, "Save settings"));
 }
 

@@ -331,7 +331,10 @@ fn a_selected_option_sets_its_property_and_a_deselected_one_clears_it() {
                 .into()
         });
         page(vec![
-            el("select").bind(Field::SeatCount).children(options).into(),
+            el("select")
+                .bind(Field::AssetKindFilter)
+                .children(options)
+                .into(),
         ])
     };
 

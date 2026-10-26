@@ -15,7 +15,7 @@ use crate::{
     },
     wire_campaign::{
         CampaignCard, CampaignRole, ContentRating, DashboardView, FundingNote, HostCreditView,
-        InvitePreview, LobbyView, PendingInvitation, WizardCatalog,
+        InvitePreview, LobbyView, PendingInvitation,
     },
 };
 
@@ -115,14 +115,6 @@ fn dashboard_screen() -> DashboardScreen {
                 card("Mines", None, true),
             ],
             can_create: true,
-        }),
-        play_now_catalog: Remote::Ready(WizardCatalog {
-            adventures: Vec::new(),
-            maximum_seats: 4,
-            presets: preset_offers(),
-            is_proposed_pricing: false,
-            custom_minimum_cents_per_hour: 100,
-            custom_maximum_cents_per_hour: 5000,
         }),
         resume_lobby: Remote::Ready(LobbyView {
             session_id: "session-1".to_owned(),
@@ -587,7 +579,7 @@ fn dashboard_resend_shows_sending_then_sent_then_refused() {
 }
 
 #[test]
-fn dashboard_offers_the_pending_invitation_with_a_join_button() {
+fn dashboard_offers_the_pending_invitation_without_a_rating_and_with_a_join_button() {
     let mut screen = dashboard_screen();
     screen.pending = Remote::Ready(invitation());
     let node = render(Screen::Dashboard(screen));
@@ -595,6 +587,8 @@ fn dashboard_offers_the_pending_invitation_with_a_join_button() {
         &node,
         "You were invited to The Sunken Keep by Bram. Join?"
     ));
+    assert!(!node.text_content().contains("Content:"));
+    assert!(!node.text_content().contains("Teen"));
     let join = find_button(&node, "Join this table").expect("a join button");
     assert_eq!(join.on_click, Some(Intent::AcceptPendingInvitation));
 }
@@ -708,7 +702,7 @@ fn dashboard_reserves_the_top_resume_action_for_the_host() {
 }
 
 #[test]
-fn new_play_now_uses_the_default_pace_from_the_pricing_catalog() {
+fn new_play_now_uses_game_defaults_and_leaves_game_settings_in_the_launcher() {
     let mut screen = dashboard_screen();
     screen.campaigns = Remote::Ready(DashboardView {
         campaigns: Vec::new(),
@@ -716,8 +710,8 @@ fn new_play_now_uses_the_default_pace_from_the_pricing_catalog() {
     });
     let node = render(Screen::Dashboard(screen));
     let text = node.text_content();
-    assert!(text.contains("Table price: up to $3.00 per active hour"));
-    assert!(text.contains("Spending limit: $3.00 per active hour"));
+    assert!(text.contains("Play now starts or resumes your campaign."));
+    assert!(text.contains("Game settings live in the launcher."));
 }
 
 #[test]
@@ -728,7 +722,7 @@ fn dashboard_shows_one_monthly_spend_figure() {
 }
 
 #[test]
-fn dashboard_disables_play_now_until_the_price_is_available() {
+fn dashboard_keeps_play_now_available_without_a_wizard_catalog() {
     let mut model = model_with(Screen::Dashboard(dashboard_screen()), true);
     model.play_operation = Remote::Ready("play".to_owned());
     if let Screen::Dashboard(screen) = &mut model.screen {
@@ -736,16 +730,14 @@ fn dashboard_disables_play_now_until_the_price_is_available() {
             campaigns: Vec::new(),
             can_create: true,
         });
-        screen.play_now_catalog = Remote::Loading;
     }
     let node = view(&model);
     assert!(
-        find_button(&node, "Play now")
-            .is_some_and(|button| { button.attribute("disabled").is_some() })
+        find_button(&node, "Play now").is_some_and(|button| button.attribute("disabled").is_none())
     );
     assert!(
         node.text_content()
-            .contains("Checking the table price. Play now will be available when it is ready.")
+            .contains("Game settings live in the launcher.")
     );
 }
 
@@ -792,7 +784,7 @@ fn dashboard_with_no_campaigns_shows_the_empty_state_and_a_room_code_link() {
 }
 
 #[test]
-fn dashboard_offers_play_now_only_when_the_account_can_create() {
+fn dashboard_offers_play_now_only_when_the_account_is_verified() {
     let mut model = model_with(Screen::Dashboard(dashboard_screen()), true);
     model.play_operation = Remote::Ready("play".to_owned());
     let tree = view(&model);
@@ -802,7 +794,6 @@ fn dashboard_offers_play_now_only_when_the_account_can_create() {
         .find(|element| element.on_click == Some(Intent::PlayNow))
         .unwrap();
     assert!(play.attribute("disabled").is_none());
-    assert!(find_link(&tree, "Create a campaign").is_none());
     model.session = Remote::Ready(SessionView {
         account: Some(AccountView {
             email: "ana@example.com".to_owned(),

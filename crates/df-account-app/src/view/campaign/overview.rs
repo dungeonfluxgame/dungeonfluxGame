@@ -6,13 +6,14 @@ use crate::{
     copy, money,
     node::{Element, Node, el},
     route::Route,
-    state::{CampaignScreen, Intent, Remote, RequestDecision},
+    state::{CampaignScreen, Field, Form, Intent, Remote, RequestDecision},
     view::{
-        ButtonKind, button, error_summary, fact, facts, failed, link, loading, page, page_wide,
-        status_line,
+        ButtonKind, RadioChoice, button, checkbox, error_summary, fact, facts, failed, form, link,
+        loading, page, page_wide, radio_group, status_line, submit_button,
     },
     wire_campaign::{
-        CampaignOverview, InvitationKind, InvitationRow, JoinRequestRow, MemberRow, RoomCodeState,
+        CampaignOverview, FundingModel, InvitationKind, InvitationRow, JoinMode, JoinRequestRow,
+        MemberRow, RoomCodeState,
     },
 };
 
@@ -51,10 +52,97 @@ pub(in crate::view) fn overview(screen: &CampaignScreen, offset_east_minutes: i3
     } else {
         sections = sections.child(members_panel(&overview.members));
     }
-    if let Some(editor) = screen.settings.as_ref()
+    if let Some(settings) = screen.settings.as_ref()
         && screen.can_edit_settings
     {
-        sections = sections.child(super::wizard::settings(editor, screen.action.is_sending()));
+        let error = screen.action.error();
+        sections = sections.child(
+            form(Form::CampaignSettings, "Campaign settings")
+                .child(el("h2").text("Campaign settings"))
+                .child(el("fieldset").class("choices").child(
+                    el("legend").text("What co-hosts can do"),
+                ).child(checkbox(
+                    Field::CoHostsCanInvite,
+                    "Co-hosts can invite people",
+                    settings.draft.co_hosts_can_invite,
+                    error,
+                )).child(checkbox(
+                    Field::CoHostsCanStart,
+                    "Co-hosts can start sessions",
+                    settings.draft.co_hosts_can_start,
+                    error,
+                )).child(checkbox(
+                    Field::CoHostsCanExport,
+                    "Co-hosts can export the campaign",
+                    settings.draft.co_hosts_can_export,
+                    error,
+                )))
+                .child(radio_group(
+                    "Who pays for the table",
+                    Field::FundingChoice,
+                    [FundingModel::Sponsor, FundingModel::SharedPot]
+                        .into_iter()
+                        .map(|funding| RadioChoice {
+                            field: Field::FundingChoice,
+                            value: match funding {
+                                FundingModel::Sponsor => "sponsor",
+                                FundingModel::SharedPot => "shared",
+                            },
+                            title: match funding {
+                                FundingModel::Sponsor => "I will sponsor this table",
+                                FundingModel::SharedPot => "Shared pot",
+                            }
+                            .to_owned(),
+                            detail: match funding {
+                                FundingModel::Sponsor => {
+                                    "Your credit pays for play, and players join without paying."
+                                }
+                                FundingModel::SharedPot => {
+                                    "Players and contributors add their own credit to one pot for the table."
+                                }
+                            }
+                            .to_owned(),
+                            is_checked: settings.draft.funding == funding,
+                        })
+                        .collect(),
+                    error,
+                ))
+                .child(radio_group(
+                    "How people join",
+                    Field::JoinModeChoice,
+                    [JoinMode::LinkOnly, JoinMode::LinkAndRoomCode]
+                        .into_iter()
+                        .map(|mode| RadioChoice {
+                            field: Field::JoinModeChoice,
+                            value: match mode {
+                                JoinMode::LinkOnly => "link",
+                                JoinMode::LinkAndRoomCode => "code",
+                            },
+                            title: match mode {
+                                JoinMode::LinkOnly => "Invitation link only",
+                                JoinMode::LinkAndRoomCode => "Invitation link and room code",
+                            }
+                            .to_owned(),
+                            detail: match mode {
+                                JoinMode::LinkOnly => {
+                                    "Only people you send an invitation link to can join."
+                                }
+                                JoinMode::LinkAndRoomCode => {
+                                    "People can also ask to join by room code. You approve each request."
+                                }
+                            }
+                            .to_owned(),
+                            is_checked: settings.draft.join_mode == mode,
+                        })
+                        .collect(),
+                    error,
+                ))
+                .child(submit_button(
+                    "Save settings",
+                    "Saving...",
+                    screen.action.is_sending(),
+                )),
+        );
     }
     if let Some(error) = screen.settings_error {
         sections = sections.child(failed(error));

@@ -22,10 +22,10 @@ use crate::wire::{
     VerifyOutcome,
 };
 use crate::wire_campaign::{
-    ApproveRequestBody, CampaignCreated, CampaignOverview, CreateInvitationRequest, DashboardView,
-    DraftView, InvitationCreated, InvitePreview, JoinAcceptRequest, JoinAccepted, JoinRequested,
-    LobbyOpened, LobbyView, OperationRequest, PendingInvitation, RoomCodeJoinRequest,
-    RoomCodeLookupRequest, SaveDraftRequest, TokenBody, WizardCatalog,
+    ApproveRequestBody, CampaignOverview, CampaignSettingsView, CreateInvitationRequest,
+    DashboardView, InvitationCreated, InvitePreview, JoinAcceptRequest, JoinAccepted,
+    JoinRequested, LobbyOpened, LobbyView, OperationRequest, PendingInvitation,
+    RoomCodeJoinRequest, RoomCodeLookupRequest, SaveDraftRequest, TokenBody,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,17 +167,6 @@ pub enum ApiCall {
         request: SaveDraftRequest,
     },
     JoinPending,
-    WizardCatalog,
-    StartDraft,
-    SaveDraft {
-        draft_id: String,
-        step: u8,
-        request: SaveDraftRequest,
-    },
-    FinishDraft {
-        draft_id: String,
-        request: OperationRequest,
-    },
     Campaign {
         campaign_id: String,
     },
@@ -287,11 +276,8 @@ pub enum Reply {
     Audit(Result<Vec<AuditRow>, ApiError>),
     Dashboard(Result<DashboardView, ApiError>),
     PlayNow(Result<crate::wire_campaign::PlayNowView, ApiError>),
-    CampaignSettings(Result<crate::wire_campaign::CampaignSettingsView, ApiError>),
+    CampaignSettings(Result<CampaignSettingsView, ApiError>),
     JoinPending(Result<PendingInvitation, ApiError>),
-    WizardCatalog(Result<WizardCatalog, ApiError>),
-    Draft(Result<DraftView, ApiError>),
-    CampaignCreated(Result<CampaignCreated, ApiError>),
     Campaign(Result<CampaignOverview, ApiError>),
     InvitationCreated(Result<InvitationCreated, ApiError>),
     Left(Result<Accepted, ApiError>),
@@ -513,20 +499,6 @@ impl ApiCall {
                 request,
             ),
             Self::JoinPending => get(at("join/pending")),
-            Self::WizardCatalog => get(at("campaigns/new")),
-            Self::StartDraft => post_empty(at("campaigns/drafts")),
-            Self::SaveDraft {
-                draft_id,
-                step,
-                request,
-            } => send(
-                Method::Put,
-                at(&format!("campaigns/drafts/{draft_id}/steps/{step}")),
-                request,
-            ),
-            Self::FinishDraft { draft_id, request } => {
-                post(at(&format!("campaigns/drafts/{draft_id}/finish")), request)
-            }
             Self::Campaign { campaign_id } => get(at(&format!("campaigns/{campaign_id}"))),
             Self::CreateInvitation {
                 campaign_id,
@@ -692,9 +664,6 @@ impl ApiCall {
                 Reply::CampaignSettings(read!())
             }
             Self::JoinPending => Reply::JoinPending(read!()),
-            Self::WizardCatalog => Reply::WizardCatalog(read!()),
-            Self::StartDraft | Self::SaveDraft { .. } => Reply::Draft(read!()),
-            Self::FinishDraft { .. } => Reply::CampaignCreated(read!()),
             Self::Campaign { .. }
             | Self::RevokeInvitation { .. }
             | Self::RotateCode { .. }

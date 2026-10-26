@@ -1,28 +1,6 @@
 use super::*;
 use crate::wire::Refusal;
-use crate::wire_campaign::{
-    CampaignDraft, FundingModel, HeroChoice, JoinMode, PictureDefault, Reason,
-};
-
-fn draft() -> CampaignDraft {
-    CampaignDraft {
-        name: "The Drowned Lantern".to_owned(),
-        adventure_id: Some("a1".to_owned()),
-        content_rating: None,
-        seat_count: 4,
-        hero_choice: HeroChoice::InLobby,
-        has_voice: true,
-        pictures: PictureDefault::Automatic,
-        pace: crate::wire::PacePreset::Immersive,
-        custom_ceiling_cents_per_hour: None,
-        co_hosts_can_invite: true,
-        co_hosts_can_start: false,
-        co_hosts_can_export: false,
-        join_mode: JoinMode::LinkOnly,
-        funding: FundingModel::Sponsor,
-    }
-}
-
+use crate::wire_campaign::Reason;
 #[test]
 fn a_typed_refusal_body_is_kept_whatever_the_status() {
     let call = ApiCall::SignIn(SignInRequest {
@@ -89,19 +67,6 @@ fn a_search_query_is_percent_encoded_into_the_path() {
 }
 
 #[test]
-fn saving_a_wizard_step_is_a_put_to_that_step() {
-    let call = ApiCall::SaveDraft {
-        draft_id: "d1".to_owned(),
-        step: 3,
-        request: SaveDraftRequest { draft: draft() },
-    };
-    let request = call.request();
-    assert_eq!(request.method, Method::Put);
-    assert_eq!(request.path, "/app/api/campaigns/drafts/d1/steps/3");
-    assert!(call.is_mutation());
-}
-
-#[test]
 fn an_invitation_token_travels_in_the_body_and_never_in_the_path() {
     for call in [
         ApiCall::JoinPreview(TokenBody {
@@ -132,7 +97,6 @@ fn every_post_has_a_json_body_and_the_csrf_guard() {
         ApiCall::SignOut,
         ApiCall::ResendVerification,
         ApiCall::RevokeOtherSessions,
-        ApiCall::StartDraft,
     ] {
         let request = call.request();
         assert_eq!(request.method, Method::Post);

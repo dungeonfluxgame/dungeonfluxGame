@@ -1,264 +1,14 @@
 use super::*;
 use crate::{
     api::JoinDecision,
-    wire::{Accepted, PacePreset, PresetOffer, Refusal},
+    wire::Accepted,
     wire_campaign::{
-        AdventureOption, ApproveRequestBody, CampaignCreated, CampaignOverview, CampaignRole,
-        ContentRating, DraftView, FundingNote, InvitePreview, JoinAcceptRequest, JoinAccepted,
-        LobbyOpened, LobbyView, MemberRow, OperationRequest, PendingInvitation, Reason,
-        RoomCodeLookupRequest, RoomCodeState, SaveDraftRequest, TokenBody, WizardCatalog,
+        ApproveRequestBody, CampaignOverview, CampaignRole, ContentRating, FundingNote,
+        InvitePreview, JoinAcceptRequest, JoinAccepted, LobbyOpened, LobbyView, MemberRow,
+        OperationRequest, PendingInvitation, Reason, RoomCodeLookupRequest, RoomCodeState,
+        TokenBody,
     },
 };
-
-fn catalog() -> WizardCatalog {
-    WizardCatalog {
-        adventures: vec![
-            AdventureOption {
-                adventure_id: "a1".to_owned(),
-                name: "The Drowned Lantern".to_owned(),
-                summary: "A tavern and a flooded crypt.".to_owned(),
-                ratings: vec![ContentRating::Teen],
-                rules_text: "Fifth edition, 2024 rules.".to_owned(),
-            },
-            AdventureOption {
-                adventure_id: "a2".to_owned(),
-                name: "Salt and Bone".to_owned(),
-                summary: "A harbour town.".to_owned(),
-                ratings: vec![ContentRating::Teen, ContentRating::Mature],
-                rules_text: "Fifth edition, 2024 rules.".to_owned(),
-            },
-        ],
-        maximum_seats: 6,
-        presets: vec![PresetOffer {
-            preset: PacePreset::Story,
-            ceiling_cents_per_hour: Some(300),
-        }],
-        is_proposed_pricing: true,
-        custom_minimum_cents_per_hour: 100,
-        custom_maximum_cents_per_hour: 10_000,
-    }
-}
-
-fn draft_view(step: u8) -> DraftView {
-    DraftView {
-        draft_id: "d1".to_owned(),
-        step,
-        draft: super::super::campaign_flow::empty_draft(),
-    }
-}
-
-fn wizard() -> Model {
-    let mut model = booted(Route::NewCampaign, signed_in(true));
-    deliver(&mut model, Reply::WizardCatalog(Ok(catalog())));
-    deliver(&mut model, Reply::Draft(Ok(draft_view(1))));
-    issue(&mut model, OperationSlot::Primary, "op-create");
-    model
-}
-
-fn fill_step_one(model: &mut Model) {
-    type_into(model, Field::CampaignName, "The Drowned Lantern");
-    type_into(model, Field::Adventure, "a1");
-    type_into(model, Field::Rating, "teen");
-}
-
-#[test]
-fn an_unverified_account_starts_no_draft() {
-    let mut model = Model::default();
-    model.update(Msg::Started {
-        route: Route::NewCampaign,
-        offset_east_minutes: 0,
-    });
-
-    let effects = deliver(&mut model, Reply::Session(Ok(signed_in(false))));
-
-    assert!(calls(&effects).is_empty());
-    assert!(matches!(model.screen, Screen::NewCampaign(_)));
-}
-
-#[test]
-fn step_one_refuses_each_missing_piece_in_order_without_a_request() {
-    let mut model = wizard();
-    if let Screen::NewCampaign(screen) = &mut model.screen {
-        screen.draft.content_rating = None;
-    }
-    let mut refusals = Vec::new();
-    for fill in [
-        None,
-        Some((Field::CampaignName, "The Drowned Lantern")),
-        Some((Field::Adventure, "a1")),
-        Some((Field::Rating, "teen")),
-    ] {
-        if let Some((field, value)) = fill {
-            type_into(&mut model, field, value);
-        }
-        let effects = submit(&mut model, Form::WizardStep);
-        refusals.push(crate::copy::refused_form_error(&model).and_then(|error| error.refusal));
-        if refusals.last() == Some(&None) {
-            assert_eq!(calls(&effects).len(), 1);
-        } else {
-            assert!(calls(&effects).is_empty());
-        }
-    }
-
-    assert_eq!(
-        refusals,
-        vec![
-            Some(Refusal::CampaignNameRequired),
-            Some(Refusal::AdventureRequired),
-            Some(Refusal::ContentRatingRequired),
-            None,
-        ]
-    );
-}
-
-#[test]
-fn a_campaign_name_over_the_limit_is_refused() {
-    let mut model = wizard();
-    fill_step_one(&mut model);
-    type_into(&mut model, Field::CampaignName, &"x".repeat(61));
-
-    submit(&mut model, Form::WizardStep);
-
-    assert_eq!(
-        crate::copy::refused_form_error(&model),
-        Some(ApiError::refused(Refusal::CampaignNameTooLong))
-    );
-}
-
-#[test]
-fn more_seats_than_the_catalog_allows_are_refused() {
-    let mut model = wizard();
-    fill_step_one(&mut model);
-    type_into(&mut model, Field::SeatCount, "7");
-
-    submit(&mut model, Form::WizardStep);
-
-    assert_eq!(
-        crate::copy::refused_form_error(&model),
-        Some(ApiError::refused(Refusal::SeatsOutOfRange))
-    );
-}
-
-#[test]
-fn saving_a_step_puts_the_whole_draft_to_that_step_and_the_reply_moves_on() {
-    let mut model = wizard();
-    fill_step_one(&mut model);
-
-    let effects = submit(&mut model, Form::WizardStep);
-    let moved = deliver(&mut model, Reply::Draft(Ok(draft_view(1))));
-
-    let Some(ApiCall::SaveDraft {
-        draft_id,
-        step,
-        request: SaveDraftRequest { draft },
-    }) = first_call(&effects)
-    else {
-        panic!("a save");
-    };
-    assert_eq!((draft_id.as_str(), *step), ("d1", 1));
-    assert_eq!(draft.name, "The Drowned Lantern");
-    let Screen::NewCampaign(screen) = &model.screen else {
-        panic!("wizard");
-    };
-    assert_eq!(screen.step, 2);
-    assert!(has_effect(&moved, &Effect::Focus(FocusTarget::Heading)));
-}
-
-#[test]
-fn going_back_keeps_everything_typed() {
-    let mut model = wizard();
-    fill_step_one(&mut model);
-    submit(&mut model, Form::WizardStep);
-    deliver(&mut model, Reply::Draft(Ok(draft_view(1))));
-
-    click(&mut model, Intent::WizardBack);
-
-    let Screen::NewCampaign(screen) = &model.screen else {
-        panic!("wizard");
-    };
-    assert_eq!(screen.step, 1);
-    assert_eq!(screen.draft.name, "The Drowned Lantern");
-}
-
-#[test]
-fn a_draft_in_progress_resumes_at_its_saved_step() {
-    let mut model = booted(Route::NewCampaign, signed_in(true));
-    deliver(&mut model, Reply::WizardCatalog(Ok(catalog())));
-    let mut saved = draft_view(4);
-    saved.draft.name = "Half done".to_owned();
-
-    deliver(&mut model, Reply::Draft(Ok(saved)));
-
-    let Screen::NewCampaign(screen) = &model.screen else {
-        panic!("wizard");
-    };
-    assert_eq!(screen.step, 4);
-    assert_eq!(screen.draft.name, "Half done");
-}
-
-#[test]
-fn changing_the_adventure_drops_a_rating_it_does_not_allow() {
-    let mut model = wizard();
-    type_into(&mut model, Field::Adventure, "a2");
-    type_into(&mut model, Field::Rating, "mature");
-
-    type_into(&mut model, Field::Adventure, "a1");
-
-    let Screen::NewCampaign(screen) = &model.screen else {
-        panic!("wizard");
-    };
-    assert_eq!(screen.draft.content_rating, None);
-}
-
-#[test]
-fn a_custom_pace_needs_a_ceiling_the_catalog_allows_before_leaving_step_three() {
-    let mut model = wizard();
-    fill_step_one(&mut model);
-    for step in 1..3 {
-        submit(&mut model, Form::WizardStep);
-        deliver(&mut model, Reply::Draft(Ok(draft_view(step))));
-    }
-    type_into(&mut model, Field::PacePreset, "custom");
-    type_into(&mut model, Field::CustomCeiling, "500");
-
-    let effects = submit(&mut model, Form::WizardStep);
-
-    assert!(calls(&effects).is_empty());
-    assert_eq!(
-        crate::copy::refused_form_error(&model),
-        Some(ApiError::refused(Refusal::CeilingOutOfRange))
-    );
-}
-
-#[test]
-fn creating_the_campaign_uses_its_operation_id_once_and_opens_it() {
-    let mut model = wizard();
-
-    let effects = submit(&mut model, Form::CreateCampaign);
-    let again = submit(&mut model, Form::CreateCampaign);
-    let opened = deliver(
-        &mut model,
-        Reply::CampaignCreated(Ok(CampaignCreated {
-            campaign_id: "0c".to_owned(),
-        })),
-    );
-
-    assert_eq!(
-        first_call(&effects),
-        Some(&ApiCall::FinishDraft {
-            draft_id: "d1".to_owned(),
-            request: OperationRequest {
-                operation: "op-create".to_owned()
-            }
-        })
-    );
-    assert!(calls(&again).is_empty());
-    assert!(matches!(model.screen, Screen::Campaign(_)));
-    assert!(has_effect(
-        &opened,
-        &Effect::PushUrl("/app/campaigns/0c".to_owned())
-    ));
-}
 
 fn overview() -> CampaignOverview {
     CampaignOverview {
@@ -697,7 +447,7 @@ fn fundinghook_a_sponsored_player_cannot_submit_a_host_consent() {
 }
 
 #[test]
-fn lobbyfix_play_now_has_one_request_without_any_wizard_fields() {
+fn play_now_starts_with_one_request_and_reuses_its_operation_on_retry() {
     let mut model = booted(Route::Dashboard, signed_in(true));
     issue(&mut model, OperationSlot::Primary, "play-once");
     let effects = click(&mut model, Intent::PlayNow);
@@ -740,11 +490,6 @@ fn play_now_goes_to_the_pre_game_launcher_once_started_and_to_the_session_otherw
         } else {
             assert!(matches!(model.screen, Screen::Lobby(_)));
         }
-        assert!(
-            !calls(&effects)
-                .iter()
-                .any(|call| matches!(call, ApiCall::StartDraft | ApiCall::WizardCatalog))
-        );
     }
 }
 

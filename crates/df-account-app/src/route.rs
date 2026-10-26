@@ -36,7 +36,6 @@ pub enum Route {
         session_id: String,
     },
     Security,
-    NewCampaign,
     Campaign {
         campaign_id: String,
     },
@@ -112,7 +111,7 @@ impl Route {
                 session_id: (*id).to_owned(),
             },
             ["security"] => Self::Security,
-            ["campaigns", "new"] => Self::NewCampaign,
+            ["campaigns", "new"] => Self::Dashboard,
             ["campaigns", id] if is_identifier(id) => Self::Campaign {
                 campaign_id: (*id).to_owned(),
             },
@@ -162,7 +161,6 @@ impl Route {
             Self::DeveloperTokens => "settings/developer-tokens",
             Self::Share { session_id } => return format!("{APP_BASE}/sessions/{session_id}/share"),
             Self::Security => "security",
-            Self::NewCampaign => "campaigns/new",
             Self::Campaign { campaign_id } => return format!("{APP_BASE}/campaigns/{campaign_id}"),
             Self::Lobby { session_id } => return format!("{APP_BASE}/sessions/{session_id}/lobby"),
             Self::Play { session_id } => return format!("{APP_BASE}/sessions/{session_id}/play"),
@@ -197,7 +195,6 @@ impl Route {
             Self::Security => "security",
             Self::DeveloperTokens => "developer_tokens",
             Self::Share { .. } => "share",
-            Self::NewCampaign => "new_campaign",
             Self::Campaign { .. } => "campaign",
             Self::Lobby { .. } => "lobby",
             Self::Play { .. } => "play",
@@ -238,7 +235,6 @@ impl Route {
             | Self::DeveloperTokens
             | Self::Share { .. }
             | Self::Security
-            | Self::NewCampaign
             | Self::Campaign { .. }
             | Self::Lobby { .. }
             | Self::Play { .. } => Audience::Customer,
@@ -302,7 +298,6 @@ mod tests {
             Route::Assets,
             Route::Settings,
             Route::Security,
-            Route::NewCampaign,
             Route::Campaign {
                 campaign_id: "0c".to_owned(),
             },
@@ -326,6 +321,11 @@ mod tests {
             let (path_only, query) = path.split_once('?').unwrap_or((&path, ""));
             assert_eq!(Route::parse(path_only, query, ""), route, "{path}");
         }
+    }
+
+    #[test]
+    fn old_campaign_creation_links_open_the_dashboard() {
+        assert_eq!(Route::parse("/app/campaigns/new", "", ""), Route::Dashboard);
     }
 
     #[test]

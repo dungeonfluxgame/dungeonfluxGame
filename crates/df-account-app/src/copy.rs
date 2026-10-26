@@ -8,7 +8,7 @@ use crate::{
         LineStatus, OperatorCapability, PacePreset, ProviderHealth, Quantity, ReconciliationKind,
         Refusal, ReviewFlag, StatementCategory,
     },
-    wire_campaign::{CampaignRole, ContentRating, Reason, StartBlocker},
+    wire_campaign::{CampaignRole, Reason, StartBlocker},
 };
 
 /// What happened, and what the person can do about it.
@@ -114,11 +114,11 @@ pub fn refusal_message(refusal: Refusal) -> &'static str {
             "Tick the box to confirm you understand what closing does."
         }
         Refusal::ConsentRequired => "Tick the box to agree before you add credit to this table.",
-        Refusal::CampaignNameRequired => "Give your campaign a name.",
-        Refusal::CampaignNameTooLong => "Use a campaign name of 60 characters or fewer.",
-        Refusal::AdventureRequired => "Choose an adventure.",
-        Refusal::ContentRatingRequired => "Choose a content rating.",
-        Refusal::SeatsOutOfRange => "Choose how many people will play, within the range shown.",
+        Refusal::CampaignNameRequired
+        | Refusal::CampaignNameTooLong
+        | Refusal::AdventureRequired
+        | Refusal::ContentRatingRequired
+        | Refusal::SeatsOutOfRange => "This request is no longer available.",
         Refusal::CodeRequired => "Enter the code shown on the screen.",
     }
 }
@@ -139,15 +139,16 @@ pub fn refusal_field(refusal: Refusal) -> Option<Field> {
         Refusal::CeilingOutOfRange => Field::CustomCeiling,
         Refusal::ConfirmationRequired => Field::CloseUnderstood,
         Refusal::ConsentRequired => Field::AllocateConsent,
-        Refusal::CampaignNameRequired | Refusal::CampaignNameTooLong => Field::CampaignName,
-        Refusal::AdventureRequired => Field::Adventure,
-        Refusal::ContentRatingRequired => Field::Rating,
-        Refusal::SeatsOutOfRange => Field::SeatCount,
         Refusal::AmountOutOfRange
         | Refusal::ReauthenticationRequired
         | Refusal::ReasonRequired
         | Refusal::ReasonTooLong
         | Refusal::SupportCaseRequired
+        | Refusal::CampaignNameRequired
+        | Refusal::CampaignNameTooLong
+        | Refusal::AdventureRequired
+        | Refusal::ContentRatingRequired
+        | Refusal::SeatsOutOfRange
         | Refusal::CodeRequired => return None,
     })
 }
@@ -181,7 +182,6 @@ pub fn refused_form_error(model: &Model) -> Option<ApiError> {
             .or(screen.revoke.error())
             .or(screen.close.error()),
         Screen::PlaySessions(_) | Screen::Assets(_) => None,
-        Screen::NewCampaign(screen) => screen.save.error(),
         Screen::Campaign(screen) => screen.action.error(),
         Screen::Lobby(screen) => screen.action.error(),
         Screen::Play(_) => None,
@@ -229,7 +229,6 @@ pub fn title(screen: &Screen) -> String {
         Screen::PlaySessions(_) => "Play sessions",
         Screen::Assets(_) => "Assets",
         Screen::Settings(_) => "Account settings",
-        Screen::NewCampaign(_) => "New campaign",
         Screen::Campaign(_) => "Campaign",
         Screen::Lobby(_) => "Lobby",
         Screen::Play(_) => "Start your game",
@@ -268,20 +267,6 @@ pub const fn preset_description(preset: PacePreset) -> &'static str {
         PacePreset::Immersive => "Spoken voices and new scene pictures from time to time.",
         PacePreset::Cinematic => "More frequent new pictures. Video always asks first.",
         PacePreset::Custom => "You set the most the table may spend in an hour.",
-    }
-}
-
-pub const fn rating_value(rating: ContentRating) -> &'static str {
-    match rating {
-        ContentRating::Teen => "teen",
-        ContentRating::Mature => "mature",
-    }
-}
-
-pub const fn rating_name(rating: ContentRating) -> &'static str {
-    match rating {
-        ContentRating::Teen => "Teen: peril and combat, no gore",
-        ContentRating::Mature => "Mature: darker themes and stronger violence",
     }
 }
 

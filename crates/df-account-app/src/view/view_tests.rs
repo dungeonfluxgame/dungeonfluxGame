@@ -56,7 +56,6 @@ fn customer_routes() -> Vec<Route> {
         Route::Funding,
         Route::Statements,
         Route::Settings,
-        Route::NewCampaign,
         Route::Campaign {
             campaign_id: "0c".to_owned(),
         },
