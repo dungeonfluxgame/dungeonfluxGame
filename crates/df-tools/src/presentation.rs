@@ -585,6 +585,7 @@ pub(crate) fn story_scene_picture(scene: &rpc::GameplayScene) -> Option<String> 
 /// The TV's screen-space effects a display view can switch off (`DisplayGameplayView.effects_off`,
 /// set with `dev fx`); each maps to `data-fx-<effect>="off"` on the stage. The server's list in
 /// `gameplay/display_effects.rs` must name the same effects.
+#[cfg(target_arch = "wasm32")]
 pub(crate) const SCREEN_EFFECTS: [&str; 8] = [
     "blur",
     "drift",
@@ -1272,6 +1273,7 @@ fn latest_hero_turn(journey: &rpc::JourneyView) -> Option<u64> {
 }
 
 /// The hero's newest typed or acted line, the one a pending reply answers, if it has words.
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn newest_hero_line(journey: &rpc::JourneyView) -> Option<(u64, &str, &str)> {
     journey.table_log.iter().rev().find_map(|line| {
         (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
@@ -1526,10 +1528,6 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
         })
     })
 }
-
-#[cfg(test)]
-#[path = "stage_director.rs"]
-mod s08_stage_director;
 
 #[cfg(test)]
 mod tests {
@@ -2061,7 +2059,7 @@ mod tests {
 
     #[test]
     fn live_round_card_values_follow_each_presented_blow_heal_and_next_heading() {
-        use super::s08_stage_director::{Command, StageDirector, StageState, ViewDiff};
+        use crate::stage_director::{Command, StageDirector, StageState, ViewDiff};
         use df_render::battle::{
             AttackResult, AttackStyle, Beat, CombatFeed, CombatSnapshot, FeedMode, Member, Outcome,
             Side, Stage, TokenId, hit_points_at_sequence, load_embedded,

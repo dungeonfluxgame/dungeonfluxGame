@@ -15,6 +15,7 @@ mod mail;
 mod ports;
 
 mod account_closure;
+mod accounts_gate;
 #[allow(
     dead_code,
     reason = "unchanged staged S1 adapter includes two unused private queries; remove when its owning crate exports it"
@@ -22,6 +23,8 @@ mod account_closure;
 #[path = "../../df-persistence/src/campaign_store/mod.rs"]
 pub mod campaign_store;
 mod runtime;
+mod support_ingest;
+mod telemetry;
 
 pub use runtime::{Hosted, OpenError};
 

@@ -99,10 +99,7 @@ async fn fake_connection(
             let mut sql = String::new();
             let mut params = Vec::new();
             let mut snapshot = None;
-            loop {
-                let Ok(kind) = server.read_u8().await else {
-                    break;
-                };
+            while let Ok(kind) = server.read_u8().await {
                 let length = server.read_u32().await.unwrap();
                 let mut body = vec![0; length as usize - 4];
                 server.read_exact(&mut body).await.unwrap();

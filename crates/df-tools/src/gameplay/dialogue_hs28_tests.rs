@@ -282,23 +282,24 @@ fn is_name_reading(body: &serde_json::Value) -> bool {
 /// also read for a revealed hero name, and since HS69 every generated person's persona is judged;
 /// those readings answer `none` and `accepted` and are not in the script, so the script and the
 /// counts below cover the judgements the flow under test makes.
+type JevResponseComputer = dyn Fn(&serde_json::Value) -> (u16, serde_json::Value) + Send + Sync;
+
 fn scripted_jev(script: Vec<Reply>) -> FakeEndpoint {
     let script = std::sync::Mutex::new(VecDeque::from(script));
-    let compute: Arc<dyn Fn(&serde_json::Value) -> (u16, serde_json::Value) + Send + Sync> =
-        Arc::new(move |body: &serde_json::Value| {
-            let next = if is_name_reading(body) || offers(body, "accepted: ") {
-                Some(answer("o1"))
-            } else {
-                script
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .pop_front()
-            };
-            match next {
-                Some(Reply::Status(status, response)) => (status, response),
-                _ => (500, serde_json::json!({"error": "unscripted"})),
-            }
-        });
+    let compute: Arc<JevResponseComputer> = Arc::new(move |body: &serde_json::Value| {
+        let next = if is_name_reading(body) || offers(body, "accepted: ") {
+            Some(answer("o1"))
+        } else {
+            script
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front()
+        };
+        match next {
+            Some(Reply::Status(status, response)) => (status, response),
+            _ => (500, serde_json::json!({"error": "unscripted"})),
+        }
+    });
     FakeEndpoint::start(
         (0..96)
             .map(|_| Reply::ComputeResponse(compute.clone()))

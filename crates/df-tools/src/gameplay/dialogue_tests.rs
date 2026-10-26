@@ -124,6 +124,14 @@ struct RunningActor {
     sender: InboxHandle<actor::Call>,
     thread: Option<std::thread::JoinHandle<Result<ActorExit, Error>>>,
 }
+
+struct NpcStartOptions {
+    social: Arc<super::social::SocialLedger>,
+    npc_voice: Arc<super::npc_reply::NpcVoice>,
+    completion_observer: Option<actor::CompletionObserver>,
+    calls_remaining: u16,
+}
+
 impl RunningActor {
     async fn start(
         repository: PostgresRepository<LocalDemoAuthority>,
@@ -149,10 +157,12 @@ impl RunningActor {
             checkpoint,
             codec,
             counter,
-            super::social::SocialLedger::none(),
-            Arc::new(super::npc_reply::NpcVoice::silent()),
-            completion_observer,
-            calls_remaining,
+            NpcStartOptions {
+                social: super::social::SocialLedger::none(),
+                npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
+                completion_observer,
+                calls_remaining,
+            },
         )
         .await
     }
@@ -166,7 +176,17 @@ impl RunningActor {
         npc_voice: Arc<super::npc_reply::NpcVoice>,
     ) -> Result<Self, Error> {
         Self::start_observed_with_npc(
-            repository, issuer, checkpoint, codec, counter, social, npc_voice, None, 100,
+            repository,
+            issuer,
+            checkpoint,
+            codec,
+            counter,
+            NpcStartOptions {
+                social,
+                npc_voice,
+                completion_observer: None,
+                calls_remaining: 100,
+            },
         )
         .await
     }
@@ -176,11 +196,14 @@ impl RunningActor {
         checkpoint: Checkpoint,
         codec: NativeCodecLimits,
         counter: Arc<AtomicUsize>,
-        social: Arc<super::social::SocialLedger>,
-        npc_voice: Arc<super::npc_reply::NpcVoice>,
-        completion_observer: Option<actor::CompletionObserver>,
-        calls_remaining: u16,
+        options: NpcStartOptions,
     ) -> Result<Self, Error> {
+        let NpcStartOptions {
+            social,
+            npc_voice,
+            completion_observer,
+            calls_remaining,
+        } = options;
         let (updates, receiver) = watch::channel(checkpoint.clone());
         let (publication, intent_notifications) = actor::Publication::new(updates.clone());
         let owner = match DurableOwner::new(
@@ -456,10 +479,7 @@ fn pending_ai(checkpoint: &Checkpoint) -> usize {
 }
 
 fn event_line_proposal(
-    actor_id: &str,
-    npc_id: &str,
-    item_id: &str,
-    recipient_id: &str,
+    identities: (&str, &str, &str, &str),
     scene_identity: &str,
     revision: &str,
     typed_words: &str,
@@ -467,6 +487,7 @@ fn event_line_proposal(
     source_line_sequence: u64,
 ) -> super::npc_event_classifier::Proposal {
     use super::npc_event_classifier::{EventKind, Proposal};
+    let (actor_id, npc_id, item_id, recipient_id) = identities;
     Proposal {
         kind: EventKind::IntentToGive,
         actor_id: actor_id.to_owned(),
@@ -928,10 +949,12 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         required(phone_card.observation_only && phone_card.holder == "Sigrun")?;
         required(phone_card.detail == held.detail)?;
         let first_proposal = event_line_proposal(
-            "merchant",
-            "patron:merchant",
-            "item-clothes-travelers",
-            "Sigrun",
+            (
+                "merchant",
+                "patron:merchant",
+                "item-clothes-travelers",
+                "Sigrun",
+            ),
             &scene_identity,
             &revision_label(opening.basis().revision),
             first_ask,
@@ -950,10 +973,12 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
 
         use super::npc_event_classifier::EventKind;
         let mut refusal = event_line_proposal(
-            "merchant",
-            "patron:merchant",
-            "item-clothes-travelers",
-            "Sigrun",
+            (
+                "merchant",
+                "patron:merchant",
+                "item-clothes-travelers",
+                "Sigrun",
+            ),
             &scene_identity,
             &revision_label(committed.basis().revision),
             second_ask,
@@ -974,10 +999,12 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         required(conditional_result.status == "conditional_no_commit")?;
         required(service.updates.borrow().clone() == committed)?;
         let wrong_speaker = event_line_proposal(
-            "shop-adventurer",
-            "bystander:shop-adventurer",
-            "item-clothes-travelers",
-            "Sigrun",
+            (
+                "shop-adventurer",
+                "bystander:shop-adventurer",
+                "item-clothes-travelers",
+                "Sigrun",
+            ),
             &scene_identity,
             &revision_label(committed.basis().revision),
             second_ask,
@@ -993,10 +1020,12 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         )?;
         required(service.updates.borrow().clone() == committed)?;
         let wrong_dossier = event_line_proposal(
-            "merchant",
-            "bystander:merchant",
-            "item-clothes-travelers",
-            "Sigrun",
+            (
+                "merchant",
+                "bystander:merchant",
+                "item-clothes-travelers",
+                "Sigrun",
+            ),
             &scene_identity,
             &revision_label(committed.basis().revision),
             second_ask,
@@ -1012,10 +1041,12 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         )?;
         required(service.updates.borrow().clone() == committed)?;
         let stale = event_line_proposal(
-            "merchant",
-            "patron:merchant",
-            "item-clothes-travelers",
-            "Sigrun",
+            (
+                "merchant",
+                "patron:merchant",
+                "item-clothes-travelers",
+                "Sigrun",
+            ),
             &scene_identity,
             &revision_label(opening.basis().revision),
             second_ask,
@@ -1033,10 +1064,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         required(wrong_reply_line.text == wrong_item_reply)?;
         required(service.updates.borrow().clone() == committed)?;
         let wrong_item_proposal = event_line_proposal(
-            "merchant",
-            "patron:merchant",
-            &bell_id,
-            "Sigrun",
+            ("merchant", "patron:merchant", &bell_id, "Sigrun"),
             &scene_identity,
             &revision_label(committed.basis().revision),
             wrong_item_ask,

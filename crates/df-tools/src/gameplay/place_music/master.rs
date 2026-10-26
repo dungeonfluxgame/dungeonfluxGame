@@ -259,13 +259,26 @@ impl Codec {
 
 pub(super) fn frames_of(bytes: &[u8]) -> Vec<Frame> {
     bytes
-        .chunks_exact(8)
-        .map(|chunk| {
-            [
-                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
-                f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
-            ]
-        })
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(
+            |&[
+                left_0,
+                left_1,
+                left_2,
+                left_3,
+                right_0,
+                right_1,
+                right_2,
+                right_3,
+            ]| {
+                [
+                    f32::from_le_bytes([left_0, left_1, left_2, left_3]),
+                    f32::from_le_bytes([right_0, right_1, right_2, right_3]),
+                ]
+            },
+        )
         .collect()
 }
 
@@ -452,11 +465,6 @@ pub(super) fn tone(frames: usize, hertz: f64, amplitude: f32) -> Vec<Frame> {
             [sample, sample]
         })
         .collect()
-}
-
-#[cfg(test)]
-pub(super) fn encode_raw_for_tests(frames: &[Frame]) -> Vec<u8> {
-    raw_bytes(frames)
 }
 
 /// Test "MP3" bytes: `TONE`, a little-endian u32 frame count and an f32 amplitude make a tone;

@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "planned caller: durable commerce admission and read-only spend observers; see planning/commerce-service.md § Atomic hierarchical spend and planning/observability.md"
+)]
+
 //! The metering port: the narrow public surface of the cost engine, for the owners that must see a
 //! billed call without reaching into the game (the acceptance tests, the money core's admission).
 //!

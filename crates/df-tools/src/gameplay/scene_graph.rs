@@ -4,16 +4,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{HeroSlot, ShotSpec};
+#[cfg(test)]
 use crate::gameplay::{
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKind, ImageRequest, OutputSpec,
         ReferenceImage, cast_expression,
     },
-    pack::SceneKey,
-    scene_mood::{Expression, HealthTier},
-    shot::PlateLayout,
+    scene_mood::HealthTier,
     startup_configuration::ContentRating,
 };
+use crate::gameplay::{pack::SceneKey, scene_mood::Expression, shot::PlateLayout};
 
 #[cfg(test)]
 #[path = "../gameplay_browser/scene_placement.rs"]
@@ -432,6 +432,7 @@ fn model_anchor(position: &str) -> (u32, u32, u32) {
 }
 
 /// Makes the transparent standing hero cut-out request from that hero's party-sheet reference.
+#[cfg(test)]
 pub(in crate::gameplay) fn hero_cutout_request(
     rating: ContentRating,
     party_sheet_figure: ReferenceImage,

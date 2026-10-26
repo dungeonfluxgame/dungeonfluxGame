@@ -6,6 +6,8 @@ pub mod build_set;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dev_cli;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod fake_profile;
+#[cfg(not(target_arch = "wasm32"))]
 mod file_identity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fixture;

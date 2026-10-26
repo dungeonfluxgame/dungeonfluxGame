@@ -189,7 +189,6 @@ fn the_listener_has_their_own_visible_identity_in_reply_facts() {
         .push(rpc::SheetFact {
             label: "Gender".to_owned(),
             value: "man".to_owned(),
-            ..Default::default()
         });
     let context = NpcReplyContext::for_cast(
         &projected,

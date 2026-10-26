@@ -95,6 +95,9 @@ pub fn plan_dispute_open(
     snapshot: &DisputeSnapshot,
     request: &DisputeOpenRequest,
 ) -> Result<Option<FinancePlan>, DisputeRefusal> {
+    if snapshot.lot.processor.as_deref() != Some(request.processor.as_str()) {
+        return Err(DisputeRefusal::LotNotPurchased);
+    }
     if snapshot.dispute_exists {
         return Ok(None);
     }
@@ -192,7 +195,10 @@ pub fn plan_dispute_open(
         snapshot.lot.revision,
     ));
     for refund_lot in &snapshot.refund_lots {
-        if refund_lot.state == "pending" || refund_lot.state == "manual_pending" {
+        if matches!(
+            refund_lot.state.as_str(),
+            "pending" | "unknown" | "manual_pending"
+        ) {
             plan.changes.push(RowChange::update(
                 ChangeKind::RefundLotUpdate,
                 Row::new()
@@ -283,6 +289,9 @@ pub fn plan_dispute_close(
     snapshot: &DisputeSnapshot,
     request: &DisputeCloseRequest,
 ) -> Result<Option<FinancePlan>, DisputeRefusal> {
+    if snapshot.lot.processor.as_deref() != Some(request.processor.as_str()) {
+        return Err(DisputeRefusal::LotNotPurchased);
+    }
     if !snapshot.dispute_open {
         return Ok(None);
     }
@@ -350,7 +359,11 @@ pub fn plan_dispute_close(
                 }
                 if matches!(
                     refund_lot.state.as_str(),
-                    "pending" | "failed_review" | "manual_pending" | "blocked_by_dispute"
+                    "pending"
+                        | "unknown"
+                        | "failed_review"
+                        | "manual_pending"
+                        | "blocked_by_dispute"
                 ) && remainder >= refund_lot.principal_micro_dollars
                 {
                     x2 = x2
@@ -415,9 +428,16 @@ pub fn plan_dispute_close(
             )
         }
     };
-    if matches!(request.outcome, DisputeOutcome::Won) {
+    if lot_state == LotState::Active {
         for refund_lot in &snapshot.refund_lots {
-            if refund_lot.state == "blocked_by_dispute" {
+            let cancelled = plan.changes.iter().any(|change| {
+                change.kind == ChangeKind::RefundLotUpdate
+                    && change.row.get("refund_lot_id")
+                        == Some(&crate::plan::Value::Bytes(
+                            refund_lot.refund_lot.as_bytes().to_vec(),
+                        ))
+            });
+            if refund_lot.state == "blocked_by_dispute" && !cancelled {
                 plan.changes.push(RowChange::update(
                     ChangeKind::RefundLotUpdate,
                     Row::new()

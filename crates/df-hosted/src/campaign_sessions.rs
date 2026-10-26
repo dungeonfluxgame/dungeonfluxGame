@@ -16,6 +16,45 @@ use tokio_postgres::Row;
 pub(super) struct Sessions(Arc<Mutex<Connection>>);
 
 impl Sessions {
+    pub(super) async fn cancel_before_start(
+        client: &tokio_postgres::Client,
+        account: df_types::AccountId,
+        session: SessionId,
+    ) -> StoreResult<()> {
+        let row = client
+            .query_one(
+                "SELECT df_runtime.cancel_host_lobby($1, $2)",
+                &[
+                    &session.as_bytes().as_slice(),
+                    &account.as_bytes().as_slice(),
+                ],
+            )
+            .await
+            .map_err(|error| {
+                let unknown = error.as_db_error().is_none();
+                query_error(error);
+                if unknown {
+                    StoreError::Unknown
+                } else {
+                    StoreError::Unavailable
+                }
+            })?;
+        if !row
+            .try_get::<_, bool>(0)
+            .map_err(|_| StoreError::InvalidRecord)?
+        {
+            return Err(StoreError::InvalidRecord);
+        }
+        df_observe::record_audit_line(
+            "hosted.session_cancelled_before_start",
+            format!(
+                "SESSION cancelled_before_start session={}",
+                df_commerce::finance_ids::hex(session.as_bytes())
+            ),
+        );
+        Ok(())
+    }
+
     pub(super) fn new(connection: Connection) -> Self {
         Self(Arc::new(Mutex::new(connection)))
     }
@@ -169,5 +208,164 @@ impl SessionDirectory for Sessions {
             ),
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fundingwire_tests {
+    use super::*;
+    use df_persistence::{account_closure::TimeoutPolicy, account_store::PostgresAccountStore};
+    use df_portal::app_api::ports::FinancePort;
+
+    #[tokio::test]
+    async fn fundingwire_real_hosted_migrations_publish_prices_and_cancel_returns_reserved_credit()
+    {
+        let transport = df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly;
+        let config: tokio_postgres::Config =
+            "host=127.0.0.1 port=55911 user=postgres dbname=postgres"
+                .parse()
+                .unwrap();
+        let admin = Connection::open(&config, &transport).await.unwrap();
+        let token = df_customer::SecretToken::generate().unwrap();
+        let database = format!("fundingwire_{}", &token.text()[..16]);
+        admin
+            .client
+            .batch_execute(&format!("CREATE DATABASE {database}"))
+            .await
+            .unwrap();
+        let mut config = config;
+        config.dbname(&database);
+        let accounts = PostgresAccountStore::open(
+            config.clone(),
+            transport.clone(),
+            1,
+            TimeoutPolicy::NotChecked,
+        )
+        .await
+        .unwrap();
+        let mut db = Connection::open(&config, &transport).await.unwrap();
+        crate::database::migrate(&mut db).await.unwrap();
+        crate::database::migrate(&mut db).await.unwrap();
+        assert!(
+            db.client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM accounts.schema_migration WHERE version = 30)",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+        );
+
+        let prices: serde_json::Value = serde_json::from_str(
+            &db.client
+                .query_one("SELECT presets::text FROM finance.price_version", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+        )
+        .unwrap();
+        assert_eq!(prices["story"]["hourly_ceiling_micro_dollars"], 3_000_000);
+        assert_eq!(
+            prices["immersive"]["hourly_ceiling_micro_dollars"],
+            8_000_000
+        );
+        assert_eq!(
+            prices["cinematic"]["hourly_ceiling_micro_dollars"],
+            20_000_000
+        );
+        let account = df_types::AccountId::from_bytes(&[0x91; 16]).unwrap();
+        let campaign = CampaignId::from_bytes(&[0x92; 16]).unwrap();
+        db.client.execute("INSERT INTO accounts.account (account_id,email_normalized,email_display,email_verified_at_ms,status,credential_generation,created_at_ms) VALUES ($1,'fundingwire@example.test','fundingwire@example.test',1,'active',1,1)", &[&account.as_bytes().as_slice()]).await.unwrap();
+        let tenant: Vec<u8> = db
+            .client
+            .query_one(
+                "INSERT INTO accounts.tenant (owner_account_id) VALUES ($1) RETURNING tenant_id",
+                &[&account.as_bytes().as_slice()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        db.client.execute("INSERT INTO campaigns.campaign (campaign_id,tenant_id,owner_account_id,name,seat_count,status,created_at_ms,last_event_at_ms,feed_epoch) VALUES ($1,$3,$2,'Funding test',1,'active',1,1,$1)", &[&campaign.as_bytes().as_slice(), &account.as_bytes().as_slice(), &tenant]).await.unwrap();
+        db.client.execute("INSERT INTO campaigns.campaign_member (member_id,campaign_id,account_id,role,holds_seat,status,joined_at_ms) VALUES ($1,$1,$2,'host',true,'active',1)", &[&campaign.as_bytes().as_slice(), &account.as_bytes().as_slice()]).await.unwrap();
+        let sessions = Sessions::new(Connection::open(&config, &transport).await.unwrap());
+        let (session, _) = sessions.open_session(campaign).await.unwrap();
+        let finance_connection = Connection::open(&config, &transport).await.unwrap();
+        finance_connection
+            .client
+            .batch_execute("SET ROLE df_finance")
+            .await
+            .unwrap();
+        let finance =
+            crate::finance::Finance::new(finance_connection, accounts.clone(), [9; 32]).unwrap();
+        finance
+            .purchase(account, 300, "fundingwire-cancel")
+            .await
+            .unwrap();
+        let quote = finance
+            .host_credit(account, session)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(quote.available_micro_dollars, 3_000_000);
+        let operation = df_types::OperationId::from_bytes(&[0x93; 16]).unwrap();
+        finance
+            .consent_host_credit(
+                account,
+                session,
+                df_account_app::wire_campaign::HostConsentRequest {
+                    operation: df_commerce::finance_ids::hex(operation.as_bytes()),
+                    price_version: quote.price_version,
+                    cap_micro_dollars: quote.cap_micro_dollars,
+                    terms_version: quote.terms_version,
+                },
+                operation,
+            )
+            .await
+            .unwrap();
+        db.client
+            .batch_execute("SET ROLE df_finance")
+            .await
+            .unwrap();
+        df_finance::host_funding::open(
+            &mut db.client,
+            df_commerce::finance_ids::CampaignKey::from_array(*campaign.as_bytes()),
+            df_commerce::finance_ids::SessionKey::from_array(*session.as_bytes()),
+            i64::try_from(df_customer::Clock::now_ms(&df_customer::SystemClock)).unwrap(),
+        )
+        .await
+        .unwrap();
+        finance.cancel_host_lobby(account, session).await.unwrap();
+        finance.cancel_host_lobby(account, session).await.unwrap();
+        assert_eq!(
+            sessions.session(session).await.unwrap().unwrap().phase,
+            SessionPhase::Ended
+        );
+        assert_eq!(
+            finance
+                .overview(account, false)
+                .await
+                .unwrap()
+                .balance
+                .purchased_available_micro_dollars,
+            3_000_000
+        );
+        assert_eq!(
+            db.client
+                .query_one("SELECT status FROM finance.session_funding", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "closed"
+        );
+        drop(finance);
+        drop(accounts);
+        drop(sessions);
+        drop(db);
+        admin
+            .client
+            .batch_execute(&format!("DROP DATABASE {database} WITH (FORCE)"))
+            .await
+            .unwrap();
     }
 }

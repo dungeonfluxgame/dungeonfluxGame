@@ -13,7 +13,7 @@ use super::test_store::TestStore;
 pub(in crate::gameplay) type StoreResult<T> = Result<T, StoryMemoryError>;
 
 pub(in crate::gameplay) enum Backend {
-    Postgres(StoryMemoryDb),
+    Postgres(Box<StoryMemoryDb>),
     #[cfg(test)]
     Test(TestStore),
 }

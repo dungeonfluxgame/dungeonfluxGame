@@ -2888,12 +2888,10 @@ async fn hs58_rate_limited_image_retries_after_backoff() {
 }
 
 /// The quota tests read and write the shared audit ring, so they run one at a time.
-static QUOTA_TESTS: Mutex<()> = Mutex::new(());
+static QUOTA_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn quota_lock() -> std::sync::MutexGuard<'static, ()> {
-    QUOTA_TESTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+async fn quota_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    QUOTA_TESTS.lock().await
 }
 
 fn engine_of(service: &Imagery) -> Arc<Engine> {
@@ -2909,7 +2907,7 @@ fn audit_count(needle: &str) -> usize {
 
 #[tokio::test]
 async fn quota_exhaustion_is_not_retried_and_fails_fast_while_the_breaker_is_open() {
-    let _quota = quota_lock();
+    let _quota = quota_lock().await;
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
     let (service, _dir) = imagery(&fake, "quota-open");
     let opened_before = audit_count("IMAGERY provider_quota status=open");
@@ -2941,7 +2939,7 @@ async fn quota_exhaustion_is_not_retried_and_fails_fast_while_the_breaker_is_ope
 
 #[tokio::test]
 async fn a_rate_limited_probe_keeps_its_probe_and_its_retry_success_closes_the_breaker() {
-    let _quota = quota_lock();
+    let _quota = quota_lock().await;
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaThenRateLimit);
     let (service, _dir) = imagery(&fake, "quota-probe-retry");
     let engine = engine_of(&service);
@@ -2975,7 +2973,7 @@ async fn a_rate_limited_probe_keeps_its_probe_and_its_retry_success_closes_the_b
 
 #[tokio::test]
 async fn record_quota_answer_opens_on_quota_closes_on_success_and_ignores_other_failures() {
-    let _quota = quota_lock();
+    let _quota = quota_lock().await;
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, _dir) = imagery(&fake, "record-quota");
     let engine = engine_of(&service);

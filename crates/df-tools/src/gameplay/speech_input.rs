@@ -594,6 +594,15 @@ struct RouteState {
     allowed_origins: Arc<[String]>,
 }
 
+struct SpeechProcessState<'a> {
+    received: &'a mut usize,
+    cancelled: &'a mut bool,
+    close_connection: &'a mut bool,
+    resource_id: Option<&'a str>,
+    provider_elapsed_ms: &'a mut Option<u128>,
+    audio_ms: &'a mut Option<u128>,
+}
+
 /// `POST /gameplay/speech` and `GET /gameplay/speech/status`.
 pub(super) fn router(
     input: SpeechInput,
@@ -681,7 +690,8 @@ fn upload_id_from(headers: &HeaderMap) -> Result<[u8; 16], SpeechOutcome> {
         .filter(|value| value.len() == 32)
         .ok_or(SpeechOutcome::Unauthenticated)?;
     let mut id = [0; 16];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    let (pairs, _) = value.as_bytes().as_chunks::<2>();
+    for (index, pair) in pairs.iter().enumerate() {
         let digits = std::str::from_utf8(pair).map_err(|_| SpeechOutcome::Unauthenticated)?;
         id[index] = u8::from_str_radix(digits, 16).map_err(|_| SpeechOutcome::Unauthenticated)?;
     }
@@ -732,19 +742,17 @@ impl RouteState {
         let mut close_connection = false;
         let mut provider_elapsed_ms = None;
         let mut audio_ms = None;
-        let result = self
-            .process(
-                headers,
-                body,
-                span,
-                &mut received,
-                &mut cancelled,
-                &mut close_connection,
-                resource_id.as_deref(),
-                &mut provider_elapsed_ms,
-                &mut audio_ms,
-            )
-            .await;
+        let result = {
+            let mut process_state = SpeechProcessState {
+                received: &mut received,
+                cancelled: &mut cancelled,
+                close_connection: &mut close_connection,
+                resource_id: resource_id.as_deref(),
+                provider_elapsed_ms: &mut provider_elapsed_ms,
+                audio_ms: &mut audio_ms,
+            };
+            self.process(headers, body, span, &mut process_state).await
+        };
         if cancelled {
             transcription_line(
                 "failed",
@@ -814,15 +822,10 @@ impl RouteState {
         headers: &HeaderMap,
         body: Body,
         span: &mut OperationSpan,
-        received: &mut usize,
-        cancelled: &mut bool,
-        close_connection: &mut bool,
-        resource_id: Option<&str>,
-        provider_elapsed_ms: &mut Option<u128>,
-        audio_ms: &mut Option<u128>,
+        state: &mut SpeechProcessState<'_>,
     ) -> Result<String, SpeechOutcome> {
         if !origin_known(headers, &self.allowed_origins) {
-            discard_refused_body(headers, body, close_connection).await;
+            discard_refused_body(headers, body, state.close_connection).await;
             return Err(SpeechOutcome::Refused);
         }
         if matches!(*self.input.mode, Mode::Off(_)) {
@@ -844,13 +847,13 @@ impl RouteState {
         let mut admission = match self.input.admit(member, upload_id) {
             Ok(admission) => admission,
             Err(outcome) => {
-                discard_refused_body(headers, body, close_connection).await;
+                discard_refused_body(headers, body, state.close_connection).await;
                 return Err(outcome);
             }
         };
         record_speech_resource(
             "gameplay.speech_input.queued",
-            resource_id,
+            state.resource_id,
             "queued",
             "queued",
             None,
@@ -861,7 +864,7 @@ impl RouteState {
             Some(admission.started.elapsed().as_millis()),
             0,
         );
-        let mut audit = QueuedAuditGuard::new(resource_id);
+        let mut audit = QueuedAuditGuard::new(state.resource_id);
         let Some(cancellation) = admission.cancellation.take() else {
             audit.complete();
             return Err(SpeechOutcome::ProviderFailed);
@@ -870,7 +873,7 @@ impl RouteState {
         let result = tokio::select! {
             cancellation_result = &mut cancellation => {
                 let _ = cancellation_result;
-                *cancelled = true;
+                *state.cancelled = true;
                 Err(SpeechOutcome::ProviderFailed)
             }
             read_result = tokio::time::timeout(
@@ -880,12 +883,18 @@ impl RouteState {
                 Err(_) => Err(SpeechOutcome::TimedOut),
                 Ok(Err(_)) => Err(SpeechOutcome::TooLarge),
                 Ok(Ok(clip)) => {
-                    *received = clip.len();
+                    *state.received = clip.len();
                     let result = admission
-                        .hear(&clip, cancellation, span, provider_elapsed_ms, audio_ms)
+                        .hear(
+                            &clip,
+                            cancellation,
+                            span,
+                            state.provider_elapsed_ms,
+                            state.audio_ms,
+                        )
                         .await;
                     if admission.cancelled.load(Ordering::Acquire) {
-                        *cancelled = true;
+                        *state.cancelled = true;
                         span.event(
                             "STT cancelled",
                             &[
@@ -1895,12 +1904,11 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Mode::On(active) = &*input.mode {
-                    if locked(&active.in_flight)
+                if let Mode::On(active) = &*input.mode
+                    && locked(&active.in_flight)
                         .contains_key(&MemberId::from_bytes(&[1; 16]).unwrap())
-                    {
-                        break;
-                    }
+                {
+                    break;
                 }
                 tokio::task::yield_now().await;
             }

@@ -47,6 +47,9 @@ use super::{
     table_log::{RollRow, TableLog},
 };
 
+#[cfg(test)]
+type TestModelResponder = Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync>;
+
 const SPEAKER_AUTHORITY: &str =
     "Decide what is yours to decide within your role, dossier, and the current scene. ";
 /// The trade allowances: only a line about trade or a question reads them (see `dialogue_mode`).
@@ -2177,6 +2180,7 @@ impl NpcVoice {
         (self.storyteller.as_ref(), &self.approach_model)
     }
 
+    #[cfg(test)]
     pub(super) async fn resolve_addressee(
         &self,
         words: &str,
@@ -2353,6 +2357,7 @@ impl NpcVoice {
         )
     }
 
+    #[cfg(test)]
     pub(super) async fn classify_input(
         &self,
         words: &str,
@@ -2421,6 +2426,7 @@ impl NpcVoice {
     /// [`Self::reply`], and the reply also becomes public table talk: the asker gets it in the
     /// dialogue response and the whole room sees it in the table log. A reply that never came
     /// adds nothing, so only the player's own line stands.
+    #[cfg(test)]
     pub(super) async fn reply_in_public(
         &self,
         context: NpcReplyContext,
@@ -2703,6 +2709,7 @@ impl NpcVoice {
     /// reply when it is on and well behaved, the dossier's prepared answer otherwise. The reply
     /// is public table talk; the exchange then moves the NPC's attitude toward the hero, which is
     /// remembered, saved and, when it changes, announced as a short public line.
+    #[cfg(test)]
     pub(super) async fn converse(
         &self,
         context: NpcReplyContext,
@@ -4671,7 +4678,7 @@ fn publication_present(
     actor_id: &str,
 ) -> bool {
     let Ok(projection) = super::wire::project_journey(
-        &current,
+        current,
         df_persistence::local_demo_scope::LocalDemoRole::Player,
         member,
     ) else {
@@ -4686,7 +4693,7 @@ fn publication_present(
     // The opening's first beat keeps its enforcer out of the foreground cast while the
     // canonical talk offer already addresses him; that offer, not the cast, admits him.
     let offered = || {
-        matches!(super::wire::opening_talk_offer(&current), Ok(Some(offer))
+        matches!(super::wire::opening_talk_offer(current), Ok(Some(offer))
         if offer.input_groups.iter().any(|group| {
             group.group_id == "dialogue-addressee"
                 && group.options.iter().any(|option| option.option_id == actor_id)
@@ -4694,7 +4701,7 @@ fn publication_present(
     };
     format!("{}|{}", scene.title, scene.scene_asset) == expected
         && (actor_id.is_empty()
-            || super::npc_target::current(&scene.cast, &actor_id).is_some()
+            || super::npc_target::current(&scene.cast, actor_id).is_some()
             || offered())
 }
 
@@ -7192,7 +7199,7 @@ pub(super) mod tests {
         reason: &'static str,
         reject_reply: bool,
     ) -> FakeEndpoint {
-        let compute: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> = Arc::new(move |body| {
+        let compute: TestModelResponder = Arc::new(move |body| {
             let criteria = body["questions"]["q1"]["criteria"].as_object().unwrap();
             let key_of = |label: &str| {
                 criteria
@@ -7996,7 +8003,7 @@ pub(super) mod tests {
     async fn hs50_ref069_unavailable_fact_step_preserves_an_authoritative_known_answer() {
         let endpoint = FakeEndpoint::start(vec![]);
         let words = "Who are you?";
-        let respond: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> = Arc::new(|body| {
+        let respond: TestModelResponder = Arc::new(|body| {
             let criteria = body["questions"]["q1"]["criteria"].as_object().unwrap();
             let key = |label: &str| {
                 criteria
@@ -9419,51 +9426,47 @@ mod fight_parley_tests {
     /// part, the first subject, and the appraisal as a raw option number (o5 is Warmed, Much and
     /// Hesitant; o4 Warmed, Much and Willing). Every other question gets no answer.
     fn jev(approach: &'static str, appraisal: &'static str) -> FakeEndpoint {
-        let compute: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> = Arc::new(
-            move |body: &Value| {
-                let criteria: Vec<(String, String)> = body["questions"]["q1"]["criteria"]
-                    .as_object()
-                    .map(|options| {
-                        options
-                            .iter()
-                            .map(|(key, text)| {
-                                (key.clone(), text.as_str().unwrap_or_default().to_owned())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let key_of = |label: &str| {
-                    criteria
+        let compute: TestModelResponder = Arc::new(move |body: &Value| {
+            let criteria: Vec<(String, String)> = body["questions"]["q1"]["criteria"]
+                .as_object()
+                .map(|options| {
+                    options
                         .iter()
-                        .find(|(_, criterion)| criterion.starts_with(&format!("{label}:")))
-                        .map(|(key, _)| key.clone())
-                };
-                let choice = if key_of("recorded").is_some() {
-                    key_of("recorded")
-                } else if key_of("approve").is_some()
-                    && body["state"].get("recorded_facts").is_some()
-                {
-                    key_of("approve")
-                } else if key_of("flirting").is_some() {
-                    key_of(approach)
-                } else if key_of("small_talk").is_some() {
-                    Some("o1".to_owned())
-                } else if key_of("warmed").is_some() {
-                    Some(appraisal.to_owned())
-                } else if key_of("other").is_some() && body["state"].get("player_words").is_some() {
-                    Some("o1".to_owned())
-                } else {
-                    None
-                };
-                match choice {
-                    Some(choice) => (
-                        200,
-                        json!({"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}}),
-                    ),
-                    None => (500, json!({"error": "unavailable"})),
-                }
-            },
-        );
+                        .map(|(key, text)| {
+                            (key.clone(), text.as_str().unwrap_or_default().to_owned())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let key_of = |label: &str| {
+                criteria
+                    .iter()
+                    .find(|(_, criterion)| criterion.starts_with(&format!("{label}:")))
+                    .map(|(key, _)| key.clone())
+            };
+            let choice = if key_of("recorded").is_some() {
+                key_of("recorded")
+            } else if key_of("approve").is_some() && body["state"].get("recorded_facts").is_some() {
+                key_of("approve")
+            } else if key_of("flirting").is_some() {
+                key_of(approach)
+            } else if key_of("small_talk").is_some() {
+                Some("o1".to_owned())
+            } else if key_of("warmed").is_some() {
+                Some(appraisal.to_owned())
+            } else if key_of("other").is_some() && body["state"].get("player_words").is_some() {
+                Some("o1".to_owned())
+            } else {
+                None
+            };
+            match choice {
+                Some(choice) => (
+                    200,
+                    json!({"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}}),
+                ),
+                None => (500, json!({"error": "unavailable"})),
+            }
+        });
         FakeEndpoint::start(
             (0..200)
                 .map(|_| Reply::ComputeResponse(compute.clone()))

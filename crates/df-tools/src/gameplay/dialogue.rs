@@ -18,6 +18,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::{Request, Response, Status};
 
+#[cfg(test)]
 use super::adventure::dossier::AnswerSubject;
 use super::{
     Service, actor, credential, freeform_action, journey,
@@ -1340,7 +1341,7 @@ impl SceneFightOrigin {
         Self {
             session_id: request.session_id.clone(),
             run_id: request.run_id.clone(),
-            observed_revision: request.observed_revision.clone(),
+            observed_revision: request.observed_revision,
             operation_id: request.input_id.clone(),
         }
     }
@@ -1417,8 +1418,8 @@ fn record_trade_judgement(stage: &str, meaning: &str, judgement: TradeJudgement)
     );
 }
 
-fn record_merchant_reply_context(
-    actor_id: &str,
+struct MerchantReplyContextRecord<'a> {
+    actor_id: &'a str,
     quote_followup: bool,
     terms_count: usize,
     hero_buy_terms: usize,
@@ -1427,7 +1428,20 @@ fn record_merchant_reply_context(
     selected_item: bool,
     buyback_memory: &'static str,
     context_ready: bool,
-) {
+}
+
+fn record_merchant_reply_context(record: MerchantReplyContextRecord<'_>) {
+    let MerchantReplyContextRecord {
+        actor_id,
+        quote_followup,
+        terms_count,
+        hero_buy_terms,
+        hero_sell_terms,
+        named_sell_terms,
+        selected_item,
+        buyback_memory,
+        context_ready,
+    } = record;
     actor::record_audit_diagnostic(
         "gameplay.merchant.reply_context",
         format!(
@@ -1565,6 +1579,7 @@ pub(super) fn named_physical_action(
     })
 }
 
+#[cfg(test)]
 fn subject_description(subject: AnswerSubject) -> &'static str {
     match subject {
         AnswerSubject::Errand => "What the character needs done.",
@@ -1581,6 +1596,7 @@ fn subject_description(subject: AnswerSubject) -> &'static str {
 }
 
 /// Jev's closed label set for the watched person's dossier facts, plus `none`.
+#[cfg(test)]
 pub(super) fn watched_subject_choices(
     subjects: &[AnswerSubject],
 ) -> Vec<(&'static str, &'static str)> {
@@ -1596,6 +1612,7 @@ pub(super) fn watched_subject_choices(
 
 /// Jev's subject for the hero's last question. Without Jev's label no subject is named, so no
 /// dossier answer is offered; only a subject the dossier holds an answer for is returned.
+#[cfg(test)]
 pub(super) fn watched_subject_from_judgement(
     subjects: &[AnswerSubject],
     judgement: Result<&'static str, super::approach_model::JevUnavailable>,
@@ -1766,6 +1783,14 @@ pub(super) struct QuoteClosureEvidence {
     /// The hero's decision on the listed quote, read from the typed words.
     hero_decision: QuoteDecision,
     merchant: Option<MerchantReplyCommitment>,
+}
+
+struct RawDialogueOptions<'a> {
+    target: Option<&'a str>,
+    hero_trade: HeroTradeIntent,
+    trade_pick: Option<String>,
+    bulk_picks: Vec<String>,
+    fight_parley: bool,
 }
 
 pub(super) enum DialogueRequest {
@@ -2254,7 +2279,7 @@ pub(super) enum DialogueReply {
     /// The open scene fight closed because its foes stood down.
     FightStoodDown,
     /// The response, plus what a spoken in-character reply needs when the line qualifies.
-    Raw(rpc::DialogueResponse, Option<SpokenTurn>),
+    Raw(rpc::DialogueResponse, Option<Box<SpokenTurn>>),
     Confirmed(rpc::SubmitActionResponse),
     Cancelled(rpc::DialogueResponse),
 }
@@ -2377,17 +2402,30 @@ fn encode<M: Message>(request: &M) -> Result<Vec<u8>, Status> {
     Ok(bytes)
 }
 
-fn record_target_route(
-    request: &rpc::RawDialogueRequest,
-    actor_id: Option<&str>,
-    source: &str,
-    reason: &str,
+struct TargetRouteRecord<'a> {
+    request: &'a rpc::RawDialogueRequest,
+    actor_id: Option<&'a str>,
+    source: &'a str,
+    reason: &'a str,
     elapsed_ms: u128,
-    validation: &str,
+    validation: &'a str,
     model_called: bool,
     deadline_hit: bool,
-    failure: Option<&str>,
-) {
+    failure: Option<&'a str>,
+}
+
+fn record_target_route(record: TargetRouteRecord<'_>) {
+    let TargetRouteRecord {
+        request,
+        actor_id,
+        source,
+        reason,
+        elapsed_ms,
+        validation,
+        model_called,
+        deadline_hit,
+        failure,
+    } = record;
     let input_id = request
         .input_id
         .as_ref()
@@ -2497,6 +2535,7 @@ fn record_merchant_skip(stage: &'static str) {
     span.finish_audit_record();
 }
 
+#[cfg(test)]
 fn observation_thing_label(thing: &str) -> Option<String> {
     let label = thing
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -2526,7 +2565,6 @@ pub(super) fn scene_visit(
 /// The narrator's answer when the addressed name matches nobody present.
 pub(super) const NAME_NOT_HERE_NARRATION: &str = "Nobody here goes by that name.";
 pub(super) const DESCRIPTION_NOT_HERE_NARRATION: &str = "Nobody here matches that description.";
-pub(super) const NAME_ONE_PERSON_NARRATION: &str = "Name just one person here to address.";
 
 impl actor::Actor {
     fn commit_scene_examine(
@@ -2954,7 +2992,7 @@ pub(super) enum AddresseeRoute {
         validation: &'static str,
         narration: &'static str,
     },
-    /// More than one person is addressed; the speaker gets `NAME_ONE_PERSON_NARRATION`.
+    /// More than one person is addressed; the speaker gets the ambiguity narration.
     Ambiguous,
 }
 
@@ -3482,7 +3520,7 @@ mod classified_line_tests {
         let decision = model(&endpoint)
             .resolve_addressee(
                 "Corin, it's not what it looks like. I was just looking at the label.",
-                &[actor.clone()],
+                std::slice::from_ref(&actor),
                 "Marek",
             )
             .await;
@@ -3676,6 +3714,11 @@ fn stand_down_evidence(
 
 /// A bounded owner for committed observation work. Receivers may disconnect without cancelling
 /// the deadline-bound job. This transient registry contains no authoritative game data.
+type ObservationProposal = (
+    journey::living_scene::ObservationFinding,
+    Option<journey::living_scene::EstablishedDetail>,
+);
+
 struct ObservationFlight {
     result: tokio::sync::watch::Receiver<
         Option<Result<journey::living_scene::ObservationFinding, Status>>,
@@ -3683,14 +3726,7 @@ struct ObservationFlight {
     task: JoinHandle<()>,
     source: tokio::sync::watch::Receiver<df_model::checkpoint::Checkpoint>,
     basis: df_model::checkpoint::Basis,
-    proposal: Arc<
-        std::sync::Mutex<
-            Option<(
-                journey::living_scene::ObservationFinding,
-                Option<journey::living_scene::EstablishedDetail>,
-            )>,
-        >,
-    >,
+    proposal: Arc<std::sync::Mutex<Option<ObservationProposal>>>,
 }
 
 impl ObservationFlight {
@@ -3841,7 +3877,7 @@ impl Service {
         }
         let scope =
             super::beat_script_runtime::scene_scope(current.state()).map_err(actor::unavailable)?;
-        if check.source_revision.splitn(4, ':').nth(1) != Some(scope.as_str()) {
+        if check.source_revision.split(':').nth(1) != Some(scope.as_str()) {
             return Err(Status::failed_precondition(
                 "observation source scene changed",
             ));
@@ -6057,17 +6093,17 @@ impl Service {
                 AddresseeRoute::Npc(selected) => selected.as_deref(),
                 _ => None,
             };
-            record_target_route(
-                &request,
-                selected,
-                decision.source,
-                decision.reason,
-                decision.elapsed_ms,
-                route.validation(),
-                decision.called,
-                decision.deadline_hit,
-                decision.failure,
-            );
+            record_target_route(TargetRouteRecord {
+                request: &request,
+                actor_id: selected,
+                source: decision.source,
+                reason: decision.reason,
+                elapsed_ms: decision.elapsed_ms,
+                validation: route.validation(),
+                model_called: decision.called,
+                deadline_hit: decision.deadline_hit,
+                failure: decision.failure,
+            });
             match route {
                 AddresseeRoute::Npc(selected) => target = selected,
                 // Hero speech is the same table line a vocative addresses to a hero: it has no
@@ -6481,7 +6517,7 @@ impl Service {
         let action = rpc::SubmitActionRequest {
             session_id: request.session_id.clone(),
             run_id: request.run_id.clone(),
-            observed_revision: request.observed_revision.clone(),
+            observed_revision: request.observed_revision,
             operation_id: request.input_id.clone(),
             offer_id,
             action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
@@ -6586,7 +6622,7 @@ impl Service {
                 let action = rpc::SubmitActionRequest {
                     session_id: request.session_id.clone(),
                     run_id: request.run_id.clone(),
-                    observed_revision: request.observed_revision.clone(),
+                    observed_revision: request.observed_revision,
                     operation_id: request.input_id.clone(),
                     offer_id,
                     action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
@@ -7149,7 +7185,7 @@ impl Service {
         let mut submit = rpc::SubmitActionRequest {
             session_id: request.session_id.clone(),
             run_id: request.run_id.clone(),
-            observed_revision: request.observed_revision.clone(),
+            observed_revision: request.observed_revision,
             operation_id: request.input_id.clone(),
             offer_id: journey::living_scene::offer_id_at(observed),
             action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
@@ -7293,7 +7329,7 @@ impl Service {
         }
         let operation = df_api::operation_id(request.input_id.as_ref())
             .map_err(|_| Status::invalid_argument("interaction identity required"))?;
-        let mut committed_revision = receipt.revision.clone();
+        let mut committed_revision = receipt.revision;
         let after = self.updates.borrow().clone();
         let line =
             journey::living_scene::line(after.state(), operation).map_err(actor::unavailable)?;
@@ -7440,7 +7476,7 @@ impl Service {
                 .map_err(actor::unavailable)?
         {
             let mut spoken = request.clone();
-            spoken.observed_revision = receipt.revision.clone();
+            spoken.observed_revision = receipt.revision;
             spoken.context = rpc::DialogueContext::Social as i32;
             if let DialogueReply::Raw(mut response, npc) = self
                 .dialogue_call(
@@ -7827,7 +7863,7 @@ impl Service {
             let submit = rpc::SubmitActionRequest {
                 session_id: request.session_id.clone(),
                 run_id: request.run_id.clone(),
-                observed_revision: request.observed_revision.clone(),
+                observed_revision: request.observed_revision,
                 operation_id: request.input_id.clone(),
                 offer_id: journey::offer_id(&current, rpc::GameplayActionKind::DefendCourier),
                 action_kind: rpc::GameplayActionKind::DefendCourier as i32,
@@ -7922,7 +7958,7 @@ impl Service {
             let submit = rpc::SubmitActionRequest {
                 session_id: request.session_id.clone(),
                 run_id: request.run_id.clone(),
-                observed_revision: request.observed_revision.clone(),
+                observed_revision: request.observed_revision,
                 operation_id: request.input_id.clone(),
                 offer_id: journey::offer_id(&current, rpc::GameplayActionKind::GreatswordAttack),
                 action_kind: rpc::GameplayActionKind::GreatswordAttack as i32,
@@ -8289,7 +8325,7 @@ impl Service {
             let origin = SceneFightOrigin {
                 session_id: request.session_id.clone(),
                 run_id: request.run_id.clone(),
-                observed_revision: request.observed_revision.clone(),
+                observed_revision: request.observed_revision,
                 operation_id: request.operation_id.clone(),
             };
             if let Ok(started) = self
@@ -9094,7 +9130,7 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             match self.submit_line(credential, request.into_inner()).await? {
                 DialogueReply::Raw(response, npc) => {
                     let completed = self
-                        .complete_dialogue_response(credential, response, npc)
+                        .complete_dialogue_response(credential, response, npc.map(|turn| *turn))
                         .await?;
                     Ok(Response::new(completed.response))
                 }
@@ -9903,13 +9939,15 @@ impl actor::Actor {
                 self.raw_dialogue(
                     credential,
                     request,
-                    None,
-                    bytes.hero_trade,
-                    bytes.trade_pick,
-                    bytes.bulk_picks,
-                    false,
+                    RawDialogueOptions {
+                        target: None,
+                        hero_trade: bytes.hero_trade,
+                        trade_pick: bytes.trade_pick,
+                        bulk_picks: bytes.bulk_picks,
+                        fight_parley: false,
+                    },
                 )
-                .map(|(response, npc)| DialogueReply::Raw(response, npc))
+                .map(|(response, npc)| DialogueReply::Raw(response, npc.map(Box::new)))
             }
             DialogueRequest::RawTarget { bytes, actor_id } => {
                 if let Some(evidence) = bytes.stand_down {
@@ -9926,13 +9964,15 @@ impl actor::Actor {
                 self.raw_dialogue(
                     credential,
                     request,
-                    Some(&actor_id),
-                    bytes.hero_trade,
-                    bytes.trade_pick,
-                    bytes.bulk_picks,
-                    bytes.fight_parley,
+                    RawDialogueOptions {
+                        target: Some(&actor_id),
+                        hero_trade: bytes.hero_trade,
+                        trade_pick: bytes.trade_pick,
+                        bulk_picks: bytes.bulk_picks,
+                        fight_parley: bytes.fight_parley,
+                    },
                 )
-                .map(|(response, npc)| DialogueReply::Raw(response, npc))
+                .map(|(response, npc)| DialogueReply::Raw(response, npc.map(Box::new)))
             }
             DialogueRequest::Confirm(bytes) => {
                 let request = rpc::ConfirmDialogueRequest::decode(bytes.as_slice())
@@ -10048,11 +10088,7 @@ impl actor::Actor {
         &mut self,
         credential: [u8; 32],
         request: rpc::RawDialogueRequest,
-        target: Option<&str>,
-        hero_trade: HeroTradeIntent,
-        trade_pick: Option<String>,
-        bulk_picks: Vec<String>,
-        fight_parley: bool,
+        options: RawDialogueOptions<'_>,
     ) -> Result<(rpc::DialogueResponse, Option<SpokenTurn>), Status> {
         let member = self.dialogue_member(&credential)?;
         if self.fenced || self.owner.has_uncertain_operation() {
@@ -10079,7 +10115,7 @@ impl actor::Actor {
         if session != basis.session || run != basis.run || observed != basis.revision {
             return Err(Status::failed_precondition("dialogue basis changed"));
         }
-        if let Some(id) = target {
+        if let Some(id) = options.target {
             let projection = wire::project_journey(current, LocalDemoRole::Player, member)
                 .map_err(actor::unavailable)?;
             let opening_enforcer = id == "bandit"
@@ -10094,21 +10130,21 @@ impl actor::Actor {
                         .is_some_and(|scene| super::npc_target::current(&scene.cast, id).is_some()),
                     _ => false,
                 };
-            record_target_route(
-                &request,
-                Some(id),
-                "actor",
-                if present {
+            record_target_route(TargetRouteRecord {
+                request: &request,
+                actor_id: Some(id),
+                source: "actor",
+                reason: if present {
                     "current_cast"
                 } else {
                     "stale_target"
                 },
-                0,
-                if present { "validated" } else { "stale" },
-                false,
-                false,
-                None,
-            );
+                elapsed_ms: 0,
+                validation: if present { "validated" } else { "stale" },
+                model_called: false,
+                deadline_hit: false,
+                failure: None,
+            });
             if !present {
                 return Err(Status::failed_precondition(
                     "The addressed character is no longer present.",
@@ -10225,17 +10261,7 @@ impl actor::Actor {
                     | IntentDisposition::Joke
                     | IntentDisposition::Clarify
             ))
-        .then(|| {
-            self.npc_reply_context(
-                member,
-                &request.text,
-                target,
-                hero_trade,
-                trade_pick,
-                bulk_picks,
-                fight_parley,
-            )
-        })
+        .then(|| self.npc_reply_context(member, &request.text, &options))
         .flatten();
         if finality == InputFinality::Final
             && declared != DiscourseContext::Meta
@@ -10276,7 +10302,7 @@ impl actor::Actor {
             },
             npc.map(|context| SpokenTurn {
                 context,
-                hero_trade,
+                hero_trade: options.hero_trade,
                 cleanup: None,
                 typed_line_shown: false,
             }),
@@ -10289,11 +10315,7 @@ impl actor::Actor {
         &self,
         member: MemberId,
         typed: &str,
-        target: Option<&str>,
-        hero_trade: HeroTradeIntent,
-        trade_pick: Option<String>,
-        bulk_picks: Vec<String>,
-        fight_parley: bool,
+        options: &RawDialogueOptions<'_>,
     ) -> Option<NpcReplyContext> {
         let current = self.owner.checkpoint();
         let scene = match super::beat_script_runtime::scene(current.state()) {
@@ -10320,7 +10342,7 @@ impl actor::Actor {
         }
         let mut projection =
             wire::project_journey(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
-        if target == Some("bandit")
+        if options.target == Some("bandit")
             && wire::opening_talk_offer(current).ok()?.is_some()
             && let Some(rpc::view_message::Audience::Player(player)) =
                 projection.view.audience.as_mut()
@@ -10343,7 +10365,7 @@ impl actor::Actor {
             &story,
             &self.social,
             &format!("{:?}", projection.scene),
-            target,
+            options.target,
         )?;
         // The view's focus may lag the committed cast after a fight or a move. Check the actual
         // selected speaker again at the actor boundary, including an implicit focus selection.
@@ -10357,7 +10379,7 @@ impl actor::Actor {
         if presence != journey::scene_fight::Presence::Standing {
             return None;
         }
-        if let Some(amount_cp) = hero_trade.coin_gift_cp {
+        if let Some(amount_cp) = options.hero_trade.coin_gift_cp {
             reply.with_payment(amount_cp);
         }
         // Each place move starts a new visit; a failed urging is held only for its own visit.
@@ -10375,7 +10397,7 @@ impl actor::Actor {
                 return Some(reply);
             }
         };
-        if (hero_trade.is_trade() || hero_trade.judgement != TradeJudgement::Jev)
+        if (options.hero_trade.is_trade() || options.hero_trade.judgement != TradeJudgement::Jev)
             && let Some(setting) = scene.setting.as_ref()
             && let Ok(Some(now)) = journey::living_scene::snapshot(current.state(), &scene)
         {
@@ -10387,7 +10409,7 @@ impl actor::Actor {
                 &hero_id,
             ) {
                 Ok(quotes) if !quotes.is_empty() => {
-                    if hero_trade.is_trade() {
+                    if options.hero_trade.is_trade() {
                         reply.merchant_trade_scope = true;
                     }
                     let services = journey::merchant_bargaining::service_facts(&quotes);
@@ -10422,7 +10444,7 @@ impl actor::Actor {
                 && quote.source_actor_id == reply.actor_id
                 && {
                     let decision = journey::merchant_bargaining::quote_decision(
-                        hero_trade,
+                        options.hero_trade,
                         typed,
                         quote.price_cp,
                     );
@@ -10430,20 +10452,20 @@ impl actor::Actor {
                         decision,
                         QuoteDecision::Counteroffer | QuoteDecision::Decline
                     ) || (decision == QuoteDecision::Unclear
-                        && hero_trade.is_trade()
+                        && options.hero_trade.is_trade()
                         && !matches!(
-                            hero_trade.meaning,
+                            options.hero_trade.meaning,
                             HeroTradeMeaning::AskPrice | HeroTradeMeaning::AskDetails
                         ))
                 }
         });
         reply.pending_quote = quote_followup.clone();
         if quote_followup.is_none() {
-            apply_personal_reply_scope(&mut reply, hero_trade);
+            apply_personal_reply_scope(&mut reply, options.hero_trade);
         }
         // A foe answering mid-fight: whether the hero has the Influence action to spend is read
         // from the same checkpoint the reply is built from.
-        if fight_parley && journey::scene_fight::open(current.state()) {
+        if options.fight_parley && journey::scene_fight::open(current.state()) {
             let action_available = journey::scene_fight::influence_action_available(
                 current, member,
             )
@@ -10464,16 +10486,19 @@ impl actor::Actor {
                 None
             }
         };
-        if hero_trade.is_trade() || quote_followup.is_some() {
+        if options.hero_trade.is_trade() || quote_followup.is_some() {
             let line = HeroLine {
-                intent: hero_trade,
+                intent: options.hero_trade,
                 words: typed,
             };
             match journey::living_scene::merchant_trade_terms(current, &hero_id) {
                 Ok(mut terms) => {
                     // The listed item Jev picked for this line, judged by the Service before the
                     // actor call; it is used for every reading below.
-                    let picked = trade_pick.filter(|_| quote_followup.is_none());
+                    let picked = options
+                        .trade_pick
+                        .clone()
+                        .filter(|_| quote_followup.is_none());
                     let tendered_item = if quote_followup.is_none() {
                         journey::merchant_bargaining::referenced_item_id(
                             &terms,
@@ -10570,24 +10595,24 @@ impl actor::Actor {
                             term.direction == journey::living_scene::SceneTradeDirection::HeroSells
                         })
                         .count();
-                    record_merchant_reply_context(
-                        &reply.actor_id,
-                        quote_followup.is_some(),
-                        terms.len(),
+                    record_merchant_reply_context(MerchantReplyContextRecord {
+                        actor_id: &reply.actor_id,
+                        quote_followup: quote_followup.is_some(),
+                        terms_count: terms.len(),
                         hero_buy_terms,
                         hero_sell_terms,
-                        usize::from(tendered_item.is_some()),
-                        tendered_item.is_some(),
-                        buyback_memory_status,
-                        trade_facts.is_some(),
-                    );
+                        named_sell_terms: usize::from(tendered_item.is_some()),
+                        selected_item: tendered_item.is_some(),
+                        buyback_memory: buyback_memory_status,
+                        context_ready: trade_facts.is_some(),
+                    });
                     if let Some(trade_facts) = trade_facts.as_mut()
                         && quote_followup.is_none()
                         && let Some(ask) = journey::merchant_bargaining::bulk_ask_from_picks(
                             &terms,
                             &hero_id,
                             &reply.actor_id,
-                            &bulk_picks,
+                            &options.bulk_picks,
                         )
                     {
                         journey::merchant_bargaining::attach_bulk_ask(trade_facts, &ask);
@@ -10638,7 +10663,7 @@ impl actor::Actor {
                 }
             }
         }
-        if hero_trade.is_trade()
+        if options.hero_trade.is_trade()
             && let Some(setting) = scene.setting.as_ref()
         {
             match journey::living_scene::snapshot(current.state(), &scene).and_then(|now| {
@@ -10994,12 +11019,12 @@ mod fight_and_service_turn_tests {
         .expect("Jessa answers a line addressed to her");
         DialogueReply::Raw(
             rpc::DialogueResponse::default(),
-            Some(SpokenTurn {
+            Some(Box::new(SpokenTurn {
                 context,
                 hero_trade: HeroTradeIntent::not_requested(),
                 cleanup: None,
                 typed_line_shown: false,
-            }),
+            })),
         )
     }
 

@@ -278,11 +278,11 @@ pub(crate) fn startup_line(settings: &HomeVideoSettings) -> String {
         Err(reason) => format!("HOME VIDEO off ({})", reason.reason()),
     };
     let scene = if settings.scene.enabled {
-        let unavailable = settings
-            .credential
-            .is_none()
-            .then_some(" (no FAL_KEY; request logging only)")
-            .unwrap_or_default();
+        let unavailable = if settings.credential.is_none() {
+            " (no FAL_KEY; request logging only)"
+        } else {
+            ""
+        };
         format!("SCENE VIDEO on model={MODEL} duration={DURATION_SECONDS}s{unavailable}")
     } else {
         format!("SCENE VIDEO off ({})", settings.scene.off_reason)
@@ -1941,7 +1941,7 @@ fn classify(failure: &Failure) -> ResourceFailure {
         Failure::Still("still task interrupted") => {
             ResourceFailure::Transient("still task interrupted")
         }
-        Failure::Still(reason) | Failure::Clip(reason) => ResourceFailure::Permanent(*reason),
+        Failure::Still(reason) | Failure::Clip(reason) => ResourceFailure::Permanent(reason),
         Failure::Timeout => ResourceFailure::TimedOut,
         Failure::Provider(detail) => provider_class(detail),
     }
@@ -1993,9 +1993,7 @@ fn log_requested(job: &ClipJob) {
             MODEL,
             DURATION_SECONDS,
             &job.reason,
-            None,
-            None,
-            None,
+            (None, None, None),
         ),
         Variant::KillShot => record_scene_video(
             "request",
@@ -2003,9 +2001,7 @@ fn log_requested(job: &ClipJob) {
             MODEL,
             DURATION_SECONDS,
             &job.reason,
-            None,
-            None,
-            None,
+            (None, None, None),
         ),
     }
 }
@@ -2066,9 +2062,7 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
             MODEL,
             DURATION_SECONDS,
             "cached",
-            Some(0),
-            Some(0),
-            Some(done.bytes),
+            (Some(0), Some(0), Some(done.bytes)),
         ),
         (Variant::Scene, false) => record_scene_video(
             "ready",
@@ -2076,9 +2070,11 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
             MODEL,
             DURATION_SECONDS,
             "ambient-scene-loop",
-            paid.map(|paid| paid.elapsed.as_millis()),
-            Some(request_ms),
-            Some(done.bytes),
+            (
+                paid.map(|paid| paid.elapsed.as_millis()),
+                Some(request_ms),
+                Some(done.bytes),
+            ),
         ),
         (Variant::KillShot, true) => record_scene_video(
             "ready",
@@ -2086,9 +2082,7 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
             MODEL,
             DURATION_SECONDS,
             "cached",
-            Some(0),
-            Some(0),
-            Some(done.bytes),
+            (Some(0), Some(0), Some(done.bytes)),
         ),
         (Variant::KillShot, false) => record_scene_video(
             "ready",
@@ -2096,9 +2090,11 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
             MODEL,
             DURATION_SECONDS,
             "ambient-scene-loop",
-            paid.map(|paid| paid.elapsed.as_millis()),
-            Some(request_ms),
-            Some(done.bytes),
+            (
+                paid.map(|paid| paid.elapsed.as_millis()),
+                Some(request_ms),
+                Some(done.bytes),
+            ),
         ),
     }
 }
@@ -2140,9 +2136,7 @@ fn log_failed(job: &ClipJob, failure: &Failure, paid: Option<&PaidCall>, elapsed
             MODEL,
             DURATION_SECONDS,
             &failure.label(),
-            None,
-            Some(request_ms),
-            None,
+            (None, Some(request_ms), None),
         ),
         Variant::KillShot => record_scene_video(
             "failed",
@@ -2150,9 +2144,7 @@ fn log_failed(job: &ClipJob, failure: &Failure, paid: Option<&PaidCall>, elapsed
             MODEL,
             DURATION_SECONDS,
             &failure.label(),
-            None,
-            Some(request_ms),
-            None,
+            (None, Some(request_ms), None),
         ),
     }
 }
@@ -2223,10 +2215,9 @@ fn record_scene_video(
     model: &str,
     duration_seconds: u32,
     reason: &str,
-    provider_ms: Option<u128>,
-    elapsed_ms: Option<u128>,
-    bytes: Option<u64>,
+    measurements: (Option<u128>, Option<u128>, Option<u64>),
 ) {
+    let (provider_ms, elapsed_ms, bytes) = measurements;
     let resource_id = safe_video_resource_id(plate);
     let (stage, status, failure_category, cache_result) = match kind {
         "request" => ("requested", "requested", None, "unknown"),
@@ -2539,23 +2530,6 @@ impl Engine {
 
     pub(crate) fn scene_view_for_test(&self, plate_key: &str) -> SceneClipView {
         self.scene_clip_view(plate_key)
-    }
-
-    pub(crate) fn request_kill_for_test(
-        self: &Arc<Self>,
-        request: kill_shot::KillShotRequest,
-        still: Vec<u8>,
-    ) {
-        self.request_kill_shot(request, still, "/gameplay/imagery/test-still".to_owned());
-    }
-
-    pub(crate) fn kill_stage_of(&self, kill_id: &str) -> Option<String> {
-        let lane = locked(&self.kill_shots).get(kill_id).cloned()?.lane;
-        Some(self.stage_text(&lane))
-    }
-
-    pub(crate) fn kill_view_for_test(&self) -> Option<rpc::KillShot> {
-        self.kill_shot_for_view()
     }
 }
 

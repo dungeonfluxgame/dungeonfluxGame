@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "The PLAY-V09 plate director and wire-layout caller are planned in planning/asset-engine.md, Scene plates."
+)]
+
 //! Who is where in a scene plate, from hosted SAM 3.1 segmentation (PLAY-V09).
 //!
 //! The display plate is the photographic scene still on the TV. It is segmented once with the

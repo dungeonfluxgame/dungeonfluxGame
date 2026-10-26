@@ -8,6 +8,8 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::approach_model::tests::model;
+
+type ResponseComputer = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 use super::journey::merchant_bargaining::{
     HeroLine, HeroTradeIntent, TradeDirection, TradeFocus, TradeTerms, reply_context,
 };
@@ -275,8 +277,7 @@ fn jev_reply(lines: &[JevLine], body: &Value) -> (u16, Value) {
 /// A script of Jev answers for `lines`, long enough for any reply these tests make.
 fn jev_script(lines: Vec<JevLine>) -> Vec<Reply> {
     let lines = Arc::new(lines);
-    let compute: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> =
-        Arc::new(move |body| jev_reply(&lines, body));
+    let compute: Arc<ResponseComputer> = Arc::new(move |body| jev_reply(&lines, body));
     (0..200)
         .map(|_| Reply::ComputeResponse(compute.clone()))
         .collect()
@@ -3127,7 +3128,7 @@ async fn unrelated_selected_words_never_authorize_personal_facts_or_evidence_his
     // Jev reads each as the question it is; the dossier has no authored answer for any.
     let decision = jev(questions
         .iter()
-        .map(|(words, focus, _)| JevLine::new(words, "question", *focus))
+        .map(|(words, focus, _)| JevLine::new(words, "question", focus))
         .collect());
     let voice = voice.with_approach_model(model(&decision));
     for (words, _, irrelevant) in questions {
@@ -3220,7 +3221,7 @@ async fn exact_question_authority_preserves_positive_negative_and_nonmonetary_fa
     ];
     let decision = jev(cases
         .iter()
-        .map(|(_, question, focus, _)| JevLine::new(question, "question", *focus))
+        .map(|(_, question, focus, _)| JevLine::new(question, "question", focus))
         .collect());
     let voice = NpcVoice::silent().with_approach_model(model(&decision));
     for (subject, question, _, fact) in cases {

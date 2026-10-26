@@ -61,6 +61,14 @@ CREATE OR REPLACE FUNCTION df_library_immutable_revision() RETURNS trigger LANGU
   RAISE EXCEPTION 'hero revisions are immutable';
  END $$;";
 
+fn library_database(database: &tokio_postgres::Config, isolated: bool) -> tokio_postgres::Config {
+    let mut selected = database.clone();
+    if !isolated {
+        selected.dbname(df_persistence::hero_library::DATABASE);
+    }
+    selected
+}
+
 pub(super) async fn configure(database: tokio_postgres::Config) {
     // A new campaign must never retain the previous campaign's grant connection.
     LIBRARY.lock().await.take();
@@ -69,10 +77,14 @@ pub(super) async fn configure(database: tokio_postgres::Config) {
         PORTRAIT_KEYS.lock().map_err(|_| unavailable_at("configure"))?.clear();
         *DATABASE.lock().map_err(|_| unavailable_at("configure"))? = Some(database.clone());
         PORTRAIT_IMPORTS.lock().map_err(|_| unavailable_at("configure"))?.clear();
-        let library = HeroLibrary::open(&database).await.map_err(failure)?;
+        let isolated = crate::fake_profile::is_enabled();
+        let library_config = library_database(&database, isolated);
+        let library = if isolated {
+            HeroLibrary::in_database(&library_config).await.map_err(failure)?
+        } else {
+            HeroLibrary::open(&database).await.map_err(failure)?
+        };
         let campaign = connect(&database).await?;
-        let mut library_config = database.clone();
-        library_config.dbname(df_persistence::hero_library::DATABASE);
         let access = connect(&library_config).await?;
         access.client.batch_execute(DELETE_SCHEMA).await.map_err(|_| unavailable_at("configure"))?;
         let rows = access.client.query("SELECT DISTINCT r.portrait_sha256 FROM hero_revisions r JOIN heroes h ON h.id=r.hero WHERE NOT h.deleted AND octet_length(r.portrait)>0 LIMIT 100001", &[]).await.map_err(|_| unavailable_at("configure"))?;
@@ -1287,5 +1299,28 @@ mod audit_tests {
         assert!(lines.iter().any(|line| line.contains("outcome=failed")
             && line.contains("step=thumbnail-decode")
             && line.contains("ms=")));
+    }
+}
+
+#[cfg(test)]
+mod fake_profile_tests {
+    use super::*;
+
+    #[test]
+    fn fake_profile_keeps_full_library_in_the_owned_campaign_database() {
+        let mut campaign = tokio_postgres::Config::new();
+        campaign.dbname("df_gameplay_demo_loadharness_library_fixture");
+        assert_eq!(
+            library_database(&campaign, true).get_dbname(),
+            campaign.get_dbname()
+        );
+        assert_eq!(
+            library_database(&campaign, false).get_dbname(),
+            Some(df_persistence::hero_library::DATABASE)
+        );
+        assert_eq!(
+            campaign.get_dbname(),
+            Some("df_gameplay_demo_loadharness_library_fixture")
+        );
     }
 }

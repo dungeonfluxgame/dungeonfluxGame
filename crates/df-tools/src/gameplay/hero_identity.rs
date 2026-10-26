@@ -228,8 +228,20 @@ pub(crate) enum IdentityError {
     TextLength,
     UnsafeText,
     FactCount,
+    #[expect(
+        dead_code,
+        reason = "provider-backed identity preview mapping in planning/character-creation-refinement-research.md"
+    )]
     ModelUnavailable,
+    #[expect(
+        dead_code,
+        reason = "provider-backed identity preview mapping in planning/character-creation-refinement-research.md"
+    )]
     Deadline,
+    #[expect(
+        dead_code,
+        reason = "provider-backed identity preview validation in planning/character-creation-refinement-research.md"
+    )]
     UnexpectedChange,
 }
 
@@ -687,6 +699,10 @@ impl ValidatedIdentity {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "identity preview model classification in planning/character-creation-refinement-research.md"
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TextKind {
     Appearance,
@@ -694,6 +710,10 @@ pub(crate) enum TextKind {
     Both,
 }
 
+#[expect(
+    dead_code,
+    reason = "identity preview model classification in planning/character-creation-refinement-research.md"
+)]
 impl TextKind {
     fn label(self) -> &'static str {
         match self {
@@ -704,6 +724,10 @@ impl TextKind {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "provider-backed identity preview result in planning/character-creation-refinement-research.md"
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Reading {
     pub(crate) identity: ValidatedIdentity,
@@ -732,6 +756,10 @@ fn check_input(appearance: &str, backstory: &str) -> Result<(), IdentityError> {
 /// Caller supplies the existing Jev and structured story-provider adapters. The whole read is
 /// bounded, has no detached work, and must finish before a player can review and confirm it.
 /// Errors preserve the caller's draft; no failed model read is fabricated as success.
+#[expect(
+    dead_code,
+    reason = "provider-backed identity preview adapter in planning/character-creation-refinement-research.md"
+)]
 pub(crate) async fn read_with<C, CF, E, EF>(
     appearance: &str,
     backstory: &str,
@@ -1006,7 +1034,6 @@ pub(in crate::gameplay) async fn preview(
             session_id: request.session_id,
             run_id: request.run_id,
             after_revision: Some(expected),
-            ..Default::default()
         };
         check_preview_scope(service, binding, &scope, &expected).await?;
         let current = match request.current_identity {

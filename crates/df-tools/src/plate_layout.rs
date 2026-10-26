@@ -147,6 +147,7 @@ thread_local! {
 }
 
 /// Adopt the display's tuned margin; out-of-range values keep the previous one.
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn set_margin_fraction(value: f64) {
     if value.is_finite() && (0.0..=0.2).contains(&value) {
         MARGIN.with(|margin| margin.set(value));

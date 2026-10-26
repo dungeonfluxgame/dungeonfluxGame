@@ -800,13 +800,11 @@ async fn a_full_queue_drops_the_new_event_and_never_waits() {
     assert_eq!(stored(&memory).len(), 2);
 }
 
-static GLOBAL: Mutex<()> = Mutex::new(());
+static GLOBAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn the_capture_api_reaches_the_installed_memory_and_is_a_no_op_without_one() {
-    let _only_one = GLOBAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _only_one = GLOBAL.lock().await;
     super::uninstall();
     capture::canon_fact(
         "harbor",
@@ -830,26 +828,26 @@ async fn the_capture_api_reaches_the_installed_memory_and_is_a_no_op_without_one
         "Marek",
         "You insulted my scales.",
     );
-    capture::scene_change(
-        "7:12",
-        Some(12),
-        "Salt Quay",
-        "Brynn",
-        "rope-1",
-        "Brynn buys a rope",
-        "purchased",
-        &["patron:merchant".to_owned()],
-    );
-    capture::scene_change(
-        "7:13",
-        Some(13),
-        "Salt Quay",
-        "Brynn",
-        "door-1",
-        "Brynn opens the door",
-        "opened",
-        &[],
-    );
+    capture::scene_change(capture::SceneChange {
+        position: "7:12",
+        revision: Some(12),
+        place: "Salt Quay",
+        hero: "Brynn",
+        entity_id: "rope-1",
+        description: "Brynn buys a rope",
+        tag: "purchased",
+        involved: &["patron:merchant".to_owned()],
+    });
+    capture::scene_change(capture::SceneChange {
+        position: "7:13",
+        revision: Some(13),
+        place: "Salt Quay",
+        hero: "Brynn",
+        entity_id: "door-1",
+        description: "Brynn opens the door",
+        tag: "opened",
+        involved: &[],
+    });
     capture::ruling(
         "Brynn",
         "Salt Quay",

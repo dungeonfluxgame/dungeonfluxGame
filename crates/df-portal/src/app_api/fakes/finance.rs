@@ -70,6 +70,9 @@ pub(super) struct Pace {
 }
 
 pub(super) struct State {
+    cancelled_host_sessions: HashSet<SessionId>,
+    pub host_sessions:
+        HashMap<SessionId, (AccountId, df_account_app::wire_campaign::HostCreditView)>,
     pub wallets: HashMap<AccountId, Wallet>,
     pub paces: HashMap<CampaignId, Pace>,
     pub pots: HashMap<SessionId, Pot>,
@@ -100,10 +103,23 @@ impl State {
 }
 
 impl FakeFinance {
+    /// Installs a customer-safe host quote in a local fixture, without moving credit.
+    pub fn seed_host_credit(
+        &self,
+        host: AccountId,
+        session: SessionId,
+        quote: df_account_app::wire_campaign::HostCreditView,
+    ) {
+        lock(&self.state)
+            .host_sessions
+            .insert(session, (host, quote));
+    }
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
             clock,
             state: Arc::new(Mutex::new(State {
+                cancelled_host_sessions: HashSet::new(),
+                host_sessions: HashMap::new(),
                 wallets: HashMap::new(),
                 paces: HashMap::new(),
                 pots: HashMap::new(),
@@ -670,6 +686,68 @@ fn per_campaign_of(lines: &[StatementLine]) -> Vec<CampaignSpend> {
 }
 
 impl FinancePort for FakeFinance {
+    async fn cancel_host_lobby(&self, account: AccountId, session: SessionId) -> PortResult<()> {
+        let mut state = lock(&self.state);
+        let (host, _) = state
+            .host_sessions
+            .get(&session)
+            .ok_or(PortError::NotFound)?;
+        if *host != account {
+            return Err(PortError::NotFound);
+        }
+        state.cancelled_host_sessions.insert(session);
+        Ok(())
+    }
+
+    async fn host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+    ) -> PortResult<Option<df_account_app::wire_campaign::HostCreditView>> {
+        let state = lock(&self.state);
+        if state.cancelled_host_sessions.contains(&session) {
+            return Ok(None);
+        }
+        Ok(state
+            .host_sessions
+            .get(&session)
+            .filter(|(host, _)| *host == account)
+            .map(|(_, quote)| *quote))
+    }
+
+    async fn consent_host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+        request: df_account_app::wire_campaign::HostConsentRequest,
+        _operation: OperationId,
+    ) -> PortResult<()> {
+        let mut state = lock(&self.state);
+        if state.cancelled_host_sessions.contains(&session) {
+            return Err(PortError::Forbidden);
+        }
+
+        let (host, quote) = state
+            .host_sessions
+            .get_mut(&session)
+            .ok_or(PortError::NotFound)?;
+        if *host != account {
+            return Err(PortError::Forbidden);
+        }
+        if request.price_version != quote.price_version
+            || request.terms_version != quote.terms_version
+            || request.cap_micro_dollars != quote.cap_micro_dollars
+        {
+            return Err(PortError::Forbidden);
+        }
+        if quote.consented_at_ms.is_none() {
+            quote.consented_at_ms =
+                Some(i64::try_from(self.now_ms()).map_err(|_| PortError::Unavailable)?);
+        }
+        quote.is_fundable = quote.available_micro_dollars >= quote.cap_micro_dollars;
+        Ok(())
+    }
+
     async fn overview(&self, account: AccountId, is_verified: bool) -> PortResult<OverviewView> {
         Ok(self.overview_now(account, is_verified))
     }

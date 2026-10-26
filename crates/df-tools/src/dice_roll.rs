@@ -274,11 +274,16 @@ pub(crate) const FALLBACK_CLIP_COUNT: usize = 3;
 #[derive(Clone, Debug)]
 pub(crate) struct DiceClip {
     pub(crate) webm: String,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) key_mp4: String,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) rest_image: String,
     pub(crate) rest_ms: u64,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) face_center: [f64; 2],
+    #[cfg(target_arch = "wasm32")]
     pub(crate) face_corners: [[f64; 2]; 3],
+    #[cfg(target_arch = "wasm32")]
     pub(crate) face_rotation_deg: f64,
 }
 
@@ -298,10 +303,35 @@ pub(crate) fn parse_manifest(text: &str) -> Option<DiceManifest> {
     let clips = value.field("clips")?.array()?;
     let mut parsed = Vec::with_capacity(clips.len());
     for clip in clips {
+        let key_mp4 = clip.field("key_mp4")?.string()?;
+        let rest_image = clip.field("rest_image")?.string()?;
+        let face_center = point(clip.field("face_center")?)?;
+        let face_corners = {
+            let corners = clip.field("face_corners")?.array()?;
+            if corners.len() != 3 {
+                return None;
+            }
+            [
+                point(&corners[0])?,
+                point(&corners[1])?,
+                point(&corners[2])?,
+            ]
+        };
+        let face_rotation_deg = clip.field("face_rotation_deg")?.number()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (
+            &key_mp4,
+            &rest_image,
+            face_center,
+            face_corners,
+            face_rotation_deg,
+        );
         parsed.push(DiceClip {
             webm: clip.field("webm")?.string()?,
-            key_mp4: clip.field("key_mp4")?.string()?,
-            rest_image: clip.field("rest_image")?.string()?,
+            #[cfg(target_arch = "wasm32")]
+            key_mp4,
+            #[cfg(target_arch = "wasm32")]
+            rest_image,
             rest_ms: {
                 let rest_ms = clip.field("rest_ms")?.number()?;
                 if rest_ms <= 0.0 || rest_ms.fract() != 0.0 || rest_ms > u64::MAX as f64 {
@@ -309,19 +339,12 @@ pub(crate) fn parse_manifest(text: &str) -> Option<DiceManifest> {
                 }
                 rest_ms as u64
             },
-            face_center: point(clip.field("face_center")?)?,
-            face_corners: {
-                let corners = clip.field("face_corners")?.array()?;
-                if corners.len() != 3 {
-                    return None;
-                }
-                [
-                    point(&corners[0])?,
-                    point(&corners[1])?,
-                    point(&corners[2])?,
-                ]
-            },
-            face_rotation_deg: clip.field("face_rotation_deg")?.number()?,
+            #[cfg(target_arch = "wasm32")]
+            face_center,
+            #[cfg(target_arch = "wasm32")]
+            face_corners,
+            #[cfg(target_arch = "wasm32")]
+            face_rotation_deg,
         });
     }
     if parsed.is_empty() || parsed.iter().any(|clip| clip.rest_ms == 0) {
@@ -897,7 +920,7 @@ mod tests {
             assert!(fight_beat_ms(true) >= d20_timing(rest, true).clear_ms);
         }
         assert_eq!(fight_beat_ms(true), fight_beat_ms(false));
-        assert!(RESULT_READ_MS >= 2_000);
+        assert!(std::hint::black_box(RESULT_READ_MS) >= 2_000);
     }
 
     #[test]
@@ -981,12 +1004,10 @@ mod tests {
             rpc::DamageRoll {
                 dice: vec![1],
                 kept: false,
-                ..Default::default()
             },
             rpc::DamageRoll {
                 dice: vec![6],
                 kept: true,
-                ..Default::default()
             },
         ];
         assert!(

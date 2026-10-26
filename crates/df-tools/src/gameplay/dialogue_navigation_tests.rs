@@ -118,12 +118,12 @@ impl Reducer<actor::Call> for Owner {
                                 disposition: rpc::DialogueDisposition::Social as i32,
                                 ..Default::default()
                             },
-                            Some(SpokenTurn {
+                            Some(Box::new(SpokenTurn {
                                 context,
                                 hero_trade: HeroTradeIntent::not_requested(),
                                 cleanup: None,
                                 typed_line_shown: false,
-                            }),
+                            })),
                         );
                         assert!(reply.send(Ok(response)).is_ok());
                         return;

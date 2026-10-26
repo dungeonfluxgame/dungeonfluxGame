@@ -51,7 +51,7 @@ impl Reducer<actor::Call> for RefusingOwner {
                     .send(Ok(rpc::SubmitActionResponse {
                         outcome: Some(rpc::submit_action_response::Outcome::CommittedDecision(
                             Box::new(rpc::DecisionReceipt {
-                                revision: Some(self.revision.clone()),
+                                revision: Some(self.revision),
                                 outcome: Some(rpc::decision_receipt::Outcome::Rejected(
                                     rpc::Rejection {
                                         code: rpc::RejectionCode::InvalidSelection as i32,

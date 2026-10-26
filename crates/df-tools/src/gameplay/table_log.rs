@@ -81,7 +81,7 @@ pub(super) fn ability_check_row(
 ) -> RollRow {
     let skill = check
         .source_revision
-        .splitn(4, ':')
+        .split(':')
         .nth(2)
         .and_then(skill_display);
     let faces = if check.faces.is_empty() {
@@ -1325,6 +1325,7 @@ impl TableLog {
     /// Checks the exact current NPC speech line that a Jev proposal names. Sequence is
     /// captured when the reply enters the table log, so another character's later line
     /// cannot make a previous NPC proposal look current by matching its text.
+    #[cfg(test)]
     pub(super) fn is_latest_npc_speech(
         &self,
         sequence: u64,
@@ -1400,36 +1401,6 @@ impl TableLog {
             .find(|line| {
                 line.sequence > sequence
                     && line.role == rpc::TableRole::Hero as i32
-                    && line.kind == rpc::TableKind::Speech as i32
-            })
-            .cloned()
-    }
-
-    pub(super) fn latest_hero_speech_before(&self, sequence: u64) -> Option<rpc::TableLine> {
-        self.ring
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .lines
-            .iter()
-            .rev()
-            .find(|line| {
-                line.sequence < sequence
-                    && line.role == rpc::TableRole::Hero as i32
-                    && line.kind == rpc::TableKind::Speech as i32
-            })
-            .cloned()
-    }
-
-    pub(super) fn latest_npc_speech_before(&self, sequence: u64) -> Option<rpc::TableLine> {
-        self.ring
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .lines
-            .iter()
-            .rev()
-            .find(|line| {
-                line.sequence < sequence
-                    && line.role == rpc::TableRole::Npc as i32
                     && line.kind == rpc::TableKind::Speech as i32
             })
             .cloned()
@@ -2671,8 +2642,9 @@ mod tests {
     #[test]
     fn a_released_reservation_leaves_no_line_and_allows_a_sequence_gap() {
         let log = TableLog::new();
-        let reservation = log.reserve();
-        drop(reservation);
+        {
+            let _reservation = log.reserve();
+        }
         speech(&log, "Calla greets the party");
 
         let lines = log.lines();
@@ -3879,12 +3851,10 @@ mod tests {
             match value {
                 serde_json::Value::Object(map) => {
                     for (key, item) in map {
-                        if matches!(key.as_str(), "asks" | "helps" | "stands") {
-                            if let Some(list) = item.as_array() {
-                                out.extend(
-                                    list.iter().filter_map(|l| l.as_str().map(str::to_owned)),
-                                );
-                            }
+                        if matches!(key.as_str(), "asks" | "helps" | "stands")
+                            && let Some(list) = item.as_array()
+                        {
+                            out.extend(list.iter().filter_map(|l| l.as_str().map(str::to_owned)));
                         }
                         choices(item, out);
                     }

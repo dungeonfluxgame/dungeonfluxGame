@@ -77,12 +77,12 @@ impl Reducer<actor::Call> for TestOwner {
                                 input_id: request.input_id,
                                 ..Default::default()
                             },
-                            Some(SpokenTurn {
+                            Some(Box::new(SpokenTurn {
                                 context,
                                 hero_trade: HeroTradeIntent::not_requested(),
                                 cleanup: None,
                                 typed_line_shown: false,
-                            }),
+                            })),
                         )
                     }
                     _ => panic!("unexpected opening dialogue request"),

@@ -512,10 +512,9 @@ fn required_story_facts(sheet: &FactSheet) -> Vec<(String, String)> {
             .facts
             .get("scene.antagonist_present")
             .is_none_or(|present| present == "true")
+        && let Some(antagonist) = sheet.facts.get("ant.short")
     {
-        if let Some(antagonist) = sheet.facts.get("ant.short") {
-            required.push(("ant.short".to_owned(), antagonist.clone()));
-        }
+        required.push(("ant.short".to_owned(), antagonist.clone()));
     }
     if sheet.beat == "resolution"
         && let Some(resolution) = sheet.facts.get("stake.resolution")

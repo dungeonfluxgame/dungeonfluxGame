@@ -684,7 +684,12 @@ fn measure_motion(
     {
         return Err(failure("clip_motion_invalid"));
     }
-    let frames = decoded.chunks_exact(SAMPLE_PIXELS).collect::<Vec<_>>();
+    let frames = decoded
+        .as_chunks::<SAMPLE_PIXELS>()
+        .0
+        .iter()
+        .map(|frame| frame.as_slice())
+        .collect::<Vec<_>>();
     let differences = frames
         .windows(2)
         .map(|pair| mean_difference(pair[0], pair[1]))

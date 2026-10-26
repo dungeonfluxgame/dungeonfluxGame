@@ -48,7 +48,9 @@ fn fact_json(fact: &LocalFact) -> Value {
 
 /// The names a new fact may not reuse, from the canonical checkpoint: every hero, and the scene's
 /// people, things, offers and place, the same names the reply path hands its validator.
-fn name_lists(state: &Shared) -> Result<(Vec<String>, Vec<String>), (StatusCode, Json<Value>)> {
+type NameLists = Result<(Vec<String>, Vec<String>), (StatusCode, Json<Value>)>;
+
+fn name_lists(state: &Shared) -> NameLists {
     let checkpoint = state.service.updates.borrow().clone();
     let game = checkpoint.state();
     let scene =

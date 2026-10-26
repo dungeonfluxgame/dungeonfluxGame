@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{oneshot, watch};
 
+#[cfg(test)]
+use super::place::DEV_EXIT;
 use super::{
     Service,
     actor::{
@@ -36,7 +38,7 @@ use super::{
     journey,
     memory::{self, Audience, recall},
     pack,
-    place::{self, DEV_EXIT, Destination, JOURNEY_EXIT, KnownPlace, LandmarkDraft, PlaceRefusal},
+    place::{self, Destination, JOURNEY_EXIT, KnownPlace, LandmarkDraft, PlaceRefusal},
     place_creation::{self, CreationRequest, Heading, HeadingChoices, ServiceOffer, TravelBeat},
     timing, wire,
 };
@@ -425,7 +427,7 @@ pub(super) struct Ride {
 }
 
 enum RideJourney {
-    Ready(PreparedMove),
+    Ready(Box<PreparedMove>),
     /// The restriction in force, as the table is told it.
     Blocked(Refusal),
 }
@@ -1035,7 +1037,7 @@ impl Service {
             return Some(blocked);
         }
         Some(Ride {
-            journey: RideJourney::Ready(prepared),
+            journey: RideJourney::Ready(Box::new(prepared)),
             fare,
             hero,
             hero_index,
@@ -1147,7 +1149,7 @@ impl Service {
             freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
         }
         let prepared = match journey {
-            RideJourney::Ready(prepared) => prepared,
+            RideJourney::Ready(prepared) => *prepared,
             RideJourney::Blocked(refusal) => {
                 return self.ride_not_taken(
                     hero_index,
@@ -1431,7 +1433,7 @@ impl Service {
             return Some(blocked);
         }
         Some(Ride {
-            journey: RideJourney::Ready(prepared),
+            journey: RideJourney::Ready(Box::new(prepared)),
             fare: Some(RideFare {
                 service_id: service.id.clone(),
                 price_cp: service.price_cp,
@@ -1445,6 +1447,7 @@ impl Service {
 
     /// Moves the party through `exit_id` of the place it stands in. The place is created first
     /// when the run does not have it yet; the owner then repeats every check and commits.
+    #[cfg(test)]
     pub(super) async fn move_party_through(
         &self,
         credential: [u8; 32],
@@ -1849,6 +1852,7 @@ impl Service {
 
     /// Moves the party straight to a place the run already has (development only: no exit is
     /// used, so nothing is created).
+    #[cfg(test)]
     pub(super) async fn move_party_to_known(
         &self,
         credential: [u8; 32],
@@ -2499,7 +2503,7 @@ pub(super) fn report(
             "people": scene.cast.iter().map(|member| member.name.clone()).collect::<Vec<_>>(),
         },
         "city": super::adventure::free_roam::world().map(|world| world.city),
-        "prepared_ahead": super::adventure::free_roam::prepared(&current).into_iter().map(|ready| json!({
+        "prepared_ahead": super::adventure::free_roam::prepared(current).into_iter().map(|ready| json!({
             "from": ready.from, "exit": ready.exit, "id": ready.place.place_id, "name": ready.place.name,
         })).collect::<Vec<_>>(),
         "exits": exits,

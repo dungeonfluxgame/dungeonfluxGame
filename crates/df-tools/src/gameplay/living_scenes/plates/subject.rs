@@ -127,7 +127,8 @@ impl Selection {
                 None,
                 None,
             )
-        } else if let Some(person) = cast.iter().find(|person| person.id == target) {
+        } else {
+            let person = cast.iter().find(|person| person.id == target)?;
             // Public entrants can precede the authored model. Their exact identity is already
             // on the cast sheet; their current position and mood come from the scene graph.
             return Some(Frame {
@@ -141,8 +142,6 @@ impl Selection {
                 owner_id: None,
                 composition: "Frame the addressed person from the canonical cast sheet and include the asking hero; use the current scene graph's recorded position and mood.",
             });
-        } else {
-            return None;
         };
         Some(Frame {
             asking_hero: self.hero.clone(),

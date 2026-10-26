@@ -6,22 +6,18 @@ use df_campaign::{
     store::{AccountDirectory, AccountProfile},
 };
 use df_customer::AccountStore;
-use df_types::{AccountId, TenantId};
+use df_types::AccountId;
 
 pub(super) struct Accounts {
     accounts: df_persistence::account_store::PostgresAccountStore,
-    connection: Connection,
 }
 
 impl Accounts {
     pub(super) fn new(
         accounts: df_persistence::account_store::PostgresAccountStore,
-        connection: Connection,
+        _connection: Connection,
     ) -> Self {
-        Self {
-            accounts,
-            connection,
-        }
+        Self { accounts }
     }
 }
 
@@ -35,39 +31,11 @@ impl AccountDirectory for Accounts {
         let Some(record) = record else {
             return Ok(None);
         };
-        let tenant = if record.is_verified {
-            let installed: bool = self
-                .connection
-                .client
-                .query_one("SELECT to_regclass('accounts.tenant') IS NOT NULL", &[])
-                .await
-                .map_err(query_error)?
-                .try_get(0)
-                .map_err(|_| StoreError::InvalidRecord)?;
-            if !installed {
-                df_observe::record_audit_line(
-                    "hosted.tenant_binding_unavailable",
-                    "HOSTED tenant_binding_unavailable owner=S1-02".to_owned(),
-                );
-                return Err(StoreError::Unavailable);
-            }
-            let row = self
-                .connection
-                .client
-                .query_opt(
-                    "SELECT tenant_id FROM accounts.tenant WHERE owner_account_id = $1",
-                    &[&account.as_bytes().as_slice()],
-                )
-                .await
-                .map_err(query_error)?;
-            row.map(|row| {
-                let bytes: Vec<u8> = row.try_get(0).map_err(|_| StoreError::InvalidRecord)?;
-                TenantId::from_bytes(&bytes).map_err(|_| StoreError::InvalidRecord)
-            })
-            .transpose()?
-        } else {
-            None
-        };
+        let tenant = self
+            .accounts
+            .tenant_for(account)
+            .await
+            .map_err(account_error)?;
         Ok(Some(AccountProfile {
             display_name: record.display_name.map(|name| name.as_str().to_owned()),
             verified: record.is_verified,
@@ -81,13 +49,20 @@ impl AccountDirectory for Accounts {
     }
 }
 
-fn query_error(error: tokio_postgres::Error) -> StoreError {
+fn account_error(error: df_customer::StoreError) -> StoreError {
+    let reason = match error {
+        df_customer::StoreError::InvalidRecord => "invalid_record",
+        df_customer::StoreError::Unavailable => "unavailable",
+        df_customer::StoreError::Unknown => "unknown",
+    };
     df_observe::record_audit_line(
         "hosted.account_directory_failed",
-        format!(
-            "HOSTED account_directory_failed sqlstate={}",
-            error.code().map_or("connection", |code| code.code())
-        ),
+        format!("HOSTED account_directory_failed source=tenant_lookup reason={reason}"),
     );
-    StoreError::Unavailable
+    match error {
+        df_customer::StoreError::InvalidRecord => StoreError::InvalidRecord,
+        df_customer::StoreError::Unavailable | df_customer::StoreError::Unknown => {
+            StoreError::Unavailable
+        }
+    }
 }

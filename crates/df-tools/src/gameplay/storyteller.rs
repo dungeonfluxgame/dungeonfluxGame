@@ -666,11 +666,13 @@ impl Storyteller {
             online,
             request,
             &key,
-            "requested",
-            "requested",
-            None,
-            None,
-            None,
+            TextResourceStatus {
+                stage: "requested",
+                status: "requested",
+                failure_category: None,
+                elapsed_ms: None,
+                slot_counts: None,
+            },
         );
         let context = OperationContext {
             trace_parent: String::new(),
@@ -705,11 +707,13 @@ impl Storyteller {
             online,
             request,
             &key,
-            if outcome.is_ok() { "ready" } else { "failed" },
-            status,
-            failure_category,
-            Some(started.elapsed().as_millis()),
-            slot_counts,
+            TextResourceStatus {
+                stage: if outcome.is_ok() { "ready" } else { "failed" },
+                status,
+                failure_category,
+                elapsed_ms: Some(started.elapsed().as_millis()),
+                slot_counts,
+            },
         );
         span.finish_unmeasured(match &outcome {
             Ok(_) => "expressed",
@@ -738,11 +742,13 @@ impl Storyteller {
                     online,
                     request,
                     &key,
-                    "failed",
-                    "failed",
-                    Some("cache_io"),
-                    None,
-                    None,
+                    TextResourceStatus {
+                        stage: "failed",
+                        status: "failed",
+                        failure_category: Some("cache_io"),
+                        elapsed_ms: None,
+                        slot_counts: None,
+                    },
                 );
             }
         }
@@ -764,11 +770,13 @@ impl Storyteller {
             online,
             request,
             &key,
-            "requested",
-            "requested",
-            None,
-            None,
-            None,
+            TextResourceStatus {
+                stage: "requested",
+                status: "requested",
+                failure_category: None,
+                elapsed_ms: None,
+                slot_counts: None,
+            },
         );
         let context = OperationContext {
             trace_parent: String::new(),
@@ -812,11 +820,13 @@ impl Storyteller {
             online,
             request,
             &key,
-            stage,
-            status,
-            failure_category,
-            Some(started.elapsed().as_millis()),
-            Some((accepted_slots, rejected_slots)),
+            TextResourceStatus {
+                stage,
+                status,
+                failure_category,
+                elapsed_ms: Some(started.elapsed().as_millis()),
+                slot_counts: Some((accepted_slots, rejected_slots)),
+            },
         );
         span.finish_unmeasured(match &outcome {
             Ok(_) => "expressed",
@@ -861,15 +871,14 @@ impl Storyteller {
                         ValidationFailure::PublishedNonSrdMaterial { slot: slot.clone() },
                     );
                 }
-                if !cached_flags.is_empty() {
-                    if let Err(error) = tokio::fs::remove_file(&file).await
-                        && error.kind() != std::io::ErrorKind::NotFound
-                    {
-                        span.event(
-                            "storyteller.cache_write_failed",
-                            &[("storyteller.io_error", format!("{:?}", error.kind()))],
-                        );
-                    }
+                if !cached_flags.is_empty()
+                    && let Err(error) = tokio::fs::remove_file(&file).await
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    span.event(
+                        "storyteller.cache_write_failed",
+                        &[("storyteller.io_error", format!("{:?}", error.kind()))],
+                    );
                 }
                 if !accepted.is_empty() {
                     span.event("storyteller.cache_hit", &[]);
@@ -878,11 +887,13 @@ impl Storyteller {
                         online,
                         request,
                         key,
-                        "ready",
-                        "cached",
-                        None,
-                        None,
-                        Some((accepted.len(), rejected.len())),
+                        TextResourceStatus {
+                            stage: "ready",
+                            status: "cached",
+                            failure_category: None,
+                            elapsed_ms: None,
+                            slot_counts: Some((accepted.len(), rejected.len())),
+                        },
                     );
                 }
                 (accepted, rejected)
@@ -1061,11 +1072,13 @@ impl Storyteller {
                     online,
                     request,
                     key,
-                    "ready",
-                    "cached",
-                    None,
-                    None,
-                    Some((request.slots.len(), 0)),
+                    TextResourceStatus {
+                        stage: "ready",
+                        status: "cached",
+                        failure_category: None,
+                        elapsed_ms: None,
+                        slot_counts: Some((request.slots.len(), 0)),
+                    },
                 );
                 return Ok(values);
             }
@@ -1302,11 +1315,13 @@ fn record_srd_guard_degraded(
         online,
         request,
         key,
-        "failed",
-        "degraded",
-        Some("published_non_srd_material"),
-        Some(elapsed.as_millis()),
-        None,
+        TextResourceStatus {
+            stage: "failed",
+            status: "degraded",
+            failure_category: Some("published_non_srd_material"),
+            elapsed_ms: Some(elapsed.as_millis()),
+            slot_counts: None,
+        },
     );
 }
 
@@ -1845,11 +1860,13 @@ fn refuse(
         online,
         request,
         key,
-        "refused",
-        "refused",
-        Some(reason),
-        None,
-        None,
+        TextResourceStatus {
+            stage: "refused",
+            status: "refused",
+            failure_category: Some(reason),
+            elapsed_ms: None,
+            slot_counts: None,
+        },
     );
     error
 }
@@ -1865,17 +1882,28 @@ fn storyteller_failure(error: &StorytellerError) -> &'static str {
     }
 }
 
-fn record_text_resource(
-    event: &'static str,
-    online: &Online,
-    request: &Expression<'_>,
-    key: &[u8; 32],
+struct TextResourceStatus {
     stage: &'static str,
     status: &'static str,
     failure_category: Option<&'static str>,
     elapsed_ms: Option<u128>,
     slot_counts: Option<(usize, usize)>,
+}
+
+fn record_text_resource(
+    event: &'static str,
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    status: TextResourceStatus,
 ) {
+    let TextResourceStatus {
+        stage,
+        status,
+        failure_category,
+        elapsed_ms,
+        slot_counts,
+    } = status;
     let resource_id = hex(key);
     let elapsed = elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string());
     let failure = failure_category.unwrap_or("none");
@@ -1995,11 +2023,13 @@ fn record_provider_reason(
         online,
         request,
         key,
-        "provider_error",
-        "provider_error",
-        Some(provider_reason_label(reason)),
-        None,
-        None,
+        TextResourceStatus {
+            stage: "provider_error",
+            status: "provider_error",
+            failure_category: Some(provider_reason_label(reason)),
+            elapsed_ms: None,
+            slot_counts: None,
+        },
     );
 }
 

@@ -531,10 +531,12 @@ impl MusicSpec {
         self.fallback_bed
     }
 
+    #[cfg(test)]
     pub(super) fn is_interior(&self) -> bool {
         self.space == Space::Interior
     }
 
+    #[cfg(test)]
     pub(super) fn is_daytime(&self) -> bool {
         self.time_of_day == TimeOfDay::Day
     }

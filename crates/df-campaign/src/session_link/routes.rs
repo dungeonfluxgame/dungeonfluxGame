@@ -9,6 +9,7 @@ use axum::{
     routing::get,
 };
 use df_types::SessionId;
+use futures::future::BoxFuture;
 use http::{HeaderValue, StatusCode, header};
 
 use super::{Audience, Placement, RuntimeLauncher, SessionLauncher, Surface};
@@ -20,6 +21,32 @@ use crate::{
     service::{CampaignService, Ports},
     store::{CampaignStore, SessionDirectory, SessionPhase},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TunnelAuthorization {
+    Authorized,
+    Revoked,
+    Unavailable,
+}
+
+#[derive(Clone)]
+pub(super) struct TunnelRevalidator {
+    check: Arc<dyn Fn() -> BoxFuture<'static, TunnelAuthorization> + Send + Sync>,
+}
+
+impl TunnelRevalidator {
+    pub(super) fn new(
+        check: impl Fn() -> BoxFuture<'static, TunnelAuthorization> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            check: Arc::new(check),
+        }
+    }
+
+    pub(super) fn check(&self) -> BoxFuture<'static, TunnelAuthorization> {
+        (self.check)()
+    }
+}
 
 pub struct App<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLauncher> {
     pub service: CampaignService<P>,
@@ -127,7 +154,15 @@ async fn serve_entry<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLauncher
     if !usable {
         return concealed();
     }
-    serve_runtime(app, &placement, audience, surface, parts).await
+    let revalidator = if surface == Surface::Tunnel {
+        match tunnel_revalidator(app, &placement, audience, &parts) {
+            Some(revalidator) => Some(revalidator),
+            None => return concealed(),
+        }
+    } else {
+        None
+    };
+    serve_runtime(app, &placement, audience, surface, revalidator, parts).await
 }
 
 async fn serve_runtime<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLauncher>(
@@ -135,6 +170,7 @@ async fn serve_runtime<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLaunch
     placement: &Placement,
     audience: Audience,
     surface: Surface,
+    revalidator: Option<TunnelRevalidator>,
     mut parts: http::request::Parts,
 ) -> Response {
     let room = match app.launcher.allocate(placement).await {
@@ -159,6 +195,9 @@ async fn serve_runtime<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLaunch
                 .insert(http::header::HeaderName::from_static(name), value.clone());
         }
     }
+    if let Some(revalidator) = revalidator {
+        parts.extensions.insert(revalidator);
+    }
     let request = Request::from_parts(parts, axum::body::Body::empty());
     match tokio::time::timeout(
         app.launcher.inner.deadline,
@@ -176,6 +215,114 @@ async fn serve_runtime<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLaunch
         Ok(Err(_)) | Err(_) => {
             record_entry(placement, "runtime_unavailable");
             waiting()
+        }
+    }
+}
+
+fn tunnel_revalidator<P: Ports, G: Guard, D: SessionDirectory, L: RuntimeLauncher>(
+    app: &App<P, G, D, L>,
+    placement: &Placement,
+    audience: Audience,
+    parts: &http::request::Parts,
+) -> Option<TunnelRevalidator> {
+    match audience {
+        Audience::Player(member) => {
+            let account = placement
+                .roster
+                .iter()
+                .find(|seat| seat.member == member)?
+                .account;
+            let service = app.service.clone();
+            let launcher = app.launcher.clone();
+            let guard = Arc::clone(&app.guard);
+            let headers = parts.headers.clone();
+            let campaign = placement.campaign;
+            let session = placement.session;
+            Some(TunnelRevalidator::new(move || {
+                let service = service.clone();
+                let launcher = launcher.clone();
+                let guard = Arc::clone(&guard);
+                let headers = headers.clone();
+                Box::pin(async move {
+                    let mut request = Request::new(axum::body::Body::empty());
+                    *request.headers_mut() = headers;
+                    let (parts, _) = request.into_parts();
+                    match guard.caller(&parts, AuthClass::Session).await {
+                        Ok(caller) if caller.account == Some(account) => {}
+                        Ok(_) | Err(GuardRefusal::Unauthenticated | GuardRefusal::CsrfRefused) => {
+                            return TunnelAuthorization::Revoked;
+                        }
+                        Err(GuardRefusal::Unavailable) => {
+                            return TunnelAuthorization::Unavailable;
+                        }
+                    }
+                    let member_snapshot = match service.member_snapshot(account, campaign).await {
+                        Ok(Some(snapshot)) => snapshot,
+                        Ok(None) => return TunnelAuthorization::Revoked,
+                        Err(Failure::Refused(_)) => return TunnelAuthorization::Revoked,
+                        Err(Failure::Store(_)) => return TunnelAuthorization::Unavailable,
+                    };
+                    if member_snapshot.member != member
+                        || member_snapshot.account != account
+                        || !member_snapshot.authorized
+                        || !member_snapshot.holds_seat
+                        || member_snapshot.status != MemberStatus::Active
+                        || member_snapshot.campaign_status != CampaignStatus::Active
+                    {
+                        return TunnelAuthorization::Revoked;
+                    }
+                    match launcher.session(session).await {
+                        Ok(Some(facts))
+                            if facts.campaign == campaign
+                                && matches!(
+                                    facts.phase,
+                                    SessionPhase::PreparingFundingOpen | SessionPhase::Playing
+                                ) =>
+                        {
+                            TunnelAuthorization::Authorized
+                        }
+                        Ok(_) => TunnelAuthorization::Revoked,
+                        Err(_) => TunnelAuthorization::Unavailable,
+                    }
+                })
+            }))
+        }
+        Audience::Display => {
+            let ticket = cookie_value(&parts.headers, TICKET_COOKIE)?.to_owned();
+            let device = cookie_value(&parts.headers, DEVICE_COOKIE)?.to_owned();
+            let service = app.service.clone();
+            let launcher = app.launcher.clone();
+            let campaign = placement.campaign;
+            let session = placement.session;
+            Some(TunnelRevalidator::new(move || {
+                let service = service.clone();
+                let launcher = launcher.clone();
+                let ticket = ticket.clone();
+                let device = device.clone();
+                Box::pin(async move {
+                    match service
+                        .verify_display_ticket(&ticket, &device, session)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(Failure::Refused(_)) => return TunnelAuthorization::Revoked,
+                        Err(Failure::Store(_)) => return TunnelAuthorization::Unavailable,
+                    }
+                    match launcher.session(session).await {
+                        Ok(Some(facts))
+                            if facts.campaign == campaign
+                                && matches!(
+                                    facts.phase,
+                                    SessionPhase::PreparingFundingOpen | SessionPhase::Playing
+                                ) =>
+                        {
+                            TunnelAuthorization::Authorized
+                        }
+                        Ok(_) => TunnelAuthorization::Revoked,
+                        Err(_) => TunnelAuthorization::Unavailable,
+                    }
+                })
+            }))
         }
     }
 }

@@ -365,8 +365,10 @@ mod tests {
         let mut views = GameplayViews::new(scope, generation.clone());
         let mut old = view(14, 0, rpc::PlateState::Pending);
         if let Some(rpc::view_message::Audience::Display(display)) = old.audience.as_mut() {
-            let mut document = crate::layout_contract::LayoutDocument::default();
-            document.revision = 9;
+            let document = crate::layout_contract::LayoutDocument {
+                revision: 9,
+                ..Default::default()
+            };
             display.layout_revision = 9;
             display.layout_json = serde_json::to_string(&document).unwrap();
         }
@@ -376,8 +378,10 @@ mod tests {
         assert!(views.reconnect(next.clone()));
         let mut new = old;
         if let Some(rpc::view_message::Audience::Display(display)) = new.audience.as_mut() {
-            let mut document = crate::layout_contract::LayoutDocument::default();
-            document.revision = 1;
+            let document = crate::layout_contract::LayoutDocument {
+                revision: 1,
+                ..Default::default()
+            };
             display.layout_revision = 1;
             display.layout_json = serde_json::to_string(&document).unwrap();
         }
@@ -527,7 +531,8 @@ mod tests {
                 Ok(ConnectionViewAcceptance::ObsoleteGeneration)
             );
             assert!(!views.reconnect(generation));
-            assert!(VIEW_SILENCE_MS > 5_000 && VIEW_SILENCE_MS <= 10_000);
+            let silence_ms = std::hint::black_box(VIEW_SILENCE_MS);
+            assert!(silence_ms > 5_000 && silence_ms <= 10_000);
         });
     }
 
@@ -578,7 +583,7 @@ mod tests {
                 assert!(futures::poll!(wait.as_mut()).is_pending());
                 // Controlled signals represent the server's 5 s snapshot arriving before
                 // each fresh 8 s deadline, over five minutes at one unchanged revision.
-                assert!(5_000 < VIEW_SILENCE_MS);
+                assert!(5_000 < std::hint::black_box(VIEW_SILENCE_MS));
                 send_view
                     .unbounded_send(view(4, 0, rpc::PlateState::Pending))
                     .unwrap();

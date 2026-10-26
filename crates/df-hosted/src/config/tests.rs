@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::*;
 
 fn environment() -> HashMap<String, String> {
-    [
+    let mut values: HashMap<String, String> = [
         ("DF_PROFILE", "development"),
         ("DF_GAMEPLAY_PUBLIC_URL", "http://127.0.0.1:8099"),
         (
@@ -27,7 +27,15 @@ fn environment() -> HashMap<String, String> {
     ]
     .into_iter()
     .map(|(key, value)| (key.to_owned(), value.to_owned()))
-    .collect()
+    .collect();
+    values.insert(
+        "DF_TELEMETRY_DIR".to_owned(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("telemetry-fixture-config-only")
+            .display()
+            .to_string(),
+    );
+    values
 }
 
 fn parse(values: &HashMap<String, String>) -> Result<Config, ConfigError> {
@@ -240,4 +248,103 @@ fn development_profile_uses_the_existing_identity_and_mail_spellings() {
     );
     values.insert("DF_GAMEPLAY_MAIL_MODE".to_owned(), "dev-outbox".to_owned());
     assert!(parse(&values).is_ok());
+}
+
+fn hosted_profile(profile: &str, accounts_open: Option<&str>) -> HashMap<String, String> {
+    let mut values = environment();
+    values.extend(
+        [
+            ("DF_PROFILE", profile),
+            ("DF_GAMEPLAY_PUBLIC_URL", "https://dungeonfluxdnd.com"),
+            ("DF_WORKOS_CLIENT_ID", "client_fixture"),
+            ("DF_WORKOS_API_KEY", "fixture_only"),
+            ("DF_RESEND_API_KEY", "fixture_only"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned())),
+    );
+    if profile == "production" {
+        values.insert(
+            "DF_GAMEPLAY_DATABASE_TLS".to_owned(),
+            "verify-full".to_owned(),
+        );
+        values.insert(
+            "DF_PORTAL_DATABASE_CA_FILE".to_owned(),
+            "artifacts/tmp/test-ca.pem".to_owned(),
+        );
+    }
+    if let Some(value) = accounts_open {
+        values.insert("DF_ACCOUNTS_OPEN".to_owned(), value.to_owned());
+    }
+    values
+}
+
+#[test]
+fn accounts_open_is_explicit_for_hosted_profiles_and_forced_for_development() {
+    for profile in ["demo", "production"] {
+        for (setting, expected) in [(None, false), (Some("false"), false), (Some("true"), true)] {
+            let values = hosted_profile(profile, setting);
+            let parsed = parse(&values).expect("valid hosted config");
+            assert_eq!(parsed.accounts_open, expected, "{profile} {setting:?}");
+        }
+    }
+
+    for setting in [None, Some("false"), Some("true")] {
+        let mut values = environment();
+        if let Some(setting) = setting {
+            values.insert("DF_ACCOUNTS_OPEN".to_owned(), setting.to_owned());
+        }
+        let parsed = parse(&values).expect("valid development config");
+        assert!(parsed.accounts_open, "development {setting:?}");
+    }
+}
+
+#[test]
+fn telemetry_dir_must_be_absolute_when_configured() {
+    let mut values = environment();
+    values.insert(
+        "DF_TELEMETRY_DIR".to_owned(),
+        "relative/telemetry".to_owned(),
+    );
+    assert!(matches!(
+        parse(&values),
+        Err(ConfigError::Invalid("DF_TELEMETRY_DIR"))
+    ));
+    values.insert(
+        "DF_TELEMETRY_DIR".to_owned(),
+        std::env::temp_dir()
+            .join("df-hosted-telemetry")
+            .display()
+            .to_string(),
+    );
+    let parsed = parse(&values).expect("absolute telemetry dir");
+    assert!(parsed.telemetry_dir.is_some());
+    let mut unconfigured = environment();
+    unconfigured.remove("DF_TELEMETRY_DIR");
+    let parsed = parse(&unconfigured).expect("development telemetry is optional");
+    assert!(parsed.telemetry_dir.is_none());
+}
+
+#[test]
+fn accounts_open_rejects_values_other_than_true_or_false() {
+    for value in ["", "TRUE", "yes", "1"] {
+        let mut values = environment();
+        values.insert("DF_ACCOUNTS_OPEN".to_owned(), value.to_owned());
+        assert!(matches!(
+            parse(&values),
+            Err(ConfigError::Invalid("DF_ACCOUNTS_OPEN"))
+        ));
+    }
+}
+
+#[test]
+fn hosted_profiles_require_a_configured_telemetry_directory() {
+    for profile in ["demo", "production"] {
+        let mut values = hosted_profile(profile, None);
+        values.remove("DF_TELEMETRY_DIR");
+        assert!(matches!(
+            parse(&values),
+            Err(ConfigError::Missing("DF_TELEMETRY_DIR"))
+        ));
+    }
 }

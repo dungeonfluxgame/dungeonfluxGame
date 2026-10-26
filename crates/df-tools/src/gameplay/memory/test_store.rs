@@ -113,7 +113,7 @@ impl TestStore {
                     natural_key: new.natural_key.clone(),
                     source: new.source.clone(),
                     game_revision: new.game_revision,
-                    created_ms: i64::try_from(event_id).unwrap_or(0),
+                    created_ms: event_id,
                     kind: new.kind,
                     visibility: new.visibility,
                     private_to: new.private_to.clone(),
@@ -132,15 +132,15 @@ impl TestStore {
                 source_seq: new.source_seq,
                 vector: None,
             });
-            if let Some(old) = new.supersedes {
-                if let Some(row) = inner.rows.iter_mut().find(|row| {
+            if let Some(old) = new.supersedes
+                && let Some(row) = inner.rows.iter_mut().find(|row| {
                     row.event.run_id == new.run_id
                         && row.event.event_id == old
                         && row.event.status == Status::Active
-                }) {
-                    row.event.status = Status::Superseded;
-                    row.event.superseded_by = Some(event_id);
-                }
+                })
+            {
+                row.event.status = Status::Superseded;
+                row.event.superseded_by = Some(event_id);
             }
             out.push(Inserted {
                 event_id,

@@ -541,6 +541,38 @@ impl LayoutPage {
     }
 }
 
+/// Equal gameplay revisions may carry newer layout metadata, independently of scene timing.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn merge_layout(
+    shown: &mut df_protocol::common::ViewMessage,
+    new: &df_protocol::common::ViewMessage,
+) -> bool {
+    use df_protocol::common::view_message::Audience;
+    let (Some(Audience::Display(shown)), Some(Audience::Display(new))) =
+        (shown.audience.as_mut(), new.audience.as_ref())
+    else {
+        return false;
+    };
+    if new.layout_revision < shown.layout_revision
+        || new.layout_json == shown.layout_json
+        || new.layout_json.is_empty()
+    {
+        return false;
+    }
+    if new.layout_revision == shown.layout_revision && !shown.layout_json.is_empty() {
+        return false;
+    }
+    let Ok(document) = LayoutDocument::parse(&new.layout_json) else {
+        return false;
+    };
+    if document.revision != new.layout_revision {
+        return false;
+    }
+    shown.layout_revision = new.layout_revision;
+    shown.layout_json.clone_from(&new.layout_json);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,36 +737,4 @@ mod tests {
         };
         assert!(!merge_layout(&mut shown, &stale));
     }
-}
-
-/// Equal gameplay revisions may carry newer layout metadata, independently of scene timing.
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn merge_layout(
-    shown: &mut df_protocol::common::ViewMessage,
-    new: &df_protocol::common::ViewMessage,
-) -> bool {
-    use df_protocol::common::view_message::Audience;
-    let (Some(Audience::Display(shown)), Some(Audience::Display(new))) =
-        (shown.audience.as_mut(), new.audience.as_ref())
-    else {
-        return false;
-    };
-    if new.layout_revision < shown.layout_revision
-        || new.layout_json == shown.layout_json
-        || new.layout_json.is_empty()
-    {
-        return false;
-    }
-    if new.layout_revision == shown.layout_revision && !shown.layout_json.is_empty() {
-        return false;
-    }
-    let Ok(document) = LayoutDocument::parse(&new.layout_json) else {
-        return false;
-    };
-    if document.revision != new.layout_revision {
-        return false;
-    }
-    shown.layout_revision = new.layout_revision;
-    shown.layout_json.clone_from(&new.layout_json);
-    true
 }

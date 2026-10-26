@@ -96,7 +96,16 @@ impl crate::campaign_store::Connect for Connector {
 static MIGRATION_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub(crate) async fn migrate(connection: &mut Connection) -> Result<(), DatabaseError> {
-    apply(connection, MIGRATIONS).await
+    apply(connection, MIGRATIONS).await?;
+    crate::finance::publish_customer_prices(&mut connection.client)
+        .await
+        .map_err(|_| {
+            df_observe::record_audit_line(
+                "hosted.customer_prices_failed",
+                "SPEND customer_prices_failed".to_owned(),
+            );
+            DatabaseError::Connect
+        })
 }
 
 pub(crate) async fn apply(
@@ -221,5 +230,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         24,
         include_str!("../../df-persistence/migrations/0024_finance_boundary.sql"),
     ),
+    (
+        31,
+        include_str!("../../df-persistence/migrations/0031_host_funding.sql"),
+    ),
     (100, include_str!("../migrations/0100_stripe_checkout.sql")),
+    (101, include_str!("../migrations/0101_paypal_checkout.sql")),
 ];

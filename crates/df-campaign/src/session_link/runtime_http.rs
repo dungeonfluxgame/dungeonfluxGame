@@ -1,4 +1,5 @@
 //! One loopback runtime, with bounded HTTP exchanges and an owned opaque WebSocket relay.
+use super::routes::{TunnelAuthorization, TunnelRevalidator};
 use super::{
     Audience, Placement, Room, RuntimeError, RuntimeLauncher, Surface, runtime_protocol::*,
 };
@@ -26,6 +27,11 @@ const MAXIMUM_TUNNEL_BYTES: usize = 256 * 1024;
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_TUNNEL_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
 const MAXIMUM_TUNNELS_PER_PRINCIPAL: usize = 2;
+const REVOCATION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const MAXIMUM_AUTHORITY_CHECK: Duration = Duration::from_millis(500);
+const AUTHORITY_ACTIVE: u8 = 0;
+const AUTHORITY_REVOKED: u8 = 1;
+const AUTHORITY_UNAVAILABLE: u8 = 2;
 
 /// Bounds the lifetime and concurrency of each upgraded session relay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +189,9 @@ impl HttpRuntime {
             }
         };
         let (mut parts, _) = request.into_parts();
+        let Some(revalidator) = parts.extensions.remove::<TunnelRevalidator>() else {
+            return Err(RuntimeError::InvalidReply);
+        };
         let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &())
             .await
             .map_err(|_| RuntimeError::InvalidReply)?;
@@ -215,17 +224,23 @@ impl HttpRuntime {
         .map_err(|_| RuntimeError::Unavailable)?;
         let deadline = self.deadline;
         let relay_config = self.relay_config;
+        let campaign = placement.campaign;
+        let session = placement.session;
         Ok(upgrade
             .max_message_size(MAXIMUM_TUNNEL_BYTES)
             .max_frame_size(MAXIMUM_TUNNEL_BYTES)
             .on_upgrade(move |client| async move {
-                let outcome = relay(client, socket, deadline, relay_config).await;
+                let outcome = relay(client, socket, deadline, relay_config, revalidator).await;
                 crate::audit::AuditLine::new("SESSION", "tunnel")
+                    .campaign(campaign)
+                    .session(session)
                     .reason(match outcome {
                         Ok(RelayEnd::ClientClosed) => "client_closed",
                         Ok(RelayEnd::UpstreamClosed) => "upstream_closed",
                         Ok(RelayEnd::IdleTimeout) => "idle_timeout",
                         Ok(RelayEnd::LifetimeLimit) => "lifetime_limit",
+                        Ok(RelayEnd::AccessRevoked) => "access_revoked",
+                        Ok(RelayEnd::AuthorityUnavailable) => "authority_unavailable",
                         Err(()) => "transport_failed",
                     })
                     .emit("session.tunnel");
@@ -384,6 +399,8 @@ enum RelayEnd {
     UpstreamClosed,
     IdleTimeout,
     LifetimeLimit,
+    AccessRevoked,
+    AuthorityUnavailable,
 }
 
 async fn relay(
@@ -393,10 +410,16 @@ async fn relay(
     >,
     deadline: Duration,
     config: RelayConfig,
+    revalidator: TunnelRevalidator,
 ) -> Result<RelayEnd, ()> {
     let started = tokio::time::Instant::now();
     let lifetime_deadline = started + config.maximum_lifetime;
     let mut idle_deadline = started + config.idle_timeout;
+    let mut revocation_check = tokio::time::interval_at(
+        started + REVOCATION_CHECK_INTERVAL,
+        REVOCATION_CHECK_INTERVAL,
+    );
+    revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(idle_deadline.min(lifetime_deadline)) => {
@@ -406,6 +429,29 @@ async fn relay(
                 } else {
                     RelayEnd::IdleTimeout
                 });
+            }
+            _ = revocation_check.tick() => {
+                match check_tunnel_access(&revalidator, deadline).await {
+                    TunnelAuthorization::Authorized => {}
+                    TunnelAuthorization::Revoked => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AccessRevoked);
+                    }
+                    TunnelAuthorization::Unavailable => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AuthorityUnavailable);
+                    }
+                }
             }
             message = client.next() => {
                 let message = match message {
@@ -420,6 +466,27 @@ async fn relay(
                     _ => return Err(()),
                 };
                 let (message, application_data) = message;
+                match check_tunnel_access(&revalidator, deadline).await {
+                    TunnelAuthorization::Authorized => {}
+                    TunnelAuthorization::Revoked => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AccessRevoked);
+                    }
+                    TunnelAuthorization::Unavailable => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AuthorityUnavailable);
+                    }
+                }
                 tokio::time::timeout(deadline, upstream.send(message)).await.map_err(|_| ())?.map_err(|_| ())?;
                 if application_data {
                     idle_deadline = tokio::time::Instant::now() + config.idle_timeout;
@@ -438,6 +505,27 @@ async fn relay(
                     _ => return Err(()),
                 };
                 let (message, application_data) = message;
+                match check_tunnel_access(&revalidator, deadline).await {
+                    TunnelAuthorization::Authorized => {}
+                    TunnelAuthorization::Revoked => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AccessRevoked);
+                    }
+                    TunnelAuthorization::Unavailable => {
+                        close_both(
+                            &mut client,
+                            &mut upstream,
+                            deadline.min(MAXIMUM_AUTHORITY_CHECK),
+                        )
+                        .await;
+                        return Ok(RelayEnd::AuthorityUnavailable);
+                    }
+                }
                 tokio::time::timeout(deadline, client.send(message)).await.map_err(|_| ())?.map_err(|_| ())?;
                 if application_data {
                     idle_deadline = tokio::time::Instant::now() + config.idle_timeout;
@@ -445,6 +533,15 @@ async fn relay(
             }
         }
     }
+}
+
+async fn check_tunnel_access(
+    revalidator: &TunnelRevalidator,
+    deadline: Duration,
+) -> TunnelAuthorization {
+    tokio::time::timeout(deadline.min(MAXIMUM_AUTHORITY_CHECK), revalidator.check())
+        .await
+        .unwrap_or(TunnelAuthorization::Unavailable)
 }
 
 async fn close_both(
@@ -495,12 +592,14 @@ mod tests {
         runtime: HttpRuntime,
         placement: Placement,
         room: Room,
+        authority: std::sync::Arc<std::sync::atomic::AtomicU8>,
     }
 
     struct RelayHarness {
         address: SocketAddr,
         outbound: broadcast::Sender<String>,
         events: mpsc::UnboundedReceiver<String>,
+        authority: std::sync::Arc<std::sync::atomic::AtomicU8>,
         front_shutdown: Option<oneshot::Sender<()>>,
         upstream_shutdown: Option<oneshot::Sender<()>>,
         front_task: JoinHandle<()>,
@@ -548,6 +647,7 @@ mod tests {
             .unwrap();
             let front_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = front_listener.local_addr().unwrap();
+            let authority = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(AUTHORITY_ACTIVE));
             let front_router = Router::new()
                 .route("/tunnel/{seat}", get(front_entry))
                 .with_state(FrontState {
@@ -561,6 +661,7 @@ mod tests {
                         code: "RELAY".to_owned(),
                         run_identity: "relay-test-run".to_owned(),
                     },
+                    authority: std::sync::Arc::clone(&authority),
                 });
             let (front_shutdown, front_shutdown_rx) = oneshot::channel();
             let front_task = tokio::spawn(async move {
@@ -577,6 +678,7 @@ mod tests {
                 address,
                 outbound,
                 events,
+                authority,
                 front_shutdown: Some(front_shutdown),
                 upstream_shutdown: Some(upstream_shutdown),
                 front_task,
@@ -647,6 +749,7 @@ mod tests {
                 },
             }
         }
+        let _ = state.events.send("closed".to_owned());
     }
 
     async fn front_entry(
@@ -655,12 +758,30 @@ mod tests {
         request: Request,
     ) -> Response {
         let member = df_types::MemberId::from_bytes(&[seat + 1; 16]).unwrap();
+        let authority = std::sync::Arc::clone(&state.authority);
+        let (mut parts, body) = request.into_parts();
+        parts.extensions.insert(TunnelRevalidator::new(move || {
+            let authority = std::sync::Arc::clone(&authority);
+            Box::pin(async move {
+                match authority.load(std::sync::atomic::Ordering::SeqCst) {
+                    AUTHORITY_ACTIVE => TunnelAuthorization::Authorized,
+                    AUTHORITY_REVOKED => TunnelAuthorization::Revoked,
+                    _ => TunnelAuthorization::Unavailable,
+                }
+            })
+        }));
+        let request = Request::from_parts(parts, body);
+        let audience = if seat == 0 {
+            Audience::Display
+        } else {
+            Audience::Player(member)
+        };
         match state
             .runtime
             .serve(
                 &state.placement,
                 &state.room,
-                Audience::Player(member),
+                audience,
                 Surface::Tunnel,
                 request,
             )
@@ -697,6 +818,34 @@ mod tests {
             .await
             .expect("client data did not reach the upstream WebSocket");
         assert_eq!(event.as_deref(), Some(expected));
+    }
+
+    async fn expect_upstream_closed(harness: &mut RelayHarness, forbidden: &str) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match harness.events.recv().await.as_deref() {
+                    Some("closed") => break,
+                    Some(event) => assert_ne!(event, forbidden),
+                    None => panic!("upstream event channel closed before the socket"),
+                }
+            }
+        })
+        .await
+        .expect("upstream tunnel did not close within the revocation bound");
+    }
+
+    async fn expect_close_without(socket: &mut ClientSocket, forbidden: &str) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    Some(Ok(tungstenite::Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(tungstenite::Message::Text(text))) => assert_ne!(text, forbidden),
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .expect("client tunnel did not close before the bounded timeout");
     }
 
     #[test]
@@ -883,6 +1032,118 @@ mod tests {
         ));
         let _other_seat = harness.connect(2).await;
         drop((_first, _second, _other_seat));
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn revoking_an_admitted_member_closes_both_tunnel_peers_before_more_frames_cross() {
+        let mut harness = RelayHarness::start(RelayConfig::default()).await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+        socket
+            .send(tungstenite::Message::Text("before-revocation".into()))
+            .await
+            .unwrap();
+        expect_upstream_data(&mut harness, "before-revocation").await;
+
+        harness
+            .outbound
+            .send("private-before-revocation".to_owned())
+            .unwrap();
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            tungstenite::Message::Text(text) if text == "private-before-revocation"
+        ));
+
+        harness
+            .authority
+            .store(AUTHORITY_REVOKED, std::sync::atomic::Ordering::SeqCst);
+        socket
+            .send(tungstenite::Message::Text("after-revocation".into()))
+            .await
+            .unwrap();
+        expect_close(&mut socket).await;
+        expect_upstream_closed(&mut harness, "after-revocation").await;
+        assert!(
+            harness
+                .outbound
+                .send("private-after-revocation".to_owned())
+                .is_err()
+        );
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_authority_outage_closes_both_peers_without_forwarding_input() {
+        let mut harness = RelayHarness::start(RelayConfig::default()).await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+        harness
+            .authority
+            .store(AUTHORITY_UNAVAILABLE, std::sync::atomic::Ordering::SeqCst);
+        socket
+            .send(tungstenite::Message::Text("during-authority-outage".into()))
+            .await
+            .unwrap();
+        expect_close(&mut socket).await;
+        expect_upstream_closed(&mut harness, "during-authority-outage").await;
+        drop(socket);
+        let replacement = harness.connect(1).await;
+        drop(replacement);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_revoked_display_tunnel_does_not_deliver_private_output() {
+        let mut harness = RelayHarness::start(RelayConfig::default()).await;
+        let mut socket = harness.connect(0).await;
+        harness.expect_upstream_ready().await;
+        harness
+            .authority
+            .store(AUTHORITY_REVOKED, std::sync::atomic::Ordering::SeqCst);
+        harness
+            .outbound
+            .send("private-after-display-revocation".to_owned())
+            .unwrap();
+        expect_close_without(&mut socket, "private-after-display-revocation").await;
+        expect_upstream_closed(&mut harness, "private-after-display-revocation").await;
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_archived_campaign_closes_an_admitted_member_tunnel_before_private_output() {
+        let mut harness = RelayHarness::start(RelayConfig::default()).await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+        harness
+            .authority
+            .store(AUTHORITY_REVOKED, std::sync::atomic::Ordering::SeqCst);
+        harness
+            .outbound
+            .send("private-after-campaign-archive".to_owned())
+            .unwrap();
+        expect_close_without(&mut socket, "private-after-campaign-archive").await;
+        expect_upstream_closed(&mut harness, "private-after-campaign-archive").await;
+        drop(socket);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_idle_tunnel_detects_member_revocation_within_the_poll_bound() {
+        let mut harness = RelayHarness::start(RelayConfig::default()).await;
+        let mut socket = harness.connect(1).await;
+        harness.expect_upstream_ready().await;
+        harness
+            .authority
+            .store(AUTHORITY_REVOKED, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::pause();
+        tokio::time::advance(REVOCATION_CHECK_INTERVAL * 2).await;
+        tokio::time::resume();
+        expect_close(&mut socket).await;
+        expect_upstream_closed(&mut harness, "").await;
+        drop(socket);
         harness.close().await;
     }
 }

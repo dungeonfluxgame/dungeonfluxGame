@@ -22,6 +22,17 @@ pub(super) const MAXIMUM_TEXT_BYTES: usize = 4096;
 pub(super) const MAXIMUM_SCENE_BYTES: usize = 64;
 pub(super) const MAXIMUM_HERO_BYTES: usize = 96;
 
+struct EntryDetails<'a> {
+    kind: Kind,
+    title: &'a str,
+    text: &'a str,
+    scene: &'a str,
+    owner_member: Option<String>,
+    owner_hero: Option<&'a str>,
+    author_member: Option<String>,
+    author_hero: Option<&'a str>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Kind {
@@ -257,8 +268,19 @@ impl NotebookLedger {
             state.next_order = next_order;
             return Ok(None);
         }
-        let order =
-            self.insert_locked(&mut state, kind, title, text, scene, None, None, None, None)?;
+        let order = self.insert_locked(
+            &mut state,
+            EntryDetails {
+                kind,
+                title,
+                text,
+                scene,
+                owner_member: None,
+                owner_hero: None,
+                author_member: None,
+                author_hero: None,
+            },
+        )?;
         Ok(Some(order))
     }
 
@@ -516,13 +538,12 @@ impl NotebookLedger {
                 });
             }
         }
-        if scene.key == super::pack::SceneKey::Inn {
-            if let Some(reward) = sheets
+        if scene.key == super::pack::SceneKey::Inn
+            && let Some(reward) = sheets
                 .iter()
                 .find_map(|sheet| sheet.facts.get("reward.line"))
-            {
-                self.add_task_hook(reward)?;
-            }
+        {
+            self.add_task_hook(reward)?;
         }
         if adventure_ended && scene.key == super::pack::SceneKey::Defeat {
             self.mark_task_failed()?;
@@ -667,14 +688,16 @@ impl NotebookLedger {
         }
         let order = self.insert_locked(
             &mut state,
-            Kind::Clue,
-            title,
-            text,
-            scene,
-            Some(member.clone()),
-            Some(hero),
-            Some(member),
-            Some(hero),
+            EntryDetails {
+                kind: Kind::Clue,
+                title,
+                text,
+                scene,
+                owner_member: Some(member.clone()),
+                owner_hero: Some(hero),
+                author_member: Some(member),
+                author_hero: Some(hero),
+            },
         )?;
         Ok(Some(order))
     }
@@ -704,14 +727,16 @@ impl NotebookLedger {
         }
         self.insert_locked(
             &mut state,
-            Kind::Note,
-            "Party note",
-            text,
-            scene,
-            None,
-            None,
-            Some(member),
-            Some(hero),
+            EntryDetails {
+                kind: Kind::Note,
+                title: "Party note",
+                text,
+                scene,
+                owner_member: None,
+                owner_hero: None,
+                author_member: Some(member),
+                author_hero: Some(hero),
+            },
         )
     }
 
@@ -749,14 +774,16 @@ impl NotebookLedger {
         }
         let order = self.insert_locked(
             &mut state,
-            Kind::Note,
-            &title,
-            &text,
-            scene,
-            Some(member.clone()),
-            Some(hero),
-            Some(member),
-            Some(hero),
+            EntryDetails {
+                kind: Kind::Note,
+                title: &title,
+                text: &text,
+                scene,
+                owner_member: Some(member.clone()),
+                owner_hero: Some(hero),
+                author_member: Some(member),
+                author_hero: Some(hero),
+            },
         )?;
         Ok(Some(order))
     }
@@ -806,7 +833,7 @@ impl NotebookLedger {
             })
             .map(view)
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| right.order.cmp(&left.order));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.order));
         entries
     }
 
@@ -818,7 +845,7 @@ impl NotebookLedger {
             .filter(|entry| entry.owner_member.is_none())
             .map(view)
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| right.order.cmp(&left.order));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.order));
         entries
     }
 
@@ -846,14 +873,7 @@ impl NotebookLedger {
     fn insert_locked(
         &self,
         state: &mut LedgerState,
-        kind: Kind,
-        title: &str,
-        text: &str,
-        scene: &str,
-        owner_member: Option<String>,
-        owner_hero: Option<&str>,
-        author_member: Option<String>,
-        author_hero: Option<&str>,
+        details: EntryDetails<'_>,
     ) -> Result<u64, NotebookError> {
         if state.entries.len() >= MAXIMUM_ENTRIES {
             return Err(NotebookError::Bound("entries"));
@@ -865,15 +885,15 @@ impl NotebookLedger {
             .ok_or(NotebookError::Bound("entry order"))?;
         let mut candidate = state.entries.clone();
         candidate.push(Entry {
-            kind,
-            title: title.to_owned(),
-            text: text.to_owned(),
-            scene: scene.to_owned(),
+            kind: details.kind,
+            title: details.title.to_owned(),
+            text: details.text.to_owned(),
+            scene: details.scene.to_owned(),
             order,
-            owner_member,
-            owner_hero: owner_hero.map(str::to_owned),
-            author_member,
-            author_hero: author_hero.map(str::to_owned),
+            owner_member: details.owner_member,
+            owner_hero: details.owner_hero.map(str::to_owned),
+            author_member: details.author_member,
+            author_hero: details.author_hero.map(str::to_owned),
         });
         self.write_saved(&candidate, next_order)?;
         state.entries = candidate;

@@ -1490,10 +1490,10 @@ fn roll_personal<'t>(
         slots.insert(key.to_owned(), entry.text.clone());
     }
     let fits = |entry: &Profile| context.personal_fits(entry, &slots);
-    let partner = roller.pick("personal_partner", &tables.partner, &fits)?;
+    let partner = roller.pick("personal_partner", &tables.partner, fits)?;
     let tied = TIED_PARTNERS.contains(&partner.id.as_str());
-    let children = roller.pick("personal_children", &tables.children, &fits)?;
-    let home = roller.pick("personal_home", &tables.homes, &fits)?;
+    let children = roller.pick("personal_children", &tables.children, fits)?;
+    let home = roller.pick("personal_home", &tables.homes, fits)?;
     let martial = martial_trade(context.member);
     let service = roller.pick("personal_service", &tables.service, |entry| {
         (entry.id.starts_with("martial-") == martial) && fits(entry)

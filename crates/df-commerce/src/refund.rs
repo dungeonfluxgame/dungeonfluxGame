@@ -262,6 +262,9 @@ pub fn plan_refund_paid(
     snapshot: &RefundLotSnapshot,
     request: &RefundPaidRequest,
 ) -> Result<Option<FinancePlan>, RefundRefusal> {
+    if snapshot.lot_state == LotState::Frozen || snapshot.lot_state == LotState::ChargedBack {
+        return Err(RefundRefusal::BlockedByDispute);
+    }
     if snapshot.state == "paid" {
         return Ok(None);
     }
@@ -387,7 +390,10 @@ pub fn plan_refund_observed(
     } else {
         (EventKind::RefundFailed, "failed_review")
     };
-    if snapshot.state == state || snapshot.state == "paid" {
+    if !matches!(snapshot.state.as_str(), "pending" | "unknown") {
+        return Err(RefundRefusal::RefundLotNotPayable);
+    }
+    if snapshot.state == state {
         return Ok(None);
     }
     let mut plan = FinancePlan::new(event_id, event_kind);

@@ -2516,8 +2516,8 @@ pub(super) fn narration_facts(resolution: &Resolution, _words: &str) -> Value {
     };
     json!({
         "hero": resolution.hero,
-        "act": resolution.act.map(|act| act_label(act)),
-        "sense": resolution.sense.map(|sense| sense_label(sense)),
+        "act": resolution.act.map(act_label),
+        "sense": resolution.sense.map(sense_label),
         "target": resolution.target.as_ref().map(|target| json!({
             "kind": target.kind.label(),
             "name": target.name,
@@ -2609,7 +2609,6 @@ pub(super) async fn narrate(
             output_tokens: Some(220),
             deadline: Some(Duration::from_secs(8)),
             guidance: NARRATION_GUIDANCE,
-            ..Default::default()
         },
     };
     match storyteller.express(&expression).await {

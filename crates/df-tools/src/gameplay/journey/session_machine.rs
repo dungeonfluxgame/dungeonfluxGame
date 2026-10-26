@@ -145,6 +145,7 @@ pub(super) struct MachineRefusal {
 
 /// Every event, so the accepted set of a state is derived from `next` and
 /// never restated.
+#[cfg(test)]
 pub(super) const EVENTS: [Event; 10] = [
     Event::CreateHero,
     Event::Begin,
@@ -159,6 +160,7 @@ pub(super) const EVENTS: [Event; 10] = [
 ];
 
 /// The events `next` accepts from `state`.
+#[cfg(test)]
 pub(super) fn accepted_events(state: SessionState) -> impl Iterator<Item = Event> {
     EVENTS
         .into_iter()
@@ -214,6 +216,7 @@ pub(super) fn kind_accepted(state: SessionState, kind: rpc::GameplayActionKind) 
 /// whose offers are not the handler's to build. `None` means the event is
 /// expected to reach the player as an ordinary offer somewhere in its
 /// state.
+#[cfg(test)]
 pub(super) fn internal_reason(state: SessionState, event: Event) -> Option<&'static str> {
     use Event as E;
     use SessionState as S;
@@ -597,12 +600,12 @@ mod tests {
                     Ok(Transition::FightMayEnd) => {
                         // The rules outcome chooses; take the later one half
                         // of the time so walks can reach the aftermath.
-                        if xorshift(&mut rng) % 2 == 0 {
+                        if xorshift(&mut rng).is_multiple_of(2) {
                             state = SessionState::Aftermath;
                         }
                     }
                     Ok(Transition::AftermathMayEnd) => {
-                        if xorshift(&mut rng) % 2 == 0 {
+                        if xorshift(&mut rng).is_multiple_of(2) {
                             state = SessionState::Ended;
                         }
                     }

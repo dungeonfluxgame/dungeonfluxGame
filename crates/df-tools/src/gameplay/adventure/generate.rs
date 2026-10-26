@@ -916,37 +916,37 @@ pub(crate) fn generate_with_prose(
     // their IDs and photographic stems stable so the plate identity sheet can admit every
     // interactable person before requesting a render.
     let shop_background_actors = |setting: &super::setting::SceneSetting| {
-        (setting.kind == super::setting::SettingKind::Shop)
-            .then(|| {
-                setting
-                    .model
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(|model| model.people.iter())
-                    .filter(|person| person.is_background)
-                    .map(|person| {
-                        // The shop's reviewed photographs where one exists for the role; any
-                        // other background person is the canonical-photo role, made on demand.
-                        let stem = person.role.replace(' ', "-");
-                        let reviewed = format!(
-                            "portrait-shop-{stem}{}",
-                            df_render::art_contract::REVIEWED_SUFFIX
-                        );
-                        let portrait = df_render::art_contract::reviewed_photo(&reviewed).map_or(
-                            df_render::art_contract::CANONICAL_PHOTO.to_owned(),
-                            |photo| format!("assets/ui/generated/{photo}"),
-                        );
-                        super::listener::cast_member(
-                            CastRole::Bystander,
-                            &person.id,
-                            &person.name,
-                            &portrait,
-                            ("", "they", "adult"),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        if setting.kind == super::setting::SettingKind::Shop {
+            setting
+                .model
+                .as_ref()
+                .into_iter()
+                .flat_map(|model| model.people.iter())
+                .filter(|person| person.is_background)
+                .map(|person| {
+                    // The shop's reviewed photographs where one exists for the role; any
+                    // other background person is the canonical-photo role, made on demand.
+                    let stem = person.role.replace(' ', "-");
+                    let reviewed = format!(
+                        "portrait-shop-{stem}{}",
+                        df_render::art_contract::REVIEWED_SUFFIX
+                    );
+                    let portrait = df_render::art_contract::reviewed_photo(&reviewed).map_or(
+                        df_render::art_contract::CANONICAL_PHOTO.to_owned(),
+                        |photo| format!("assets/ui/generated/{photo}"),
+                    );
+                    super::listener::cast_member(
+                        CastRole::Bystander,
+                        &person.id,
+                        &person.name,
+                        &portrait,
+                        ("", "they", "adult"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
     };
     for scene in &mut pack.scenes {
         let (beat, title, narration, speaker, line, portrait) = match scene.key {
@@ -1077,9 +1077,7 @@ pub(crate) fn generate_with_prose(
             scene.key,
             SceneKey::Opening | SceneKey::DialogueSeal | SceneKey::DialogueEscort
         ) {
-            scene
-                .cast
-                .extend(shop_background_actors(setting).into_iter());
+            scene.cast.extend(shop_background_actors(setting));
         }
         let mechanic = match scene.key {
             SceneKey::Combat => Some("combat_mech"),

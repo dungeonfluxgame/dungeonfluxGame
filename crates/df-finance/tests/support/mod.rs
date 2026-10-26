@@ -1,5 +1,5 @@
 //! Scratch-database harness for the finance tests. Each test gets a new database named
-//! `df_finance_test_<time>_<pid>_<serial>` on the owned scratch server named by
+//! `df_finance_refundstate_<time>_<pid>_<serial>` on the owned scratch server named by
 //! `DUNGEONFLUX_FINANCE_PG_PORT` (host `DUNGEONFLUX_FINANCE_PG_HOST`, default 127.0.0.1; user
 //! `DUNGEONFLUX_FINANCE_PG_USER`, default postgres) and drops only that database at the end.
 //! Without the port the test reports SKIPPED. Tests connect as the server's superuser and act as
@@ -138,7 +138,10 @@ impl Scratch {
             .as_nanos();
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-        let database = format!("df_finance_test_{nanos}_{}_{serial}", std::process::id());
+        let database = format!(
+            "df_finance_refundstate_{nanos}_{}_{serial}",
+            std::process::id()
+        );
         connect(&admin)
             .await
             .batch_execute(&format!("CREATE DATABASE {database}"))

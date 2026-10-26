@@ -1,7 +1,7 @@
 //! Durable checkout receipts bridge Stripe acknowledgements and idempotent finance posting.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use df_account_app::wire::{CheckoutCreated, CheckoutStatus, CheckoutView};
 use df_portal::app_api::ports::{PortError, PortResult};
@@ -16,7 +16,7 @@ use crate::{database::Connection, finance::Finance};
 pub(super) struct Stripe {
     pub(super) connection: tokio::sync::Mutex<Connection>,
     pub(super) provider: Provider,
-    pub(super) creations: Mutex<CreationState>,
+    pub(super) creations: Arc<Mutex<CreationState>>,
 }
 
 /// Maximum number of provider calls one account can have in flight.
@@ -29,7 +29,7 @@ pub(super) struct CreationState {
     accounts: HashMap<[u8; 16], usize>,
 }
 
-struct CreationClaim<'a> {
+pub(super) struct CreationClaim<'a> {
     creations: &'a Mutex<CreationState>,
     account: [u8; 16],
     operation: [u8; 16],
@@ -119,7 +119,7 @@ impl Stripe {
         }
         // Same-operation callers receive Busy while one request dispatches.
         // Stripe's idempotency key covers duplicate sends from other processes.
-        let _claim = self.claim_creation(account_id, operation)?;
+        let _claim = claim_creation(&self.creations, account_id, operation)?;
         let session = self.provider.create(&operation_hex, amount_cents).await?;
         let connection = self.connection.lock().await;
         let updated = connection
@@ -150,31 +150,6 @@ impl Stripe {
         Ok(CheckoutCreated {
             checkout_id: operation_hex,
             redirect_url: session.url,
-        })
-    }
-
-    fn claim_creation(
-        &self,
-        account: [u8; 16],
-        operation: [u8; 16],
-    ) -> Result<CreationClaim<'_>, Error> {
-        let mut state = self
-            .creations
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.operations.contains(&(account, operation)) {
-            return Err(Error::InProgress);
-        }
-        let count = state.accounts.get(&account).copied().unwrap_or_default();
-        if count >= MAXIMUM_PENDING_CREATES_PER_ACCOUNT {
-            return Err(Error::AtCapacity);
-        }
-        state.operations.insert((account, operation));
-        state.accounts.insert(account, count + 1);
-        Ok(CreationClaim {
-            creations: &self.creations,
-            account,
-            operation,
         })
     }
 
@@ -287,4 +262,28 @@ impl Stripe {
         );
         Ok(())
     }
+}
+
+pub(super) fn claim_creation(
+    creations: &Mutex<CreationState>,
+    account: [u8; 16],
+    operation: [u8; 16],
+) -> Result<CreationClaim<'_>, Error> {
+    let mut state = creations
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.operations.contains(&(account, operation)) {
+        return Err(Error::InProgress);
+    }
+    let count = state.accounts.get(&account).copied().unwrap_or_default();
+    if count >= MAXIMUM_PENDING_CREATES_PER_ACCOUNT {
+        return Err(Error::AtCapacity);
+    }
+    state.operations.insert((account, operation));
+    state.accounts.insert(account, count + 1);
+    Ok(CreationClaim {
+        creations,
+        account,
+        operation,
+    })
 }

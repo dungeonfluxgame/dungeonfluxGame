@@ -267,6 +267,7 @@ pub(in crate::gameplay) fn canonical_room_content(
     Ok((layout, goods, context.map(|context| json!(context))))
 }
 
+#[cfg(test)]
 pub(in crate::gameplay) fn canonical_room(
     rating: ContentRating,
     model: &SceneModel,

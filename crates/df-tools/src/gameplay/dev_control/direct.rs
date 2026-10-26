@@ -176,7 +176,7 @@ pub(in crate::gameplay) fn admit(
     let receive = order
         .living
         .direct_plate(text.clone(), order.keep)
-        .map_err(|reason| tonic::Status::failed_precondition(reason))?;
+        .map_err(tonic::Status::failed_precondition)?;
     history
         .directions
         .set(directions::Target::Plate, text, order.keep);

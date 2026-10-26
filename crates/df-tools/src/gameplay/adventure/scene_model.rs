@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+#[cfg(test)]
 const SCHEMA: &str =
     include_str!("../../../../../content/adventure-tables/scene-model.schema.json");
+#[cfg(test)]
 const PROMPT: &str = include_str!("../../../../../content/adventure-tables/scene-model.prompt.md");
+#[cfg(test)]
 const MAXIMUM_CHANGES: usize = 64;
 /// Finite stock offers one scene model may list; matches the live projection bound.
 const MAXIMUM_OFFERS: usize = 12;
@@ -600,11 +603,15 @@ pub(crate) enum SceneModelError {
     InvalidBounds,
     DuplicateId,
     UnknownPerson,
+    #[cfg(test)]
     UnknownPlace,
+    #[cfg(test)]
     UnknownFact,
+    #[cfg(test)]
     UnknownFinding,
     Contradiction,
     UnknownEntity,
+    #[cfg(test)]
     TooManyChanges,
     Serialization,
 }
@@ -617,11 +624,15 @@ impl std::fmt::Display for SceneModelError {
             Self::InvalidBounds => "scene model exceeded its content bounds",
             Self::DuplicateId => "scene model repeats an entity ID",
             Self::UnknownPerson => "scene model names a person outside the adventure cast",
+            #[cfg(test)]
             Self::UnknownPlace => "scene model names a place outside the adventure",
+            #[cfg(test)]
             Self::UnknownFact => "scene model cites a fact outside the adventure",
+            #[cfg(test)]
             Self::UnknownFinding => "scene model cites a finding outside the scene",
             Self::Contradiction => "scene model contradicts a supplied adventure fact",
             Self::UnknownEntity => "scene change names an entity outside the scene model",
+            #[cfg(test)]
             Self::TooManyChanges => "scene change history exceeded its bound",
             Self::Serialization => "scene model serialization failed",
         })
@@ -827,10 +838,6 @@ impl SceneModel {
         entries
     }
 
-    pub(crate) fn inventory_json(&self) -> Result<Value, SceneModelError> {
-        serde_json::to_value(self.inventory()).map_err(|_| SceneModelError::Serialization)
-    }
-
     pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
         // Built as a Value directly: no serialize-then-parse round trip of the picture state.
         let mut contents = self.picture_state_value();
@@ -909,16 +916,14 @@ impl SceneModel {
                     {
                         entry.owner_id = None;
                     }
-                } else if let Some(offer) = self
-                    .offers
-                    .iter()
-                    .find(|offer| offer.canonical_item_id() == entry.item_id)
-                {
+                } else {
+                    let offer = self
+                        .offers
+                        .iter()
+                        .find(|offer| offer.canonical_item_id() == entry.item_id)?;
                     if !visible_people.contains(offer.seller_id.as_str()) {
                         entry.owner_id = None;
                     }
-                } else {
-                    return None;
                 }
                 Some(entry)
             })
@@ -1032,10 +1037,12 @@ impl SceneModel {
         Ok(model)
     }
 
+    #[cfg(test)]
     pub(crate) fn prompt() -> &'static str {
         PROMPT
     }
 
+    #[cfg(test)]
     pub(crate) fn schema() -> Result<Value, SceneModelError> {
         serde_json::from_str(SCHEMA).map_err(|_| SceneModelError::InvalidShape)
     }
@@ -1238,6 +1245,7 @@ impl SceneModel {
     }
 
     /// Rejects structured output whose cast, place, finding, or cited knowledge is not grounded.
+    #[cfg(test)]
     pub(crate) fn validate_candidate(
         value: Value,
         cast: &BTreeMap<String, String>,
@@ -1432,6 +1440,7 @@ impl SceneModel {
     }
 
     /// The single prompt projection for the immutable model plus every accepted state change.
+    #[cfg(test)]
     pub(crate) fn as_it_is_now(
         &self,
         scene_key: SceneKey,

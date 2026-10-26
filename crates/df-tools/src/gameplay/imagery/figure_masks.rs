@@ -528,7 +528,7 @@ impl Imagery {
                 index,
                 None,
             );
-            bytes.map(bytes::Bytes::from)
+            bytes
         })
         .await
         {

@@ -102,6 +102,29 @@ pub struct OperatorAct {
 
 /// Finance (F): balances, the trial, funding, statements and the operator ledger.
 pub trait FinancePort: Send + Sync + 'static {
+    /// Durably cancels a host's unstarted lobby, then returns its unreserved credit.
+    fn cancel_host_lobby(
+        &self,
+        account: AccountId,
+        session: SessionId,
+    ) -> impl Future<Output = PortResult<()>> + Send;
+
+    /// Only the current host sees their own credit and a versioned customer price.
+    fn host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+    ) -> impl Future<Output = PortResult<Option<df_account_app::wire_campaign::HostCreditView>>> + Send;
+
+    /// Records explicit consent without allocating credit. The session's host is rechecked.
+    fn consent_host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+        request: df_account_app::wire_campaign::HostConsentRequest,
+        operation: OperationId,
+    ) -> impl Future<Output = PortResult<()>> + Send;
+
     /// The five balances and the trial. A verified account's trial is granted once, on the first
     /// call after verification, and never again (TODO(F): the verification hook posts it).
     fn overview(

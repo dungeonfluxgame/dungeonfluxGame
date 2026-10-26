@@ -27,6 +27,13 @@ pub(crate) enum SceneScriptLine<'a> {
     CheckResult,
     /// The die and result card of a roll the server attached to this line, told in table order
     /// before whatever the line itself says.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            dead_code,
+            reason = "planned caller: the browser stage conductor sequences this roll before its line; see planning/campaign-cinematics.md"
+        )
+    )]
     Dice(&'a TableLine),
 }
 

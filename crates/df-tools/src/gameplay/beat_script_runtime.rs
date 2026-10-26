@@ -428,6 +428,7 @@ pub(super) struct OpeningSocialAttempt<'a> {
     /// Jev must explicitly judge a different offer or approach before another roll is admitted.
     pub(super) changed_after: Option<df_types::OperationId>,
 }
+#[cfg(test)]
 pub(super) fn stage_opening_social(
     current: &Checkpoint,
     operation: df_types::OperationId,
@@ -437,6 +438,7 @@ pub(super) fn stage_opening_social(
 }
 
 /// The owner supplies the currently available typed Help source before drawing the check.
+#[cfg(test)]
 pub(super) fn stage_opening_social_with_sources(
     current: &Checkpoint,
     operation: df_types::OperationId,
@@ -1469,7 +1471,7 @@ pub(super) fn validate(
         || (state.logical_time.ticks != 0
             && !(fought
                 && state.logical_time.ticks_per_second == 1
-                && state.logical_time.ticks % 6 == 0))
+                && state.logical_time.ticks.is_multiple_of(6)))
     {
         refusal_detail::note("scene-fight-accounting");
         return invalid("FightAccountingMismatch");

@@ -52,6 +52,14 @@ where
     F: FnOnce(PostgresSaveStore, Client) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
+    run_save_test_with_scope_migration(test, true);
+}
+
+fn run_save_test_with_scope_migration<F, Fut>(test: F, apply_scope_migration: bool)
+where
+    F: FnOnce(PostgresSaveStore, Client) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
     let Some(port) = std::env::var("DUNGEONFLUX_RUNTIME_PG_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
@@ -95,6 +103,9 @@ where
         let outcome =
             tokio::spawn(async move {
                 for migration in runtime_support::MIGRATIONS {
+                    if !apply_scope_migration && migration.file == "0036_save_control_scope.sql" {
+                        continue;
+                    }
                     if let Some(schema) = migration.search_path {
                         client.batch_execute(&format!(
                         "CREATE SCHEMA IF NOT EXISTS {schema}; SET search_path TO {schema}; \
@@ -110,6 +121,18 @@ where
                         .batch_execute("RESET search_path")
                         .await
                         .expect("reset search path");
+                }
+                client
+                    .batch_execute("INSERT INTO df_save.schema_migration (version) VALUES (28)")
+                    .await
+                    .expect("record fixture save migration");
+                if apply_scope_migration {
+                    client
+                        .batch_execute(
+                            "INSERT INTO df_save.schema_migration (version) VALUES (36)",
+                        )
+                        .await
+                        .expect("record fixture control-scope migration");
                 }
                 let store = PostgresSaveStore::open(client)
                     .await
@@ -381,6 +404,49 @@ fn postgres_save_append_only_grants_and_every_table_force_rls() {
             }
         }
     });
+}
+
+#[test]
+fn control_role_cannot_read_private_checkpoint_payload() {
+    run_save_test_with_scope_migration(|mut store, client| async move {
+        let first = request(1);
+        let first_token = place_request(&client, &first, 1).await;
+        scope_store(&mut store, &first_token).await;
+        store.create_save_point(&first).await.expect("first save");
+
+        store
+            .client_mut()
+            .batch_execute("RESET ROLE")
+            .await
+            .expect("reset first runtime role");
+        let mut second = request(2);
+        second.tenant_id = id(0xa2, |bytes| TenantId::from_bytes(bytes).expect("tenant"));
+        second.campaign_id = id(0xc2, |bytes| CampaignId::from_bytes(bytes).expect("campaign"));
+        let second_token = place_request(&client, &second, 2).await;
+        scope_store(&mut store, &second_token).await;
+        store.create_save_point(&second).await.expect("second save");
+
+        let control = client;
+        control
+            .batch_execute("SET ROLE df_control")
+            .await
+            .expect("control role");
+        let metadata = control
+            .query(
+                "SELECT save_point_id, tenant_id, campaign_id, branch_id, created_at \
+                 FROM df_save.save_points",
+                &[],
+            )
+            .await
+            .expect("control metadata read");
+        assert_eq!(metadata.len(), 2);
+
+        let checkpoint = control
+            .query("SELECT checkpoint FROM df_save.save_points", &[])
+            .await
+            .expect_err("control role must not read any checkpoint payload");
+        assert_eq!(runtime_support::sqlstate(&checkpoint).as_deref(), Some("42501"));
+    }, false);
 }
 
 #[test]

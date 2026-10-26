@@ -590,3 +590,212 @@ async fn a_hero_choice_is_guarded_owned_and_clears_ready_before_another_choice()
         .await;
     assert_eq!(denied.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn fundinghook_lobby_exposes_only_the_hosts_credit_and_waits_for_consent() {
+    use crate::app_api::{ids, ports::FinancePort};
+    use df_account_app::wire_campaign::{HostConsentRequest, HostCreditView};
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let account = host.account_id().await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let quote = HostCreditView {
+        price_version: [7; 16],
+        hourly_micro_dollars: 3_000_000,
+        available_micro_dollars: 10_000_000,
+        cap_micro_dollars: 3_000_000,
+        terms_version: 1,
+        consented_at_ms: None,
+        is_fundable: false,
+    };
+    harness
+        .ports
+        .finance
+        .seed_host_credit(account, session, quote);
+    let path = format!("/app/api/sessions/{}/lobby", ids::hex(session.as_bytes()));
+    let waiting = host.get(&path).await.json();
+    assert_eq!(
+        waiting["funding_note"]["host_credit"]["available_micro_dollars"],
+        10_000_000
+    );
+    assert!(
+        waiting["start_blockers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("funding_not_ready"))
+    );
+    let invitation = invite(&mut host, &campaign, "player").await;
+    let mut player = harness.browser();
+    player.sign_up_verified("funded-player@example.test").await;
+    let token = token_of(invitation["link"].as_str().unwrap());
+    assert_eq!(
+        accept(&mut player, Some(&token)).await.status,
+        StatusCode::OK
+    );
+    let private = player.get(&path).await.json();
+    assert!(private["funding_note"].is_string());
+    assert!(!private.to_string().contains("available_micro_dollars"));
+    let operation = ids::operation(&host.operation().await).unwrap();
+    harness
+        .ports
+        .finance
+        .consent_host_credit(
+            account,
+            session,
+            HostConsentRequest {
+                price_version: quote.price_version,
+                cap_micro_dollars: quote.cap_micro_dollars,
+                terms_version: quote.terms_version,
+                operation: ids::hex(operation.as_bytes()),
+            },
+            operation,
+        )
+        .await
+        .unwrap();
+    let approved = host.get(&path).await.json();
+    assert_eq!(approved["funding_note"]["host_credit"]["is_fundable"], true);
+    assert_eq!(
+        approved["funding_note"]["host_credit"]["available_micro_dollars"],
+        10_000_000
+    );
+    assert!(
+        !approved["start_blockers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("funding_not_ready"))
+    );
+}
+
+#[tokio::test]
+async fn fundinghook_fake_refuses_a_stale_quote_and_a_different_account() {
+    use crate::app_api::{
+        ids,
+        ports::{FinancePort, PortError},
+    };
+    use df_account_app::wire_campaign::{HostConsentRequest, HostCreditView};
+    let harness = Harness::new().await;
+    let (host, campaign) = host_with_campaign(&harness).await;
+    let account = host.account_id().await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(ids::campaign(&campaign).unwrap())
+        .unwrap();
+    harness.ports.finance.seed_host_credit(
+        account,
+        session,
+        HostCreditView {
+            price_version: [7; 16],
+            hourly_micro_dollars: 3_000_000,
+            available_micro_dollars: 3_000_000,
+            cap_micro_dollars: 3_000_000,
+            terms_version: 1,
+            consented_at_ms: None,
+            is_fundable: false,
+        },
+    );
+    let operation = ids::operation(&"01".repeat(16)).unwrap();
+    let stale = HostConsentRequest {
+        price_version: [8; 16],
+        cap_micro_dollars: 3_000_000,
+        terms_version: 1,
+        operation: ids::hex(operation.as_bytes()),
+    };
+    assert_eq!(
+        harness
+            .ports
+            .finance
+            .consent_host_credit(account, session, stale.clone(), operation)
+            .await,
+        Err(PortError::Forbidden)
+    );
+    let foreign = ids::account(&"ff".repeat(16)).unwrap();
+    assert_eq!(
+        harness
+            .ports
+            .finance
+            .consent_host_credit(foreign, session, stale, operation)
+            .await,
+        Err(PortError::Forbidden)
+    );
+    assert!(
+        harness
+            .ports
+            .finance
+            .host_credit(foreign, session)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn fundingwire_router_records_host_consent_and_cancels_only_for_the_host() {
+    use crate::app_api::ids;
+    use df_account_app::wire_campaign::HostCreditView;
+    let harness = Harness::new().await;
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let account = host.account_id().await;
+    let session = harness
+        .ports
+        .campaigns
+        .seed_lobby(ids::campaign(&campaign).unwrap())
+        .unwrap();
+    let quote = HostCreditView {
+        price_version: [7; 16],
+        hourly_micro_dollars: 3_000_000,
+        available_micro_dollars: 10_000_000,
+        cap_micro_dollars: 3_000_000,
+        terms_version: 1,
+        consented_at_ms: None,
+        is_fundable: false,
+    };
+    harness
+        .ports
+        .finance
+        .seed_host_credit(account, session, quote);
+    let lobby = format!("/app/api/sessions/{}/lobby", ids::hex(session.as_bytes()));
+    let path = format!("{lobby}/funding/consent");
+    let operation = host.operation().await;
+    let request = json!({"price_version":quote.price_version, "cap_micro_dollars":quote.cap_micro_dollars,
+        "terms_version":1, "operation":operation});
+    let accepted = host.post(&path, &request).await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.json());
+    assert_eq!(
+        accepted.json()["funding_note"]["host_credit"]["is_fundable"],
+        true
+    );
+    assert_eq!(
+        accepted.json()["funding_note"]["host_credit"]["available_micro_dollars"],
+        10_000_000
+    );
+    let replay = host.post(&path, &request).await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(
+        replay.json()["funding_note"]["host_credit"]["consented_at_ms"],
+        accepted.json()["funding_note"]["host_credit"]["consented_at_ms"]
+    );
+    let mut stranger = harness.browser();
+    stranger
+        .sign_up_verified("fundingwire-stranger@example.test")
+        .await;
+    let operation = stranger.operation().await;
+    assert_ne!(
+        stranger
+            .post(&format!("{lobby}/cancel"), &json!({"operation":operation}))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let operation = host.operation().await;
+    assert_eq!(
+        host.post(&format!("{lobby}/cancel"), &json!({"operation":operation}))
+            .await
+            .status,
+        StatusCode::OK
+    );
+}

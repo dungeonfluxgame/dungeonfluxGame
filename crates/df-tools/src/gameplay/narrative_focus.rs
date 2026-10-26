@@ -83,6 +83,7 @@ pub(super) struct NarrativeFocus {
 }
 
 /// A complete, public, committed NPC line. The caller verifies the speaker's current cast ID.
+#[cfg(test)]
 pub(super) struct Dialogue<'a> {
     pub(super) sequence: u64,
     pub(super) actor_id: &'a str,
@@ -130,6 +131,7 @@ impl Presentation {
 
 /// Match canonical names and aliases as whole word spans, ignoring case. Prefer the most
 /// specific alias; equal matches for different subjects leave the camera unchanged.
+#[cfg(test)]
 pub(super) fn select(model: &SceneModel, dialogue: Dialogue<'_>) -> Option<NarrativeFocus> {
     let words = words(dialogue.text);
     let mut candidates = Vec::new();
@@ -215,6 +217,7 @@ pub(super) fn select(model: &SceneModel, dialogue: Dialogue<'_>) -> Option<Narra
     })
 }
 
+#[cfg(test)]
 fn words(text: &str) -> Vec<String> {
     text.split(|character: char| !character.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -222,6 +225,7 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn mentioned(text: &[String], name: &str, aliases: &[String]) -> Option<usize> {
     std::iter::once(name)
         .chain(aliases.iter().map(String::as_str))

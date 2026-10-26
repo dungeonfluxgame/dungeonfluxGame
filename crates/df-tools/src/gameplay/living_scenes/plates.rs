@@ -1413,18 +1413,32 @@ fn record_plate_diagnostic(
     crate::gameplay::actor::record_audit_diagnostic(event, line, fields, &[]);
 }
 
-fn record_plate_render_diagnostic(
+struct PlateRenderDiagnostic<'a> {
     event: &'static str,
     status: &'static str,
-    scene: &PlateScene,
-    spec: &ShotSpec,
-    plate_id: &str,
+    scene: &'a PlateScene,
+    spec: &'a ShotSpec,
+    plate_id: &'a str,
     graph_revision: u64,
     ahead: bool,
-    image_key: Option<&ImageKey>,
+    image_key: Option<&'a ImageKey>,
     failure: Option<ImageFailure>,
     elapsed_ms: u128,
-) {
+}
+
+fn record_plate_render_diagnostic(diagnostic: PlateRenderDiagnostic<'_>) {
+    let PlateRenderDiagnostic {
+        event,
+        status,
+        scene,
+        spec,
+        plate_id,
+        graph_revision,
+        ahead,
+        image_key,
+        failure,
+        elapsed_ms,
+    } = diagnostic;
     let scene_key = scene.source_identity();
     let scene_id = df_observe::presentation::local_identity(&scene_key);
     let plate_id = df_observe::presentation::local_identity(plate_id);
@@ -2174,7 +2188,7 @@ impl Shared {
         if story_plate_started {
             let reason = located
                 .as_ref()
-                .and_then(|scene| crate::gameplay::adventure::scene_model::current_scene(scene))
+                .and_then(crate::gameplay::adventure::scene_model::current_scene)
                 .and_then(|snapshot| snapshot.changes.last().cloned())
                 .unwrap_or_else(|| "visible scene state changed".into());
             record(
@@ -2197,7 +2211,7 @@ impl Shared {
                 );
             }
             let faces = self.inner.hero_face_keys(&view.hero_names);
-            let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
+            let id = self.canonical_plate_id(scene, &view.heroes, &faces, view.graph_revision);
             book.current
                 .as_ref()
                 .and_then(|current| current.reference_id.as_ref())
@@ -3041,7 +3055,7 @@ impl Shared {
                 scene,
                 spec,
                 heroes,
-                faces,
+                faces: _,
                 ahead,
             } => {
                 tasks.spawn(async move {
@@ -3061,7 +3075,6 @@ impl Shared {
                         &scene,
                         &spec,
                         &heroes,
-                        &faces,
                         &id,
                         graph_revision,
                         ahead,
@@ -3450,6 +3463,7 @@ impl Shared {
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
+        _faces: &[(u8, ImageKey)],
         direction: Option<&str>,
         override_face: Option<Face>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
@@ -3698,10 +3712,10 @@ impl Shared {
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
-        _faces: &[(u8, ImageKey)],
+        faces: &[(u8, ImageKey)],
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
-        self.photographic_request(scene, spec, heroes, direction, None)
+        self.photographic_request(scene, spec, heroes, faces, direction, None)
             .await
     }
 
@@ -3710,7 +3724,6 @@ impl Shared {
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
-        faces: &[(u8, ImageKey)],
         plate_id: &str,
         graph_revision: u64,
         ahead: bool,
@@ -3719,21 +3732,21 @@ impl Shared {
         let mut image_key = None;
         let result = async {
             let (request, _locator_face) =
-                self.fresh_request(scene, spec, heroes, faces, None).await?;
+                self.fresh_request(scene, spec, heroes, &[], None).await?;
             let key = self.inner.imagery.key_for(&request);
             image_key = Some(key.clone());
-            record_plate_render_diagnostic(
-                "gameplay.living_scene.plate_render_requested",
-                "render_requested",
+            record_plate_render_diagnostic(PlateRenderDiagnostic {
+                event: "gameplay.living_scene.plate_render_requested",
+                status: "render_requested",
                 scene,
                 spec,
                 plate_id,
                 graph_revision,
                 ahead,
-                Some(&key),
-                None,
-                started.elapsed().as_millis(),
-            );
+                image_key: Some(&key),
+                failure: None,
+                elapsed_ms: started.elapsed().as_millis(),
+            });
             let key = self
                 .inner
                 .imagery
@@ -3774,18 +3787,18 @@ impl Shared {
         } else {
             "gameplay.living_scene.plate_ready"
         };
-        record_plate_render_diagnostic(
+        record_plate_render_diagnostic(PlateRenderDiagnostic {
             event,
-            if failure.is_some() { "failed" } else { "ready" },
+            status: if failure.is_some() { "failed" } else { "ready" },
             scene,
             spec,
             plate_id,
             graph_revision,
             ahead,
-            image_key.as_ref(),
+            image_key: image_key.as_ref(),
             failure,
-            started.elapsed().as_millis(),
-        );
+            elapsed_ms: started.elapsed().as_millis(),
+        });
         crate::gameplay::actor::record_audit_line(
             "gameplay.imagery_complete",
             super::image_completion_line(
@@ -4218,7 +4231,14 @@ impl Shared {
     ) -> Result<ImageKey, ImageFailure> {
         let direction = locked(&self.book).direct.keep.clone();
         let (request, _) = self
-            .photographic_request(scene, spec, heroes, direction.as_deref(), override_face)
+            .photographic_request(
+                scene,
+                spec,
+                heroes,
+                &[],
+                direction.as_deref(),
+                override_face,
+            )
             .await?;
         self.inner
             .imagery
@@ -4516,7 +4536,6 @@ impl Shared {
                 // waits for a fresh render of the scene to be its base.
                 if book.state_images.carried_edit {
                     self.request_chain_refresh(&mut book, now, "face");
-                    return;
                 }
                 let base_key = base.as_str().to_owned();
                 // Cloned only when an edit is queued, not on every one-second poll.

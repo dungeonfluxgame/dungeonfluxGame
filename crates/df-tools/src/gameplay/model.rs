@@ -1584,7 +1584,6 @@ mod creator_portrait_recovery_tests {
                     } else {
                         String::new()
                     },
-                    ..Default::default()
                 };
                 let request = rpc::SubmitActionRequest {
                     session_id: Some(rpc::SessionId {

@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "planned caller: the F14 world-generation queue; see planning/feature-inventory.md F14 and planning/worldlabs-splat-worlds-research.md"
+)]
+
 //! Real splat worlds for places: the generator behind the hub's
 //! [`SplatWorld`](super::resources::ResourceKind::SplatWorld) kind.
 //!
@@ -73,7 +78,6 @@ const PROOF_GROUND_PLANE_OFFSET: f64 = 1.2088797;
 /// A Marble model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum MarbleModel {
-    Draft,
     Marble11,
 }
 
@@ -83,7 +87,6 @@ const NON_PANORAMA_IMAGE_CREDITS: u64 = 80;
 impl MarbleModel {
     pub(in crate::gameplay) const fn api_name(self) -> &'static str {
         match self {
-            Self::Draft => "marble-1.0-draft",
             Self::Marble11 => "marble-1.1",
         }
     }
@@ -91,11 +94,7 @@ impl MarbleModel {
     /// The most credits one world from a photograph costs: the model's world step and the
     /// panorama step. The operation reports the credits it really used.
     const fn maximum_credits(self) -> u64 {
-        NON_PANORAMA_IMAGE_CREDITS
-            + match self {
-                Self::Draft => 150,
-                Self::Marble11 => 1_500,
-            }
+        NON_PANORAMA_IMAGE_CREDITS + 1_500
     }
 }
 
@@ -107,17 +106,13 @@ fn signed(amount: u64) -> i64 {
 /// A PLY export resolution. Only the 500k export is requested by the generator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum PlyResolution {
-    HundredK,
     FiveHundredK,
-    FullRes,
 }
 
 impl PlyResolution {
     pub(in crate::gameplay) const fn api_name(self) -> &'static str {
         match self {
-            Self::HundredK => "100k",
             Self::FiveHundredK => "500k",
-            Self::FullRes => "full_res",
         }
     }
 }
@@ -223,7 +218,6 @@ impl WorldMaker for df_providers::NativeWorldLabs {
                 image_jpeg: &request.image_jpeg,
                 text_prompt: &request.text_prompt,
                 model: match request.model {
-                    MarbleModel::Draft => df_providers::MarbleModel::Draft,
                     MarbleModel::Marble11 => df_providers::MarbleModel::Marble11,
                 },
             };
@@ -268,9 +262,7 @@ impl WorldMaker for df_providers::NativeWorldLabs {
     ) -> MakerFuture<'a, String> {
         Box::pin(async move {
             let resolution = match resolution {
-                PlyResolution::HundredK => df_providers::PlyResolution::K100,
                 PlyResolution::FiveHundredK => df_providers::PlyResolution::K500,
-                PlyResolution::FullRes => df_providers::PlyResolution::FullRes,
             };
             df_providers::NativeWorldLabs::export_ply(self, world_id, resolution)
                 .await
@@ -590,14 +582,15 @@ pub(in crate::gameplay) fn register_stored_worlds(cache_dir: &Path) {
     };
     for entry in entries.flatten() {
         let directory = entry.path();
-        if directory.join("world.ply").is_file() && directory.join("collider.glb").is_file() {
-            if let Some(key) = entry.file_name().to_str() {
-                super::splat_assets::register_world(
-                    key,
-                    &directory.join("world.ply"),
-                    &directory.join("collider.glb"),
-                );
-            }
+        if directory.join("world.ply").is_file()
+            && directory.join("collider.glb").is_file()
+            && let Some(key) = entry.file_name().to_str()
+        {
+            super::splat_assets::register_world(
+                key,
+                &directory.join("world.ply"),
+                &directory.join("collider.glb"),
+            );
         }
     }
 }

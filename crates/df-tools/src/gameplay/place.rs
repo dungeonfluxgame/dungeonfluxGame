@@ -1468,7 +1468,6 @@ pub(in crate::gameplay) fn journey_line(hero: &str, place_name: &str) -> String 
 
 /// A move the owner has checked: the name of the exit used and of the place entered.
 pub(in crate::gameplay) struct Admitted {
-    pub(in crate::gameplay) exit_name: String,
     pub(in crate::gameplay) to_name: String,
 }
 
@@ -1505,7 +1504,7 @@ pub(in crate::gameplay) fn admit(
     to: &str,
     created_place: Option<&PlaceRecord>,
 ) -> Result<Admitted, PlaceFailure> {
-    let exit_name = if exit == DEV_EXIT {
+    if exit == DEV_EXIT {
         // A development move goes straight to a place the run already has.
         match destination_of(state, &party.home, to)? {
             Destination::Home if to == party.home && created_place.is_none() => {}
@@ -1516,7 +1515,6 @@ pub(in crate::gameplay) fn admit(
             Destination::Create { .. } => return Err(PlaceRefusal::NoExit.into()),
             Destination::Story { .. } => return Err(PlaceRefusal::StoryPlace.into()),
         }
-        "a development order".to_owned()
     } else if exit.starts_with(SPOT_PREFIX) {
         if to == party.here {
             return Err(PlaceRefusal::InvalidPlace.into());
@@ -1542,7 +1540,6 @@ pub(in crate::gameplay) fn admit(
                 }
             }
         }
-        "a nearby spot".to_owned()
     } else if exit == JOURNEY_EXIT {
         // A journey reaches a place the run has, by name, or makes the one new place it heads for.
         if to == party.here {
@@ -1560,7 +1557,6 @@ pub(in crate::gameplay) fn admit(
             },
             Some(made) => admit_new(state, party, to, None, made)?,
         }
-        "the way there".to_owned()
     } else {
         let way = model
             .ways_out
@@ -1582,13 +1578,12 @@ pub(in crate::gameplay) fn admit(
                 admit_new(state, party, to, named.as_deref(), made)?;
             }
         }
-        way.name.clone()
-    };
+    }
     let to_name = match created_place {
         Some(made) => made.name.clone(),
         None => name_of(state, to)?,
     };
-    Ok(Admitted { exit_name, to_name })
+    Ok(Admitted { to_name })
 }
 
 /// The checks of a new place a move makes: it is the place the move names, no place the run or

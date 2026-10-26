@@ -571,7 +571,7 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
     let PlateIdentities { sheet, .. } = shared.identity_sheet(&plate, &[1]).await.unwrap();
     let spec = plate.stage(&[1]).unwrap();
     let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1], None, None)
+        .photographic_request(&plate, &spec, &[1], &[], None, None)
         .await
         .unwrap();
     assert_eq!(request.references[0].sha256, room.sha256);
@@ -1036,14 +1036,13 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         scene,
         spec,
         heroes,
-        faces,
         ..
     } = drain(&mut queue).remove(0)
     else {
         panic!("initial plate")
     };
     let (base, placement, _) = shared
-        .render_fresh(&scene, &spec, &heroes, &faces, &id, 1, false)
+        .render_fresh(&scene, &spec, &heroes, &id, 1, false)
         .await
         .unwrap();
     locked(&shared.book).insert(
@@ -1719,11 +1718,11 @@ async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_
                     scene,
                     spec,
                     heroes,
-                    faces,
+                    faces: _,
                     ahead,
                 } => {
                     let (fresh, placement, _) = shared
-                        .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, ahead)
+                        .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
                         .await
                         .unwrap();
                     shared.finish(Done::Fresh {
@@ -1837,7 +1836,7 @@ fn poll_story_edit(
     let Job::State(state_images::Job::Bake { pending, .. }) = jobs.remove(0) else {
         panic!("story edit after its fresh base is ready");
     };
-    pending
+    *pending
 }
 
 #[tokio::test]
@@ -3279,14 +3278,13 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
         scene,
         spec,
         heroes,
-        faces,
         ..
     } = drain(&mut queue).remove(0)
     else {
         panic!("fresh plate");
     };
     let (base, placement, _) = shared
-        .render_fresh(&scene, &spec, &heroes, &faces, &id, 1, false)
+        .render_fresh(&scene, &spec, &heroes, &id, 1, false)
         .await
         .unwrap();
     locked(&shared.book).insert(
@@ -3360,16 +3358,6 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
         "only the continuously prepared REF-068 frame may be queued"
     );
     assert_eq!(fixture.calls() - reference_calls, 2);
-}
-
-fn pending_state(shared: &Shared) -> String {
-    locked(&shared.book)
-        .state_images
-        .pending
-        .as_ref()
-        .unwrap()
-        .state
-        .clone()
 }
 
 fn apply_at(shared: &Shared, message: &mut rpc::ViewMessage, now: Duration) {
@@ -3492,7 +3480,7 @@ async fn a_prefetched_plate_is_reused_when_its_scene_arrives_on_a_later_graph_re
     let (shared, mut queue) = shared(16);
     let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     let next = scene(SceneKey::Inn, "At the Door", Some("Kestrel"));
-    observe(&shared, &opening, &[next.clone()], &[1, 2]);
+    observe(&shared, &opening, std::slice::from_ref(&next), &[1, 2]);
     let jobs = drain(&mut queue);
     let ahead_id = jobs
         .iter()
@@ -3941,7 +3929,7 @@ async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party()
     };
     let spec = scene.stage(heroes).unwrap();
     let (request, _) = shared
-        .fresh_request(&scene, &spec, heroes, faces, None)
+        .fresh_request(scene, &spec, heroes, faces, None)
         .await
         .unwrap();
     fixture
@@ -5210,7 +5198,7 @@ async fn authored_documentary_place_is_used_exactly_without_a_generated_room_dep
     let expected = shared.inner.load(current.asset.clone()).await.unwrap();
     let spec = plate.stage(&[1]).unwrap();
     let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1], None, None)
+        .photographic_request(&plate, &spec, &[1], &[], None, None)
         .await
         .unwrap();
     assert_eq!(request.references[0].sha256, expected.sha256);
@@ -5271,11 +5259,11 @@ async fn explicit_spatial_staging_reaches_whole_cast_masks_but_reviewed_photos_s
     plate.hero_names = vec!["Accepted hero 1".into(), "Accepted hero 2".into()];
     let spec = plate.stage(&[1, 2]).unwrap();
     let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1, 2], None, None)
+        .photographic_request(&plate, &spec, &[1, 2], &[], None, None)
         .await
         .unwrap();
     let (reordered, _) = shared
-        .photographic_request(&plate, &spec, &[2, 1], None, None)
+        .photographic_request(&plate, &spec, &[2, 1], &[], None, None)
         .await
         .unwrap();
     assert_eq!(
@@ -5358,7 +5346,7 @@ async fn explicit_spatial_staging_reaches_whole_cast_masks_but_reviewed_photos_s
         ["Accepted hero 1", "Accepted hero 2", "aaa", "keeper"]
     );
     let (same_name_request, _) = shared
-        .photographic_request(&duplicate, &spec, &[2, 1], None, None)
+        .photographic_request(&duplicate, &spec, &[2, 1], &[], None, None)
         .await
         .unwrap();
     let custody: serde_json::Value =
@@ -5714,7 +5702,7 @@ async fn scene_plate_stages_six_heroes_by_latest_activity_and_keeps_custody_with
     assert_eq!(plate.hero_activity.len(), 4);
     let spec = plate.stage(&projected.heroes).unwrap();
     let (request, _) = shared
-        .photographic_request(&plate, &spec, &projected.heroes, None, None)
+        .photographic_request(&plate, &spec, &projected.heroes, &[], None, None)
         .await
         .unwrap();
     let prompt = request.prompt.as_str();
@@ -5792,7 +5780,7 @@ async fn scene_plate_stages_six_heroes_by_latest_activity_and_keeps_custody_with
         let heroes = &projected.heroes[..count];
         let spec = selected.stage(heroes).unwrap();
         let (request, _) = shared
-            .photographic_request(&selected, &spec, heroes, None, None)
+            .photographic_request(&selected, &spec, heroes, &[], None, None)
             .await
             .unwrap();
         let characters = request.prompt.character_count();
@@ -6127,7 +6115,7 @@ async fn photo_check_provider_failure_still_measures_and_projects_narrator_arriv
         scene,
         spec,
         heroes,
-        faces,
+        faces: _,
         ahead,
     } = drain(&mut queue).remove(0)
     else {
@@ -6135,7 +6123,7 @@ async fn photo_check_provider_failure_still_measures_and_projects_narrator_arriv
     };
     assert!(spec.speaker.is_none());
     let (key, placement, locate) = shared
-        .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, ahead)
+        .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
         .await
         .unwrap();
     let work = locate.expect("a narrator-led arrival still measures every person");

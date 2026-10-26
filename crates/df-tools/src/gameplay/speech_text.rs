@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-/// A sentence is not counted as a repeat below this many words.
+#[cfg(test)]
 pub(super) const REPEAT_MIN_WORDS: usize = 4;
 pub(super) const REPEATED_CLAUSE_WORDS: usize = 4;
 
@@ -168,6 +168,7 @@ pub(super) enum SpokenRule {
     NoDenialFirst,
     /// No sentence may say the speaker does not know or cannot tell: they already said so
     /// once in this conversation, and now steer to what they know instead.
+    #[cfg(test)]
     NoDenial,
     /// No sentence or four-word content clause may repeat one of these earlier replies.
     NoRepeat(Vec<String>),
@@ -195,6 +196,7 @@ impl SpokenRule {
                 .then_some(
                     "the first sentence denied knowing; answer first from the facts you were given",
                 ),
+            #[cfg(test)]
             Self::NoDenial => parts
                 .iter()
                 .any(|part| is_denial(part))

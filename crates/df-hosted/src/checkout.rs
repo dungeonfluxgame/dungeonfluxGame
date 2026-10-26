@@ -8,18 +8,27 @@ use df_types::{AccountId, CheckoutId, OperationId};
 
 use crate::{config::Profile, database::Connection, finance::Finance};
 
+mod paypal;
+mod paypal_provider;
+mod paypal_settings;
+mod paypal_webhook;
 mod provider;
 mod settings;
 mod stripe;
 mod webhook;
 
+pub(crate) use paypal_settings::Settings as PaypalSettings;
 pub(crate) use settings::Settings;
-pub(crate) use webhook::router;
+
+pub(crate) fn router(checkout: Checkout) -> axum::Router {
+    webhook::router(checkout.clone()).merge(paypal_webhook::router(checkout))
+}
 
 #[derive(Clone)]
 pub(crate) struct Checkout {
     development: Option<Arc<tokio::sync::Mutex<Connection>>>,
     stripe: Option<Arc<stripe::Stripe>>,
+    paypal: Option<Arc<paypal::Paypal>>,
     finance: Finance,
 }
 
@@ -38,10 +47,11 @@ impl Checkout {
             })?;
             return Ok(Self {
                 development: None,
+                paypal: None,
                 stripe: Some(Arc::new(stripe::Stripe {
                     connection: tokio::sync::Mutex::new(connection),
                     provider,
-                    creations: std::sync::Mutex::new(stripe::CreationState::default()),
+                    creations: Arc::new(std::sync::Mutex::new(stripe::CreationState::default())),
                 })),
                 finance,
             });
@@ -60,8 +70,34 @@ impl Checkout {
         Ok(Self {
             development,
             stripe: None,
+            paypal: None,
             finance,
         })
+    }
+
+    pub(crate) fn with_paypal(
+        mut self,
+        connection: Connection,
+        settings: Option<PaypalSettings>,
+        origin: &str,
+    ) -> PortResult<Self> {
+        if let Some(settings) = settings {
+            let provider = paypal_provider::Provider::new(settings, origin).map_err(|error| {
+                error.audit_for("paypal");
+                PortError::Unavailable
+            })?;
+            let creations = self.stripe.as_ref().map_or_else(
+                || Arc::new(std::sync::Mutex::new(stripe::CreationState::default())),
+                |stripe| Arc::clone(&stripe.creations),
+            );
+            self.development = None;
+            self.paypal = Some(Arc::new(paypal::Paypal {
+                connection: tokio::sync::Mutex::new(connection),
+                provider,
+                creations,
+            }));
+        }
+        Ok(self)
     }
 
     pub(crate) async fn complete(
@@ -98,7 +134,11 @@ impl CheckoutPort for Checkout {
             is_test_mode: self
                 .stripe
                 .as_ref()
-                .is_none_or(|stripe| stripe.provider.settings.is_test_mode),
+                .is_none_or(|stripe| stripe.provider.settings.is_test_mode)
+                && self
+                    .paypal
+                    .as_ref()
+                    .is_none_or(|paypal| paypal.provider.settings.is_test_mode),
             preset_amounts_cents: vec![1_000, 2_000, 5_000],
             custom_minimum_cents: 500,
             custom_maximum_cents: 50_000,
@@ -150,8 +190,17 @@ impl CheckoutPort for Checkout {
     }
 
     async fn status(&self, account: AccountId, checkout: CheckoutId) -> PortResult<CheckoutView> {
+        if let Some(paypal) = &self.paypal {
+            match paypal.status(account, checkout).await {
+                Err(PortError::NotFound) => {}
+                result => return result,
+            }
+        }
         if let Some(stripe) = &self.stripe {
             return stripe.status(account, checkout).await;
+        }
+        if self.paypal.is_some() {
+            return Err(PortError::NotFound);
         }
         let connection = self
             .development

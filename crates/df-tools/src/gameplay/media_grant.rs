@@ -543,7 +543,7 @@ fn parse_principal(value: &str) -> Option<[u8; KEY_BYTES]> {
         return None;
     }
     let mut principal = [0; KEY_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         principal[index] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
     }
     Some(principal)
@@ -610,12 +610,14 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if value.len() > MAXIMUM_TOKEN_BYTES || value.len() % 2 != 0 || !value.is_ascii() {
+    if value.len() > MAXIMUM_TOKEN_BYTES || !value.len().is_multiple_of(2) || !value.is_ascii() {
         return None;
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Some((nibble(pair[0])? << 4) | nibble(pair[1])?))
         .collect()
 }

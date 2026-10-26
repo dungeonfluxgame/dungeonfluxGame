@@ -706,15 +706,15 @@ pub(crate) fn canonical_actor_ref(
 /// The fixed Bandit remains the fallback for pre-binding checkpoints; a scene
 /// assault resolves the canonical Courier entity instead.
 pub(super) fn combat_enemy(state: &GameState) -> Result<EntityId, RepositoryError> {
-    if let Some(encounter) = state.encounters.first() {
-        if let Some(enemy) = encounter.participants.iter().copied().find(|candidate| {
+    if let Some(encounter) = state.encounters.first()
+        && let Some(enemy) = encounter.participants.iter().copied().find(|candidate| {
             !state
                 .characters
                 .iter()
                 .any(|character| character.entity == *candidate)
-        }) {
-            return Ok(enemy);
-        }
+        })
+    {
+        return Ok(enemy);
     }
     entity(BANDIT)
 }
@@ -4131,12 +4131,12 @@ fn observe_check(
     current: &Checkpoint,
     actor: EntityId,
     member: MemberId,
-    choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
-    offered_target: &str,
+    choices_and_target: (&[(df_types::RevisionLabel, df_types::RevisionLabel)], &str),
     operation: OperationId,
     draws: &mut Vec<ActualDraw>,
     supplier: DiceSource<'_>,
 ) -> Result<rpc::AbilityCheckResult, RepositoryError> {
+    let (choices, offered_target) = choices_and_target;
     if choices.iter().any(|(group, target)| {
         group.as_str() == "attempt-thing"
             && (target.as_str() == "room"
@@ -4390,11 +4390,10 @@ fn stage_using(
         }
         bad(error)
     })?;
-    let command = command(input).map_err(|error| {
+    let command = command(input).inspect_err(|_error| {
         if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
             refusal_detail::note("short-rest-command-decode");
         }
-        error
     })?;
     if (tactical::present(current.state())
         || !super::beat_script::with_script(|script| script.is_canonical()))
@@ -4494,21 +4493,19 @@ fn stage_using(
         let mut scene_draws = Vec::new();
         return living_scene::stage_with_supplier(current, command, &mut scene_draws, supplier);
     }
-    let selected =
-        super::beat_script_runtime::select(current, kind, submitted_choices).map_err(|error| {
+    let selected = super::beat_script_runtime::select(current, kind, submitted_choices)
+        .inspect_err(|_error| {
             if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
                 refusal_detail::note("short-rest-script-select");
             }
-            error
         })?;
     // The forward state machine gates every command before any handler runs:
     // a command that is illegal in the session's current state is refused
     // here, whatever its handler might have allowed.
-    let machine_state = session_machine::SessionState::of(current).map_err(|error| {
+    let machine_state = session_machine::SessionState::of(current).inspect_err(|_error| {
         if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
             refusal_detail::note("short-rest-machine-state");
         }
-        error
     })?;
     let machine_event = session_machine::Event::of(selected.effect);
     let machine_transition = match session_machine::next(machine_state, machine_event) {
@@ -4521,11 +4518,10 @@ fn stage_using(
     // The machine also decides the Aftermath rest rule: once per
     // aftermath, and only while a living hero has something to regain.
     if machine_event == session_machine::Event::Rest
-        && !session_machine::rest_accepted(current).map_err(|error| {
+        && !session_machine::rest_accepted(current).inspect_err(|_error| {
             if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
                 refusal_detail::note("short-rest-machine-rule");
             }
-            error
         })?
     {
         refusal_detail::note("session-machine-rest");
@@ -4624,8 +4620,7 @@ fn stage_using(
                     current,
                     *who,
                     command.member,
-                    choices,
-                    &selected.id,
+                    (choices, &selected.id),
                     command.operation,
                     &mut draws,
                     supplier,
@@ -4818,7 +4813,7 @@ fn stage_using(
         refusal_detail::note("receipt-too-large");
         return Err(RepositoryError::Capacity);
     }
-    let scene_attack = encounter_admission::scene_attack_target(current, &command)?.is_some();
+    let scene_attack = encounter_admission::scene_attack_target(current, command)?.is_some();
     let entry = if pure_target.is_some() {
         super::beat_script_runtime::STEP
     } else if selected.effect == super::beat_script::BeatEffect::ThirdApproach {

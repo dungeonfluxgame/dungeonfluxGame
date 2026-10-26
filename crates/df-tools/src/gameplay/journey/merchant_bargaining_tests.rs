@@ -370,7 +370,7 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
         .unwrap();
     assert_eq!(sale.maximum_price_cp, 199);
     assert_eq!(sale.stock_units, 1);
-    assert_eq!(sale.available, true);
+    assert!(sale.available);
 
     let candidate = quote_candidate_for_reply(
         &trade_terms,

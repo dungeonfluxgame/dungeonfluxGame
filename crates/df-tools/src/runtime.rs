@@ -21,7 +21,7 @@ pub fn install_console_stop_handler() -> tokio::sync::watch::Receiver<bool> {
     let (sender, receiver) = tokio::sync::watch::channel(false);
     let _ = WINDOWS_STOP.set(sender);
     unsafe extern "system" fn handle_console_event(event: u32) -> i32 {
-        if matches!(event, 0 | 1 | 2) {
+        if matches!(event, 0..=2) {
             if let Some(sender) = WINDOWS_STOP.get() {
                 let _ = sender.send(true);
             }
@@ -57,13 +57,12 @@ where
         .name("df-server-entry".to_owned())
         .stack_size(WINDOWS_STACK_SIZE)
         .spawn(move || {
-            let result = tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_current_thread()
                 .thread_stack_size(WINDOWS_STACK_SIZE)
                 .enable_all()
                 .build()
                 .map_err(|error| error.to_string())
-                .and_then(|runtime| runtime.block_on(entry()).map_err(|error| error.to_string()));
-            result
+                .and_then(|runtime| runtime.block_on(entry()).map_err(|error| error.to_string()))
         })?
         .join()
         .map_err(|_| io::Error::other("server entry thread panicked"))?
@@ -82,23 +81,6 @@ where
         .block_on(entry())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn windows_entry_and_worker_stacks_exceed_default_stack() {
-        assert!(WINDOWS_STACK_SIZE >= 16 * 1024 * 1024);
-    }
-
-    #[test]
-    fn panic_report_contains_message_and_source_location() {
-        let (message, location) = panic_details(&"diagnostic-test", Some(("test.rs", 7, 2)));
-        assert_eq!(message, "diagnostic-test");
-        assert_eq!(location, "test.rs:7:2");
-    }
-}
-
 fn panic_details(
     payload: &(dyn std::any::Any + Send),
     location: Option<(&str, u32, u32)>,
@@ -113,4 +95,22 @@ fn panic_details(
         .map(|(file, line, column)| format!("{file}:{line}:{column}"))
         .unwrap_or_else(|| "unknown location".to_owned());
     (message, location)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_entry_and_worker_stacks_exceed_default_stack() {
+        let stack_size = std::hint::black_box(WINDOWS_STACK_SIZE);
+        assert!(stack_size >= 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn panic_report_contains_message_and_source_location() {
+        let (message, location) = panic_details(&"diagnostic-test", Some(("test.rs", 7, 2)));
+        assert_eq!(message, "diagnostic-test");
+        assert_eq!(location, "test.rs:7:2");
+    }
 }

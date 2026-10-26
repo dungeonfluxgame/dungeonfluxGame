@@ -458,7 +458,7 @@ fn subject_answers(
             AnswerSubject::Errand,
             SubjectAnswer {
                 text: format!("{task}."),
-                restatement: format!("That is the errand."),
+                restatement: "That is the errand.".to_owned(),
             },
         ),
         (

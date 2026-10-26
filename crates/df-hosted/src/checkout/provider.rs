@@ -28,6 +28,10 @@ pub(super) enum Error {
 
 impl Error {
     pub(super) fn audit(&self) {
+        self.audit_for("stripe");
+    }
+
+    pub(super) fn audit_for(&self, processor: &str) {
         let class = match self {
             Self::Configuration => "configuration",
             Self::Transport(cause) => {
@@ -49,8 +53,12 @@ impl Error {
             Self::AtCapacity => "creation_limit",
         };
         df_observe::record_audit_line(
-            "hosted.stripe_failed",
-            format!("SPEND stripe_failed error={class}"),
+            if processor == "paypal" {
+                "hosted.paypal_failed"
+            } else {
+                "hosted.stripe_failed"
+            },
+            format!("SPEND {processor}_failed error={class}"),
         );
     }
 }

@@ -46,6 +46,8 @@ use super::adventure::dossier::{
 
 use super::adventure::scene_model::SceneTheftWitness;
 
+type DevelopmentFeeling = (String, Attitude, EmotionalState);
+
 #[path = "fight_witness.rs"]
 pub(in crate::gameplay) mod fight_witness;
 
@@ -1747,7 +1749,7 @@ impl SocialLedger {
     pub(super) fn development_feelings(
         &self,
         npc_id: &str,
-    ) -> Option<(EmotionalProfile, Vec<(String, Attitude, EmotionalState)>)> {
+    ) -> Option<(EmotionalProfile, Vec<DevelopmentFeeling>)> {
         let dossier = self
             .dossiers
             .iter()

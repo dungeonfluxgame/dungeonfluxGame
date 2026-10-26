@@ -315,7 +315,7 @@ fn non_finishing_and_knockout_attacks_keep_their_existing_kill_shot_decisions() 
     };
     let mut history = vec![rpc::CombatOutcome::default(); 3];
     history.push(attack.clone());
-    let sequenced = sequence_committed_outcomes(&history, &[attack.clone()])
+    let sequenced = sequence_committed_outcomes(&history, std::slice::from_ref(&attack))
         .expect("the committed history includes this non-finishing attack");
     assert_eq!(
         decide(

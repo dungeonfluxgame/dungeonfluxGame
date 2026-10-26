@@ -296,33 +296,6 @@ pub(super) async fn mood(State(state): State<Arc<Shared>>, headers: HeaderMap) -
     scene_diagnostics["faces"] = json!(faces.into_values().collect::<Vec<_>>());
     Ok((StatusCode::OK, Json(scene_diagnostics)))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn transcript_cursor_and_speaker_filters_are_independent() {
-        let lines = vec![
-            json!({"seq":1,"speaker":"Brynn","actor_id":"hero:1"}),
-            json!({"seq":2,"speaker":"Marek","actor_id":"patron:merchant"}),
-        ];
-        assert_eq!(
-            transcript_document(lines.clone(), 1, None, Some("merchant")),
-            json!([{ "seq":2,"speaker":"Marek","actor_id":"patron:merchant" }])
-        );
-        assert_eq!(
-            transcript_document(lines.clone(), 0, Some(("brynn", 0)), None)
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            transcript_document(lines, 1, None, Some("Marek"))[0]["seq"],
-            2
-        );
-    }
-}
-
 /// Discoverable roleplay contracts. Null means unavailable observation, never a guessed value.
 pub(super) fn commands() -> Vec<Value> {
     [
@@ -354,3 +327,7 @@ pub(super) fn routes() -> axum::Router<Arc<Shared>> {
         .route("/dev/voice", get(voice))
         .route("/dev/mood", get(mood))
 }
+
+#[cfg(test)]
+#[path = "roleplay_tests.rs"]
+mod tests;

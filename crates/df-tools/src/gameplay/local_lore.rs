@@ -611,8 +611,7 @@ impl RoleKnowledgeCache {
 
     /// Keeps the first outcome stored for `npc_id`, so two first calls that race return one text.
     fn keep(&self, npc_id: &str, knowledge: &'static str) -> &'static str {
-        *self
-            .decided
+        self.decided
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(npc_id.to_owned())

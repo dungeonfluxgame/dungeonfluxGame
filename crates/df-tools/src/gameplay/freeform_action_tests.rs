@@ -794,7 +794,7 @@ fn a_known_spell_is_cast_only_when_the_sheet_names_it() {
         "I cast Prestidigitation to clean the counter.",
         12,
     );
-    assert_eq!(performance(&resolution).succeeded, true);
+    assert!(performance(&resolution).succeeded);
     assert_eq!(resolution.spell.as_deref(), Some("Prestidigitation"));
 }
 
@@ -1045,7 +1045,7 @@ fn a_consumable_must_be_in_the_heroes_inventory() {
         "I eat some rations.",
         12,
     );
-    assert_eq!(performance(&carried).succeeded, true);
+    assert!(performance(&carried).succeeded);
 }
 
 #[test]
@@ -1105,9 +1105,10 @@ fn hiding_rolls_stealth_against_the_passive_perception_of_who_could_see() {
     assert_eq!(record.label, "Dexterity (Stealth)");
     assert_eq!(record.number, 12);
     assert!(performance(&hidden).succeeded);
-    assert_eq!(
-        narration_facts(&hidden, "I duck behind the clothing rack.")["hidden"],
-        true
+    assert!(
+        narration_facts(&hidden, "I duck behind the clothing rack.")["hidden"]
+            .as_bool()
+            .unwrap()
     );
     assert_eq!(
         fallback_line(&hidden),
@@ -1241,7 +1242,7 @@ async fn jev_names_the_known_spell_last_and_none_names_no_spell() {
         2
     );
     let resolution = run(&situation, &plan, "I cast Mage Hand on the candle.", 12);
-    assert_eq!(performance(&resolution).succeeded, true);
+    assert!(performance(&resolution).succeeded);
     assert_eq!(resolution.spell.as_deref(), Some("Mage Hand"));
 
     let none = FakeEndpoint::start(vec![
@@ -2238,7 +2239,11 @@ async fn hs41_freeform_action_six_saved_build_inventories_resolve_my_sword_by_mo
             })
         ));
         assert!(fallback_line(&resolved).contains(&format!("draws her {weapon}")));
-        assert_eq!(narration_facts(&resolved, "")["main_weapon_instead"], false);
+        assert!(
+            !narration_facts(&resolved, "")["main_weapon_instead"]
+                .as_bool()
+                .unwrap()
+        );
     }
 }
 
@@ -2370,8 +2375,9 @@ async fn hs41_freeform_action_model_can_ready_a_main_weapon_only_when_fairly_jud
     );
     let bodies = endpoint.bodies();
     assert!(bodies[2].to_string().contains("carried_weapons"));
-    assert_eq!(
-        narration_facts(&resolution, "")["main_weapon_instead"],
-        true
+    assert!(
+        narration_facts(&resolution, "")["main_weapon_instead"]
+            .as_bool()
+            .unwrap()
     );
 }

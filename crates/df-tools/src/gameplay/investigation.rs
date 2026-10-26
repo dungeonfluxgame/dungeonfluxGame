@@ -8,10 +8,10 @@ use df_types::{MemberId, OperationId, RevisionLabel};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[cfg(test)]
+use crate::gameplay::freeform_action::Pronouns;
 use crate::gameplay::{
-    actor,
-    freeform_action::Pronouns,
-    pack, shot,
+    actor, pack, shot,
     storyteller::{CallProfile, Expression, Slot, Storyteller},
 };
 
@@ -831,7 +831,7 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                     for dressing in plate.dressing {
                         options.push(target(
                             dressing.item,
-                            &format!("You see {}.", the_phrase(&dressing.item)),
+                            &format!("You see {}.", the_phrase(dressing.item)),
                             false,
                         ));
                     }
@@ -1066,12 +1066,12 @@ pub(super) fn party_targets(
 }
 
 fn decoded_name(encoded: &str) -> Option<String> {
-    if encoded.len() > 120 || encoded.len() % 2 != 0 || !encoded.is_ascii() {
+    if encoded.len() > 120 || !encoded.len().is_multiple_of(2) || !encoded.is_ascii() {
         return None;
     }
-    let bytes = encoded
-        .as_bytes()
-        .chunks_exact(2)
+    let (pairs, _) = encoded.as_bytes().as_chunks::<2>();
+    let bytes = pairs
+        .iter()
         .map(|pair| {
             let text = std::str::from_utf8(pair).ok()?;
             u8::from_str_radix(text, 16).ok()
@@ -1082,9 +1082,15 @@ fn decoded_name(encoded: &str) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+fn revision_detail(source_revision: &str) -> Option<&str> {
+    let (_, rest) = source_revision.split_once(':')?;
+    let (_, rest) = rest.split_once(':')?;
+    rest.split_once(':').map(|(_, detail)| detail)
+}
+
 /// Resolve the committed target key, never the player's lowercased sentence.
 pub(super) fn check_target(scene: &pack::Scene, check: &rpc::AbilityCheckResult) -> Option<Target> {
-    let detail = check.source_revision.splitn(4, ':').nth(3)?;
+    let detail = revision_detail(&check.source_revision)?;
     let detail = detail.strip_prefix("repeat-").unwrap_or(detail);
     let options = targets(scene, &[]);
     if let Some(id) = detail.strip_prefix("finding-") {
@@ -1135,13 +1141,14 @@ pub(super) fn observation(
     scene: &pack::Scene,
     check: &rpc::AbilityCheckResult,
 ) -> Option<Observation> {
-    let skill = check.source_revision.splitn(4, ':').nth(2)?.to_owned();
+    let skill = check.source_revision.split(':').nth(2)?.to_owned();
     let repeated = check
         .source_revision
-        .splitn(4, ':')
+        .split(':')
         .nth(3)?
         .starts_with("repeat-");
     let target = check_target(scene, check)?;
+    #[cfg(test)]
     let found = if check.succeeded && !repeated {
         finding_on(scene, &target, &skill)
             .cloned()
@@ -1152,9 +1159,12 @@ pub(super) fn observation(
     Some(Observation {
         target,
         skill,
+        #[cfg(test)]
         succeeded: check.succeeded,
         repeated,
+        #[cfg(test)]
         finding: found.as_ref().map(|finding| finding.sentence.clone()),
+        #[cfg(test)]
         private_finding: found.is_some_and(|finding| finding.private),
     })
 }
@@ -1498,6 +1508,7 @@ pub(super) fn fallen_search_target(
 /// what they want here, from the scene model's own record of that person. `attitude` is the social
 /// ledger's current attitude when the person has a dossier; otherwise the scene's starting attitude
 /// is used. None when the target is not a modelled person.
+#[cfg(test)]
 pub(super) fn state_of_mind(
     scene: &pack::Scene,
     target: &Target,
@@ -1508,6 +1519,7 @@ pub(super) fn state_of_mind(
 
 /// Like [`state_of_mind`], naming the acting hero the read is about, so the narration
 /// never falls back to "the hero" when the hero's name is known.
+#[cfg(test)]
 pub(super) fn state_of_mind_for(
     scene: &pack::Scene,
     target: &Target,
@@ -1737,7 +1749,7 @@ pub(super) fn private_observation_finding<'a>(
         return None;
     }
     let target = check_target(scene, check)?;
-    let skill = check.source_revision.splitn(4, ':').nth(2)?;
+    let skill = check.source_revision.split(':').nth(2)?;
     scene.findings.iter().find(|finding| {
         finding.private
             && !finding.id.starts_with("observation-")
@@ -1787,15 +1799,13 @@ pub(super) fn recorded_finding(
             return None;
         }
         narration_sentence(&thing.closer_look)
-    } else if let Some(offer) = target
-        .id
-        .strip_prefix("offer-")
-        .and_then(|id| model.offers.iter().find(|offer| offer.id == id))
-        .filter(|offer| model.offer_available(&offer.id))
-    {
-        ware_description(&model, offer)
     } else {
-        return None;
+        let offer = target
+            .id
+            .strip_prefix("offer-")
+            .and_then(|id| model.offers.iter().find(|offer| offer.id == id))
+            .filter(|offer| model.offer_available(&offer.id))?;
+        ware_description(&model, offer)
     };
     let skill = match skill {
         "insight" => pack::FindingSkill::Insight,
@@ -1845,7 +1855,7 @@ pub(super) fn observation_sources(
     let Some(target) = check_target(scene, check) else {
         return Vec::new();
     };
-    let skill = check.source_revision.splitn(4, ':').nth(2).unwrap_or("");
+    let skill = check.source_revision.split(':').nth(2).unwrap_or("");
     if target.id.strip_prefix("finding-").is_some_and(|id| {
         scene
             .findings
@@ -1983,7 +1993,7 @@ pub(super) async fn complete_finding(
         criteria.push("inconclusive: the hero cannot make out the attempted detail".into());
     }
     let facts = json!({"hero": hero, "target": subject, "check_succeeded": check.succeeded,
-        "skill": check.source_revision.splitn(4, ':').nth(2), "sources": sources,
+        "skill": check.source_revision.split(':').nth(2), "sources": sources,
         "schema": include_str!("observation-finding.schema.json")});
     let selected = match jev
         .choose_option(
@@ -2316,46 +2326,25 @@ fn item_finding<'a>(
     if !target.id.starts_with("thing-") && !target.id.starts_with("offer-") {
         return None;
     }
-    let skill = check.source_revision.splitn(4, ':').nth(2)?;
+    let skill = check.source_revision.split(':').nth(2)?;
     finding_on(scene, &target, skill).filter(|finding| !finding.private)
 }
 
 pub(super) struct Observation {
     pub(super) target: Target,
     pub(super) skill: String,
+    #[cfg(test)]
     pub(super) succeeded: bool,
     pub(super) repeated: bool,
+    #[cfg(test)]
     pub(super) finding: Option<String>,
+    #[cfg(test)]
     pub(super) private_finding: bool,
-}
-
-pub(super) fn hero_pronouns(hero: &rpc::CharacterSheet) -> Option<Pronouns> {
-    let appearance = hero.identity.as_ref()?.appearance.as_ref()?;
-    match appearance.pronouns.as_str() {
-        "she-her" => Some(Pronouns {
-            subject: "she",
-            object: "her",
-            possessive: "her",
-            reflexive: "herself",
-        }),
-        "he-him" => Some(Pronouns {
-            subject: "he",
-            object: "him",
-            possessive: "his",
-            reflexive: "himself",
-        }),
-        "they-them" => Some(Pronouns {
-            subject: "they",
-            object: "them",
-            possessive: "their",
-            reflexive: "themselves",
-        }),
-        _ => None,
-    }
 }
 
 impl Observation {
     /// Public prose never receives a member-private finding, even in its provider prompt.
+    #[cfg(test)]
     pub(super) fn public_view(&self) -> Self {
         Self {
             target: self.target.clone(),
@@ -2371,6 +2360,7 @@ impl Observation {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn fallback(&self) -> String {
         if self.repeated {
             return format!(
@@ -2402,6 +2392,7 @@ impl Observation {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn fallback_for(&self, hero_name: &str, pronouns: Option<Pronouns>) -> String {
         if self.repeated {
             return match pronouns {
@@ -2452,6 +2443,7 @@ impl Observation {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn facts(&self) -> Value {
         json!({"target": {"name": self.target.name, "description": self.target.description,
             "present": self.target.present}, "skill": self.skill, "succeeded": self.succeeded,
@@ -2459,6 +2451,7 @@ impl Observation {
                 self.finding.as_deref() } else { None }})
     }
 
+    #[cfg(test)]
     fn facts_for(&self, hero_name: &str, pronouns: Option<Pronouns>) -> Value {
         let mut facts = self.facts();
         facts["hero"] = match pronouns {
@@ -2476,6 +2469,7 @@ impl Observation {
         facts
     }
 
+    #[cfg(test)]
     pub(super) fn roll_line(&self, hero: &str, check: &rpc::AbilityCheckResult) -> String {
         self.roll_line_with_intention(hero, check, None)
     }
@@ -2521,10 +2515,12 @@ impl Observation {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn describe(storyteller: &Storyteller, observation: &Observation) -> String {
     describe_for(storyteller, observation, None).await
 }
 
+#[cfg(test)]
 pub(super) async fn describe_for(
     storyteller: &Storyteller,
     observation: &Observation,
@@ -3028,23 +3024,20 @@ impl crate::gameplay::Service {
             return Ok(None);
         };
         if let Some(setting) = &scene.setting {
-            if target.id == "room" {
-                if let Ok(pictures) = crate::gameplay::journey::living_scene::picture_features(
+            if target.id == "room"
+                && let Ok(pictures) = crate::gameplay::journey::living_scene::picture_features(
                     self.updates.borrow().state(),
                     &setting.place_id,
-                ) {
-                    for feature in pictures
-                        .into_iter()
-                        .flat_map(|picture| picture.seen_in_picture)
-                    {
-                        look.facts.insert(
-                            1,
-                            narration_sentence(&format!(
-                                "In view: {}. {}",
-                                feature.name, feature.look
-                            )),
-                        );
-                    }
+                )
+            {
+                for feature in pictures
+                    .into_iter()
+                    .flat_map(|picture| picture.seen_in_picture)
+                {
+                    look.facts.insert(
+                        1,
+                        narration_sentence(&format!("In view: {}. {}", feature.name, feature.look)),
+                    );
                 }
             }
             if let Some(detail) = crate::gameplay::journey::living_scene::established_detail_for(

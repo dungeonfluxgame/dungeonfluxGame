@@ -2248,9 +2248,18 @@ mod tests {
         assert!((gain_for_decibels(DUCK_BATTLE_DECIBELS) - 0.178).abs() < 0.002);
         assert!((gain_for_decibels(DUCK_LINE_DECIBELS) - 0.251).abs() < 0.002);
         assert!((gain_for_decibels(DUCK_SFX_DECIBELS) - 0.708).abs() < 0.002);
-        assert!(DUCK_LINE_ATTACK_SECONDS < DUCK_RELEASE_SECONDS);
-        assert!(DUCK_SFX_ATTACK_SECONDS < DUCK_LINE_ATTACK_SECONDS);
-        assert!(DUCK_SFX_HOLD_SECONDS > 0.0 && DUCK_SFX_RELEASE_SECONDS > 0.0);
+        assert!(
+            std::hint::black_box(DUCK_LINE_ATTACK_SECONDS)
+                < std::hint::black_box(DUCK_RELEASE_SECONDS)
+        );
+        assert!(
+            std::hint::black_box(DUCK_SFX_ATTACK_SECONDS)
+                < std::hint::black_box(DUCK_LINE_ATTACK_SECONDS)
+        );
+        assert!(
+            std::hint::black_box(DUCK_SFX_HOLD_SECONDS) > 0.0
+                && std::hint::black_box(DUCK_SFX_RELEASE_SECONDS) > 0.0
+        );
     }
 
     #[test]

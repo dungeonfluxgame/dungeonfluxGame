@@ -997,7 +997,7 @@ enum Job {
 }
 
 enum Done {
-    Resource(resources::Completed),
+    Resource(Box<resources::Completed>),
     KillShot {
         request: kill_shot::KillShotRequest,
         elapsed: Duration,
@@ -1372,54 +1372,54 @@ impl super::Service {
             return false;
         }
         let public_scene = super::beat_script_runtime::scene(checkpoint.state());
-        if let Ok(public_scene) = public_scene {
-            if let Ok(Some(snapshot)) = living_scene::snapshot(checkpoint.state(), &public_scene) {
-                let names = snapshot
-                    .model
-                    .people
-                    .iter()
-                    .map(|person| super::place::name_key(&person.name))
-                    .chain(
-                        snapshot
-                            .model
-                            .things
-                            .iter()
-                            .map(|thing| super::place::name_key(&thing.name)),
-                    )
-                    .chain(
-                        snapshot
-                            .model
-                            .offers
-                            .iter()
-                            .map(|offer| super::place::name_key(&offer.name)),
-                    )
-                    .chain(
-                        admitted
-                            .as_ref()
-                            .into_iter()
-                            .flat_map(|records| records.iter())
-                            .flat_map(|record| record.seen_in_picture.iter())
-                            .map(|feature| super::place::name_key(&feature.name)),
-                    )
-                    .collect::<BTreeSet<_>>();
-                let ids = snapshot
-                    .model
-                    .people
-                    .iter()
-                    .map(|person| person.id.as_str())
-                    .chain(snapshot.model.things.iter().map(|thing| thing.id.as_str()))
-                    .chain(snapshot.model.offers.iter().map(|offer| offer.id.as_str()))
-                    .chain(snapshot.model.ways_out.iter().map(|way| way.id.as_str()))
-                    .collect::<BTreeSet<_>>();
-                if evidence.visible_features.iter().all(|feature| {
-                    feature
-                        .recorded_id
-                        .as_deref()
-                        .is_some_and(|id| ids.contains(id))
-                        || names.contains(&super::place::name_key(&feature.name))
-                }) {
-                    return false;
-                }
+        if let Ok(public_scene) = public_scene
+            && let Ok(Some(snapshot)) = living_scene::snapshot(checkpoint.state(), &public_scene)
+        {
+            let names = snapshot
+                .model
+                .people
+                .iter()
+                .map(|person| super::place::name_key(&person.name))
+                .chain(
+                    snapshot
+                        .model
+                        .things
+                        .iter()
+                        .map(|thing| super::place::name_key(&thing.name)),
+                )
+                .chain(
+                    snapshot
+                        .model
+                        .offers
+                        .iter()
+                        .map(|offer| super::place::name_key(&offer.name)),
+                )
+                .chain(
+                    admitted
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|records| records.iter())
+                        .flat_map(|record| record.seen_in_picture.iter())
+                        .map(|feature| super::place::name_key(&feature.name)),
+                )
+                .collect::<BTreeSet<_>>();
+            let ids = snapshot
+                .model
+                .people
+                .iter()
+                .map(|person| person.id.as_str())
+                .chain(snapshot.model.things.iter().map(|thing| thing.id.as_str()))
+                .chain(snapshot.model.offers.iter().map(|offer| offer.id.as_str()))
+                .chain(snapshot.model.ways_out.iter().map(|way| way.id.as_str()))
+                .collect::<BTreeSet<_>>();
+            if evidence.visible_features.iter().all(|feature| {
+                feature
+                    .recorded_id
+                    .as_deref()
+                    .is_some_and(|id| ids.contains(id))
+                    || names.contains(&super::place::name_key(&feature.name))
+            }) {
+                return false;
             }
         }
         let mut committed = false;
@@ -1436,12 +1436,11 @@ impl super::Service {
                 },
                 reply,
             });
-            if submitted.is_ok() {
-                if let Ok(Ok(Ok(_revision))) =
+            if submitted.is_ok()
+                && let Ok(Ok(Ok(_revision))) =
                     tokio::time::timeout(super::timing::active().reply, wait).await
-                {
-                    committed = true;
-                }
+            {
+                committed = true;
             }
         }
         if !committed {
@@ -1546,6 +1545,7 @@ impl LivingScenes {
     }
 
     /// Living scenes that do nothing: imagery is off.
+    #[cfg(test)]
     pub(super) fn disabled() -> Self {
         Self {
             inner: None,
@@ -1651,19 +1651,6 @@ impl LivingScenes {
 
     pub(super) fn direct_status(&self, key: &str) -> Option<serde_json::Value> {
         self.plates.as_ref()?.direct_status(key)
-    }
-
-    pub(super) fn request_item(
-        &self,
-        hero: &str,
-        thing_id: &str,
-        detail: Option<String>,
-        shared: bool,
-    ) -> Result<(), &'static str> {
-        self.plates
-            .as_ref()
-            .ok_or("scene pictures are unavailable")?
-            .request_item(hero, thing_id, detail, shared)
     }
 
     pub(super) fn request_committed_item(
@@ -1940,7 +1927,7 @@ impl Inner {
                 .hub()
                 .take_jobs(super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()))
             {
-                tasks.spawn(async move { Done::Resource(job.execute().await) });
+                tasks.spawn(async move { Done::Resource(Box::new(job.execute().await)) });
             }
         }
     }
@@ -2288,7 +2275,7 @@ impl Inner {
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
         if let Done::Resource(completed) = done {
-            self.imagery.hub().complete(completed);
+            self.imagery.hub().complete(*completed);
             self.wake.send_modify(|sequence| *sequence += 1);
             return;
         }
@@ -2330,7 +2317,7 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         match done {
-            Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => return,
+            Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => (),
             Done::Warm { id, tier, result } => {
                 match result {
                     Ok(key) => state.book.learn(&id, tier, key),

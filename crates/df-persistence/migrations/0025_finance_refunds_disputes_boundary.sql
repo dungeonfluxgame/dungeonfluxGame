@@ -56,7 +56,7 @@ INSERT INTO finance.event_kind (event_kind, carries_entries, journaled, allowed_
         '{refund_lot_update,refund_update,funding_lot_refund_update,processor_payment_state_update,key_create}',
         '{refund_paid}'),
     ('refund_unknown', false, true,
-        '{refund_lot_update,refund_outbox_update}', '{}'),
+        '{refund_lot_update,refund_outbox_update,operation_receipt_insert}', '{}'),
     ('refund_failed', false, true,
         '{refund_lot_update,refund_outbox_update}', '{}'),
     ('refund_returned', true, true,
@@ -78,9 +78,9 @@ INSERT INTO finance.event_update_cols (event_kind, kind, cols) VALUES
     ('refund_paid', 'processor_payment_state_update',
         '{refunded_total_micro_dollars,object_revision,applied_at_ms}'),
     ('refund_unknown', 'refund_lot_update', '{state,object_revision,updated_at_ms}'),
-    ('refund_unknown', 'refund_outbox_update', '{attempts,next_attempt_at_ms}'),
+    ('refund_unknown', 'refund_outbox_update', '{attempts,next_attempt_at_ms,claimed_by,lease_until_ms}'),
     ('refund_failed', 'refund_lot_update', '{state,object_revision,updated_at_ms}'),
-    ('refund_failed', 'refund_outbox_update', '{attempts,next_attempt_at_ms}'),
+    ('refund_failed', 'refund_outbox_update', '{attempts,next_attempt_at_ms,claimed_by,lease_until_ms}'),
     ('refund_returned', 'refund_lot_update', '{state,object_revision,updated_at_ms}'),
     ('refund_returned', 'refund_update', '{state}'),
     ('dispute_opened', 'funding_lot_dispute_update', '{state}'),
@@ -114,6 +114,11 @@ CREATE TRIGGER event_update_cols_append_only BEFORE UPDATE OR DELETE ON finance.
 
 -- `apply_change` compare-and-set needs a revision on every updated table.
 ALTER TABLE finance.refund_outbox ADD COLUMN revision bigint NOT NULL DEFAULT 1;
+
+-- Paid observations survive a later dispute/return and are reconciled independently of the lot.
+ALTER TABLE finance.operation_receipt DROP CONSTRAINT operation_receipt_namespace_check;
+ALTER TABLE finance.operation_receipt ADD CHECK (namespace IN ('admission', 'allocation', 'withdrawal',
+    'policy_update', 'quote_approval', 'refund', 'credit', 'manual_adjustment', 'refund_processor_paid'));
 
 -- Generated apply functions for the new kinds, and rebuilt insert/update dispatchers.
 DO $generate$
@@ -368,7 +373,10 @@ BEGIN
                                WHERE s.refund_id = (SELECT refund_id FROM finance.refund_lot WHERE refund_lot_id = v_refund_lot)), '[]'::jsonb),
         'payment_state', (SELECT to_jsonb(s) FROM finance.processor_payment_state s
                            JOIN finance.funding_lot l ON l.lot_id = s.lot_id WHERE l.lot_id = v_lot),
-        'outbox', (SELECT to_jsonb(o) FROM finance.refund_outbox o WHERE o.refund_lot_id = v_refund_lot));
+        'outbox', (SELECT to_jsonb(o) FROM finance.refund_outbox o WHERE o.refund_lot_id = v_refund_lot),
+        'paid_observation', (SELECT to_jsonb(r) FROM finance.operation_receipt r
+            WHERE r.namespace = 'refund_processor_paid' AND r.principal = v_refund_lot
+            ORDER BY r.created_at_ms, r.operation_id LIMIT 1));
 END $$;
 
 CREATE FUNCTION finance.lock_flow_dispute(p_args jsonb) RETURNS jsonb
@@ -377,6 +385,11 @@ DECLARE
     v_lot bytea := finance.hexbytes(p_args -> 'lot');
     v_payer bytea;
 BEGIN
+    IF EXISTS (SELECT 1 FROM finance.dispute d
+                WHERE d.processor = p_args ->> 'processor' AND d.dispute_ref = p_args ->> 'dispute_ref'
+                  AND d.lot_id <> v_lot) THEN
+        RETURN jsonb_build_object('missing', true);
+    END IF;
     SELECT payer_account_id INTO v_payer FROM finance.funding_lot WHERE lot_id = v_lot;
     IF v_payer IS NULL THEN
         RETURN jsonb_build_object('missing', true);
@@ -395,6 +408,11 @@ BEGIN
     PERFORM finance.note_locks('processor_payment_state', ARRAY(SELECT s.processor || '|' || s.payment_ref
                   FROM finance.processor_payment_state s JOIN finance.funding_lot l ON l.lot_id = s.lot_id
                  WHERE l.lot_id = v_lot FOR UPDATE));
+    IF EXISTS (SELECT 1 FROM finance.dispute d
+                WHERE d.processor = p_args ->> 'processor' AND d.dispute_ref = p_args ->> 'dispute_ref'
+                  AND d.lot_id <> v_lot) THEN
+        RETURN jsonb_build_object('missing', true);
+    END IF;
     RETURN jsonb_build_object(
         'lot', (SELECT to_jsonb(l) - 'billing_country' - 'billing_region' FROM finance.funding_lot l WHERE l.lot_id = v_lot),
         'available', coalesce((SELECT b.natural_micro_dollars FROM finance.account_key k

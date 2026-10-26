@@ -1,5 +1,19 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--prepare-load-assets")
+    {
+        let path = std::env::args_os()
+            .nth(2)
+            .ok_or("load asset directory required")?;
+        df_tools::fake_profile::prepare_assets(std::path::Path::new(&path))?;
+        return Ok(());
+    }
+    // SAFETY: startup precedes the runtime and every thread this executable creates.
+    if let Some(profile) = unsafe { df_tools::fake_profile::apply_from_environment() }? {
+        println!("{}", profile.startup_line());
+    }
     df_tools::runtime::install_panic_reporter();
     #[cfg(windows)]
     let console_stop = df_tools::runtime::install_console_stop_handler();

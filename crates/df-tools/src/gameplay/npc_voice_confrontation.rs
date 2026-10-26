@@ -154,7 +154,7 @@ mod tests {
         player.scene = Some(df_protocol::common::GameplayScene {
             title: authored.title.clone(),
             scene_asset: authored.asset.clone(),
-            cast: wire::scene_cast(&authored),
+            cast: wire::scene_cast(authored),
             ..Default::default()
         });
         let facts = StoryFacts::from_pack(&content);

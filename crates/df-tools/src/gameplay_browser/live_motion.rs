@@ -3103,7 +3103,7 @@ mod tests {
             slot: None,
             settled: false,
             timing: LineTiming::Ordinary,
-            detail: Detail::Line(LineDetail {
+            detail: Detail::Line(Box::new(LineDetail {
                 table_sequence: None,
                 speaker: restored.speaker.clone(),
                 actor_id: restored.actor_id.clone(),
@@ -3116,7 +3116,7 @@ mod tests {
                 check_roll: None,
                 check_settled: false,
                 dice: None,
-            }),
+            })),
         };
         let commands = motion.conductor.restart(
             0,

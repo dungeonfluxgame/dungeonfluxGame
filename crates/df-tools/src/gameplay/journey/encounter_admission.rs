@@ -627,7 +627,7 @@ mod tests {
                 &resources,
                 &pins
             ),
-            Ok(actors.clone().try_into().unwrap())
+            Ok(actors.clone())
         );
         assert_eq!(draws, original_draws);
         assert_eq!(combat.state(), &staged_before);

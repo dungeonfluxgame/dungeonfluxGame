@@ -123,12 +123,14 @@ mod native {
     }
 
     fn migrate(action: &str, argument: Option<std::path::PathBuf>) -> ExitCode {
-        // Migration application is owned by the migration runner; this entry point only
-        // validates the named config so a bad file fails before any deploy step.
         match load(argument) {
             Ok(_) => {
-                println!("migrate {action}: config valid");
-                ExitCode::SUCCESS
+                df_observe::record_audit_line(
+                    "migration.runner_unavailable",
+                    format!("MIGRATE status=unavailable action={action}"),
+                );
+                eprintln!("migration runner unavailable; migrate {action} was not performed");
+                ExitCode::FAILURE
             }
             Err(code) => code,
         }

@@ -244,7 +244,9 @@ impl Service {
             self.voice
                 .register_people(self.updates.borrow().state())
                 .map_err(actor::unavailable)?;
-            self.voice.register_view(message);
+            if !crate::fake_profile::is_enabled() {
+                self.voice.register_view(message);
+            }
         }
         // Living scenes watch the display's view and then add their published art to it; the
         // art is presentation only and nothing else in the view changes.
@@ -275,6 +277,12 @@ impl Service {
             .attach(&mut message)
             .await
             .map_err(|error| Status::internal(error.to_string()))?;
+        if crate::fake_profile::is_enabled() {
+            // Final presentation must follow living-scene/portrait overlays. Register the
+            // resulting canonical fake text before attaching its signed local audio URLs.
+            crate::fake_profile::FakeProfile.project(&mut message);
+            self.voice.register_view(&message);
+        }
         voice::attach_urls(&mut message);
         media_grant::sign_view(&mut message, role == LocalDemoRole::Display, &credential);
         wire::validate_view_size(&message).map_err(actor::unavailable)?;
@@ -1754,8 +1762,8 @@ async fn serve_run(
             join_grant_driver(grant_driver).await?;
             refusal_report?;
             return Err(io::Error::other(format!(
-                "owned gameplay admission refused: {}",
-                format!("{} {:?}", error.stage, error.class)
+                "owned gameplay admission refused: {} {:?}",
+                error.stage, error.class
             ))
             .into());
         }
@@ -2026,7 +2034,7 @@ async fn serve_run(
             Ok(started) => started,
             Err(error) => {
                 return startup_failure_after_admission(
-                    error.into(),
+                    error,
                     close_admitted_startup(&mut repository, &mut issuer, "campaign worker"),
                 )
                 .await
@@ -2822,6 +2830,15 @@ async fn serve_run(
             settings.allowed_origins.clone().into(),
         ))
         .merge(join_link::router(join_qr));
+    if crate::fake_profile::is_enabled() {
+        // Axum selects this exact static fake image before the existing dynamic imagery route.
+        router = router.route_service(
+            crate::fake_profile::PORTRAIT_PATH,
+            tower_http::services::ServeFile::new(
+                std::path::Path::new(&asset_root).join("scenes/mara-harbor-v4.png"),
+            ),
+        );
+    }
     // DEVCTL-001: merged only when the surface is on; otherwise the game
     // router is exactly what it was.
     if let Some(routes) = dev_control.router {

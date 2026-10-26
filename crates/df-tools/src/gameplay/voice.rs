@@ -805,6 +805,16 @@ impl Voice {
             );
             return Lookup::Unregistered;
         };
+        if crate::fake_profile::is_enabled() {
+            let Some(bytes) = crate::fake_profile::silent_part(&line.text, index) else {
+                return Lookup::Unregistered;
+            };
+            super::actor::record_audit_line(
+                "gameplay.voice.fake",
+                format!("RESOURCE ready kind=voice_line key={resource_id} provider=fake"),
+            );
+            return Lookup::Audio(bytes.into());
+        }
         let Mode::On { synthesis, .. } = &self.inner.mode else {
             record_voice_resource(
                 "gameplay.voice.delivery_failed",
@@ -1308,7 +1318,7 @@ async fn serve_line(
     let response = match voice.audio_part(&key, 0, presentation_id(&headers)).await {
         Lookup::Audio(bytes) => (
             [
-                (header::CONTENT_TYPE, "audio/mpeg"),
+                (header::CONTENT_TYPE, audio_content_type()),
                 (header::CACHE_CONTROL, CACHE_CONTROL),
             ],
             bytes,
@@ -1441,10 +1451,18 @@ fn record_voice_resource(
     super::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
+fn audio_content_type() -> &'static str {
+    if crate::fake_profile::is_enabled() {
+        "audio/wav"
+    } else {
+        "audio/mpeg"
+    }
+}
+
 fn audio_parts_response(bytes: Bytes, count: usize) -> Response {
     let mut response = (
         [
-            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CONTENT_TYPE, audio_content_type()),
             (header::CACHE_CONTROL, CACHE_CONTROL),
         ],
         bytes,
@@ -2959,5 +2977,56 @@ mod tests {
         let credential = VoiceCredential::for_test("sentinel-secret-value");
 
         assert!(!format!("{credential:?}").contains("sentinel"));
+    }
+}
+
+#[cfg(test)]
+mod fake_profile_voice_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fake_profile_keeps_authored_narration_bound_to_the_registered_voice_slot() {
+        let text = "The heroes wait for the courier.";
+        let mut message = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    narration: text.to_owned(),
+                    journey: Some(rpc::JourneyView {
+                        table_log: vec![rpc::TableLine {
+                            sequence: 7,
+                            role: rpc::TableRole::Narrator as i32,
+                            kind: rpc::TableKind::Speech as i32,
+                            text: text.to_owned(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        crate::fake_profile::FakeProfile.project(&mut message);
+        let voice = Voice::disabled(VoiceOff::Disabled);
+        voice.register_view(&message);
+        attach_urls(&mut message);
+        let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+            panic!("display lost");
+        };
+        let caption = &display.journey.as_ref().unwrap().table_log[0];
+        assert_eq!(display.narration, text);
+        assert_eq!(caption.text, text);
+        let key = caption
+            .audio_url
+            .strip_prefix("/gameplay/voice/")
+            .expect("registered narrative URL");
+        assert!(
+            crate::voice_line::display_lines(display)
+                .iter()
+                .any(|slot| slot.key() == key && slot.text == caption.text)
+        );
+        // Off mode cannot synthesize, but the real lookup distinguishes a registered slot
+        // from an unregistered key without accessing any provider.
+        assert_eq!(voice.audio(key).await, Lookup::Unavailable);
     }
 }

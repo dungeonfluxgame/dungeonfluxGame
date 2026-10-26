@@ -158,28 +158,34 @@ pub(in crate::gameplay) enum DossierOutcome {
     Unavailable(&'static str),
 }
 
+struct ResourceLine<'a> {
+    state: &'a str,
+    kind: &'a str,
+    key: &'a str,
+    subject: &'a str,
+    took: std::time::Duration,
+    handle: &'a str,
+    error: &'a str,
+}
+
 impl StoryMemory {
     pub(in crate::gameplay) fn set_dossier_writer(&self, writer: Arc<dyn DossierWriter>) {
         *locked(&self.writer) = Some(writer);
     }
 
     /// A `RESOURCE <state> kind=<kind> ...` line in the hub's own format.
-    pub(in crate::gameplay) fn resource_line(
-        &self,
-        state: &str,
-        kind: &str,
-        key: &str,
-        subject: &str,
-        took: std::time::Duration,
-        handle: &str,
-        error: &str,
-    ) {
-        let key: String = key.chars().take(32).collect();
+    pub(in crate::gameplay) fn resource_line(&self, line: ResourceLine<'_>) {
+        let key: String = line.key.chars().take(32).collect();
         super::super::actor::record_audit_line(
             "gameplay.resource",
             format!(
-                "RESOURCE {state} kind={kind} key={key} subject={subject} ms={} handle={handle} error={error}",
-                took.as_millis()
+                "RESOURCE {} kind={} key={key} subject={} ms={} handle={} error={}",
+                line.state,
+                line.kind,
+                line.subject,
+                line.took.as_millis(),
+                line.handle,
+                line.error,
             ),
         );
     }
@@ -227,11 +233,11 @@ impl StoryMemory {
         }
         let event_set_hash = self
             .backend
-            .entity_event_ids(&scope, &entity)
+            .entity_event_ids(&scope, entity.as_str())
             .await
             .ok()
             .flatten()
-            .map(|ids| event_set_hash(&entity, &scope.audience.dossier_tier(), &ids));
+            .map(|ids| event_set_hash(entity.as_str(), &scope.audience.dossier_tier(), &ids));
         EntityView {
             entity,
             events,
@@ -367,15 +373,15 @@ impl StoryMemory {
                 .collect(),
             max_chars: SUMMARY_CHARACTERS,
         };
-        self.resource_line(
-            "request",
-            "story_dossier",
-            hash,
-            &subject,
-            std::time::Duration::ZERO,
-            "",
-            "",
-        );
+        self.resource_line(ResourceLine {
+            state: "request",
+            kind: "story_dossier",
+            key: hash,
+            subject: &subject,
+            took: std::time::Duration::ZERO,
+            handle: "",
+            error: "",
+        });
         match writer.write(&request).await {
             Ok(text) => {
                 let summary: String = super::capture::tidy(&text)
@@ -398,30 +404,30 @@ impl StoryMemory {
                     writer: writer.name().chars().take(64).collect(),
                 };
                 if row.summary.is_empty() {
-                    self.resource_line(
-                        "failed",
-                        "story_dossier",
-                        hash,
-                        &subject,
-                        started.elapsed(),
-                        "",
-                        "empty",
-                    );
+                    self.resource_line(ResourceLine {
+                        state: "failed",
+                        kind: "story_dossier",
+                        key: hash,
+                        subject: &subject,
+                        took: started.elapsed(),
+                        handle: "",
+                        error: "empty",
+                    });
                     return DossierOutcome::Unavailable("empty");
                 }
                 if let Err(error) = self.backend.put_dossier(&self.run, &row).await {
                     self.note_error(&error);
                     return DossierOutcome::Unavailable("store_error");
                 }
-                self.resource_line(
-                    "ready",
-                    "story_dossier",
-                    hash,
-                    &subject,
-                    started.elapsed(),
-                    hash,
-                    "",
-                );
+                self.resource_line(ResourceLine {
+                    state: "ready",
+                    kind: "story_dossier",
+                    key: hash,
+                    subject: &subject,
+                    took: started.elapsed(),
+                    handle: hash,
+                    error: "",
+                });
                 self.audit(format!(
                     "MEMORY dossier entity={entity} tier={tier} covered={} writer={} ms={}",
                     row.covered_ids.len(),
@@ -431,15 +437,15 @@ impl StoryMemory {
                 DossierOutcome::Written(row)
             }
             Err(failure) => {
-                self.resource_line(
-                    "failed",
-                    "story_dossier",
-                    hash,
-                    &subject,
-                    started.elapsed(),
-                    "",
-                    failure.label(),
-                );
+                self.resource_line(ResourceLine {
+                    state: "failed",
+                    kind: "story_dossier",
+                    key: hash,
+                    subject: &subject,
+                    took: started.elapsed(),
+                    handle: "",
+                    error: failure.label(),
+                });
                 cached.cloned().map_or(
                     DossierOutcome::Unavailable(failure.label()),
                     DossierOutcome::Stale,

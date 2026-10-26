@@ -141,7 +141,7 @@ fn presentation_fields(
         presentation::ComponentPhase::Closing | presentation::ComponentPhase::Hidden => "hidden",
         presentation::ComponentPhase::Failed => "failed",
     });
-    let stage = component_stage.unwrap_or_else(|| match event.kind {
+    let stage = component_stage.unwrap_or(match event.kind {
         "line-open" | "figure" | "figure-mounted" | "figure-shown" | "scene" | "plate-shown"
         | "plate-kept" | "plate-crossfade" | "visual-source" | "check-shown" | "paint"
         | "paint-opportunity" => "projected",
@@ -673,6 +673,46 @@ impl rpc::presentation_telemetry_service_server::PresentationTelemetryService
 }
 
 #[cfg(test)]
+pub(super) fn fake_display_upload(
+    events: Vec<presentation::TimingEvent>,
+    run: &[u8],
+) -> serde_json::Value {
+    let mut buffer = presentation::TimingBuffer::default();
+    for event in events {
+        buffer.push(event).unwrap();
+    }
+    let batch = buffer.batch().unwrap();
+    let correlation = scope_correlation(Some(b"test-room"), Some(run), "hs48-test");
+    let accepted = std::cell::RefCell::new(Vec::new());
+    let receipt = Ledger::default()
+        .record(
+            TimingUpload {
+                binding: [1; 32],
+                producer: [2; 16],
+                sequence: batch.sequence,
+                dropped: batch.dropped,
+                bytes: &batch.bytes,
+                role: LocalDemoRole::Display,
+                correlation: &correlation,
+                receive_unix_ms: 123_456,
+            },
+            |_, _, event, producer| {
+                if let Some(event) = event {
+                    let (mut fields, _) = presentation_fields(&event, &correlation, producer);
+                    fields.insert("audience".to_owned(), serde_json::json!("display"));
+                    accepted
+                        .borrow_mut()
+                        .push(serde_json::json!({"unix_ms":123456,"fields":fields}));
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(receipt, (batch.records, false));
+    assert!(buffer.acknowledge(batch.sequence));
+    serde_json::json!({"events":accepted.into_inner()})
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use df_observe::presentation::{
@@ -1065,126 +1105,4 @@ mod tests {
         );
         assert_eq!(lines.borrow().len(), 1);
     }
-}
-
-/// Development-only injection of a clearly labelled fixture into the real authenticated
-/// handler. This proves ingress/allowlisting/replay, never actual browser presentation.
-pub(super) async fn synthetic_probe(
-    service: Service,
-    binding: [u8; 32],
-    scope: rpc::WatchViewRequest,
-) -> Result<serde_json::Value, Status> {
-    use df_observe::presentation::TimingEvent;
-    use rpc::presentation_telemetry_service_server::PresentationTelemetryService;
-
-    if std::env::var("DF_GAMEPLAY_DEV_CONTROL").as_deref() != Ok("on") {
-        return Err(Status::permission_denied(
-            "timing probe is development only",
-        ));
-    }
-    let producer = *b"T01-synthetic-01";
-    let producer_hex = producer
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let events = [
-        TimingEvent::lifecycle("plate-requested", "ready", 5, 7, 100),
-        TimingEvent::lifecycle("plate-loaded", "ready", 5, 7, 200),
-        TimingEvent::lifecycle("plate-decoded", "ready", 5, 7, 300),
-        TimingEvent {
-            crossfade_ms: 1_200,
-            ..TimingEvent::lifecycle("plate-shown", "ready", 5, 7, 500)
-        },
-        TimingEvent::lifecycle("figure-shown", "appeared", 2, 7, 600),
-        TimingEvent {
-            slot: Some(2),
-            chars: 89,
-            read_ms: 8_285,
-            opened_ms: Some(1_000),
-            voice_start_ms: Some(1_100),
-            voice_end_ms: Some(7_000),
-            closed_ms: Some(10_000),
-            ..TimingEvent::lifecycle("line", "read", 29, 7, 10_000)
-        },
-        TimingEvent::lifecycle("check-shown", "ready", 10, 7, 11_000),
-        TimingEvent::lifecycle("check-hidden", "ended", 10, 7, 15_000),
-        TimingEvent::lifecycle("plate-kept", "failed", 6, 7, 16_000),
-        TimingEvent::lifecycle("figure-hidden", "scene-change", 2, 7, 17_000),
-    ];
-    let body = rpc::PresentationTelemetryRequest {
-        scope: Some(scope),
-        producer_id: producer.to_vec(),
-        batch_sequence: 1,
-        otlp_logs: presentation::encode(&events)
-            .map_err(|_| Status::internal("synthetic timing fixture invalid"))?,
-        dropped_records: 0,
-    };
-    let ingress = PresentationIngress::new(service);
-    let request = |body| -> Result<_, Status> {
-        let mut request = Request::new(body);
-        let credential = binding
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        request.metadata_mut().insert(
-            "x-df-local-binding",
-            credential
-                .parse()
-                .map_err(|_| Status::internal("probe credential encoding failed"))?,
-        );
-        Ok(request)
-    };
-    // The actor authentication occurs before the fixture is admitted, including on the retry.
-    let first = ingress.upload(request(body.clone())?).await?.into_inner();
-    actor::record_audit_line(
-        "gameplay.presentation_synthetic",
-        format!(
-            "DISPLAY synthetic-probe producer={producer_hex} synthetic=true records={} evidence=ingress-only",
-            first.accepted_records
-        ),
-    );
-    let replay = ingress.upload(request(body)?).await?.into_inner();
-    Ok(
-        serde_json::json!({ "synthetic": true, "evidence": "authenticated ingress only; no browser or media observed", "producer": producer_hex, "accepted_records": first.accepted_records, "replayed": replay.replayed }),
-    )
-}
-
-#[cfg(test)]
-pub(super) fn fake_display_upload(
-    events: Vec<presentation::TimingEvent>,
-    run: &[u8],
-) -> serde_json::Value {
-    let mut buffer = presentation::TimingBuffer::default();
-    for event in events {
-        buffer.push(event).unwrap();
-    }
-    let batch = buffer.batch().unwrap();
-    let correlation = scope_correlation(Some(b"test-room"), Some(run), "hs48-test");
-    let accepted = std::cell::RefCell::new(Vec::new());
-    let receipt = Ledger::default()
-        .record(
-            TimingUpload {
-                binding: [1; 32],
-                producer: [2; 16],
-                sequence: batch.sequence,
-                dropped: batch.dropped,
-                bytes: &batch.bytes,
-                role: LocalDemoRole::Display,
-                correlation: &correlation,
-                receive_unix_ms: 123_456,
-            },
-            |_, _, event, producer| {
-                if let Some(event) = event {
-                    let (mut fields, _) = presentation_fields(&event, &correlation, producer);
-                    fields.insert("audience".to_owned(), serde_json::json!("display"));
-                    accepted
-                        .borrow_mut()
-                        .push(serde_json::json!({"unix_ms":123456,"fields":fields}));
-                }
-            },
-        )
-        .unwrap();
-    assert_eq!(receipt, (batch.records, false));
-    assert!(buffer.acknowledge(batch.sequence));
-    serde_json::json!({"events":accepted.into_inner()})
 }

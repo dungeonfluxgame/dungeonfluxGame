@@ -628,6 +628,7 @@ impl ApproachModel {
         Ok(Some(CoinHandover { amount_cp }))
     }
 
+    #[cfg(test)]
     pub(super) async fn classify_hero_identity(
         &self,
         request: &serde_json::Value,
@@ -656,6 +657,7 @@ impl ApproachModel {
 
     /// Chooses among current public cast IDs using the existing Jev choice provider, with no party
     /// heroes other than the speaker. See `resolve_addressee_with_party`.
+    #[cfg(test)]
     pub(super) async fn resolve_addressee(
         &self,
         words: &str,

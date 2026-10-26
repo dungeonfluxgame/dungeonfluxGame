@@ -1518,7 +1518,7 @@ pub(super) async fn say(
         };
         state
             .service
-            .complete_dialogue_response(credential, response, npc)
+            .complete_dialogue_response(credential, response, npc.map(|turn| *turn))
             .await
             .map_err(|status| failed(status.message()))
     })

@@ -35,7 +35,7 @@ use super::{
     startup_configuration::{ContentRating, content_rating},
     storyteller::{
         CallProfile, Expression, RESTRAINED_GORE, RESTRAINED_PROFANITY, Slot, Storyteller,
-        StorytellerError, contains_whole_word, mature_themes,
+        contains_whole_word, mature_themes,
     },
 };
 
@@ -113,8 +113,8 @@ pub(super) enum EmotionalProfileFailure {
 
 #[derive(Debug)]
 pub(super) enum EmotionalProfileError {
-    Model(StorytellerError),
-    Invalid(EmotionalProfileFailure),
+    Model,
+    Invalid,
 }
 
 /// Schema supplied to profile generation; inner checks also run after the provider response.
@@ -283,13 +283,13 @@ pub(super) async fn generate_emotional_profile(
             profile: call_profile,
         })
         .await
-        .map_err(EmotionalProfileError::Model)?;
-    let serialized = values.get("profile").ok_or(EmotionalProfileError::Invalid(
-        EmotionalProfileFailure::InvalidShape,
-    ))?;
-    let parsed: EmotionalProfile = serde_json::from_str(serialized)
-        .map_err(|_| EmotionalProfileError::Invalid(EmotionalProfileFailure::InvalidShape))?;
-    validate_emotional_profile(dossier, &parsed).map_err(EmotionalProfileError::Invalid)?;
+        .map_err(|_| EmotionalProfileError::Model)?;
+    let serialized = values
+        .get("profile")
+        .ok_or(EmotionalProfileError::Invalid)?;
+    let parsed: EmotionalProfile =
+        serde_json::from_str(serialized).map_err(|_| EmotionalProfileError::Invalid)?;
+    validate_emotional_profile(dossier, &parsed).map_err(|_| EmotionalProfileError::Invalid)?;
     Ok(parsed)
 }
 
@@ -314,7 +314,7 @@ pub(super) async fn write_emotional_profiles(storyteller: &Storyteller, dossiers
                         ("npc.id", dossier.npc_id.clone()),
                         (
                             "social.source",
-                            if matches!(error, EmotionalProfileError::Invalid(_)) {
+                            if matches!(error, EmotionalProfileError::Invalid) {
                                 "invalid".to_owned()
                             } else {
                                 "model_failure".to_owned()

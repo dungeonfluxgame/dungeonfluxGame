@@ -93,16 +93,18 @@ impl StoryMemory {
                         .and_then(Value::as_str)
                         .unwrap_or("changed");
                     let sequence = change.revision.sequence();
-                    let draft = capture::scene_change_draft(
-                        &format!("{}:{sequence}", change.revision.epoch().get()),
-                        i64::try_from(sequence).ok(),
-                        &change.place,
-                        &change.hero,
-                        &change.change.entity_id,
-                        &change.change.description,
+                    let position = format!("{}:{sequence}", change.revision.epoch().get());
+                    let involved = involved(&kind);
+                    let draft = capture::scene_change_draft(capture::SceneChange {
+                        position: &position,
+                        revision: i64::try_from(sequence).ok(),
+                        place: &change.place,
+                        hero: &change.hero,
+                        entity_id: &change.change.entity_id,
+                        description: &change.change.description,
                         tag,
-                        &involved(&kind),
-                    );
+                        involved: &involved,
+                    });
                     report.journal += usize::from(self.record(draft));
                 }
             }

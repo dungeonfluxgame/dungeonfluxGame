@@ -66,6 +66,8 @@ pub struct Hosted {
     app: Router,
     listen: SocketAddr,
     tasks: ServiceTasks,
+    support_worker: Option<(crate::support_ingest::WorkerHandle, crate::database::Driver)>,
+    telemetry: Arc<crate::telemetry::HostedTelemetry>,
 }
 
 impl Hosted {
@@ -73,16 +75,28 @@ impl Hosted {
         if !config.bundle.join("index.html").is_file() {
             return Err(OpenError::Bundle);
         }
+        let telemetry = crate::telemetry::HostedTelemetry::open(config.telemetry_dir.as_deref());
         let (accounts, campaign_store) = open_stores(&config).await?;
+        telemetry.record_db_outcome(true);
         let payment_mode = match (&config.stripe, config.profile) {
             (Some(_), _) => "stripe",
             (None, Profile::Development) => "development",
             (None, _) => "unconfigured",
         };
+        let mut finance_connection = Connection::open(&config.database, &config.transport)
+            .await
+            .map_err(|_| OpenError::Database)?;
+        crate::finance::publish_customer_prices(&mut finance_connection.client)
+            .await
+            .map_err(|_| {
+                df_observe::record_audit_line(
+                    "hosted.customer_prices_failed",
+                    "SPEND customer_prices_failed".to_owned(),
+                );
+                OpenError::Port
+            })?;
         let finance = crate::finance::Finance::new(
-            Connection::open(&config.database, &config.transport)
-                .await
-                .map_err(|_| OpenError::Database)?,
+            finance_connection,
             accounts.clone(),
             config.trial_email_key,
         )
@@ -154,16 +168,53 @@ impl Hosted {
             .layer(axum::Extension(df_portal::ClientAddressPolicy {
                 proxies: config.proxies,
             }));
+        app = crate::accounts_gate::apply(app, config.accounts_open);
+        app = app.layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&telemetry),
+            crate::telemetry::observe,
+        ));
         df_observe::record_audit_line(
             "hosted.composed",
             format!(
                 "HOSTED composed accounts=postgres finance=postgres campaigns=postgres payments={payment_mode}"
             ),
         );
+        // Support ingest worker: only when the mailbox env names are configured.
+        // The handle and its connection driver are owned here and abort on drop.
+        let support_worker = match Connection::open(&config.database, &config.transport).await {
+            Ok(connection) => {
+                let crate::database::Connection { client, driver } = connection;
+                let store =
+                    std::sync::Arc::new(df_persistence::support_store::SupportStore::new(client));
+                crate::support_ingest::from_env(store).map(|worker| {
+                    let interval_s: u64 = std::env::var("DF_SUPPORT_INGEST_INTERVAL_S")
+                        .ok()
+                        .and_then(|value| value.parse().ok())
+                        .filter(|seconds: &u64| *seconds >= 30)
+                        .unwrap_or(300);
+                    (
+                        crate::support_ingest::spawn(
+                            worker,
+                            std::time::Duration::from_secs(interval_s),
+                        ),
+                        driver,
+                    )
+                })
+            }
+            Err(_) => None,
+        };
+        if support_worker.is_none() {
+            df_observe::record_audit_line(
+                "hosted.support_ingest_disabled",
+                "HOSTED support_ingest disabled (mailbox not configured)".to_owned(),
+            );
+        }
         Ok(Self {
             app,
             listen: config.listen,
             tasks,
+            support_worker,
+            telemetry,
         })
     }
 
@@ -172,6 +223,10 @@ impl Hosted {
     }
 
     pub async fn shutdown(self) {
+        if let Some((worker, _driver)) = self.support_worker {
+            worker.shutdown().await;
+        }
+        self.telemetry.shutdown();
         self.tasks.shutdown().await;
     }
 
@@ -262,12 +317,17 @@ async fn pay(
     )))
 }
 
+#[path = "google.rs"]
+mod google;
+
 async fn start_accounts(
     hosts: df_customer::HostConfig,
     identity: Identity,
     mail: Mail,
     accounts: PostgresAccountStore,
 ) -> Result<(CustomerService<PostgresAccountStore, Sender>, ServiceTasks), OpenError> {
+    let google_hosts = hosts.clone();
+    let google_accounts = accounts.clone();
     let identity = match identity {
         Identity::Local => IdentitySource::local_passwords(),
         Identity::WorkOs { client_id, api_key } => {
@@ -288,7 +348,7 @@ async fn start_accounts(
         }
         Mail::Resend(key) => Sender::resend(key).map_err(|_| OpenError::Mail)?,
     };
-    CustomerService::start(
+    let (service, tasks) = CustomerService::start(
         CustomerConfig {
             hosts,
             identity,
@@ -305,7 +365,12 @@ async fn start_accounts(
         Arc::new(BuiltInCommonPasswords),
     )
     .await
-    .map_err(|_| OpenError::Customer)
+    .map_err(|_| OpenError::Customer)?;
+    Ok((
+        google::configure(service, google_accounts, &google_hosts)
+            .map_err(|_| OpenError::Identity)?,
+        tasks,
+    ))
 }
 
 async fn open_stores(

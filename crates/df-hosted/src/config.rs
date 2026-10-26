@@ -25,6 +25,7 @@ pub(crate) enum Mail {
 /// Validated native configuration. Deliberately has no Debug implementation.
 pub struct Config {
     pub(crate) profile: Profile,
+    pub(crate) accounts_open: bool,
     pub(crate) listen: SocketAddr,
     pub(crate) origin: String,
     pub(crate) bundle: PathBuf,
@@ -35,6 +36,7 @@ pub struct Config {
     pub(crate) identity: Identity,
     pub(crate) mail: Mail,
     pub(crate) proxies: df_portal::TrustedProxies,
+    pub(crate) telemetry_dir: Option<PathBuf>,
     pub(crate) trial_email_key: [u8; 32],
     pub(crate) campaign_keys: df_campaign::service::ServiceKeys,
     pub(crate) stripe: Option<crate::checkout::Settings>,
@@ -72,6 +74,12 @@ impl Config {
             "production" => Profile::Production,
             _ => return Err(ConfigError::Invalid("DF_PROFILE")),
         };
+        let configured_accounts_open = match get("DF_ACCOUNTS_OPEN").as_deref() {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => return Err(ConfigError::Invalid("DF_ACCOUNTS_OPEN")),
+        };
+        let accounts_open = profile == Profile::Development || configured_accounts_open;
         reject_development_ports(&get, profile)?;
         let stripe = crate::checkout::Settings::parse(&get)?;
         let listen: SocketAddr = present(&get, "DF_PORTAL_LISTEN")
@@ -185,8 +193,15 @@ impl Config {
             .collect();
         let proxies = df_portal::TrustedProxies::parse(&networks)
             .map_err(|_| ConfigError::Invalid("DF_PORTAL_TRUSTED_PROXIES"))?;
+        let telemetry_dir = match present(&get, "DF_TELEMETRY_DIR") {
+            Some(path) if PathBuf::from(&path).is_absolute() => Some(PathBuf::from(path)),
+            Some(_) => return Err(ConfigError::Invalid("DF_TELEMETRY_DIR")),
+            None if profile == Profile::Development => None,
+            None => return Err(ConfigError::Missing("DF_TELEMETRY_DIR")),
+        };
         Ok(Self {
             profile,
+            accounts_open,
             listen,
             origin,
             bundle: PathBuf::from(required(&get, "DF_PORTAL_BUNDLE_DIR")?),
@@ -199,6 +214,7 @@ impl Config {
             campaign_keys,
             trial_email_key,
             proxies,
+            telemetry_dir,
             stripe,
         })
     }

@@ -329,7 +329,7 @@ fn cut(text: &str) -> String {
         "{}\u{2026}",
         at_word.trim_end_matches(|c: char| !c.is_alphanumeric())
     );
-    if quotation_marks(text) % 2 == 0 && quotation_marks(&cut) % 2 == 1 {
+    if quotation_marks(text).is_multiple_of(2) && !quotation_marks(&cut).is_multiple_of(2) {
         cut.push(match cut.chars().rev().find(|c| is_quotation_mark(*c)) {
             Some('\u{201c}') => '\u{201d}',
             _ => '"',

@@ -38,14 +38,14 @@ impl Fixture {
         .unwrap();
         let token = df_customer::SecretToken::generate().unwrap();
         let suffix = &token.text()[..16];
-        let database = format!("journeywire_{suffix}");
+        let database = format!("fundingwire_{suffix}");
         admin
             .client
             .batch_execute(&format!("CREATE DATABASE {database}"))
             .await
             .unwrap();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/agents/JOURNEYWIRE")
+            .join("../../artifacts/tmp/agents/FUNDINGWIRE")
             .join(&database);
         std::fs::create_dir_all(root.join("bundle")).unwrap();
         std::fs::write(
@@ -84,20 +84,39 @@ impl Fixture {
     }
 
     async fn finish(self) {
-        assert!(self.database.starts_with("journeywire_"));
+        assert!(self.database.starts_with("fundingwire_"));
         assert!(
             self.database
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let row = self
+                    .admin
+                    .client
+                    .query_one(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = $1",
+                        &[&self.database],
+                    )
+                    .await
+                    .unwrap();
+                if row.get::<_, i64>(0) == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned database connections close before cleanup");
         self.admin
             .client
-            .batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", self.database))
+            .batch_execute(&format!("DROP DATABASE {}", self.database))
             .await
             .unwrap();
         let root = self.root.canonicalize().unwrap();
         let permitted = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/agents/JOURNEYWIRE")
+            .join("../../artifacts/tmp/agents/FUNDINGWIRE")
             .canonicalize()
             .unwrap();
         assert!(root.starts_with(permitted));
@@ -203,6 +222,19 @@ impl Browser {
         let operation = self.operation().await;
         let (status, body) = self.request("POST", "/app/api/sign-up", json!({"email":"journey@example.test","password":PASSWORD,"is_adult":true,"accepts_terms":true,"terms_version":"terms-2026-10","operation":operation})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+        let connection = Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        )
+        .await
+        .unwrap();
+        let row = connection.client.query_one("SELECT count(*) FROM accounts.tenant t JOIN accounts.account a ON a.account_id = t.owner_account_id WHERE a.email_normalized = 'journey@example.test'", &[]).await.unwrap();
+        assert_eq!(
+            row.get::<_, i64>(0),
+            0,
+            "unverified accounts have no tenant"
+        );
+        drop(connection);
         let token = fixture.token().await;
         let (status, body) = self
             .request(
@@ -295,22 +327,71 @@ impl Browser {
 }
 
 #[tokio::test]
-async fn real_http_accounts_and_finance_survive_restart_and_campaign_creation_refuses_missing_tenant()
+async fn journey_01_through_campaign_creation_and_restart_uses_the_verified_accounts_personal_tenant()
  {
     with_fixture(async |fixture| {
         let hosted = Hosted::open(fixture.config()).await.unwrap();
         let mut browser = Browser::new(hosted.router());
         browser.verified(fixture).await;
         browser.top_up().await;
-        let (status, body) = browser
-            .request("POST", "/app/api/campaigns/drafts", json!({}))
-            .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-        assert_eq!(body["code"], "unavailable");
+        let campaign = create_bound_campaign(&mut browser).await;
         drop(browser.router);
         hosted.shutdown().await;
         let reopened = Hosted::open(fixture.config()).await.unwrap();
         browser.router = reopened.router();
+        let (status, body) = browser
+            .request("GET", "/app/api/overview", Value::Null)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["balance"]["purchased_available_micro_dollars"],
+            20_000_000
+        );
+        assert_eq!(
+            body["balance"]["promotional_available_micro_dollars"],
+            10_000_000
+        );
+        let connection = Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        )
+        .await
+        .unwrap();
+        let row = connection.client.query_one(
+            "SELECT count(*) FROM campaigns.campaign c JOIN accounts.tenant t USING (tenant_id) \
+             JOIN accounts.account a ON a.account_id = t.owner_account_id \
+             WHERE a.email_normalized = 'journey@example.test' AND c.campaign_id = $1",
+            &[&df_types::CampaignId::from_hex(&campaign).unwrap().as_bytes().as_slice()],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, i64>(0), 1);
+        drop(connection);
+        drop(browser);
+        reopened.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "JOURNEY-01 campaign detail after restart awaits S1 CampaignDirectory::campaign projection"]
+async fn journey_01_campaign_detail_after_creation_and_restart_restores_balance() {
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.verified(fixture).await;
+        browser.top_up().await;
+        let campaign = create_bound_campaign(&mut browser).await;
+        drop(browser.router);
+        hosted.shutdown().await;
+        let reopened = Hosted::open(fixture.config()).await.unwrap();
+        browser.router = reopened.router();
+        let (status, body) = browser
+            .request(
+                "GET",
+                &format!("/app/api/campaigns/{campaign}"),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
         let (status, body) = browser
             .request("GET", "/app/api/overview", Value::Null)
             .await;
@@ -330,7 +411,7 @@ async fn real_http_accounts_and_finance_survive_restart_and_campaign_creation_re
 }
 
 #[tokio::test]
-#[ignore = "JOURNEY-01 pending account-owner tenant issuance, finance sponsor consent/open-funding hook, runtime owner placement, and STRIPETEST checkout qualification"]
+#[ignore = "JOURNEY-01 successful Start awaits O1 runtime owner placement; funding consent/allocation/cancel prefix is active"]
 async fn journey_01_signup_verify_signin_topup_create_campaign_open_lobby_start_session() {
     with_fixture(async |fixture| {
     let hosted = Hosted::open(fixture.config()).await.unwrap();
@@ -376,6 +457,16 @@ async fn journey_01_signup_verify_signin_topup_create_campaign_open_lobby_start_
         .await;
     assert_eq!(status, StatusCode::OK, "{lobby}");
     let session = lobby["session_id"].as_str().unwrap();
+    let (status, view) = browser.request("GET", &format!("/app/api/sessions/{session}/lobby"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let quote = &view["funding_note"]["host_credit"];
+    let operation = browser.operation().await;
+    let (status, consented) = browser.request("POST", &format!("/app/api/sessions/{session}/lobby/funding/consent"), json!({
+        "price_version":quote["price_version"], "cap_micro_dollars":quote["cap_micro_dollars"],
+        "terms_version":quote["terms_version"], "operation":operation,
+    })).await;
+    assert_eq!(status, StatusCode::OK, "{consented}");
+    assert_eq!(consented["funding_note"]["host_credit"]["is_fundable"], true);
     let operation = browser.operation().await;
     let (status, chosen) = browser.request("POST", &format!("/app/api/sessions/{session}/lobby/character"),
         json!({"choice":"template", "reference":"12".repeat(16), "operation":operation})).await;
@@ -473,16 +564,114 @@ async fn with_fixture(test: impl for<'a> AsyncFnOnce(&'a Fixture)) {
     }
 }
 
-// The account owner's tenant-creation migration/verification hook is still pending.
-// This fixture provisions its specified binding explicitly, never deriving a tenant from an account.
-async fn provision_tenant(fixture: &Fixture) {
-    let connection = Connection::open(
-        &fixture.url.parse().unwrap(),
-        &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
-    )
-    .await
-    .unwrap();
-    connection.client.batch_execute("CREATE TABLE accounts.tenant (tenant_id bytea PRIMARY KEY, owner_account_id bytea NOT NULL UNIQUE REFERENCES accounts.account(account_id)); INSERT INTO accounts.tenant SELECT decode('11121314151617181920212223242526', 'hex'), account_id FROM accounts.account WHERE email_normalized = 'journey@example.test'").await.unwrap();
+#[tokio::test]
+async fn personal_tenant_migration_backfills_only_verified_accounts_with_random_ids_and_scoped_grants()
+ {
+    with_fixture(async |fixture| {
+        let connection = Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        ).await.unwrap();
+        connection.client.batch_execute("CREATE SCHEMA accounts; SET search_path TO accounts; CREATE TABLE schema_migration (version integer PRIMARY KEY)").await.unwrap();
+        connection.client.batch_execute(include_str!("../../df-persistence/migrations/0005_accounts.sql")).await.unwrap();
+        connection.client.batch_execute(include_str!("../../df-persistence/migrations/0006_account_closure.sql")).await.unwrap();
+        connection.client.batch_execute("INSERT INTO accounts.account (account_id, email_normalized, email_display, status, credential_generation, created_at_ms, email_verified_at_ms) VALUES (decode(repeat('01',16),'hex'),'verified@example.test','verified@example.test','active',1,1,2), (decode(repeat('02',16),'hex'),'unverified@example.test','unverified@example.test','active',1,1,NULL)").await.unwrap();
+        connection.client.batch_execute(include_str!("../../df-persistence/migrations/0030_personal_tenants.sql")).await.unwrap();
+        let row = connection.client.query_one("SELECT count(*), bool_and(tenant_id <> owner_account_id AND octet_length(tenant_id) = 16 AND standing = 'active' AND restriction_reason IS NULL AND created_at IS NOT NULL) FROM accounts.tenant", &[]).await.unwrap();
+        assert_eq!(row.get::<_, i64>(0), 1);
+        assert!(row.get::<_, bool>(1));
+        let row = connection.client.query_one("SELECT has_table_privilege('df_accounts','accounts.tenant','SELECT') AND has_table_privilege('df_accounts','accounts.tenant','INSERT') AND has_table_privilege('df_accounts','accounts.tenant','UPDATE'), has_table_privilege('df_campaigns','accounts.tenant','SELECT'), has_table_privilege('df_campaigns','accounts.tenant','INSERT'), has_table_privilege('df_campaigns','accounts.tenant','UPDATE')", &[]).await.unwrap();
+        assert!(row.get::<_, bool>(0));
+        assert!(row.get::<_, bool>(1));
+        assert!(!row.get::<_, bool>(2));
+        assert!(!row.get::<_, bool>(3));
+        drop(connection);
+    }).await;
+}
+
+#[tokio::test]
+async fn verification_replay_preserves_one_tenant_and_restriction_blocks_campaign_creation() {
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.verified(fixture).await;
+        let connection = Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        ).await.unwrap();
+        let row = connection.client.query_one("SELECT tenant_id, owner_account_id FROM accounts.tenant", &[]).await.unwrap();
+        let tenant: Vec<u8> = row.get(0);
+        let account: Vec<u8> = row.get(1);
+        assert_ne!(tenant, account);
+        let token = fixture.token().await;
+        let (status, body) = browser.request("POST", "/app/api/verify-email", json!({"token":token,"password":PASSWORD,"confirmation":PASSWORD})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rows = connection.client.query("SELECT tenant_id FROM accounts.tenant WHERE owner_account_id = $1", &[&account]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, Vec<u8>>(0), tenant);
+        assert_eq!(browser.request("POST", "/app/api/campaigns/drafts", json!({})).await.0, StatusCode::OK);
+        connection.client.execute("UPDATE accounts.tenant SET standing = 'restricted', restriction_reason = 'operator' WHERE owner_account_id = $1", &[&account]).await.unwrap();
+        assert_eq!(browser.request("POST", "/app/api/campaigns/drafts", json!({})).await.0, StatusCode::FORBIDDEN);
+        connection.client.execute("UPDATE accounts.tenant SET standing = 'active', restriction_reason = NULL WHERE owner_account_id = $1", &[&account]).await.unwrap();
+        assert_eq!(browser.request("POST", "/app/api/campaigns/drafts", json!({})).await.0, StatusCode::OK);
+        let store = df_persistence::account_store::PostgresAccountStore::open(
+            fixture.url.parse().unwrap(),
+            df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+            1,
+            df_persistence::account_closure::TimeoutPolicy::NotChecked,
+        ).await.unwrap();
+        let directory = crate::campaign_accounts::Accounts::new(store, Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        ).await.unwrap());
+        let account_id = df_types::AccountId::from_bytes(&account).unwrap();
+        for status in ["closing", "closed"] {
+            connection.client.execute("UPDATE accounts.account SET status = $2, email_normalized = CASE WHEN $2 = 'closed' THEN NULL ELSE email_normalized END, email_display = CASE WHEN $2 = 'closed' THEN NULL ELSE email_display END WHERE account_id = $1", &[&account, &status]).await.unwrap();
+            let profile = df_campaign::store::AccountDirectory::profile(&directory, account_id).await.unwrap().unwrap();
+            assert_eq!(profile.tenant, None);
+            let row = connection.client.query_one("SELECT tenant_id FROM accounts.tenant WHERE owner_account_id = $1", &[&account]).await.unwrap();
+            assert_eq!(row.get::<_, Vec<u8>>(0), tenant);
+        }
+        drop(directory);
+        drop(connection);
+        drop(browser);
+        hosted.shutdown().await;
+    }).await;
+}
+
+#[tokio::test]
+async fn failed_tenant_insert_rolls_back_verification_password_and_token_consumption() {
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.request("GET", "/app/api/session", Value::Null).await;
+        let operation = browser.operation().await;
+        let (status, body) = browser.request("POST", "/app/api/sign-up", json!({"email":"journey@example.test","password":PASSWORD,"is_adult":true,"accepts_terms":true,"terms_version":"terms-2026-10","operation":operation})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let connection = Connection::open(
+            &fixture.url.parse().unwrap(),
+            &df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly,
+        ).await.unwrap();
+        let before: String = connection.client.query_one("SELECT phc_hash FROM accounts.password_credential", &[]).await.unwrap().get(0);
+        connection.client.batch_execute("ALTER TABLE accounts.tenant ADD CONSTRAINT reject_tenant CHECK (false) NOT VALID").await.unwrap();
+        let token = fixture.token().await;
+        let request = json!({"token":token,"password":"the miller keeps a second key","confirmation":"the miller keeps a second key"});
+        let (status, body) = browser.request("POST", "/app/api/verify-email", request.clone()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        let row = connection.client.query_one("SELECT a.email_verified_at_ms IS NULL, a.credential_generation, p.phc_hash, t.consumed_at_ms IS NULL, (SELECT count(*) FROM accounts.tenant) FROM accounts.account a JOIN accounts.password_credential p USING(account_id) JOIN accounts.account_token t USING(account_id) WHERE t.purpose = 'verify_email'", &[]).await.unwrap();
+        assert!(row.get::<_, bool>(0));
+        assert_eq!(row.get::<_, i64>(1), 1);
+        assert_eq!(row.get::<_, String>(2), before);
+        assert!(row.get::<_, bool>(3));
+        assert_eq!(row.get::<_, i64>(4), 0);
+        connection.client.batch_execute("ALTER TABLE accounts.tenant DROP CONSTRAINT reject_tenant").await.unwrap();
+        let (status, body) = browser.request("POST", "/app/api/verify-email", request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(connection.client.query_one("SELECT count(*) FROM accounts.tenant", &[]).await.unwrap().get::<_, i64>(0), 1);
+        drop(connection);
+        drop(browser);
+        hosted.shutdown().await;
+    }).await;
 }
 
 async fn create_bound_campaign(browser: &mut Browser) -> String {
@@ -518,7 +707,6 @@ async fn a_bound_tenant_can_create_a_campaign_and_reopen_its_lobby_with_hero_and
         let mut browser = Browser::new(hosted.router());
         browser.verified(fixture).await;
         browser.top_up().await;
-        provision_tenant(fixture).await;
         let campaign = create_bound_campaign(&mut browser).await;
         let operation = browser.operation().await;
         let path = format!("/app/api/campaigns/{campaign}/lobby");
@@ -568,7 +756,9 @@ async fn a_bound_tenant_can_create_a_campaign_and_reopen_its_lobby_with_hero_and
             .await;
         assert_eq!(status, StatusCode::OK, "{ready}");
         assert_eq!(ready["members"][0]["is_ready"], true);
-        assert_eq!(ready["funding_note"], "waiting_for_sponsor");
+        assert_eq!(ready["funding_note"]["host_credit"]["available_micro_dollars"], 30_000_000);
+        assert_eq!(ready["funding_note"]["host_credit"]["is_fundable"], false);
+        assert_eq!(ready["funding_note"]["host_credit"]["consented_at_ms"], Value::Null);
         assert!(
             ready["start_blockers"]
                 .as_array()
@@ -603,7 +793,6 @@ async fn session_start_requires_a_live_owner_fence_and_freezes_the_ready_roster(
         let hosted = Hosted::open(fixture.config()).await.unwrap();
         let mut browser = Browser::new(hosted.router());
         browser.verified(fixture).await;
-        provision_tenant(fixture).await;
         let campaign = create_bound_campaign(&mut browser).await;
         let campaign = df_types::CampaignId::from_hex(&campaign).unwrap();
         let transport = df_persistence::postgres_tls::PostgresTransport::PlaintextLoopbackOnly;
@@ -630,4 +819,209 @@ async fn session_start_requires_a_live_owner_fence_and_freezes_the_ready_roster(
         drop(browser);
         hosted.shutdown().await;
     }).await;
+}
+
+#[tokio::test]
+async fn fundingwire_journey_01_through_consent_and_cancel_before_start() {
+    with_fixture(async |fixture| {
+        let hosted = Hosted::open(fixture.config()).await.unwrap();
+        let mut browser = Browser::new(hosted.router());
+        browser.verified(fixture).await;
+        browser.top_up().await;
+        let campaign = create_bound_campaign(&mut browser).await;
+        let operation = browser.operation().await;
+        let (status, opened) = browser.request("POST", &format!("/app/api/campaigns/{campaign}/lobby"), json!({"operation":operation})).await;
+        assert_eq!(status, StatusCode::OK, "{opened}");
+        let session = opened["session_id"].as_str().unwrap();
+        let path = format!("/app/api/sessions/{session}/lobby");
+        let (status, view) = browser.request("GET", &path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        let quote = &view["funding_note"]["host_credit"];
+        assert_eq!(quote["hourly_micro_dollars"], 3_000_000);
+        assert_eq!(quote["is_fundable"], false);
+        let operation = browser.operation().await;
+        let (status, consented) = browser.request("POST", &format!("{path}/funding/consent"), json!({
+            "price_version":quote["price_version"], "cap_micro_dollars":quote["cap_micro_dollars"],
+            "terms_version":quote["terms_version"], "operation":operation,
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{consented}");
+        assert_eq!(consented["funding_note"]["host_credit"]["is_fundable"], true);
+        let (status, balance) = browser.request("GET", "/app/api/overview", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{balance}");
+        assert_eq!(balance["balance"]["allocated_micro_dollars"], 0);
+        assert_eq!(balance["balance"]["purchased_available_micro_dollars"], 20_000_000);
+        assert_eq!(balance["balance"]["promotional_available_micro_dollars"], 10_000_000);
+        let operation = browser.operation().await;
+        let (status, chosen) = browser.request("POST", &format!("{path}/character"), json!({
+            "choice":"template", "reference":"12".repeat(16), "operation":operation,
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{chosen}");
+        let operation = browser.operation().await;
+        let (status, microphone) = browser.request("POST", &format!("{path}/microphone"), json!({
+            "prefers_typing":true, "permission":null, "operation":operation,
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{microphone}");
+        let operation = browser.operation().await;
+        let (status, ready) = browser.request("POST", &format!("{path}/ready"), json!({"operation":operation})).await;
+        assert_eq!(status, StatusCode::OK, "{ready}");
+        let operation = browser.operation().await;
+        let (status, started) = browser.request("POST", &format!("{path}/start"), json!({"operation":operation})).await;
+        // Finance opens first; no fixture manufactures O1's missing owner placement.
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{started}");
+        let (status, allocated) = browser.request("GET", "/app/api/overview", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{allocated}");
+        assert_eq!(allocated["balance"]["allocated_micro_dollars"], 3_000_000);
+        let operation = browser.operation().await;
+        let (status, cancelled) = browser.request("POST", &format!("{path}/cancel"), json!({"operation":operation})).await;
+        assert_eq!(status, StatusCode::OK, "{cancelled}");
+        let (status, released) = browser.request("GET", "/app/api/overview", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{released}");
+        assert_eq!(released["balance"]["allocated_micro_dollars"], 0);
+        assert_eq!(released["balance"]["purchased_available_micro_dollars"], 20_000_000);
+        assert_eq!(released["balance"]["promotional_available_micro_dollars"], 10_000_000);
+        let operation = browser.operation().await;
+        let (status, replay) = browser.request("POST", &format!("{path}/cancel"), json!({"operation":operation})).await;
+        assert_eq!(status, StatusCode::OK, "{replay}");
+        assert_eq!(browser.request("GET", "/app/api/overview", Value::Null).await.1["balance"], released["balance"]);
+        drop(browser);
+        hosted.shutdown().await;
+    }).await;
+}
+
+#[tokio::test]
+async fn fundingwire_startup_without_migrator_publishes_customer_prices_idempotently() {
+    with_fixture(async |fixture| {
+        let config = fixture.config();
+        let accounts = df_persistence::account_store::PostgresAccountStore::open(
+            config.database.clone(),
+            config.transport.clone(),
+            1,
+            df_persistence::account_closure::TimeoutPolicy::NotChecked,
+        )
+        .await
+        .unwrap();
+        drop(accounts);
+        let mut db = Connection::open(&config.database, &config.transport)
+            .await
+            .unwrap();
+        // The deployment migrator installs schema before a serving instance publishes its prices.
+        crate::database::apply(
+            &mut db,
+            &[
+                (
+                    1,
+                    include_str!("../../df-persistence/migrations/0001_game_decisions.sql"),
+                ),
+                (
+                    3,
+                    include_str!("../../df-persistence/migrations/0003_story_memory.sql"),
+                ),
+                (
+                    8,
+                    include_str!("../../df-persistence/migrations/0008_campaigns.sql"),
+                ),
+                (
+                    9,
+                    include_str!("../../df-persistence/migrations/0009_lobby.sql"),
+                ),
+                (
+                    10,
+                    include_str!("../../df-persistence/migrations/0010_media_catalog.sql"),
+                ),
+                (
+                    11,
+                    include_str!("../../df-persistence/migrations/0011_character_library.sql"),
+                ),
+                (
+                    12,
+                    include_str!("../../df-persistence/migrations/0012_media_exports.sql"),
+                ),
+                (
+                    13,
+                    include_str!("../../df-persistence/migrations/0013_recovery_journal.sql"),
+                ),
+                (
+                    14,
+                    include_str!("../../df-persistence/migrations/0014_media_sweep.sql"),
+                ),
+                (
+                    15,
+                    include_str!("../../df-persistence/migrations/0015_runtime_directory.sql"),
+                ),
+                (
+                    16,
+                    include_str!("../../df-persistence/migrations/0016_table_sessions.sql"),
+                ),
+                (
+                    18,
+                    include_str!("../../df-persistence/migrations/0018_runtime_roles.sql"),
+                ),
+                (
+                    20,
+                    include_str!("../../df-persistence/migrations/0020_finance_journal.sql"),
+                ),
+                (
+                    21,
+                    include_str!("../../df-persistence/migrations/0021_finance_funding.sql"),
+                ),
+                (
+                    22,
+                    include_str!("../../df-persistence/migrations/0022_finance_admission.sql"),
+                ),
+                (
+                    23,
+                    include_str!(
+                        "../../df-persistence/migrations/0023_finance_refunds_disputes.sql"
+                    ),
+                ),
+                (
+                    24,
+                    include_str!("../../df-persistence/migrations/0024_finance_boundary.sql"),
+                ),
+                (
+                    31,
+                    include_str!("../../df-persistence/migrations/0031_host_funding.sql"),
+                ),
+                (100, include_str!("../migrations/0100_stripe_checkout.sql")),
+                (101, include_str!("../migrations/0101_paypal_checkout.sql")),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.client
+                .query_one("SELECT count(*) FROM finance.price_version", &[])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            0
+        );
+        for _ in 0..2 {
+            let mut config = fixture.config();
+            config.migrate_database = None;
+            let hosted = Hosted::open(config).await.unwrap();
+            hosted.shutdown().await;
+            let row = db
+                .client
+                .query_one("SELECT count(*) FROM finance.price_version", &[])
+                .await
+                .unwrap();
+            assert_eq!(row.get::<_, i64>(0), 1);
+            let prices: Value =
+                serde_json::from_slice(include_bytes!("../../../content/customer-prices.json"))
+                    .unwrap();
+            let version: Vec<u8> = db
+                .client
+                .query_one("SELECT price_version_id FROM finance.price_version", &[])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(
+                df_commerce::finance_ids::hex(&version),
+                prices["price_version_id"].as_str().unwrap()
+            );
+        }
+        drop(db);
+    })
+    .await;
 }

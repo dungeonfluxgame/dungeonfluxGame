@@ -735,6 +735,7 @@ fn seat_binding_changed(seat: usize) -> (StatusCode, Json<Value>) {
     )
 }
 
+#[cfg(test)]
 pub(super) fn is_stale_seat_binding(error: &(StatusCode, Json<Value>)) -> bool {
     error.1.0.get("code").and_then(Value::as_str) == Some("seat_binding_stale")
 }

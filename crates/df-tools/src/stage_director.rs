@@ -124,13 +124,13 @@ pub(crate) enum Command<D> {
 #[derive(Clone, Debug)]
 pub(crate) struct ViewDiff<D> {
     pub(crate) scene_changed: bool,
+    pub(crate) turn_changed: bool,
     /// The scene change is the start of a fight: it is not held behind the line being spoken.
     pub(crate) enters_combat: bool,
     /// The story begins with this view: the scene change shows the title card (the payload)
     /// after the wordmark and before the scene enters.
     pub(crate) title: Option<D>,
     /// The server's active combatant changed in this view.
-    pub(crate) turn_changed: bool,
     pub(crate) roll: Option<D>,
     /// A recorded turn that moves without an attack: label and walk, without invented dice.
     pub(crate) turn: Option<D>,
@@ -172,9 +172,9 @@ impl<D> Default for ViewDiff<D> {
     fn default() -> Self {
         Self {
             scene_changed: false,
+            turn_changed: false,
             enters_combat: false,
             title: None,
-            turn_changed: false,
             roll: None,
             turn: None,
             impact: None,
@@ -375,6 +375,7 @@ impl<D: Clone> StageDirector<D> {
         self.battlefield_busy = busy;
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn set_speech_busy(&mut self, busy: bool) {
         self.speech_busy = busy;
     }

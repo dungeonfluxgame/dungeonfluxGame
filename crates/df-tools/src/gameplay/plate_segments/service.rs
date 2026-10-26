@@ -889,6 +889,11 @@ fn record_staging_line(
     );
 }
 
+/// The SHA-256 of `bytes` as lowercase hexadecimal (a reference portrait's identity).
+pub(in crate::gameplay) fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,9 +921,4 @@ mod tests {
             Value::Null
         );
     }
-}
-
-/// The SHA-256 of `bytes` as lowercase hexadecimal (a reference portrait's identity).
-pub(in crate::gameplay) fn sha256_hex(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
 }

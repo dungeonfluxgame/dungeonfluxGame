@@ -120,24 +120,29 @@ impl FundingDirectory for Funding {
         session: SessionId,
     ) -> StoreResult<StartReadiness> {
         self.consume(campaign).await?;
-        let row = self.0.lock().await.client.query_opt(
-            "SELECT s.status = 'open' AND EXISTS (SELECT 1 FROM finance.allocation a \
-             JOIN finance.allocation_consent c ON c.allocation_id = a.allocation_id AND c.consent_revision = a.consent_revision \
-             JOIN finance.payer p ON p.account_id = a.payer_account_id \
-             JOIN accounts.account b ON b.account_id = a.payer_account_id \
-             JOIN campaigns.campaign_member m ON m.account_id = a.payer_account_id AND m.campaign_id = s.campaign_id WHERE m.status = 'active' AND a.session_id = s.session_id AND a.status = 'active' AND p.standing = 'active' AND b.status = 'active' \
-             AND a.authorized_micro_dollars > a.drawn_micro_dollars + a.returned_micro_dollars \
-             AND c.price_version_id = s.price_version_id AND c.approved_hourly_ceiling >= s.hourly_ceiling_micro_dollars \
-             AND c.approved_split_mode = s.split_mode AND c.approved_session_ceiling IS NOT DISTINCT FROM s.session_ceiling_micro_dollars              AND c.approval_threshold_micro_dollars = s.per_request_threshold_micro_dollars              AND c.generation_policy_digest IS NOT DISTINCT FROM s.generation_policy_digest)              FROM finance.session_funding s WHERE s.campaign_id = $1 AND s.session_id = $2",
-            &[&campaign.as_bytes().as_slice(), &session.as_bytes().as_slice()],
-        ).await.map_err(failure)?;
-        let ready = row
-            .map(|row| {
-                row.try_get::<_, bool>(0)
-                    .map_err(|_| StoreError::InvalidRecord)
-            })
-            .transpose()?
-            .unwrap_or(false);
+        let ready = {
+            match df_finance::host_funding::start_fundable(
+                &self.0.lock().await.client,
+                df_commerce::finance_ids::CampaignKey::from_array(*campaign.as_bytes()),
+                df_commerce::finance_ids::SessionKey::from_array(*session.as_bytes()),
+                now_ms()?,
+            )
+            .await
+            {
+                Ok(ready) => ready,
+                Err(df_finance::host_funding::Error::Finance(error)) => {
+                    df_observe::record_audit_line(
+                        "hosted.funding_unavailable",
+                        format!(
+                            "SPEND funding_unavailable sqlstate={}",
+                            error.sqlstate().unwrap_or("connection")
+                        ),
+                    );
+                    return Err(StoreError::Unavailable);
+                }
+                Err(_) => false,
+            }
+        };
         Ok(StartReadiness {
             ready,
             waiting_for_sponsor: !ready,
@@ -150,10 +155,47 @@ impl FundingDirectory for Funding {
         campaign: CampaignId,
         session: SessionId,
     ) -> StoreResult<()> {
-        if self.start_readiness(campaign, session).await?.ready {
-            Ok(())
-        } else {
-            Err(StoreError::Unavailable)
-        }
+        self.consume(campaign).await?;
+        df_finance::host_funding::open(
+            &mut self.0.lock().await.client,
+            df_commerce::finance_ids::CampaignKey::from_array(*campaign.as_bytes()),
+            df_commerce::finance_ids::SessionKey::from_array(*session.as_bytes()),
+            now_ms()?,
+        )
+        .await
+        .map_err(|error| {
+            let sqlstate = match &error {
+                df_finance::host_funding::Error::Finance(error) => {
+                    error.sqlstate().unwrap_or("connection")
+                }
+                _ => "refused",
+            };
+            df_observe::record_audit_line(
+                "hosted.host_funding_refused",
+                format!(
+                    "SPEND host_funding_refused session={} sqlstate={sqlstate}",
+                    df_commerce::finance_ids::hex(session.as_bytes())
+                ),
+            );
+            match error {
+                df_finance::host_funding::Error::Finance(
+                    df_finance::service::FinanceError::Database(_),
+                ) => StoreError::Unknown,
+                _ => StoreError::Unavailable,
+            }
+        })?;
+        df_observe::record_audit_line(
+            "hosted.host_funding_opened",
+            format!(
+                "SPEND host_funding_opened session={}",
+                df_commerce::finance_ids::hex(session.as_bytes())
+            ),
+        );
+        Ok(())
     }
+}
+
+fn now_ms() -> StoreResult<i64> {
+    i64::try_from(df_customer::Clock::now_ms(&df_customer::SystemClock))
+        .map_err(|_| StoreError::InvalidRecord)
 }

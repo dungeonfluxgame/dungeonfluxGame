@@ -1447,7 +1447,7 @@ pub(super) fn record_enemy_turn(
     reason: &str,
     detail: &str,
 ) {
-    let line = enemy_turn_line(
+    let turn = EnemyTurn {
         actor,
         operation,
         run,
@@ -1456,7 +1456,8 @@ pub(super) fn record_enemy_turn(
         action,
         reason,
         detail,
-    );
+    };
+    let line = enemy_turn_line(&turn);
     record_audit_line("gameplay.enemy_turn", line);
     let context = OperationContext {
         trace_parent: String::new(),
@@ -1488,21 +1489,28 @@ pub(super) fn record_enemy_turn(
     span.finish_unmeasured("recorded");
 }
 
-fn enemy_turn_line(
-    actor: &str,
-    operation: &str,
-    run: &str,
+struct EnemyTurn<'a> {
+    actor: &'a str,
+    operation: &'a str,
+    run: &'a str,
     revision: u64,
-    policy_revision: &str,
-    action: &str,
-    reason: &str,
-    detail: &str,
-) -> String {
+    policy_revision: &'a str,
+    action: &'a str,
+    reason: &'a str,
+    detail: &'a str,
+}
+
+fn enemy_turn_line(turn: &EnemyTurn<'_>) -> String {
     format!(
-        "COMBAT turn actor_hash={} operation={operation} run={run} revision={revision} policy={policy_revision:?} action={action} reason_hash={} detail_hash={}",
-        df_observe::seat_hash(actor.as_bytes()),
-        df_observe::operation_hash(reason.as_bytes()),
-        df_observe::operation_hash(detail.as_bytes()),
+        "COMBAT turn actor_hash={} operation={} run={} revision={} policy={:?} action={} reason_hash={} detail_hash={}",
+        df_observe::seat_hash(turn.actor.as_bytes()),
+        turn.operation,
+        turn.run,
+        turn.revision,
+        turn.policy_revision,
+        turn.action,
+        df_observe::operation_hash(turn.reason.as_bytes()),
+        df_observe::operation_hash(turn.detail.as_bytes()),
     )
 }
 
@@ -4087,67 +4095,63 @@ impl Actor {
                     ),
                 );
             })?;
-        if request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32 {
-            if let GameInput::Game(command) = &mut input {
-                if let GameCommand::ProposeAction { choices, .. } = &mut command.command {
-                    let uncertain = if self.owner.has_uncertain_operation() {
-                        match self.session.attempt.as_ref() {
-                            Some(Attempt::Input {
-                                credential: original,
-                                input: original_input,
-                                ..
-                            }) if original == &credential => match original_input.as_ref() {
-                                GameInput::Game(original)
-                                    if original.operation == command.operation
-                                        && original.member == member =>
-                                {
-                                    match &original.command {
-                                        GameCommand::ProposeAction { choices, .. } => Some(
-                                            choices
-                                                .iter()
-                                                .filter(|(field, _)| {
-                                                    field.as_str().starts_with("identity-portrait:")
-                                                })
-                                                .cloned()
-                                                .collect::<Vec<_>>(),
-                                        ),
-                                        _ => None,
-                                    }
-                                }
+        if request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32
+            && let GameInput::Game(command) = &mut input
+            && let GameCommand::ProposeAction { choices, .. } = &mut command.command
+        {
+            let uncertain = if self.owner.has_uncertain_operation() {
+                match self.session.attempt.as_ref() {
+                    Some(Attempt::Input {
+                        credential: original,
+                        input: original_input,
+                        ..
+                    }) if original == &credential => match original_input.as_ref() {
+                        GameInput::Game(original)
+                            if original.operation == command.operation
+                                && original.member == member =>
+                        {
+                            match &original.command {
+                                GameCommand::ProposeAction { choices, .. } => Some(
+                                    choices
+                                        .iter()
+                                        .filter(|(field, _)| {
+                                            field.as_str().starts_with("identity-portrait:")
+                                        })
+                                        .cloned()
+                                        .collect::<Vec<_>>(),
+                                ),
                                 _ => None,
-                            },
-                            _ => None,
+                            }
                         }
-                    } else {
-                        None
-                    };
-                    let committed = self
-                        .owner
-                        .checkpoint()
-                        .state()
-                        .characters
-                        .iter()
-                        .find(|character| character.owner == member)
-                        .map(|character| {
-                            character
-                                .choices
-                                .iter()
-                                .filter(|choice| {
-                                    choice.offer.as_str().starts_with("identity-portrait:")
-                                })
-                                .map(|choice| (choice.offer.clone(), choice.selected.clone()))
-                                .collect::<Vec<_>>()
-                        });
-                    let mut fresh =
-                        super::hero_library::identity_choices(request.character.as_ref())?;
-                    if let Some(portrait) = portrait {
-                        fresh.extend(portrait.choices().map_err(unavailable)?);
-                    }
-                    choices.extend(super::creator_portraits::frozen_metadata(
-                        uncertain, committed, fresh,
-                    ));
+                        _ => None,
+                    },
+                    _ => None,
                 }
+            } else {
+                None
+            };
+            let committed = self
+                .owner
+                .checkpoint()
+                .state()
+                .characters
+                .iter()
+                .find(|character| character.owner == member)
+                .map(|character| {
+                    character
+                        .choices
+                        .iter()
+                        .filter(|choice| choice.offer.as_str().starts_with("identity-portrait:"))
+                        .map(|choice| (choice.offer.clone(), choice.selected.clone()))
+                        .collect::<Vec<_>>()
+                });
+            let mut fresh = super::hero_library::identity_choices(request.character.as_ref())?;
+            if let Some(portrait) = portrait {
+                fresh.extend(portrait.choices().map_err(unavailable)?);
             }
+            choices.extend(super::creator_portraits::frozen_metadata(
+                uncertain, committed, fresh,
+            ));
         }
         let GameInput::Game(command) = &input else {
             return Err(tonic::Status::internal("canonical command unavailable"));
@@ -4778,7 +4782,7 @@ impl Actor {
         let after = self.owner.checkpoint();
         let action_lines =
             if kind == rpc::GameplayActionKind::ShortRest && !request.action_choices.is_empty() {
-                match rest_hit_die_details(before, &after, member) {
+                match rest_hit_die_details(before, after, member) {
                     Ok(Some(details)) => {
                         vec![super::table_log::ActionLine {
                             roll: None,
@@ -4859,13 +4863,12 @@ impl Actor {
                     after.state().characters.len()
                 ),
             );
-            if let Some(favour) = reward.favour {
-                if let Err(error) =
+            if let Some(favour) = reward.favour
+                && let Err(error) =
                     self.notebook
                         .add_note(member, &hero, &favour, "The completed errand")
-                {
-                    record_unavailable("reward-favour-note", &error.to_string());
-                }
+            {
+                record_unavailable("reward-favour-note", &error.to_string());
             }
         } else {
             match (
@@ -6252,43 +6255,36 @@ fn rest_hit_die_details(
         return Err(RepositoryError::InvalidCandidate);
     };
     let before_dice =
-        super::journey::value(before.state(), who, "hit-point-dice").map_err(|error| {
+        super::journey::value(before.state(), who, "hit-point-dice").inspect_err(|_| {
             refusal_detail::note("short-rest-hit-die-state");
-            error
         })?;
     let after_dice =
-        super::journey::value(after.state(), who, "hit-point-dice").map_err(|error| {
+        super::journey::value(after.state(), who, "hit-point-dice").inspect_err(|_| {
             refusal_detail::note("short-rest-hit-die-state");
-            error
         })?;
     if !hit_point_die_was_spent(before_dice, after_dice) {
         return Ok(None);
     }
     let die =
-        super::journey::value(after.state(), who, "short-rest-die-roll").map_err(|error| {
+        super::journey::value(after.state(), who, "short-rest-die-roll").inspect_err(|_| {
             refusal_detail::note("short-rest-hit-die-state");
-            error
         })?;
     if die == 0 {
         return Ok(None);
     }
     let before_hit_points =
-        super::journey::value(before.state(), who, "hit-points").map_err(|error| {
+        super::journey::value(before.state(), who, "hit-points").inspect_err(|_| {
             refusal_detail::note("short-rest-hit-die-state");
-            error
         })?;
-    let hit_points = super::journey::value(after.state(), who, "hit-points").map_err(|error| {
+    let hit_points = super::journey::value(after.state(), who, "hit-points").inspect_err(|_| {
         refusal_detail::note("short-rest-hit-die-state");
-        error
     })?;
-    let maximum = super::journey::maximum_hit_points(after.state(), who).map_err(|error| {
+    let maximum = super::journey::maximum_hit_points(after.state(), who).inspect_err(|_| {
         refusal_detail::note("short-rest-hit-die-state");
-        error
     })?;
     let constitution = u8::try_from(
-        super::journey::value(after.state(), who, "constitution").map_err(|error| {
+        super::journey::value(after.state(), who, "constitution").inspect_err(|_| {
             refusal_detail::note("short-rest-hit-die-state");
-            error
         })?,
     )
     .map_err(|_| {
@@ -6397,8 +6393,7 @@ mod qualification_tests {
         };
         refusal_detail::begin_action();
         let failure = wire::journey_input(&request, model::member().unwrap(), &current)
-            .err()
-            .expect("invalid character bounds");
+            .expect_err("invalid character bounds");
         let result = Err(failure);
         record_action_result(request.action_kind, &result);
         record_action_result(request.action_kind, &result);
@@ -6688,20 +6683,20 @@ mod qualification_tests {
 
 #[cfg(test)]
 mod enemy_turn_audit_tests {
-    use super::enemy_turn_line;
+    use super::{EnemyTurn, enemy_turn_line};
 
     #[test]
     fn enemy_turn_audit_includes_actor_correlation_policy_and_reason() {
-        let line = enemy_turn_line(
-            "Bandit 1",
-            "010203",
-            "aabbcc",
-            42,
-            "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2",
-            "dodge",
-            "no attack target is currently reachable",
-            "Dodge",
-        );
+        let line = enemy_turn_line(&EnemyTurn {
+            actor: "Bandit 1",
+            operation: "010203",
+            run: "aabbcc",
+            revision: 42,
+            policy_revision: "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2",
+            action: "dodge",
+            reason: "no attack target is currently reachable",
+            detail: "Dodge",
+        });
         assert!(line.starts_with(&format!(
             "COMBAT turn actor_hash={} operation=010203 run=aabbcc revision=42",
             df_observe::seat_hash(b"Bandit 1")

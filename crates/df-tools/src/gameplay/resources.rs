@@ -90,6 +90,10 @@ pub(in crate::gameplay) enum ResourceKind {
     PlateSegments,
     /// Who and where everyone is in a scene plate (identity, facing, layout): derived from the
     /// plate's segments and the vision judge, kept as a note beside the cached plate.
+    #[expect(
+        dead_code,
+        reason = "Planned Scene plates service caller (planning/asset-engine.md)."
+    )]
     PlateStaging,
     /// A generated 3D splat world for a place.
     SplatWorld,
@@ -320,8 +324,6 @@ pub(in crate::gameplay) enum Unit {
     VoiceCharacter,
     SttSecond,
     TextToken,
-    /// One creator Jev classification attempt; supplier currency cost is unreported.
-    CreatorClassificationCall,
     MusicCall,
     /// One input token of a text-embedding call (the story memory).
     EmbeddingToken,
@@ -339,7 +341,6 @@ impl Unit {
             Self::VoiceCharacter => "voice_character",
             Self::SttSecond => "stt_second",
             Self::TextToken => "text_token",
-            Self::CreatorClassificationCall => "creator_classification_call",
             Self::MusicCall => "music_call",
             Self::EmbeddingToken => "embedding_token",
             Self::SegmentCall => "segment_call",
@@ -430,6 +431,7 @@ impl SpendLedger {
     }
 
     /// Every account that has seen a movement: the dev tools' read of the ledger.
+    #[cfg(test)]
     pub(in crate::gameplay) fn report(&self) -> Vec<(Unit, Spend)> {
         locked(&self.accounts)
             .iter()
@@ -711,6 +713,7 @@ image_spec!(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum SplatWorldFormat {
     Ply,
+    #[cfg(test)]
     Sog,
 }
 
@@ -718,6 +721,7 @@ impl SplatWorldFormat {
     const fn label(self) -> &'static str {
         match self {
             Self::Ply => "ply",
+            #[cfg(test)]
             Self::Sog => "sog",
         }
     }
@@ -752,11 +756,6 @@ impl SplatWorldSpec {
     /// The place facts the photographic prompt is built from.
     pub(in crate::gameplay) fn prompt_facts(&self) -> &[String] {
         &self.prompt_facts
-    }
-
-    /// The requested splat encoding.
-    pub(in crate::gameplay) fn format(&self) -> SplatWorldFormat {
-        self.format
     }
 }
 
@@ -1299,10 +1298,8 @@ impl Hub {
             let completed = registry.entries.get(key).is_some_and(|entry| {
                 !matches!(entry.state, State::Queued | State::InFlight { .. })
             });
-            if completed {
-                if let Some(entry) = registry.entries.remove(key) {
-                    audit(&mut lines, "invalidated", key, &entry, 0, "", "");
-                }
+            if completed && let Some(entry) = registry.entries.remove(key) {
+                audit(&mut lines, "invalidated", key, &entry, 0, "", "");
             }
         }
         emit(lines);

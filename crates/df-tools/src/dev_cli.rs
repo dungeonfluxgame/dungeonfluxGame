@@ -395,7 +395,7 @@ async fn dispatch(
                 && (flag("--input-id").is_none() || flag("--confirmation-token").is_none()) {
                 return client.print_error("confirm needs --input-id and --confirmation-token from say");
             }
-            let mut body = match act_body(&positional, &options) {
+            let mut body = match act_body(positional, options) {
                 Ok(body) => body,
                 Err(message) => return client.print_error(message),
             };

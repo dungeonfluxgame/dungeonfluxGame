@@ -111,7 +111,7 @@ fn position(person: &SegmentedPerson) -> (f32, f32) {
     person
         .head
         .as_ref()
-        .map_or((person.anchor.x, person.anchor.y), |head| centre(head))
+        .map_or((person.anchor.x, person.anchor.y), centre)
 }
 
 fn head_height(person: &SegmentedPerson) -> Option<f32> {

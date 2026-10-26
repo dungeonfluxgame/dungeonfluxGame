@@ -97,11 +97,10 @@ pub(super) async fn actor_view(
             }
         }
     };
-    let viewed = tokio::time::timeout_at(reply_deadline, wait)
+    tokio::time::timeout_at(reply_deadline, wait)
         .await
         .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
-        .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
-    viewed
+        .map_err(|_| Status::unavailable("gameplay actor stopped"))?
 }
 
 mod reclaim;

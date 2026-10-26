@@ -121,35 +121,35 @@ impl Portraits {
                 .join("artifacts/tmp/creator-portraits")
                 .join(format!("run-{}", std::process::id()));
             std::fs::create_dir_all(&manifest)?;
-            if let Ok(key) = std::env::var("DF_GAMEPLAY_CREATOR_BFL_KEY") {
-                if !key.is_empty() {
-                    let provider = df_providers::NativeBflImageProvider::new(
-                        df_providers::BflImageConfig::live(),
-                        &key,
-                        settings.deadline,
-                    )
-                    .map_err(|_| {
-                        io::Error::other("Alternate portrait provider configuration refused")
-                    })?;
-                    let mut inputs = config::ImageryInputs::from_environment();
-                    inputs.credential = std::env::var("DF_GAMEPLAY_CREATOR_OPENAI_KEY");
-                    inputs.mode = Ok("on".into());
-                    inputs.quality = Ok("medium".into());
-                    inputs.deadline_seconds = Ok("170".into());
-                    let config::ImagerySettings::On(mut alternate_settings) =
-                        config::imagery_settings(inputs, current, config::content_rating())?
-                    else {
-                        return Err(io::Error::other("Alternate portrait configuration refused"));
-                    };
-                    alternate_settings.deadline = settings.deadline;
-                    alternate = Some(Imagery::new_in_hub(
-                        alternate_settings,
-                        imagery::ImageRoute::Bfl(provider),
-                        Some(&manifest),
-                        hub.clone(),
-                        true,
-                    )?);
-                }
+            if let Ok(key) = std::env::var("DF_GAMEPLAY_CREATOR_BFL_KEY")
+                && !key.is_empty()
+            {
+                let provider = df_providers::NativeBflImageProvider::new(
+                    df_providers::BflImageConfig::live(),
+                    &key,
+                    settings.deadline,
+                )
+                .map_err(|_| {
+                    io::Error::other("Alternate portrait provider configuration refused")
+                })?;
+                let mut inputs = config::ImageryInputs::from_environment();
+                inputs.credential = std::env::var("DF_GAMEPLAY_CREATOR_OPENAI_KEY");
+                inputs.mode = Ok("on".into());
+                inputs.quality = Ok("medium".into());
+                inputs.deadline_seconds = Ok("170".into());
+                let config::ImagerySettings::On(mut alternate_settings) =
+                    config::imagery_settings(inputs, current, config::content_rating())?
+                else {
+                    return Err(io::Error::other("Alternate portrait configuration refused"));
+                };
+                alternate_settings.deadline = settings.deadline;
+                alternate = Some(Imagery::new_in_hub(
+                    alternate_settings,
+                    imagery::ImageRoute::Bfl(provider),
+                    Some(&manifest),
+                    hub.clone(),
+                    true,
+                )?);
             }
             hub.set_limits(
                 super::resources::ResourceKind::CreatorPortrait,

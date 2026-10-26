@@ -608,6 +608,7 @@ pub(in crate::gameplay) fn common_noun(name: &str, proper: &[String]) -> String 
 
 /// Maps the three answered slots onto a place of this run. Pure: the same answer and request give
 /// the same record, so a test needs no provider.
+#[cfg(test)]
 pub(in crate::gameplay) fn build(
     request: &CreationRequest,
     place_text: &str,

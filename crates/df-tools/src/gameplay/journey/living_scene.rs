@@ -2431,16 +2431,8 @@ pub(crate) fn inventory_projection(
                 ),
             };
         }
-        entry.owner_id = entry
-            .owner_id
-            .as_deref()
-            .map(|actor| actor_ref(actor))
-            .transpose()?;
-        entry.holder_id = entry
-            .holder_id
-            .as_deref()
-            .map(|actor| actor_ref(actor))
-            .transpose()?;
+        entry.owner_id = entry.owner_id.as_deref().map(&mut actor_ref).transpose()?;
+        entry.holder_id = entry.holder_id.as_deref().map(&mut actor_ref).transpose()?;
         if let SceneInventoryLocation::Held { holder_id } = &mut entry.location {
             *holder_id = actor_ref(holder_id.as_str())?;
         }
@@ -2940,7 +2932,7 @@ pub(in crate::gameplay) fn released_item_detail(
                 .map_err(|_| invalid())?;
             if check.succeeded
                 && check.total >= i32::from(dc)
-                && check.source_revision.splitn(4, ':').nth(2)
+                && check.source_revision.split(':').nth(2)
                     == Some(crate::gameplay::investigation::finding_skill(skill))
             {
                 return Ok(Some(detail));
@@ -3008,8 +3000,8 @@ pub(in crate::gameplay) fn observation_journal(
         {
             return Err(invalid());
         }
-        if let Some(detail) = read(decision)?.and_then(|entry| entry.established_detail) {
-            if !check.succeeded
+        if let Some(detail) = read(decision)?.and_then(|entry| entry.established_detail)
+            && (!check.succeeded
                 || record.unavailable
                 || !detail.consistency_approved
                 || detail.target != record.target
@@ -3018,10 +3010,9 @@ pub(in crate::gameplay) fn observation_journal(
                 || detail.question.chars().count() > 500
                 || detail.detail.trim().is_empty()
                 || detail.detail.chars().count() > 240
-                || detail.detail.chars().any(char::is_control)
-            {
-                return Err(invalid());
-            }
+                || detail.detail.chars().any(char::is_control))
+        {
+            return Err(invalid());
         }
         records.push(record);
     }
@@ -3041,6 +3032,8 @@ pub(in crate::gameplay) fn observation_source_hash(
     Ok(hex(&Sha256::digest(bytes)))
 }
 
+/// Test convenience for observations without established detail.
+#[cfg(test)]
 pub(in crate::gameplay) fn commit_observation(
     current: &Checkpoint,
     expected_basis: Basis,
@@ -3465,7 +3458,15 @@ pub(crate) enum NpcInventoryAction {
         /// Required when the acting NPC is not the canonical owner.
         owner_consent_id: Option<String>,
     },
+    #[expect(
+        dead_code,
+        reason = "scene-trade admission will construct purchases under planning/interaction-engine.md"
+    )]
     Purchase,
+    #[expect(
+        dead_code,
+        reason = "scene-theft admission will construct steals under planning/interaction-engine.md"
+    )]
     Steal,
 }
 
@@ -5651,7 +5652,7 @@ fn build_snapshot(
         .into_iter()
         .filter(|(_, entry)| entry.change.from == setting.place_id)
         .map(|(revision, _)| revision)
-        .last();
+        .next_back();
     let mut changes = Vec::new();
     let mut witnessed = Vec::new();
     // Replay the journal in order on the same base the projection uses, so each steal receipt
@@ -5729,14 +5730,12 @@ fn build_snapshot(
                 if interaction.place != setting.place_id
                     && !shared_trade(change)
                     && !matches!(change.kind, SceneChangeKind::Moved { .. })
-                {
-                    if let Some(thing) = replay
+                    && let Some(thing) = replay
                         .things
                         .iter_mut()
                         .find(|thing| thing.id == change.entity_id)
-                    {
-                        *thing = possession.thing.clone();
-                    }
+                {
+                    *thing = possession.thing.clone();
                 }
             }
         }
@@ -7154,13 +7153,6 @@ pub(in crate::gameplay) async fn judge_recipient(
         .choose_option(&state, RECIPIENT_INSTRUCTIONS, &choices.criteria)
         .await?;
     Ok(choices.person_ids.get(position).cloned())
-}
-
-pub(super) fn stage(
-    current: &Checkpoint,
-    command: &CommandInput,
-) -> Result<Checkpoint, RepositoryError> {
-    stage_inner(current, command, None, None, Vec::new())
 }
 
 pub(super) fn stage_with_supplier(

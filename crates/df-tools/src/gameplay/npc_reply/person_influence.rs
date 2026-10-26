@@ -341,7 +341,7 @@ mod tests {
     };
     use super::super::{
         InfluenceCheckInput, InfluenceVerdict, NpcReplyContext, NpcVoice, StoryFacts,
-        tests::ref069_existing_facts,
+        TestModelResponder, tests::ref069_existing_facts,
     };
 
     const PERSON: &str = "mira-tull";
@@ -468,26 +468,24 @@ mod tests {
     /// Jev reading the line as `approach`, every question part and the subject as `other`, and
     /// the person's willingness as `willingness`. Any other request is unavailable.
     fn jev(approach: &'static str, willingness: &'static str) -> FakeEndpoint {
-        let compute: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> = Arc::new(
-            move |body: &Value| {
-                let choice = if key_of(body, "flirting").is_some() {
-                    key_of(body, approach)
-                } else if key_of(body, "no_request").is_some() {
-                    key_of(body, willingness)
-                } else if key_of(body, "small_talk").is_some() || key_of(body, "errand").is_some() {
-                    key_of(body, "other")
-                } else {
-                    None
-                };
-                match choice {
-                    Some(choice) => (
-                        200,
-                        json!({"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}}),
-                    ),
-                    None => (500, json!({"error": "unavailable"})),
-                }
-            },
-        );
+        let compute: TestModelResponder = Arc::new(move |body: &Value| {
+            let choice = if key_of(body, "flirting").is_some() {
+                key_of(body, approach)
+            } else if key_of(body, "no_request").is_some() {
+                key_of(body, willingness)
+            } else if key_of(body, "small_talk").is_some() || key_of(body, "errand").is_some() {
+                key_of(body, "other")
+            } else {
+                None
+            };
+            match choice {
+                Some(choice) => (
+                    200,
+                    json!({"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}}),
+                ),
+                None => (500, json!({"error": "unavailable"})),
+            }
+        });
         ref069_existing_facts(
             (0..40)
                 .map(|_| Reply::ComputeResponse(compute.clone()))

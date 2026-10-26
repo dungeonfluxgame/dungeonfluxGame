@@ -26,7 +26,7 @@ use super::{
         SignedIn, VisitorPost, clear_secret_cookie, reply, secret_cookie,
     },
     ids,
-    ports::{Actor, CampaignDirectory, Ports, RequestDecision},
+    ports::{Actor, CampaignDirectory, FinancePort, Ports, RequestDecision},
     state::AppApiState,
 };
 use crate::security::cookie;
@@ -285,13 +285,89 @@ pub(super) async fn lobby<S: AccountStore, M: EmailSender, P: Ports>(
     Path(session_id): Path<String>,
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
-    reply(
-        state
+    let view = state
+        .ports
+        .campaigns()
+        .lobby(&actor(&caller), session)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
+}
+
+async fn lobby_reply<S: AccountStore, M: EmailSender, P: Ports>(
+    state: &AppApiState<S, M, P>,
+    caller: &Authenticated,
+    session: df_types::SessionId,
+    mut view: LobbyView,
+) -> ApiResult<LobbyView> {
+    if !view.has_started
+        && let Some(quote) = state
             .ports
-            .campaigns()
-            .lobby(&actor(&caller), session)
-            .await?,
-    )
+            .finance()
+            .host_credit(caller.account.id, session)
+            .await?
+    {
+        view.funding_note = df_account_app::wire_campaign::FundingNote::HostCredit(quote);
+        if quote.is_fundable {
+            view.start_blockers.retain(|blocker| {
+                *blocker != df_account_app::wire_campaign::StartBlocker::FundingNotReady
+            });
+        }
+        if !quote.is_fundable
+            && !view
+                .start_blockers
+                .contains(&df_account_app::wire_campaign::StartBlocker::FundingNotReady)
+        {
+            view.start_blockers
+                .push(df_account_app::wire_campaign::StartBlocker::FundingNotReady);
+        }
+    }
+    reply(view)
+}
+
+pub(super) async fn cancel_host_lobby<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SessionPost(caller): SessionPost,
+    Path(session_id): Path<String>,
+    ApiBody(body): ApiBody<OperationRequest>,
+) -> ApiResult<Accepted> {
+    let session = ids::session(&session_id)?;
+    ids::operation(&body.operation)?;
+    state
+        .ports
+        .finance()
+        .cancel_host_lobby(caller.account.id, session)
+        .await?;
+    reply(ACCEPTED)
+}
+
+pub(super) async fn consent_host_credit<S: AccountStore, M: EmailSender, P: Ports>(
+    State(state): State<AppApiState<S, M, P>>,
+    SessionPost(caller): SessionPost,
+    Path(session_id): Path<String>,
+    ApiBody(body): ApiBody<df_account_app::wire_campaign::HostConsentRequest>,
+) -> ApiResult<LobbyView> {
+    let session = ids::session(&session_id)?;
+    let operation = ids::operation(&body.operation)?;
+    state
+        .ports
+        .campaigns()
+        .lobby(&actor(&caller), session)
+        .await?;
+    state
+        .ports
+        .finance()
+        .consent_host_credit(caller.account.id, session, body, operation)
+        .await?;
+    df_observe::record_audit_line(
+        "portal.host_credit_consented",
+        format!("SPEND host_credit_consented session={session_id}"),
+    );
+    let view = state
+        .ports
+        .campaigns()
+        .lobby(&actor(&caller), session)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn choose_character<S: AccountStore, M: EmailSender, P: Ports>(
@@ -310,13 +386,12 @@ pub(super) async fn choose_character<S: AccountStore, M: EmailSender, P: Ports>(
     if let Some(reference) = &body.reference {
         ids::campaign(reference)?;
     }
-    reply(
-        state
-            .ports
-            .campaigns()
-            .choose_character(&actor(&caller), session, body)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .choose_character(&actor(&caller), session, body)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 async fn set_ready<S: AccountStore, M: EmailSender, P: Ports>(
@@ -328,13 +403,12 @@ async fn set_ready<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .set_ready(&actor(&caller), session, is_ready)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .set_ready(&actor(&caller), session, is_ready)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn ready<S: AccountStore, M: EmailSender, P: Ports>(
@@ -363,13 +437,12 @@ pub(super) async fn microphone<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .report_microphone(&actor(&caller), session, body)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .report_microphone(&actor(&caller), session, body)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn start_session<S: AccountStore, M: EmailSender, P: Ports>(
@@ -380,13 +453,12 @@ pub(super) async fn start_session<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .start_session(&actor(&caller), session)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .start_session(&actor(&caller), session)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn lookup_display<S: AccountStore, M: EmailSender, P: Ports>(
@@ -413,13 +485,12 @@ pub(super) async fn approve_display<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .approve_display(&actor(&caller), session, &body.pairing_id)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .approve_display(&actor(&caller), session, &body.pairing_id)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn unpair_display<S: AccountStore, M: EmailSender, P: Ports>(
@@ -430,13 +501,12 @@ pub(super) async fn unpair_display<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .unpair_display(&actor(&caller), session, &ticket_id)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .unpair_display(&actor(&caller), session, &ticket_id)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn unpair_all_displays<S: AccountStore, M: EmailSender, P: Ports>(
@@ -447,13 +517,12 @@ pub(super) async fn unpair_all_displays<S: AccountStore, M: EmailSender, P: Port
 ) -> ApiResult<LobbyView> {
     let session = ids::session(&session_id)?;
     ids::operation(&body.operation)?;
-    reply(
-        state
-            .ports
-            .campaigns()
-            .unpair_all_displays(&actor(&caller), session)
-            .await?,
-    )
+    let view = state
+        .ports
+        .campaigns()
+        .unpair_all_displays(&actor(&caller), session)
+        .await?;
+    lobby_reply(&state, &caller, session, view).await
 }
 
 pub(super) async fn join_preview<S: AccountStore, M: EmailSender, P: Ports>(

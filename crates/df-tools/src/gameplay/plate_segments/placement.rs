@@ -89,8 +89,8 @@ fn open_space(head: &HeadBox, side: Side, others: &[HeadBox]) -> f32 {
         .iter()
         .filter(|other| other.top < band.bottom && band.top < other.bottom)
         .filter_map(|other| match side {
-            Side::Left => (other.right <= head.left).then(|| head.left - other.right),
-            Side::Right => (other.left >= head.right).then(|| other.left - head.right),
+            Side::Left => (other.right <= head.left).then_some(head.left - other.right),
+            Side::Right => (other.left >= head.right).then_some(other.left - head.right),
         })
         .fold(edge, f32::min)
 }

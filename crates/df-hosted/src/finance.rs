@@ -20,6 +20,114 @@ use std::sync::Arc;
 #[path = "finance_service.rs"]
 mod backend;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+enum CustomerPace {
+    Story,
+    Immersive,
+    Cinematic,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustomerPrice {
+    name: CustomerPace,
+    micro_dollars_per_hour: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustomerPrices {
+    price_version_id: String,
+    effective_date: String,
+    prices: [CustomerPrice; 3],
+}
+
+impl CustomerPrices {
+    fn parse(bytes: &[u8]) -> PortResult<Self> {
+        let prices: Self = serde_json::from_slice(bytes).map_err(|_| PortError::Unavailable)?;
+        let date = prices.effective_date.as_bytes();
+        if date.len() != 10
+            || date.iter().enumerate().any(|(index, byte)| {
+                if index == 4 || index == 7 {
+                    *byte != b'-'
+                } else {
+                    !byte.is_ascii_digit()
+                }
+            })
+        {
+            return Err(PortError::Unavailable);
+        }
+        for name in [
+            CustomerPace::Story,
+            CustomerPace::Immersive,
+            CustomerPace::Cinematic,
+        ] {
+            if prices
+                .prices
+                .iter()
+                .filter(|price| price.name == name)
+                .count()
+                != 1
+            {
+                return Err(PortError::Unavailable);
+            }
+        }
+        Ok(prices)
+    }
+
+    fn amount(&self, name: CustomerPace) -> PortResult<u64> {
+        self.prices
+            .iter()
+            .find(|price| price.name == name)
+            .map(|price| price.micro_dollars_per_hour)
+            .ok_or(PortError::Unavailable)
+    }
+}
+
+pub(crate) async fn publish_customer_prices(client: &mut tokio_postgres::Client) -> PortResult<()> {
+    let bytes = tokio::task::spawn_blocking(|| std::fs::read("content/customer-prices.json"))
+        .await
+        .map_err(|_| PortError::Unavailable)?
+        .map_err(|_| PortError::Unavailable)?;
+    let config = CustomerPrices::parse(&bytes)?;
+    let version_id = df_commerce::finance_ids::PriceVersionId::from_hex(&config.price_version_id)
+        .ok_or(PortError::Unavailable)?;
+    let effective: i64 = client.query_one(
+        "SELECT (extract(epoch FROM ($1::text::date::timestamp AT TIME ZONE 'UTC')) * 1000)::bigint",
+        &[&config.effective_date],
+    ).await.map_err(|_| PortError::Unavailable)?.try_get(0).map_err(|_| PortError::Unavailable)?;
+    let version = df_commerce::price_schedule::PriceVersion {
+        id: version_id,
+        label: format!("customer-{}", config.effective_date),
+        currency: CurrencyTag::USD,
+        platform_rate_micro_dollars_per_hour: 0,
+        markup_numerator: 1,
+        markup_denominator: 1,
+        tariff: Vec::new(),
+        proposed_pilot: true,
+    };
+    df_finance::host_funding::publish_host_price_version(
+        client,
+        &version,
+        df_finance::host_funding::HostPrices {
+            story_micro_dollars: config.amount(CustomerPace::Story)?,
+            immersive_micro_dollars: config.amount(CustomerPace::Immersive)?,
+            cinematic_micro_dollars: config.amount(CustomerPace::Cinematic)?,
+        },
+        effective,
+    )
+    .await
+    .map_err(host_funding_error)?;
+    df_observe::record_audit_line(
+        "hosted.customer_prices_published",
+        format!(
+            "SPEND customer_prices_published version={} effective_date={}",
+            config.price_version_id, config.effective_date,
+        ),
+    );
+    Ok(())
+}
+
 #[derive(Clone)]
 pub(crate) struct Finance {
     inner: Arc<Inner>,
@@ -65,6 +173,16 @@ impl Finance {
         reference: &str,
     ) -> PortResult<()> {
         self.purchase_from(account, cents, "stripe", reference)
+            .await
+    }
+
+    pub(crate) async fn paypal_purchase(
+        &self,
+        account: AccountId,
+        cents: u32,
+        reference: &str,
+    ) -> PortResult<()> {
+        self.purchase_from(account, cents, "paypal", reference)
             .await
     }
 
@@ -127,7 +245,126 @@ fn finance_error(error: df_finance::service::FinanceError) -> PortError {
     }
 }
 
+fn cancel_error(error: df_campaign::errors::StoreError) -> PortError {
+    match error {
+        df_campaign::errors::StoreError::InvalidRecord => PortError::Forbidden,
+        df_campaign::errors::StoreError::Unknown => PortError::UnknownOutcome,
+        _ => PortError::Unavailable,
+    }
+}
+
+fn host_funding_error(error: df_finance::host_funding::Error) -> PortError {
+    use df_finance::host_funding::Error;
+    let (reason, refusal) = match error {
+        Error::Finance(error) => return finance_error(error),
+        Error::NotHost => ("not_host", PortError::NotFound),
+        Error::RestrictedAccount => ("restricted_account", PortError::Forbidden),
+        Error::PriceUnavailable => ("price_unavailable", PortError::Unavailable),
+        Error::StalePriceVersion => (
+            "stale_price",
+            PortError::Because(
+                df_account_app::wire::ErrorCode::StaleForm,
+                df_account_app::wire_campaign::Reason::StaleRevision,
+            ),
+        ),
+        Error::InvalidConsent | Error::ConsentRequired => (
+            "consent_required",
+            PortError::Refused(df_account_app::wire::Refusal::ConsentRequired),
+        ),
+        Error::InsufficientCredit => (
+            "insufficient_credit",
+            PortError::Refused(df_account_app::wire::Refusal::AmountOutOfRange),
+        ),
+        Error::NotInLobby | Error::Closed => ("session_closed", PortError::Forbidden),
+    };
+    df_observe::record_audit_line(
+        "hosted.host_funding_refused",
+        format!("SPEND host_funding_refused reason={reason}"),
+    );
+    refusal
+}
+
 impl FinancePort for Finance {
+    async fn cancel_host_lobby(&self, account: AccountId, session: SessionId) -> PortResult<()> {
+        let mut service = self.inner.service.lock().await;
+        crate::campaign_sessions::Sessions::cancel_before_start(service.client(), account, session)
+            .await
+            .map_err(cancel_error)?;
+        service
+            .close_host_session(df_commerce::finance_ids::SessionKey::from_array(
+                *session.as_bytes(),
+            ))
+            .await
+            .map_err(host_funding_error)
+    }
+
+    async fn host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+    ) -> PortResult<Option<df_account_app::wire_campaign::HostCreditView>> {
+        let service = self.inner.service.lock().await;
+        let now = i64::try_from(df_customer::Clock::now_ms(&df_customer::SystemClock))
+            .map_err(|_| PortError::Unavailable)?;
+        match df_finance::host_funding::quote(
+            service.client(),
+            df_commerce::finance_ids::SessionKey::from_array(*session.as_bytes()),
+            PayerId::from_array(*account.as_bytes()),
+            now,
+        )
+        .await
+        {
+            Ok(quote) => Ok(Some(df_account_app::wire_campaign::HostCreditView {
+                price_version: *quote.price_version.as_bytes(),
+                hourly_micro_dollars: quote.hourly_micro_dollars,
+                available_micro_dollars: quote.available_micro_dollars,
+                cap_micro_dollars: quote.cap_micro_dollars,
+                terms_version: df_finance::host_funding::CONSENT_TERMS_VERSION,
+                consented_at_ms: quote.consented_at_ms,
+                is_fundable: quote.is_fundable,
+            })),
+            Err(df_finance::host_funding::Error::NotHost) => Ok(None),
+            Err(df_finance::host_funding::Error::PriceUnavailable) => {
+                df_observe::record_audit_line(
+                    "hosted.host_price_unavailable",
+                    format!(
+                        "SPEND host_price_unavailable session={}",
+                        df_commerce::finance_ids::hex(session.as_bytes())
+                    ),
+                );
+                Ok(None)
+            }
+            Err(error) => Err(host_funding_error(error)),
+        }
+    }
+
+    async fn consent_host_credit(
+        &self,
+        account: AccountId,
+        session: SessionId,
+        request: df_account_app::wire_campaign::HostConsentRequest,
+        operation: OperationId,
+    ) -> PortResult<()> {
+        self.inner
+            .service
+            .lock()
+            .await
+            .record_host_consent(df_finance::host_funding::ConsentCommand {
+                session: df_commerce::finance_ids::SessionKey::from_array(*session.as_bytes()),
+                account: PayerId::from_array(*account.as_bytes()),
+                operation: df_commerce::finance_ids::OperationKey::from_array(
+                    *operation.as_bytes(),
+                ),
+                price_version: df_commerce::finance_ids::PriceVersionId::from_array(
+                    request.price_version,
+                ),
+                cap_micro_dollars: request.cap_micro_dollars,
+                terms_version: request.terms_version,
+            })
+            .await
+            .map_err(host_funding_error)
+    }
+
     async fn overview(&self, account: AccountId, is_verified: bool) -> PortResult<OverviewView> {
         let record = self
             .inner
@@ -352,6 +589,84 @@ fn derive_email_key(key: &[u8], normalized_email: &str) -> PortResult<[u8; 32]> 
 
 #[cfg(test)]
 mod tests {
+    fn published_prices(page: &str) -> Vec<(super::CustomerPace, u64)> {
+        page.split("class=\"pace-item\"")
+            .skip(1)
+            .map(|block| {
+                let block = block.split("</div>").next().unwrap();
+                let field = |class: &str| {
+                    block
+                        .split(&format!("class=\"{class}\">"))
+                        .nth(1)
+                        .unwrap()
+                        .split("</p>")
+                        .next()
+                        .unwrap()
+                };
+                let name = serde_json::from_value(serde_json::json!(field("pace-name"))).unwrap();
+                let dollars: u64 = field("sum-big").strip_prefix('$').unwrap().parse().unwrap();
+                assert_eq!(field("pace-per"), "per table-hour, at most");
+                (name, dollars.checked_mul(1_000_000).unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fundingwire_cancel_preserves_unknown_durable_outcomes() {
+        use df_campaign::errors::StoreError;
+        use df_portal::app_api::ports::PortError;
+        assert!(matches!(
+            super::cancel_error(StoreError::Unknown),
+            PortError::UnknownOutcome
+        ));
+        assert!(matches!(
+            super::cancel_error(StoreError::Unavailable),
+            PortError::Unavailable
+        ));
+        assert!(matches!(
+            super::cancel_error(StoreError::InvalidRecord),
+            PortError::Forbidden
+        ));
+    }
+
+    #[test]
+    fn fundingwire_customer_config_matches_the_three_published_pace_blocks() {
+        let config =
+            super::CustomerPrices::parse(include_bytes!("../../../content/customer-prices.json"))
+                .unwrap();
+        let page = include_str!("../../../docs/pricing/index.html");
+        let published = published_prices(page);
+        assert_eq!(published.len(), 3);
+        for price in &config.prices {
+            assert_eq!(
+                published
+                    .iter()
+                    .filter(|(name, _)| *name == price.name)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                published
+                    .iter()
+                    .find(|(name, _)| *name == price.name)
+                    .unwrap()
+                    .1,
+                price.micro_dollars_per_hour
+            );
+        }
+    }
+
+    #[test]
+    fn fundingwire_customer_config_rejects_duplicate_missing_and_unknown_prices() {
+        let bytes = include_str!("../../../content/customer-prices.json");
+        assert!(
+            super::CustomerPrices::parse(bytes.replace("Cinematic", "Story").as_bytes()).is_err()
+        );
+        assert!(
+            super::CustomerPrices::parse(bytes.replace("Cinematic", "Custom").as_bytes()).is_err()
+        );
+    }
+
     #[test]
     fn email_grant_key_matches_hmac_sha256_vector_and_is_stable() {
         let key = [0x0b; 20];

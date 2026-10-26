@@ -294,7 +294,7 @@ pub(super) fn demand_confrontation(
         .into_iter()
         .filter(|(_, entry)| entry.change.from == place)
         .map(|(revision, _)| revision)
-        .last();
+        .next_back();
     for decision in state.decisions.iter().rev() {
         if departure.is_some_and(|revision| {
             !revision_is_after(&revision_text(decision.revision), &revision_text(revision))

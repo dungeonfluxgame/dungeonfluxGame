@@ -324,7 +324,7 @@ mod tests {
             Diagnostic::PageStarted,
         ] {
             let event = diagnostic.event(12345, 240, 30_000, 123456);
-            let bytes = df_observe::presentation::encode(&[event.clone()]).unwrap();
+            let bytes = df_observe::presentation::encode(std::slice::from_ref(&event)).unwrap();
             let decoded = df_observe::presentation::decode(&bytes).unwrap();
             assert_eq!(decoded, [event]);
             assert!(log_suffix(&decoded[0]).contains(diagnostic.label()));

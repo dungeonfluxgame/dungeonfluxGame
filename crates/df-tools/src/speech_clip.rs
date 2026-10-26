@@ -45,6 +45,13 @@ pub(crate) enum SpeechOutcome {
     NothingHeard,
     Available,
     Unavailable,
+    #[cfg_attr(
+        all(not(target_arch = "wasm32"), not(test)),
+        expect(
+            dead_code,
+            reason = "planned native speech admission response; gameplay_browser::talk_control consumes the wire label; see planning/commerce-service.md § Atomic hierarchical spend"
+        )
+    )]
     BudgetSpent,
     Busy,
     TooLarge,

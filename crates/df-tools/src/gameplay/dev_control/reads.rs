@@ -1321,10 +1321,12 @@ fn person_name_in(model: &SceneModel, person_id: &str) -> Option<String> {
 /// Stock and purse revisions from the server's own trade terms, keyed by item and by merchant.
 /// Those revisions do not depend on which hero asks, so the first answer for a key is kept.
 /// Keys are absent when no hero exists to ask, and the document reports them as null.
+type TradeRevisions = (HashMap<String, u64>, HashMap<String, u64>);
+
 fn trade_revisions(
     current: &Checkpoint,
     hero_names: &[&str],
-) -> Result<(HashMap<String, u64>, HashMap<String, u64>), RepositoryError> {
+) -> Result<TradeRevisions, RepositoryError> {
     let mut stock = HashMap::new();
     let mut purses = HashMap::new();
     for hero in hero_names {

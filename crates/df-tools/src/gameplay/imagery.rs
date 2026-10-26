@@ -284,7 +284,7 @@ mod drawn_tests {
         ] {
             let small = smallest_like(spec);
             assert!(u64::from(small.width) * u64::from(small.height) >= PROVIDER_MINIMUM_PIXELS);
-            assert!(small.width % 16 == 0 && small.height % 16 == 0);
+            assert!(small.width.is_multiple_of(16) && small.height.is_multiple_of(16));
         }
         for kind in [
             ImageKind::ScenePlate,
@@ -1478,7 +1478,7 @@ impl Imagery {
             &key,
             started.elapsed(),
             flight.timing,
-            result.as_ref().map_err(|e| e),
+            result.as_ref(),
         );
         result
     }

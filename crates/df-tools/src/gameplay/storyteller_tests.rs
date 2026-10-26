@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::*;
 
 const CREDENTIAL: &str = "credential-private-sentinel";
+type ResponseComputer = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
 /// What the fake endpoint answers to one connection.
 pub(in crate::gameplay) enum Reply {
@@ -27,7 +28,7 @@ pub(in crate::gameplay) enum Reply {
     /// A complete response whose assistant text is computed from the request's prompt.
     Compute(Arc<dyn Fn(&str) -> Value + Send + Sync>),
     /// An HTTP status and JSON response computed from the request body.
-    ComputeResponse(Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync>),
+    ComputeResponse(Arc<ResponseComputer>),
     /// A bare HTTP status with a JSON body.
     Status(u16, Value),
     /// A bare JSON response deliberately arriving after the caller's deadline.

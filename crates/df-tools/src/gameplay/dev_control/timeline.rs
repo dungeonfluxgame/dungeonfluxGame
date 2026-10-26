@@ -100,7 +100,7 @@ impl Timeline {
         let events = if summary_only {
             Vec::new()
         } else {
-            window.iter().copied().collect::<Vec<_>>()
+            window.to_vec()
         };
         let mut by_type = std::collections::BTreeMap::<String, usize>::new();
         let mut by_stage = std::collections::BTreeMap::<String, usize>::new();

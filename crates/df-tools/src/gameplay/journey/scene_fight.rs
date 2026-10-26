@@ -210,13 +210,14 @@ pub(super) fn combatants_in(
         .collect())
 }
 
-/// Additional inventory derived from bounded, validated place records, never from stored resource
-/// values. Checkpoint/command/recovery inventories must include these beside authored resources.
+/// All created people's rows for checkpoint verification in tests.
+#[cfg(test)]
 pub(super) fn created_resources(
     state: &GameState,
 ) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     created_resources_of(state, None)
 }
+
 /// The created people's rows, or only the rows owned by `only`. The owner check runs before the
 /// 19 rows of a person are built, so a single-owner lookup builds at most one person's rows.
 pub(super) fn created_resources_of(

@@ -201,8 +201,10 @@ fn forced_battle_scene_projects_no_generated_world_even_when_ready() {
     };
     assert!(project_battle_world(true, None, ready()).is_some());
     for scene in ["scan-riverbed", "merchant-shop"] {
-        let mut combat = rpc::CombatView::default();
-        combat.battle_world = project_battle_world(true, Some(scene), ready());
+        let combat = rpc::CombatView {
+            battle_world: project_battle_world(true, Some(scene), ready()),
+            ..Default::default()
+        };
         assert!(combat.battle_world.is_none(), "forced {scene}");
     }
     assert!(project_battle_world(false, None, ready()).is_none());

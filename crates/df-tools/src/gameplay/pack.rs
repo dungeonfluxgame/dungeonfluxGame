@@ -2860,22 +2860,21 @@ static ACTIVE: std::sync::RwLock<Option<std::sync::Arc<LoadedPack>>> = std::sync
 
 pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
     super::journey::living_scene::clear();
-    if loaded.pack.is_freeplay() {
-        if let Some(place) = loaded
+    if loaded.pack.is_freeplay()
+        && let Some(place) = loaded
             .pack
             .scenes
             .iter()
             .find(|scene| scene.key == SceneKey::Opening)
             .and_then(|scene| scene.setting.clone())
-        {
-            super::adventure::scene_model::install_scenes(
-                &super::adventure::setting::ChapterSettings {
-                    meeting: place.clone(),
-                    confrontation: place.clone(),
-                    destination: place,
-                },
-            );
-        }
+    {
+        super::adventure::scene_model::install_scenes(
+            &super::adventure::setting::ChapterSettings {
+                meeting: place.clone(),
+                confrontation: place.clone(),
+                destination: place,
+            },
+        );
     }
     let setting = |key| {
         loaded

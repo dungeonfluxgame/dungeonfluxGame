@@ -14,6 +14,7 @@ use df_customer::{AccountStore, EmailSender};
 use super::{
     admin, auth, campaign, customer, display,
     guard::{MAXIMUM_BODY_BYTES, api_headers},
+    oauth,
     ports::Ports,
     session,
     state::AppApiState,
@@ -22,6 +23,16 @@ use super::{
 
 fn account_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApiState<S, M, P>> {
     Router::new()
+        .route("/app/api/oauth/google/start", post(oauth::start::<S, M, P>))
+        .route(
+            "/app/api/oauth/google/callback",
+            get(oauth::callback::<S, M, P>).layer(middleware::from_fn(oauth::callback_headers)),
+        )
+        .route(
+            "/app/api/oauth/google/unlink",
+            post(oauth::unlink::<S, M, P>),
+        )
+        .route("/app/oauth/error/{reason}", get(oauth::error))
         .route("/app/api/session", get(session::get_session::<S, M, P>))
         .route("/app/api/operation", get(session::get_operation::<S, M, P>))
         .route("/app/api/sign-up", post(auth::sign_up::<S, M, P>))
@@ -237,6 +248,14 @@ fn session_routes<S: AccountStore, M: EmailSender, P: Ports>() -> Router<AppApiS
         .route(
             "/app/api/sessions/{session_id}/lobby/start",
             post(campaign::start_session::<S, M, P>),
+        )
+        .route(
+            "/app/api/sessions/{session_id}/lobby/funding/consent",
+            post(campaign::consent_host_credit::<S, M, P>),
+        )
+        .route(
+            "/app/api/sessions/{session_id}/lobby/cancel",
+            post(campaign::cancel_host_lobby::<S, M, P>),
         )
         .route(
             "/app/api/sessions/{session_id}/lobby/display/lookup",

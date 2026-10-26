@@ -112,7 +112,7 @@ impl CameraState {
             "shot" => {
                 let shot = body.shot.ok_or("shot needs a name")?;
                 ShotName::from_key(&shot).ok_or("unknown camera shot")?;
-                (self.command.home.clone(), shot)
+                (self.command.home, shot)
             }
             "reset" => (None, String::new()),
             _ => return Err("camera command must be home, shot, reset or save"),

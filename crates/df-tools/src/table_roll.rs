@@ -73,7 +73,6 @@ pub(crate) struct StabiliseCard {
     pub(crate) explanation: String,
     pub(crate) source: String,
     pub(crate) verdict: &'static str,
-    pub(crate) succeeded: bool,
 }
 
 #[cfg(test)]
@@ -108,7 +107,6 @@ pub(crate) fn stabilise_card(outcome: &rpc::CombatOutcome) -> Option<StabiliseCa
                 } else {
                     "Failure"
                 },
-                succeeded: result.succeeded,
             })
         }
         _ => Some(StabiliseCard {
@@ -117,7 +115,6 @@ pub(crate) fn stabilise_card(outcome: &rpc::CombatOutcome) -> Option<StabiliseCa
             explanation: "No roll: a healer's kit stabilizes".to_owned(),
             source: format!("{target} is stable"),
             verdict: "Stable",
-            succeeded: result.succeeded,
         }),
     }
 }

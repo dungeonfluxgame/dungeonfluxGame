@@ -4681,12 +4681,12 @@ pub(super) mod tests {
     ) -> Result<Checkpoint, RepositoryError> {
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let mut supplied = faces.iter().copied();
-        let mut defend = input(&dialogue, member, 7, "defend-courier", vec![]);
+        let mut defend = input(dialogue, member, 7, "defend-courier", vec![]);
         let GameInput::Game(command) = &mut defend else {
             panic!("game input");
         };
         command.operation = OperationId::from_bytes(&operation).expect("operation");
-        stage_with_supplier(&dialogue, &defend, &mut |sides| {
+        stage_with_supplier(dialogue, &defend, &mut |sides| {
             Ok(supplied.next().unwrap_or(10).clamp(1, sides))
         })
     }
@@ -6389,7 +6389,9 @@ pub(super) mod tests {
     #[test]
     fn a_recorded_fight_says_the_same_lines_twice() {
         use df_persistence::local_demo_scope::{DISPLAY, LocalDemoRole as R};
-        fn spoken(finished: &Checkpoint) -> (Vec<(i32, u32, String, String)>, Vec<String>) {
+        type SpokenLines = Vec<(i32, u32, String, String)>;
+
+        fn spoken(finished: &Checkpoint) -> (SpokenLines, Vec<String>) {
             let mut lines = Vec::new();
             for decision in &finished.state().decisions {
                 let Ok(receipt) = accepted(decision) else {
@@ -8721,8 +8723,9 @@ mod shared_scene_tests {
                     {
                         continue;
                     }
-                    if !distances.contains_key(&next) {
-                        distances.insert(next, current_distance + 1);
+                    if let std::collections::btree_map::Entry::Vacant(entry) = distances.entry(next)
+                    {
+                        entry.insert(current_distance + 1);
                         pending.push_back(next);
                     }
                 }

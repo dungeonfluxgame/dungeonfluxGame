@@ -267,7 +267,7 @@ impl StoryMemory {
             }
             Err(_) => {
                 let dropped = self.stats.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-                if dropped == 1 || dropped % 100 == 0 {
+                if dropped == 1 || dropped.is_multiple_of(100) {
                     self.audit(format!(
                         "MEMORY queue_full dropped={dropped} capacity={}",
                         self.config.queue_capacity

@@ -87,7 +87,7 @@ pub(in crate::gameplay) async fn start(
         ));
     }
     let memory = StoryMemory::new(
-        Backend::Postgres(db),
+        Backend::Postgres(Box::new(db)),
         embedder,
         Arc::clone(hub.ledger()),
         Config::new(run_id),

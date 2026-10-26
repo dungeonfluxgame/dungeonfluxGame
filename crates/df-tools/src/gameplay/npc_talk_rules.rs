@@ -28,6 +28,10 @@ pub(super) const INFLUENCE_FAILURE_WAIT: std::time::Duration =
 pub(super) enum InfluenceSkill {
     Deception,
     Intimidation,
+    #[expect(
+        dead_code,
+        reason = "the planned Influence action caller keeps Performance for NPCs per SRD 5.2.1 p. 184 and planning/issue-triage.md RUL-19"
+    )]
     Performance,
     Persuasion,
 }
@@ -508,7 +512,7 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
     }
     // A term of address wears out: at most about one reply in four may use one.
     let replies = transcript.exchanges.len();
-    let allowed = (replies + 3) / 4;
+    let allowed = replies.div_ceil(4);
     for (index, term) in TERMS_OF_ADDRESS.iter().enumerate() {
         if addressed[index] > allowed {
             found.push(finding(

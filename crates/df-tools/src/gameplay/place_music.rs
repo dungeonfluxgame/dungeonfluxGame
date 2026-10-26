@@ -120,15 +120,8 @@ pub(in crate::gameplay) fn apply(message: &mut rpc::ViewMessage) {
     }
 }
 
-/// Projects only decided specs and existing cache status; never starts Jev or generation.
-pub(in crate::gameplay) fn apply_read(message: &mut rpc::ViewMessage) {
-    if let Some(music) = installed() {
-        music.apply_read(message);
-    }
-}
-
 impl PlaceMusic {
-    /// Projects the existing spec/cache only. No resolution or generation side effects.
+    #[cfg(test)]
     fn apply_read(&self, message: &mut rpc::ViewMessage) {
         let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
             return;

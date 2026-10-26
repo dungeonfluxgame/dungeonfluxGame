@@ -202,15 +202,19 @@ impl Actor {
                 let created = proposal.created.is_some();
                 place::audit_changed(&proposal.from, &proposal.to, &proposal.exit, created);
                 // The story memory hears of the move, so later places and lines agree with it.
+                let position =
+                    format!("place-move:{}", journey::hex(proposal.operation.as_bytes()));
                 crate::gameplay::memory::capture::scene_change(
-                    &format!("place-move:{}", journey::hex(proposal.operation.as_bytes())),
-                    i64::try_from(revision.sequence()).ok(),
-                    &proposal.from,
-                    &hero,
-                    &proposal.exit,
-                    &entry.line,
-                    "place_change",
-                    &[proposal.to.clone()],
+                    crate::gameplay::memory::capture::SceneChange {
+                        position: &position,
+                        revision: i64::try_from(revision.sequence()).ok(),
+                        place: &proposal.from,
+                        hero: &hero,
+                        entity_id: &proposal.exit,
+                        description: &entry.line,
+                        tag: "place_change",
+                        involved: std::slice::from_ref(&proposal.to),
+                    },
                 );
                 Ok(MoveOutcome::Moved(Box::new(Moved {
                     revision,

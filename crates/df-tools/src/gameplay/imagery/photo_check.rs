@@ -278,6 +278,7 @@ impl PhotoCheckError {
 impl super::Imagery {
     /// Generation owners retain this reading with the accepted image key, then propose its
     /// visible features to the session owner. A failed quality gate carries no features.
+    #[cfg(test)]
     pub(in crate::gameplay) async fn read_scene_photo(
         judge: &NativePlateJudge,
         bytes: &[u8],
@@ -349,20 +350,21 @@ pub(super) async fn check_photo(
         .judge_photo_quality(&picture, kind.into(), deadline)
         .await
         .map_err(PhotoCheckError::Judge)?;
-    Ok(classify(
+    Ok(classify(PhotoCheckJudgement {
         kind,
-        answer.frame,
-        answer.medium,
-        answer.text,
-        answer.dress,
-        answer.setting,
-        answer.people_count,
-        answer.people_present,
-    ))
+        frame: answer.frame,
+        medium: answer.medium,
+        text: answer.text,
+        dress: answer.dress,
+        setting: answer.setting,
+        people_count: answer.people_count,
+        people_present: answer.people_present,
+    }))
 }
 
 /// Counts player heroes against their canonical sheet in the same call as the quality check.
 /// The generic judge port keeps the scene-specific contract local to gameplay.
+#[cfg(test)]
 pub(super) async fn check_scene_photo(
     judge: &NativePlateJudge,
     bytes: &[u8],
@@ -377,6 +379,7 @@ pub(super) async fn check_scene_photo(
 /// The existing quality/count gate also compares visible weapons against the server's public
 /// hand facts. These are quoted evidence, never instructions to the judge; the full picture
 /// prompt can exceed the judge adapter's 6,000-character instruction limit.
+#[cfg(test)]
 pub(super) async fn check_scene_photo_with_custody(
     judge: &NativePlateJudge,
     bytes: &[u8],
@@ -613,19 +616,19 @@ fn parse_scene_photo_answer(
             PhotoCheckFailure::UnexpectedDrawnWeapon,
         ));
     }
-    Ok(classify(
-        PhotoCheckKind::ScenePlate,
+    Ok(classify(PhotoCheckJudgement {
+        kind: PhotoCheckKind::ScenePlate,
         frame,
         medium,
         text,
         dress,
         setting,
-        None,
-        None,
-    ))
+        people_count: None,
+        people_present: None,
+    }))
 }
 
-fn classify(
+struct PhotoCheckJudgement {
     kind: PhotoCheckKind,
     frame: PhotoFrame,
     medium: PhotoMedium,
@@ -634,37 +637,49 @@ fn classify(
     setting: PhotoSetting,
     people_count: Option<PhotoPeopleCount>,
     people_present: Option<bool>,
-) -> PhotoCheckOutcome {
+}
+
+fn classify(judgement: PhotoCheckJudgement) -> PhotoCheckOutcome {
+    let PhotoCheckJudgement {
+        kind,
+        frame,
+        medium,
+        text,
+        dress,
+        setting,
+        people_count,
+        people_present,
+    } = judgement;
     let failure = match frame {
         PhotoFrame::GridOrCollage => Some(PhotoCheckFailure::GridOrCollage),
         PhotoFrame::CutoutComposite => Some(PhotoCheckFailure::CutoutComposite),
         PhotoFrame::SinglePhotograph => None,
     }
-    .or_else(|| match medium {
+    .or(match medium {
         PhotoMedium::Photograph => None,
         PhotoMedium::PaintingOrIllustration | PhotoMedium::CgiOrRender => {
             Some(PhotoCheckFailure::NotPhotograph)
         }
     })
-    .or_else(|| match setting {
+    .or(match setting {
         PhotoSetting::Period => None,
         PhotoSetting::Modern => Some(PhotoCheckFailure::ModernSetting),
     })
-    .or_else(|| match text {
+    .or(match text {
         PhotoText::None => None,
         PhotoText::VisibleText => Some(PhotoCheckFailure::VisibleText),
     })
-    .or_else(|| match (kind, people_present) {
+    .or(match (kind, people_present) {
         (PhotoCheckKind::CanonicalRoom, Some(false)) => None,
         (PhotoCheckKind::CanonicalRoom, Some(true)) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
         (PhotoCheckKind::CanonicalRoom, None) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
         _ => None,
     })
-    .or_else(|| match dress {
+    .or(match dress {
         PhotoDress::ModernClothing => Some(PhotoCheckFailure::ModernClothing),
         PhotoDress::Period | PhotoDress::NoPeople => None,
     })
-    .or_else(|| match (kind, dress, people_count) {
+    .or(match (kind, dress, people_count) {
         (PhotoCheckKind::CanonicalCharacter, PhotoDress::NoPeople, _) => {
             Some(PhotoCheckFailure::CharacterHasNoPeople)
         }

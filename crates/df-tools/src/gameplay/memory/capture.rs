@@ -234,19 +234,31 @@ pub(in crate::gameplay) fn grievance_draft(
     ))
 }
 
-/// The scene-change builder shared by the live call and the backfill. `tag` is the change's own
-/// closed kind label (`purchased`, `stolen`, `opened`, ...); `involved` are the other ids its kind
-/// object names (holder, seller, buyer).
-pub(in crate::gameplay) fn scene_change_draft(
-    position: &str,
-    revision: Option<i64>,
-    place: &str,
-    hero: &str,
-    entity_id: &str,
-    description: &str,
-    tag: &str,
-    involved: &[String],
-) -> Draft {
+/// One committed journal change, shared by live capture and backfill.
+pub(in crate::gameplay) struct SceneChange<'a> {
+    pub(in crate::gameplay) position: &'a str,
+    pub(in crate::gameplay) revision: Option<i64>,
+    pub(in crate::gameplay) place: &'a str,
+    pub(in crate::gameplay) hero: &'a str,
+    pub(in crate::gameplay) entity_id: &'a str,
+    pub(in crate::gameplay) description: &'a str,
+    pub(in crate::gameplay) tag: &'a str,
+    pub(in crate::gameplay) involved: &'a [String],
+}
+
+/// Builds the story-memory event for a scene change. `tag` is its closed kind label; `involved`
+/// contains the other ids named by that kind (holder, seller, buyer).
+pub(in crate::gameplay) fn scene_change_draft(change: SceneChange<'_>) -> Draft {
+    let SceneChange {
+        position,
+        revision,
+        place,
+        hero,
+        entity_id,
+        description,
+        tag,
+        involved,
+    } = change;
     let kind = match tag {
         "purchased" | "npc_purchased" | "sold" | "taken" | "stolen" | "steal_attempt" | "given"
         | "returned" => EventKind::Transaction,
@@ -285,7 +297,7 @@ impl StoryMemory {
         let entities = draft.entities.normalised();
         let scene = draft.scene.clone().or_else(|| locked(&self.scene).clone());
         let natural_key = match &draft.key {
-            Some(key) => format!("{key}"),
+            Some(key) => key.clone(),
             None => format!(
                 "{}:{}",
                 draft.source,
@@ -448,27 +460,9 @@ pub(in crate::gameplay) fn grievance(hero: &str, npc_id: &str, npc_name: &str, r
 }
 
 /// One committed scene change.
-pub(in crate::gameplay) fn scene_change(
-    position: &str,
-    revision: Option<i64>,
-    place: &str,
-    hero: &str,
-    entity_id: &str,
-    description: &str,
-    tag: &str,
-    involved: &[String],
-) {
+pub(in crate::gameplay) fn scene_change(change: SceneChange<'_>) {
     with_memory(|memory| {
-        memory.record(scene_change_draft(
-            position,
-            revision,
-            place,
-            hero,
-            entity_id,
-            description,
-            tag,
-            involved,
-        ));
+        memory.record(scene_change_draft(change));
     });
 }
 
