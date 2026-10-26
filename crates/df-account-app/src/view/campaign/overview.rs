@@ -76,10 +76,10 @@ fn play_panel(overview: &CampaignOverview, is_busy: bool) -> Element {
     let panel = panel("Play");
     match (&overview.live_session_id, overview.can_open_lobby) {
         (Some(session_id), _) => panel
-            .child(el("p").text("A lobby is open for this campaign."))
+            .child(el("p").text("A session is open for this campaign."))
             .child(actions(vec![
                 link(
-                    "Go to the lobby",
+                    "See who has joined",
                     Route::Lobby {
                         session_id: session_id.clone(),
                     },

@@ -538,13 +538,58 @@ pub(super) async fn play_now<S: AccountStore, M: EmailSender, P: Ports>(
         .await
         .map_err(|error| launch_after_creation_failed(campaign, error))?;
     let mut view = view;
-    if let Some(quote) = state
+    if let Some(mut quote) = state
         .ports
         .finance()
         .host_credit(who.account, session)
         .await
         .map_err(|error| launch_after_creation_failed(campaign, error))?
     {
+        // Pressing Play now is the host's approval to use their credit at this quote (owner
+        // decision 2026-10-26); the dashboard says so beside the button. Only when the credit covers
+        // the quote's cap; otherwise the lobby asks for funding as before. A retry finds it recorded.
+        if quote.consented_at_ms.is_none()
+            && quote.available_micro_dollars >= quote.cap_micro_dollars
+        {
+            state
+                .ports
+                .finance()
+                .consent_host_credit(
+                    who.account,
+                    session,
+                    df_account_app::wire_campaign::HostConsentRequest {
+                        price_version: quote.price_version,
+                        cap_micro_dollars: quote.cap_micro_dollars,
+                        terms_version: quote.terms_version,
+                        operation: body.operation.clone(),
+                    },
+                    operation,
+                )
+                .await
+                .map_err(|error| launch_after_creation_failed(campaign, error))?;
+            df_observe::record_audit_line(
+                "portal.host_credit_consented",
+                format!(
+                    "SPEND host_credit_consented session={} via=play_now",
+                    ids::hex(session.as_bytes())
+                ),
+            );
+            view = state
+                .ports
+                .campaigns()
+                .lobby(&who, session)
+                .await
+                .map_err(|error| launch_after_creation_failed(campaign, error))?;
+            if let Some(refreshed) = state
+                .ports
+                .finance()
+                .host_credit(who.account, session)
+                .await
+                .map_err(|error| launch_after_creation_failed(campaign, error))?
+            {
+                quote = refreshed;
+            }
+        }
         view.funding_note = df_account_app::wire_campaign::FundingNote::HostCredit(quote);
         if !quote.is_fundable {
             view.start_blockers

@@ -27,11 +27,10 @@ pub(in crate::view) fn lobby(screen: &LobbyScreen, _offset_east_minutes: i32) ->
     if lobby.has_started {
         sections = sections.child(started_panel(&screen.session_id));
     }
-    sections =
-        sections
-            .child(members_panel(lobby))
-            .child(funding_panel(lobby.funding_note, screen, busy));
+    sections = sections.child(members_panel(lobby));
+    // The pre-start cost wording ("No charge until ...") is wrong once the session runs.
     if !lobby.has_started {
+        sections = sections.child(funding_panel(lobby.funding_note, screen, busy));
         if lobby.can_manage {
             let mut start = panel("Start the session");
             if !lobby.start_blockers.is_empty() {

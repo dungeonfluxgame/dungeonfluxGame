@@ -659,7 +659,7 @@ async fn fundingwire_router_records_host_consent_and_cancels_only_for_the_host()
 }
 
 #[tokio::test]
-async fn lobbyfix_play_now_uses_defaults_once_and_keeps_funding_consent_required() {
+async fn lobbyfix_play_now_uses_defaults_once() {
     let harness = Harness::new().await;
     let mut host = harness.browser();
     host.sign_up_verified("play-now@example.test").await;
@@ -675,11 +675,8 @@ async fn lobbyfix_play_now_uses_defaults_once_and_keeps_funding_consent_required
     assert_eq!(repeated["campaign_id"], view["campaign_id"]);
     assert_eq!(repeated["lobby"]["session_id"], view["lobby"]["session_id"]);
     assert_eq!(view["game_unavailable"], true);
-    assert_eq!(view["lobby"]["has_started"], false);
-    assert_eq!(
-        view["lobby"]["start_blockers"],
-        json!(["funding_not_ready"])
-    );
+    // The new account's free trial covers the default pace's cap, so the same click starts it.
+    assert_eq!(view["lobby"]["has_started"], true);
     let campaign = view["campaign_id"].as_str().unwrap();
     let settings = host
         .get(&format!("/app/api/campaigns/{campaign}/settings"))
@@ -701,6 +698,50 @@ async fn lobbyfix_play_now_uses_defaults_once_and_keeps_funding_consent_required
     let overview = host.get("/app/api/overview").await.json();
     assert_eq!(overview["balance"]["allocated_micro_dollars"], 0);
     assert_eq!(overview["balance"]["reserved_micro_dollars"], 0);
+}
+
+#[tokio::test]
+async fn play_now_with_enough_credit_approves_it_and_starts_in_the_same_click() {
+    use crate::app_api::{ids, ports::FinancePort};
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("play-now-funded@example.test").await;
+    let account = host.account_id().await;
+    harness
+        .ports
+        .finance
+        .credit_purchase(account, 2_000, "play-now-funded");
+    let operation = host.operation().await;
+    let request = json!({"operation": operation});
+    let first = host.post("/app/api/campaigns/play-now", &request).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    let view = first.json();
+    assert_eq!(view["lobby"]["has_started"], true, "{view}");
+    let session = ids::session(view["lobby"]["session_id"].as_str().unwrap()).unwrap();
+    let approved = harness
+        .ports
+        .finance
+        .host_credit(account, session)
+        .await
+        .unwrap()
+        .expect("the host's quote");
+    assert!(approved.consented_at_ms.is_some());
+    assert!(approved.is_fundable);
+    // A retry of the same click reuses the campaign, session and recorded approval.
+    let repeated = host
+        .post("/app/api/campaigns/play-now", &request)
+        .await
+        .json();
+    assert_eq!(repeated["campaign_id"], view["campaign_id"]);
+    assert_eq!(repeated["lobby"]["session_id"], view["lobby"]["session_id"]);
+    let after_retry = harness
+        .ports
+        .finance
+        .host_credit(account, session)
+        .await
+        .unwrap()
+        .expect("the host's quote");
+    assert_eq!(after_retry.consented_at_ms, approved.consented_at_ms);
 }
 
 #[tokio::test]
@@ -880,19 +921,28 @@ async fn lobbyfix_play_now_and_settings_preserve_csrf_and_same_origin_guards() {
 
 #[tokio::test]
 async fn lobbyfix_a_co_host_cannot_bypass_sponsor_consent_or_read_the_sponsors_wallet() {
+    use crate::app_api::ids;
+    use df_account_app::wire_campaign::HostCreditView;
+    // A lobby still waiting for the sponsor's approval (Play now with enough credit starts at once).
     let harness = Harness::new().await;
-    let mut host = harness.browser();
-    host.sign_up_verified("sponsor-now@example.test").await;
-    let operation = host.operation().await;
-    let created = host
-        .post(
-            "/app/api/campaigns/play-now",
-            &json!({"operation": operation}),
-        )
-        .await
-        .json();
-    let campaign = crate::app_api::ids::campaign(created["campaign_id"].as_str().unwrap()).unwrap();
-    let session = created["lobby"]["session_id"].as_str().unwrap();
+    let (mut host, campaign) = host_with_campaign(&harness).await;
+    let account = host.account_id().await;
+    let campaign = ids::campaign(&campaign).unwrap();
+    let session_id = harness.ports.campaigns.seed_lobby(campaign).unwrap();
+    harness.ports.finance.seed_host_credit(
+        account,
+        session_id,
+        HostCreditView {
+            price_version: [7; 16],
+            hourly_micro_dollars: 8_000_000,
+            available_micro_dollars: 10_000_000,
+            cap_micro_dollars: 8_000_000,
+            terms_version: 1,
+            consented_at_ms: None,
+            is_fundable: false,
+        },
+    );
+    let session = ids::hex(session_id.as_bytes());
     let mut co_host = harness.browser();
     co_host.sign_up_verified("co-host-now@example.test").await;
     harness.ports.campaigns.seed_member(

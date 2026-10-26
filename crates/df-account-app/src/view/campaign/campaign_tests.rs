@@ -873,7 +873,7 @@ fn the_host_opens_the_lobby_when_none_is_live() {
         control(&tree, "Open the lobby").on_click,
         Some(Intent::OpenLobby)
     );
-    assert!(!has_control(&tree, "Go to the lobby"));
+    assert!(!has_control(&tree, "See who has joined"));
 }
 
 #[test]
@@ -881,7 +881,7 @@ fn a_live_lobby_is_linked_instead_of_opened_again() {
     let mut overview = overview_data();
     overview.live_session_id = Some("sess-1".to_owned());
     let tree = overview_page(campaign_screen(overview));
-    let link = control(&tree, "Go to the lobby");
+    let link = control(&tree, "See who has joined");
     assert_eq!(
         link.on_click,
         Some(Intent::Go(Route::Lobby {

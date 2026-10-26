@@ -28,6 +28,9 @@ pub(in crate::view) fn dashboard(screen: &DashboardScreen, model: &Model) -> Nod
                 || model.play_operation.ready().is_none()
                 || !model.account().is_some_and(|account| account.is_verified),
         ))
+        .child(el("p").class("hint").text(
+            "Play now starts a table on your credit, at most the hourly price of its pace. You can change the pace or end the session on the campaign page.",
+        ))
         .child(stats_section(screen))
         .child(credit_section(&screen.overview))
         .child(funds_section(screen))
