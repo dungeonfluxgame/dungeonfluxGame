@@ -16,6 +16,7 @@ df-auth = { path = "../df-auth" }
 df-observe = { path = "../df-observe" }
 df-types = { path = "../df-types" }
 argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "password-hash"] }
+base64 = "=0.22.1"
 getrandom = "=0.3.4"
 hmac = "=0.13.0"
 serde_json = "=1.0.151"

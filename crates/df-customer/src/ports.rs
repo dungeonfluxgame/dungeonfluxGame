@@ -7,7 +7,7 @@
 
 use std::future::Future;
 
-use df_types::{AccountId, WebSessionId};
+use df_types::{AccountId, TenantId, WebSessionId};
 
 use crate::{
     closure::{CloseOutcome, CompletionOutcome},
@@ -102,6 +102,13 @@ pub trait AccountStore: Send + Sync + 'static {
         &self,
         id: AccountId,
     ) -> impl Future<Output = StoreResult<Option<AccountRecord>>> + Send;
+
+    /// The verified active account's personal tenant, only while its standing is active.
+    /// The binding survives account closure and tenant restrictions, but cannot be used then.
+    fn tenant_for(
+        &self,
+        account: AccountId,
+    ) -> impl Future<Output = StoreResult<Option<TenantId>>> + Send;
 
     /// Stores a token and consumes the account's earlier unconsumed tokens of the same purpose.
     fn issue_token(&self, token: NewToken) -> impl Future<Output = StoreResult<()>> + Send;

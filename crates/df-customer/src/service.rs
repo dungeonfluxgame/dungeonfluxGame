@@ -14,7 +14,7 @@ use std::{
 };
 
 use df_auth::throttle::ThrottleDecision;
-use df_types::AccountId;
+use df_types::{AccountId, TenantId};
 use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
@@ -162,12 +162,14 @@ pub(crate) struct Shared<S, M> {
 /// The account service. Cheap to clone; every clone shares one state.
 pub struct CustomerService<S, M> {
     pub(crate) shared: Arc<Shared<S, M>>,
+    pub(crate) google: Option<Arc<crate::oauth::OAuthState>>,
 }
 
 impl<S, M> Clone for CustomerService<S, M> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
+            google: self.google.clone(),
         }
     }
 }
@@ -193,6 +195,11 @@ pub enum StartError {
 }
 
 impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
+    /// Returns the account owner's usable personal tenant under the normal store deadline.
+    pub async fn tenant_for(&self, account: AccountId) -> Result<Option<TenantId>, ServiceError> {
+        read(self.shared.store.tenant_for(account)).await
+    }
+
     /// Builds the service and starts its mail worker and retention pass.
     pub async fn start(
         config: CustomerConfig,
@@ -218,6 +225,7 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
         let (mail_queue, receiver) = mpsc::channel(MAIL_QUEUE_CAPACITY);
         let (login_event_queue, login_event_receiver) = mpsc::channel(LOGIN_EVENT_QUEUE_CAPACITY);
         let service = Self {
+            google: None,
             shared: Arc::new(Shared {
                 store,
                 mail,

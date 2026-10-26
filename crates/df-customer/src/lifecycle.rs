@@ -83,7 +83,7 @@ fn event_json(event: &AccountEvent) -> Value {
 
 impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
     /// A password proof checks the password now. A sign-in proof must be at most `window_ms` old.
-    async fn is_reauthenticated(
+    pub(crate) async fn is_reauthenticated(
         &self,
         caller: &Authenticated,
         proof: Reauthentication<'_>,
@@ -92,6 +92,13 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
         match proof {
             Reauthentication::Password(password) => self.password_matches(caller, password).await,
             Reauthentication::RecentSignIn => {
+                if let Some(proof) = self.google_session_proof(caller).await? {
+                    return Ok(proof.is_some_and(|expires_at_ms| {
+                        self.now_ms() < expires_at_ms
+                            && caller.signed_in_at_ms <= self.now_ms()
+                            && self.now_ms().saturating_sub(caller.signed_in_at_ms) <= window_ms
+                    }));
+                }
                 Ok(self.now_ms().saturating_sub(caller.signed_in_at_ms) <= window_ms)
             }
         }

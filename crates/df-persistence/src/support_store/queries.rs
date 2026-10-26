@@ -1,7 +1,8 @@
 use df_support::{
     contracts::{
-        ActionProposalRecord, AuditEvent, MessagePage, MessagePageRequest, ProposalId,
-        ProposalStatus, SupportTicket, TicketId,
+        ActionProposalRecord, AuditEvent, AuditId, MessagePage, MessagePageRequest, ProposalId,
+        ProposalStatus, QueueContentGrant, QueuePage, QueuePageRequest, SupportTicket, TicketId,
+        TriageCommand, TriageReceipt,
     },
     ports::SupportStoreError,
 };
@@ -336,6 +337,465 @@ pub(super) async fn save_approval(
 ) -> Result<(), SupportStoreError> {
     client.execute("INSERT INTO support.approval (approval_id,proposal_id,operator_id,proof_id,approved_payload_digest,decided_at_unix_s,decision) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (approval_id) DO NOTHING", &[&approval.approval_id,&approval.proposal_id.as_str(),&approval.operator_id,&approval.proof_id,&approval.payload_digest,&approval.decided_at_unix_s,&approval.decision]).await.map_err(|_| SupportStoreError::Unavailable)?;
     Ok(())
+}
+
+async fn begin_transaction(
+    client: &mut Client,
+) -> Result<tokio_postgres::Transaction<'_>, SupportStoreError> {
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    transaction
+        .batch_execute(
+            "SET LOCAL transaction_timeout='15s'; SET LOCAL statement_timeout='5s'; \
+             SET LOCAL lock_timeout='5s'; SET LOCAL idle_in_transaction_session_timeout='5s'",
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    Ok(transaction)
+}
+
+const QUEUE_SQL: &str = "SELECT t.ticket_id, t.status, t.revision, t.created_at_unix_s, \
+ t.first_received_at_unix_s, t.last_inbound_at_unix_s, (t.sensitivity <> 'ordinary') AS restricted, \
+ c.data->>'category' AS category, \
+ (SELECT count(*) FROM support.message m WHERE m.ticket_id=t.ticket_id) AS message_count, \
+ CASE WHEN $6::boolean AND (t.sensitivity='ordinary' OR t.ticket_id=ANY($7::text[])) THEN \
+ (SELECT left(m.body_text,120) FROM support.message m WHERE m.ticket_id=t.ticket_id \
+ AND NOT m.source_unavailable ORDER BY m.received_at_unix_s DESC, m.message_id DESC LIMIT 1) \
+ ELSE NULL END AS latest_body \
+ FROM support.ticket t LEFT JOIN LATERAL \
+ (SELECT data FROM support.classification WHERE ticket_id=t.ticket_id \
+ ORDER BY (classification_id=t.classification_head) DESC NULLS LAST, \
+ source_revision DESC, created_at_unix_s DESC, classification_id DESC LIMIT 1) c ON true \
+ WHERE ($1::text IS NULL OR t.status=$1) \
+ AND ($2::text IS NULL OR c.data->>'category'=$2) \
+ AND ($3::bigint IS NULL OR t.last_inbound_at_unix_s < $3 \
+ OR (t.last_inbound_at_unix_s=$3 AND t.ticket_id > $4)) \
+ ORDER BY t.last_inbound_at_unix_s DESC, t.ticket_id ASC LIMIT $5";
+
+pub(super) async fn list_queue(
+    client: &mut Client,
+    request: QueuePageRequest,
+    content: Option<QueueContentGrant>,
+) -> Result<QueuePage, SupportStoreError> {
+    if !(1..=100).contains(&request.page_size)
+        || content
+            .as_ref()
+            .is_some_and(|grant| grant.restricted_ticket_ids.len() > 100)
+    {
+        return Err(SupportStoreError::InvalidRequest);
+    }
+    let restricted_tickets: Vec<&str> = content.as_ref().map_or_else(Vec::new, |grant| {
+        grant
+            .restricted_ticket_ids
+            .iter()
+            .map(TicketId::as_str)
+            .collect()
+    });
+    let (cursor_at, cursor_id) = match request.cursor.as_ref() {
+        Some(value) => {
+            let (timestamp, ticket_id) = value
+                .as_str()
+                .split_once('|')
+                .ok_or(SupportStoreError::InvalidRequest)?;
+            (
+                Some(
+                    timestamp
+                        .parse::<i64>()
+                        .map_err(|_| SupportStoreError::InvalidRequest)?,
+                ),
+                Some(ticket_id.to_owned()),
+            )
+        }
+        None => (None, None),
+    };
+    let status = request.filter.status.map(rows::ticket_status);
+    let category = request.filter.category.map(rows::category_name);
+    let transaction = begin_transaction(client).await?;
+    let found = transaction
+        .query(
+            QUEUE_SQL,
+            &[
+                &status,
+                &category,
+                &cursor_at,
+                &cursor_id,
+                &(i64::from(request.page_size) + 1),
+                &content.is_some(),
+                &restricted_tickets,
+            ],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    let has_more = found.len() > usize::from(request.page_size);
+    let entries = found
+        .iter()
+        .take(usize::from(request.page_size))
+        .map(rows::queue_entry_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(grant) = &content {
+        let data = serde_json::json!({
+            "event": "content_read",
+            "operator_id": grant.operator_id.as_str(),
+        })
+        .to_string();
+        for (index, entry) in entries.iter().enumerate() {
+            let audit_id = format!("queue:{}:{index}", grant.audit_id.as_str());
+            transaction
+                .execute(
+                    "INSERT INTO support.audit (audit_id,operation_id,ticket_id,data,created_at_unix_s) \
+                     VALUES ($1,$2,$3,$4::text::jsonb,floor(extract(epoch FROM clock_timestamp()))::bigint)",
+                    &[&audit_id, &grant.audit_id.as_str(), &entry.ticket_id.as_str(), &data],
+                )
+                .await
+                .map_err(|_| SupportStoreError::AuditUnavailable)?;
+        }
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|entry| {
+                let value = format!(
+                    "{}|{}",
+                    entry.last_inbound_at_unix_s,
+                    entry.ticket_id.as_str()
+                );
+                df_support::contracts::PageCursor::new(value)
+                    .map_err(|_| SupportStoreError::Unavailable)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(QueuePage {
+        entries,
+        next_cursor,
+    })
+}
+
+pub(super) async fn apply_triage(
+    client: &mut Client,
+    command: TriageCommand,
+) -> Result<TriageReceipt, SupportStoreError> {
+    if command.reason.trim().is_empty()
+        || command.reason.chars().count() > 500
+        || (command.status.is_none() && command.category.is_none())
+        || command.source_revision > command.expected_revision
+        || command.expected_revision >= i64::MAX.unsigned_abs()
+    {
+        return Err(SupportStoreError::InvalidRequest);
+    }
+    let requested_status = command.status.map(rows::ticket_status);
+    let requested_category = command.category.map(rows::category_name);
+    let audit_id = format!("triage:{}", command.operation_id.as_str());
+    let receipt_audit_id =
+        AuditId::new(audit_id.clone()).map_err(|_| SupportStoreError::InvalidRequest)?;
+    let transaction = begin_transaction(client).await?;
+    // Serialize retries before examining receipts, including retries targeting another ticket.
+    transaction
+        .query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&command.operation_id.as_str()],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    let existing = transaction
+        .query_opt(
+            "SELECT ticket_id,operator_id,expected_revision,source_revision,requested_status,requested_category,reason,previous_revision,new_revision,resulting_status,resulting_category,audit_id,created_at_unix_s FROM support.triage_operation WHERE operation_id=$1",
+            &[&command.operation_id.as_str()],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    if let Some(row) = existing {
+        let identical = row.get::<_, String>("ticket_id") == command.ticket_id.as_str()
+            && row.get::<_, String>("operator_id") == command.operator_id.as_str()
+            && row.get::<_, i64>("expected_revision")
+                == i64::try_from(command.expected_revision)
+                    .map_err(|_| SupportStoreError::InvalidRequest)?
+            && row.get::<_, i64>("source_revision")
+                == i64::try_from(command.source_revision)
+                    .map_err(|_| SupportStoreError::InvalidRequest)?
+            && row.get::<_, Option<String>>("requested_status").as_deref() == requested_status
+            && row
+                .get::<_, Option<String>>("requested_category")
+                .as_deref()
+                == requested_category
+            && row.get::<_, String>("reason") == command.reason;
+        if !identical {
+            return Err(SupportStoreError::Conflict);
+        }
+        let receipt = TriageReceipt {
+            operation_id: command.operation_id.clone(),
+            ticket_id: command.ticket_id.clone(),
+            previous_revision: row
+                .get::<_, i64>("previous_revision")
+                .try_into()
+                .map_err(|_| SupportStoreError::Unavailable)?,
+            new_revision: row
+                .get::<_, i64>("new_revision")
+                .try_into()
+                .map_err(|_| SupportStoreError::Unavailable)?,
+            status: rows::parse_ticket_status(row.get("resulting_status"))?,
+            category: rows::optional_category(row.get("resulting_category"))?,
+            audit_id: AuditId::new(row.get::<_, String>("audit_id"))
+                .map_err(|_| SupportStoreError::Unavailable)?,
+            replayed: true,
+            created_at_unix_s: row.get("created_at_unix_s"),
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(|_| SupportStoreError::Unavailable)?;
+        return Ok(receipt);
+    }
+    let ticket_row = transaction
+        .query_opt(
+            "SELECT status,revision FROM support.ticket WHERE ticket_id=$1 FOR UPDATE",
+            &[&command.ticket_id.as_str()],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?
+        .ok_or(SupportStoreError::NotFound)?;
+    let current_status = rows::parse_ticket_status(ticket_row.get("status"))?;
+    let current_revision: i64 = ticket_row.get("revision");
+    let expected =
+        i64::try_from(command.expected_revision).map_err(|_| SupportStoreError::InvalidRequest)?;
+    if current_revision != expected {
+        return Err(SupportStoreError::Conflict);
+    }
+    if command.source_revision > command.expected_revision {
+        return Err(SupportStoreError::InvalidRequest);
+    }
+    let prior = transaction.query_opt(
+        "SELECT data->>'category' AS category FROM support.classification WHERE ticket_id=$1 \
+         ORDER BY (classification_id=(SELECT classification_head FROM support.ticket WHERE ticket_id=$1)) \
+         DESC NULLS LAST,source_revision DESC,created_at_unix_s DESC,classification_id DESC LIMIT 1",
+        &[&command.ticket_id.as_str()],
+    ).await.map_err(|_| SupportStoreError::Unavailable)?;
+    let prior_category = prior
+        .map(|row| rows::optional_category(row.get("category")))
+        .transpose()?
+        .flatten();
+    let resulting_category = command.category.or(prior_category);
+    let created_at_unix_s: i64 = transaction
+        .query_one(
+            "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint",
+            &[],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?
+        .get(0);
+    let next_status = match command.status {
+        Some(next) => current_status
+            .transition(next)
+            .map_err(|_| SupportStoreError::InvalidTransition)?,
+        None => current_status,
+    };
+    let new_revision = current_revision + 1;
+    transaction
+        .execute(
+            "UPDATE support.ticket SET status=$2, revision=$3 WHERE ticket_id=$1",
+            &[
+                &command.ticket_id.as_str(),
+                &rows::ticket_status(next_status),
+                &new_revision,
+            ],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    if let Some(category) = command.category {
+        let classification_id = format!("manual:{}", command.operation_id.as_str());
+        let data = serde_json::json!({
+            "category": rows::category_name(category),
+            "origin": "manual_correction",
+            "source_revision": command.source_revision,
+            "revision": new_revision,
+            "reason": command.reason,
+            "operator_id": command.operator_id.as_str(),
+        })
+        .to_string();
+        let source_revision = i64::try_from(command.source_revision)
+            .map_err(|_| SupportStoreError::InvalidRequest)?;
+        transaction
+            .execute(
+                "INSERT INTO support.classification (classification_id,ticket_id,source_revision,data,created_at_unix_s) \
+                 VALUES ($1,$2,$3,$4::text::jsonb,floor(extract(epoch FROM clock_timestamp()))::bigint)",
+                &[
+                    &classification_id,
+                    &command.ticket_id.as_str(),
+                    &source_revision,
+                    &data,
+                ],
+            )
+            .await
+            .map_err(|_| SupportStoreError::Unavailable)?;
+        transaction
+            .execute(
+                "UPDATE support.ticket SET classification_head=$2 WHERE ticket_id=$1",
+                &[&command.ticket_id.as_str(), &classification_id],
+            )
+            .await
+            .map_err(|_| SupportStoreError::Unavailable)?;
+    }
+    let audit_data = serde_json::json!({
+        "event": "triage_applied",
+        "operation_id": command.operation_id.as_str(),
+        "operator_id": command.operator_id.as_str(),
+        "reason": command.reason,
+        "previous_revision": current_revision,
+        "new_revision": new_revision,
+        "status": rows::ticket_status(next_status),
+        "category": requested_category,
+        "source_revision": command.source_revision,
+    })
+    .to_string();
+    transaction
+        .execute(
+            "INSERT INTO support.audit (audit_id,operation_id,ticket_id,data,created_at_unix_s) \
+             VALUES ($1,$2,$3,$4::text::jsonb,floor(extract(epoch FROM clock_timestamp()))::bigint)",
+            &[
+                &audit_id,
+                &command.operation_id.as_str(),
+                &command.ticket_id.as_str(),
+                &audit_data,
+            ],
+        )
+        .await
+        .map_err(|_| SupportStoreError::AuditUnavailable)?;
+    transaction
+        .execute(
+            "INSERT INTO support.triage_operation (operation_id,ticket_id,operator_id,expected_revision,source_revision,requested_status,requested_category,reason,previous_revision,new_revision,resulting_status,resulting_category,audit_id,created_at_unix_s) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+            &[
+                &command.operation_id.as_str(),
+                &command.ticket_id.as_str(),
+                &command.operator_id.as_str(),
+                &expected,
+                &i64::try_from(command.source_revision)
+                    .map_err(|_| SupportStoreError::InvalidRequest)?,
+                &requested_status,
+                &requested_category,
+                &command.reason,
+                &current_revision,
+                &new_revision,
+                &rows::ticket_status(next_status),
+                &resulting_category.map(rows::category_name),
+                &audit_id,
+                &created_at_unix_s,
+            ],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    Ok(TriageReceipt {
+        operation_id: command.operation_id.clone(),
+        ticket_id: command.ticket_id.clone(),
+        previous_revision: current_revision
+            .try_into()
+            .map_err(|_| SupportStoreError::Unavailable)?,
+        new_revision: new_revision
+            .try_into()
+            .map_err(|_| SupportStoreError::Unavailable)?,
+        status: next_status,
+        category: resulting_category,
+        audit_id: receipt_audit_id,
+        replayed: false,
+        created_at_unix_s,
+    })
+}
+
+pub(super) async fn read_messages_audited(
+    client: &mut Client,
+    ticket_id: &TicketId,
+    request: MessagePageRequest,
+    content: QueueContentGrant,
+) -> Result<MessagePage, SupportStoreError> {
+    if !(1..=100).contains(&request.page_size) || content.restricted_ticket_ids.len() > 100 {
+        return Err(SupportStoreError::InvalidRequest);
+    }
+    let transaction = begin_transaction(client).await?;
+    let exists = transaction
+        .query_opt(
+            "SELECT sensitivity <> 'ordinary' AS restricted FROM support.ticket WHERE ticket_id=$1",
+            &[&ticket_id.as_str()],
+        )
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    let row = exists.ok_or(SupportStoreError::NotFound)?;
+    if row.get::<_, bool>("restricted") && !content.restricted_ticket_ids.contains(ticket_id) {
+        return Err(SupportStoreError::NotFound);
+    }
+    let event = AuditEvent::ContentRead {
+        ticket_id: ticket_id.clone(),
+        operator_id: content.operator_id,
+        audit_id: content.audit_id.clone(),
+    };
+    let data = serde_json::to_string(&event).map_err(|_| SupportStoreError::AuditUnavailable)?;
+    transaction
+        .execute(
+            "INSERT INTO support.audit (audit_id,operation_id,ticket_id,data,created_at_unix_s) \
+             VALUES ($1,$1,$2,$3::text::jsonb,floor(extract(epoch FROM clock_timestamp()))::bigint)",
+            &[&content.audit_id.as_str(), &ticket_id.as_str(), &data],
+        )
+        .await
+        .map_err(|_| SupportStoreError::AuditUnavailable)?;
+    let cursor = request.cursor.map(|value| value.as_str().to_owned());
+    let (cursor_at, cursor_id) = match cursor.as_deref() {
+        Some(value) => {
+            let (timestamp, message_id) = value
+                .split_once('|')
+                .ok_or(SupportStoreError::InvalidRequest)?;
+            (
+                Some(
+                    timestamp
+                        .parse::<i64>()
+                        .map_err(|_| SupportStoreError::InvalidRequest)?,
+                ),
+                Some(message_id.to_owned()),
+            )
+        }
+        None => (None, None),
+    };
+    let mut found = transaction.query(
+        "SELECT message_id,direction,received_at_unix_s,sender_party_id,recipient_party_ids::text AS recipient_party_ids,body_text \
+         FROM support.message WHERE ticket_id=$1 AND ($2::bigint IS NULL OR (received_at_unix_s,message_id) > ($2,$3)) \
+         ORDER BY received_at_unix_s,message_id LIMIT $4",
+        &[&ticket_id.as_str(), &cursor_at, &cursor_id, &(i64::from(request.page_size) + 1)],
+    ).await.map_err(|_| SupportStoreError::Unavailable)?;
+    let has_more = found.len() > usize::from(request.page_size);
+    found.truncate(usize::from(request.page_size));
+    let messages = found
+        .iter()
+        .map(rows::message_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| SupportStoreError::Unavailable)?;
+    let next_cursor = if has_more {
+        messages
+            .last()
+            .map(|message| {
+                let value = format!("{}|{}", message.received_at_unix_s, message.id.as_str());
+                df_support::contracts::PageCursor::new(value)
+                    .map_err(|_| SupportStoreError::Unavailable)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(MessagePage {
+        messages,
+        next_cursor,
+    })
 }
 
 pub(super) async fn purge_expired(

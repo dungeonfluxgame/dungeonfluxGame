@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use df_types::{AccountId, WebSessionId};
+use df_types::{AccountId, TenantId, WebSessionId};
 
 use std::future::Future;
 
@@ -39,6 +39,8 @@ use crate::{
     },
     tokens::{PasswordHash, TokenDigest},
 };
+
+mod oauth;
 
 struct TokenRow {
     token: NewToken,
@@ -70,8 +72,13 @@ struct ReceiptRow {
 
 #[derive(Default)]
 struct State {
+    oauth_attempts: HashMap<TokenDigest, crate::OAuthAttempt>,
+    google_links: HashMap<String, AccountId>,
+    google_proofs: HashMap<WebSessionId, Option<u64>>,
+    google_consents: HashMap<AccountId, (u64, String, u64)>,
     identities: HashMap<(IdentityProviderKind, String), AccountId>,
     accounts: HashMap<AccountId, AccountRecord>,
+    tenants: HashMap<AccountId, TenantId>,
     by_email: HashMap<String, AccountId>,
     tokens: HashMap<TokenDigest, TokenRow>,
     sessions: HashMap<WebSessionId, SessionRow>,
@@ -122,6 +129,10 @@ pub trait CampaignSeeding {
 }
 
 impl State {
+    fn issue_tenant(&mut self, account: AccountId, tenant: TenantId) {
+        self.tenants.entry(account).or_insert(tenant);
+    }
+
     fn closure_check(&self, account: AccountId) -> ClosureCheck {
         let mut check = ClosureCheck::default();
         for entry in &self.campaigns {
@@ -261,6 +272,7 @@ impl State {
         now_ms: u64,
         policy: ResetPolicy,
         new_hash: Option<PasswordHash>,
+        tenant: TenantId,
     ) -> ResetOutcome {
         let Some(row) = self.tokens.get(&digest) else {
             return ResetOutcome::Invalid;
@@ -295,6 +307,7 @@ impl State {
             // Holding the emailed link proves control of the address.
             account.is_verified = true;
         }
+        self.issue_tenant(account_id, tenant);
         self.revoke(account_id, RevokeScope::All, now_ms);
         self.event(
             account_id,
@@ -312,6 +325,12 @@ impl State {
             }
         }
     }
+}
+
+fn random_tenant() -> StoreResult<TenantId> {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).map_err(|_| crate::StoreError::Unavailable)?;
+    TenantId::from_bytes(&bytes).map_err(|_| crate::StoreError::InvalidRecord)
 }
 
 fn receipt_key(key: &OperationKey) -> (&'static str, [u8; 32], [u8; 16]) {
@@ -394,6 +413,7 @@ impl AccountStore for MemoryAccountStore {
         &self,
         account: NewIdentityAccount,
     ) -> StoreResult<CreateOutcome> {
+        let tenant = random_tenant()?;
         let mut state = self.state();
         if state.by_email.contains_key(account.email.normalized()) {
             return Ok(CreateOutcome::EmailTaken);
@@ -404,6 +424,9 @@ impl AccountStore for MemoryAccountStore {
         state
             .identities
             .insert((account.provider, account.subject), account.id);
+        if account.is_verified {
+            state.issue_tenant(account.id, tenant);
+        }
         if let Some(token) = account.verification {
             state.tokens.insert(
                 token.digest,
@@ -518,6 +541,15 @@ impl AccountStore for MemoryAccountStore {
         Ok(self.state().accounts.get(&id).cloned())
     }
 
+    async fn tenant_for(&self, account: AccountId) -> StoreResult<Option<TenantId>> {
+        let state = self.state();
+        Ok(state
+            .accounts
+            .get(&account)
+            .filter(|record| record.is_verified && record.status == AccountStatus::Active)
+            .and_then(|_| state.tenants.get(&account).copied()))
+    }
+
     async fn issue_token(&self, token: NewToken) -> StoreResult<()> {
         let mut state = self.state();
         for row in state.tokens.values_mut() {
@@ -566,6 +598,7 @@ impl AccountStore for MemoryAccountStore {
         now_ms: u64,
         replacement: Option<PasswordHash>,
     ) -> StoreResult<VerifyOutcome> {
+        let tenant = random_tenant()?;
         let mut state = self.state();
         let Some(row) = state.tokens.get(&digest) else {
             return Ok(VerifyOutcome::Invalid);
@@ -598,6 +631,7 @@ impl AccountStore for MemoryAccountStore {
         if let Some(hash) = replacement {
             record.password_hash = Some(hash);
         }
+        state.issue_tenant(account, tenant);
         state.revoke(account, RevokeScope::All, now_ms);
         state.event(account, EventKind::Verified, now_ms, DeviceLabel::Unknown);
         Ok(VerifyOutcome::Verified(account))
@@ -731,7 +765,7 @@ impl AccountStore for MemoryAccountStore {
     ) -> StoreResult<ResetOutcome> {
         Ok(self
             .state()
-            .apply_reset(digest, now_ms, policy, Some(new_hash)))
+            .apply_reset(digest, now_ms, policy, Some(new_hash), random_tenant()?))
     }
 
     async fn consume_reset_token(
@@ -740,7 +774,9 @@ impl AccountStore for MemoryAccountStore {
         now_ms: u64,
         policy: ResetPolicy,
     ) -> StoreResult<ResetOutcome> {
-        Ok(self.state().apply_reset(digest, now_ms, policy, None))
+        Ok(self
+            .state()
+            .apply_reset(digest, now_ms, policy, None, random_tenant()?))
     }
 
     async fn request_email_change(
@@ -1024,6 +1060,13 @@ impl AccountStore for MemoryAccountStore {
         state.tokens.retain(|_, row| row.token.account != account);
         state.changes.retain(|_, change| change.account != account);
         state.events.remove(&account);
+        state.google_links.retain(|_, linked| *linked != account);
+        state
+            .oauth_attempts
+            .retain(|_, row| row.account != Some(account));
+        state
+            .google_proofs
+            .retain(|session, _| state.sessions.contains_key(session));
         Ok(true)
     }
 
@@ -1108,6 +1151,9 @@ impl AccountStore for MemoryAccountStore {
         // A plain reference lets the loop borrow two fields at once.
         let state = &mut *guard;
         let mut counts = PurgeCounts::default();
+        state
+            .oauth_attempts
+            .retain(|_, attempt| attempt.expires_at_ms > cutoffs.now_ms);
         let before = state.sessions.len();
         state.sessions.retain(|_, row| {
             let ended = row
@@ -1118,6 +1164,9 @@ impl AccountStore for MemoryAccountStore {
             !ended
         });
         counts.sessions = u64::try_from(before - state.sessions.len()).unwrap_or(u64::MAX);
+        state
+            .google_proofs
+            .retain(|session, _| state.sessions.contains_key(session));
         let before = state.tokens.len();
         state
             .tokens

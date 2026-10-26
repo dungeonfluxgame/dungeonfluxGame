@@ -26,6 +26,8 @@ mod native_connection;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_scope;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod operator_store;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod postgres_tls;
 #[cfg(not(target_arch = "wasm32"))]
 mod revision_codec;

@@ -539,6 +539,7 @@ name = "df-customer"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64 0.22.1",
  "df-auth",
  "df-observe",
  "df-types",
@@ -612,6 +613,19 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tokio-postgres",
+]
+
+[[package]]
+name = "df-google"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "df-customer",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
 ]
 
 [[package]]
@@ -759,13 +773,18 @@ name = "df-portal"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "df-account-app",
  "df-customer",
+ "df-google",
  "df-observe",
  "df-types",
  "http-body-util",
+ "opentelemetry",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "subtle",
  "tokio",
  "tower",
 ]
@@ -916,6 +935,7 @@ name = "df-support"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "thiserror",

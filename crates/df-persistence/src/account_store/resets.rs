@@ -87,6 +87,7 @@ impl PostgresAccountStore {
                 )
                 .await
                 .map_err(unavailable)?;
+            super::issue_tenant(&transaction, account).await?;
             if let Some(new_hash) = &new_hash {
                 transaction
                     .execute(

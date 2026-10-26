@@ -55,7 +55,7 @@ macro_rules! migration {
 /// The whole hosted migration set in order (0004 needs pgvector and 0002 is local-only), so the
 /// catalog walk sees every owner's grants. `every_hosted_migration_file_is_in_the_harness`
 /// fails when a file is added to the directory and not listed here.
-pub const MIGRATIONS: [Migration; 20] = [
+pub const MIGRATIONS: [Migration; 25] = [
     migration!("0001", "0001_game_decisions.sql"),
     migration!("0003", "0003_story_memory.sql"),
     migration!("0005", "0005_accounts.sql", in "accounts"),
@@ -76,12 +76,18 @@ pub const MIGRATIONS: [Migration; 20] = [
     migration!("0022", "0022_finance_admission.sql"),
     migration!("0023", "0023_finance_refunds_disputes.sql"),
     migration!("0024", "0024_finance_boundary.sql"),
+    migration!("0025", "0025_finance_refunds_disputes_boundary.sql"),
+    migration!("0028", "0028_save_points.sql"),
+    migration!("0029", "0029_google_oauth.sql", in "accounts"),
+    migration!("0030", "0030_personal_tenants.sql", in "accounts"),
+    migration!("0031", "0031_host_funding.sql"),
 ];
 
 /// Migration files that are deliberately not applied to the hosted database.
-pub const NOT_HOSTED: [&str; 2] = [
+pub const NOT_HOSTED: [&str; 3] = [
     "0002_local_room_reclaim.sql",
     "0004_story_memory_vector.sql",
+    "0007_processor_records.sql",
 ];
 
 /// Roles are cluster-wide and advisory locks are per database, so every test binary takes this

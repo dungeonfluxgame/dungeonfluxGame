@@ -976,6 +976,9 @@ pub async fn password_and_email_changes_are_not_offered_while_the_provider_holds
     );
 }
 
+/// PostgreSQL suites retain this established name for the same verification scenario.
+pub use verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions as verifying_replaces_the_sign_up_password_and_ends_earlier_sessions;
+
 pub async fn verifying_replaces_the_sign_up_password_issues_a_session_and_revokes_earlier_sessions<
     S: AccountStore + Clone,
 >(

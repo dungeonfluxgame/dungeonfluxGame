@@ -15,9 +15,15 @@ use crate::{
 };
 
 /// The migrations this store owns, in order (`planning/account-service-research.md` 5.1).
-pub(super) const MIGRATIONS: [(i32, &str); 2] = [
+pub(super) const MIGRATIONS: [(i32, &str); 5] = [
     (5, include_str!("../../migrations/0005_accounts.sql")),
     (6, include_str!("../../migrations/0006_account_closure.sql")),
+    (29, include_str!("../../migrations/0029_google_oauth.sql")),
+    (
+        30,
+        include_str!("../../migrations/0030_personal_tenants.sql"),
+    ),
+    (32, include_str!("../../migrations/0032_integration_tokens.sql")),
 ];
 pub(super) const CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 /// The account tables live in schema `accounts` of the shared hosted database (coordinator
@@ -209,7 +215,10 @@ async fn is_migrated(client: &Client) -> Result<bool, tokio_postgres::Error> {
         return Ok(false);
     }
     let applied: i64 = client
-        .query_one("SELECT count(*) FROM accounts.schema_migration", &[])
+        .query_one(
+            "SELECT count(*) FROM accounts.schema_migration WHERE version = ANY($1)",
+            &[&MIGRATIONS.map(|(version, _)| version).as_slice()],
+        )
         .await?
         .try_get(0)?;
     Ok(usize::try_from(applied).is_ok_and(|applied| applied >= MIGRATIONS.len()))

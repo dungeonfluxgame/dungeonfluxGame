@@ -20,6 +20,12 @@ mod email;
 mod hosts;
 mod lifecycle;
 mod mail_worker;
+mod oauth;
+mod oauth_provider;
+mod oauth_store;
+pub mod operator_contract;
+pub mod operator_ports;
+mod operators;
 mod password_hashing;
 mod ports;
 mod provider;
@@ -37,6 +43,12 @@ pub mod fakes;
 
 #[cfg(any(test, feature = "test-fakes"))]
 pub mod contract;
+
+#[cfg(any(test, feature = "test-fakes"))]
+pub mod oauth_contract;
+
+#[cfg(any(test, feature = "test-fakes"))]
+pub mod tenant_contract;
 
 pub use access::{
     Authenticated, IssuedSession, LoginOutcome, ResendOutcome, SignupForm, SignupOutcome,
@@ -64,6 +76,17 @@ pub use lifecycle::{
     CLOSURE_REAUTHENTICATION_MS, CloseResult, ExportResult, ProfileResult, RECENT_SIGN_IN_MS,
     Reauthentication, SecurityOverview,
 };
+pub use oauth::{OAuthOutcome, OAuthStart, OAuthStartForm};
+pub use oauth_provider::{
+    OAuthAuthorize, OAuthCall, OAuthExchange, OAuthFailure, OAuthIdentity, OAuthProvider,
+    OAuthSecret, pkce_challenge,
+};
+pub use oauth_store::{
+    GoogleResolution, GoogleResolved, GoogleSession, GoogleStore, GoogleStoreCall, OAuthAttempt,
+    OAuthIntent, OAuthRefusal,
+};
+pub use operator_ports::OperatorStore;
+pub use operators::OperatorService;
 pub use password_hashing::HashingParameters;
 pub use ports::{AccountStore, EmailError, EmailSender, ResetPolicy, StoreError, StoreResult};
 pub use provider::{

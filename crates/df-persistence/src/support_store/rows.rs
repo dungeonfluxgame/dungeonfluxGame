@@ -1,6 +1,6 @@
 use df_support::contracts::{
-    MessageDirection, MessageId, PartyId, ProposalStatus, SupportMessage, SupportTicket, TicketId,
-    TicketStatus, UntrustedEmailContent,
+    ClassificationCategory, MessageDirection, MessageId, PartyId, ProposalStatus, QueueEntry,
+    SupportMessage, SupportTicket, TicketId, TicketStatus, UntrustedEmailContent,
 };
 
 use super::SupportStoreError;
@@ -97,6 +97,76 @@ pub(super) fn proposal_status(status: ProposalStatus) -> &'static str {
         ProposalStatus::Superseded => "superseded",
         ProposalStatus::Expired => "expired",
     }
+}
+
+pub(super) fn category_name(category: ClassificationCategory) -> &'static str {
+    match category {
+        ClassificationCategory::BillingRefund => "billing_refund",
+        ClassificationCategory::PaymentDispute => "payment_dispute",
+        ClassificationCategory::BugReport => "bug_report",
+        ClassificationCategory::AccountAccess => "account_access",
+        ClassificationCategory::PrivacyDataRequest => "privacy_data_request",
+        ClassificationCategory::LegalNoticeTakedownIp => "legal_notice_takedown_ip",
+        ClassificationCategory::AbuseSafety => "abuse_safety",
+        ClassificationCategory::Feedback => "feedback",
+        ClassificationCategory::SalesPress => "sales_press",
+        ClassificationCategory::Spam => "spam",
+        ClassificationCategory::Undetermined => "undetermined",
+    }
+}
+
+pub(super) fn parse_category(value: &str) -> Option<ClassificationCategory> {
+    Some(match value {
+        "billing_refund" => ClassificationCategory::BillingRefund,
+        "payment_dispute" => ClassificationCategory::PaymentDispute,
+        "bug_report" => ClassificationCategory::BugReport,
+        "account_access" => ClassificationCategory::AccountAccess,
+        "privacy_data_request" => ClassificationCategory::PrivacyDataRequest,
+        "legal_notice_takedown_ip" => ClassificationCategory::LegalNoticeTakedownIp,
+        "abuse_safety" => ClassificationCategory::AbuseSafety,
+        "feedback" => ClassificationCategory::Feedback,
+        "sales_press" => ClassificationCategory::SalesPress,
+        "spam" => ClassificationCategory::Spam,
+        "undetermined" => ClassificationCategory::Undetermined,
+        _ => return None,
+    })
+}
+
+pub(super) fn optional_category(
+    value: Option<String>,
+) -> Result<Option<ClassificationCategory>, SupportStoreError> {
+    value
+        .map(|value| parse_category(&value).ok_or(SupportStoreError::Unavailable))
+        .transpose()
+}
+
+/// Content fields have already been permission-filtered in SQL.
+pub(super) fn queue_entry_from_row(
+    row: &tokio_postgres::Row,
+) -> Result<QueueEntry, SupportStoreError> {
+    let restricted: bool = row.get("restricted");
+    let snippet: Option<String> = row.get("latest_body");
+    Ok(QueueEntry {
+        ticket_id: TicketId::new(row.get::<_, String>("ticket_id"))
+            .map_err(|_| SupportStoreError::Unavailable)?,
+        status: parse_ticket_status(row.get("status"))?,
+        revision: row
+            .get::<_, i64>("revision")
+            .try_into()
+            .map_err(|_| SupportStoreError::Unavailable)?,
+        category: optional_category(row.get("category"))?,
+        restricted,
+        subject: None,
+        snippet,
+        attachment_count: None,
+        message_count: row
+            .get::<_, i64>("message_count")
+            .try_into()
+            .map_err(|_| SupportStoreError::Unavailable)?,
+        created_at_unix_s: row.get("created_at_unix_s"),
+        first_received_at_unix_s: row.get("first_received_at_unix_s"),
+        last_inbound_at_unix_s: row.get("last_inbound_at_unix_s"),
+    })
 }
 
 pub(super) fn message_from_row(

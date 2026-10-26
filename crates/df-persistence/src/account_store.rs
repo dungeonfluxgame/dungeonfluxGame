@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for `df_customer::AccountStore` (schema `accounts` of the hosted database,
-//! migrations `0005_accounts.sql` and `0006_account_closure.sql`). Every mutating method is one
-//! transaction; queries are parameterized and scoped by account id. A failure before commit is `Unavailable`; a failed or lost commit is
-//! `Unknown`. Credentials never appear in errors or logs.
+//! with versioned account migrations). Every mutating method is one transaction; queries are
+//! parameterized and scoped by account id. A failure before commit is `Unavailable`; a failed or
+//! lost commit is `Unknown`. Credentials never appear in errors or logs.
 
 use df_customer::{
     AccountEvent, AccountRecord, AccountStatus, AccountStore, AccountsSummary, CloseOutcome,
@@ -13,9 +13,10 @@ use df_customer::{
     SessionRecord, SessionSummary, StoreError, StoreResult, TokenDigest, TokenPurpose,
     VerificationTarget, VerifyOutcome,
 };
-use df_types::{AccountId, WebSessionId};
+use df_types::{AccountId, TenantId, WebSessionId};
 
 mod closing;
+mod oauth;
 mod pool;
 mod resets;
 mod rows;
@@ -121,6 +122,9 @@ impl AccountStore for PostgresAccountStore {
                 .map_err(unavailable)?;
             if inserted == 0 {
                 return Ok(CreateOutcome::EmailTaken);
+            }
+            if account.is_verified {
+                issue_tenant(&transaction, account.id).await?;
             }
             if let Some(token) = &account.verification {
                 insert_token(&transaction, token).await?;
@@ -296,6 +300,21 @@ impl AccountStore for PostgresAccountStore {
         })
     }
 
+    async fn tenant_for(&self, account: AccountId) -> StoreResult<Option<TenantId>> {
+        with_client!(self, client => {
+            let row = client.query_opt(
+                "SELECT t.tenant_id FROM tenant t JOIN account a ON a.account_id = t.owner_account_id \
+                 WHERE a.account_id = $1 AND a.email_verified_at_ms IS NOT NULL \
+                 AND a.status = 'active' AND t.standing = 'active'",
+                &[&&account.as_bytes()[..]],
+            ).await.map_err(unavailable)?;
+            row.map(|row| {
+                let bytes: Vec<u8> = row.try_get(0).map_err(unavailable)?;
+                TenantId::from_bytes(&bytes).map_err(|_| StoreError::InvalidRecord)
+            }).transpose()
+        })
+    }
+
     async fn issue_token(&self, token: NewToken) -> StoreResult<()> {
         with_client!(self, client => {
             let transaction = begin_transaction(client).await.map_err(unavailable)?;
@@ -401,6 +420,7 @@ impl AccountStore for PostgresAccountStore {
                 )
                 .await
                 .map_err(unavailable)?;
+            issue_tenant(&transaction, account).await?;
             if let Some(hash) = &replacement {
                 transaction
                     .execute(
@@ -1051,6 +1071,7 @@ impl AccountStore for PostgresAccountStore {
     async fn purge(&self, cutoffs: RetentionCutoffs) -> StoreResult<PurgeCounts> {
         with_client!(self, client => {
             let transaction = begin_transaction(client).await.map_err(unavailable)?;
+            oauth::purge_expired(&transaction, cutoffs.now_ms).await?;
             let sessions = transaction
                 .execute(
                     "DELETE FROM web_session WHERE revoked_at_ms < $1 \
@@ -1187,3 +1208,24 @@ mod tests;
 #[cfg(test)]
 #[path = "account_closure_tests.rs"]
 mod closure_tests;
+
+async fn issue_tenant(
+    transaction: &tokio_postgres::Transaction<'_>,
+    account: AccountId,
+) -> StoreResult<()> {
+    transaction.execute(
+        "INSERT INTO tenant (owner_account_id) VALUES ($1) ON CONFLICT (owner_account_id) DO NOTHING",
+        &[&&account.as_bytes()[..]],
+    ).await.map_err(|error| {
+        df_observe::record_audit_line(
+            "account.tenant_issuance_failed",
+            format!(
+                "ACCOUNT tenant_issuance_failed account={} sqlstate={}",
+                df_customer::HexId::of(account.as_bytes()).as_str(),
+                error.code().map_or("connection", |code| code.code()),
+            ),
+        );
+        unavailable(error)
+    })?;
+    Ok(())
+}

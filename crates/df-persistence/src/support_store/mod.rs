@@ -5,7 +5,8 @@ mod rows;
 use df_support::{
     contracts::{
         ActionProposalRecord, AuditEvent, MessagePage, MessagePageRequest, ProposalId,
-        ProposalStatus, SupportTicket, TicketId,
+        ProposalStatus, QueueContentGrant, QueuePage, QueuePageRequest, SupportTicket, TicketId,
+        TriageCommand, TriageReceipt,
     },
     ports::{SupportStore as SupportStorePort, SupportStoreError},
 };
@@ -16,6 +17,7 @@ pub use rows::{ApprovalInsert, InboundMessage, IngestOutcome, RetentionPurge};
 
 /// Borrowed adapter over an operator-authorized PostgreSQL connection.
 pub struct SupportStore {
+    // Transactions exclusively borrow this connection; cancellation queues rollback before reuse.
     client: Mutex<Client>,
 }
 
@@ -126,6 +128,87 @@ impl SupportStorePort for SupportStore {
     async fn record_audit(&self, event: AuditEvent) -> Result<(), SupportStoreError> {
         queries::record_audit(&*self.client.lock().await, event).await
     }
+
+    async fn list_queue(
+        &self,
+        request: QueuePageRequest,
+        content: Option<QueueContentGrant>,
+    ) -> Result<QueuePage, SupportStoreError> {
+        let context = df_observe::current_audit_context();
+        let started = std::time::Instant::now();
+        let operation_hash = content
+            .as_ref()
+            .map(|grant| df_observe::operation_hash(grant.audit_id.as_str().as_bytes()));
+        let result = queries::list_queue(&mut *self.client.lock().await, request, content).await;
+        record_operation("queue_read", context, operation_hash, started, &result);
+        result
+    }
+
+    async fn apply_triage(
+        &self,
+        command: TriageCommand,
+    ) -> Result<TriageReceipt, SupportStoreError> {
+        let context = df_observe::current_audit_context();
+        let started = std::time::Instant::now();
+        let operation_hash = df_observe::operation_hash(command.operation_id.as_str().as_bytes());
+        let result = queries::apply_triage(&mut *self.client.lock().await, command).await;
+        record_operation("triage", context, Some(operation_hash), started, &result);
+        result
+    }
+
+    async fn read_messages_audited(
+        &self,
+        ticket_id: &TicketId,
+        request: MessagePageRequest,
+        content: QueueContentGrant,
+    ) -> Result<MessagePage, SupportStoreError> {
+        let context = df_observe::current_audit_context();
+        let started = std::time::Instant::now();
+        let operation_hash = df_observe::operation_hash(content.audit_id.as_str().as_bytes());
+        let result = queries::read_messages_audited(
+            &mut *self.client.lock().await,
+            ticket_id,
+            request,
+            content,
+        )
+        .await;
+        record_operation(
+            "content_read",
+            context,
+            Some(operation_hash),
+            started,
+            &result,
+        );
+        result
+    }
+}
+
+fn record_operation<T>(
+    action: &'static str,
+    context: df_observe::AuditContext,
+    operation_hash: Option<u64>,
+    started: std::time::Instant,
+    result: &Result<T, SupportStoreError>,
+) {
+    let operation_hash = operation_hash.or(context.operation);
+    let _scope = df_observe::audit_scope(context);
+    let outcome = match result {
+        Ok(_) => "succeeded",
+        Err(SupportStoreError::NotFound) => "not_found",
+        Err(SupportStoreError::Conflict) => "conflict",
+        Err(SupportStoreError::AuditUnavailable) => "audit_unavailable",
+        Err(SupportStoreError::Unavailable) => "unavailable",
+        Err(SupportStoreError::InvalidTransition) => "invalid_transition",
+        Err(SupportStoreError::InvalidRequest) => "invalid_request",
+    };
+    df_observe::record_audit_line(
+        "support.store_operation",
+        format!(
+            "SUPPORT {action} status={outcome} op={} ms={}",
+            operation_hash.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+            started.elapsed().as_millis(),
+        ),
+    );
 }
 
 #[cfg(test)]
