@@ -7,8 +7,9 @@ mod funding_tests;
 use crate::{
     copy, money,
     node::{Element, Node, el},
+    route::Route,
     state::{Field, Form, Intent, LobbyScreen, Remote},
-    view::{ButtonKind, button, checkbox, error_summary, failed, loading, page_wide},
+    view::{ButtonKind, button, checkbox, error_summary, failed, link, loading, page_wide},
     wire_campaign::{FundingNote, LobbyMember, LobbyView, StartBlocker},
 };
 
@@ -65,16 +66,13 @@ pub(in crate::view) fn lobby(screen: &LobbyScreen, _offset_east_minutes: i32) ->
 }
 
 fn started_panel(session_id: &str) -> Element {
-    panel("The session has started").child(
-        el("p").class("actions").child(
-            el("a")
-                .class("btn btn-gilt")
-                .attr("href", format!("/app/api/sessions/{session_id}/game"))
-                .attr("target", "_blank")
-                .attr("rel", "noopener noreferrer")
-                .text("Open the game"),
-        ),
-    )
+    panel("The session has started").child(actions(vec![link(
+        "Open the game",
+        Route::Play {
+            session_id: session_id.to_owned(),
+        },
+        "btn btn-gilt",
+    )]))
 }
 
 fn members_panel(lobby: &LobbyView) -> Element {

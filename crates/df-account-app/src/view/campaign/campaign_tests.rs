@@ -1342,21 +1342,17 @@ fn a_member_who_cannot_manage_waits_for_the_host_when_nothing_blocks() {
 }
 
 #[test]
-fn a_started_session_links_to_the_game_with_a_plain_anchor() {
+fn a_started_session_links_to_the_pre_game_launcher() {
     let mut lobby = lobby_data();
     lobby.has_started = true;
     let tree = lobby_page(lobby_screen(lobby));
     assert!(tree.text_content().contains("The session has started"));
     let game = control(&tree, "Open the game");
     assert_eq!(game.tag, "a");
-    assert_eq!(
-        game.attribute("href"),
-        Some("/app/api/sessions/sess-1/game")
-    );
-    assert_eq!(game.on_click, None, "a full page load, not an intent");
+    assert_eq!(game.attribute("href"), Some("/app/sessions/sess-1/play"));
     assert!(!has_control(&tree, "Start the session"));
-    assert_eq!(game.attribute("target"), Some("_blank"));
-    assert_eq!(game.attribute("rel"), Some("noopener noreferrer"));
+    // The launcher page opens in this tab; it opens the table and player screens in new ones.
+    assert_eq!(game.attribute("target"), None);
 }
 
 #[test]

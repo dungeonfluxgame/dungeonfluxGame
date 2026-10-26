@@ -701,7 +701,6 @@ fn lobbyfix_play_now_has_one_request_without_any_wizard_fields() {
     let mut model = booted(Route::Dashboard, signed_in(true));
     issue(&mut model, OperationSlot::Primary, "play-once");
     let effects = click(&mut model, Intent::PlayNow);
-    assert!(effects.contains(&Effect::ReserveGameTab));
     assert_eq!(
         calls(&effects),
         vec![&ApiCall::PlayNow(OperationRequest {
@@ -719,42 +718,94 @@ fn lobbyfix_play_now_has_one_request_without_any_wizard_fields() {
 }
 
 #[test]
-fn lobbyfix_unavailable_game_opens_a_new_tab_and_keeps_campaign_settings_in_the_account_tab() {
-    let mut model = booted(Route::Dashboard, signed_in(true));
-    issue(&mut model, OperationSlot::Primary, "play-once");
-    click(&mut model, Intent::PlayNow);
-    let effects = deliver(
-        &mut model,
-        Reply::PlayNow(Ok(crate::wire_campaign::PlayNowView {
-            campaign_id: "0c".to_owned(),
-            game_unavailable: true,
-            lobby: lobby_view(5, false),
-        })),
-    );
-    assert!(effects.contains(&Effect::OpenGame(Some(
-        "/app/api/sessions/5e/game".to_owned()
-    ))));
-    assert!(matches!(model.screen, Screen::Campaign(_)));
-    assert_eq!(model.play_operation, Remote::Loading);
-    assert!(
-        !calls(&effects)
-            .iter()
-            .any(|call| matches!(call, ApiCall::StartDraft | ApiCall::WizardCatalog))
-    );
+fn play_now_goes_to_the_pre_game_launcher_once_started_and_to_the_session_otherwise() {
+    for (started, launcher) in [(true, true), (false, false)] {
+        let mut model = booted(Route::Dashboard, signed_in(true));
+        issue(&mut model, OperationSlot::Primary, "play-once");
+        click(&mut model, Intent::PlayNow);
+        let effects = deliver(
+            &mut model,
+            Reply::PlayNow(Ok(crate::wire_campaign::PlayNowView {
+                campaign_id: "0c".to_owned(),
+                game_unavailable: true,
+                lobby: lobby_view(5, started),
+            })),
+        );
+        assert_eq!(model.play_operation, Remote::Loading);
+        if launcher {
+            assert!(matches!(model.screen, Screen::Play(_)));
+            assert!(calls(&effects).contains(&&ApiCall::GameLaunch {
+                session_id: "5e".to_owned()
+            }));
+        } else {
+            assert!(matches!(model.screen, Screen::Lobby(_)));
+        }
+        assert!(
+            !calls(&effects)
+                .iter()
+                .any(|call| matches!(call, ApiCall::StartDraft | ApiCall::WizardCatalog))
+        );
+    }
 }
 
 #[test]
-fn lobbyfix_a_start_refused_or_blocked_after_the_click_closes_its_reserved_tab() {
+fn a_start_goes_to_the_launcher_and_a_refused_or_blocked_start_stays_on_the_session() {
+    let mut model = lobby_model();
+    click(&mut model, Intent::StartSession);
+    deliver(&mut model, Reply::Lobby(Ok(lobby_view(5, true))));
+    assert!(matches!(model.screen, Screen::Play(_)));
     for result in [
         Ok(lobby_view(5, false)),
         Err(ApiError::of(ErrorCode::Forbidden)),
     ] {
         let mut model = lobby_model();
-        let click = click(&mut model, Intent::StartSession);
-        assert!(click.contains(&Effect::ReserveGameTab));
-        let effects = deliver(&mut model, Reply::Lobby(result));
-        assert!(effects.contains(&Effect::OpenGame(None)));
+        click(&mut model, Intent::StartSession);
+        deliver(&mut model, Reply::Lobby(result));
+        assert!(matches!(model.screen, Screen::Lobby(_)));
     }
+}
+
+fn launch_view(
+    links: Option<crate::wire_campaign::GameLinks>,
+) -> crate::wire_campaign::GameLaunchView {
+    crate::wire_campaign::GameLaunchView {
+        session_id: "5e".to_owned(),
+        campaign_name: "The Drowned Lantern".to_owned(),
+        has_started: true,
+        links,
+        poll_seconds: 3,
+    }
+}
+
+#[test]
+fn the_launcher_asks_again_until_the_game_is_reachable_then_holds_still() {
+    let mut model = booted(
+        Route::Play {
+            session_id: "5e".to_owned(),
+        },
+        signed_in(true),
+    );
+    let waiting = deliver(&mut model, Reply::GameLaunch(Ok(launch_view(None))));
+    assert!(waiting.iter().any(|effect| matches!(
+        effect,
+        Effect::After {
+            delay_ms: 3_000,
+            ..
+        }
+    )));
+    let ready = deliver(
+        &mut model,
+        Reply::GameLaunch(Ok(launch_view(Some(crate::wire_campaign::GameLinks {
+            display_url: "http://game.test/gameplay/display".to_owned(),
+            player_url: "http://game.test/gameplay/player?room=ABCDEF".to_owned(),
+            room_code: Some("ABCDEF".to_owned()),
+        })))),
+    );
+    assert!(
+        !ready
+            .iter()
+            .any(|effect| matches!(effect, Effect::After { .. }))
+    );
 }
 
 #[test]

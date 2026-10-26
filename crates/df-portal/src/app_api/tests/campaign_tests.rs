@@ -858,34 +858,37 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
     let started = host.post(&path, &json!({"operation": operation})).await;
     assert_eq!(started.status, StatusCode::OK, "{}", started.body);
     assert_eq!(started.json()["has_started"], true);
-    let unavailable = host
-        .get(&format!(
-            "/app/api/sessions/{}/game",
-            hex(session.as_bytes())
-        ))
-        .await;
-    assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(
-        unavailable
-            .body
-            .contains("The game isn't available right now.")
-    );
-    assert!(unavailable.body.contains("Try again in a few minutes."));
-    assert!(!unavailable.body.contains("DF_GAMEPLAY") && !unavailable.body.contains("/sessions/"));
-    harness.ports.campaigns.seed_game_link(
+    let launch_path = format!("/app/api/sessions/{}/game", hex(session.as_bytes()));
+    let waiting = host.get(&launch_path).await;
+    assert_eq!(waiting.status, StatusCode::OK, "{}", waiting.body);
+    let waiting = waiting.json();
+    assert_eq!(waiting["has_started"], true);
+    assert_eq!(waiting["links"], Value::Null);
+    assert!(!waiting.to_string().contains("DF_GAMEPLAY"));
+    let session_hex = hex(session.as_bytes());
+    let links = |display: &str| df_account_app::wire_campaign::GameLinks {
+        display_url: display.to_owned(),
+        player_url: format!("https://game.example.test/sessions/{session_hex}/player?room=ABCDEF"),
+        room_code: Some("ABCDEF".to_owned()),
+    };
+    // A link carrying credentials is never handed to the browser.
+    harness.ports.campaigns.seed_game_links(
         session,
-        format!(
-            "https://game.example.test/sessions/{}/play",
-            hex(session.as_bytes())
-        ),
+        links("https://user:secret@game.example.test/display"),
     );
-    let opened = player
-        .get(&format!(
-            "/app/api/sessions/{}/game",
-            hex(session.as_bytes())
-        ))
-        .await;
-    assert_eq!(opened.status, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(player.get(&launch_path).await.json()["links"], Value::Null);
+    harness.ports.campaigns.seed_game_links(
+        session,
+        links(&format!(
+            "https://game.example.test/sessions/{session_hex}/display"
+        )),
+    );
+    let opened = player.get(&launch_path).await.json();
+    assert_eq!(
+        opened["links"]["display_url"],
+        format!("https://game.example.test/sessions/{session_hex}/display")
+    );
+    assert_eq!(opened["links"]["room_code"], "ABCDEF");
 }
 
 #[tokio::test]

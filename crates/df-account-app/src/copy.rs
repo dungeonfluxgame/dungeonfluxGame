@@ -184,6 +184,7 @@ pub fn refused_form_error(model: &Model) -> Option<ApiError> {
         Screen::NewCampaign(screen) => screen.save.error(),
         Screen::Campaign(screen) => screen.action.error(),
         Screen::Lobby(screen) => screen.action.error(),
+        Screen::Play(_) => None,
         Screen::Join(screen) => screen.submit.error(),
         Screen::Admin(AdminScreen::Account(screen)) => screen
             .refund
@@ -231,6 +232,7 @@ pub fn title(screen: &Screen) -> String {
         Screen::NewCampaign(_) => "New campaign",
         Screen::Campaign(_) => "Campaign",
         Screen::Lobby(_) => "Lobby",
+        Screen::Play(_) => "Start your game",
         Screen::Join(_) => "Join a table",
         Screen::Admin(_) => "Operator console",
         Screen::NotPermitted => "Not available",

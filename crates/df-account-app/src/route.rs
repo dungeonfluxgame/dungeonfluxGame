@@ -43,6 +43,10 @@ pub enum Route {
     Lobby {
         session_id: String,
     },
+    /// The pre-game launcher: opens the started session's table screen and player screen.
+    Play {
+        session_id: String,
+    },
     /// An invitation link (token in the fragment) or, without a token, the room-code form.
     Join {
         token: Option<String>,
@@ -115,6 +119,9 @@ impl Route {
             ["sessions", id, "lobby"] if is_identifier(id) => Self::Lobby {
                 session_id: (*id).to_owned(),
             },
+            ["sessions", id, "play"] if is_identifier(id) => Self::Play {
+                session_id: (*id).to_owned(),
+            },
             ["join"] => Self::Join { token: token() },
             ["display"] => Self::NotFound,
             ["admin"] => Self::Admin(AdminRoute::Summary),
@@ -158,6 +165,7 @@ impl Route {
             Self::NewCampaign => "campaigns/new",
             Self::Campaign { campaign_id } => return format!("{APP_BASE}/campaigns/{campaign_id}"),
             Self::Lobby { session_id } => return format!("{APP_BASE}/sessions/{session_id}/lobby"),
+            Self::Play { session_id } => return format!("{APP_BASE}/sessions/{session_id}/play"),
             Self::Join { .. } => "join",
             Self::Admin(admin) => return format!("{APP_BASE}/admin{}", admin.tail()),
         };
@@ -192,6 +200,7 @@ impl Route {
             Self::NewCampaign => "new_campaign",
             Self::Campaign { .. } => "campaign",
             Self::Lobby { .. } => "lobby",
+            Self::Play { .. } => "play",
             Self::Join { .. } => "join",
             Self::Admin(_) => "admin",
             Self::NotFound => "not_found",
@@ -231,7 +240,8 @@ impl Route {
             | Self::Security
             | Self::NewCampaign
             | Self::Campaign { .. }
-            | Self::Lobby { .. } => Audience::Customer,
+            | Self::Lobby { .. }
+            | Self::Play { .. } => Audience::Customer,
             Self::Admin(_) => Audience::Operator,
         }
     }

@@ -308,12 +308,14 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         draft: CampaignDraft,
     ) -> impl Future<Output = PortResult<df_account_app::wire_campaign::CampaignSettingsView>> + Send;
 
-    /// A session-specific runtime link, only after its actual placement is available.
-    fn game_link(
+    /// The session's table screen, player screen and room code, only after its actual runtime
+    /// placement is available.
+    fn game_links(
         &self,
         who: &Actor,
         session: SessionId,
-    ) -> impl Future<Output = PortResult<Option<String>>> + Send {
+    ) -> impl Future<Output = PortResult<Option<df_account_app::wire_campaign::GameLinks>>> + Send
+    {
         async move {
             self.lobby(who, session).await?;
             Ok(None)

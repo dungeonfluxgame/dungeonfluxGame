@@ -21,8 +21,8 @@ pub use admin_flow::{
 };
 pub use auth_flow::{ForgotForm, ResetForm, SignInForm, SignUpForm, VerifyConfirm, VerifyPending};
 pub use campaign_flow::{
-    CampaignScreen, JoinScreen, LobbyScreen, MAXIMUM_CAMPAIGN_NAME_CHARS, RequestDecision,
-    WIZARD_STEPS, WizardScreen,
+    CampaignScreen, JoinScreen, LobbyScreen, MAXIMUM_CAMPAIGN_NAME_CHARS, PlayScreen,
+    RequestDecision, WIZARD_STEPS, WizardScreen,
 };
 pub use customer_flow::{
     AllocateEdit, AmountChoice, AssetsScreen, CHECKOUT_POLL_DELAYS_MS, CreditForm, CreditReturn,
@@ -406,9 +406,6 @@ pub enum Effect {
     ReplaceUrl(String),
     /// Leave the app for this address (the hosted checkout page).
     Leave(String),
-    /// Reserve on the click, then navigate after the guarded request completes.
-    ReserveGameTab,
-    OpenGame(Option<String>),
     /// Abort every request still in flight and clear timers (navigation).
     CancelPending,
     After {
@@ -454,6 +451,7 @@ pub enum Screen {
     NewCampaign(WizardScreen),
     Campaign(CampaignScreen),
     Lobby(LobbyScreen),
+    Play(PlayScreen),
     Join(JoinScreen),
     Admin(AdminScreen),
     /// Signed in, but the server does not grant this account the operator console.
@@ -897,6 +895,7 @@ impl Model {
             | Route::NewCampaign
             | Route::Campaign { .. }
             | Route::Lobby { .. }
+            | Route::Play { .. }
             | Route::Join { .. } => self.enter_customer(route),
         }
     }
@@ -962,6 +961,7 @@ fn reply_error(reply: &Reply) -> Option<ApiError> {
         Reply::Left(result) | Reply::JoinHeld(result) => of(result),
         Reply::LobbyOpened(result) => of(result),
         Reply::Lobby(result) => of(result),
+        Reply::GameLaunch(result) => of(result),
         Reply::LobbyCancelled(result) => of(result),
         Reply::JoinPreview(result) => of(result),
         Reply::Joined(result) => of(result),

@@ -85,13 +85,13 @@ fn play_panel(overview: &CampaignOverview, is_busy: bool) -> Element {
                     },
                     "btn btn-outline",
                 ),
-                el("a")
-                    .class("btn btn-gilt")
-                    .attr("href", format!("/app/api/sessions/{session_id}/game"))
-                    .attr("target", "_blank")
-                    .attr("rel", "noopener noreferrer")
-                    .text("Open the game")
-                    .into(),
+                link(
+                    "Open the game",
+                    Route::Play {
+                        session_id: session_id.clone(),
+                    },
+                    "btn btn-gilt",
+                ),
             ])),
         (None, true) => panel
             .child(el("p").text("Open the lobby when the table is ready to gather."))

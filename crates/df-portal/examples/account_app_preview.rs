@@ -7,7 +7,9 @@
 //! The bundle directory defaults to `artifacts/build/account-app-web`; port 0 (the default) picks
 //! a free port. The site directory defaults to `docs`. The server prints its address and process id
 //! when it is ready, and stops cleanly on ctrl-c or when its standard input closes (set
-//! `DF_PREVIEW_IGNORE_STDIN=1` to run detached with no standard input).
+//! `DF_PREVIEW_IGNORE_STDIN=1` to run detached with no standard input). Set `DF_PREVIEW_GAME_DISPLAY`
+//! and `DF_PREVIEW_GAME_PLAYER` to a running local game's display and player links (the ones
+//! `dungeonflux.exe start` prints) and every started session's pre-game page offers them.
 //!
 //! Test accounts, all with the test password printed in the banner: a customer (verified, trial
 //! plus purchased credit, a hosted campaign with an open lobby, statement lines), an operator
@@ -142,6 +144,24 @@ async fn main() -> std::io::Result<()> {
     let google = df_google::fake::FakeGoogle::new(&origin_text);
     let service = service.with_google(google.clone(), google_accounts);
     let ports = Arc::new(FakePorts::new(&origin_text, Arc::new(SystemClock)));
+    let local_game = |name: &str| std::env::var(name).ok().filter(|link| !link.is_empty());
+    if let (Some(display_url), Some(player_url)) = (
+        local_game("DF_PREVIEW_GAME_DISPLAY"),
+        local_game("DF_PREVIEW_GAME_PLAYER"),
+    ) {
+        let room_code = player_url
+            .split_once("room=")
+            .map(|(_, code)| code.split('&').next().unwrap_or_default().to_owned())
+            .filter(|code| !code.is_empty());
+        println!("started sessions use the local game at {display_url}");
+        ports
+            .campaigns
+            .use_local_game(df_account_app::wire_campaign::GameLinks {
+                display_url,
+                player_url,
+                room_code,
+            });
+    }
     let seeded = seed::seed(&service, &outbox, &ports, TEST_PASSWORD).await?;
     if dev_accounts_enabled {
         seed::seed_dev_accounts(&service, &outbox, &ports, TEST_PASSWORD).await?;

@@ -81,6 +81,13 @@ pub struct LobbyScreen {
     pub consent_checked: bool,
 }
 
+/// The pre-game launcher for a started session: the table screen, the player screen and the room code.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayScreen {
+    pub session_id: String,
+    pub launch: Remote<crate::wire_campaign::GameLaunchView>,
+}
+
 pub(super) fn empty_draft() -> CampaignDraft {
     CampaignDraft {
         name: String::new(),
@@ -190,6 +197,13 @@ impl Model {
                     self.api(ApiCall::Lobby { session_id }),
                     self.issue_operation(OperationSlot::Primary),
                 ]
+            }
+            Route::Play { session_id } => {
+                self.screen = Screen::Play(PlayScreen {
+                    session_id: session_id.clone(),
+                    launch: Remote::Loading,
+                });
+                vec![self.api(ApiCall::GameLaunch { session_id })]
             }
             Route::Join { token } => {
                 let mut effects = Vec::new();
@@ -419,12 +433,7 @@ impl Model {
                 request,
             }
         };
-        let mut effects = Vec::new();
-        if opens_game {
-            effects.push(Effect::ReserveGameTab);
-        }
-        effects.push(Effect::Api { generation, call });
-        effects
+        vec![Effect::Api { generation, call }]
     }
 
     pub(super) fn edit_campaign(&mut self, field: Field, value: &str) -> bool {
@@ -625,6 +634,7 @@ impl Model {
                 _,
             ) => self.overview_reply(reply),
             (reply @ Reply::Lobby(_), _) => self.lobby_reply(reply),
+            (reply @ Reply::GameLaunch(_), _) => self.play_reply(reply),
             (
                 reply @ (Reply::JoinPreview(_)
                 | Reply::JoinHeld(_)
@@ -758,12 +768,8 @@ impl Model {
                         {
                             screen.consent_checked = false;
                         }
+                        let started_now = was_action && lobby.has_started;
                         if was_action {
-                            effects.push(Effect::OpenGame(
-                                lobby.has_started.then(|| {
-                                    format!("/app/api/sessions/{}/game", screen.session_id)
-                                }),
-                            ));
                             screen.action = Submit::Idle;
                             effects.push(Effect::IssueOperation {
                                 generation,
@@ -772,7 +778,12 @@ impl Model {
                         }
                         let poll_ms = lobby.poll_seconds.saturating_mul(1_000).max(1_000);
                         let is_open = !lobby.has_started;
+                        let session_id = screen.session_id.clone();
                         screen.lobby = Remote::Ready(lobby);
+                        if started_now {
+                            // The host just started it: go on to the pre-game launcher.
+                            return self.navigate(Route::Play { session_id }, History::Push);
+                        }
                         if is_open && !was_action {
                             effects.push(Effect::After {
                                 generation,
@@ -780,11 +791,7 @@ impl Model {
                             });
                         }
                     }
-                    Err(error) if was_action => {
-                        let mut effects = self.refused_and_reissue(error);
-                        effects.insert(0, Effect::OpenGame(None));
-                        return effects;
-                    }
+                    Err(error) if was_action => return self.refused_and_reissue(error),
                     Err(error) => screen.lobby = Remote::Failed(error),
                 }
                 effects
@@ -987,10 +994,43 @@ impl Model {
             return Vec::new();
         };
         self.play_now = Submit::Sending;
-        vec![
-            Effect::ReserveGameTab,
-            self.api(ApiCall::PlayNow(OperationRequest { operation })),
-        ]
+        vec![self.api(ApiCall::PlayNow(OperationRequest { operation }))]
+    }
+
+    fn play_reply(&mut self, reply: Reply) -> Vec<Effect> {
+        let generation = self.generation;
+        let (Reply::GameLaunch(result), Screen::Play(screen)) = (reply, &mut self.screen) else {
+            return Vec::new();
+        };
+        match result {
+            Ok(view) => {
+                // Keep asking until the game is reachable; then the page holds still.
+                let waiting = view.links.is_none();
+                let delay_ms = view.poll_seconds.saturating_mul(1_000).max(1_000);
+                screen.launch = Remote::Ready(view);
+                if waiting {
+                    vec![Effect::After {
+                        generation,
+                        delay_ms,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(error) => {
+                screen.launch = Remote::Failed(error);
+                Vec::new()
+            }
+        }
+    }
+
+    pub(super) fn refresh_play(&mut self) -> Vec<Effect> {
+        let Screen::Play(screen) = &self.screen else {
+            return Vec::new();
+        };
+        vec![self.api(ApiCall::GameLaunch {
+            session_id: screen.session_id.clone(),
+        })]
     }
 
     fn play_now_reply(
@@ -1001,33 +1041,21 @@ impl Model {
             Ok(view) => {
                 self.play_now = Submit::Idle;
                 self.play_operation = Remote::Loading;
-                let started = view.lobby.has_started;
-                let opens_game = started || view.game_unavailable;
                 let session_id = view.lobby.session_id.clone();
-                let mut effects = self.navigate(
-                    if opens_game {
-                        Route::Campaign {
-                            campaign_id: view.campaign_id,
-                        }
+                // Started: the pre-game launcher. Still waiting for funding: the session page.
+                self.navigate(
+                    if view.lobby.has_started {
+                        Route::Play { session_id }
                     } else {
-                        Route::Lobby {
-                            session_id: session_id.clone(),
-                        }
+                        Route::Lobby { session_id }
                     },
                     History::Push,
-                );
-                effects.push(Effect::OpenGame(
-                    opens_game.then(|| format!("/app/api/sessions/{session_id}/game")),
-                ));
-                effects
+                )
             }
             Err(error) => {
                 self.play_now = Submit::Refused(error);
                 // Keep the same operation for an unknown outcome: retry cannot create another campaign.
-                vec![
-                    Effect::OpenGame(None),
-                    Effect::Focus(FocusTarget::ErrorSummary),
-                ]
+                vec![Effect::Focus(FocusTarget::ErrorSummary)]
             }
         }
     }

@@ -619,7 +619,7 @@ pub(super) async fn play_now<S: AccountStore, M: EmailSender, P: Ports>(
     let game_unavailable = state
         .ports
         .campaigns()
-        .game_link(&who, session)
+        .game_links(&who, session)
         .await
         .map_err(|error| launch_after_creation_failed(campaign, error))?
         .is_none();
@@ -666,67 +666,64 @@ pub(super) async fn save_campaign_settings<S: AccountStore, M: EmailSender, P: P
     reply(view)
 }
 
-/// A stable account link always terminates in the actual runtime or a plain player message.
+/// The pre-game launcher's view: whether the session has started and, once its runtime is
+/// reachable, the table screen, the player screen and the room code. Never a developer detail.
 pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
     State(state): State<AppApiState<S, M, P>>,
     SignedIn(caller): SignedIn,
     Path(session_id): Path<String>,
-) -> Result<axum::response::Response, ApiFailure> {
-    use axum::response::IntoResponse;
+) -> ApiResult<df_account_app::wire_campaign::GameLaunchView> {
     let session = ids::session(&session_id)?;
-    let view = state
+    let lobby = state
         .ports
         .campaigns()
         .lobby(&actor(&caller), session)
         .await?;
-    if !view.has_started {
+    let mut links = None;
+    let reason = if !lobby.has_started {
+        "session_not_started"
+    } else {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            state.ports.campaigns().game_links(&actor(&caller), session),
+        )
+        .await
+        {
+            Ok(Ok(Some(found)))
+                if is_game_url(&found.display_url) && is_game_url(&found.player_url) =>
+            {
+                links = Some(found);
+                "ready"
+            }
+            Ok(Ok(Some(_))) => "invalid_session_link",
+            Ok(Ok(None)) => "placement_missing",
+            Ok(Err(_)) => "runtime_unavailable",
+            Err(_) => "runtime_deadline",
+        }
+    };
+    if links.is_none() {
         df_observe::record_audit_line(
             "portal.game_unavailable",
-            format!("SESSION game_unavailable session={session_id} reason=session_not_started"),
+            format!("SESSION game_unavailable session={session_id} reason={reason}"),
         );
-        return Ok(game_unavailable());
     }
-    let reason = match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        state.ports.campaigns().game_link(&actor(&caller), session),
-    )
-    .await
-    {
-        Ok(Ok(Some(destination))) => {
-            let valid = destination
-                .parse::<axum::http::Uri>()
-                .ok()
-                .is_some_and(|uri| {
-                    matches!(uri.scheme_str(), Some("http" | "https"))
-                        && uri
-                            .authority()
-                            .is_some_and(|authority| !authority.as_str().contains('@'))
-                });
-            if valid {
-                return Ok(axum::response::Redirect::temporary(&destination).into_response());
-            }
-            "invalid_session_link"
-        }
-        Ok(Ok(None)) => {
-            if std::env::var_os("DF_GAMEPLAY_PUBLIC_URL").is_some() {
-                "placement_missing"
-            } else {
-                "origin_missing"
-            }
-        }
-        Ok(Err(_)) => "runtime_unavailable",
-        Err(_) => "runtime_deadline",
-    };
-    df_observe::record_audit_line(
-        "portal.game_unavailable",
-        format!("SESSION game_unavailable session={session_id} reason={reason}"),
-    );
-    Ok(game_unavailable())
+    reply(df_account_app::wire_campaign::GameLaunchView {
+        session_id,
+        campaign_name: lobby.campaign_name,
+        has_started: lobby.has_started,
+        links,
+        poll_seconds: lobby.poll_seconds,
+    })
 }
 
-fn game_unavailable() -> axum::response::Response {
-    use axum::response::IntoResponse;
-    (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::response::Html(r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DungeonFlux</title><main><h1>The game isn't available right now.</h1><p>Try again in a few minutes.</p></main></html>"#)).into_response()
+/// Only an absolute http(s) address without credentials may be handed to the browser.
+fn is_game_url(text: &str) -> bool {
+    text.parse::<axum::http::Uri>().ok().is_some_and(|uri| {
+        matches!(uri.scheme_str(), Some("http" | "https"))
+            && uri
+                .authority()
+                .is_some_and(|authority| !authority.as_str().contains('@'))
+    })
 }
 
 fn launch_after_creation_failed(

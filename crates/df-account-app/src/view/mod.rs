@@ -69,6 +69,7 @@ fn screen(model: &Model) -> Node {
         Screen::NewCampaign(screen) => campaign::wizard(screen, model),
         Screen::Campaign(screen) => campaign::overview(screen, model.offset_east_minutes),
         Screen::Lobby(screen) => campaign::lobby(screen, model.offset_east_minutes),
+        Screen::Play(screen) => campaign::play(screen),
         Screen::Join(screen) => campaign::join(screen, model),
         Screen::Admin(screen) => admin::console(screen, model),
         Screen::NotPermitted => message_page(

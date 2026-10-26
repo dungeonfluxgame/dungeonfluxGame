@@ -197,7 +197,6 @@ struct App {
     dom: Dom,
     state: RefCell<State>,
     listeners: RefCell<Vec<Listener>>,
-    game_tab: RefCell<Option<Window>>,
     /// True from the first message of a dispatch to the focus move after its render.
     is_dispatching: Cell<bool>,
     this: Weak<App>,
@@ -227,7 +226,6 @@ impl App {
                 location_key,
             }),
             listeners: RefCell::new(Vec::new()),
-            game_tab: RefCell::new(None),
             is_dispatching: Cell::new(false),
             this: this.clone(),
             window,
@@ -480,42 +478,6 @@ impl App {
             Effect::PushUrl(path) => self.change_history(&path, true),
             Effect::ReplaceUrl(path) => self.change_history(&path, false),
             Effect::Leave(url) => self.leave(&url),
-            Effect::ReserveGameTab => {
-                match self
-                    .window
-                    .open_with_url_and_target("about:blank", "_blank")
-                {
-                    Ok(Some(tab)) => {
-                        if tab.set_opener(&JsValue::NULL).is_err() {
-                            refused("game_tab_opener");
-                        }
-                        if let Some(document) = tab.document() {
-                            document.set_title("DungeonFlux");
-                            if let Some(body) = document.body() {
-                                body.set_text_content(Some("Opening the game..."));
-                            }
-                        }
-                        *self.game_tab.borrow_mut() = Some(tab);
-                    }
-                    _ => refused("game_tab_open"),
-                }
-            }
-            Effect::OpenGame(url) => {
-                if let Some(tab) = self.game_tab.borrow_mut().take() {
-                    match url {
-                        Some(url) => {
-                            if tab.location().set_href(&url).is_err() {
-                                refused("game_tab_navigate");
-                            }
-                        }
-                        None => {
-                            if tab.close().is_err() {
-                                refused("game_tab_close");
-                            }
-                        }
-                    }
-                }
-            }
             Effect::CancelPending => self.cancel_pending(),
             Effect::After {
                 generation,

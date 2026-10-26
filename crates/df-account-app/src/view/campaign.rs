@@ -5,11 +5,13 @@
 mod join;
 mod lobby;
 mod overview;
+mod play;
 mod wizard;
 
 pub(super) use join::join;
 pub(super) use lobby::lobby;
 pub(super) use overview::overview;
+pub(super) use play::play;
 pub(super) use wizard::wizard;
 
 use super::ButtonKind;

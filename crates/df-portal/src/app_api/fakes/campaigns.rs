@@ -90,7 +90,9 @@ pub(super) struct State {
     pub drafts: Vec<(String, AccountId, CampaignDraft)>,
     pub receipts: Receipts<Receipt>,
     pub last_ratings: HashMap<AccountId, ContentRating>,
-    pub game_links: HashMap<SessionId, String>,
+    pub game_links: HashMap<SessionId, df_account_app::wire_campaign::GameLinks>,
+    /// A local preview's one running game, used for every started session without its own links.
+    pub local_game: Option<df_account_app::wire_campaign::GameLinks>,
     pub fail_next_open: bool,
     /// Play history per account, newest first (seeded; S1's real adapter reads its store).
     pub play_sessions: Vec<(AccountId, PlaySessionRow)>,
@@ -119,11 +121,22 @@ impl FakeCampaigns {
         lock(&self.state).fail_next_open = true;
     }
 
-    /// Registers a fixture runtime's already placed session link.
-    pub fn seed_game_link(&self, session: SessionId, link: String) {
+    /// Points every started session without its own links at one running local game (the
+    /// preview's DF_PREVIEW_GAME_DISPLAY and DF_PREVIEW_GAME_PLAYER), until hosted sessions get
+    /// their own placed runtime.
+    pub fn use_local_game(&self, links: df_account_app::wire_campaign::GameLinks) {
+        lock(&self.state).local_game = Some(links);
+    }
+
+    /// Registers a fixture runtime's already placed session links.
+    pub fn seed_game_links(
+        &self,
+        session: SessionId,
+        links: df_account_app::wire_campaign::GameLinks,
+    ) {
         let mut state = lock(&self.state);
         if state.lobbies.contains_key(&session) {
-            state.game_links.insert(session, link);
+            state.game_links.insert(session, links);
         }
     }
 
@@ -179,10 +192,18 @@ impl FakeCampaigns {
 }
 
 impl CampaignDirectory for FakeCampaigns {
-    async fn game_link(&self, who: &Actor, session: SessionId) -> PortResult<Option<String>> {
+    async fn game_links(
+        &self,
+        who: &Actor,
+        session: SessionId,
+    ) -> PortResult<Option<df_account_app::wire_campaign::GameLinks>> {
         self.run(|state, _, _| {
             state.lobby_for(who, session)?;
-            Ok(state.game_links.get(&session).cloned())
+            Ok(state
+                .game_links
+                .get(&session)
+                .or(state.local_game.as_ref())
+                .cloned())
         })
     }
 

@@ -210,6 +210,9 @@ pub enum ApiCall {
     Lobby {
         session_id: String,
     },
+    GameLaunch {
+        session_id: String,
+    },
     StartSession {
         session_id: String,
         request: OperationRequest,
@@ -294,6 +297,7 @@ pub enum Reply {
     Left(Result<Accepted, ApiError>),
     LobbyOpened(Result<LobbyOpened, ApiError>),
     Lobby(Result<LobbyView, ApiError>),
+    GameLaunch(Result<crate::wire_campaign::GameLaunchView, ApiError>),
     LobbyCancelled(Result<Accepted, ApiError>),
     JoinPreview(Result<InvitePreview, ApiError>),
     JoinHeld(Result<Accepted, ApiError>),
@@ -581,6 +585,7 @@ impl ApiCall {
                 request,
             } => post(at(&format!("sessions/{session_id}/lobby/cancel")), request),
             Self::Lobby { session_id } => get(at(&format!("sessions/{session_id}/lobby"))),
+            Self::GameLaunch { session_id } => get(at(&format!("sessions/{session_id}/game"))),
             Self::StartSession {
                 session_id,
                 request,
@@ -698,6 +703,7 @@ impl ApiCall {
             Self::LeaveCampaign { .. } => Reply::Left(read!()),
             Self::OpenLobby { .. } => Reply::LobbyOpened(read!()),
             Self::CancelLobby { .. } => Reply::LobbyCancelled(read!()),
+            Self::GameLaunch { .. } => Reply::GameLaunch(read!()),
             Self::Lobby { .. } | Self::ConsentHostFunding { .. } | Self::StartSession { .. } => {
                 Reply::Lobby(read!())
             }

@@ -359,6 +359,24 @@ pub enum StartBlocker {
     CampaignArchived,
 }
 
+/// The pre-game launcher's view of a session: whether it has started, and once its game is
+/// reachable, the table screen, the player screen and the room code people type on their phones.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GameLaunchView {
+    pub session_id: String,
+    pub campaign_name: String,
+    pub has_started: bool,
+    pub links: Option<GameLinks>,
+    pub poll_seconds: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GameLinks {
+    pub display_url: String,
+    pub player_url: String,
+    pub room_code: Option<String>,
+}
+
 /// Defaults are chosen by the campaign owner; funding may still need the host's consent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlayNowView {

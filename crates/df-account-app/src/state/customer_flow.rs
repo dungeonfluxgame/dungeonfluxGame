@@ -396,6 +396,7 @@ impl Model {
             Route::NewCampaign
             | Route::Campaign { .. }
             | Route::Lobby { .. }
+            | Route::Play { .. }
             | Route::Join { .. } => self.enter_campaign(route),
             _ => Vec::new(),
         }
@@ -1169,6 +1170,7 @@ impl Model {
                 checkout_id: checkout_id.clone(),
             })],
             Screen::Lobby(_) => self.refresh_lobby(),
+            Screen::Play(_) => self.refresh_play(),
             _ => Vec::new(),
         }
     }
