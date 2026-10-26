@@ -278,6 +278,8 @@ mod player_page_tests {
 #[cfg(test)]
 mod admission_tests;
 #[cfg(test)]
+mod rejoin_tests;
+#[cfg(test)]
 mod view_retry_tests;
 
 impl actor::Actor {
@@ -550,6 +552,8 @@ impl rpc::room_service_server::RoomService for Service {
         &self,
         request: Request<rpc::ReclaimRoomRequest>,
     ) -> Result<Response<rpc::ReclaimRoomResponse>, Status> {
+        let table_display = request.metadata().contains_key("x-df-local-binding")
+            && super::credential(&request)? == self.display_credential;
         let body = request.into_inner();
         if body.room_code.len() > 32 || !matches!(body.seat_token.len(), 0 | 32) {
             return Err(rpc_failure(
@@ -610,13 +614,7 @@ impl rpc::room_service_server::RoomService for Service {
                 })??;
             return Ok(Response::new(rpc::ReclaimRoomResponse {
                 outcome: None,
-                away_heroes: away
-                    .into_iter()
-                    .map(|hero| rpc::AwayHero {
-                        name: hero.name,
-                        seat_token: hero.token.to_vec(),
-                    })
-                    .collect(),
+                away_heroes: reclaim::listing(away, table_display),
             }));
         }
         let operation = df_api::operation_id(body.operation_id.as_ref()).map_err(|_| {

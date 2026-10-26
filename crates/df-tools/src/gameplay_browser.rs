@@ -158,99 +158,38 @@ impl Drop for Client {
 }
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
 
-/// Local-demo credential store: the player's room binding and scope ids live in this
-/// tab's `sessionStorage` so a reload can resume the same hero. It is per tab on purpose:
-/// two players sharing one browser each keep their own seat.
-/// Real guest sign-in (df-auth) replaces this store later. Nothing here is game data;
-/// the server still authenticates every request and may refuse the saved credential.
+mod player_storage;
+
 mod saved_player {
     use super::*;
+    pub(super) use player_storage::{is_from_run, parse};
 
-    const VERSION: &str = "v2";
-
-    pub(super) struct SavedPlayer {
-        pub(super) credential: String,
-        pub(super) session: rpc::SessionId,
-        pub(super) run: rpc::RunId,
-        pub(super) binding: rpc::ClientBindingId,
-        /// The server run the seat was joined in, as that run published it ("" when it did not).
-        pub(super) run_identity: String,
+    impl player_storage::Storage for web_sys::Storage {
+        type Error = JsValue;
+        fn get(&self, key: &str) -> Result<Option<String>, JsValue> {
+            self.get_item(key)
+        }
+        fn set(&self, key: &str, value: &str) -> Result<(), JsValue> {
+            self.set_item(key, value)
+        }
+        fn remove(&self, key: &str) -> Result<(), JsValue> {
+            self.remove_item(key)
+        }
     }
-
-    fn key(room_code: &str) -> String {
-        format!("df.gameplay.{room_code}.player")
-    }
-
-    fn storage() -> Result<web_sys::Storage, JsValue> {
-        web_sys::window()
-            .ok_or_else(|| JsValue::from_str("window absent"))?
+    fn stores() -> Result<(web_sys::Storage, web_sys::Storage), JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
+        let persistent = window
+            .local_storage()?
+            .ok_or_else(|| JsValue::from_str("local storage unavailable"))?;
+        let tab = window
             .session_storage()?
-            .ok_or_else(|| JsValue::from_str("session storage unavailable"))
+            .ok_or_else(|| JsValue::from_str("session storage unavailable"))?;
+        Ok((persistent, tab))
     }
-
-    fn encode(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    pub(super) fn load(room_code: &str) -> Result<Option<player_storage::SavedPlayer>, JsValue> {
+        let (persistent, tab) = stores()?;
+        player_storage::load(&persistent, &tab, room_code)
     }
-
-    fn decode_id(text: &str) -> Option<Vec<u8>> {
-        if text.len() != 32 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return None;
-        }
-        text.as_bytes()
-            .chunks(2)
-            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-            .collect()
-    }
-
-    pub(super) fn parse(text: &str) -> Option<SavedPlayer> {
-        let mut parts = text.split('.');
-        let (version, credential, session, run, binding, run_identity) = (
-            parts.next()?,
-            parts.next()?,
-            parts.next()?,
-            parts.next()?,
-            parts.next()?,
-            parts.next()?,
-        );
-        // The server accepts only lowercase hexadecimal, 64 characters.
-        if parts.next().is_some()
-            || version != VERSION
-            || credential.len() != 64
-            || !credential
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            return None;
-        }
-        Some(SavedPlayer {
-            credential: credential.to_owned(),
-            session: rpc::SessionId {
-                value: Some(decode_id(session)?),
-            },
-            run: rpc::RunId {
-                value: Some(decode_id(run)?),
-            },
-            binding: rpc::ClientBindingId {
-                value: Some(decode_id(binding)?),
-            },
-            run_identity: run_identity.to_owned(),
-        })
-    }
-
-    /// A malformed entry is removed and treated as absent; storage failures are returned.
-    pub(super) fn load(room_code: &str) -> Result<Option<SavedPlayer>, JsValue> {
-        let storage = storage()?;
-        let key = key(room_code);
-        let Some(text) = storage.get_item(&key)? else {
-            return Ok(None);
-        };
-        let saved = parse(&text);
-        if saved.is_none() {
-            storage.remove_item(&key)?;
-        }
-        Ok(saved)
-    }
-
     pub(super) fn save(
         room_code: &str,
         credential: &str,
@@ -259,25 +198,23 @@ mod saved_player {
         binding: &rpc::ClientBindingId,
         run_identity: &str,
     ) -> Result<(), JsValue> {
-        let id = |value: &Option<Vec<u8>>| encode(value.as_deref().unwrap_or_default());
-        storage()?.set_item(
-            &key(room_code),
-            &format!(
-                "{VERSION}.{credential}.{}.{}.{}.{run_identity}",
-                id(&session.value),
-                id(&run.value),
-                id(&binding.value)
-            ),
+        let (persistent, tab) = stores()?;
+        player_storage::save(
+            &persistent,
+            &tab,
+            room_code,
+            &player_storage::SavedPlayer {
+                credential: credential.to_owned(),
+                session: session.clone(),
+                run: run.clone(),
+                binding: binding.clone(),
+                run_identity: run_identity.to_owned(),
+            },
         )
     }
-
-    /// Whether the seat was joined in the server run the page says it was served for.
-    pub(super) fn is_from_run(saved: &SavedPlayer, served_run: &str) -> bool {
-        saved.run_identity == served_run
-    }
-
     pub(super) fn clear(room_code: &str) -> Result<(), JsValue> {
-        storage()?.remove_item(&key(room_code))
+        let (persistent, tab) = stores()?;
+        player_storage::clear(&persistent, &tab, room_code)
     }
 }
 const SAVED_GAME_REFUSED: &str = "The server did not accept this saved game.";
@@ -3542,6 +3479,12 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
+    if role == "display" {
+        if let Some(code) = clean_room_code(&journey.room_code) {
+            client.borrow_mut().room_code = code;
+            seat_recovery::ensure_poll(client)?;
+        }
+    }
     let dead_hero = role == "player" && is_dead_hero(&journey);
     if let Some(own) = journey.own_character.as_ref() {
         let notebook = live_notebook::view(&journey)?;

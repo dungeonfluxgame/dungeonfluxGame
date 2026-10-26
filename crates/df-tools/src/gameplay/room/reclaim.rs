@@ -87,6 +87,58 @@ pub(in crate::gameplay) struct AwayHero {
     pub(in crate::gameplay) token: [u8; 32],
 }
 
+const RECOVERY_PROOF_PREFIX: &[u8; 8] = b"DFREJOIN";
+
+fn recovery_proof(hero: &AwayHero) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"local-room-tv-recovery-v1");
+    hash.update(hero.member);
+    hash.update(hero.token);
+    let digest = hash.finalize();
+    let mut proof = [0; 32];
+    proof[..8].copy_from_slice(RECOVERY_PROOF_PREFIX);
+    proof[8..24].copy_from_slice(&hero.member);
+    proof[24..].copy_from_slice(&digest[..8]);
+    proof
+}
+
+pub(super) fn listing(away: Vec<AwayHero>, table_display: bool) -> Vec<rpc::AwayHero> {
+    away.into_iter()
+        .map(|hero| rpc::AwayHero {
+            seat_token: if table_display {
+                recovery_proof(&hero).to_vec()
+            } else {
+                // Public seat identifiers carry no authority; #1273 exposed the raw token here.
+                hero.member.to_vec()
+            },
+            name: hero.name,
+        })
+        .collect()
+}
+
+struct RecoveryAuthority<'a, A> {
+    issuer: &'a mut A,
+    away: &'a [AwayHero],
+}
+impl<A: SeatAuthority> SeatAuthority for RecoveryAuthority<'_, A> {
+    fn reclaim(
+        &mut self,
+        mut request: LocalSeatReclaim,
+    ) -> Result<Result<LocalReclaimedSeat, SeatReclaimRefusal>, RepositoryError> {
+        if request.token.starts_with(RECOVERY_PROOF_PREFIX)
+            && let Some(hero) = self
+                .away
+                .iter()
+                .find(|hero| recovery_proof(hero) == request.token)
+        {
+            request.token = hero.token;
+        }
+        // The fingerprint remains the submitted proof, so a lost reply replays even after
+        // rotation removes this hero from the away list. The durable authority checks replay first.
+        self.issuer.reclaim(request)
+    }
+}
+
 pub(in crate::gameplay) struct ReclaimRequest {
     pub(in crate::gameplay) room_code: String,
     pub(in crate::gameplay) operation: df_types::OperationId,
@@ -317,8 +369,17 @@ impl actor::Actor {
             .seat_clock
             .millis(Instant::now())
             .map_err(actor::unavailable)?;
+        let away = if correct_room {
+            self.collect_away(now)?
+        } else {
+            Vec::new()
+        };
+        let mut authority = RecoveryAuthority {
+            issuer: &mut self.issuer,
+            away: &away,
+        };
         let answer = admit_reclaim(
-            &mut self.issuer,
+            &mut authority,
             request,
             correct_room,
             self.owner.checkpoint(),

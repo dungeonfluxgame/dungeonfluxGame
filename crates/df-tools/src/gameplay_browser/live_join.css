@@ -24,3 +24,41 @@
 .df-character .character-choice-group[data-choice-group=true] .character-option button{min-height:42px;padding:6px 8px;font:600 14px/1.2 var(--serif,Georgia,serif);text-align:center}
 .df-character .character-choice-group[data-choice-group=true] .character-option .option-description:not(:empty){grid-column:1;grid-row:2;margin:0;padding:0 4px 5px;font:11px/1.35 system-ui,sans-serif;text-align:center}
 }
+
+.tv-recovery-codes {
+    position: fixed;
+    right: var(--tune-panel-margin, 24px);
+    top: var(--tune-panel-margin, 24px);
+    z-index: 100;
+    max-width: var(--tune-recovery-width, 28rem);
+    padding: var(--tune-recovery-padding, 20px);
+    border: 1px solid var(--tune-recovery-border, #ae9467);
+    border-radius: var(--tune-recovery-radius, 12px);
+    background: var(--tune-recovery-background, #171c24);
+    color: var(--tune-recovery-text, #fff);
+    font-size: var(--tune-recovery-font-size, 22px);
+}
+.tv-recovery-codes[hidden] {
+    display: none;
+}
+.reclaim-code-form {
+    margin: var(--tune-recovery-margin, 20px);
+    padding: var(--tune-recovery-padding, 20px);
+    border: 1px solid var(--tune-recovery-border, #ae9467);
+    border-radius: var(--tune-recovery-radius, 12px);
+    background: var(--tune-recovery-background, #171c24);
+    color: var(--tune-recovery-text, #fff);
+}
+.reclaim-code-form label {
+    display: grid;
+    gap: var(--tune-recovery-gap, 12px);
+}
+.reclaim-code-form input,
+.reclaim-code-form button {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--tune-recovery-control-height, 48px);
+    margin-top: var(--tune-recovery-gap, 12px);
+    padding: var(--tune-recovery-control-padding, 12px);
+    font: inherit;
+}

@@ -1,7 +1,8 @@
-//! Room-code-only seat recovery. The client displays server offers and retains retry proof.
+//! Seat recovery through a code read from the authenticated TV; retry proof stays on this device.
 use super::*;
 
-pub(super) const REFUSED: &str = "That hero is being played on another phone.";
+pub(super) const REFUSED: &str =
+    "That code did not reclaim this hero. Check the TV code; an active hero cannot be taken back.";
 pub(super) const ROOM_MOVED: &str = "This game has ended or moved. Scan the QR code on the TV, or enter its new room code to join the current game.";
 /// A retained proof field is at most 256 bytes, so at most 512 hex characters.
 const MAXIMUM_ENCODED_HEX_CHARACTERS: usize = 512;
@@ -101,6 +102,13 @@ pub(super) fn clear(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 pub(super) async fn call(
     request: rpc::ReclaimRoomRequest,
 ) -> Result<rpc::ReclaimRoomResponse, String> {
+    call_with_binding(request, None).await
+}
+
+async fn call_with_binding(
+    request: rpc::ReclaimRoomRequest,
+    binding: Option<&str>,
+) -> Result<rpc::ReclaimRoomResponse, String> {
     let url = super::tunnel_url()?;
     let (connection, channel) = BrowserConnection::connect(&url)
         .await
@@ -110,6 +118,14 @@ pub(super) async fn call(
         .max_encoding_message_size(8192);
     let mut request = tonic::Request::new(request);
     request.set_timeout(request_timeout());
+    if let Some(binding) = binding {
+        request.metadata_mut().insert(
+            "x-df-local-binding",
+            binding
+                .parse()
+                .map_err(|_| "Display identity unavailable".to_owned())?,
+        );
+    }
     let reply = rooms
         .reclaim(request)
         .await
@@ -117,6 +133,92 @@ pub(super) async fn call(
         .map_err(|_| "The room did not answer yet. Confirm the same request.".to_owned());
     connection.close();
     reply
+}
+
+pub(super) fn ask_for_code(client: Rc<RefCell<Client>>, hero: rpc::AwayHero) {
+    let rendered = (|| -> Result<(), JsValue> {
+        if client.borrow().busy || client.borrow().reclaim_request.is_some() {
+            return Ok(());
+        }
+        render_join(&client)?;
+        let state = client.borrow();
+        if state.busy || state.reclaim_request.is_some() {
+            return Ok(());
+        }
+        let view = state
+            .root
+            .query_selector(".view")?
+            .ok_or_else(|| JsValue::from_str("view absent"))?;
+        if let Some(previous) = view.query_selector(".reclaim-code-form")? {
+            previous.remove();
+        }
+        let panel = node(&state.document, &view, "div", "reclaim-code-form", "")?;
+        node(
+            &state.document,
+            &panel,
+            "h2",
+            "",
+            &format!("Return to {}", hero.name),
+        )?;
+        node(
+            &state.document,
+            &panel,
+            "p",
+            "",
+            "Look at the TV. Enter the recovery code beside your hero. Your hero appears after 30 seconds away.",
+        )?;
+        let label = node(&state.document, &panel, "label", "", "TV recovery code")?;
+        let input = node(&state.document, &label, "input", "reclaim-code", "")?;
+        input.set_attribute("maxlength", "19")?;
+        input.set_attribute("autocomplete", "off")?;
+        input.set_attribute("spellcheck", "false")?;
+        input.set_attribute("placeholder", "ABCD-EF01-2345-6789")?;
+        if let Some(element) = input.dyn_ref::<web_sys::HtmlElement>() {
+            element.focus()?;
+        }
+        drop(state);
+        button(&client, &panel, "Return to my hero", move |client| {
+            let typed = js_sys::Reflect::get(input.as_ref(), &JsValue::from_str("value"))
+                .ok()
+                .and_then(|value| value.as_string());
+            let Some(proof) = typed
+                .as_deref()
+                .and_then(|code| code_proof(&hero.seat_token, code))
+            else {
+                feedback(
+                    &client.borrow(),
+                    "Enter the 16 letters and numbers shown beside your hero on the TV.",
+                );
+                return;
+            };
+            take_back(client, proof);
+        })?;
+        Ok(())
+    })();
+    if rendered.is_err() {
+        feedback(
+            &client.borrow(),
+            "The recovery code form could not open. Try again.",
+        );
+    }
+}
+
+fn code_proof(member: &[u8], code: &str) -> Option<Vec<u8>> {
+    if member.len() != 16 {
+        return None;
+    }
+    let code: String = code
+        .chars()
+        .filter(|character| *character != '-' && !character.is_whitespace())
+        .collect();
+    if code.len() != 16 {
+        return None;
+    }
+    let digits = decode(&code)?;
+    let mut proof = b"DFREJOIN".to_vec();
+    proof.extend_from_slice(member);
+    proof.extend(digits);
+    Some(proof)
 }
 
 pub(super) fn take_back(client: Rc<RefCell<Client>>, token: Vec<u8>) {
@@ -156,10 +258,12 @@ pub(super) fn take_back(client: Rc<RefCell<Client>>, token: Vec<u8>) {
 pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     {
         let mut state = client.borrow_mut();
-        if !state.credential.is_empty() || state.seat_poll_abort.is_some() {
+        if (state.role != "display" && !state.credential.is_empty())
+            || state.seat_poll_abort.is_some()
+        {
             return Ok(());
         }
-        if state.reclaim_request.is_none() {
+        if state.role != "display" && state.reclaim_request.is_none() {
             state.reclaim_request = load(&state.room_code)?;
         }
         let (abort, registration) = AbortHandle::new_pair();
@@ -171,9 +275,9 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     let Some(client) = weak.upgrade() else {
                         break;
                     };
-                    let (code, generation, is_busy) = {
+                    let (code, generation, is_busy, display_binding) = {
                         let state = client.borrow();
-                        if !state.credential.is_empty() {
+                        if state.role != "display" && !state.credential.is_empty() {
                             break;
                         }
                         let typed = state
@@ -181,26 +285,36 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                             .lobby
                             .as_ref()
                             .map(|screen| screen.invitation_value());
-                        let code =
-                            if state.join_request.is_some() || state.reclaim_request.is_some() {
-                                Some(state.room_code.clone())
-                            } else {
-                                typed.as_deref().and_then(clean_room_code)
-                            };
-                        (code, state.generation, state.busy)
+                        let code = if state.role == "display"
+                            || state.join_request.is_some()
+                            || state.reclaim_request.is_some()
+                        {
+                            Some(state.room_code.clone())
+                        } else {
+                            typed.as_deref().and_then(clean_room_code)
+                        };
+                        (
+                            code,
+                            state.generation,
+                            state.busy,
+                            (state.role == "display").then(|| state.credential.clone()),
+                        )
                     };
                     let now_ms = js_sys::Date::now() as u64;
                     if let Some(code) = code.filter(|code| {
                         !is_busy && client.borrow_mut().seat_poll.ready(code, now_ms)
                     }) {
-                        let answer = call(rpc::ReclaimRoomRequest {
-                            room_code: code.clone(),
-                            operation_id: None,
-                            seat_token: Vec::new(),
-                        })
+                        let answer = call_with_binding(
+                            rpc::ReclaimRoomRequest {
+                                room_code: code.clone(),
+                                operation_id: None,
+                                seat_token: Vec::new(),
+                            },
+                            display_binding.as_deref(),
+                        )
                         .await;
                         if client.borrow().generation == generation
-                            && client.borrow().credential.is_empty()
+                            && (display_binding.is_some() || client.borrow().credential.is_empty())
                         {
                             let outcome = match &answer {
                                 Ok(answer) if wrong_room(answer) => {
@@ -233,7 +347,22 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                                         state.away_heroes = heroes;
                                         changed
                                     };
-                                    if changed && render_join(&client).is_err() {
+                                    let rendered = if display_binding.is_some() {
+                                        render_display_codes(&client)
+                                    } else if changed
+                                        && client
+                                            .borrow()
+                                            .root
+                                            .query_selector(".reclaim-code-form")
+                                            .ok()
+                                            .flatten()
+                                            .is_none()
+                                    {
+                                        render_join(&client)
+                                    } else {
+                                        Ok(())
+                                    };
+                                    if rendered.is_err() {
                                         feedback(
                                             &client.borrow(),
                                             "The available heroes could not be displayed. Try again.",
@@ -260,6 +389,62 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 
+fn render_display_codes(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let state = client.borrow();
+    let panel = match state.root.query_selector(".tv-recovery-codes")? {
+        Some(panel) => panel,
+        None => {
+            let panel = node(
+                &state.document,
+                &state.root,
+                "aside",
+                "tv-recovery-codes",
+                "",
+            )?;
+            panel
+        }
+    };
+    panel.set_text_content(None);
+    if state.away_heroes.is_empty() {
+        panel.set_attribute("hidden", "")?;
+        return Ok(());
+    }
+    panel.remove_attribute("hidden")?;
+    node(
+        &state.document,
+        &panel,
+        "h2",
+        "",
+        "Returning on another device?",
+    )?;
+    for hero in &state.away_heroes {
+        if let Some(code) = hero.seat_token.get(24..32) {
+            let code = hex(code).to_ascii_uppercase();
+            let grouped = code
+                .as_bytes()
+                .chunks(4)
+                .filter_map(|part| std::str::from_utf8(part).ok())
+                .collect::<Vec<_>>()
+                .join("-");
+            node(
+                &state.document,
+                &panel,
+                "p",
+                "",
+                &format!("{}: {}", hero.name, grouped),
+            )?;
+        }
+    }
+    node(
+        &state.document,
+        &panel,
+        "p",
+        "",
+        "Select your away hero on your phone and enter its code.",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +460,23 @@ mod tests {
         assert_eq!(parse(&encode(&request), "ROOM").unwrap(), request);
         assert!(decode("xyz").is_none());
         assert!(decode(&"a".repeat(514)).is_none());
+    }
+    #[test]
+    fn tv_code_builds_the_proof_for_its_own_seat_only() {
+        let member = [7_u8; 16];
+        let proof = code_proof(&member, "ABCD-EF01-2345-6789").unwrap();
+        assert_eq!(proof.len(), 32);
+        assert!(proof.starts_with(b"DFREJOIN"));
+        assert_eq!(&proof[8..24], member);
+        assert_eq!(
+            &proof[24..],
+            [0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89]
+        );
+        // The grouped TV spelling and the plain spelling are the same code.
+        assert_eq!(code_proof(&member, "abcdef0123456789").unwrap(), proof);
+        // A short code, a non-hex code and another seat's identifier build nothing.
+        assert!(code_proof(&member, "ABCD-1234").is_none());
+        assert!(code_proof(&member, "WXYZ-EF01-2345-6789").is_none());
+        assert!(code_proof(&[7_u8; 8], "ABCD-EF01-2345-6789").is_none());
     }
 }

@@ -259,3 +259,174 @@ fn seat_activity_is_debounced_per_credential_and_reactivation_is_immediate() {
 
 #[path = "pg_tests.rs"]
 mod pg_tests;
+
+fn away_hero(seats: &StoredSeats) -> AwayHero {
+    AwayHero {
+        member: seats.member,
+        name: "Brannoc".to_owned(),
+        token: seats.token,
+    }
+}
+
+#[test]
+fn public_reclaim_listing_never_discloses_tokens_or_tv_proofs() {
+    let (_, seats) = fixture();
+    let proof = recovery_proof(&away_hero(&seats));
+    let public = listing(vec![away_hero(&seats)], false);
+    assert_eq!(public[0].name, "Brannoc");
+    assert_eq!(public[0].seat_token, seats.member);
+    assert!(
+        !public[0]
+            .encode_to_vec()
+            .windows(32)
+            .any(|bytes| bytes == seats.token)
+    );
+    assert!(
+        !public[0]
+            .encode_to_vec()
+            .windows(32)
+            .any(|bytes| bytes == proof)
+    );
+    let display = listing(vec![away_hero(&seats)], true);
+    assert_eq!(display[0].seat_token, proof);
+    assert_ne!(display[0].seat_token, seats.token);
+}
+
+fn recover_from_tv(
+    seats: &mut StoredSeats,
+    checkpoint: &df_model::checkpoint::Checkpoint,
+    proof: [u8; 32],
+    operation: u8,
+    now: i64,
+    away: &[AwayHero],
+) -> Result<rpc::JoinedRoom, ReclaimRefusal> {
+    let mut request = request(operation);
+    request.token = proof;
+    let mut authority = RecoveryAuthority {
+        issuer: seats,
+        away,
+    };
+    admit_reclaim(
+        &mut authority,
+        request,
+        true,
+        checkpoint,
+        now,
+        [3; 32],
+        [4; 32],
+    )
+    .unwrap()
+}
+
+#[test]
+fn tv_code_reclaims_only_its_away_hero_and_replays_after_the_reply_is_lost() {
+    let (checkpoint, mut seats) = fixture();
+    let away = vec![away_hero(&seats)];
+    let proof = recovery_proof(&away[0]);
+    let original = checkpoint.clone();
+    let mut wrong = proof;
+    wrong[31] ^= 1;
+    assert!(matches!(
+        recover_from_tv(&mut seats, &checkpoint, wrong, 8, 31_000, &away),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+    ));
+    assert_eq!(seats.credential, [1; 32]);
+    assert!(matches!(
+        recover_from_tv(&mut seats, &checkpoint, proof, 9, 30_999, &away),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::NotAway))
+    ));
+    let joined = recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_000, &away).unwrap();
+    assert_eq!(
+        joined.client_binding_id.unwrap().value.unwrap(),
+        seats.member
+    );
+    assert_eq!(joined.local_binding, journey::hex(&[3; 32]));
+    assert_ne!(seats.credential, [1; 32]);
+    assert_eq!(checkpoint, original);
+    let replay = recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_001, &[]).unwrap();
+    assert_eq!(replay.local_binding, joined.local_binding);
+    assert!(replay.receipt.unwrap().replayed);
+    assert!(matches!(
+        recover_from_tv(&mut seats, &checkpoint, proof, 10, 31_001, &[]),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+    ));
+}
+
+#[test]
+fn public_seat_identifier_cannot_reclaim_an_away_seat_for_a_new_person() {
+    let (checkpoint, mut seats) = fixture();
+    let away = vec![away_hero(&seats)];
+    let public = listing(vec![away_hero(&seats)], false);
+    let mut proof = [0; 32];
+    proof[..16].copy_from_slice(&public[0].seat_token);
+    assert!(matches!(
+        recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_000, &away),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+    ));
+    assert_eq!(seats.credential, [1; 32]);
+    assert!(seats.receipts.is_empty());
+}
+
+#[test]
+fn tv_reclaim_preserves_the_current_hero_and_adventure_in_every_phase() {
+    use crate::gameplay::beat_script_variety_tests as native;
+    let room = native::prepared();
+    let opening = native::act(&room, native::first(), 5, "begin-story");
+    let dialogue = native::act(&opening, native::first(), 6, "escort-courier");
+    let combat = native::act(&dialogue, native::first(), 7, "defend-courier");
+    for (checkpoint, phase) in [
+        (room, rpc::JourneyPhase::Room),
+        (opening, rpc::JourneyPhase::Opening),
+        (dialogue, rpc::JourneyPhase::Dialogue),
+        (combat, rpc::JourneyPhase::Combat),
+    ] {
+        assert_eq!(journey::phase(&checkpoint).unwrap(), phase);
+        let before = checkpoint.clone();
+        let (_, mut seats) = fixture();
+        let away = vec![away_hero(&seats)];
+        let joined = recover_from_tv(
+            &mut seats,
+            &checkpoint,
+            recovery_proof(&away[0]),
+            9,
+            31_000,
+            &away,
+        )
+        .unwrap();
+        assert_eq!(
+            joined.client_binding_id.unwrap().value.unwrap(),
+            native::first().as_bytes()
+        );
+        assert_eq!(checkpoint, before);
+        let resumed = wire::journey_view(
+            &checkpoint,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            native::first(),
+        )
+        .unwrap();
+        let rpc::view_message::Audience::Player(player) = resumed.audience.unwrap() else {
+            panic!("player view");
+        };
+        let view = player.journey.unwrap();
+        assert_eq!(view.phase, phase as i32);
+        assert!(!view.own_character.unwrap().name.is_empty());
+        if phase != rpc::JourneyPhase::Room {
+            let input = crate::gameplay::beat_script_tests::input(
+                &checkpoint,
+                journey::bootstrap_member().unwrap(),
+                40,
+                "join-room",
+                vec![],
+            );
+            assert!(journey::stage_join(&checkpoint, &input).is_err());
+        }
+        assert_eq!(
+            joined.session_id.unwrap().value.unwrap(),
+            checkpoint.basis().session.as_bytes()
+        );
+        assert_eq!(
+            joined.run_id.unwrap().value.unwrap(),
+            checkpoint.basis().run.as_bytes()
+        );
+    }
+}

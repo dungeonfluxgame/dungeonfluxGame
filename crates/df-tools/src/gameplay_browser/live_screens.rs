@@ -2308,11 +2308,11 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     };
     LobbyScreen::present(client, &view, &model)?;
     for hero in &model.away_heroes {
-        let token = hero.seat_token.clone();
-        let key = hex(&token);
+        let hero = hero.clone();
+        let key = hex(&hero.seat_token);
         if let Some(button) = view.query_selector(&format!("[data-reclaim-key='{key}']"))? {
             bind_click(client, &button, move |client| {
-                seat_recovery::take_back(client, token.clone())
+                seat_recovery::ask_for_code(client, hero.clone())
             })?;
         }
     }
