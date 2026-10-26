@@ -122,6 +122,18 @@ async fn closing_with_archived_campaigns_schedules_their_deletion_with_a_notice(
     let guest = world.account(2).await;
     let owned = world.campaign(owner, 4).await;
     world.join(owned.id, owner, guest, JoinRole::Player).await;
+    let preferences_before: i64 = world
+        .db
+        .admin
+        .client
+        .query_one(
+            "SELECT count(*) FROM campaigns.account_preferences WHERE account_id = $1",
+            &[&owner.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(preferences_before, 1);
     archive(world, owner, owned.id).await;
     let mut b = bench.b().await;
     let tx = b.client.transaction().await.unwrap();
@@ -144,6 +156,21 @@ async fn closing_with_archived_campaigns_schedules_their_deletion_with_a_notice(
     assert_eq!(scheduled[0].campaign, owned.id);
     assert!(scheduled[0].members.contains(&guest) && scheduled[0].members.contains(&owner));
     tx.commit().await.unwrap();
+    let preferences: i64 = world
+        .db
+        .admin
+        .client
+        .query_one(
+            "SELECT count(*) FROM campaigns.account_preferences WHERE account_id = $1",
+            &[&owner.as_bytes().as_slice()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        preferences, 0,
+        "account closure removes campaign preferences"
+    );
     let events = world.events(owned.id).await;
     let notice = events
         .iter()

@@ -465,6 +465,21 @@ async fn lobbyfix_native_settings_are_durable_host_only_and_remember_the_hosts_o
             .await
             .is_err()
     );
+    let unknown_account = df_types::AccountId::from_bytes(&[0x77; 16]).unwrap();
+    assert!(matches!(
+        world
+            .store
+            .update_settings(
+                unknown_account,
+                campaign.id,
+                update.clone(),
+                crate::fixture::START_MS
+            )
+            .await,
+        Err(df_campaign::errors::Failure::Refused(
+            df_campaign::errors::Refusal::AccountClosing
+        ))
+    ));
     world
         .store
         .update_settings(host, campaign.id, update, crate::fixture::START_MS)

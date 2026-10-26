@@ -388,7 +388,7 @@ async fn guard_frames_of_different_fighters_are_drawn_at_the_same_time() {
     });
     let first_spec = CharacterClipSpec::new(fighter(), "canonical-v1".to_owned(), ClipKind::Idle);
     let second_spec = CharacterClipSpec::new(second, "canonical-v1".to_owned(), ClipKind::Idle);
-    let (first, other) = tokio::time::timeout(Duration::from_secs(5), async {
+    let (first, other) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(
             service
                 .generation

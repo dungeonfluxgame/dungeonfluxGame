@@ -154,14 +154,29 @@ struct Ahead {
 }
 
 fn with_ahead<T>(run: impl FnOnce(&mut Ahead) -> T) -> T {
-    static AHEAD: std::sync::Mutex<Ahead> = std::sync::Mutex::new(Ahead {
-        scope: String::new(),
-        world: None,
-        places: Vec::new(),
-    });
-    run(&mut AHEAD
+    const MAX_SCOPES: usize = 64;
+    static AHEAD: std::sync::Mutex<Vec<(World, Ahead)>> = std::sync::Mutex::new(Vec::new());
+
+    let Some(world) = world() else {
+        return run(&mut Ahead::default());
+    };
+    let mut cache = AHEAD
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner))
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let index = cache
+        .iter()
+        .position(|(cached_world, _)| cached_world == &world);
+    let ahead = if let Some(index) = index {
+        &mut cache[index].1
+    } else {
+        if cache.len() == MAX_SCOPES {
+            cache.remove(0);
+        }
+        let index = cache.len();
+        cache.push((world.clone(), Ahead::default()));
+        &mut cache[index].1
+    };
+    run(ahead)
 }
 
 pub(crate) fn prepared(current: &df_model::checkpoint::Checkpoint) -> Vec<PreparedPlace> {
@@ -584,7 +599,14 @@ mod tests {
         wire,
     };
     use df_persistence::local_demo_scope::LocalDemoRole;
-    use std::{path::PathBuf, sync::Arc, time::Duration};
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     fn cache(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -789,7 +811,9 @@ mod tests {
         use tokio::sync::{Semaphore, watch};
 
         let endpoint = endpoint();
-        let directory = cache_directory("free-roam-service");
+        static CACHE_INSTANCE: AtomicUsize = AtomicUsize::new(0);
+        let cache_instance = CACHE_INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let directory = cache_directory(&format!("free-roam-service-{cache_instance}"));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -797,7 +821,7 @@ mod tests {
         let storyteller = teller(endpoint.address, 0, Duration::from_secs(10), &directory);
         let generated = runtime
             .block_on(generate(
-                868,
+                870,
                 RulesMode::Standard,
                 ContentRating::default(),
                 &storyteller,

@@ -5530,6 +5530,21 @@ impl Service {
             audit.record("opening_social", "jev_obstruction_request");
             return Ok(reply);
         }
+        let mut speech_cleanup = None;
+        if finality(request.finality)? == InputFinality::Final
+            && matches!(
+                reading.intent,
+                super::approach_model::LineIntent::CharacterSpeech
+                    | super::approach_model::LineIntent::HeroSpeech
+            )
+            && let Some(names) = speech_names(current.state(), &scene)
+        {
+            speech_cleanup = Some(SpeechCleanup::start(
+                Arc::clone(&self.npc_voice),
+                super::npc_reply::sanitize_player_words(&request.text),
+                names,
+            ));
+        }
         // An opening information question is not the request to stand down. Preserve its
         // explicit NPC addressee instead of losing the turn to the generic unresolved route.
         if opening_active
@@ -5572,7 +5587,7 @@ impl Service {
                 // An opening talk offer is routing context, not an executable menu choice.
                 request.offer_id.clear();
                 audit.record("opening_social", "jev_present_npc_speech");
-                return self
+                let mut reply = self
                     .dialogue_call(
                         credential,
                         DialogueRequest::RawTarget {
@@ -5583,7 +5598,11 @@ impl Service {
                             actor_id: target,
                         },
                     )
-                    .await;
+                    .await?;
+                if let DialogueReply::Raw(_, Some(turn)) = &mut reply {
+                    turn.cleanup = speech_cleanup.take();
+                }
+                return Ok(reply);
             }
         }
         // An attempt is spoken to a present person only when Jev explicitly chose that person as
@@ -5616,21 +5635,6 @@ impl Service {
         let observation = is_observation_submission(&request, &reading, addressed_present_person)?;
         // A line that may be spoken to an NPC starts its tidy-up now, so the model's wait overlaps
         // the routing below. Any other route drops it, which cancels the call.
-        let mut speech_cleanup = None;
-        if finality(request.finality)? == InputFinality::Final
-            && matches!(
-                reading.intent,
-                super::approach_model::LineIntent::CharacterSpeech
-                    | super::approach_model::LineIntent::HeroSpeech
-            )
-            && let Some(names) = speech_names(current.state(), &scene)
-        {
-            speech_cleanup = Some(SpeechCleanup::start(
-                Arc::clone(&self.npc_voice),
-                super::npc_reply::sanitize_player_words(&request.text),
-                names,
-            ));
-        }
         // Mid-fight, a spoken line reaches the standing foe it is spoken to (Jev chooses among
         // them), who answers in character; a plea to stop is an Influence request the reply rules
         // resolve, and a foe who agrees ends the fight (`complete_dialogue_response`).

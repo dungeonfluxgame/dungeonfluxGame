@@ -618,12 +618,9 @@ fn story_input_one_four_and_six_mixed_heroes_reach_the_storyteller_after_opening
                 (0..count)
                     .flat_map(|_| {
                         [
-                            answer("o1"),  // character speech
-                            answer("o1"),  // not a request to settle the obstruction
-                            answer("o15"), // ordinary conversation, no scene interaction
-                            answer("o4"), // courier is the candidate service provider (no listed services)
-                            answer("o1"), // a question
-                            answer("o4"), // the present courier
+                            answer("o1"), // character speech
+                            answer("o1"), // not a request to settle the obstruction
+                            answer("o4"), // the Courier is the first present actor in the cast
                         ]
                     })
                     .collect(),
@@ -674,7 +671,7 @@ fn story_input_one_four_and_six_mixed_heroes_reach_the_storyteller_after_opening
                 });
                 result.unwrap_or_else(|error| panic!("{count}-hero seat {index}: {error:?}"));
             }
-            assert_eq!(endpoint.connections(), 6 * count);
+            assert_eq!(endpoint.connections(), 3 * count);
             assert_eq!(storyteller.connections(), count);
             assert_eq!(
                 *table.service.updates.borrow(),

@@ -93,6 +93,14 @@ fn new_migrations_are_registered_in_their_owner_ledgers() {
         ("runtime support fixture", "0030_personal_tenants.sql"),
         ("account store", "0030_personal_tenants.sql"),
         ("df-hosted database", "0031_host_funding.sql"),
+        (
+            "df-hosted database",
+            "0037_campaign_preferences_owner_boundary.sql",
+        ),
+        (
+            "campaign postgres fixtures",
+            "0037_campaign_preferences_owner_boundary.sql",
+        ),
         ("runtime support fixture", "0031_host_funding.sql"),
         ("finance host funding fixture", "0031_host_funding.sql"),
     ];

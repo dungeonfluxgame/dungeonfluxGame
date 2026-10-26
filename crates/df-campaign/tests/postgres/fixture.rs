@@ -286,6 +286,13 @@ impl TestDb {
             ))
             .await
             .expect("migration 0036");
+        admin
+            .client
+            .batch_execute(include_str!(
+                "../../../df-persistence/migrations/0037_campaign_preferences_owner_boundary.sql"
+            ))
+            .await
+            .expect("migration 0037");
         Self {
             name,
             admin,
