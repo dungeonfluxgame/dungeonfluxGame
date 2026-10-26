@@ -391,14 +391,14 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 @keyframes motes-sway { from { translate: -10px 0; } to { translate: 12px 0; } }
 @keyframes fog-drift { from { translate: -6% 0; } to { translate: 6% 0; } }
 
-.vigil-stage { display: flex; flex-direction: column; align-items: center; padding-top: clamp(8px, 4vh, 44px); text-align: center; }
-.vigil .lantern { width: 104px; height: 104px; margin: 0 0 22px; }
-.vigil .lantern img { width: 46px; height: 46px; }
+.vigil-stage { display: flex; flex-direction: column; align-items: center; padding-top: 8px; text-align: center; }
+.vigil .lantern { width: 64px; height: 64px; margin: 0 0 8px; }
+.vigil .lantern img { width: 30px; height: 30px; }
 .vigil-state { color: var(--brass-bright); font: italic 18px/1.3 var(--serif); text-shadow: 0 1px 14px rgba(0, 0, 0, .8); }
-.vigil h1 { margin-top: 6px; font-size: clamp(40px, 5.6vw, 68px); line-height: 1.04; letter-spacing: -1px; overflow-wrap: anywhere; text-shadow: 0 2px 34px rgba(0, 0, 0, .8); }
-.vigil-lede { margin-top: 12px; color: #d7d9d2; font-size: 17px; text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
+.vigil h1 { margin-top: 2px; font-size: clamp(32px, 4vw, 48px); line-height: 1.04; letter-spacing: -1px; overflow-wrap: anywhere; text-shadow: 0 2px 34px rgba(0, 0, 0, .8); }
+.vigil-lede { margin-top: 6px; color: #d7d9d2; font-size: 15px; text-shadow: 0 1px 12px rgba(0, 0, 0, .8); }
 /* Three brass tablets in a row: the room code and two clocks that count on by themselves. */
-.tablets { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 30px; }
+.tablets { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 12px; }
 .tablet {
   display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 168px; padding: 12px 22px 14px;
   border: 1px solid rgba(198, 163, 107, .5); border-radius: 10px;
@@ -411,6 +411,7 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 .tablet-label { color: var(--muted); font-size: 12px; }
 .room-code { color: var(--brass-bright); font: 30px/1 var(--serif); letter-spacing: .26em; margin-right: -.26em; text-shadow: 0 0 22px rgba(242, 178, 92, .35); transition: text-shadow .3s, color .3s; }
 .room-tablet:hover .room-code { color: #fbe2b0; text-shadow: 0 0 26px rgba(242, 178, 92, .7); }
+.player-link { font-size: 13px; text-underline-offset: 3px; overflow-wrap: anywhere; }
 /* The clocks: a registered integer counts up from --start for ten days; hours, minutes and
    seconds are derived from it and printed by CSS counters. No script. */
 @property --tick { syntax: "<integer>"; inherits: false; initial-value: 0; }
@@ -431,12 +432,14 @@ input[aria-invalid="true"] { border-color: var(--ember); }
 
 /* The heroes at the table: a frame that reloads itself, so the page around it never does. */
 .table-frame { display: block; width: min(760px, 100%); height: 172px; margin-top: 22px; border: 0; background: transparent; color-scheme: dark; }
-.vigil-facts { display: flex; justify-content: center; margin: 28px 0 0; }
+.vigil-facts { display: flex; justify-content: center; margin: 14px 0 0; }
 .vigil-facts > div { padding: 2px 24px; }
 .vigil-facts > div + div { border-left: 1px solid var(--line); }
 .vigil-facts dt { color: var(--muted); font-size: 12px; }
 .vigil-facts dd { margin: 3px 0 0; color: var(--ivory); font-size: 15px; }
-.vigil .actions { justify-content: center; margin-top: 30px; }
+.vigil .actions { justify-content: center; margin-top: 8px; }
+.vigil .actions button.primary { min-height: 48px; }
+.secondary-tablets { margin-top: 8px; }
 .vigil .hint { margin-inline: auto; }
 .vigil-facts, .vigil .hint { text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 16px rgba(0, 0, 0, .8); }
 .vigil .stop-row { display: flex; flex-direction: column; align-items: center; width: min(520px, 100%); margin-top: 34px; }
@@ -466,8 +469,16 @@ input[aria-invalid="true"] { border-color: var(--ember); }
   .saves li { flex-wrap: wrap; }
   .settings-body section { padding: 20px 16px; }
   .masthead nav a { padding: 6px 12px; }
-  .vigil .lantern { width: 76px; height: 76px; }
-  .vigil .lantern img { width: 34px; height: 34px; }
+  .vigil .lantern { width: 52px; height: 52px; margin-bottom: 6px; }
+  .vigil .lantern img { width: 24px; height: 24px; }
+  .vigil-state { font-size: 15px; }
+  .vigil h1 { font-size: 32px; }
+  .vigil-lede { max-width: 32ch; font-size: 14px; }
+  .vigil .actions { margin-top: 6px; }
+  .vigil .actions button.primary { width: 100%; }
+  .room-tablet { flex-basis: 100%; }
+  .player-link { max-width: 100%; }
+  .vigil-facts { margin-top: 10px; }
   .tablets { gap: 10px; }
   .tablet { min-width: 0; flex: 1 1 140px; padding: 10px 14px 12px; }
   .room-code, .clock { font-size: 24px; }

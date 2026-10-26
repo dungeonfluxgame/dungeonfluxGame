@@ -804,7 +804,7 @@ fn display_controls(snapshot: &Snapshot) -> String {
         } else {
             actions.push(button(
                 "/display/open",
-                "Show table display",
+                "Open table display",
                 "primary",
                 &[],
             ));
@@ -812,7 +812,11 @@ fn display_controls(snapshot: &Snapshot) -> String {
     }
     actions.push(button(
         "/display/browser",
-        "Open display in browser",
+        if snapshot.windowed {
+            "Open in browser"
+        } else {
+            "Open table display"
+        },
         if snapshot.windowed {
             "quiet"
         } else {
@@ -823,13 +827,14 @@ fn display_controls(snapshot: &Snapshot) -> String {
     actions.concat()
 }
 
-/// The running game, centred: its lantern and name, the room code and two live clocks, the
-/// heroes at the table (a frame that refreshes itself), a few facts, then the actions.
+/// The running game puts its display action and player link before secondary session details.
 fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     let display_state = if snapshot.display_open {
         "Open"
+    } else if snapshot.settings.display == DisplayTarget::Browser {
+        "Connected in a browser"
     } else {
-        "Closed, players stay connected"
+        "Not open"
     };
     let joining = if snapshot.settings.phones_on_network {
         "From phones on this Wi-Fi"
@@ -839,8 +844,9 @@ fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     let room = room_code(&run.player_url)
         .map(|code| {
             format!(
-                "<div class=\"tablet room-tablet\"><span class=\"tablet-label\">Room code</span><span class=\"room-code\">{}</span></div>",
-                escape(code)
+                "<div class=\"tablet room-tablet\"><span class=\"tablet-label\">Room code</span><span class=\"room-code\">{}</span><a class=\"player-link\" href=\"{}\">Player link</a></div>",
+                escape(code),
+                escape(&run.player_url)
             )
         })
         .unwrap_or_default();
@@ -853,18 +859,18 @@ fn running(snapshot: &Snapshot, run: &RunRecord) -> String {
     };
     format!(
         "<section class=\"vigil-stage\" aria-labelledby=\"running-name\">{}<p class=\"vigil-state\">Now playing</p><h1 id=\"running-name\">{}</h1><p class=\"vigil-lede\">{}, running since {}.</p>\
-<div class=\"tablets\">{room}{}{}</div>{table}\
+<div class=\"actions\">{}</div><div class=\"tablets\">{room}</div>\
 <dl class=\"vigil-facts\"><div><dt>Table display</dt><dd>{display_state}</dd></div><div><dt>Players join</dt><dd>{joining}</dd></div><div><dt>First played</dt><dd>{}</dd></div></dl>\
-<div class=\"actions\">{}</div><p class=\"hint\">{}</p>\
+<div class=\"tablets secondary-tablets\">{}{}</div>{table}<p class=\"hint\">{}</p>\
 <div class=\"stop-row\">{}<p class=\"hint\">Closing this window keeps the game running. Stop saves the game and ends it.</p></div></section>",
         lantern("lit"),
         escape(&run.game.name),
         escape(run.game.adventure.label()),
         escape(&since(run.game.last_played)),
+        display_controls(snapshot),
+        escape(&first_played(run.game.created)),
         clock_tablet("This session", session),
         clock_tablet("All sessions", total),
-        escape(&first_played(run.game.created)),
-        display_controls(snapshot),
         joining_line(&snapshot.settings),
         button("/stop", "Stop and save", "danger", &[])
     )
@@ -1747,6 +1753,19 @@ mod tests {
         let page = home(&snapshot);
         assert!(page.contains("<h1 id=\"running-name\">The Iron Crown</h1>"));
         assert!(page.contains("<span class=\"room-code\">ZOMATA</span>"));
+        assert!(page.contains("<a class=\"player-link\" href=\"http://127.0.0.1:63309/gameplay/player?room=ZOMATA\">Player link</a>"));
+        assert!(page.contains("Open table display"));
+        assert!(page.contains("<dd>Not open</dd>"));
+        let open_display = page.find("Open table display").unwrap();
+        let room_code_position = page
+            .find("<span class=\"room-code\">ZOMATA</span>")
+            .unwrap();
+        let player_link = page.find("class=\"player-link\"").unwrap();
+        let session_clock = page.find("This session").unwrap();
+        assert!(open_display < room_code_position);
+        assert!(room_code_position < player_link && player_link < session_clock);
+        assert!(STYLE.contains("@media (max-width: 560px)"));
+        assert!(STYLE.contains(".room-tablet { flex-basis: 100%; }"));
         assert!(page.contains("class=\"ambience\" aria-hidden=\"true\""));
         assert!(page.contains("Stop and save"));
         assert!(!page.contains("Saved games"));
@@ -1754,6 +1773,10 @@ mod tests {
         assert!(page.contains("<span class=\"tablet-label\">All sessions</span><span class=\"clock\" style=\"--start: 37"));
         assert!(page.contains("aria-label=\"2 minutes\""));
         assert!(page.contains("<iframe class=\"table-frame\" src=\"/table\""));
+        snapshot.settings.display = DisplayTarget::Browser;
+        let browser_page = home(&snapshot);
+        assert!(browser_page.contains("<dd>Connected in a browser</dd>"));
+        assert!(!browser_page.contains("Closed, players stay connected"));
         assert_eq!(duration_words(0), "under a minute");
         assert_eq!(duration_words(3_660), "1 hour 1 minute");
         assert_eq!(duration_words(7_500), "2 hours 5 minutes");
