@@ -4,7 +4,7 @@ use df_account_app::{
     wire::PlaySessionsView,
     wire_campaign::{
         CampaignCard, CampaignDraft, CampaignOverview, CampaignRole, DashboardView,
-        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView, WizardCatalog,
+        InvitationCreated, InvitationKind, InvitePreview, JoinRequested, LobbyView,
     },
 };
 use df_campaign::{
@@ -177,53 +177,6 @@ impl CampaignDirectory for Campaigns {
 
     async fn closure_blockers(&self, _account: AccountId) -> PortResult<Vec<String>> {
         crate::ports::unavailable("S1")
-    }
-
-    async fn wizard_catalog(&self) -> PortResult<WizardCatalog> {
-        Ok(super::campaign_views::catalog())
-    }
-
-    async fn start_draft(&self, who: &Actor) -> PortResult<(String, CampaignDraft)> {
-        let draft = self
-            .service
-            .start_draft(who.account)
-            .await
-            .map_err(failure)?;
-        Ok((
-            hex(draft.id.as_bytes()),
-            super::campaign_views::draft(draft)?,
-        ))
-    }
-
-    async fn save_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        step: u8,
-        draft: CampaignDraft,
-    ) -> PortResult<CampaignDraft> {
-        let id = CampaignId::from_hex(draft_id).map_err(|_| PortError::NotFound)?;
-        let data = super::campaign_views::step(step, draft)?;
-        let saved = self
-            .service
-            .save_draft_step(who.account, id, data)
-            .await
-            .map_err(failure)?;
-        super::campaign_views::draft(saved)
-    }
-
-    async fn finish_draft(
-        &self,
-        who: &Actor,
-        draft_id: &str,
-        operation: OperationId,
-    ) -> PortResult<CampaignId> {
-        let id = CampaignId::from_hex(draft_id).map_err(|_| PortError::NotFound)?;
-        self.service
-            .finish_draft(who.account, id, operation)
-            .await
-            .map(|row| row.id)
-            .map_err(failure)
     }
 
     async fn campaign(&self, who: &Actor, campaign: CampaignId) -> PortResult<CampaignOverview> {
