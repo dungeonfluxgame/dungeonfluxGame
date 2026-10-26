@@ -1,7 +1,9 @@
 //! Invitations, room codes and join requests: tokens and codes are made and read here, the
 //! guess throttles are applied here, and the store decides everything else.
 
-use std::{future::Future, net::IpAddr, time::Instant};
+use std::{future::Future, net::IpAddr};
+
+use tokio::time::Instant;
 
 use df_campaign_wire::{InvitationCreated, InvitePreview, RoomCodeCreated};
 use df_types::{AccountId, CampaignId, OperationId};
@@ -484,7 +486,7 @@ mod tests {
         time::Duration,
     };
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn malformed_and_unknown_acceptance_tokens_do_the_same_delayed_lookup() {
         let lookups = Arc::new(AtomicUsize::new(0));
         let delayed_unknown = |digest: [u8; 32]| {
