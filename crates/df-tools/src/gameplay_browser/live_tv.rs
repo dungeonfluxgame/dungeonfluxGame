@@ -1,8 +1,8 @@
 //! The shared display's 16:9 stage for the lobby and the exploration scenes.
 //!
 //! One persistent DOM is built on first use and updated in place for every accepted view;
-//! it holds no game state and sends nothing. Generated art is an alternate `url()` layered
-//! above the authored fallback, so a missing file shows the fallback.
+//! it holds no game state and sends nothing. A place picture is shown only after it loads;
+//! a missing successor leaves the last confirmed picture beneath the scene figures.
 //!
 //! Stable shell for other screens (combat): `.tv-stage` is the fixed full-viewport root,
 //! `.tv-art` the full-bleed painting, `.tv-scrim` the text gradients, `.tv-safe` the
@@ -36,7 +36,9 @@ use crate::live_art::mural_view;
 pub(super) use live_scene_stage::SceneGraphView;
 #[path = "live_tv_status.rs"]
 mod status;
-use status::plate_loading_visible;
+use status::{
+    PlaceAttempt, PlaceOutcome, place_selection_changed, plate_loading_visible, show_retained_place,
+};
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
 // PLAY-Q01: the server's QR code of the join link (see gameplay/join_link.rs).
@@ -113,6 +115,39 @@ struct WordmarkSlot {
     image: Element,
     text: Element,
     load: Closure<dyn FnMut(Event)>,
+}
+
+struct ImageFailureGuard {
+    load: Closure<dyn FnMut(Event)>,
+    error: Closure<dyn FnMut(Event)>,
+}
+
+struct PlaceRequest {
+    image: Element,
+    load: Closure<dyn FnMut(Event)>,
+    error: Closure<dyn FnMut(Event)>,
+}
+
+impl Drop for PlaceRequest {
+    fn drop(&mut self) {
+        let _ = self
+            .image
+            .remove_event_listener_with_callback("load", self.load.as_ref().unchecked_ref());
+        let _ = self
+            .image
+            .remove_event_listener_with_callback("error", self.error.as_ref().unchecked_ref());
+        let _ = self.image.remove_attribute("src");
+    }
+}
+
+struct PlacePicture {
+    root: Element,
+    scene: RefCell<String>,
+    background: RefCell<Vec<String>>,
+    graph: RefCell<Vec<String>>,
+    selected: RefCell<Option<Vec<String>>>,
+    request: RefCell<Option<PlaceRequest>>,
+    generation: Cell<u64>,
 }
 
 struct SeatCard {
@@ -194,8 +229,8 @@ pub(super) struct TvStage {
     mural_art: Element,
     /// The scene contents last read for the party mural, so an unchanged view parses nothing.
     mural_source: RefCell<String>,
-    art: Element,
-    art_previous: Element,
+    place_picture: PlacePicture,
+    image_failure_guard: ImageFailureGuard,
     plate: PlateLayer,
     scene_graph: live_scene_stage::StageLayer,
     /// PLAY-V12: the establishing shot's title card: the adventure title on opening, then the scene title.
@@ -293,6 +328,267 @@ fn set_hidden(element: &Element, hidden: bool) -> Result<(), JsValue> {
         element.set_attribute("hidden", "")
     } else {
         element.remove_attribute("hidden")
+    }
+}
+
+fn bind_image_failure_guard(stage: &Element) -> Result<ImageFailureGuard, JsValue> {
+    let load = {
+        let stage = stage.clone();
+        Closure::wrap(Box::new(move |event: Event| {
+            let Some(image) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlImageElement>().ok())
+            else {
+                return;
+            };
+            // A queued event from an earlier src must not reveal a later failed request.
+            if !image.complete() || image.natural_width() == 0 {
+                return;
+            }
+            let _ = image.remove_attribute("data-image-failed");
+            if image.class_list().contains("tv-mural-art") {
+                let _ = stage.set_attribute("data-mural", "ready");
+                let _ = sync_shot(&stage);
+            }
+        }) as Box<dyn FnMut(Event)>)
+    };
+    let error = {
+        let stage = stage.clone();
+        Closure::wrap(Box::new(move |event: Event| {
+            let Some(image) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlImageElement>().ok())
+            else {
+                return;
+            };
+            if image.complete() && image.natural_width() > 0 {
+                return;
+            }
+            let _ = image.set_attribute("data-image-failed", "");
+            if image.class_list().contains("tv-mural-art") {
+                let _ = stage.remove_attribute("data-mural");
+                let _ = sync_shot(&stage);
+            }
+        }) as Box<dyn FnMut(Event)>)
+    };
+    stage.add_event_listener_with_callback_and_bool("load", load.as_ref().unchecked_ref(), true)?;
+    stage.add_event_listener_with_callback_and_bool(
+        "error",
+        error.as_ref().unchecked_ref(),
+        true,
+    )?;
+    Ok(ImageFailureGuard { load, error })
+}
+
+fn place_picture_urls(style: &str) -> Vec<String> {
+    let Some(urls) = style
+        .strip_prefix("background-image:url(")
+        .and_then(|urls| urls.strip_suffix(')'))
+    else {
+        return Vec::new();
+    };
+    urls.split("),url(")
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn paint_loaded_place(stage: &Element, url: &str) -> Result<(), JsValue> {
+    let Some(art) = stage.query_selector(":scope > .tv-art:not(.tv-art-previous)")? else {
+        return Ok(());
+    };
+    let style = image_layers(url, "");
+    if art.get_attribute("style").as_deref() != Some(style.as_str()) {
+        if let Some(before) = art.get_attribute("style")
+            && let Some(previous) = stage.query_selector(":scope > .tv-art-previous")?
+        {
+            previous.set_attribute("style", &before)?;
+            let tick = if stage.get_attribute("data-art-swap").as_deref() == Some("a") {
+                "b"
+            } else {
+                "a"
+            };
+            stage.set_attribute("data-art-swap", tick)?;
+        }
+        art.set_attribute("style", &style)?;
+    }
+    if let Some(set) = stage.query_selector(".tv-scene-set")? {
+        set.set_attribute("style", &style)?;
+    }
+    Ok(())
+}
+
+fn remember_loaded_place(stage: &Element, url: &str) -> Result<(), JsValue> {
+    stage.set_attribute("data-place-picture", url)?;
+    stage.set_attribute(
+        "data-place-picture-scene",
+        &stage.get_attribute("data-scene-key").unwrap_or_default(),
+    )
+}
+
+fn show_loaded_place(stage: &Element, url: &str) -> Result<(), JsValue> {
+    paint_loaded_place(stage, url)?;
+    remember_loaded_place(stage, url)
+}
+
+fn retain_loaded_place(stage: &Element) {
+    if stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
+        && stage.has_attribute("data-place-picture")
+    {
+        let _ = stage.set_attribute("data-place-picture-fallback", "");
+        let _ = sync_shot(stage);
+    }
+}
+
+fn loaded_place_shot(stage: &Element, primary: bool) {
+    if stage.get_attribute("data-plate-state").as_deref() == Some("failed")
+        && stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
+    {
+        let _ = stage.set_attribute("data-place-picture-fallback", "");
+    } else if primary {
+        let _ = stage.remove_attribute("data-place-picture-fallback");
+    }
+    let _ = sync_shot(stage);
+}
+
+impl PlacePicture {
+    fn new(root: &Element) -> Self {
+        Self {
+            root: root.clone(),
+            scene: RefCell::new(String::new()),
+            background: RefCell::new(Vec::new()),
+            graph: RefCell::new(Vec::new()),
+            selected: RefCell::new(None),
+            request: RefCell::new(None),
+            generation: Cell::new(0),
+        }
+    }
+
+    fn set_background(&self, style: &str) -> Result<(), JsValue> {
+        let scene = self
+            .root
+            .get_attribute("data-scene-key")
+            .unwrap_or_default();
+        if *self.scene.borrow() != scene {
+            *self.scene.borrow_mut() = scene;
+            self.graph.borrow_mut().clear();
+            *self.selected.borrow_mut() = None;
+        }
+        *self.background.borrow_mut() = place_picture_urls(style);
+        self.select()
+    }
+
+    fn set_graph(&self, graph: Option<&SceneGraphView>) -> Result<(), JsValue> {
+        *self.graph.borrow_mut() = graph
+            .map(|graph| {
+                [graph.set.asset.as_str(), graph.set.fallback_asset.as_str()]
+                    .into_iter()
+                    .filter_map(crate::presentation::set_picture)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.select()?;
+        if graph.is_some() && self.graph.borrow().is_empty() {
+            retain_loaded_place(&self.root);
+        }
+        Ok(())
+    }
+
+    fn select(&self) -> Result<(), JsValue> {
+        let mut candidates = Vec::with_capacity(4);
+        for url in self
+            .graph
+            .borrow()
+            .iter()
+            .chain(self.background.borrow().iter())
+        {
+            if !candidates.contains(url) {
+                candidates.push(url.clone());
+            }
+        }
+        if !place_selection_changed(self.selected.borrow().as_deref(), &candidates) {
+            return Ok(());
+        }
+        *self.selected.borrow_mut() = Some(candidates.clone());
+        self.root.remove_attribute("data-place-request")?;
+        self.request.borrow_mut().take();
+        let Some(first) = candidates.first().cloned() else {
+            retain_loaded_place(&self.root);
+            return Ok(());
+        };
+        if self.root.get_attribute("data-place-picture").as_deref() == Some(first.as_str()) {
+            loaded_place_shot(&self.root, true);
+            return Ok(());
+        }
+        let generation = self
+            .generation
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| JsValue::from_str("place picture request generation exhausted"))?;
+        self.generation.set(generation);
+        let generation = generation.to_string();
+        self.root.set_attribute("data-place-request", &generation)?;
+        let document = self.root.owner_document().ok_or("document absent")?;
+        let image = document.create_element("img")?;
+        let attempt = Rc::new(RefCell::new(PlaceAttempt::new(
+            self.scene.borrow().clone(),
+            generation,
+            candidates,
+        )));
+        let load = {
+            let (stage, image, attempt) = (self.root.clone(), image.clone(), Rc::clone(&attempt));
+            Closure::wrap(Box::new(move |_: Event| {
+                if !stage.is_connected() {
+                    return;
+                }
+                let Some(image) = image.dyn_ref::<HtmlImageElement>() else {
+                    return;
+                };
+                if !image.complete() || image.natural_width() == 0 {
+                    return;
+                }
+                let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+                let generation = stage.get_attribute("data-place-request");
+                if let PlaceOutcome::Show { url, primary } =
+                    attempt.borrow_mut().loaded(&scene, generation.as_deref())
+                {
+                    let _ = show_loaded_place(&stage, &url);
+                    loaded_place_shot(&stage, primary);
+                }
+            }) as Box<dyn FnMut(Event)>)
+        };
+        let error = {
+            let (stage, image) = (self.root.clone(), image.clone());
+            Closure::wrap(Box::new(move |_: Event| {
+                if !stage.is_connected() {
+                    return;
+                }
+                if image
+                    .dyn_ref::<HtmlImageElement>()
+                    .is_some_and(|image| image.complete() && image.natural_width() > 0)
+                {
+                    return;
+                }
+                let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+                let generation = stage.get_attribute("data-place-request");
+                match attempt.borrow_mut().failed(
+                    &scene,
+                    generation.as_deref(),
+                    stage.has_attribute("data-place-picture"),
+                ) {
+                    PlaceOutcome::Retry(url) => {
+                        let _ = image.set_attribute("src", &url);
+                    }
+                    PlaceOutcome::Keep => retain_loaded_place(&stage),
+                    PlaceOutcome::Ignore | PlaceOutcome::Show { .. } => {}
+                }
+            }) as Box<dyn FnMut(Event)>)
+        };
+        image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
+        image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())?;
+        image.set_attribute("src", &first)?;
+        *self.request.borrow_mut() = Some(PlaceRequest { image, load, error });
+        Ok(())
     }
 }
 
@@ -492,9 +788,16 @@ fn mount_sound_gate(document: &Document, stage: &Element) -> Result<SoundGate, J
 /// own picture.
 fn sync_shot(stage: &Element) -> Result<(), JsValue> {
     let is_scene = stage.get_attribute("data-tv-mode").as_deref() == Some("scene");
-    let plate_state =
-        PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default());
-    let shot = if is_scene && stage.has_attribute("data-place-plate-retained") {
+    let plate_state_name = stage.get_attribute("data-plate-state");
+    let plate_state = PlateState::from_name(plate_state_name.as_deref().unwrap_or_default());
+    let retained_place = show_retained_place(
+        plate_state_name.as_deref(),
+        stage.has_attribute("data-place-picture"),
+        stage.get_attribute("data-place-picture-scene") != stage.get_attribute("data-scene-key"),
+        stage.has_attribute("data-plate-loaded"),
+        stage.has_attribute("data-place-picture-fallback"),
+    );
+    let shot = if is_scene && (stage.has_attribute("data-place-plate-retained") || retained_place) {
         crate::presentation::Shot::Stage
     } else if is_scene {
         if stage.has_attribute("data-plate-loaded")
@@ -512,7 +815,12 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
         crate::presentation::Shot::Stage
     };
     stage.set_attribute("data-shot", shot.name())?;
-    if is_scene && stage.has_attribute("data-mural") && shot != crate::presentation::Shot::Plate {
+    if is_scene
+        && stage.has_attribute("data-mural")
+        && !stage.has_attribute("data-place-plate-retained")
+        && !retained_place
+        && shot != crate::presentation::Shot::Plate
+    {
         stage.set_attribute("data-arrival-mural", "")?;
     } else {
         stage.remove_attribute("data-arrival-mural")?;
@@ -578,7 +886,7 @@ fn record_visual_source(
         PlateState::Unavailable => VisualPlateState::Unavailable,
     };
     let art_asset = stage
-        .query_selector(".tv-art")
+        .query_selector(":scope > .tv-art:not(.tv-art-previous)")
         .ok()
         .flatten()
         .and_then(|art| art.get_attribute("style"))
@@ -1777,6 +2085,11 @@ fn activate_plate_request_at(
         }
     }
     let _set = stage.set_attribute("data-plate-loaded", "");
+    if let Some(url) = image.get_attribute("data-src") {
+        let _ = stage.remove_attribute("data-place-request");
+        let _ = remember_loaded_place(stage, &url);
+        let _ = stage.remove_attribute("data-place-picture-fallback");
+    }
     let _removed = stage.remove_attribute("data-place-plate-retained");
     let _removed = root.remove_attribute("data-loading");
     sync_plate_loading(
@@ -1852,6 +2165,7 @@ fn fail_plate_request(
         if let Some(figures) = figures.upgrade() {
             let _applied = figures.set_plate(None, None);
         }
+        retain_loaded_place(stage);
     }
     let _synced = sync_shot(stage);
 }
@@ -2045,8 +2359,10 @@ impl TvStage {
         if let Some(splash) = document.query_selector(".tv-splash")? {
             splash.set_attribute("data-done", "")?;
         }
-        let art_previous = node(document, &root, "div", "tv-art tv-art-previous", "")?;
-        let art = node(document, &root, "div", "tv-art", "")?;
+        node(document, &root, "div", "tv-art tv-art-previous", "")?;
+        node(document, &root, "div", "tv-art", "")?;
+        let place_picture = PlacePicture::new(&root);
+        let image_failure_guard = bind_image_failure_guard(&root)?;
         let loop_layer = node(document, &root, "div", "tv-loop", "")?;
         let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
         let kill_shot = live_kill_shot::KillShotPlayer::new(document, &root)?;
@@ -2181,8 +2497,8 @@ impl TvStage {
             root,
             mural_art,
             mural_source: RefCell::new(String::new()),
-            art,
-            art_previous,
+            place_picture,
+            image_failure_guard,
             plate,
             scene_graph,
             establish_title,
@@ -2244,6 +2560,7 @@ impl TvStage {
         baked_revision: Option<u64>,
     ) -> Result<(), JsValue> {
         self.scene_graph.update(&self.root, graph, baked_revision)?;
+        self.place_picture.set_graph(graph)?;
         sync_shot(&self.root)
     }
 
@@ -2441,20 +2758,7 @@ impl TvStage {
     /// Shows `style` as the painting. A different painting leaves the previous one to fade
     /// out underneath while the new one fades in; the same one changes nothing.
     pub(super) fn set_art(&self, style: &str) -> Result<(), JsValue> {
-        let before = self.art.get_attribute("style");
-        if before.as_deref() == Some(style) {
-            return Ok(());
-        }
-        if let Some(before) = before {
-            self.art_previous.set_attribute("style", &before)?;
-            let tick = if self.root.get_attribute("data-art-swap").as_deref() == Some("a") {
-                "b"
-            } else {
-                "a"
-            };
-            self.root.set_attribute("data-art-swap", tick)?;
-        }
-        self.art.set_attribute("style", style)
+        self.place_picture.set_background(style)
     }
 
     /// Where the director is in a scene change or beat; the stylesheet shows each state.
@@ -2764,7 +3068,7 @@ impl TvStage {
         if !self.plate.root.has_attribute("data-transition") {
             let deferred = self.plate.deferred.borrow_mut().take();
             if let Some((plate, scene)) = deferred {
-                self.apply_plate(&plate, &scene)?;
+                self.set_plate(&plate, &scene, true)?;
             }
         }
         for image in &self.plate.images {
@@ -3836,14 +4140,24 @@ impl TvStage {
         if self.root.get_attribute("data-entry-scene-key").as_deref() != Some(scene_key) {
             self.begin_entry(!narrated || !self.drawn.get())?;
         }
-        if !self.same_place.get() && self.plate.seen.borrow().as_str() != scene_key {
+        if self.same_place.get()
+            && self.plate.seen.borrow().as_str() != scene_key
+            && self.plate.root.has_attribute("data-transition")
+        {
+            return self.apply_plate(plate, scene_key);
+        }
+        if self.plate.seen.borrow().as_str() != scene_key {
             self.plate.root.remove_attribute("data-transition")?;
             self.plate.root.remove_attribute("data-transition-at")?;
+            self.plate.root.remove_attribute("data-previous")?;
             *self.plate.deferred.borrow_mut() = None;
             if can_retain_plate_for_scene(
                 self.plate.root.has_attribute("data-active"),
                 self.root.has_attribute("data-plate-loaded"),
             ) {
+                if let Some(url) = self.root.get_attribute("data-place-picture") {
+                    paint_loaded_place(&self.root, &url)?;
+                }
                 self.root.set_attribute("data-place-plate-retained", "")?;
             } else {
                 self.clear_plate(scene_key)?;
@@ -4058,6 +4372,9 @@ impl TvStage {
         let Some(image) = layer.images.get(next) else {
             return Ok(());
         };
+        if layer.root.get_attribute("data-previous").as_deref() == Some(next.to_string().as_str()) {
+            layer.root.remove_attribute("data-previous")?;
+        }
         if let Some(video_loop) = layer.video_loops.borrow().get(next) {
             video_loop.release();
         }
@@ -4128,6 +4445,16 @@ impl TvStage {
 
     pub(super) fn dispose(self) -> Result<(), JsValue> {
         self.sound_gate.layer.remove();
+        self.root.remove_event_listener_with_callback_and_bool(
+            "load",
+            self.image_failure_guard.load.as_ref().unchecked_ref(),
+            true,
+        )?;
+        self.root.remove_event_listener_with_callback_and_bool(
+            "error",
+            self.image_failure_guard.error.as_ref().unchecked_ref(),
+            true,
+        )?;
         for (image, (load, error)) in self.plate.images.iter().zip(&self.plate.listeners) {
             // Listeners die with their elements; removing them is hygiene.
             let _removed =
@@ -4694,6 +5021,550 @@ mod tests {
     fn finish_stage(parent: web_sys::Element, stage: TvStage) {
         stage.dispose().unwrap();
         parent.remove();
+    }
+
+    fn picture_graph(scene: &str, asset: &str, fallback: &str) -> super::SceneGraphView {
+        use super::live_scene_stage::{Camera, SceneActorView, SceneSetView};
+        super::SceneGraphView {
+            revision: 1,
+            scene_key: scene.into(),
+            set: SceneSetView {
+                place_name: scene.into(),
+                asset: asset.into(),
+                fallback_asset: fallback.into(),
+                exterior: true,
+                time_of_day: "day".into(),
+                weather: None,
+                lights: vec![],
+            },
+            camera: Camera::Wide,
+            actors: vec![SceneActorView {
+                id: "courier".into(),
+                name: "Courier".into(),
+                art: asset.into(),
+                fallback_art: fallback.into(),
+                spot: "front".into(),
+                anchor_x_permille: 500,
+                anchor_y_permille: 700,
+                depth_permille: 500,
+                pose: "standing".into(),
+                expression: "neutral".into(),
+                look_at: None,
+                speaking: true,
+            }],
+        }
+    }
+
+    fn place_probe(stage: &TvStage) -> web_sys::Element {
+        stage
+            .place_picture
+            .request
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .image
+            .clone()
+    }
+
+    fn dispatch_successful_image_load(image: &web_sys::Element) {
+        let object: &js_sys::Object = image.unchecked_ref();
+        for (name, value) in [("complete", true.into()), ("naturalWidth", 1.into())] {
+            let descriptor = js_sys::Object::new();
+            js_sys::Reflect::set(&descriptor, &"value".into(), &value).unwrap();
+            js_sys::Object::define_property(object, &name.into(), &descriptor);
+        }
+        image
+            .dispatch_event(&web_sys::Event::new("load").unwrap())
+            .unwrap();
+    }
+
+    fn dispatch_loaded_place(stage: &TvStage) {
+        dispatch_successful_image_load(&place_probe(stage));
+    }
+
+    fn load_lobby_picture(stage: &TvStage, scene: &str, picture: &str) {
+        stage.root.set_attribute("data-tv-mode", "lobby").unwrap();
+        stage.root.set_attribute("data-scene-key", scene).unwrap();
+        stage.set_art(&super::image_layers(picture, "")).unwrap();
+        dispatch_loaded_place(stage);
+    }
+
+    #[test]
+    fn a_failed_first_scene_picture_keeps_the_loaded_lobby_picture_under_its_figures() {
+        let (parent, stage) = mounted_stage();
+        let harbor = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let missing = format!("/gameplay/imagery/{}", "b".repeat(64));
+        let alternate = format!("/gameplay/imagery/{}", "c".repeat(64));
+        load_lobby_picture(&stage, "lobby", &harbor);
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "first").unwrap();
+        stage
+            .root
+            .set_attribute("data-plate-state", "pending")
+            .unwrap();
+        stage.root.set_attribute("data-mural", "ready").unwrap();
+        stage
+            .set_art(&super::image_layers(&missing, &alternate))
+            .unwrap();
+        stage
+            .update_scene_graph(Some(&picture_graph("first", &missing, &alternate)), None)
+            .unwrap();
+        let probe = place_probe(&stage);
+        probe
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(harbor.as_str())
+        );
+        assert_eq!(
+            probe.get_attribute("src").as_deref(),
+            Some(missing.as_str())
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
+        assert!(!stage.root.has_attribute("data-arrival-mural"));
+        let set = stage.root.query_selector(".tv-scene-set").unwrap().unwrap();
+        assert_eq!(
+            set.get_attribute("style").as_deref(),
+            Some(super::image_layers(&harbor, "").as_str())
+        );
+        assert!(
+            stage
+                .root
+                .query_selector(".tv-scene-actor[data-actor-id=courier]")
+                .unwrap()
+                .is_some()
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_later_failed_or_missing_scene_keeps_the_last_loaded_graph_picture() {
+        let (parent, stage) = mounted_stage();
+        let first = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let second = format!("/gameplay/imagery/{}", "b".repeat(64));
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "first").unwrap();
+        stage.set_art(&super::image_layers(&first, "")).unwrap();
+        stage
+            .update_scene_graph(Some(&picture_graph("first", &first, &first)), None)
+            .unwrap();
+        dispatch_loaded_place(&stage);
+        stage
+            .root
+            .set_attribute("data-scene-key", "second")
+            .unwrap();
+        stage.set_art(&super::image_layers(&second, "")).unwrap();
+        let graph = picture_graph("second", &second, &second);
+        stage.update_scene_graph(Some(&graph), None).unwrap();
+        let failed = place_probe(&stage);
+        failed
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        let generation = stage.root.get_attribute("data-place-request");
+        stage.set_art(&super::image_layers(&second, "")).unwrap();
+        stage.update_scene_graph(Some(&graph), None).unwrap();
+        assert_eq!(stage.root.get_attribute("data-place-request"), generation);
+        assert!(place_probe(&stage).is_same_node(Some(&failed)));
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(first.as_str())
+        );
+        stage.root.set_attribute("data-scene-key", "third").unwrap();
+        stage.set_art(&super::image_layers("", "")).unwrap();
+        stage.update_scene_graph(None, None).unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(first.as_str())
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_failed_mounted_plate_hides_its_image_and_keeps_the_last_place_under_scene_figures() {
+        for prior_plate in [false, true] {
+            let (parent, stage) = mounted_stage();
+            let document = stage.root.owner_document().unwrap();
+            let style = document.create_element("style").unwrap();
+            style.set_text_content(Some(&format!(
+                "{}\n{}\n{}\n.tv-stage *{{transition:none!important;animation:none!important}}",
+                include_str!("live_tv.css"),
+                include_str!("live_stage.css"),
+                include_str!("live_plate.css")
+            )));
+            parent.append_child(&style).unwrap();
+            let previous = format!("/gameplay/imagery/{}", "a".repeat(64));
+            let missing = format!("/gameplay/imagery/{}", "b".repeat(64));
+            load_lobby_picture(&stage, "old-scene", &previous);
+            if prior_plate {
+                seed_active_plate(&stage);
+                stage.plate.images[0]
+                    .set_attribute("data-src", &previous)
+                    .unwrap();
+                stage.plate.images[0]
+                    .set_attribute("src", &previous)
+                    .unwrap();
+                dispatch_successful_image_load(&stage.plate.images[0]);
+            }
+            stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+            stage
+                .root
+                .set_attribute("data-battle-state", "absent")
+                .unwrap();
+            stage
+                .root
+                .set_attribute("data-scene-key", "new-scene")
+                .unwrap();
+            stage.root.set_attribute("data-mural", "ready").unwrap();
+            stage.set_art(&super::image_layers(&missing, "")).unwrap();
+            stage
+                .update_scene_graph(Some(&picture_graph("new-scene", &missing, &missing)), None)
+                .unwrap();
+            let replacement = PlateView {
+                state: PlateState::Ready,
+                url: Some(missing),
+                ..Default::default()
+            };
+            stage.set_plate(&replacement, "new-scene", true).unwrap();
+            let index = if prior_plate { 1 } else { 0 };
+            let failed = &stage.plate.images[index];
+            if prior_plate {
+                failed.set_attribute("style", "display:block").unwrap();
+            }
+            failed
+                .dispatch_event(&web_sys::Event::new("error").unwrap())
+                .unwrap();
+
+            assert_eq!(
+                stage.root.get_attribute("data-place-picture").as_deref(),
+                Some(previous.as_str())
+            );
+            assert_eq!(
+                stage.root.get_attribute("data-shot").as_deref(),
+                Some("stage")
+            );
+            assert!(!stage.root.has_attribute("data-arrival-mural"));
+            let window = web_sys::window().unwrap();
+            let failed_style = window.get_computed_style(failed).unwrap().unwrap();
+            assert_eq!(
+                failed_style.get_property_value("visibility").unwrap(),
+                "hidden"
+            );
+            if !prior_plate {
+                assert_eq!(failed_style.get_property_value("display").unwrap(), "none");
+            }
+            let actors = stage
+                .root
+                .query_selector(".tv-scene-actors")
+                .unwrap()
+                .unwrap();
+            let actor_style = window.get_computed_style(&actors).unwrap().unwrap();
+            assert_eq!(
+                actor_style.get_property_value("visibility").unwrap(),
+                "visible"
+            );
+            let graph = stage
+                .root
+                .query_selector(".tv-scene-graph")
+                .unwrap()
+                .unwrap();
+            let graph_style = window.get_computed_style(&graph).unwrap().unwrap();
+            assert_eq!(graph_style.get_property_value("opacity").unwrap(), "1");
+            assert!(
+                actors
+                    .query_selector("[data-actor-id=courier]")
+                    .unwrap()
+                    .is_some()
+            );
+            finish_stage(parent, stage);
+        }
+    }
+
+    #[test]
+    fn activating_a_plate_does_not_repaint_the_graph_during_its_dissolve() {
+        let (parent, stage) = mounted_stage();
+        let old_place = "/gameplay/imagery/old-place";
+        let incoming_plate = "/gameplay/imagery/new-plate";
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "first").unwrap();
+        stage.root.set_attribute("data-narration-over", "").unwrap();
+        super::show_loaded_place(&stage.root, old_place).unwrap();
+        let set = stage.root.query_selector(".tv-scene-set").unwrap().unwrap();
+        let art = stage
+            .root
+            .query_selector(":scope > .tv-art:not(.tv-art-previous)")
+            .unwrap()
+            .unwrap();
+        let previous_set = set.get_attribute("style");
+        let previous_art = art.get_attribute("style");
+        stage
+            .plate
+            .root
+            .set_attribute("data-want", incoming_plate)
+            .unwrap();
+        stage.plate.root.set_attribute("data-want-i", "0").unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-want-key", "new-plate")
+            .unwrap();
+        stage.plate.root.set_attribute("data-request", "1").unwrap();
+        let image = &stage.plate.images[0];
+        image.set_attribute("data-src", incoming_plate).unwrap();
+        image.set_attribute("data-request", "1").unwrap();
+        image.set_attribute("data-decoded", "1").unwrap();
+        super::activate_plate_request_at(
+            &stage.root,
+            &stage.plate.root,
+            image,
+            &std::rc::Rc::downgrade(&stage.figures),
+            &stage.plate.pending_layout,
+            &stage.plate.picture_size,
+            10_000.0,
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(incoming_plate)
+        );
+        assert_eq!(set.get_attribute("style"), previous_set);
+        assert_eq!(art.get_attribute("style"), previous_art);
+        *stage.plate.seen.borrow_mut() = "first".to_owned();
+        stage
+            .root
+            .set_attribute("data-scene-key", "second")
+            .unwrap();
+        stage
+            .set_plate(
+                &PlateView {
+                    state: PlateState::Pending,
+                    ..Default::default()
+                },
+                "second",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            set.get_attribute("style").as_deref(),
+            Some(super::image_layers(incoming_plate, "").as_str())
+        );
+        assert_eq!(
+            stage
+                .root
+                .get_attribute("data-place-picture-scene")
+                .as_deref(),
+            Some("first")
+        );
+        assert!(stage.root.has_attribute("data-place-plate-retained"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_place_load_after_plate_failure_does_not_restore_the_mural_or_hide_figures() {
+        let (parent, stage) = mounted_stage();
+        let harbor = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let next_place = format!("/gameplay/imagery/{}", "b".repeat(64));
+        let missing_plate = format!("/gameplay/imagery/{}", "c".repeat(64));
+        load_lobby_picture(&stage, "lobby", &harbor);
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage
+            .root
+            .set_attribute("data-battle-state", "absent")
+            .unwrap();
+        stage.root.set_attribute("data-scene-key", "first").unwrap();
+        stage.root.set_attribute("data-mural", "ready").unwrap();
+        stage
+            .set_art(&super::image_layers(&next_place, ""))
+            .unwrap();
+        let graph = picture_graph("first", &next_place, &next_place);
+        stage.update_scene_graph(Some(&graph), None).unwrap();
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some(missing_plate),
+            ..Default::default()
+        };
+        stage.set_plate(&plate, "first", true).unwrap();
+        stage.plate.images[0]
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert!(stage.root.has_attribute("data-place-picture-fallback"));
+        dispatch_loaded_place(&stage);
+        stage
+            .set_art(&super::image_layers(&next_place, &harbor))
+            .unwrap();
+        assert!(stage.root.has_attribute("data-place-picture-fallback"));
+        stage
+            .set_art(&super::image_layers(&next_place, ""))
+            .unwrap();
+        stage.update_scene_graph(Some(&graph), None).unwrap();
+        stage.set_plate(&plate, "first", true).unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(next_place.as_str())
+        );
+        assert!(stage.root.has_attribute("data-place-picture-fallback"));
+        assert!(!stage.root.has_attribute("data-arrival-mural"));
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
+        assert!(
+            stage
+                .root
+                .query_selector(".tv-scene-actor[data-actor-id=courier]")
+                .unwrap()
+                .is_some()
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_missing_plate_keeps_the_lobby_or_later_loaded_place_above_the_mural() {
+        for plate_state in [PlateState::None, PlateState::Failed] {
+            let (parent, stage) = mounted_stage();
+            let harbor = format!("/gameplay/imagery/{}", "a".repeat(64));
+            let next_place = format!("/gameplay/imagery/{}", "b".repeat(64));
+            load_lobby_picture(&stage, "lobby", &harbor);
+            stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+            stage
+                .root
+                .set_attribute("data-battle-state", "absent")
+                .unwrap();
+            stage.root.set_attribute("data-scene-key", "first").unwrap();
+            stage.root.set_attribute("data-mural", "ready").unwrap();
+            stage.set_art(&super::image_layers(&harbor, "")).unwrap();
+            stage
+                .update_scene_graph(Some(&picture_graph("first", &harbor, &harbor)), None)
+                .unwrap();
+            stage
+                .set_plate(
+                    &PlateView {
+                        state: plate_state,
+                        ..Default::default()
+                    },
+                    "first",
+                    true,
+                )
+                .unwrap();
+            assert!(!stage.root.has_attribute("data-arrival-mural"));
+            assert_eq!(
+                stage.root.get_attribute("data-shot").as_deref(),
+                Some("stage")
+            );
+            stage
+                .set_art(&super::image_layers(&next_place, ""))
+                .unwrap();
+            let graph = picture_graph("first", &next_place, &next_place);
+            stage.update_scene_graph(Some(&graph), None).unwrap();
+            dispatch_loaded_place(&stage);
+            stage.update_scene_graph(Some(&graph), None).unwrap();
+            assert_eq!(
+                stage.root.get_attribute("data-place-picture").as_deref(),
+                Some(next_place.as_str())
+            );
+            assert!(!stage.root.has_attribute("data-arrival-mural"));
+            assert_eq!(
+                stage.root.get_attribute("data-shot").as_deref(),
+                Some("stage")
+            );
+            finish_stage(parent, stage);
+        }
+    }
+
+    #[test]
+    fn an_unavailable_plate_uses_the_prior_place_until_the_current_place_loads() {
+        let (parent, stage) = mounted_stage();
+        let harbor = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let next_place = format!("/gameplay/imagery/{}", "b".repeat(64));
+        load_lobby_picture(&stage, "lobby", &harbor);
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "first").unwrap();
+        stage.root.set_attribute("data-mural", "ready").unwrap();
+        stage.set_art(&super::image_layers(&harbor, "")).unwrap();
+        stage
+            .set_plate(
+                &PlateView {
+                    state: PlateState::Unavailable,
+                    ..Default::default()
+                },
+                "first",
+                true,
+            )
+            .unwrap();
+        assert!(!stage.root.has_attribute("data-arrival-mural"));
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
+        stage
+            .set_art(&super::image_layers(&next_place, ""))
+            .unwrap();
+        dispatch_loaded_place(&stage);
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some(next_place.as_str())
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("establishing")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_superseded_scene_picture_load_cannot_replace_the_current_place() {
+        let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "old").unwrap();
+        stage.set_art(&super::image_layers("/old", "")).unwrap();
+        let old = place_probe(&stage);
+        stage.root.set_attribute("data-scene-key", "new").unwrap();
+        stage.set_art(&super::image_layers("/new", "")).unwrap();
+        dispatch_loaded_place(&stage);
+        old.dispatch_event(&web_sys::Event::new("load").unwrap())
+            .unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-place-picture").as_deref(),
+            Some("/new")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn failed_tv_images_stay_hidden_across_stale_load_events_and_keep_hidden_state() {
+        let (parent, stage) = mounted_stage();
+        let document = stage.root.owner_document().unwrap();
+        for class in [
+            "tv-qr-image",
+            "tv-mural-art",
+            "tv-plate-img",
+            "tv-scene-actor-art",
+            "tv-fig-sprite",
+        ] {
+            let image = document.create_element("img").unwrap();
+            image.set_class_name(class);
+            image.set_attribute("hidden", "").unwrap();
+            stage.root.append_child(&image).unwrap();
+            image
+                .dispatch_event(&web_sys::Event::new("error").unwrap())
+                .unwrap();
+            assert!(image.has_attribute("data-image-failed"));
+            image
+                .dispatch_event(&web_sys::Event::new("load").unwrap())
+                .unwrap();
+            assert!(image.has_attribute("data-image-failed"));
+            assert!(image.has_attribute("hidden"));
+            dispatch_successful_image_load(&image);
+            assert!(!image.has_attribute("data-image-failed"));
+            assert!(image.has_attribute("hidden"));
+        }
+        finish_stage(parent, stage);
     }
 
     #[test]
@@ -5925,6 +6796,11 @@ mod tests {
             .root
             .set_attribute("data-transition", "0")
             .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-previous", "1")
+            .unwrap();
         stage.root.set_attribute("data-mural", "ready").unwrap();
         stage
             .root
@@ -5955,6 +6831,7 @@ mod tests {
             Some("stage")
         );
         assert!(!stage.plate.root.has_attribute("data-transition"));
+        assert!(!stage.plate.root.has_attribute("data-previous"));
         assert_eq!(
             stage.root.get_attribute("data-plate-state").as_deref(),
             Some("pending")
@@ -5968,6 +6845,85 @@ mod tests {
         };
         stage.set_plate(&ready, "new-scene", true).unwrap();
         assert!(stage.root.has_attribute("data-plate-loading"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_failed_plate_for_a_new_scene_in_the_same_place_keeps_figures_over_the_old_plate() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage.same_place.set(true);
+        stage
+            .root
+            .set_attribute("data-scene-key", "new-scene")
+            .unwrap();
+        let replacement = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/missing".to_owned()),
+            ..Default::default()
+        };
+        stage.set_plate(&replacement, "new-scene", true).unwrap();
+        stage.plate.images[1]
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert!(stage.root.has_attribute("data-place-plate-retained"));
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
+        assert!(stage.plate.images[1].has_attribute("data-image-failed"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn a_same_place_scene_waits_for_the_existing_plate_dissolve_before_using_its_fallback() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage.same_place.set(true);
+        stage
+            .root
+            .set_attribute("data-scene-key", "new-scene")
+            .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition", "0")
+            .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition-at", "1000")
+            .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-previous", "1")
+            .unwrap();
+        let replacement = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/missing".to_owned()),
+            ..Default::default()
+        };
+        stage.set_plate(&replacement, "new-scene", true).unwrap();
+        assert!(stage.plate.root.has_attribute("data-transition"));
+        assert!(!stage.root.has_attribute("data-place-plate-retained"));
+        stage.plate_clock_at(2_099.0).unwrap();
+        assert!(stage.plate.root.has_attribute("data-transition"));
+        stage.plate_clock_at(2_100.0).unwrap();
+        assert!(!stage.plate.root.has_attribute("data-transition"));
+        assert!(!stage.plate.root.has_attribute("data-previous"));
+        assert!(stage.root.has_attribute("data-place-plate-retained"));
+        stage.plate.images[1]
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
         finish_stage(parent, stage);
     }
 

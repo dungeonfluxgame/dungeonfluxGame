@@ -34,6 +34,87 @@ pub(super) fn lobby_readiness(ready_seats: usize, seats: usize) -> String {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PlaceOutcome {
+    Ignore,
+    Show { url: String, primary: bool },
+    Retry(String),
+    Keep,
+}
+
+pub(super) struct PlaceAttempt {
+    scene: String,
+    generation: String,
+    candidates: Vec<String>,
+    index: usize,
+    terminal: bool,
+}
+
+impl PlaceAttempt {
+    pub(super) fn new(scene: String, generation: String, candidates: Vec<String>) -> Self {
+        Self {
+            scene,
+            generation,
+            candidates,
+            index: 0,
+            terminal: false,
+        }
+    }
+
+    fn is_current(&self, scene: &str, generation: Option<&str>) -> bool {
+        !self.terminal && self.scene == scene && generation == Some(self.generation.as_str())
+    }
+
+    pub(super) fn loaded(&mut self, scene: &str, generation: Option<&str>) -> PlaceOutcome {
+        if !self.is_current(scene, generation) {
+            return PlaceOutcome::Ignore;
+        }
+        self.terminal = true;
+        match self.candidates.get(self.index) {
+            Some(url) => PlaceOutcome::Show {
+                url: url.clone(),
+                primary: self.index == 0,
+            },
+            None => PlaceOutcome::Ignore,
+        }
+    }
+
+    pub(super) fn failed(
+        &mut self,
+        scene: &str,
+        generation: Option<&str>,
+        has_retained: bool,
+    ) -> PlaceOutcome {
+        if !self.is_current(scene, generation) {
+            return PlaceOutcome::Ignore;
+        }
+        if !has_retained && let Some(url) = self.candidates.get(self.index + 1) {
+            self.index += 1;
+            return PlaceOutcome::Retry(url.clone());
+        }
+        self.terminal = true;
+        PlaceOutcome::Keep
+    }
+}
+
+pub(super) fn place_selection_changed(previous: Option<&[String]>, next: &[String]) -> bool {
+    previous != Some(next)
+}
+
+pub(super) fn show_retained_place(
+    plate_state: Option<&str>,
+    place_loaded: bool,
+    place_from_prior_scene: bool,
+    plate_loaded: bool,
+    explicit_fallback: bool,
+) -> bool {
+    explicit_fallback
+        || (place_loaded
+            && !plate_loaded
+            && (matches!(plate_state, None | Some("none" | "failed"))
+                || (plate_state == Some("unavailable") && place_from_prior_scene)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +194,120 @@ mod tests {
             ".tv-stage[data-place-plate-retained] .tv-plate{z-index:1;opacity:1;visibility:visible"
         ));
         assert!(stage_styles.contains(".tv-scene-graph{position:absolute;z-index:2;"));
+    }
+
+    #[test]
+    fn a_loaded_place_picture_is_not_covered_by_the_plate_wait_gradient() {
+        let styles = include_str!("live_plate.css");
+        let gradient = styles
+            .lines()
+            .find(|line| line.contains("background-image:radial-gradient(ellipse at 50% 42%"))
+            .unwrap();
+        assert_eq!(gradient.matches(":not([data-place-picture])").count(), 3);
+    }
+
+    #[test]
+    fn failed_tv_images_are_hidden_until_a_successful_load() {
+        let styles = include_str!("live_tv.css");
+        assert!(
+            styles.contains(".tv-stage img[data-image-failed]{display:none;visibility:hidden}")
+        );
+    }
+
+    #[test]
+    fn failed_scene_picture_keeps_the_confirmed_previous_picture_without_retry() {
+        let mut attempt = PlaceAttempt::new(
+            "first-scene".into(),
+            "2".into(),
+            vec!["missing".into(), "alternate".into()],
+        );
+        assert_eq!(
+            attempt.failed("first-scene", Some("2"), true),
+            PlaceOutcome::Keep
+        );
+        assert_eq!(
+            attempt.loaded("first-scene", Some("2")),
+            PlaceOutcome::Ignore
+        );
+        assert!(!place_selection_changed(
+            Some(&["missing".into(), "alternate".into()]),
+            &["missing".into(), "alternate".into()]
+        ));
+    }
+
+    #[test]
+    fn without_a_confirmed_picture_a_failed_candidate_can_use_the_next_one() {
+        let mut attempt = PlaceAttempt::new(
+            "first-scene".into(),
+            "2".into(),
+            vec!["missing".into(), "fallback".into()],
+        );
+        assert_eq!(
+            attempt.failed("first-scene", Some("2"), false),
+            PlaceOutcome::Retry("fallback".into())
+        );
+        assert_eq!(
+            attempt.loaded("first-scene", Some("2")),
+            PlaceOutcome::Show {
+                url: "fallback".into(),
+                primary: false
+            }
+        );
+    }
+
+    #[test]
+    fn an_old_scene_or_superseded_generation_cannot_replace_the_current_picture() {
+        let mut attempt = PlaceAttempt::new("scene-a".into(), "1".into(), vec!["old".into()]);
+        assert_eq!(attempt.loaded("scene-b", Some("1")), PlaceOutcome::Ignore);
+        assert_eq!(
+            attempt.failed("scene-a", Some("2"), false),
+            PlaceOutcome::Ignore
+        );
+        assert_eq!(attempt.loaded("scene-a", None), PlaceOutcome::Ignore);
+        assert_eq!(
+            attempt.loaded("scene-a", Some("1")),
+            PlaceOutcome::Show {
+                url: "old".into(),
+                primary: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_missing_or_failed_plate_keeps_a_loaded_place_visible() {
+        for state in [None, Some("none"), Some("failed")] {
+            assert!(show_retained_place(state, true, true, false, false));
+            assert!(!show_retained_place(state, false, true, false, false));
+            assert!(!show_retained_place(state, true, true, true, false));
+        }
+        assert!(!show_retained_place(
+            Some("pending"),
+            true,
+            true,
+            false,
+            false
+        ));
+        assert!(show_retained_place(
+            Some("unavailable"),
+            true,
+            true,
+            false,
+            false
+        ));
+        assert!(!show_retained_place(
+            Some("unavailable"),
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(show_retained_place(
+            Some("pending"),
+            true,
+            true,
+            false,
+            true
+        ));
     }
 
     #[test]

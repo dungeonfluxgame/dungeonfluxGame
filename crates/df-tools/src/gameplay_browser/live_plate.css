@@ -52,7 +52,7 @@
    photograph with an unready set and cut-outs while the caption reading gate holds the plate. */
 .tv-stage[data-tv-mode=scene][data-shot=establishing]:is([data-plate-state=pending],[data-plate-state=ready]) :is(.tv-scene-graph,.tv-fig-body){opacity:0;visibility:hidden;transition:none}
 /* The empty-room asset can be the wrong first frame while this scene's composed plate loads. */
-.tv-stage[data-tv-mode=scene][data-plate-state=pending] .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=ready]:not([data-plate-loaded]) .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=failed]:not([data-plate-loaded]) .tv-scene-set{background-image:radial-gradient(ellipse at 50% 42%,#574c3a 0,#2a2930 48%,#131720 100%)!important}
+.tv-stage[data-tv-mode=scene][data-plate-state=pending]:not([data-place-picture]) .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=ready]:not([data-plate-loaded]):not([data-place-picture]) .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=failed]:not([data-plate-loaded]):not([data-place-picture]) .tv-scene-set{background-image:radial-gradient(ellipse at 50% 42%,#574c3a 0,#2a2930 48%,#131720 100%)!important}
 /* A composed plate includes the cast; retain their nodes as the fallback and bubble anchors. */
 .tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:2;opacity:1;visibility:visible;transition:none}
 .tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden;transition:visibility 0s 1s}

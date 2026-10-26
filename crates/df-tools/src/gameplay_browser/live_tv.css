@@ -3,6 +3,8 @@ body:has(.tv-stage){overflow:hidden}
 .tv-stage{--u:min(1vw,1.7778vh);--gold:#e8cb94;--ivory:#f7efdc;--fs-title:clamp(44px,calc(var(--u)*4.6),230px);--fs-line:clamp(24px,calc(var(--u)*2.05),110px);--fs-name:clamp(24px,calc(var(--u)*1.7),90px);--fs-label:clamp(24px,calc(var(--u)*1.3),64px);--fs-code:clamp(52px,calc(var(--u)*5.6),280px);position:fixed;inset:0;z-index:20;overflow:hidden;background:#05090f;color:var(--ivory);font-family:var(--serif);text-shadow:0 2px 14px #000d}
 .tv-stage *{box-sizing:border-box;min-width:0}
 .tv-stage [hidden]{display:none!important}
+/* Visibility also covers dice images whose inline style sets display:block. */
+.tv-stage img[data-image-failed]{display:none;visibility:hidden}
 .tv-art{position:absolute;inset:0;background-color:#0a1118;background-size:cover;background-position:center 40%}
 .tv-scrim{position:absolute;inset:0;pointer-events:none}
 .tv-stage[data-tv-mode=scene] .tv-scrim{background:linear-gradient(0deg,#03060ef5 0%,#03060edb 30%,#03060e00 62%),linear-gradient(180deg,#03060eb3 0%,#03060e00 28%)}
