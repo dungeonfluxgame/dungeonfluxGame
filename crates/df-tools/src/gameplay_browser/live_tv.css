@@ -49,7 +49,7 @@ body:has(.tv-stage){overflow:hidden}
 .tv-stage[data-tv-mode=lobby] .tv-card[data-ready=true] .tv-member-status::before{content:'✓ '}
 
 .tv-stagebox{grid-row:4;justify-self:center;width:min(100%,calc(var(--u)*62));text-align:center;display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*.4)}
-.tv-narration{margin:0;max-width:58ch;font-size:var(--fs-line);line-height:1.3;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+.tv-narration{margin:0;max-width:58ch;max-height:min(28vh,calc(var(--u)*28));overflow-y:auto;font-size:var(--fs-line);line-height:1.3}
 .tv-stagebox .tv-divider{width:calc(var(--u)*30);max-width:100%;background-position:center}
 .tv-speaker{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*1.6);text-align:left}
 .tv-speaker .tv-portrait{width:calc(var(--u)*8)}
@@ -244,6 +244,17 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
 .tv-stage[data-tv-mode=scene] .tv-bigcard-crest{border:0;box-shadow:none}
 .tv-stage[data-tv-mode=scene] .tv-stagebox{width:min(86vw,calc(var(--u)*88));padding:calc(var(--u)*.45) calc(var(--u)*1.3);background:linear-gradient(0deg,#03060eb8 0%,#03060e78 60%,#03060e00 100%);text-align:center}
 .tv-stage[data-tv-mode=scene] .tv-narration{max-width:52ch;color:#f1efe9;font-family:Georgia,serif;line-height:1.38;text-shadow:0 1px 12px #000}
+
+/* Lobby status stays in sentence case; names and readiness lead beneath the room code. */
+.tv-stage[data-tv-mode=lobby] .tv-roster .tv-gathered{font-size:clamp(24px,calc(var(--u)*2),48px);letter-spacing:normal;text-transform:none}
+.tv-stage[data-tv-mode=lobby] .tv-roster .tv-member-name{font-size:clamp(calc(var(--u)*1.5),calc(var(--seat)*.1),calc(var(--u)*2.3))}
+.tv-stage[data-tv-mode=lobby] .tv-roster .tv-member-status{font-size:clamp(calc(var(--u)*1.1),calc(var(--seat)*.075),calc(var(--u)*1.7))}
+.tv-stage[data-tv-mode=lobby] .tv-title-block .tv-wordmark{height:calc(var(--u)*4.8)}
+.tv-stage[data-tv-mode=lobby] .tv-title-block .tv-wordmark-text{font-size:calc(var(--u)*3.6)}
+.tv-stage[data-tv-mode=lobby] .tv-title-block .tv-title{font-size:calc(var(--u)*3.5)}
+.tv-stage .tv-voice-prompt[data-visible=true]{display:block!important}
+.tv-stage .tv-voice-prompt{cursor:default}
+body:has(.tv-stage[data-sound-opted-out]) .tv-voice-control{opacity:.84!important;visibility:visible!important;animation:none!important}
 
 /* Settled context on reconnect is static, separate from the active subtitle lane. */
 .tv-scene-context{position:absolute;z-index:24;top:auto;right:auto;bottom:15vh;left:12vw;width:76vw;max-height:12vh;overflow:hidden;padding:.45em .8em;background:#03060e9c;color:#e5e3dd;font:400 clamp(20px,1.4vw,30px)/1.4 Georgia,serif;text-align:center;text-shadow:0 1px 8px #000;pointer-events:none}

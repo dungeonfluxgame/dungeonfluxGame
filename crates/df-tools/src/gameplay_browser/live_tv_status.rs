@@ -69,4 +69,44 @@ mod tests {
             "reload does not replay entry"
         );
     }
+
+    #[test]
+    fn caption_scrolls_inside_its_row_above_the_party_bar() {
+        let styles = include_str!("live_tv.css");
+        assert!(styles.contains("grid-template-rows:auto auto minmax(0,1fr) auto auto"));
+        assert!(styles.contains(".tv-stagebox{grid-row:4;"));
+        assert!(styles.contains(".tv-partybar{grid-row:5;"));
+        assert!(styles.contains("max-height:min(28vh,calc(var(--u)*28));overflow-y:auto"));
+        assert!(!styles.contains("-webkit-line-clamp:6"));
+    }
+
+    #[test]
+    fn lobby_readiness_and_hero_cards_outweigh_the_wordmark() {
+        let styles = include_str!("live_tv.css");
+        assert!(styles.contains(".tv-roster .tv-gathered{font-size:"));
+        assert!(styles.contains(".tv-roster .tv-member-name{font-size:"));
+        assert!(styles.contains(".tv-title-block .tv-wordmark{height:calc(var(--u)*4.8)}"));
+    }
+
+    #[test]
+    fn retained_place_plate_sits_under_the_current_scene_graph() {
+        let plate_styles = include_str!("live_plate.css");
+        let stage_styles = include_str!("live_stage.css");
+        assert!(plate_styles.contains(
+            ".tv-stage[data-place-plate-retained] .tv-plate{z-index:1;opacity:1;visibility:visible"
+        ));
+        assert!(stage_styles.contains(".tv-scene-graph{position:absolute;z-index:2;"));
+    }
+
+    #[test]
+    fn sound_opt_out_keeps_only_the_small_corner_control_visible() {
+        let styles = include_str!("live_tv.css");
+        assert!(styles.contains(
+            "body:has(.tv-stage[data-sound-opted-out]) .tv-voice-control{opacity:.84!important;visibility:visible!important;animation:none!important}"
+        ));
+        assert!(
+            styles
+                .contains(".tv-stage .tv-voice-prompt[data-visible=true]{display:block!important}")
+        );
+    }
 }

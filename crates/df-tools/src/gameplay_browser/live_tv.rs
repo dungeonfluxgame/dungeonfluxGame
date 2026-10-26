@@ -355,12 +355,12 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
     }
 }
 
-fn can_retain_plate_for_scene(
-    scene_matches: bool,
-    has_active_plate: bool,
-    plate_loaded: bool,
-) -> bool {
-    scene_matches && has_active_plate && plate_loaded
+fn can_retain_plate_for_scene(has_active_plate: bool, plate_loaded: bool) -> bool {
+    has_active_plate && plate_loaded
+}
+
+fn lobby_readiness(ready_seats: usize, seats: usize) -> String {
+    format!("{ready_seats} of {seats} heroes ready")
 }
 
 fn initial(name: &str) -> String {
@@ -462,9 +462,12 @@ fn mount_sound_gate(document: &Document, stage: &Element) -> Result<SoundGate, J
     stage.set_attribute("data-sound-gate", "")?;
 
     let mut dismiss_listeners = Vec::with_capacity(2);
-    for button in [&start, &skip] {
+    for (button, opted_out) in [(&start, false), (&skip, true)] {
         let (stage, layer) = (stage.clone(), layer.clone());
         let listener = Closure::wrap(Box::new(move |_: Event| {
+            if opted_out {
+                let _marked = stage.set_attribute("data-sound-opted-out", "");
+            }
             let _removed = stage.remove_attribute("data-sound-gate");
             layer.remove();
         }) as Box<dyn FnMut(Event)>);
@@ -495,7 +498,9 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
     let is_scene = stage.get_attribute("data-tv-mode").as_deref() == Some("scene");
     let plate_state =
         PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default());
-    let shot = if is_scene {
+    let shot = if is_scene && stage.has_attribute("data-place-plate-retained") {
+        crate::presentation::Shot::Stage
+    } else if is_scene {
         if stage.has_attribute("data-plate-loaded")
             && stage.get_attribute("data-shot").as_deref() == Some("plate")
         {
@@ -1776,6 +1781,7 @@ fn activate_plate_request_at(
         }
     }
     let _set = stage.set_attribute("data-plate-loaded", "");
+    let _removed = stage.remove_attribute("data-place-plate-retained");
     let _removed = root.remove_attribute("data-loading");
     sync_plate_loading(
         stage,
@@ -2110,7 +2116,7 @@ impl TvStage {
             &roster,
             "div",
             "tv-label tv-gathered",
-            "The party is gathered",
+            "0 of 0 heroes ready",
         )?;
         gathered.set_attribute("hidden", "")?;
         let roster_slot = node(document, &roster, "div", "tv-roster-slot", "")?;
@@ -2131,6 +2137,8 @@ impl TvStage {
         )?;
         let narration = node(document, &caption, "p", "tv-narration", "")?;
         narration.set_attribute("data-voice-role", "narrator")?;
+        narration.set_attribute("tabindex", "0")?;
+        narration.set_attribute("aria-label", "Narration")?;
         // The rules wording is read, never spoken, and looks quieter than the story.
         let rules = node(document, &stagebox, "p", "tv-rules", "")?;
         node(document, &rules, "span", "tv-rules-tag", "Rules")?;
@@ -3324,15 +3332,8 @@ impl TvStage {
         }
         set_hidden(&self.gathered, !lobby)?;
         if lobby {
-            let ready_heroes = if ready_seats == 1 { "hero" } else { "heroes" };
-            let next_step = if gathered {
-                "Any player can begin the adventure from their phone"
-            } else {
-                "Waiting for heroes"
-            };
-            self.gathered.set_text_content(Some(&format!(
-                "{ready_seats} {ready_heroes} ready. {next_step}."
-            )));
+            self.gathered
+                .set_text_content(Some(&lobby_readiness(ready_seats, seats)));
         }
         if newly_ready {
             live_sfx::play(Cue::HeroReady, Duration::ZERO);
@@ -3843,7 +3844,14 @@ impl TvStage {
             self.plate.root.remove_attribute("data-transition")?;
             self.plate.root.remove_attribute("data-transition-at")?;
             *self.plate.deferred.borrow_mut() = None;
-            self.clear_plate(scene_key)?;
+            if can_retain_plate_for_scene(
+                self.plate.root.has_attribute("data-active"),
+                self.root.has_attribute("data-plate-loaded"),
+            ) {
+                self.root.set_attribute("data-place-plate-retained", "")?;
+            } else {
+                self.clear_plate(scene_key)?;
+            }
         }
         let shown = self.apply_plate(plate, scene_key);
         sync_shot(&self.root)?;
@@ -3921,6 +3929,7 @@ impl TvStage {
         self.root.remove_attribute("data-plate-key")?;
         self.root.remove_attribute("data-plate-layout-key")?;
         self.root.remove_attribute("data-plate-loaded")?;
+        self.root.remove_attribute("data-place-plate-retained")?;
         layer.root.remove_attribute("data-loading")?;
         layer.root.remove_attribute("data-active")?;
         sync_plate_loading(&self.root, None, scene_key);
@@ -3988,7 +3997,6 @@ impl TvStage {
         };
         let Some(url) = usable else {
             if can_retain_plate_for_scene(
-                layer.scene.borrow().as_str() == scene_key || self.same_place.get(),
                 layer.root.has_attribute("data-active"),
                 self.root.has_attribute("data-plate-loaded"),
             ) {
@@ -3997,7 +4005,7 @@ impl TvStage {
                 {
                     sync_plate_loading(&self.root, Some(true), scene_key);
                 }
-                self.root.set_attribute("data-plate-state", "ready")?;
+                self.root.set_attribute("data-plate-state", state.name())?;
                 *layer.seen.borrow_mut() = scene_key.to_owned();
                 return Ok(());
             }
@@ -4459,8 +4467,8 @@ mod tests {
     use super::super::rpc;
     use super::{
         PlateState, PlateView, TvStage, can_retain_plate_for_scene, check_display, first_art_asset,
-        is_loopback_join_host, plate_asset_key, plate_loading_visible, roll_intention,
-        scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
+        is_loopback_join_host, lobby_readiness, plate_asset_key, plate_loading_visible,
+        roll_intention, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     use crate::stage_machines::LineState;
     use wasm_bindgen::JsCast;
@@ -5092,11 +5100,11 @@ mod tests {
     }
 
     #[test]
-    fn previous_plate_is_not_retained_across_a_place_change() {
-        assert!(!can_retain_plate_for_scene(false, true, true));
-        assert!(!can_retain_plate_for_scene(true, false, true));
-        assert!(!can_retain_plate_for_scene(true, true, false));
-        assert!(can_retain_plate_for_scene(true, true, true));
+    fn a_loaded_place_plate_remains_available_for_a_new_scene() {
+        assert!(!can_retain_plate_for_scene(false, true));
+        assert!(!can_retain_plate_for_scene(true, false));
+        assert!(can_retain_plate_for_scene(true, true));
+        assert_eq!(lobby_readiness(2, 4), "2 of 4 heroes ready");
     }
 
     #[test]
@@ -5911,8 +5919,9 @@ mod tests {
     }
 
     #[test]
-    fn pending_new_scene_clears_the_previous_plate_even_during_a_dissolve() {
+    fn pending_new_scene_keeps_the_previous_plate_under_the_new_scene_figures() {
         let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
         seed_active_plate(&stage);
         stage.root.set_attribute("data-plate-key", "old").unwrap();
         stage
@@ -5935,15 +5944,27 @@ mod tests {
 
         stage.set_plate(&pending, "new-scene", true).unwrap();
 
-        assert!(!stage.plate.root.has_attribute("data-active"));
-        assert!(!stage.root.has_attribute("data-plate-loaded"));
-        assert!(!stage.root.has_attribute("data-plate-key"));
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        assert_eq!(
+            stage.root.get_attribute("data-plate-key").as_deref(),
+            Some("old")
+        );
+        assert!(stage.root.has_attribute("data-place-plate-retained"));
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("stage")
+        );
         assert!(!stage.plate.root.has_attribute("data-transition"));
         assert_eq!(
             stage.root.get_attribute("data-plate-state").as_deref(),
             Some("pending")
         );
         assert!(stage.root.has_attribute("data-plate-loading"));
+        assert!(stage.root.has_attribute("data-place-plate-retained"));
         let ready = PlateView {
             state: PlateState::Ready,
             url: Some("/gameplay/imagery/old".to_owned()),
@@ -6165,6 +6186,7 @@ mod tests {
             .unwrap();
 
         assert!(!stage.root.has_attribute("data-sound-gate"));
+        assert!(stage.root.has_attribute("data-sound-opted-out"));
         assert!(stage.sound_gate.layer.parent_element().is_none());
         finish_stage(parent, stage);
     }

@@ -11,6 +11,7 @@
 
 .tv-plate{position:absolute;z-index:3;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1s ease,visibility 0s 1s}
 .tv-stage[data-shot=plate] .tv-plate{opacity:1;visibility:visible;transition:opacity 1s ease,visibility 0s}
+.tv-stage[data-place-plate-retained] .tv-plate{z-index:1;opacity:1;visibility:visible;transition:none}
 .tv-stage[data-tv-mode=lobby] .tv-plate{display:none}
 /* A quiet status mark lives in the stage corner while a requested plate is still loading and
    decoding. It is independent of the picture layer, so it remains visible over the establishing

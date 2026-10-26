@@ -36,12 +36,12 @@ const UNLOCK_CLIP: &str =
 const WATCH_MARGIN_MS: u32 = 5_000;
 const WATCH_UNSTARTED_MS: u32 = 15_000;
 const WATCH_UNKNOWN_MS: u32 = 30_000;
-// Sized for a TV seen from across a room: the label never drops below 24px.
+// Sized for a compact corner control that remains easy to point to on a TV.
 const CONTROL_STYLE: &str = "position:fixed;right:2.4vw;top:2.6vh;z-index:40;display:flex;\
-align-items:center;gap:.6em;min-height:2.4em;padding:.45em 1em;border-radius:999px;\
+align-items:center;gap:.6em;min-height:2em;padding:.3em .45em;border-radius:999px;\
 border:1px solid rgba(223,185,116,.55);background:rgba(8,15,23,.78);color:#efe6ce;\
-font:clamp(24px,1.35vw,34px) \"Iowan Old Style\",\"Palatino Linotype\",Palatino,Georgia,serif;\
-letter-spacing:.03em;cursor:pointer;opacity:.92";
+font:clamp(18px,1vw,24px) \"Iowan Old Style\",\"Palatino Linotype\",Palatino,Georgia,serif;\
+letter-spacing:.03em;cursor:pointer;opacity:.84";
 const ICON_ATTRIBUTES: &str = "viewBox=\"0 0 24 24\" width=\"1.1em\" height=\"1.1em\" aria-hidden=\"true\" \
 fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"";
 const SPEAKER_PATHS: &str = "<path d=\"M11 5 6 9H3v6h3l5 4z\"/>";
@@ -71,6 +71,7 @@ struct Director {
     audio: HtmlAudioElement,
     control: Element,
     prompt: Element,
+    playback_failed: bool,
     icon: Element,
     label: Element,
     switch: SoundSwitch,
@@ -182,6 +183,10 @@ fn insert_fight_urls(
     urls.insert(voice.key(), line_urls);
 }
 
+fn voice_prompt_visibility(playback_failed: bool) -> &'static str {
+    if playback_failed { "true" } else { "false" }
+}
+
 impl Director {
     fn sound(&self) -> Sound {
         self.switch.sound()
@@ -190,18 +195,14 @@ impl Director {
     fn render_control(&self) {
         let sound = self.sound();
         let (state, label, paths, name) = match sound {
-            Sound::Locked => ("locked", "Enable sound", WAVE_PATHS, "Enable sound"),
+            Sound::Locked => ("locked", "", WAVE_PATHS, "Enable sound"),
             Sound::On => ("on", "", WAVE_PATHS, "Mute narration"),
             Sound::Muted => ("muted", "", MUTE_PATHS, "Unmute narration"),
         };
         let _marked = self.control.set_attribute("data-voice-state", state);
         let _prompt = self.prompt.set_attribute(
             "data-visible",
-            if sound == Sound::Locked {
-                "true"
-            } else {
-                "false"
-            },
+            voice_prompt_visibility(self.playback_failed),
         );
         let _stalled = self
             .control
@@ -348,10 +349,12 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     control.set_attribute("type", "button")?;
     control.set_attribute("class", "tv-voice-control")?;
     control.set_attribute("style", CONTROL_STYLE)?;
-    let prompt = document.create_element("button")?;
-    prompt.set_attribute("type", "button")?;
+    let prompt = document.create_element("div")?;
     prompt.set_attribute("class", "tv-voice-prompt")?;
-    prompt.set_text_content(Some("Sound is off. Press here to turn it on"));
+    prompt.set_attribute("role", "status")?;
+    prompt.set_text_content(Some(
+        "Sound could not play. Use the sound control to try again.",
+    ));
 
     let icon = node(document, &control, "span", "tv-voice-icon", "")?;
     let label = node(document, &control, "span", "tv-voice-label", "")?;
@@ -359,6 +362,7 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
         audio: audio.clone(),
         control: control.clone(),
         prompt: prompt.clone(),
+        playback_failed: false,
         icon,
         label,
         switch: SoundSwitch::new(),
@@ -377,7 +381,6 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     listen(&shared, audio.as_ref(), "ended", on_ended)?;
     listen(&shared, audio.as_ref(), "error", on_error)?;
     listen(&shared, control.as_ref(), "click", on_control)?;
-    listen(&shared, prompt.as_ref(), "click", on_control)?;
     listen(&shared, document.as_ref(), "pointerdown", on_gesture)?;
     listen(&shared, document.as_ref(), "keydown", on_gesture)?;
     listen(&shared, document.as_ref(), "pointermove", on_pointer_move)?;
@@ -456,7 +459,8 @@ fn now_ms() -> u64 {
 /// Audio was just unlocked by a gesture: play the unlock clip inside it.
 fn start_unlocked(shared: &Shared) {
     {
-        let state = shared.borrow();
+        let mut state = shared.borrow_mut();
+        state.playback_failed = false;
         state.render_control();
         state.audio.set_src(UNLOCK_CLIP);
         // Playing inside the gesture is what unlocks the element; a browser that refuses
@@ -514,6 +518,9 @@ pub(super) fn failure_diagnostic(source: &'static str, reason: &'static str) {
 fn mark_media_event(shared: &Shared, event: &str, id: Option<LineId>) {
     if matches!(event, "fetch-error" | "media-error") {
         failure_diagnostic("voice", "failed");
+        let mut state = shared.borrow_mut();
+        state.playback_failed = true;
+        state.render_control();
     }
     let value = id.map_or_else(|| event.to_owned(), |id| format!("{event}:{id}"));
     let _marked = shared
@@ -661,6 +668,7 @@ fn watch_fired(shared: &Shared, id: LineId, watch: u64) {
         if overran {
             let _paused = state.audio.pause();
             state.stalls += 1;
+            state.playback_failed = true;
             state.render_control();
             state.current.take()
         } else {
@@ -725,10 +733,11 @@ fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
         }
         // Only a policy block before the first audible clip re-locks the switch.
         let relocked = blocked && state.plays_started == 0;
+        state.playback_failed = true;
         if relocked {
             state.switch.refused();
-            state.render_control();
         }
+        state.render_control();
         (state.current.take(), relocked)
     };
     if let Some(current) = released {
@@ -743,6 +752,8 @@ fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
 fn on_playing(shared: &Shared, _event: &Event) {
     let reported = {
         let mut state = shared.borrow_mut();
+        state.playback_failed = false;
+        state.render_control();
         let url = state.audio.current_src();
         let seconds = state.audio.duration();
         let started = match state.current.as_mut() {
@@ -885,4 +896,15 @@ async fn fetch_clip(url: &str, presentation_id: LineId) -> Result<(String, usize
     options.set_type("audio/mpeg");
     let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&bytes), &options)?;
     Ok((Url::create_object_url_with_blob(&blob)?, 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::voice_prompt_visibility;
+
+    #[test]
+    fn sound_opt_out_hides_the_nudge_until_requested_playback_fails() {
+        assert_eq!(voice_prompt_visibility(false), "false");
+        assert_eq!(voice_prompt_visibility(true), "true");
+    }
 }
