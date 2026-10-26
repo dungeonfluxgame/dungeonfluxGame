@@ -181,7 +181,7 @@ async fn finance_maintenance(
         .dbname(&database.name)
         .user(&database.user)
         .password(password.trim_end_matches(['\r', '\n']))
-        .options(&format!(
+        .options(format!(
             "-c statement_timeout={}",
             database.statement_timeout_ms
         ));

@@ -1576,7 +1576,6 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
                         ..Default::default()
                     }),
                 )),
-                ..Default::default()
             };
             let record = table
                 .service

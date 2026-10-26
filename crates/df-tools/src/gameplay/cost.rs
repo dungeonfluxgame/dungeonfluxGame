@@ -1733,6 +1733,13 @@ pub(in crate::gameplay) struct BilledRoute {
     pub(in crate::gameplay) provider: Provider,
     pub(in crate::gameplay) model: &'static str,
     pub(in crate::gameplay) categories: &'static [Category],
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the cost-metering route tests; settlement reads categories"
+        )
+    )]
     pub(in crate::gameplay) metering: Metering,
 }
 

@@ -550,7 +550,7 @@ fn claim_and_renew_project_the_fence_and_lease_into_the_game_session_and_a_missi
         )
         .await;
         assert_eq!(
-            sqlstate(&failed.err().expect("mismatch")).as_deref(),
+            sqlstate(&failed.expect_err("mismatch")).as_deref(),
             Some("DF004")
         );
         let lease_after: f64 = client
@@ -1034,7 +1034,7 @@ fn the_runtime_role_cannot_execute_record_money_state() {
         )
         .await;
         assert_eq!(
-            sqlstate(&refused.err().expect("refused")).as_deref(),
+            sqlstate(&refused.expect_err("refused")).as_deref(),
             Some("42501")
         );
         for role in ["df_control", "df_runner", "df_egress"] {

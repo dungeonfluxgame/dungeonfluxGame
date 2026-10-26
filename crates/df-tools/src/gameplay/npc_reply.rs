@@ -2180,18 +2180,6 @@ impl NpcVoice {
         (self.storyteller.as_ref(), &self.approach_model)
     }
 
-    #[cfg(test)]
-    pub(super) async fn resolve_addressee(
-        &self,
-        words: &str,
-        cast: &[rpc::SceneActor],
-        focus: &str,
-    ) -> super::npc_target::Decision {
-        self.approach_model
-            .resolve_addressee(words, cast, focus)
-            .await
-    }
-
     /// An unfocused public place still has listeners. Resolve roles and descriptions against
     /// its canonical people, and let Jev choose who would answer an unaddressed spoken line.
     pub(super) async fn resolve_scene_listener(
@@ -2355,18 +2343,6 @@ impl NpcVoice {
             &local_lore::Names { heroes, game_state },
             &|_: &str| false,
         )
-    }
-
-    #[cfg(test)]
-    pub(super) async fn classify_input(
-        &self,
-        words: &str,
-        public_scene: &str,
-        available_things: &[String],
-    ) -> super::approach_model::LineReading {
-        self.approach_model
-            .classify_input(words, public_scene, available_things)
-            .await
     }
 
     /// A voice that never answers.

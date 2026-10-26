@@ -996,6 +996,10 @@ enum Job {
     },
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "short-lived completion message; boxing the plate variant would add a hop on every finished render"
+)]
 enum Done {
     Resource(Box<resources::Completed>),
     KillShot {

@@ -18,8 +18,12 @@ type RoomResources<'a> = (
 
 #[path = "mural.rs"]
 mod mural;
+// Test builds already load this file as crate::live_art::mural_view; load it once per build.
+#[cfg(not(test))]
 #[path = "mural_view.rs"]
 mod mural_view;
+#[cfg(test)]
+use crate::live_art::mural_view;
 
 const ROOM_RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 

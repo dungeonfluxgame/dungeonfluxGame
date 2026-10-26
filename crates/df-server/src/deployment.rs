@@ -1,16 +1,11 @@
 //! Initial deployment ownership policy; it does not construct server runtime services.
 use std::path::{Component, Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub(crate) enum DeploymentMode {
+    #[default]
     SingleNode,
     MultiNode,
-}
-
-impl Default for DeploymentMode {
-    fn default() -> Self {
-        Self::SingleNode
-    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

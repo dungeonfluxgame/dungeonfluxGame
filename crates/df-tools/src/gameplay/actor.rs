@@ -1437,6 +1437,10 @@ pub(super) fn record_audit_diagnostic(
     span.finish_audit_record();
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one audit line with one field per argument"
+)]
 pub(super) fn record_enemy_turn(
     actor: &str,
     operation: &str,

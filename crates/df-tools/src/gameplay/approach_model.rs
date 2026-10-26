@@ -461,6 +461,10 @@ impl ApproachModel {
     /// Classifies a completed NPC line into a closed event proposal.  Jev sees canonical item
     /// IDs and the current revision, while the session/location owner remains responsible for
     /// validating and committing any resulting transfer, reveal, or trade.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Jev classification inputs are the scene ids the owner validates"
+    )]
     pub(super) async fn classify_npc_reply_event(
         &self,
         actor_id: &str,
@@ -489,6 +493,10 @@ impl ApproachModel {
     /// consent for the seated hero, for example with
     /// `SocialLedger::record_try_on_consent(member, owner_dossier, &consent.item_id)`.
     #[allow(dead_code)] // Wired by the dialogue/actor lane per M3 request.md; covered by tests.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Jev classification inputs are the scene ids the owner validates"
+    )]
     pub(super) async fn classify_npc_reply_event_with_consent(
         &self,
         actor_id: &str,
@@ -913,6 +921,10 @@ impl ApproachModel {
     }
 
     /// Asks Jev to interpret one perceived moment for this particular character and relationship.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one perceived moment needs its character, relationship and scene inputs"
+    )]
     pub(super) async fn appraise(
         &self,
         dossier: &Dossier,

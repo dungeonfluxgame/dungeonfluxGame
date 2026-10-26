@@ -747,7 +747,7 @@ async fn the_table_tap_captures_public_lines_as_they_are_pushed_and_retires_a_re
     assert!(
         events
             .iter()
-            .all(|e| e.source == "table_log" && e.rebuildable == false)
+            .all(|e| e.source == "table_log" && !e.rebuildable)
     );
     assert_eq!(events[0].text, "Brynn: I want the warehouse key.");
     assert_eq!(events[0].entities.hero, vec!["brynn".to_owned()]);

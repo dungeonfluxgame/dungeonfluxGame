@@ -63,7 +63,7 @@ impl FakeEndpoint {
                 stop.clone(),
             );
             thread::spawn(move || {
-                let mut script = script.into_iter();
+                let mut script = script.into_iter().peekable();
                 while !stop.load(Ordering::SeqCst) {
                     let Ok((mut socket, _)) = listener.accept() else {
                         thread::sleep(Duration::from_millis(5));
@@ -82,7 +82,17 @@ impl FakeEndpoint {
                         bodies.lock().unwrap().push(body.clone());
                         heads.lock().unwrap().push(head);
                     }
-                    let scripted = script.next();
+                    // A judgement takes a scripted reply only when the script's next reply is a judgement
+                    // answer; otherwise it is answered as clear so content replies stay in order.
+                    let scripted_judgement = matches!(
+                        script.peek(),
+                        Some(Reply::Output(slots)) if slots.get("decision").is_some()
+                    );
+                    let scripted = if is_judgement && !scripted_judgement {
+                        None
+                    } else {
+                        script.next()
+                    };
                     match scripted.or_else(|| {
                         is_judgement.then(|| {
                             Reply::Output(json!({
@@ -146,8 +156,13 @@ impl FakeEndpoint {
 impl Drop for FakeEndpoint {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+        // A panicked endpoint thread already failed its test; panicking again while unwinding aborts
+        // the whole test binary.
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+            && !thread::panicking()
+        {
+            panic!("fake endpoint thread panicked");
         }
     }
 }

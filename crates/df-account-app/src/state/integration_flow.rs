@@ -79,6 +79,10 @@ pub struct SharingScreen {
     pub submit: Submit,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one screen value per page; boxing would add a hop on every render"
+)]
 pub enum IntegrationScreen {
     Tokens(TokensScreen),
     Share(SharingScreen),

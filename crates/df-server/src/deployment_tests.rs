@@ -180,12 +180,13 @@ fn each_telemetry_root_rejects_overlap_with_every_other_authority() {
         }
     }
 
-    for (first, second, first_owner, second_owner) in [(
-        rooted("/srv/telemetry/same"),
-        rooted("/srv/telemetry/same"),
-        StorageRoot::TelemetryDatabase,
-        StorageRoot::TelemetrySpool,
-    )] {
+    {
+        let (first, second, first_owner, second_owner) = (
+            rooted("/srv/telemetry/same"),
+            rooted("/srv/telemetry/same"),
+            StorageRoot::TelemetryDatabase,
+            StorageRoot::TelemetrySpool,
+        );
         assert_eq!(
             roots(first, second, rooted("/srv/other-segments"))
                 .validate_for(&policy, other_roots()),

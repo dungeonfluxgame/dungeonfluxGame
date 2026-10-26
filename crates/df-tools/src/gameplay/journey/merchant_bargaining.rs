@@ -1496,8 +1496,7 @@ fn amount_candidates_cp(words: &str, quantity_tokens: &BTreeSet<String>) -> Vec<
         }
         let Some(multiplier) = explicit
             .iter()
-            .filter(|(unit_index, _, _)| *unit_index < index)
-            .next_back()
+            .rfind(|(unit_index, _, _)| *unit_index < index)
             .map(|(_, multiplier, _)| *multiplier)
         else {
             continue;

@@ -672,11 +672,14 @@ fn mean_difference(left: &[u8], right: &[u8]) -> f64 {
         / left.len() as f64
 }
 
+/// Contact, return-to-guard and settle times of a decoded clip in milliseconds, when the clip kind has them.
+type ClipMeasures = (Option<u64>, Option<u64>, Option<u64>);
+
 fn measure_motion(
     decoded: &[u8],
     fps: f64,
     kind: ClipKind,
-) -> Result<(Option<u64>, Option<u64>, Option<u64>), ResourceFailure> {
+) -> Result<ClipMeasures, ResourceFailure> {
     if !fps.is_finite()
         || fps <= 0.0
         || decoded.len() < SAMPLE_PIXELS * 2

@@ -483,10 +483,10 @@ impl WorkerHandle {
     pub(crate) async fn shutdown(mut self) {
         if let Some(task) = self.0.take() {
             task.abort();
-            if let Err(error) = task.await {
-                if !error.is_cancelled() {
-                    audit("HOSTED support_ingest status=shutdown_failed".into());
-                }
+            if let Err(error) = task.await
+                && !error.is_cancelled()
+            {
+                audit("HOSTED support_ingest status=shutdown_failed".into());
             }
         }
     }

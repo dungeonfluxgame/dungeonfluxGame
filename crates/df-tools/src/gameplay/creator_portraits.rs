@@ -2040,9 +2040,29 @@ mod catalog_tests {
         let mut portraits = Portraits::disabled();
         portraits.imagery = Some(creator.imagery.clone());
         let content_key = ready_draft(&portraits, &creator, "draft-a", [1; 32], [0x11; 32]).await;
+        // Both routes get a valid seat grant, so a 404 below means the draft is not public, not a missing grant.
+        let seat = [0x22; 32];
         let request = |key: &str| {
+            let expiry = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 60;
+            let grant = super::super::media_grant::sign(
+                key,
+                super::super::media_grant::Audience::Imagery,
+                super::super::media_grant::PrincipalAudience::Seat,
+                &seat,
+                expiry,
+            )
+            .unwrap();
+            let bearer: String = seat.iter().map(|byte| format!("{byte:02x}")).collect();
             Request::builder()
-                .uri(format!("/gameplay/imagery/{key}"))
+                .uri(format!("/gameplay/imagery/{key}?g={grant}"))
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {bearer}"),
+                )
                 .body(Body::empty())
                 .unwrap()
         };

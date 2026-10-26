@@ -161,6 +161,10 @@ pub(super) fn setting_on(listen: SocketAddr) -> Result<bool, io::Error> {
 /// explicit setting, writes a fresh control file to
 /// `development/runs/<database>/dev-control-token` and returns the routes.
 /// With the setting off, returns no routes and touches nothing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "development routes are assembled from each service handle"
+)]
 pub(super) fn setup(
     service: super::Service,
     display_credential: [u8; 32],

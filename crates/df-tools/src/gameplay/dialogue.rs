@@ -6390,13 +6390,12 @@ impl Service {
                     })
                 })
         });
-        if !target.present || recorded_stall {
-            if let Some(response) = self
+        if (!target.present || recorded_stall)
+            && let Some(response) = self
                 .local_reference_call(credential, request, scene, false)
                 .await?
-            {
-                return Ok(response);
-            }
+        {
+            return Ok(response);
         }
         if let Some(person_id) =
             super::investigation::fallen_search_target(current.state(), scene, &target)

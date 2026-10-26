@@ -406,6 +406,10 @@ fn item_card_matches(card: &rpc::SceneItemCard, item: &Item) -> bool {
             || card.picture_description == item.thing.picture_description)
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one queued job per plate; the bake variant is moved once into its worker"
+)]
 pub(super) enum Job {
     Bake {
         scene: String,

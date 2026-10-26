@@ -221,7 +221,7 @@ impl PostgresRecoveryStore {
             .dbname(&database.name)
             .user(&database.user)
             .password(password)
-            .options(&format!(
+            .options(format!(
                 "-c statement_timeout={}",
                 database.statement_timeout_ms
             ));

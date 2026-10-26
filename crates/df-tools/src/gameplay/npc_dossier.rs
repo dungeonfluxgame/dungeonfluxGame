@@ -104,7 +104,6 @@ const MAXIMUM_PROFILE_TELLS: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum EmotionalProfileFailure {
-    InvalidShape,
     InvalidGrounding,
     InvalidLength,
     AdultOnly,

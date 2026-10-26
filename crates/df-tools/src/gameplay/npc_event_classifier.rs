@@ -357,6 +357,10 @@ pub(super) fn choice_labels(items: &[(String, String)]) -> Vec<String> {
 }
 
 /// Parses and validates the closed Jev choice against the scene's current canonical IDs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validates the Jev choice against each canonical id set of the scene"
+)]
 pub(super) fn proposal(
     choice: &str,
     actor_id: &str,

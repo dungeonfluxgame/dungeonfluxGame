@@ -8,8 +8,20 @@ use df_types::{AccountId, CheckoutId, OperationId};
 
 use crate::{config::Profile, database::Connection, finance::Finance};
 
+#[allow(
+    dead_code,
+    reason = "PayPal checkout is built and tested; the runtime mounts it when PayPal top-up is enabled"
+)]
 mod paypal;
+#[allow(
+    dead_code,
+    reason = "PayPal checkout is built and tested; the runtime mounts it when PayPal top-up is enabled"
+)]
 mod paypal_provider;
+#[allow(
+    dead_code,
+    reason = "PayPal checkout is built and tested; the runtime mounts it when PayPal top-up is enabled"
+)]
 mod paypal_settings;
 mod paypal_webhook;
 mod provider;
@@ -75,6 +87,10 @@ impl Checkout {
         })
     }
 
+    #[allow(
+        dead_code,
+        reason = "PayPal checkout is built and tested; the runtime mounts it when PayPal top-up is enabled"
+    )]
     pub(crate) fn with_paypal(
         mut self,
         connection: Connection,

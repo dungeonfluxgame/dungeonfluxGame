@@ -1210,6 +1210,13 @@ enum Job {
         spec: Box<ShotSpec>,
         heroes: Vec<u8>,
         /// The health variants (already made and cached) of hurt heroes, by art number.
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "kept on the job for the health-variant plate tests"
+            )
+        )]
         faces: Vec<(u8, ImageKey)>,
         /// A plate for a scene that may come next, not the one on screen.
         ahead: bool,
@@ -4578,7 +4585,6 @@ impl Shared {
                     );
                     drop(book);
                     self.wake();
-                    return;
                 }
             }
         }

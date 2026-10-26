@@ -113,6 +113,7 @@ use super::startup_configuration::{
 
 /// Words for a medium other than photography. No image or video prompt names one, even to forbid
 /// it: naming another medium steers the model toward it (owner, 2026-10-17).
+#[cfg(test)]
 pub(super) const NON_PHOTOGRAPHIC_WORDS: &[&str] = &[
     "painting",
     "painted",

@@ -174,7 +174,7 @@ impl StoryMemory {
     }
 
     /// A `RESOURCE <state> kind=<kind> ...` line in the hub's own format.
-    pub(in crate::gameplay) fn resource_line(&self, line: ResourceLine<'_>) {
+    fn resource_line(&self, line: ResourceLine<'_>) {
         let key: String = line.key.chars().take(32).collect();
         super::super::actor::record_audit_line(
             "gameplay.resource",
@@ -237,7 +237,7 @@ impl StoryMemory {
             .await
             .ok()
             .flatten()
-            .map(|ids| event_set_hash(entity.as_str(), &scope.audience.dossier_tier(), &ids));
+            .map(|ids| event_set_hash(entity.as_str(), scope.audience.dossier_tier(), &ids));
         EntityView {
             entity,
             events,

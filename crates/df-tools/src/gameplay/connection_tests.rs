@@ -15,6 +15,10 @@ use super::{PageState, socket};
 // stream/deadline signals instead of browser timers or a gameplay database.
 #[path = "../gameplay_browser/live_tv_status.rs"]
 mod live_tv;
+#[expect(
+    clippy::duplicate_mod,
+    reason = "native tests run the browser delivery policy; music_score loads the same file for its own tests"
+)]
 #[path = "../gameplay_browser/view_delivery.rs"]
 mod view_delivery;
 

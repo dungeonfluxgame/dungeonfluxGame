@@ -90,9 +90,12 @@ pub(in crate::gameplay) enum ResourceKind {
     PlateSegments,
     /// Who and where everyone is in a scene plate (identity, facing, layout): derived from the
     /// plate's segments and the vision judge, kept as a note beside the cached plate.
-    #[expect(
-        dead_code,
-        reason = "Planned Scene plates service caller (planning/asset-engine.md)."
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Planned Scene plates service caller (planning/asset-engine.md)."
+        )
     )]
     PlateStaging,
     /// A generated 3D splat world for a place.

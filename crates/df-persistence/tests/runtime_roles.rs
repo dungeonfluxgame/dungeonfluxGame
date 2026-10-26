@@ -26,7 +26,7 @@ fn the_runtime_reaches_the_directory_only_through_its_functions() {
         ] {
             let refused = as_runtime(&client, &placement.token, sql, &[]).await;
             assert_eq!(
-                sqlstate(&refused.err().expect(sql)).as_deref(),
+                sqlstate(&refused.expect_err(sql)).as_deref(),
                 Some("42501"),
                 "{sql}"
             );
@@ -42,7 +42,7 @@ fn the_runtime_reaches_the_directory_only_through_its_functions() {
         ] {
             let refused = as_role(&client, role, sql, &[]).await;
             assert_eq!(
-                sqlstate(&refused.err().expect(sql)).as_deref(),
+                sqlstate(&refused.expect_err(sql)).as_deref(),
                 Some("42501"),
                 "{role}: {sql}"
             );
@@ -135,7 +135,7 @@ fn a_runtime_cannot_write_a_game_row_for_another_campaigns_session() {
         )
         .await;
         assert_eq!(
-            sqlstate(&foreign.err().expect("refused")).as_deref(),
+            sqlstate(&foreign.expect_err("refused")).as_deref(),
             Some("42501")
         );
         let own = as_runtime(
@@ -300,7 +300,7 @@ fn a_runtime_cannot_rewrite_its_own_fence_or_lease_but_can_advance_the_sequence(
         ] {
             let refused = as_runtime(&client, &first.token, sql, &[]).await;
             assert_eq!(
-                sqlstate(&refused.err().expect(sql)).as_deref(),
+                sqlstate(&refused.expect_err(sql)).as_deref(),
                 Some("42501"),
                 "{sql}"
             );
@@ -386,7 +386,7 @@ fn a_runtime_reads_only_the_table_sessions_and_segments_of_its_own_campaign() {
         )
         .await;
         assert_eq!(
-            sqlstate(&written.err().expect("read only")).as_deref(),
+            sqlstate(&written.expect_err("read only")).as_deref(),
             Some("42501")
         );
         scratch.finish().await;
@@ -426,7 +426,7 @@ fn story_rows_are_scoped_to_the_leased_campaign() {
             .expect("own campaign");
         let cross = add_story_event(&client, &first.token, &second_table, "three").await;
         assert_eq!(
-            sqlstate(&cross.err().expect("refused")).as_deref(),
+            sqlstate(&cross.expect_err("refused")).as_deref(),
             Some("42501")
         );
         let visible = as_runtime(
@@ -803,7 +803,7 @@ fn a_dispatcher_without_a_live_registration_claims_nothing() {
             .await
             .expect("request");
         let claimed = as_dispatcher(&client, &"ee".repeat(32), CLAIM_REFETCH, &[&attempt]).await;
-        let refused = claimed.err().expect("an unknown token cannot take a claim");
+        let refused = claimed.expect_err("an unknown token cannot take a claim");
         assert_eq!(sqlstate(&refused).as_deref(), Some("42501"));
         let held: i64 = client
             .query_one("SELECT count(*) FROM df_runtime.refetch_requests WHERE claimed_by_instance IS NOT NULL", &[])

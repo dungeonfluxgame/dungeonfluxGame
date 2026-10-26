@@ -3,7 +3,15 @@ use df_protocol::common as rpc;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "read by the browser storage adapter on wasm32")
+)]
 pub(super) const DRAFT_KEY: &str = "df.creator.draft.v1";
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "read by the browser storage adapter on wasm32")
+)]
 pub(super) const LIBRARY_KEY: &str = "df.library.key.v1";
 pub(super) const ORIGIN_KEY: &str = "df.library.origin.v1";
 const MAX_DRAFT_BYTES: usize = 96 * 1024;
