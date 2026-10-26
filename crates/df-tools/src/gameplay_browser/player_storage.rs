@@ -1,7 +1,8 @@
 //! Browser seat identity survives a closed tab; the server validates every restored credential.
 use df_protocol::common as rpc;
 
-const VERSION: &str = "v2";
+const VERSION: &str = "v3";
+pub(super) const MAXIMUM_AGE_MS: u64 = 24 * 60 * 60 * 1_000;
 
 pub(super) struct SavedPlayer {
     pub(super) credential: String,
@@ -10,14 +11,16 @@ pub(super) struct SavedPlayer {
     pub(super) binding: rpc::ClientBindingId,
     /// The server run the seat was joined in, as that run published it ("" when it did not).
     pub(super) run_identity: String,
+    pub(super) hero_name: String,
+    pub(super) saved_at_ms: u64,
 }
 
 fn encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn decode_id(text: &str) -> Option<Vec<u8>> {
-    if text.len() != 32 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     text.as_bytes()
@@ -37,8 +40,11 @@ pub(super) fn parse(text: &str) -> Option<SavedPlayer> {
         parts.next()?,
     );
     // The server accepts only lowercase hexadecimal, 64 characters.
+    let saved_at_ms = parts.next()?.parse().ok()?;
+    let hero_name = String::from_utf8(decode_hex(parts.next()?)?).ok()?;
     if parts.next().is_some()
         || version != VERSION
+        || hero_name.len() > 256
         || credential.len() != 64
         || !credential
             .bytes()
@@ -49,15 +55,17 @@ pub(super) fn parse(text: &str) -> Option<SavedPlayer> {
     Some(SavedPlayer {
         credential: credential.to_owned(),
         session: rpc::SessionId {
-            value: Some(decode_id(session)?),
+            value: Some(decode_hex(session).filter(|bytes| bytes.len() == 16)?),
         },
         run: rpc::RunId {
-            value: Some(decode_id(run)?),
+            value: Some(decode_hex(run).filter(|bytes| bytes.len() == 16)?),
         },
         binding: rpc::ClientBindingId {
-            value: Some(decode_id(binding)?),
+            value: Some(decode_hex(binding).filter(|bytes| bytes.len() == 16)?),
         },
         run_identity: run_identity.to_owned(),
+        hero_name,
+        saved_at_ms,
     })
 }
 
@@ -76,10 +84,11 @@ pub(super) fn load<S: Storage>(
     persistent: &S,
     tab: &S,
     room_code: &str,
+    now_ms: u64,
 ) -> Result<Option<SavedPlayer>, S::Error> {
     let key = key(room_code);
     if let Some(text) = tab.get(&key)? {
-        if let Some(saved) = parse(&text) {
+        if let Some(saved) = parse(&text).filter(|saved| is_current(saved, now_ms)) {
             persistent.set(&key, &text)?;
             return Ok(Some(saved));
         }
@@ -88,7 +97,7 @@ pub(super) fn load<S: Storage>(
     let Some(text) = persistent.get(&key)? else {
         return Ok(None);
     };
-    let saved = parse(&text);
+    let saved = parse(&text).filter(|saved| is_current(saved, now_ms));
     if saved.is_some() {
         tab.set(&key, &text)?;
     } else {
@@ -105,12 +114,14 @@ pub(super) fn save<S: Storage>(
 ) -> Result<(), S::Error> {
     let id = |value: &Option<Vec<u8>>| encode(value.as_deref().unwrap_or_default());
     let encoded = format!(
-        "{VERSION}.{}.{}.{}.{}.{}",
+        "{VERSION}.{}.{}.{}.{}.{}.{}.{}",
         saved.credential,
         id(&saved.session.value),
         id(&saved.run.value),
         id(&saved.binding.value),
-        saved.run_identity
+        saved.run_identity,
+        saved.saved_at_ms,
+        encode(saved.hero_name.as_bytes())
     );
     persistent.set(&key(room_code), &encoded)?;
     tab.set(&key(room_code), &encoded)
@@ -123,6 +134,50 @@ pub(super) fn clear<S: Storage>(persistent: &S, tab: &S, room_code: &str) -> Res
 
 pub(super) fn is_from_run(saved: &SavedPlayer, served_run: &str) -> bool {
     saved.run_identity == served_run
+}
+
+pub(super) fn is_current(saved: &SavedPlayer, now_ms: u64) -> bool {
+    now_ms >= saved.saved_at_ms && now_ms - saved.saved_at_ms < MAXIMUM_AGE_MS
+}
+
+pub(super) fn clear_on_run_end<S: Storage>(
+    persistent: &S,
+    tab: &S,
+    room_code: &str,
+    run_ended: bool,
+) -> Result<(), S::Error> {
+    if run_ended {
+        clear(persistent, tab, room_code)?;
+    }
+    Ok(())
+}
+
+pub(super) fn set_hero_name<S: Storage>(
+    persistent: &S,
+    tab: &S,
+    room_code: &str,
+    saved: &mut SavedPlayer,
+    hero_name: &str,
+) -> Result<(), S::Error> {
+    let name = hero_name.trim();
+    if !name.is_empty() && name.len() <= 256 && saved.hero_name != name {
+        saved.hero_name = name.to_owned();
+        let key = key(room_code);
+        let id = |value: &Option<Vec<u8>>| encode(value.as_deref().unwrap_or_default());
+        let encoded = format!(
+            "{VERSION}.{}.{}.{}.{}.{}.{}.{}",
+            saved.credential,
+            id(&saved.session.value),
+            id(&saved.run.value),
+            id(&saved.binding.value),
+            saved.run_identity,
+            saved.saved_at_ms,
+            encode(saved.hero_name.as_bytes())
+        );
+        persistent.set(&key, &encoded)?;
+        tab.set(&key, &encoded)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -160,6 +215,8 @@ mod tests {
                 value: Some(vec![3; 16]),
             },
             run_identity: "current-run".to_owned(),
+            hero_name: "Vela".to_owned(),
+            saved_at_ms: 1_000,
         }
     }
     #[test]
@@ -169,11 +226,14 @@ mod tests {
         let original = seat();
         save(&persistent, &tab, "ROOM", &original).unwrap();
         let fresh_tab = MemoryStorage::default();
-        let restored = load(&persistent, &fresh_tab, "ROOM").unwrap().unwrap();
+        let restored = load(&persistent, &fresh_tab, "ROOM", 1_001)
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.credential, original.credential);
         assert_eq!(restored.session, original.session);
         assert_eq!(restored.run, original.run);
         assert_eq!(restored.binding, original.binding);
+        assert_eq!(restored.hero_name, "Vela");
         assert!(is_from_run(&restored, "current-run"));
         assert!(!is_from_run(&restored, "another-run"));
     }
@@ -182,16 +242,16 @@ mod tests {
         let persistent = MemoryStorage::default();
         let tab = MemoryStorage::default();
         save(&tab, &MemoryStorage::default(), "ROOM", &seat()).unwrap();
-        let migrated = load(&persistent, &tab, "ROOM").unwrap().unwrap();
+        let migrated = load(&persistent, &tab, "ROOM", 1_001).unwrap().unwrap();
         assert_eq!(migrated.credential, seat().credential);
         assert!(tab.get(&key("ROOM")).unwrap().is_some());
         assert!(
-            load(&persistent, &MemoryStorage::default(), "ROOM")
+            load(&persistent, &MemoryStorage::default(), "ROOM", 1_001)
                 .unwrap()
                 .is_some()
         );
         clear(&persistent, &tab, "ROOM").unwrap();
-        assert!(load(&persistent, &tab, "ROOM").unwrap().is_none());
+        assert!(load(&persistent, &tab, "ROOM", 1_001).unwrap().is_none());
     }
     #[test]
     fn another_browser_or_room_has_no_saved_authority() {
@@ -199,11 +259,16 @@ mod tests {
         let tab = MemoryStorage::default();
         save(&persistent, &tab, "ROOM", &seat()).unwrap();
         assert!(
-            load(&MemoryStorage::default(), &MemoryStorage::default(), "ROOM")
-                .unwrap()
-                .is_none()
+            load(
+                &MemoryStorage::default(),
+                &MemoryStorage::default(),
+                "ROOM",
+                1_001
+            )
+            .unwrap()
+            .is_none()
         );
-        assert!(load(&persistent, &tab, "OTHER").unwrap().is_none());
+        assert!(load(&persistent, &tab, "OTHER", 1_001).unwrap().is_none());
     }
     #[test]
     fn an_existing_second_hero_tab_keeps_its_own_seat_when_another_is_remembered() {
@@ -216,11 +281,60 @@ mod tests {
         second.binding.value = Some(vec![4; 16]);
         save(&persistent, &first_tab, "ROOM", &first).unwrap();
         save(&MemoryStorage::default(), &second_tab, "ROOM", &second).unwrap();
-        let resumed_second = load(&persistent, &second_tab, "ROOM").unwrap().unwrap();
+        let resumed_second = load(&persistent, &second_tab, "ROOM", 1_001)
+            .unwrap()
+            .unwrap();
         assert_eq!(resumed_second.credential, second.credential);
         assert_eq!(resumed_second.binding, second.binding);
-        let resumed_first = load(&persistent, &first_tab, "ROOM").unwrap().unwrap();
+        let resumed_first = load(&persistent, &first_tab, "ROOM", 1_001)
+            .unwrap()
+            .unwrap();
         assert_eq!(resumed_first.credential, first.credential);
         assert_eq!(resumed_first.binding, first.binding);
+    }
+
+    #[test]
+    fn remembered_seat_expires_after_twenty_four_hours() {
+        let persistent = MemoryStorage::default();
+        let tab = MemoryStorage::default();
+        save(&persistent, &tab, "ROOM", &seat()).unwrap();
+
+        assert!(
+            load(&persistent, &tab, "ROOM", 1_000 + MAXIMUM_AGE_MS - 1)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            load(&persistent, &tab, "ROOM", 1_000 + MAXIMUM_AGE_MS)
+                .unwrap()
+                .is_none()
+        );
+        assert!(persistent.get(&key("ROOM")).unwrap().is_none());
+    }
+
+    #[test]
+    fn updating_the_resumed_hero_keeps_the_original_expiry_time() {
+        let persistent = MemoryStorage::default();
+        let tab = MemoryStorage::default();
+        save(&persistent, &tab, "ROOM", &seat()).unwrap();
+        let mut restored = load(&persistent, &tab, "ROOM", 1_001).unwrap().unwrap();
+
+        set_hero_name(&persistent, &tab, "ROOM", &mut restored, "Vela the Brave").unwrap();
+        let updated = load(&persistent, &tab, "ROOM", 1_002).unwrap().unwrap();
+
+        assert_eq!(updated.hero_name, "Vela the Brave");
+        assert_eq!(updated.saved_at_ms, 1_000);
+    }
+
+    #[test]
+    fn a_run_end_forgets_the_seat_from_both_stores() {
+        let persistent = MemoryStorage::default();
+        let tab = MemoryStorage::default();
+        save(&persistent, &tab, "ROOM", &seat()).unwrap();
+
+        clear_on_run_end(&persistent, &tab, "ROOM", true).unwrap();
+
+        assert!(persistent.get(&key("ROOM")).unwrap().is_none());
+        assert!(tab.get(&key("ROOM")).unwrap().is_none());
     }
 }

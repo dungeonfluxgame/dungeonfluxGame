@@ -54,6 +54,7 @@ struct Client {
     root: Element,
     role: &'static str,
     credential: String,
+    hero_name_recorded: bool,
     campaign_entry: bool,
     room_code: String,
     session: Option<rpc::SessionId>,
@@ -188,7 +189,11 @@ mod saved_player {
     }
     pub(super) fn load(room_code: &str) -> Result<Option<player_storage::SavedPlayer>, JsValue> {
         let (persistent, tab) = stores()?;
-        player_storage::load(&persistent, &tab, room_code)
+        let now_ms = js_sys::Date::now()
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("browser clock unavailable"))?;
+        player_storage::load(&persistent, &tab, room_code, now_ms)
     }
     pub(super) fn save(
         room_code: &str,
@@ -197,8 +202,13 @@ mod saved_player {
         run: &rpc::RunId,
         binding: &rpc::ClientBindingId,
         run_identity: &str,
+        hero_name: &str,
     ) -> Result<(), JsValue> {
         let (persistent, tab) = stores()?;
+        let saved_at_ms = js_sys::Date::now()
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("browser clock unavailable"))?;
         player_storage::save(
             &persistent,
             &tab,
@@ -209,12 +219,29 @@ mod saved_player {
                 run: run.clone(),
                 binding: binding.clone(),
                 run_identity: run_identity.to_owned(),
+                hero_name: hero_name.to_owned(),
+                saved_at_ms,
             },
         )
+    }
+    pub(super) fn set_hero_name(room_code: &str, hero_name: &str) -> Result<(), JsValue> {
+        let (persistent, tab) = stores()?;
+        let now_ms = js_sys::Date::now()
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("browser clock unavailable"))?;
+        if let Some(mut saved) = player_storage::load(&persistent, &tab, room_code, now_ms)? {
+            player_storage::set_hero_name(&persistent, &tab, room_code, &mut saved, hero_name)?;
+        }
+        Ok(())
     }
     pub(super) fn clear(room_code: &str) -> Result<(), JsValue> {
         let (persistent, tab) = stores()?;
         player_storage::clear(&persistent, &tab, room_code)
+    }
+    pub(super) fn clear_on_run_end(room_code: &str, run_ended: bool) -> Result<(), JsValue> {
+        let (persistent, tab) = stores()?;
+        player_storage::clear_on_run_end(&persistent, &tab, room_code, run_ended)
     }
 }
 const SAVED_GAME_REFUSED: &str = "The server did not accept this saved game.";
@@ -474,8 +501,8 @@ fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 const LEAVE_LABEL: &str = "Leave this game on this device";
-/// Shown while a saved player is reconnecting, and as the way out if that cannot finish.
-fn render_resume(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+/// Shows which saved hero this browser would resume and lets the player reject that identity.
+fn render_resume(client: &Rc<RefCell<Client>>, hero_name: Option<&str>) -> Result<(), JsValue> {
     let (document, surface) = {
         let mut state = client.borrow_mut();
         clear_callbacks(&mut state);
@@ -491,17 +518,25 @@ fn render_resume(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     surface.set_text_content(None);
     let body = node(&document, &surface, "div", "scene-copy", "")?;
     node(&document, &body, "div", "eyebrow", "Welcome back")?;
-    node(&document, &body, "h2", "", "Rejoining your adventure")?;
+    let title = hero_name
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("Resume as {name}?"))
+        .unwrap_or_else(|| "Resume this adventure?".to_owned());
+    node(&document, &body, "h2", "", &title)?;
     node(
         &document,
         &body,
         "p",
         "narration",
-        "Reconnecting to the hero saved on this device.",
+        "This device remembers a hero for this game.",
     )?;
     let tools = node(&document, &body, "div", "tools", "")?;
-    button(client, &tools, "Try again", connect)?;
-    button(client, &tools, LEAVE_LABEL, leave_saved_game)?;
+    let resume_label = hero_name
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("Continue as {name}"))
+        .unwrap_or_else(|| "Continue".to_owned());
+    button(client, &tools, &resume_label, connect)?;
+    button(client, &tools, "Not me", leave_saved_game)?;
     node(&document, &body, "p", "feedback", "")?;
     Ok(())
 }
@@ -536,6 +571,7 @@ fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
         retire_transport(&mut state);
         let reset = clear_view_scope(&mut state);
         state.credential.clear();
+        state.hero_name_recorded = false;
         state.session = None;
         state.run = None;
         state.binding = None;
@@ -809,6 +845,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
                         let mut state = client.borrow_mut();
                         seat_recovery::stop(&mut state);
                         state.credential = joined.local_binding;
+                        state.hero_name_recorded = false;
                         state.session = joined.session_id;
                         state.run = joined.run_id;
                         state.binding = joined.client_binding_id;
@@ -820,6 +857,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
                                 run,
                                 binding,
                                 state.served_run.as_deref().unwrap_or_default(),
+                                "",
                             ),
                             _ => Err(JsValue::from_str("joined scope absent")),
                         }
@@ -3479,6 +3517,48 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
+    if role == "player" {
+        if journey.adventure_ended {
+            if saved_player::clear_on_run_end(&client.borrow().room_code, true).is_err() {
+                record_diagnostic(
+                    client,
+                    crate::client_diagnostics::Diagnostic::LocalStorageFailed,
+                    0,
+                    1,
+                    0,
+                );
+                feedback(
+                    &client.borrow(),
+                    "This browser could not forget the ended game.",
+                );
+            }
+        } else if let Some(own) = journey.own_character.as_ref() {
+            let should_record = {
+                let mut state = client.borrow_mut();
+                if state.hero_name_recorded {
+                    false
+                } else {
+                    state.hero_name_recorded = true;
+                    true
+                }
+            };
+            if should_record
+                && saved_player::set_hero_name(&client.borrow().room_code, &own.name).is_err()
+            {
+                record_diagnostic(
+                    client,
+                    crate::client_diagnostics::Diagnostic::LocalStorageFailed,
+                    0,
+                    1,
+                    0,
+                );
+                feedback(
+                    &client.borrow(),
+                    "This browser could not update its remembered hero.",
+                );
+            }
+        }
+    }
     if role == "display" {
         if let Some(code) = clean_room_code(&journey.room_code) {
             client.borrow_mut().room_code = code;
@@ -3862,6 +3942,7 @@ fn new_client(
         root: root.clone(),
         role,
         credential,
+        hero_name_recorded: false,
         campaign_entry,
         room_code,
         session: if let Some(scope) = campaign_scope.as_ref() {
@@ -3947,7 +4028,7 @@ fn new_client(
 /// Resumes a credential saved on this device through the ordinary reconnect path.
 fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if client.borrow().campaign_entry {
-        render_resume(client)?;
+        render_resume(client, None)?;
         connect(client.clone());
         return Ok(());
     }
@@ -3968,6 +4049,7 @@ fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             &saved.run,
             &saved.binding,
             &saved.run_identity,
+            &saved.hero_name,
         )?;
         web_sys::window()
             .ok_or_else(|| JsValue::from_str("window absent"))?
@@ -3996,12 +4078,12 @@ fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             {
                 let mut state = client.borrow_mut();
                 state.credential = saved.credential;
+                state.hero_name_recorded = !saved.hero_name.is_empty();
                 state.session = Some(saved.session);
                 state.run = Some(saved.run);
                 state.binding = Some(saved.binding);
             }
-            render_resume(client)?;
-            connect(client.clone());
+            render_resume(client, Some(&saved.hero_name))?;
         }
         Ok(None) => render_join(client)?,
         Err(_) => {
