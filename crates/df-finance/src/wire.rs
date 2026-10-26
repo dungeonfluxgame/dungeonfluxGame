@@ -7,10 +7,12 @@
 use std::collections::BTreeMap;
 
 use df_commerce::admission::AdmissionSnapshot;
+use df_commerce::dispute::{DisputeAllocation, DisputeRefundLot, DisputeSnapshot};
 use df_commerce::finance_ids::{
     AllocationId, AttemptId, CampaignKey, LotId, PayerId, PriceVersionId, QuoteId, ReservationId,
     SessionKey, TenantKey, UsageEventId, hex, unhex,
 };
+use df_commerce::finance_ids::{RefundId, RefundLotId};
 use df_commerce::funding::{LotClass, LotState};
 use df_commerce::funding_flows::{
     AllocateSnapshot, ExistingAllocation, OtherAllocation, PayerLot, TrialSnapshot, WithdrawLot,
@@ -19,6 +21,7 @@ use df_commerce::funding_flows::{
 use df_commerce::ledger::{Actor, CurrencyTag, JournalEntry};
 use df_commerce::plan::{FinancePlan, Row, RowChange, Value as RowValue};
 use df_commerce::price_schedule::{PriceVersion, TariffLine};
+use df_commerce::refund::{RefundLotSnapshot, RefundLotState, RefundRequestSnapshot};
 use df_commerce::returns::AllocationStatus;
 use df_commerce::settlement::{CreditShare, CreditSnapshot, HeldSnapshot};
 use df_commerce::snapshot::{
@@ -400,10 +403,13 @@ fn parse_lot_row(value: &Value) -> Wire<LotRow> {
         class: lot_class(value)?,
         promo_source: opt_text_field(value, "promo_source"),
         processor: opt_text_field(value, "processor"),
+        tax_jurisdiction: opt_text_field(value, "tax_jurisdiction"),
         currency: currency(value, "currency")?,
         state: lot_state(value)?,
         original_micro_dollars: uint_field(value, "original_micro_dollars")?,
         consumed_micro_dollars: uint_field(value, "consumed_micro_dollars")?,
+        refunded_micro_dollars: uint_field(value, "refunded_micro_dollars").unwrap_or(0),
+        charged_back_micro_dollars: uint_field(value, "charged_back_micro_dollars").unwrap_or(0),
         extinguished_micro_dollars: uint_field(value, "extinguished_micro_dollars")?,
         created_at_ms: int_field(value, "created_at_ms")?,
         revision: int_field(value, "revision")?,
@@ -530,6 +536,174 @@ pub fn parse_credit_snapshot(value: &Value) -> Wire<CreditSnapshot> {
         shares,
         lots: list(value, "lots", parse_lot_row)?,
     })
+}
+
+pub fn parse_refund_request_snapshot(
+    value: &Value,
+    payer: df_commerce::finance_ids::PayerId,
+    fallback_currency: CurrencyTag,
+) -> Wire<RefundRequestSnapshot> {
+    let lots = field(value, "lots")?
+        .as_array()
+        .ok_or_else(|| WireError("lots".into()))?
+        .iter()
+        .map(|entry| {
+            let lot = field(entry, "lot")?;
+            Ok(RefundLotState {
+                lot: id_field(lot, "lot_id", LotId::from_slice)?,
+                currency: currency(lot, "currency")?,
+                class: lot_class(lot)?,
+                state: lot_state(lot)?,
+                processor: opt_text_field(lot, "processor"),
+                payment_ref: opt_text_field(lot, "payment_ref"),
+                original_micro_dollars: uint_field(lot, "original_micro_dollars")?,
+                tax_micro_dollars: uint_field(lot, "tax_micro_dollars").unwrap_or(0),
+                tax_jurisdiction: opt_text_field(lot, "tax_jurisdiction"),
+                created_at_ms: int_field(lot, "created_at_ms")?,
+                available_micro_dollars: uint_field(entry, "available")?,
+            })
+        })
+        .collect::<Wire<Vec<_>>>()?;
+    let existing_refund = match value.get("existing_refund") {
+        None | Some(Value::Null) => None,
+        Some(row) => Some(id_field(row, "refund_id", RefundId::from_slice)?),
+    };
+    Ok(RefundRequestSnapshot {
+        payer,
+        currency: lots.first().map_or(fallback_currency, |lot| lot.currency),
+        lots,
+        existing_refund,
+    })
+}
+
+pub fn parse_refund_lot_snapshot(value: &Value) -> Wire<Option<RefundLotSnapshot>> {
+    if value.get("missing").and_then(Value::as_bool) == Some(true) {
+        return Ok(None);
+    }
+    let refund = field(value, "refund")?;
+    let refund_lot = field(value, "refund_lot")?;
+    let lot = parse_lot_row(field(value, "lot")?)?;
+    let siblings = field(value, "siblings")?
+        .as_array()
+        .ok_or_else(|| WireError("siblings".into()))?;
+    let this_id = id_field(refund_lot, "refund_lot_id", RefundLotId::from_slice)?;
+    let siblings_paid = siblings.iter().all(|sibling| {
+        id_field(sibling, "refund_lot_id", RefundLotId::from_slice).ok() == Some(this_id)
+            || text_field(sibling, "state").ok() == Some("paid")
+    });
+    let (payment_ref, payment_refunded, payment_object_revision, payment_revision) =
+        match value.get("payment_state") {
+            None | Some(Value::Null) => (None, 0, 0, 0),
+            Some(state) => (
+                opt_text_field(state, "payment_ref"),
+                uint_field(state, "refunded_total_micro_dollars").unwrap_or(0),
+                int_field(state, "object_revision").unwrap_or(0),
+                int_field(state, "revision").unwrap_or(0),
+            ),
+        };
+    let (outbox_attempts, outbox_revision) = match value.get("outbox") {
+        None | Some(Value::Null) => (0, 1),
+        Some(outbox) => (
+            int_field(outbox, "attempts").unwrap_or(0),
+            int_field(outbox, "revision").unwrap_or(1),
+        ),
+    };
+    Ok(Some(RefundLotSnapshot {
+        payer: id_field(refund, "payer_account_id", PayerId::from_slice)?,
+        currency: lot.currency,
+        refund: id_field(refund, "refund_id", RefundId::from_slice)?,
+        refund_state: text_field(refund, "state")?.to_owned(),
+        refund_revision: int_field(refund, "revision")?,
+        refund_lot: this_id,
+        lot: lot.lot,
+        lot_state: lot.state,
+        lot_refunded_micro_dollars: lot.refunded_micro_dollars,
+        lot_revision: lot.revision,
+        principal_micro_dollars: uint_field(refund_lot, "principal_micro_dollars")?,
+        tax_micro_dollars: uint_field(refund_lot, "tax_micro_dollars").unwrap_or(0),
+        tax_jurisdiction: lot.tax_jurisdiction.clone(),
+        processor: lot.processor.clone(),
+        state: text_field(refund_lot, "state")?.to_owned(),
+        object_revision: int_field(refund_lot, "object_revision").unwrap_or(1),
+        revision: int_field(refund_lot, "revision")?,
+        siblings_paid,
+        payment_ref,
+        payment_refunded_total_micro_dollars: payment_refunded,
+        payment_object_revision,
+        payment_revision,
+        outbox_attempts,
+        outbox_revision,
+    }))
+}
+
+pub fn parse_dispute_snapshot(value: &Value) -> Wire<Option<DisputeSnapshot>> {
+    if value.get("missing").and_then(Value::as_bool) == Some(true) {
+        return Ok(None);
+    }
+    let lot = parse_lot_row(field(value, "lot")?)?;
+    let allocations = field(value, "allocations")?
+        .as_array()
+        .ok_or_else(|| WireError("allocations".into()))?
+        .iter()
+        .map(|entry| {
+            let row = field(entry, "allocation")?;
+            Ok(DisputeAllocation {
+                allocation: id_field(row, "allocation_id", AllocationId::from_slice)?,
+                allocated_micro_dollars: uint_field(entry, "allocated")?,
+                returned_micro_dollars: uint_field(row, "returned_micro_dollars")?,
+                revision: int_field(row, "revision")?,
+            })
+        })
+        .collect::<Wire<Vec<_>>>()?;
+    let refund_lots = field(value, "refund_lots")?
+        .as_array()
+        .ok_or_else(|| WireError("refund lots".into()))?
+        .iter()
+        .map(|row| {
+            Ok(DisputeRefundLot {
+                refund_lot: id_field(row, "refund_lot_id", RefundLotId::from_slice)?,
+                principal_micro_dollars: uint_field(row, "principal_micro_dollars")?,
+                state: text_field(row, "state")?.to_owned(),
+                object_revision: int_field(row, "object_revision").unwrap_or(1),
+                revision: int_field(row, "revision")?,
+            })
+        })
+        .collect::<Wire<Vec<_>>>()?;
+    let (dispute_exists, dispute_open, dispute_revision, disputed) = match value.get("dispute") {
+        None | Some(Value::Null) => (false, false, 1, 0),
+        Some(row) => (
+            true,
+            text_field(row, "status")? == "open",
+            int_field(row, "revision").unwrap_or(1),
+            uint_field(row, "disputed_micro_dollars").unwrap_or(0),
+        ),
+    };
+    let (payment_ref, payment_object_revision, payment_revision) = match value.get("payment_state")
+    {
+        None | Some(Value::Null) => (None, 0, 0),
+        Some(state) => (
+            opt_text_field(state, "payment_ref"),
+            int_field(state, "object_revision").unwrap_or(0),
+            int_field(state, "revision").unwrap_or(0),
+        ),
+    };
+    Ok(Some(DisputeSnapshot {
+        payer: lot.payer,
+        currency: lot.currency,
+        lot,
+        available_micro_dollars: uint_field(value, "available")?,
+        frozen_micro_dollars: uint_field(value, "frozen")?,
+        allocations,
+        refund_lots,
+        dispute_exists,
+        dispute_open,
+        dispute_revision,
+        disputed_micro_dollars: disputed,
+        payment_ref,
+        payment_disputed_micro_dollars: disputed,
+        payment_object_revision,
+        payment_revision,
+    }))
 }
 
 pub fn parse_trial_snapshot(value: &Value) -> TrialSnapshot {

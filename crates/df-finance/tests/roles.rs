@@ -345,11 +345,12 @@ fn the_definer_holds_exactly_the_writes_the_registry_names() {
             granted, registry,
             "the definer's column grants are the registry"
         );
+        // `funding_lot.state` and `allocation.status` leave this list: the dispute flow
+        // (FIN-05) and the withdrawal flow change them only through typed update kinds
+        // named in the registry, and the grant == registry equality above still holds.
         for (table, column) in [
-            ("funding_lot", "state"),
             ("funding_lot", "original_micro_dollars"),
             ("session_funding", "session_ceiling_micro_dollars"),
-            ("allocation", "status"),
         ] {
             assert!(
                 !granted.contains(&(table.to_owned(), column.to_owned())),

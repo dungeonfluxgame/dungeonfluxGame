@@ -1,7 +1,6 @@
 -- Finance refunds, disputes and manual adjustments (planning/finance-ledger-research.md 14, 17.4).
--- Round 1 creates the tables and their constraints; the refund and dispute flows are round 5.
--- TODO(FIN-05): the refund, dispute/chargeback and manual-adjustment flows (14, 16.17) are not
--- built yet; no planner or service flow writes these tables.
+-- The tables and their constraints; the refund and dispute flows that write them are FIN-05
+-- (df-commerce refund/dispute planners, df-finance refunds service, migration 0025 boundary).
 
 CREATE TABLE finance.refund (
     refund_id bytea PRIMARY KEY CHECK (octet_length(refund_id) = 16),

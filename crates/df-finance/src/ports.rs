@@ -83,6 +83,25 @@ pub trait MediaPort: Send + Sync {
     ) -> impl Future<Output = Result<MediaVerdict, PortUnavailable>> + Send;
 }
 
+/// What one processor refund call concluded (14.1). A timeout is `Unknown`, never a
+/// failure: the refund lot keeps its hold until a conclusive answer with the same key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefundCall {
+    Paid { processor_refund_ref: String },
+    KnownFailure,
+    Unknown,
+}
+
+/// The payment processor's refund call, keyed by the refund lot id (14.1): one
+/// processor refund per original charge, however often the call is retried.
+pub trait RefundProcessor: Send + Sync {
+    fn refund(
+        &self,
+        idempotency_key: &str,
+        amount_micro_dollars: u64,
+    ) -> impl Future<Output = RefundCall> + Send;
+}
+
 pub trait MemberPort: Send + Sync {
     /// The payers among `payers` whose fresh `member_snapshot` for `campaign` is authorized.
     fn authorized_payers(

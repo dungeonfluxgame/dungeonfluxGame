@@ -38,6 +38,8 @@ pub enum FinanceError {
     Funding(FundingRefusal),
     Withdrawal(WithdrawalRefusal),
     Settle(SettleRefusal),
+    Refund(df_commerce::refund::RefundRefusal),
+    Dispute(df_commerce::dispute::DisputeRefusal),
     Lifecycle(LifecycleRefusal),
     Fence(FenceVerdict),
     Media(MediaVerdict),

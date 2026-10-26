@@ -11,7 +11,7 @@ use tokio_postgres::Transaction;
 
 use crate::ports::{
     Clock, FencePort, FenceRequest, FenceVerdict, IdSource, MediaPort, MediaRequest, MediaVerdict,
-    MemberPort, PortUnavailable,
+    MemberPort, PortUnavailable, RefundCall, RefundProcessor,
 };
 
 /// A clock the test moves by hand.
@@ -154,6 +154,66 @@ impl MediaPort for FakeMedia {
             .lock()
             .map(|verdict| *verdict)
             .map_err(|_| PortUnavailable)
+    }
+}
+
+/// How the fake processor answers refund calls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FakeRefundMode {
+    Succeed,
+    /// The first call for each key times out; later calls with the same key succeed.
+    TimeoutOnce,
+    KnownFailure,
+}
+
+/// A fake processor refund endpoint: paid once per idempotency key, however often retried.
+pub struct FakeRefundProcessor {
+    mode: FakeRefundMode,
+    attempts: AtomicU64,
+    timed_out_keys: Mutex<std::collections::BTreeSet<String>>,
+    paid_keys: Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl FakeRefundProcessor {
+    pub fn new(mode: FakeRefundMode) -> Self {
+        Self {
+            mode,
+            attempts: AtomicU64::new(0),
+            timed_out_keys: Mutex::new(std::collections::BTreeSet::new()),
+            paid_keys: Mutex::new(std::collections::BTreeSet::new()),
+        }
+    }
+
+    pub fn attempts(&self) -> u64 {
+        self.attempts.load(Ordering::SeqCst)
+    }
+
+    /// How many distinct keys were actually paid: a double refund would make this exceed 1.
+    pub fn paid_count(&self) -> usize {
+        self.paid_keys.lock().map(|keys| keys.len()).unwrap_or(0)
+    }
+}
+
+impl RefundProcessor for FakeRefundProcessor {
+    async fn refund(&self, idempotency_key: &str, _amount_micro_dollars: u64) -> RefundCall {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        let first_for_key = self
+            .timed_out_keys
+            .lock()
+            .map(|mut keys| keys.insert(idempotency_key.to_owned()))
+            .unwrap_or(false);
+        match self.mode {
+            FakeRefundMode::KnownFailure => RefundCall::KnownFailure,
+            FakeRefundMode::TimeoutOnce if first_for_key => RefundCall::Unknown,
+            _ => {
+                if let Ok(mut keys) = self.paid_keys.lock() {
+                    keys.insert(idempotency_key.to_owned());
+                }
+                RefundCall::Paid {
+                    processor_refund_ref: format!("fake-refund-{idempotency_key}"),
+                }
+            }
+        }
     }
 }
 

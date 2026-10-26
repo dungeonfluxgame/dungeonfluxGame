@@ -109,6 +109,14 @@ pub enum EventKind {
     AttemptPrepared,
     AttemptSent,
     UsageRecorded,
+    RefundRequested,
+    RefundPaid,
+    RefundUnknown,
+    RefundFailed,
+    RefundReturned,
+    DisputeOpened,
+    DisputeClosed,
+    InvalidOutputSettled,
 }
 
 impl EventKind {
@@ -129,6 +137,14 @@ impl EventKind {
             Self::AttemptPrepared => "attempt_prepared",
             Self::AttemptSent => "attempt_sent",
             Self::UsageRecorded => "usage_recorded",
+            Self::RefundRequested => "refund_requested",
+            Self::RefundPaid => "refund_paid",
+            Self::RefundUnknown => "refund_unknown",
+            Self::RefundFailed => "refund_failed",
+            Self::RefundReturned => "refund_returned",
+            Self::DisputeOpened => "dispute_opened",
+            Self::DisputeClosed => "dispute_closed",
+            Self::InvalidOutputSettled => "invalid_output_settled",
         }
     }
 }
@@ -172,11 +188,23 @@ pub enum ChangeKind {
     MeterSegmentPricedInsert,
     WorkItemUpsert,
     WorkItemComplete,
+    RefundInsert,
+    RefundUpdate,
+    RefundLotInsert,
+    RefundLotUpdate,
+    RefundOutboxInsert,
+    RefundOutboxUpdate,
+    DisputeInsert,
+    DisputeUpdate,
+    ProcessorPaymentStateUpdate,
+    FundingLotRefundUpdate,
+    FundingLotDisputeUpdate,
+    ProviderAttemptOutcomeUpdate,
 }
 
 impl ChangeKind {
     /// Every kind, for the test that compares them with `finance.change_kind`.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 48] = [
         Self::KeyCreate,
         Self::PayerInsert,
         Self::FundingLotInsert,
@@ -213,6 +241,18 @@ impl ChangeKind {
         Self::MeterSegmentPricedInsert,
         Self::WorkItemUpsert,
         Self::WorkItemComplete,
+        Self::RefundInsert,
+        Self::RefundUpdate,
+        Self::RefundLotInsert,
+        Self::RefundLotUpdate,
+        Self::RefundOutboxInsert,
+        Self::RefundOutboxUpdate,
+        Self::DisputeInsert,
+        Self::DisputeUpdate,
+        Self::ProcessorPaymentStateUpdate,
+        Self::FundingLotRefundUpdate,
+        Self::FundingLotDisputeUpdate,
+        Self::ProviderAttemptOutcomeUpdate,
     ];
 
     pub fn label(self) -> &'static str {
@@ -253,6 +293,18 @@ impl ChangeKind {
             Self::MeterSegmentPricedInsert => "meter_segment_priced_insert",
             Self::WorkItemUpsert => "work_item_upsert",
             Self::WorkItemComplete => "work_item_complete",
+            Self::RefundInsert => "refund_insert",
+            Self::RefundUpdate => "refund_update",
+            Self::RefundLotInsert => "refund_lot_insert",
+            Self::RefundLotUpdate => "refund_lot_update",
+            Self::RefundOutboxInsert => "refund_outbox_insert",
+            Self::RefundOutboxUpdate => "refund_outbox_update",
+            Self::DisputeInsert => "dispute_insert",
+            Self::DisputeUpdate => "dispute_update",
+            Self::ProcessorPaymentStateUpdate => "processor_payment_state_update",
+            Self::FundingLotRefundUpdate => "funding_lot_refund_update",
+            Self::FundingLotDisputeUpdate => "funding_lot_dispute_update",
+            Self::ProviderAttemptOutcomeUpdate => "provider_attempt_outcome_update",
         }
     }
 }

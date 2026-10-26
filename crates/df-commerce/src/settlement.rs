@@ -106,6 +106,158 @@ impl UsageSource {
     }
 }
 
+/// Why the metering outcome marked a billed result unusable (12.1, 12.2, 15.1).
+/// The metering layer decides this; finance never re-judges the output itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnusableOutcome {
+    InvalidOutput,
+    FailedNoOutput,
+    Duplicate,
+    Superseded,
+}
+
+impl UnusableOutcome {
+    /// The `absorbed_supplier_cost` loss class (15.1).
+    pub fn loss_class(self) -> &'static str {
+        match self {
+            Self::InvalidOutput => "invalid_output",
+            Self::FailedNoOutput => "failed_no_output",
+            Self::Duplicate => "duplicate",
+            Self::Superseded => "superseded",
+        }
+    }
+
+    /// The label kept on the attempt (`usability_class`).
+    pub fn usability_class(self) -> &'static str {
+        self.loss_class()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusableRequest {
+    pub event_id: EventId,
+    pub entry_id: EntryId,
+    pub actual_units: Vec<(String, u64)>,
+    pub usage_source: UsageSource,
+    pub outcome: UnusableOutcome,
+    pub now_ms: i64,
+}
+
+/// 12.2, billed with no usable output: the customer is never charged, the hold is
+/// released to the 14.4 targets, and the supplier cost is a company loss (16.7).
+/// This is the metering outcome path, not an operator credit of a settled charge.
+pub fn plan_unusable_settlement(
+    snapshot: &HeldSnapshot,
+    request: &UnusableRequest,
+) -> Result<FinancePlan, SettleRefusal> {
+    if !snapshot.reservation.held {
+        return Err(SettleRefusal::Stale);
+    }
+    if snapshot.attempt.dispatch.is_unsent()
+        || snapshot.attempt.dispatch == DispatchState::FailedUnknown
+    {
+        return Err(SettleRefusal::NotDispatched);
+    }
+    let version = &snapshot.price_version;
+    let (provider, model) = (
+        snapshot.attempt.provider.as_str(),
+        snapshot.attempt.model.as_str(),
+    );
+    let supplier = version.supplier_cost(provider, model, &request.actual_units)?;
+    let keys = Keys::new(snapshot.session.currency);
+    let mut lines = Lines::default();
+    let mut resolved = Vec::new();
+    for (index, share) in snapshot.shares.iter().enumerate() {
+        lines.debit(
+            keys.reserved(share.class, share.allocation, share.lot),
+            share.held_micro_dollars,
+        )?;
+        let target = post_return(&mut lines, &keys, snapshot, share, share.held_micro_dollars)?;
+        resolved.push((
+            index,
+            Resolved {
+                charged: 0,
+                released: share.held_micro_dollars,
+            },
+            target,
+        ));
+    }
+    if supplier > 0 {
+        lines.debit(
+            keys.absorbed(provider, request.outcome.loss_class()),
+            supplier,
+        )?;
+        lines.credit(keys.supplier_payable(provider), supplier)?;
+    }
+    let exposure = snapshot.attempt.supplier_exposure_micro_dollars;
+    if exposure > 0 {
+        lines.debit(keys.exposure_offset(provider), exposure)?;
+        lines.credit(keys.exposure_open(provider), exposure)?;
+    }
+    let mut plan = FinancePlan::new(request.event_id, EventKind::InvalidOutputSettled);
+    if supplier > 0 {
+        plan.changes.push(RowChange::key(
+            &keys.absorbed(provider, request.outcome.loss_class()),
+        ));
+    }
+    share_changes(&mut plan, snapshot, &resolved, Closing::Released)?;
+    let mut attempt = Row::new()
+        .bytes("attempt_id", snapshot.attempt.attempt.as_bytes())
+        .text("customer_state", "released")
+        .text("supplier_state", "cost_recorded")
+        .text("supplier_outcome", "billed")
+        .text("usage_source", request.usage_source.label())
+        .uint("supplier_cost_micro_dollars", supplier)
+        .text("usability", "no_usable_output")
+        .text("usability_class", request.outcome.usability_class())
+        .int("customer_released_at_ms", request.now_ms)
+        .int("settled_at_ms", request.now_ms);
+    if snapshot.attempt.dispatch != DispatchState::ResultKnown {
+        attempt = attempt
+            .text("dispatch_state", "result_known")
+            .int("result_at_ms", request.now_ms);
+    }
+    plan.changes.push(RowChange::update(
+        ChangeKind::ProviderAttemptOutcomeUpdate,
+        attempt,
+        snapshot.attempt.revision,
+    ));
+    plan.changes.push(RowChange::insert(
+        ChangeKind::SettlementFactInsert,
+        Row::new()
+            .bytes("attempt_id", snapshot.attempt.attempt.as_bytes())
+            .text("source", "runtime")
+            .text("outcome", "no_usable_output")
+            .text("reason", request.outcome.usability_class())
+            .int("recorded_at_ms", request.now_ms),
+    ));
+    if supplier > 0 {
+        plan.changes.push(RowChange::insert(
+            ChangeKind::CompanyLossInsert,
+            Row::new()
+                .bytes("attempt_id", snapshot.attempt.attempt.as_bytes())
+                .text("loss_class", request.outcome.loss_class())
+                .uint("micro_dollars", supplier)
+                .bytes("entry_id", request.entry_id.as_bytes()),
+        ));
+    }
+    complete_timers(&mut plan, snapshot);
+    plan.entries.push(JournalEntry {
+        entry_id: request.entry_id,
+        kind: EntryKind::CompanyLoss,
+        business_key: business_key("company_loss", &[snapshot.attempt.attempt.as_bytes()]),
+        external_ref: None,
+        stream: (StreamKind::Session, *snapshot.session.session.as_bytes()),
+        effective_at_ms: request.now_ms,
+        reason: EntryReason::CompanyLoss,
+        actor: Actor::System,
+        correlation: correlation(snapshot),
+        lines: lines.finish(),
+    });
+    plan.check().map_err(SettleRefusal::Plan)?;
+    Ok(plan)
+}
+
 #[derive(Clone, Debug)]
 pub struct SettleRequest {
     pub event_id: EventId,

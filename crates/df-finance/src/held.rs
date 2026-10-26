@@ -10,8 +10,9 @@ use df_commerce::lifecycle::{
 };
 use df_commerce::price_schedule::PriceVersion;
 use df_commerce::settlement::{
-    CreditReason, CreditRequest, ReleaseReason, ReleaseRequest, SettleRequest, UsageSource,
-    plan_credit, plan_release, plan_settlement,
+    CreditReason, CreditRequest, ReleaseReason, ReleaseRequest, SettleRequest, UnusableOutcome,
+    UnusableRequest, UsageSource, plan_credit, plan_release, plan_settlement,
+    plan_unusable_settlement,
 };
 use serde_json::{Value, json};
 
@@ -68,6 +69,39 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
                     return Ok(None);
                 };
                 plan_settlement(&snapshot, &request)
+                    .map(Some)
+                    .map_err(FinanceError::Settle)
+            },
+        )
+        .await
+    }
+
+    /// 12.2: settles a billed result the metering outcome marked unusable. The customer
+    /// is never charged and the supplier cost is a company loss; this is not a credit
+    /// of a settled charge. `Ok(None)` when the reservation is no longer held.
+    pub async fn settle_unusable(
+        &mut self,
+        attempt: AttemptId,
+        actual_units: Vec<(String, u64)>,
+        usage_source: UsageSource,
+        outcome: UnusableOutcome,
+    ) -> Result<Option<Committed>, FinanceError> {
+        let request = UnusableRequest {
+            event_id: EventId::from_array(self.id()),
+            entry_id: EntryId::from_array(self.id()),
+            actual_units,
+            usage_source,
+            outcome,
+            now_ms: self.clock.now_ms(),
+        };
+        self.run_flow(
+            "settlement",
+            json!({"attempt": attempt.hex()}),
+            |document| {
+                let Some(snapshot) = parse_held_snapshot(document)? else {
+                    return Ok(None);
+                };
+                plan_unusable_settlement(&snapshot, &request)
                     .map(Some)
                     .map_err(FinanceError::Settle)
             },

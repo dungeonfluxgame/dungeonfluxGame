@@ -121,6 +121,14 @@ finance_id!(
     /// A caller-chosen operation id: a retry of the same operation is the same operation.
     OperationKey
 );
+finance_id!(
+    /// One refund of a payer's unspent purchased credit (14.1).
+    RefundId
+);
+finance_id!(
+    /// One lot's part of a refund; also the idempotency key of its processor refund (14.1).
+    RefundLotId
+);
 
 #[cfg(test)]
 mod tests {

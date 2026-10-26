@@ -79,6 +79,29 @@ impl Keys {
         self.key(code).provider(provider)
     }
 
+    pub fn refund_payable(&self, lot: LotId) -> AccountKey {
+        self.key(AccountCode::RefundPayable).lot(lot)
+    }
+
+    pub fn dispute_withheld(&self, processor: &str) -> AccountKey {
+        self.key(AccountCode::DisputeFundsWithheld)
+            .processor(processor)
+    }
+
+    pub fn processing_fees(&self, processor: &str) -> AccountKey {
+        self.key(AccountCode::ProcessingFees).processor(processor)
+    }
+
+    pub fn tax_payable(&self, jurisdiction: &str) -> AccountKey {
+        self.key(AccountCode::TaxPayable).jurisdiction(jurisdiction)
+    }
+
+    pub fn absorbed(&self, provider: &str, loss_class: &str) -> AccountKey {
+        self.key(AccountCode::AbsorbedSupplierCost)
+            .provider(provider)
+            .loss_class(loss_class)
+    }
+
     pub fn exposure_open(&self, provider: &str) -> AccountKey {
         self.key(AccountCode::SupplierExposureOpen)
             .provider(provider)
