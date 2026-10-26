@@ -425,7 +425,7 @@ impl Controls {
             && (!self.appearance_text.value().trim().is_empty()
                 || !self.backstory_text.value().trim().is_empty())
         {
-            missing.push("Press Read my description and review the details".to_owned());
+            missing.push("Use your text to suggest choices and review them".to_owned());
         }
         let groups: Vec<_> = self
             .appearance
@@ -682,9 +682,9 @@ impl Controls {
         })();
         self.storage_status
             .set_text_content(Some(if result.is_ok() {
-                "Draft saved on this browser"
+                "Draft saved on this device"
             } else {
-                "This browser could not save your draft. Keep this page open."
+                "This device could not save your draft. Keep this page open."
             }));
     }
 
@@ -812,6 +812,26 @@ fn node(
     Ok(element)
 }
 
+fn select_step(sections: &[(Element, Element)], active: usize) {
+    for (index, (button, panel)) in sections.iter().enumerate() {
+        let selected = index == active;
+        let _ = button.set_attribute("aria-pressed", if selected { "true" } else { "false" });
+        if selected {
+            let _ = panel.remove_attribute("hidden");
+        } else {
+            let _ = panel.set_attribute("hidden", "");
+        }
+    }
+}
+
+fn set_library_visibility(picker: &Element, has_saved_heroes: bool) -> Result<(), JsValue> {
+    if has_saved_heroes {
+        picker.remove_attribute("hidden")
+    } else {
+        picker.set_attribute("hidden", "")
+    }
+}
+
 fn text_input(
     document: &Document,
     parent: &Element,
@@ -920,13 +940,20 @@ impl HeroCreator {
             &caption,
             "p",
             "hero-art-label",
-            "Your character portrait",
+            "Portrait (optional)",
+        )?;
+        node(
+            document,
+            &caption,
+            "p",
+            "hero-art-note",
+            "Your hero works without one. You can add a portrait later.",
         )?;
         let portrait_status = node(
             document,
             &caption,
             "p",
-            "hero-art-note",
+            "hero-art-status",
             "Choose your appearance, then generate a portrait.",
         )?;
         portrait_status.set_attribute("aria-live", "polite")?;
@@ -1043,6 +1070,7 @@ impl HeroCreator {
             let input = select(document, parent, group, default)?;
             build.push((group.clone(), input));
         }
+        editor.insert_before(&stage, Some(&tablist))?;
         node(
             document,
             &look,
@@ -1125,8 +1153,16 @@ impl HeroCreator {
             &description,
             "p",
             "hero-help",
-            "Describe body features, facial patterns or accessibility aids. These visual details are public and saved exactly; keep private backstory elsewhere. Up to 2,000 characters / 4 KiB. Read my description can suggest menu choices without replacing your text.",
+            "Describe body features, facial patterns or accessibility aids. These visual details are public and saved exactly; keep private backstory elsewhere. Up to 2,000 characters / 4 KiB. Use your text to suggest menu choices, then review them before applying.",
         )?;
+        let read = node(
+            document,
+            &description,
+            "button",
+            "hero-read",
+            "Suggest choices from my text",
+        )?;
+        read.set_attribute("type", "button")?;
         let custom_summary = node(document, &look, "p", "hero-custom-summary", "")?;
         custom_summary.set_attribute("aria-label", "Exact public appearance description")?;
         let summary = node(
@@ -1227,17 +1263,9 @@ impl HeroCreator {
             }
             facts.push(input);
         }
-        let read = node(
-            document,
-            &editor,
-            "button",
-            "hero-read",
-            "Read my description",
-        )?;
-        read.set_attribute("type", "button")?;
         let feedback = node(document, &editor, "p", "hero-feedback", "")?;
         feedback.set_attribute("role", "status")?;
-        let footer = node(document, &editor, "div", "hero-confirm", "")?;
+        let footer = node(document, &advanced, "div", "hero-confirm", "")?;
         node(
             document,
             &footer,
@@ -1250,7 +1278,7 @@ impl HeroCreator {
         missing_summary.set_attribute("aria-live", "polite")?;
         let missing = node(document, &validation, "p", "hero-missing", "")?;
         missing.set_attribute("aria-live", "polite")?;
-        let confirm = node(document, &footer, "button", "", "Confirm your hero")?
+        let confirm = node(document, &footer, "button", "", "Join the table")?
             .dyn_into::<HtmlButtonElement>()?;
         confirm.set_type("button");
         let controls = Controls {
@@ -1298,7 +1326,7 @@ impl HeroCreator {
                 &footer,
                 "p",
                 "hero-draft-status",
-                "Drafts stay in this browser. Clearing browser storage loses access to your saved heroes until accounts are available.",
+                "Drafts and saved heroes are kept on this device.",
             )?,
         };
         let initial_draft = controls.stored()?;
@@ -1316,17 +1344,30 @@ impl HeroCreator {
         for (active, (button, _)) in tabs.iter().enumerate() {
             let sections = tabs.clone();
             surface.listen(button.clone(), "click", move |_| {
-                for (index, (button, panel)) in sections.iter().enumerate() {
-                    let selected = index == active;
-                    let _ = button
-                        .set_attribute("aria-pressed", if selected { "true" } else { "false" });
-                    if selected {
-                        let _ = panel.remove_attribute("hidden");
-                    } else {
-                        let _ = panel.set_attribute("hidden", "");
-                    }
-                }
+                select_step(&sections, active);
             })?;
+        }
+        for (index, (_, panel)) in tabs.iter().enumerate() {
+            let navigation = node(document, panel, "div", "hero-step-navigation", "")?;
+            if index > 0 {
+                let back = node(document, &navigation, "button", "hero-step-back", "Back")?;
+                back.set_attribute("type", "button")?;
+                let sections = tabs.clone();
+                surface.listen(back, "click", move |_| {
+                    select_step(&sections, index - 1);
+                })?;
+            }
+            if index < 2 {
+                let label = ["Next: Story", "Next: Abilities"][index];
+                let next = node(document, &navigation, "button", "hero-step-next", label)?;
+                next.set_attribute("type", "button")?;
+                let sections = tabs.clone();
+                surface.listen(next, "click", move |_| {
+                    select_step(&sections, index + 1);
+                })?;
+            } else {
+                navigation.append_child(&surface.controls.confirm)?;
+            }
         }
         // Swatches supplement the actual selects, so keyboard/native-picker behavior remains.
         for (group, select) in surface.controls.appearance.clone() {
@@ -1527,7 +1568,7 @@ impl HeroCreator {
                         surface
                             .controls
                             .storage_status
-                            .set_text_content(Some("Draft restored from this browser"));
+                            .set_text_content(Some("Draft restored from this device"));
                         if !stored.portrait_uri.is_empty() {
                             surface.load_portrait_reference(
                                 stored.look_revision,
@@ -1546,7 +1587,7 @@ impl HeroCreator {
         })();
         if restored.is_err() {
             surface.controls.storage_status.set_text_content(Some(
-                "This browser could not restore your draft. You can still make a hero.",
+                "This device could not restore your draft. You can still make a hero.",
             ));
         }
         if let Some(window) = web_sys::window() {
@@ -1976,6 +2017,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_saved_hero_shelves_stay_hidden_until_they_have_a_hero() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let picker = document.create_element("section").unwrap();
+
+        set_library_visibility(&picker, false).unwrap();
+        assert!(picker.has_attribute("hidden"));
+        set_library_visibility(&picker, true).unwrap();
+        assert!(!picker.has_attribute("hidden"));
+    }
+
+    #[test]
     fn compact_surface_retains_listeners_and_rejects_a_preview_after_typing() {
         let document = web_sys::window().unwrap().document().unwrap();
         let parent = document.create_element("div").unwrap();
@@ -2032,6 +2084,98 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(
+            surface
+                .root()
+                .query_selector(".hero-intro + .hero-field + .hero-name-help + .hero-basics")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            surface
+                .root()
+                .query_selector(".hero-basics ~ .hero-stage + .hero-tabs")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            surface
+                .root()
+                .query_selector(".hero-art-label")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("Portrait (optional)")
+        );
+        assert!(
+            surface
+                .root()
+                .query_selector(".hero-art-note")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap()
+                .contains("works without one")
+        );
+        let next = surface
+            .root()
+            .query_selector(".hero-step-next")
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.text_content().as_deref(), Some("Next: Story"));
+        next.dispatch_event(&web_sys::Event::new("click").unwrap())
+            .unwrap();
+        let active = surface
+            .root()
+            .query_selector(".hero-panel:not([hidden])")
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.get_attribute("aria-label").as_deref(), Some("Story"));
+        let next = surface
+            .root()
+            .query_selector(
+                ".hero-panel[aria-label='Story'] > .hero-step-navigation > .hero-step-next",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.text_content().as_deref(), Some("Next: Abilities"));
+        next.dispatch_event(&web_sys::Event::new("click").unwrap())
+            .unwrap();
+        let active = surface
+            .root()
+            .query_selector(".hero-panel:not([hidden])")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            active.get_attribute("aria-label").as_deref(),
+            Some("Abilities")
+        );
+        let read = surface
+            .root()
+            .query_selector(".hero-read")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read.text_content().as_deref(),
+            Some("Suggest choices from my text")
+        );
+        assert!(
+            surface
+                .root()
+                .query_selector("details .hero-read")
+                .unwrap()
+                .is_some()
+        );
+        let join = surface
+            .root()
+            .query_selector(
+                ".hero-panel[aria-label='Abilities'] > .hero-step-navigation > button:not(.hero-step-back)",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(join.text_content().as_deref(), Some("Join the table"));
+        assert!(include_str!("hero_creator.css").contains("@media(max-width:600px)"));
         assert_eq!(
             surface
                 .root()
@@ -2112,7 +2256,7 @@ mod tests {
                 .missing
                 .text_content()
                 .unwrap()
-                .contains("Read my description")
+                .contains("Use your text to suggest choices")
         );
         let version = surface.controls.version.get();
         assert!(surface.apply_preview(version, &initial, &[]));
@@ -2596,7 +2740,7 @@ pub(super) fn sync_library(
         status.set_attribute("role", "status")?;
         if !draft_cleared {
             status.set_text_content(Some(
-                "Your hero is accepted. This browser could not clear its old draft.",
+                "Your hero is accepted. This device could not clear its old draft.",
             ));
         }
         use sha2::{Digest, Sha256};
@@ -2636,7 +2780,7 @@ pub(super) fn sync_library(
                 Ok(origin) => origin,
                 Err(_) => {
                     LIBRARY_SAVING.with(|saving| saving.set(false));
-                    status.set_text_content(Some("Not yet saved to your heroes - this browser could not retain the hero reference"));
+                    status.set_text_content(Some("Not yet saved to your heroes - this device could not retain the hero reference"));
                     return Ok(());
                 }
             },
@@ -2689,7 +2833,7 @@ pub(super) fn sync_library(
                 });
                 if retained.is_err() {
                     status.set_text_content(Some(
-                        "Saved to your heroes. This browser could not retain the hero reference.",
+                        "Saved to your heroes. This device could not retain the hero reference.",
                     ));
                     return;
                 }
@@ -2714,12 +2858,13 @@ pub(super) fn sync_library(
         .owner_document()
         .ok_or_else(|| JsValue::from_str("Document unavailable"))?;
     let picker = node(&document, &creator.root, "section", "hero-library", "")?;
+    set_library_visibility(&picker, false)?;
     if let Some(layout) = creator.root.query_selector(".hero-layout")? {
         creator.root.insert_before(&picker, Some(&layout))?;
     }
     let heading = node(&document, &picker, "div", "hero-library-head", "")?;
     node(&document, &heading, "h2", "", "Your heroes")?;
-    let note = node(
+    node(
         &document,
         &heading,
         "p",
@@ -2819,9 +2964,9 @@ pub(super) fn sync_library(
                 return Ok(());
             }
             if rows.heroes.is_empty() {
-                note.set_text_content(Some(
-                    "Heroes you confirm are kept here for your next adventure.",
-                ));
+                set_library_visibility(&picker, false)?;
+            } else {
+                set_library_visibility(&picker, true)?;
             }
             for row in rows.heroes {
                 let button = node(&document, &list, "button", "hero-library-item", "")?;
