@@ -14,7 +14,7 @@ use crate::{
     config::{self, Config},
     credentials::{self, Credential, Keys},
     form::Form,
-    install::Install,
+    install::{Install, Missing},
     log, platform, postgres,
     saves::{self, Adventure, SavedGame},
     server,
@@ -356,7 +356,7 @@ impl App {
                 inner.display_full_screen,
             )
         };
-        let install = Install::locate(&settings).map_err(|missing| missing.0);
+        let install = Install::locate(&settings).map_err(|_| Missing::SHOWN.to_owned());
         Snapshot {
             keys: self
                 .keys(&settings, install.as_ref().ok())
@@ -569,7 +569,7 @@ impl App {
             })
         };
         let install = Install::locate(&settings)
-            .map_err(|missing| failed("DungeonFlux can't find the game", missing.0))?;
+            .map_err(|missing| failed("DungeonFlux can't find the game", missing.logged()))?;
         log::event(
             "INSTALL",
             format!(
@@ -1237,9 +1237,18 @@ impl App {
                 std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok()
             });
         if !reachable {
+            log::event(
+                "CONNECT_UNREACHABLE",
+                format!(
+                    "origin={} hint=start_the_server_with_development/run-gameplay.sh",
+                    log::value(&origin)
+                ),
+            );
             self.set_phase(Phase::Failed(Failure {
                 title: "No server answered".to_owned(),
-                message: format!("Nothing is listening at {origin}. Start the server first (for example with development/run-gameplay.sh), then connect again."),
+                message: format!(
+                    "No game server answered at {origin}. Check the address, then connect again."
+                ),
                 log_tail: String::new(),
                 recovery: Recovery::Nothing,
             }));

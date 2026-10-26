@@ -20,9 +20,31 @@ pub struct Install {
     pub env_file: PathBuf,
 }
 
-/// What is missing, written so the player knows what to do next.
+/// What is missing. Players see [`Missing::SHOWN`]; the developer detail (which folder, what to
+/// build or set) goes only to the launcher log.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Missing(pub String);
+pub struct Missing {
+    pub detail: String,
+}
+
+impl Missing {
+    pub const SHOWN: &'static str = "DungeonFlux is missing some of its files, so a game can't start. Reinstalling DungeonFlux fixes this.";
+
+    fn because(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+        }
+    }
+
+    /// Records the detail in the launcher log and returns the player message.
+    pub fn logged(self) -> String {
+        crate::log::event(
+            "INSTALL_MISSING",
+            format!("detail={}", crate::log::value(&self.detail)),
+        );
+        Self::SHOWN.to_owned()
+    }
+}
 
 impl Install {
     pub fn locate(settings: &Settings) -> Result<Self, Missing> {
@@ -35,7 +57,7 @@ impl Install {
         };
         for tool in ["initdb", "pg_ctl", "createdb", "psql"] {
             if !postgres_bin.join(format!("{tool}{EXE}")).is_file() {
-                return Err(Missing(format!(
+                return Err(Missing::because(format!(
                     "PostgreSQL was not found in {}. Set the PostgreSQL folder in Settings, under Developer.",
                     postgres_bin.display()
                 )));
@@ -90,16 +112,15 @@ fn game_folder(settings: &Settings) -> Result<PathBuf, Missing> {
         return if is_game_folder(&folder) {
             Ok(folder)
         } else {
-            Err(Missing(format!(
+            Err(Missing::because(format!(
                 "{} does not hold the DungeonFlux content folder. Correct the game folder in Settings, under Developer.",
                 folder.display()
             )))
         };
     }
     find_game_folder().ok_or_else(|| {
-        Missing(
-            "The DungeonFlux game folder was not found. Set it in Settings, under Developer."
-                .to_owned(),
+        Missing::because(
+            "The DungeonFlux game folder was not found. Set it in Settings, under Developer.",
         )
     })
 }
@@ -120,7 +141,7 @@ fn build_folder(settings: &Settings, root: &Path) -> Result<PathBuf, Missing> {
         return if is_build(&folder) {
             Ok(folder)
         } else {
-            Err(Missing(format!(
+            Err(Missing::because(format!(
                 "{} is not a complete game build (it needs debug/df-transport-fixture{EXE} and play-web). Correct the build folder in Settings, under Developer.",
                 folder.display()
             )))
@@ -131,9 +152,8 @@ fn build_folder(settings: &Settings, root: &Path) -> Result<PathBuf, Missing> {
         return Ok(standard);
     }
     newest_build(&root.join("artifacts/build")).ok_or_else(|| {
-        Missing(
-            "The game has not been built yet. Build it once with development/run-gameplay.sh, or set a build folder in Settings, under Developer."
-                .to_owned(),
+        Missing::because(
+            "The game has not been built yet. Build it once with development/run-gameplay.sh, or set a build folder in Settings, under Developer.",
         )
     })
 }
@@ -190,7 +210,7 @@ mod tests {
         assert!(
             Install::locate(&settings)
                 .unwrap_err()
-                .0
+                .detail
                 .contains("not been built")
         );
         std::fs::create_dir_all(root.join("artifacts/build/incomplete/debug")).unwrap();
@@ -219,7 +239,7 @@ mod tests {
         assert!(
             Install::locate(&wrong)
                 .unwrap_err()
-                .0
+                .detail
                 .contains("not a complete game build")
         );
         std::fs::remove_dir_all(root).unwrap();
