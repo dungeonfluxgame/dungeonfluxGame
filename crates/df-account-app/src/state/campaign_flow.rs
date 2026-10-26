@@ -86,7 +86,12 @@ pub struct LobbyScreen {
 pub struct PlayScreen {
     pub session_id: String,
     pub launch: Remote<crate::wire_campaign::GameLaunchView>,
+    /// How many times the page has asked while the started game was not reachable yet.
+    pub waiting_polls: u32,
 }
+
+/// After this many unanswered checks (about two minutes) the page says the game is slow to start.
+pub const SLOW_START_POLLS: u32 = 40;
 
 pub(super) fn empty_draft() -> CampaignDraft {
     CampaignDraft {
@@ -202,6 +207,7 @@ impl Model {
                 self.screen = Screen::Play(PlayScreen {
                     session_id: session_id.clone(),
                     launch: Remote::Loading,
+                    waiting_polls: 0,
                 });
                 vec![self.api(ApiCall::GameLaunch { session_id })]
             }
@@ -1004,9 +1010,13 @@ impl Model {
         };
         match result {
             Ok(view) => {
-                // Keep asking until the game is reachable; then the page holds still.
-                let waiting = view.launcher_url.is_none();
+                // Keep asking while a started game is not reachable yet; a ready game, or a session
+                // that has not started (its session page starts it), holds still.
+                let waiting = view.has_started && view.launcher_url.is_none();
                 let delay_ms = view.poll_seconds.saturating_mul(1_000).max(1_000);
+                if waiting {
+                    screen.waiting_polls = screen.waiting_polls.saturating_add(1);
+                }
                 screen.launch = Remote::Ready(view);
                 if waiting {
                     vec![Effect::After {

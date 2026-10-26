@@ -7,7 +7,7 @@ use super::{actions, panel};
 use crate::{
     node::{Element, Node, el},
     route::Route,
-    state::{PlayScreen, Remote},
+    state::{PlayScreen, Remote, SLOW_START_POLLS},
     view::{failed, link, loading, page_wide},
 };
 
@@ -19,14 +19,17 @@ pub(in crate::view) fn play(screen: &PlayScreen) -> Node {
                 .into();
         }
         Remote::Failed(error) => {
-            return page_wide("Starting your game", None)
-                .child(failed(*error))
-                .into();
+            return page_wide("Your game", None).child(failed(*error)).into();
         }
         Remote::Ready(launch) => launch,
     };
     let body = match (&launch.launcher_url, launch.has_started) {
         (Some(url), _) => ready_panel(url),
+        (None, true) if screen.waiting_polls >= SLOW_START_POLLS => {
+            panel("Your game is taking longer than usual").child(el("p").text(
+                "It opens here as soon as it is ready. If it has not opened in a few minutes, come back and try again.",
+            ))
+        }
         (None, true) => panel("Your game is starting").child(
             el("p")
                 .class("hint")

@@ -745,6 +745,61 @@ async fn play_now_with_enough_credit_approves_it_and_starts_in_the_same_click() 
 }
 
 #[tokio::test]
+async fn play_now_again_returns_to_the_running_table_instead_of_starting_another() {
+    use crate::app_api::{ids, ports::FinancePort};
+    let harness = Harness::new().await;
+    let mut host = harness.browser();
+    host.sign_up_verified("play-again@example.test").await;
+    let account = host.account_id().await;
+    let operation = host.operation().await;
+    let first = host
+        .post(
+            "/app/api/campaigns/play-now",
+            &json!({"operation": operation}),
+        )
+        .await
+        .json();
+    assert_eq!(first["lobby"]["has_started"], true, "{first}");
+    let session = ids::session(first["lobby"]["session_id"].as_str().unwrap()).unwrap();
+    let approved = harness
+        .ports
+        .finance
+        .host_credit(account, session)
+        .await
+        .unwrap()
+        .expect("the host's quote")
+        .consented_at_ms;
+    // A new click, with a new operation, while that table runs.
+    let operation = host.operation().await;
+    let again = host
+        .post(
+            "/app/api/campaigns/play-now",
+            &json!({"operation": operation}),
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.body);
+    let again = again.json();
+    assert_eq!(again["campaign_id"], first["campaign_id"]);
+    assert_eq!(again["lobby"]["session_id"], first["lobby"]["session_id"]);
+    assert_eq!(
+        host.get("/app/api/campaigns").await.json()["campaigns"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let after = harness
+        .ports
+        .finance
+        .host_credit(account, session)
+        .await
+        .unwrap()
+        .expect("the host's quote")
+        .consented_at_ms;
+    assert_eq!(after, approved);
+}
+
+#[tokio::test]
 async fn lobbyfix_settings_save_two_changes_and_reuse_the_hosts_last_rating() {
     use super::fixtures::Req;
     use axum::http::Method;

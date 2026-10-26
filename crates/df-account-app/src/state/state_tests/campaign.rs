@@ -776,6 +776,46 @@ fn launch_view(launcher_url: Option<&str>) -> crate::wire_campaign::GameLaunchVi
 }
 
 #[test]
+fn the_launcher_does_not_keep_asking_about_a_session_that_has_not_started() {
+    let mut model = booted(
+        Route::Play {
+            session_id: "5e".to_owned(),
+        },
+        signed_in(true),
+    );
+    let mut view = launch_view(None);
+    view.has_started = false;
+    let effects = deliver(&mut model, Reply::GameLaunch(Ok(view)));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::After { .. }))
+    );
+}
+
+#[test]
+fn the_launcher_says_a_slow_start_is_slow_and_keeps_asking() {
+    let mut model = booted(
+        Route::Play {
+            session_id: "5e".to_owned(),
+        },
+        signed_in(true),
+    );
+    for _ in 0..crate::state::SLOW_START_POLLS {
+        let effects = deliver(&mut model, Reply::GameLaunch(Ok(launch_view(None))));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::After { .. }))
+        );
+    }
+    let Screen::Play(screen) = &model.screen else {
+        panic!("still on the launcher page");
+    };
+    assert_eq!(screen.waiting_polls, crate::state::SLOW_START_POLLS);
+}
+
+#[test]
 fn the_launcher_asks_again_until_the_game_is_reachable_then_holds_still() {
     let mut model = booted(
         Route::Play {

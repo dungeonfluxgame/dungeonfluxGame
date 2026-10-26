@@ -507,6 +507,35 @@ pub(super) async fn code_request<S: AccountStore, M: EmailSender, P: Ports>(
     )
 }
 
+/// The host's live table, a started session first, else an open lobby; `None` when they host none.
+async fn hosted_live_table<S: AccountStore, M: EmailSender, P: Ports>(
+    state: &AppApiState<S, M, P>,
+    who: &super::ports::Actor,
+) -> Result<Option<(df_types::CampaignId, df_types::SessionId)>, ApiFailure> {
+    let dashboard = state.ports.campaigns().dashboard(who).await?;
+    let mut open_lobby = None;
+    for card in dashboard.campaigns {
+        if card.is_archived || card.role != df_account_app::wire_campaign::CampaignRole::Host {
+            continue;
+        }
+        let Some(live) = card.live_session_id.as_deref() else {
+            continue;
+        };
+        let (campaign, session) = (ids::campaign(&card.campaign_id)?, ids::session(live)?);
+        if state
+            .ports
+            .campaigns()
+            .lobby(who, session)
+            .await?
+            .has_started
+        {
+            return Ok(Some((campaign, session)));
+        }
+        open_lobby.get_or_insert((campaign, session));
+    }
+    Ok(open_lobby)
+}
+
 pub(super) async fn play_now<S: AccountStore, M: EmailSender, P: Ports>(
     State(state): State<AppApiState<S, M, P>>,
     SessionPost(caller): SessionPost,
@@ -514,23 +543,40 @@ pub(super) async fn play_now<S: AccountStore, M: EmailSender, P: Ports>(
 ) -> ApiResult<df_account_app::wire_campaign::PlayNowView> {
     let who = verified_actor(&caller)?;
     let operation = ids::operation(&body.operation)?;
-    let campaign = state
-        .ports
-        .campaigns()
-        .play_now_campaign(&who, operation)
-        .await?;
-    let session = state
-        .ports
-        .campaigns()
-        .open_lobby(&who, campaign)
-        .await
-        .map_err(|error| launch_after_creation_failed(campaign, error))?;
-    state
-        .ports
-        .finance()
-        .prepare_host_session(who.account, session)
-        .await
-        .map_err(|error| launch_after_creation_failed(campaign, error))?;
+    // One table at a time: Play now returns to the host's running (or still open) table instead of
+    // starting a second one that would also spend.
+    let (campaign, session) = match hosted_live_table(&state, &who).await? {
+        Some(table) => {
+            df_observe::record_audit_line(
+                "portal.play_now",
+                format!(
+                    "SESSION play_now_resumed session={}",
+                    ids::hex(table.1.as_bytes())
+                ),
+            );
+            table
+        }
+        None => {
+            let campaign = state
+                .ports
+                .campaigns()
+                .play_now_campaign(&who, operation)
+                .await?;
+            let session = state
+                .ports
+                .campaigns()
+                .open_lobby(&who, campaign)
+                .await
+                .map_err(|error| launch_after_creation_failed(campaign, error))?;
+            state
+                .ports
+                .finance()
+                .prepare_host_session(who.account, session)
+                .await
+                .map_err(|error| launch_after_creation_failed(campaign, error))?;
+            (campaign, session)
+        }
+    };
     let view = state
         .ports
         .campaigns()
