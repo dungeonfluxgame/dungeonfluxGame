@@ -1005,7 +1005,7 @@ impl Model {
         match result {
             Ok(view) => {
                 // Keep asking until the game is reachable; then the page holds still.
-                let waiting = view.links.is_none();
+                let waiting = view.launcher_url.is_none();
                 let delay_ms = view.poll_seconds.saturating_mul(1_000).max(1_000);
                 screen.launch = Remote::Ready(view);
                 if waiting {

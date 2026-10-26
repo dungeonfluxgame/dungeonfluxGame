@@ -765,14 +765,12 @@ fn a_start_goes_to_the_launcher_and_a_refused_or_blocked_start_stays_on_the_sess
     }
 }
 
-fn launch_view(
-    links: Option<crate::wire_campaign::GameLinks>,
-) -> crate::wire_campaign::GameLaunchView {
+fn launch_view(launcher_url: Option<&str>) -> crate::wire_campaign::GameLaunchView {
     crate::wire_campaign::GameLaunchView {
         session_id: "5e".to_owned(),
         campaign_name: "The Drowned Lantern".to_owned(),
         has_started: true,
-        links,
+        launcher_url: launcher_url.map(str::to_owned),
         poll_seconds: 3,
     }
 }
@@ -795,11 +793,7 @@ fn the_launcher_asks_again_until_the_game_is_reachable_then_holds_still() {
     )));
     let ready = deliver(
         &mut model,
-        Reply::GameLaunch(Ok(launch_view(Some(crate::wire_campaign::GameLinks {
-            display_url: "http://game.test/gameplay/display".to_owned(),
-            player_url: "http://game.test/gameplay/player?room=ABCDEF".to_owned(),
-            room_code: Some("ABCDEF".to_owned()),
-        })))),
+        Reply::GameLaunch(Ok(launch_view(Some("http://127.0.0.1:8770/")))),
     );
     assert!(
         !ready

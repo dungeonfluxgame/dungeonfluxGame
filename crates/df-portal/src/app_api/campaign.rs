@@ -679,7 +679,9 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
         .campaigns()
         .lobby(&actor(&caller), session)
         .await?;
-    let mut links = None;
+    // The game counts as reachable once the session is placed (its table and player links exist);
+    // the account then hands off to the game launcher, never to the screens themselves.
+    let mut launcher_url = None;
     let reason = if !lobby.has_started {
         "session_not_started"
     } else {
@@ -692,8 +694,13 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
             Ok(Ok(Some(found)))
                 if is_game_url(&found.display_url) && is_game_url(&found.player_url) =>
             {
-                links = Some(found);
-                "ready"
+                match game_launcher_url() {
+                    Some(url) => {
+                        launcher_url = Some(url);
+                        "ready"
+                    }
+                    None => "launcher_missing",
+                }
             }
             Ok(Ok(Some(_))) => "invalid_session_link",
             Ok(Ok(None)) => "placement_missing",
@@ -701,7 +708,7 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
             Err(_) => "runtime_deadline",
         }
     };
-    if links.is_none() {
+    if launcher_url.is_none() {
         df_observe::record_audit_line(
             "portal.game_unavailable",
             format!("SESSION game_unavailable session={session_id} reason={reason}"),
@@ -711,9 +718,17 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
         session_id,
         campaign_name: lobby.campaign_name,
         has_started: lobby.has_started,
-        links,
+        launcher_url,
         poll_seconds: lobby.poll_seconds,
     })
+}
+
+/// This deployment's game launcher (the desktop launcher's screen, served to the browser), from
+/// DF_GAME_LAUNCHER_URL. Hosted sessions get a per-session launcher address with their placement.
+fn game_launcher_url() -> Option<String> {
+    std::env::var("DF_GAME_LAUNCHER_URL")
+        .ok()
+        .filter(|url| is_game_url(url))
 }
 
 /// Only an absolute http(s) address without credentials may be handed to the browser.

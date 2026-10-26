@@ -359,14 +359,16 @@ pub enum StartBlocker {
     CampaignArchived,
 }
 
-/// The pre-game launcher's view of a session: whether it has started, and once its game is
-/// reachable, the table screen, the player screen and the room code people type on their phones.
+/// The account's hand-off for a session: whether it has started and, once its game is reachable,
+/// the game launcher's address. The launcher (the desktop launcher's screen) offers the table
+/// screen, the players' join and the room code; the account never does (planning/client-architecture.md
+/// "Game start flow").
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GameLaunchView {
     pub session_id: String,
     pub campaign_name: String,
     pub has_started: bool,
-    pub links: Option<GameLinks>,
+    pub launcher_url: Option<String>,
     pub poll_seconds: u32,
 }
 

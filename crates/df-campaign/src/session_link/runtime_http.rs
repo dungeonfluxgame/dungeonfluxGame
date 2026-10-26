@@ -638,6 +638,7 @@ mod tests {
             .expect("loopback upstream WebSocket fixture failed its own handshake");
             assert_eq!(events.recv().await.as_deref(), Some("ready"));
             upstream_probe.close(None).await.unwrap();
+            assert_eq!(events.recv().await.as_deref(), Some("closed"));
 
             let secret =
                 LaunchSecret::new(&format!("relay-test-secret-{}", "x".repeat(24))).unwrap();

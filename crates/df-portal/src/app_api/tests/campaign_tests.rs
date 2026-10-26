@@ -863,7 +863,7 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
     assert_eq!(waiting.status, StatusCode::OK, "{}", waiting.body);
     let waiting = waiting.json();
     assert_eq!(waiting["has_started"], true);
-    assert_eq!(waiting["links"], Value::Null);
+    assert_eq!(waiting["launcher_url"], Value::Null);
     assert!(!waiting.to_string().contains("DF_GAMEPLAY"));
     let session_hex = hex(session.as_bytes());
     let links = |display: &str| df_account_app::wire_campaign::GameLinks {
@@ -876,19 +876,23 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
         session,
         links("https://user:secret@game.example.test/display"),
     );
-    assert_eq!(player.get(&launch_path).await.json()["links"], Value::Null);
+    assert_eq!(
+        player.get(&launch_path).await.json()["launcher_url"],
+        Value::Null
+    );
     harness.ports.campaigns.seed_game_links(
         session,
         links(&format!(
             "https://game.example.test/sessions/{session_hex}/display"
         )),
     );
+    // Placed, but the account only ever hands off to the game launcher: it never carries the table
+    // or player links or the room code (planning/client-architecture.md "Game start flow").
     let opened = player.get(&launch_path).await.json();
-    assert_eq!(
-        opened["links"]["display_url"],
-        format!("https://game.example.test/sessions/{session_hex}/display")
-    );
-    assert_eq!(opened["links"]["room_code"], "ABCDEF");
+    let text = opened.to_string();
+    assert!(!text.contains("/display") && !text.contains("/player") && !text.contains("ABCDEF"));
+    // No launcher address is configured in this harness, so there is nothing to open yet.
+    assert_eq!(opened["launcher_url"], Value::Null);
 }
 
 #[tokio::test]
