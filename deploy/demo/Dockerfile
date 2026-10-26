@@ -2,6 +2,8 @@
 FROM rust:1.98.1-bookworm AS build
 
 WORKDIR /src
+# The repository .cargo/config.toml points target-dir at artifacts/; release paths below expect /src/target.
+ENV CARGO_TARGET_DIR=/src/target
 RUN rustup target add wasm32-unknown-unknown
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

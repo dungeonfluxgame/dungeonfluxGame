@@ -23,7 +23,10 @@ pub(super) const MIGRATIONS: [(i32, &str); 5] = [
         30,
         include_str!("../../migrations/0030_personal_tenants.sql"),
     ),
-    (32, include_str!("../../migrations/0032_integration_tokens.sql")),
+    (
+        32,
+        include_str!("../../migrations/0032_integration_tokens.sql"),
+    ),
 ];
 pub(super) const CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 /// The account tables live in schema `accounts` of the shared hosted database (coordinator

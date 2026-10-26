@@ -29,8 +29,11 @@ const DEFAULT_TUNNEL_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
 const MAXIMUM_TUNNELS_PER_PRINCIPAL: usize = 2;
 const REVOCATION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const MAXIMUM_AUTHORITY_CHECK: Duration = Duration::from_millis(500);
+#[cfg(test)]
 const AUTHORITY_ACTIVE: u8 = 0;
+#[cfg(test)]
 const AUTHORITY_REVOKED: u8 = 1;
+#[cfg(test)]
 const AUTHORITY_UNAVAILABLE: u8 = 2;
 
 /// Bounds the lifetime and concurrency of each upgraded session relay.

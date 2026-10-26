@@ -162,14 +162,14 @@ mod catalog_service_tests;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod operator_review;
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-fakes")))]
+pub use operator_review::LocalReviewBytes;
 #[cfg(not(target_arch = "wasm32"))]
 pub use operator_review::{
     MAX_PENDING_REVIEWS, MAX_REASON_CHARS, OperatorContext, OperatorReviewStore, PendingReview,
     ReviewByteHandle, ReviewByteStore, ReviewDecision, ReviewError, ReviewReceipt, ReviewRequest,
     approval_permitted, decision_permitted, verify_review_bytes,
 };
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-fakes")))]
-pub use operator_review::LocalReviewBytes;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod operator_review_tests;

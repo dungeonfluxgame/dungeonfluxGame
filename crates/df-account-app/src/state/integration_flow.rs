@@ -130,7 +130,12 @@ impl Model {
         let Screen::Integration(screen) = &mut self.screen else {
             return false;
         };
-        if match &**screen {IntegrationScreen::Tokens(s)=>s.submit.is_sending(),IntegrationScreen::Share(s)=>s.submit.is_sending()} {return true;}
+        if match &**screen {
+            IntegrationScreen::Tokens(s) => s.submit.is_sending(),
+            IntegrationScreen::Share(s) => s.submit.is_sending(),
+        } {
+            return true;
+        }
         match (&mut **screen, field) {
             (IntegrationScreen::Tokens(s), IntegrationField::Label) => s.label = value.to_owned(),
             (IntegrationScreen::Tokens(s), IntegrationField::Expiry) => s.expiry = value.to_owned(),
@@ -157,7 +162,9 @@ impl Model {
             return Vec::new();
         };
         let call = match (&mut **screen, intent) {
-            (IntegrationScreen::Tokens(s), IntegrationIntent::ToggleScope(scope)) if !s.submit.is_sending() => {
+            (IntegrationScreen::Tokens(s), IntegrationIntent::ToggleScope(scope))
+                if !s.submit.is_sending() =>
+            {
                 if s.scopes.contains(&scope) {
                     s.scopes.retain(|v| v != &scope);
                 } else {
@@ -182,7 +189,7 @@ impl Model {
             (IntegrationScreen::Tokens(s), IntegrationIntent::RevokeToken(id))
                 if !s.submit.is_sending() =>
             {
-                s.reveal=None;
+                s.reveal = None;
                 s.submit = Submit::Sending;
                 let password = (!s.password.0.is_empty()).then(|| s.password.clone());
                 s.password.0.clear();
@@ -200,7 +207,9 @@ impl Model {
                 s.reveal = None;
                 return Vec::new();
             }
-            (IntegrationScreen::Share(s), IntegrationIntent::Person(account)) if !s.submit.is_sending() => {
+            (IntegrationScreen::Share(s), IntegrationIntent::Person(account))
+                if !s.submit.is_sending() =>
+            {
                 if let Remote::Ready(p) = &mut s.preview {
                     if p.draft
                         .people
@@ -222,7 +231,7 @@ impl Model {
             (IntegrationScreen::Share(s), IntegrationIntent::SavePreview)
                 if !s.submit.is_sending() =>
             {
-                s.reveal=None;
+                s.reveal = None;
                 s.submit = Submit::Sending;
                 Call::SavePreview(
                     s.session.clone(),
@@ -249,7 +258,9 @@ impl Model {
                     return Vec::new();
                 };
                 s.submit = Submit::Sending;
-                if !agrees {s.reveal=None;}
+                if !agrees {
+                    s.reveal = None;
+                }
                 Call::Consent(
                     s.session.clone(),
                     ShareConsent {
@@ -265,7 +276,7 @@ impl Model {
                     return Vec::new();
                 };
                 s.submit = Submit::Sending;
-                s.reveal=None;
+                s.reveal = None;
                 Call::CreateShare(
                     s.session.clone(),
                     CreateShare {
@@ -279,7 +290,7 @@ impl Model {
             (IntegrationScreen::Share(s), IntegrationIntent::RevokeShare(key))
                 if !s.submit.is_sending() =>
             {
-                s.reveal=None;
+                s.reveal = None;
                 s.submit = Submit::Sending;
                 Call::RevokeShare(s.session.clone(), key)
             }
@@ -437,7 +448,7 @@ mod tests {
             duration_minutes: 60,
             consented_accounts: Vec::new(),
             can_publish: true,
-                can_consent: false,
+            can_consent: false,
             candidates: Vec::new(),
         })));
         model.update(Msg::Edit(

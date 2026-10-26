@@ -169,9 +169,7 @@ impl FakeProfile {
                 }
                 (&mut view.scene, &mut view.journey)
             }
-            Some(Audience::Player(view)) => {
-                (&mut view.scene, &mut view.journey)
-            }
+            Some(Audience::Player(view)) => (&mut view.scene, &mut view.journey),
             None => return,
         };
         if let Some(scene) = scene {

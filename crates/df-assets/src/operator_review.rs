@@ -148,7 +148,9 @@ pub struct ReviewByteHandle {
 pub enum ReviewError {
     InvalidReason,
     /// The item is not pending (wrong state, already decided, expired, or gone).
-    NotPending { state: Option<AssetState> },
+    NotPending {
+        state: Option<AssetState>,
+    },
     /// The attempt moved or the expected revision no longer matches.
     StaleRevision,
     /// A different payload already used this operation id.

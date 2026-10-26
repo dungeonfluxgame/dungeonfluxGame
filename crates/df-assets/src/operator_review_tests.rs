@@ -23,8 +23,14 @@ fn request(reason: &str) -> ReviewRequest {
 
 #[test]
 fn reason_must_be_one_to_five_hundred_trimmed_characters() {
-    assert_eq!(request("").validated_reason(), Err(ReviewError::InvalidReason));
-    assert_eq!(request("   ").validated_reason(), Err(ReviewError::InvalidReason));
+    assert_eq!(
+        request("").validated_reason(),
+        Err(ReviewError::InvalidReason)
+    );
+    assert_eq!(
+        request("   ").validated_reason(),
+        Err(ReviewError::InvalidReason)
+    );
     assert_eq!(request("  ok  ").validated_reason(), Ok("ok"));
     let longest = "x".repeat(MAX_REASON_CHARS);
     assert!(request(&longest).validated_reason().is_ok());
@@ -88,8 +94,5 @@ fn local_bytes_are_exact_and_hash_checked() {
     assert_eq!(store.read_exact(handle), Ok(bytes));
     let mut wrong = handle;
     wrong.byte_len += 1;
-    assert_eq!(
-        store.read_exact(wrong),
-        Err(ReviewError::IntegrityMismatch)
-    );
+    assert_eq!(store.read_exact(wrong), Err(ReviewError::IntegrityMismatch));
 }

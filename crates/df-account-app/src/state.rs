@@ -12,7 +12,9 @@ mod campaign_flow;
 mod customer_flow;
 mod display_flow;
 mod integration_flow;
-pub use integration_flow::{IntegrationField, IntegrationIntent, IntegrationScreen, SharingScreen, TokensScreen};
+pub use integration_flow::{
+    IntegrationField, IntegrationIntent, IntegrationScreen, SharingScreen, TokensScreen,
+};
 
 pub use admin_flow::{
     AccountScreen, ActionTarget, AdminScreen, CreditGrantForm, ReasonAction, RefundForm,
@@ -669,7 +671,9 @@ impl Model {
         if let (Screen::Integration(screen), Field::Integration(field)) = (&mut self.screen, field)
         {
             if let IntegrationScreen::Share(s) = &mut **screen {
-                if s.submit.is_sending() {return;}
+                if s.submit.is_sending() {
+                    return;
+                }
                 match field {
                     IntegrationField::Indexing => s.indexing = is_on,
                     IntegrationField::Embeds => s.embeds = is_on,
