@@ -285,9 +285,11 @@ async fn offered_known_travel_is_primed_from_the_committed_place_journal() {
         request.time_of_day = model.time_of_day.clone();
         request.weather = model.weather.clone();
         request.origin_name = base.setting.as_ref().unwrap().name.clone();
+        let mut place = place_creation::tests::place_slot();
+        place["name"] = serde_json::json!("TESTSC Known Travel Street");
         let street = place_creation::build(
             &request,
-            &place_creation::tests::place_slot().to_string(),
+            &place.to_string(),
             &place_creation::tests::people_slot().to_string(),
             &place_creation::tests::things_slot().to_string(),
         )

@@ -301,12 +301,9 @@ impl PreviewRegistration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     // Symlink and mode assertions are Unix-only cases.
     #[cfg(unix)]
     use std::os::unix::fs::{DirBuilderExt, symlink};
-
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
 
     fn private_directory(path: &Path) {
         // Directory modes are a Unix-only property.
@@ -321,16 +318,21 @@ mod tests {
     }
 
     fn root() -> PathBuf {
-        let attempt = format!(
-            "preview-unit-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
+        let mut nonce = [0; 16];
+        getrandom::getrandom(&mut nonce).unwrap();
+        let attempt = format!("preview-unit-{:032x}", u128::from_le_bytes(nonce));
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
             .unwrap();
-        let namespace = workspace.join("artifacts").join("tmp").join(attempt);
+        let artifacts = workspace
+            .ancestors()
+            .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "artifacts"))
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| workspace.join("artifacts"));
+        let scratch = artifacts.join("tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let namespace = scratch.join(attempt);
         private_directory(&namespace);
         let root = namespace.join("state");
         private_directory(&root);

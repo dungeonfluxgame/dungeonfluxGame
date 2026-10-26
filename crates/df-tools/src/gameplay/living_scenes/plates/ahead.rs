@@ -866,10 +866,8 @@ mod free_roam_tests {
             });
         let endpoint =
             FakeEndpoint::start((0..32).map(|_| Reply::Compute(compute.clone())).collect());
-        let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../artifacts/tmp/lanes/HS55/tmp/forecast-{}",
-            std::process::id()
-        ));
+        let cache = crate::gameplay::imagery::tests::directory("free-roam-forecast");
+        let persona_judge = fixtures::accepting_persona_judge(64);
         let storyteller = teller(endpoint.address, 0, Duration::from_secs(10), &cache);
         let generated = runtime
             .block_on(free_roam::generate(
@@ -877,9 +875,7 @@ mod free_roam_tests {
                 RulesMode::Standard,
                 ContentRating::default(),
                 &storyteller,
-                &crate::gameplay::place_creation::tests::jev(
-                    &crate::gameplay::place_creation::tests::accepting_persona_judge(32),
-                ),
+                &fixtures::jev(&persona_judge),
             ))
             .unwrap();
         let (loaded, _) =
@@ -1064,9 +1060,10 @@ mod free_roam_tests {
                 voice: crate::gameplay::voice::Voice::disabled(
                     crate::gameplay::startup_configuration::VoiceOff::Qualification,
                 ),
-                npc_voice: Arc::new(crate::gameplay::npc_reply::NpcVoice::new(Arc::new(
-                    storyteller,
-                ))),
+                npc_voice: Arc::new(
+                    crate::gameplay::npc_reply::NpcVoice::new(Arc::new(storyteller))
+                        .with_approach_model(fixtures::jev(&persona_judge)),
+                ),
                 table_log: crate::gameplay::table_log::TableLog::new(),
                 social: crate::gameplay::social::SocialLedger::none(),
                 living: crate::gameplay::living_scenes::LivingScenes::disabled(),
@@ -1076,6 +1073,7 @@ mod free_roam_tests {
             runtime
                 .block_on(service.prepare_free_roam_current())
                 .unwrap();
+            runtime.block_on(service.look_ahead.wait());
             assert_eq!(*updates_in.borrow(), restored);
             assert_eq!(
                 free_roam::prepared(&restored)
@@ -1089,6 +1087,7 @@ mod free_roam_tests {
             runtime
                 .block_on(service.prepare_free_roam_current())
                 .unwrap();
+            runtime.block_on(service.look_ahead.wait());
             assert_eq!(
                 endpoint.connections(),
                 calls,

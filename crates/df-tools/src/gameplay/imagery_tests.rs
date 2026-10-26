@@ -315,7 +315,7 @@ fn every_image_prompt_uses_the_shared_film_look_and_names_no_other_medium() {
         for marker in [
             "real camera",
             "prime lens",
-            "practical light",
+            "ungraded available light",
             "documentary color photograph",
             "skin pores",
             "woven fabric",
@@ -422,7 +422,7 @@ fn hero_portrait_cutout_and_expression_prompts_use_only_the_checked_identity_and
             "green eyes",
             "healed facial scar",
             "red cloak",
-            "canonical held gear: a longbow",
+            "canonical equipment: a longbow",
             "appearance only",
             "no facial hair",
         ] {
@@ -465,14 +465,14 @@ fn a_different_hero_identity_changes_the_drawn_species_presentation_and_canonica
     assert!(
         first_prompt
             .as_str()
-            .contains("canonical held gear: a shortbow")
+            .contains("canonical equipment: a shortbow")
     );
     assert!(second_prompt.as_str().contains("human"));
     assert!(second_prompt.as_str().contains("masculine presentation"));
     assert!(
         second_prompt
             .as_str()
-            .contains("canonical held gear: a longsword")
+            .contains("canonical equipment: a longsword")
     );
     assert_ne!(first_prompt, second_prompt);
 }
@@ -894,9 +894,12 @@ fn fake_jpeg(width: u32, height: u32, padding: usize) -> Vec<u8> {
 // ---------------------------------------------------------------------------------------------
 // Helpers.
 
-fn directory(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("df-imagery-test-{name}-{}", std::process::id()));
-    let _removed = std::fs::remove_dir_all(&path);
+pub(in crate::gameplay) fn directory(name: &str) -> PathBuf {
+    let mut nonce = [0; 16];
+    getrandom::getrandom(&mut nonce).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/TESTSC/tmp")
+        .join(format!("{name}-{:032x}", u128::from_le_bytes(nonce)));
     std::fs::create_dir_all(&path).unwrap();
     path
 }

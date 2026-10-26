@@ -775,7 +775,7 @@ fn same_place_authored_layouts_coexist_and_select_the_exact_current_room() {
     assert_eq!(canonical.entries.len(), 2);
     let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
     let work = locked(&inner.state).canonical.take_jobs();
-    assert_eq!(work.len(), imagery::MAXIMUM_IN_FLIGHT);
+    assert_eq!(work.len(), 2);
     for (index, job) in work.into_iter().enumerate() {
         let Job::Canonical(work) = job else {
             panic!("canonical work");

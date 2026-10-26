@@ -486,10 +486,7 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         adventure::scene_model::{SceneKnowledge, SceneModel, ScenePerson, StartingAttitude},
         imagery::tests::DirectionFixture,
     };
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/plate-{}",
-        std::process::id()
-    ));
+    let cache = crate::gameplay::imagery::tests::directory("canonical-plate-refs");
     let fixture = DirectionFixture::photographic(&cache);
     let timing = Timing::from_interval(Duration::from_secs(30));
     let inner = Arc::new(Inner {
@@ -2146,10 +2143,7 @@ pub(super) fn finish_canonical_references(inner: &Inner) {
 #[tokio::test]
 async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_base_cached() {
     use crate::gameplay::imagery::tests::DirectionFixture;
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../artifacts/tmp/lanes/HS37/fixture-cache/campaign/luna6/J17/unit-plate-cache-{}",
-        std::process::id()
-    ));
+    let cache = crate::gameplay::imagery::tests::directory("directed-plate");
     let fixture = DirectionFixture::new(&cache);
     let mut timing = Timing::from_interval(Duration::from_secs(30));
     timing.roll_quiet = Duration::ZERO;
@@ -2274,7 +2268,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     );
     assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
     for mut message in [display_message(&current), player_message(&current)] {
-        apply(&shared, &mut message);
+        apply_at(&shared, &mut message, Duration::from_secs(25));
         assert_eq!(
             shown_scene(&message).live_plate,
             format!("/gameplay/imagery/{}", response["key"].as_str().unwrap())
@@ -2288,7 +2282,10 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), angry);
-    shared.poll_face();
+    for job in drain(&mut queue) {
+        assert!(matches!(job, Job::Measure { .. }));
+    }
+    shared.poll_face_at(Duration::from_secs(30));
     let Job::Edit {
         base: edit_base, ..
     } = queue.recv().await.unwrap()
@@ -2306,7 +2303,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         .direct("A directed plate that will fail".to_owned(), false)
         .unwrap();
     let mut failing_view = display_message(&current);
-    apply_at(&shared, &mut failing_view, Duration::from_secs(10));
+    apply_at(&shared, &mut failing_view, Duration::from_secs(40));
     assert!(shown_scene(&failing_view).plate_update_pending);
     let Job::Directed(failing) = queue.recv().await.unwrap() else {
         panic!("failing directed work")
@@ -2321,7 +2318,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     });
     assert!(!locked(&shared.book).direct.pending);
     let mut failed_view = display_message(&current);
-    apply_at(&shared, &mut failed_view, Duration::from_secs(10));
+    apply_at(&shared, &mut failed_view, Duration::from_secs(40));
     assert!(
         !shown_scene(&failed_view).plate_update_pending,
         "a failed directed plate clears the pending badge"
@@ -2329,7 +2326,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     plates.clear_direction();
     assert!(locked(&shared.book).direct.keep.is_none());
     let mut message = display_message(&current);
-    apply_at(&shared, &mut message, Duration::from_secs(20));
+    apply_at(&shared, &mut message, Duration::from_secs(60));
     assert_eq!(shown_scene(&message).live_plate, base.path());
     let calls = fixture.calls();
     let (request, _) = shared
@@ -2348,10 +2345,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
 }
 
 fn lane_cache(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/Q6B/{name}-{}",
-        std::process::id()
-    ))
+    crate::gameplay::imagery::tests::directory(name)
 }
 
 fn canonical_member(member: &pack::SceneCastMember) -> super::super::Member {
@@ -3800,9 +3794,9 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
     locked(&shared.inner.state)
         .plate_wants
         .insert("keeper".to_owned(), Face::AUTHORED);
-    shared.poll_face();
+    shared.poll_face_at(Duration::from_secs(30));
     let mut message = display_message(&current);
-    apply_at(&shared, &mut message, Duration::from_secs(25));
+    apply_at(&shared, &mut message, Duration::from_secs(30));
     assert_eq!(
         shown_scene(&message).live_plate,
         format!("/gameplay/imagery/{}", "a".repeat(64)),

@@ -745,6 +745,6 @@ mod tests {
         let line = lines.last().unwrap();
         assert!(line.starts_with("RESOURCE ready kind=text key="), "{line}");
         assert!(line.contains(&format!("key={}", &key[..32])), "{line}");
-        assert!(line.ends_with("ms=12 handle=handle-1 error="), "{line}");
+        assert!(line.contains("ms=12 handle=handle-1 error= op="), "{line}");
     }
 }

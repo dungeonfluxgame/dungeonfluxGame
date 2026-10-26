@@ -796,11 +796,7 @@ async fn wrong_scene_hero_count_retries_and_right_count_passes_for_each_party_si
     for heroes in [1, 2, 4, 6] {
         for edit in [false, true] {
             for retry in [false, true] {
-                let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join(
-                        "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/scene-retry-pass",
-                    )
-                    .join(format!("{}-{heroes}-{edit}-{retry}", std::process::id()));
+                let root = crate::gameplay::imagery::tests::directory("scene-count-retry");
                 let fixture = DirectionFixture::photographic(&root);
                 let mut answers = Vec::new();
                 if retry {
@@ -850,9 +846,7 @@ async fn wrong_scene_hero_count_retries_and_right_count_passes_for_each_party_si
 async fn persistent_scene_count_mismatch_keeps_the_fallback_and_never_publishes_rejected_bytes() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     for edit in [false, true] {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/scene-retry-bound")
-            .join(format!("{}-{edit}", std::process::id()));
+        let root = crate::gameplay::imagery::tests::directory("scene-count-refused");
         let fixture = DirectionFixture::photographic(&root);
         let mut wrong = scene_answer(7);
         wrong["text"] = json!("visible_text");
@@ -1052,9 +1046,7 @@ fn scene_photo_custody_is_required_and_count_failures_keep_priority_over_text() 
 async fn unexpected_drawn_weapon_uses_the_existing_plate_regeneration_gate() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     for edit in [false, true] {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS37/weapon-retry")
-            .join(format!("{}-{edit}", std::process::id()));
+        let root = crate::gameplay::imagery::tests::directory("unexpected-weapon");
         let fixture = DirectionFixture::photographic(&root);
         let mut wrong = scene_answer(6);
         wrong["weapon_custody"] = json!("unexpected_drawn_weapon");
@@ -1123,9 +1115,7 @@ async fn production_scene_gate_receives_compact_custody_for_fresh_and_edited_pla
     let custody =
         "Vesper: sword drawn in right hand, left hand empty. Other heroes: both hands empty.";
     for edit in [false, true] {
-        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS37/production-custody")
-            .join(format!("{}-{edit}", std::process::id()));
+        let cache = crate::gameplay::imagery::tests::directory("plate-custody");
         let fixture = DirectionFixture::photographic(&cache);
         let (judge, seen) = fake_judge(scene_answer(6)).await;
         let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
@@ -1213,9 +1203,7 @@ async fn photo_feature_public_catalog_keeps_quality_and_custody_within_the_instr
 #[tokio::test]
 async fn photo_check_keeps_only_the_accepted_retry_features_with_the_cached_image_key() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
-    let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS40/photo-evidence-cache")
-        .join(std::process::id().to_string());
+    let cache = crate::gameplay::imagery::tests::directory("photo_check_keeps_only_the_accepted_");
     let fixture = DirectionFixture::photographic(&cache);
     let mut accepted = scene_answer(6);
     accepted["visible_features"] = json!([{"name":"fruit stand","look":"Apples under canvas.","region":[600,200,900,700],"recorded_id":null}]);
