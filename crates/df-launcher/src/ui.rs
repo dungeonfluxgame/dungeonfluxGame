@@ -1137,10 +1137,11 @@ fn saved_games(snapshot: &Snapshot) -> String {
     let feature = featured
         .map(|game| {
             format!(
-                "<div class=\"continue\">{}<div class=\"continue-text\"><p class=\"continue-label\">Pick up where you left off</p><h3>{}</h3><p>{}, last played {}.</p>{}</div></div>",
+                "<div class=\"continue\">{}<div class=\"continue-text\"><p class=\"continue-label\">Pick up where you left off</p><h3>{}</h3><p>{}, Started {} · last played {}.</p>{}</div></div>",
                 save_picture(snapshot, game),
                 escape(&game.name),
                 escape(game.adventure.label()),
+                when(game.created),
                 when(game.last_played),
                 button_named(
                     "/resume",
@@ -1171,10 +1172,10 @@ fn saved_games(snapshot: &Snapshot) -> String {
                 String::new()
             };
             format!(
-                "<li>{}<div class=\"save-text\"><h3>{}</h3><p>{}</p><p>Last played {}</p></div>{action}</li>",
+                "<li>{}<div class=\"save-text\"><h3>{}</h3><p>Started {}</p><p>Last played {}</p></div>{action}</li>",
                 save_picture(snapshot, game),
                 escape(&game.name),
-                escape(game.adventure.short_label()),
+                when(game.created),
                 when(game.last_played)
             )
         })
@@ -1656,6 +1657,43 @@ mod tests {
         assert!(page.contains("value=\"free-roam\""));
         assert!(page.contains("<strong>Free roam</strong>"));
         assert!(page.contains("at your own pace."));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn saved_games_show_the_adventure_title_and_when_each_save_started() {
+        let (app, data) = app("same-title-saves");
+        let mut snapshot = app.snapshot();
+        snapshot.saves = vec![
+            SavedGame {
+                database: "df_gameplay_demo_first".to_owned(),
+                name: "The Broken Seal".to_owned(),
+                adventure: Adventure::Harbor,
+                created: 1_700_000_000,
+                last_played: 1_700_000_100,
+                played_seconds: 0,
+            },
+            SavedGame {
+                database: "df_gameplay_demo_second".to_owned(),
+                name: "The Broken Seal".to_owned(),
+                adventure: Adventure::Harbor,
+                created: 1_700_000_200,
+                last_played: 1_700_000_300,
+                played_seconds: 0,
+            },
+        ];
+        snapshot.phase = Phase::Failed(Failure {
+            title: String::new(),
+            message: String::new(),
+            log_tail: String::new(),
+            recovery: Recovery::Nothing,
+        });
+
+        let page = saved_games(&snapshot);
+
+        assert_eq!(page.matches("<h3>The Broken Seal</h3>").count(), 2);
+        assert_eq!(page.matches("Started ").count(), 2);
+        assert!(page.contains("Last played"));
         std::fs::remove_dir_all(data).unwrap();
     }
 

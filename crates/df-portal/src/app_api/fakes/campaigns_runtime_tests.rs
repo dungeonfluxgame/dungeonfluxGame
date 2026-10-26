@@ -12,6 +12,32 @@ use std::{
     time::Duration,
 };
 
+#[tokio::test]
+async fn play_now_uses_the_shipped_harbor_adventure_title_and_id() {
+    let campaigns = FakeCampaigns::new("http://127.0.0.1:8099", Arc::new(df_customer::SystemClock));
+    let who = Actor {
+        account: df_types::AccountId::from_bytes(&[1; 16]).unwrap(),
+        display_name: "Host".into(),
+        is_verified: true,
+    };
+
+    let catalog = campaigns.wizard_catalog().await.unwrap();
+    assert_eq!(catalog.adventures.len(), 1);
+    assert_eq!(catalog.adventures[0].adventure_id, "harbor-journey");
+    assert_eq!(catalog.adventures[0].name, "The Broken Seal");
+    let campaign = campaigns
+        .play_now_campaign(&who, df_types::OperationId::from_bytes(&[2; 16]).unwrap())
+        .await
+        .unwrap();
+    let settings = campaigns.campaign_settings(&who, campaign).await.unwrap();
+
+    assert_eq!(settings.draft.name, "The Broken Seal");
+    assert_eq!(
+        settings.draft.adventure_id.as_deref(),
+        Some("harbor-journey")
+    );
+}
+
 #[derive(Clone)]
 struct RuntimeFixture {
     origin: String,

@@ -337,7 +337,9 @@ impl App {
 
     fn read_run(&self) -> Option<RunRecord> {
         let text = std::fs::read_to_string(self.data.join(RUN_FILE)).ok()?;
-        toml::from_str(&text).ok()
+        let mut run = toml::from_str::<RunRecord>(&text).ok()?;
+        run.game.name = run.game.adventure.title().to_owned();
+        Some(run)
     }
 
     pub fn viewing(&self, view: View) {
@@ -380,10 +382,11 @@ impl App {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return;
         };
-        let Ok(run) = toml::from_str::<RunRecord>(&text) else {
+        let Ok(mut run) = toml::from_str::<RunRecord>(&text) else {
             let _ = std::fs::remove_file(&path);
             return;
         };
+        run.game.name = run.game.adventure.title().to_owned();
         if platform::process_is(run.pid, &run.server_exe) {
             log::event(
                 "GAME_RECONNECTED",
@@ -426,15 +429,13 @@ impl App {
         matches!(self.lock().phase, Phase::Idle { .. } | Phase::Failed(_))
     }
 
-    /// A new saved game with an automatic name (REF-009).
+    /// A new saved game named after its adventure.
     pub fn new_game(&self, adventure: Adventure) -> SavedGame {
-        let existing = saves::load(&self.data).unwrap_or_default();
         let now = chrono::Utc::now();
         let nanos = now.timestamp_subsec_nanos();
-        let seed = u64::from(nanos) ^ (now.timestamp() as u64).rotate_left(17);
         SavedGame {
             database: saves::new_database(now, nanos ^ std::process::id()),
-            name: saves::new_name(seed, &existing),
+            name: adventure.title().to_owned(),
             adventure,
             created: now.timestamp(),
             last_played: now.timestamp(),
@@ -1541,6 +1542,24 @@ mod tests {
     }
 
     #[test]
+    fn new_harbor_saves_use_the_game_content_title() {
+        let data =
+            std::env::temp_dir().join(format!("df-launcher-new-save-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let app = App::new(
+            data.clone(),
+            data.join("dungeonflux.toml"),
+            false,
+            Box::new(|_| {}),
+        );
+
+        let game = app.new_game(Adventure::Harbor);
+
+        assert_eq!(game.name, "The Broken Seal");
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
     fn a_stale_run_record_is_cleared_with_a_notice() {
         let data = std::env::temp_dir().join(format!("df-launcher-app-{}", std::process::id()));
         std::fs::create_dir_all(&data).unwrap();
@@ -1579,7 +1598,7 @@ mod tests {
         match app.snapshot().phase {
             Phase::Idle {
                 notice: Some(notice),
-            } => assert!(notice.contains("The Amber Bell")),
+            } => assert!(notice.contains("The Broken Seal")),
             other => panic!("unexpected phase {other:?}"),
         }
         assert!(!data.join(RUN_FILE).exists());

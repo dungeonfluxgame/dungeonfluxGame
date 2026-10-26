@@ -211,18 +211,11 @@ impl State {
             rules_text: "Plays by the fifth edition SRD 5.2.1 rules.".to_owned(),
         };
         WizardCatalog {
-            adventures: vec![
-                option(
-                    "lantern-road",
-                    "The Lantern Road",
-                    "A caravan, a missing lamplighter and a road that changes at night.",
-                ),
-                option(
-                    "ashes-of-vale",
-                    "Ashes of Vale",
-                    "A burned village, a sealed cellar and a stranger who knows your names.",
-                ),
-            ],
+            adventures: vec![option(
+                "harbor-journey",
+                "The Broken Seal",
+                "A harbor mystery about a missing courier and a broken seal.",
+            )],
             maximum_seats: MAXIMUM_SEATS,
             presets: [
                 (PacePreset::Story, Some(300)),

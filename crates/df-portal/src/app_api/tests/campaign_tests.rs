@@ -116,7 +116,7 @@ async fn the_wizard_creates_a_campaign_from_a_saved_draft_once_per_operation() {
         json!("campaign_name_required")
     );
     body["name"] = json!("The Lantern Road");
-    body["adventure_id"] = json!("lantern-road");
+    body["adventure_id"] = json!("harbor-journey");
     body["content_rating"] = json!("teen");
     for step in 1..=5 {
         let saved = host

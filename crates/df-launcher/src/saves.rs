@@ -28,21 +28,17 @@ impl Adventure {
         }
     }
 
-    /// For compact lists.
-    pub fn short_label(self) -> &'static str {
+    /// The title shown for a save of this adventure.
+    pub fn title(self) -> &'static str {
         match self {
-            Self::Harbor => "Harbor adventure",
-            Self::Random => "Rolled adventure",
+            Self::Harbor => "The Broken Seal",
+            Self::Random => "A newly rolled adventure",
             Self::FreeRoam => "Free roam",
         }
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Harbor => "The harbor adventure",
-            Self::Random => "A newly rolled adventure",
-            Self::FreeRoam => "Free roam",
-        }
+        self.title()
     }
 }
 
@@ -83,6 +79,9 @@ pub fn load(data: &Path) -> Result<Vec<SavedGame>, io::Error> {
         .map_err(|_| io::Error::other(format!("{} is damaged.", data.join(SAVES_FILE).display())))?
         .games;
     games.retain(|game| valid_database(&game.database));
+    for game in &mut games {
+        game.name = game.adventure.title().to_owned();
+    }
     games.sort_by_key(|game| std::cmp::Reverse(game.last_played));
     Ok(games)
 }
@@ -91,15 +90,18 @@ pub fn load(data: &Path) -> Result<Vec<SavedGame>, io::Error> {
 pub fn record(data: &Path, game: &SavedGame) -> Result<(), io::Error> {
     let _serialized = RECORD_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let mut games = load(data)?;
+    let mut game = game.clone();
+    game.name = game.adventure.title().to_owned();
     match games
         .iter_mut()
         .find(|known| known.database == game.database)
     {
         Some(known) => {
+            known.name.clone_from(&game.name);
             known.last_played = game.last_played;
             known.played_seconds = game.played_seconds;
         }
-        None => games.push(game.clone()),
+        None => games.push(game),
     }
     let text = toml::to_string_pretty(&SavedGames { games }).map_err(io::Error::other)?;
     crate::files::write_atomic(&data.join(SAVES_FILE), text.as_bytes())
@@ -136,82 +138,6 @@ pub fn new_database(now: chrono::DateTime<chrono::Utc>, nonce: u32) -> String {
     )
 }
 
-const QUALITIES: [&str; 24] = [
-    "Amber",
-    "Ashen",
-    "Brazen",
-    "Copper",
-    "Drowned",
-    "Ember",
-    "Gilded",
-    "Hollow",
-    "Iron",
-    "Lantern",
-    "Lost",
-    "Moonlit",
-    "Oaken",
-    "Pale",
-    "Quiet",
-    "Red",
-    "Salt",
-    "Silver",
-    "Sunken",
-    "Thorned",
-    "Twice-Sworn",
-    "Velvet",
-    "Wandering",
-    "Winter",
-];
-const THINGS: [&str; 24] = [
-    "Anchor",
-    "Bell",
-    "Bargain",
-    "Candle",
-    "Crown",
-    "Ferry",
-    "Gate",
-    "Harbor",
-    "Hound",
-    "Key",
-    "Lantern Road",
-    "Map",
-    "Mill",
-    "Oath",
-    "Raven",
-    "Reliquary",
-    "Sigil",
-    "Spire",
-    "Tide",
-    "Tower",
-    "Vault",
-    "Wake",
-    "Well",
-    "Wolf",
-];
-
-/// An automatic name such as "The Gilded Tide", never one already in use (REF-009).
-pub fn new_name(seed: u64, existing: &[SavedGame]) -> String {
-    let taken = |name: &str| existing.iter().any(|game| game.name == name);
-    let pairs = QUALITIES.len() * THINGS.len();
-    for step in 0..pairs {
-        let index = (seed as usize).wrapping_add(step.wrapping_mul(7919)) % pairs;
-        let quality = QUALITIES[index % QUALITIES.len()];
-        let thing = THINGS[index / QUALITIES.len()];
-        let name = format!("The {quality} {thing}");
-        if !taken(&name) {
-            return name;
-        }
-    }
-    let mut number = 2;
-    loop {
-        let name = format!("The Gilded Tide {number}");
-        if !taken(&name) {
-            return name;
-        }
-        number += 1;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,7 +161,7 @@ mod tests {
         assert!(encoded.contains("adventure = \"free-roam\""));
         assert_eq!(toml::from_str::<SavedGame>(&encoded).unwrap(), saved);
         assert_eq!(saved.adventure.server_value(), "free-roam");
-        assert_eq!(saved.adventure.short_label(), "Free roam");
+        assert_eq!(saved.adventure.title(), "Free roam");
     }
 
     #[test]
@@ -255,14 +181,28 @@ mod tests {
     }
 
     #[test]
-    fn names_stay_unique_past_every_combination() {
-        let mut existing = Vec::new();
-        for seed in 0..600 {
-            let name = new_name(seed, &existing);
-            assert!(!existing.iter().any(|known: &SavedGame| known.name == name));
-            assert!(name.starts_with("The "));
-            existing.push(game(&format!("df_gameplay_demo_{seed}"), &name, 0));
-        }
+    fn harbor_saves_use_the_adventure_title_even_when_legacy_names_are_loaded() {
+        let data =
+            std::env::temp_dir().join(format!("df-launcher-legacy-save-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(
+            data.join(SAVES_FILE),
+            "[[game]]\ndatabase = \"df_gameplay_demo_legacy\"\nname = \"The Amber Bargain\"\n\
+             adventure = \"harbor\"\ncreated = 1\nlast_played = 2\n",
+        )
+        .unwrap();
+
+        let games = load(&data).unwrap();
+
+        assert_eq!(games[0].name, "The Broken Seal");
+        assert_eq!(games[0].database, "df_gameplay_demo_legacy");
+        record(&data, &games[0]).unwrap();
+        assert!(
+            std::fs::read_to_string(data.join(SAVES_FILE))
+                .unwrap()
+                .contains("name = \"The Broken Seal\"")
+        );
+        std::fs::remove_dir_all(data).unwrap();
     }
 
     #[test]
@@ -274,7 +214,7 @@ mod tests {
         record(&data, &game("df_gameplay_demo_a", "ignored rename", 30)).unwrap();
         let games = load(&data).unwrap();
         assert_eq!(games.len(), 2);
-        assert_eq!(games[0].name, "The Amber Bell");
+        assert_eq!(games[0].name, "The Broken Seal");
         assert_eq!(games[0].last_played, 30);
         std::fs::remove_dir_all(data).unwrap();
     }
