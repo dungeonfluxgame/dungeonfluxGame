@@ -128,6 +128,14 @@ async fn start_places_two_sessions_in_distinct_rooms_and_reconciles_repeated_all
         })
         .unwrap();
     assert_ne!(launchers.0, launchers.1);
+    assert_eq!(
+        campaigns.launcher_url(&who, first).await.unwrap(),
+        Some(launchers.0.clone())
+    );
+    assert_eq!(
+        campaigns.launcher_url(&who, second).await.unwrap(),
+        Some(launchers.1.clone())
+    );
     let later_member = Actor {
         account: df_types::AccountId::from_bytes(&[3; 16]).unwrap(),
         display_name: "Later".into(),

@@ -739,27 +739,31 @@ pub(super) async fn game<S: AccountStore, M: EmailSender, P: Ports>(
     } else if !lobby.can_manage {
         ("member_cannot_manage", None)
     } else {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            state.ports.campaigns().game_links(&actor(&caller), session),
-        )
+        match tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let campaigns = state.ports.campaigns();
+            let who = actor(&caller);
+            let links = campaigns.game_links(&who, session).await?;
+            let launcher = campaigns.launcher_url(&who, session).await?;
+            Ok::<_, super::ports::PortError>((links, launcher))
+        })
         .await
         {
-            Ok(Ok(Some(found)))
+            Ok(Ok((Some(found), placed_launcher_url)))
                 if is_game_url(&found.display_url) && is_game_url(&found.player_url) =>
             {
                 match game_launcher_url(
                     lobby.can_manage,
                     lobby.has_started,
                     true,
+                    placed_launcher_url.as_deref(),
                     configured_launcher_url.as_deref(),
                 ) {
                     Some(url) => ("ready", Some(url)),
                     None => ("launcher_missing", None),
                 }
             }
-            Ok(Ok(Some(_))) => ("invalid_session_link", None),
-            Ok(Ok(None)) => ("placement_missing", None),
+            Ok(Ok((Some(_), _))) => ("invalid_session_link", None),
+            Ok(Ok((None, _))) => ("placement_missing", None),
             Ok(Err(_)) => ("runtime_unavailable", None),
             Err(_) => ("runtime_deadline", None),
         }
@@ -783,12 +787,16 @@ pub(super) fn game_launcher_url(
     can_manage: bool,
     has_started: bool,
     links_ready: bool,
+    placed_url: Option<&str>,
     configured_url: Option<&str>,
 ) -> Option<String> {
     if can_manage && has_started && links_ready {
-        configured_url
-            .filter(|url| is_game_url(url))
-            .map(str::to_owned)
+        match placed_url {
+            Some(url) => is_game_url(url).then(|| url.to_owned()),
+            None => configured_url
+                .filter(|url| is_game_url(url))
+                .map(str::to_owned),
+        }
     } else {
         None
     }

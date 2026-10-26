@@ -322,6 +322,18 @@ pub trait CampaignDirectory: Send + Sync + 'static {
         }
     }
 
+    /// A placed session's launcher address, available only through the session's own placement.
+    fn launcher_url(
+        &self,
+        who: &Actor,
+        session: SessionId,
+    ) -> impl Future<Output = PortResult<Option<String>>> + Send {
+        async move {
+            self.lobby(who, session).await?;
+            Ok(None)
+        }
+    }
+
     fn dashboard(&self, who: &Actor) -> impl Future<Output = PortResult<DashboardView>> + Send;
 
     /// Play history of one account, newest first, paged by an opaque cursor (S1 owns the data).

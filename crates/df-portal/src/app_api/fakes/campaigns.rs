@@ -93,7 +93,6 @@ pub(super) struct State {
     pub game_links: HashMap<SessionId, df_account_app::wire_campaign::GameLinks>,
     /// A local preview's one running game, used for every started session without its own links.
     pub local_game: Option<df_account_app::wire_campaign::GameLinks>,
-    #[cfg(feature = "test-fakes")]
     pub launcher_urls: HashMap<SessionId, String>,
     pub fail_next_open: bool,
     /// Play history per account, newest first (seeded; S1's real adapter reads its store).
@@ -149,6 +148,14 @@ impl FakeCampaigns {
         }
     }
 
+    /// Registers a fixture runtime's launcher address for one placed session.
+    pub fn seed_launcher_url(&self, session: SessionId, url: String) {
+        let mut state = lock(&self.state);
+        if state.lobbies.contains_key(&session) {
+            state.launcher_urls.insert(session, url);
+        }
+    }
+
     /// Creates an active campaign hosted by `host` and returns its id.
     pub fn seed_campaign(&self, host: &Actor, name: &str) -> CampaignId {
         let now_ms = self.clock.now_ms();
@@ -201,6 +208,13 @@ impl FakeCampaigns {
 }
 
 impl CampaignDirectory for FakeCampaigns {
+    async fn launcher_url(&self, who: &Actor, session: SessionId) -> PortResult<Option<String>> {
+        self.run(|state, _, _| {
+            state.lobby_for(who, session)?;
+            Ok(state.launcher_urls.get(&session).cloned())
+        })
+    }
+
     async fn game_links(
         &self,
         who: &Actor,

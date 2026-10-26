@@ -942,12 +942,19 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
             "https://game.example.test/sessions/{session_hex}/display"
         )),
     );
+    let launcher = format!("https://launcher.example.test/sessions/{session_hex}");
+    harness
+        .ports
+        .campaigns
+        .seed_launcher_url(session, launcher.clone());
     // Placed, but the account only ever hands off to the game launcher: it never carries the table
     // or player links or the room code (planning/client-architecture.md "Game start flow").
+    let manager_view = host.get(&launch_path).await.json();
+    assert_eq!(manager_view["launcher_url"], launcher);
     let opened = player.get(&launch_path).await.json();
     let text = opened.to_string();
     assert!(!text.contains("/display") && !text.contains("/player") && !text.contains("ABCDEF"));
-    // No launcher address is configured in this harness, so there is nothing to open yet.
+    // A plain member never receives the manager's launcher address.
     assert_eq!(opened["launcher_url"], Value::Null);
 }
 
@@ -955,19 +962,39 @@ async fn lobbyfix_start_still_requires_host_authority_and_funding_but_no_hero_or
 fn a_configured_launcher_address_is_only_returned_to_a_session_manager() {
     let address = "https://launcher.example.test";
     assert_eq!(
-        crate::app_api::campaign::game_launcher_url(false, true, true, Some(address)),
+        crate::app_api::campaign::game_launcher_url(false, true, true, None, Some(address)),
         None
     );
     assert_eq!(
-        crate::app_api::campaign::game_launcher_url(true, true, true, Some(address)),
+        crate::app_api::campaign::game_launcher_url(true, true, true, None, Some(address)),
         Some(address.to_owned())
     );
     assert_eq!(
-        crate::app_api::campaign::game_launcher_url(true, false, true, Some(address)),
+        crate::app_api::campaign::game_launcher_url(true, false, true, None, Some(address)),
         None
     );
     assert_eq!(
-        crate::app_api::campaign::game_launcher_url(true, true, false, Some(address)),
+        crate::app_api::campaign::game_launcher_url(true, true, false, None, Some(address)),
+        None
+    );
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(
+            true,
+            true,
+            true,
+            Some("https://placed.example.test/session"),
+            Some(address),
+        ),
+        Some("https://placed.example.test/session".to_owned())
+    );
+    assert_eq!(
+        crate::app_api::campaign::game_launcher_url(
+            true,
+            true,
+            true,
+            Some("javascript:alert(1)"),
+            Some(address),
+        ),
         None
     );
 }
