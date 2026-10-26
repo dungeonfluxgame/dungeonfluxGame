@@ -4,9 +4,16 @@ use df_campaign::{
     lobby_state::SeatedMember,
     session_link::{HttpRuntime, Placement},
 };
-use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    process::Stdio,
+    time::Duration,
+};
 use tokio::{
-    process::{Child, Command},
+    io::{AsyncBufReadExt, BufReader, Lines},
+    process::{Child, ChildStdout, Command},
     sync::watch,
     task::JoinHandle,
 };
@@ -36,18 +43,128 @@ impl Drop for ChildRoom {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SupervisedNetwork {
+    listen: SocketAddr,
+    public_origin: String,
+    allowed_origins: String,
+}
+
+fn supervised_network(phones_on_network: bool, lan_address: Option<Ipv4Addr>) -> SupervisedNetwork {
+    match (phones_on_network, lan_address) {
+        (true, Some(address)) => SupervisedNetwork {
+            listen: SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            public_origin: format!("http://{address}:0"),
+            allowed_origins: format!("http://{address}:0,http://127.0.0.1:0,http://localhost:0"),
+        },
+        _ => SupervisedNetwork {
+            listen: SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            public_origin: "http://127.0.0.1:0".to_owned(),
+            allowed_origins: "http://127.0.0.1:0,http://localhost:0".to_owned(),
+        },
+    }
+}
+
+fn network_join_from_environment() -> (bool, Option<Ipv4Addr>) {
+    let lan_address = std::env::var("DF_RUNTIME_LAN_ADDRESS")
+        .ok()
+        .and_then(|value| value.parse::<Ipv4Addr>().ok())
+        .filter(|address| address.is_private())
+        .or_else(|| {
+            std::env::var("DF_GAMEPLAY_PUBLIC_URL")
+                .ok()
+                .and_then(|url| {
+                    url.strip_prefix("http://")
+                        .and_then(|rest| rest.split('/').next())
+                        .and_then(|authority| authority.split(':').next())
+                        .and_then(|host| host.parse::<Ipv4Addr>().ok())
+                        .filter(|address| address.is_private())
+                })
+        });
+    let phones_on_network = match std::env::var("DF_RUNTIME_PHONES_ON_NETWORK")
+        .ok()
+        .as_deref()
+    {
+        Some("1") => true,
+        Some("0") => false,
+        _ => lan_address.is_some(),
+    };
+    (phones_on_network, lan_address)
+}
+
+fn child_secret(secret: &LaunchSecret, session: &[u8; 16]) -> Result<LaunchSecret, std::io::Error> {
+    let derived = super::super::hex(&secret.derive(b"local runtime child v1", session));
+    LaunchSecret::new(&derived).map_err(|_| std::io::Error::other("local child secret unavailable"))
+}
+
+fn ready_origin(line: &str) -> Option<String> {
+    let display = line
+        .trim_end()
+        .strip_prefix("READY display=")?
+        .split(' ')
+        .next()?;
+    let origin = display.strip_suffix("/gameplay/display")?;
+    let authority = origin.strip_prefix("http://")?;
+    authority
+        .rsplit(':')
+        .next()?
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)?;
+    Some(origin.to_owned())
+}
+
+fn loopback_control_address(ready_origin: &str) -> Option<SocketAddr> {
+    let port = ready_origin
+        .strip_prefix("http://")?
+        .rsplit(':')
+        .next()?
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)?;
+    Some(SocketAddr::new(
+        std::net::IpAddr::V4(Ipv4Addr::LOCALHOST),
+        port,
+    ))
+}
+
+fn links_from_ready(
+    ready_origin: &str,
+    launcher_address: SocketAddr,
+    room_code: &str,
+) -> LocalLinks {
+    LocalLinks {
+        launcher_url: format!("http://{launcher_address}/"),
+        display_url: format!("{ready_origin}/gameplay/display"),
+        player_url: format!("{ready_origin}/gameplay/player?room={room_code}"),
+    }
+}
+
+fn adventure_title(adventure: &str) -> &'static str {
+    match adventure {
+        "random" => "A newly rolled adventure",
+        "free-roam" => "Free roam",
+        _ => "The Broken Seal",
+    }
+}
+
 pub(super) struct Supervisor {
     secret: LaunchSecret,
     database: tokio_postgres::Config,
     children: Mutex<HashMap<[u8; 16], ChildRoom>>,
+    phones_on_network: bool,
+    lan_address: Option<Ipv4Addr>,
 }
 
 impl Supervisor {
     pub(super) fn new(secret: LaunchSecret) -> Result<Self, std::io::Error> {
+        let (phones_on_network, lan_address) = network_join_from_environment();
         Ok(Self {
             secret,
             database: super::super::database_config()?,
             children: Mutex::new(HashMap::new()),
+            phones_on_network,
+            lan_address,
         })
     }
 
@@ -87,10 +204,8 @@ impl Supervisor {
 
     async fn reserve(&self, allocation: Allocation) -> Result<ChildRoom, std::io::Error> {
         let placement = placement(&allocation)?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let runtime = HttpRuntime::new(address, self.secret.clone(), EXCHANGE_DEADLINE)
-            .map_err(|_| std::io::Error::other("local child adapter unavailable"))?;
+        let network = supervised_network(self.phones_on_network, self.lan_address);
+        let child_secret = child_secret(&self.secret, &allocation.session)?;
         let mut database = self.database.clone();
         database.dbname(format!(
             "df_gameplay_demo_rtlocal_{}",
@@ -104,11 +219,10 @@ impl Supervisor {
         );
         // No await between dispatch and retaining the task; HTTP cancellation retains the reservation.
         let task = tokio::spawn(async move {
-            drop(listener);
             let result = run_child(
                 database,
-                address,
-                runtime,
+                network,
+                child_secret,
                 placement.clone(),
                 status_token,
                 updates.clone(),
@@ -170,10 +284,26 @@ fn child_command(executable: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+async fn read_ready(lines: &mut Lines<BufReader<ChildStdout>>) -> Result<String, std::io::Error> {
+    loop {
+        let Some(line) = lines
+            .next_line()
+            .await
+            .map_err(|_| std::io::Error::other("child output unavailable"))?
+        else {
+            return Err(std::io::Error::other("child exited before ready"));
+        };
+        if let Some(origin) = ready_origin(&line) {
+            return Ok(origin);
+        }
+        println!("{line}");
+    }
+}
+
 async fn run_child(
     database: tokio_postgres::Config,
-    address: SocketAddr,
-    runtime: HttpRuntime,
+    network: SupervisedNetwork,
+    child_secret: LaunchSecret,
     placement: Placement,
     status_token: String,
     updates: watch::Sender<Phase>,
@@ -190,21 +320,44 @@ async fn run_child(
     tokio::time::timeout(STARTUP_DEADLINE, prepare_database(&database))
         .await
         .map_err(|_| std::io::Error::other("local database startup deadline"))??;
-    let origin = format!("http://{address}");
     let database_name = database
         .get_dbname()
         .ok_or_else(|| std::io::Error::other("child database missing"))?;
+    let child_secret_text = String::from_utf8(child_secret.header_value().to_vec())
+        .map_err(|_| std::io::Error::other("local child secret unavailable"))?;
     let mut child = child_command(&executable)
         .args(std::env::args_os().skip(1))
         .env("DF_RUNTIME_CHILD", "1")
+        .env_remove("DF_RUNTIME_SUPERVISOR")
         .env_remove("DF_GAMEPLAY_ROOM_CODE")
-        .env("DF_GAMEPLAY_LISTEN", address.to_string())
-        .env("DF_GAMEPLAY_PUBLIC_URL", &origin)
-        .env("DF_GAMEPLAY_ALLOWED_ORIGINS", &origin)
+        .env("DF_RUNTIME_LAUNCH_SECRET", &child_secret_text)
+        .env("DF_GAMEPLAY_LISTEN", network.listen.to_string())
+        .env("DF_GAMEPLAY_PUBLIC_URL", &network.public_origin)
+        .env("DF_GAMEPLAY_ALLOWED_ORIGINS", &network.allowed_origins)
         .env("DF_GAMEPLAY_DEMO_DATABASE", database_name)
         .env("DF_GAMEPLAY_STOP_FILE", &stop_directory)
         .env("DF_GAMEPLAY_LAUNCHER_TOKEN", &status_token)
+        .stdout(Stdio::piped())
         .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("child output missing"))?;
+    let mut lines = BufReader::new(stdout).lines();
+    // The READY line on this child's own pipe is its identity and bound address; no
+    // allocation (and no secret) is sent to any address before it arrives.
+    let ready = tokio::time::timeout(STARTUP_DEADLINE, read_ready(&mut lines))
+        .await
+        .map_err(|_| std::io::Error::other("child startup deadline"))??;
+    let drain = tokio::spawn(async move {
+        while let Ok(Some(line)) = lines.next_line().await {
+            println!("{line}");
+        }
+    });
+    let control_address = loopback_control_address(&ready)
+        .ok_or_else(|| std::io::Error::other("child ready address invalid"))?;
+    let runtime = HttpRuntime::new(control_address, child_secret, EXCHANGE_DEADLINE)
+        .map_err(|_| std::io::Error::other("local child adapter unavailable"))?;
     let room = tokio::time::timeout(STARTUP_DEADLINE, async {
         loop {
             if let Ok(room) = runtime.allocate_with_links(&placement).await {
@@ -221,21 +374,25 @@ async fn run_child(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let launcher_address = listener.local_addr()?;
     drop(listener);
-    let links = LocalLinks {
-        launcher_url: format!("http://{launcher_address}/"),
-        display_url: format!("{origin}/gameplay/display"),
-        player_url: format!("{origin}/gameplay/player?room={}", room.code),
-    };
-    let record = launcher_record(
-        &links,
-        &executable,
-        child
+    let origin = ready;
+    let links = links_from_ready(&origin, launcher_address, &room.code);
+    let adventure = std::env::var("DF_GAMEPLAY_ADVENTURE").unwrap_or_else(|_| "harbor".to_owned());
+    let created_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(std::io::Error::other)?
+        .as_secs();
+    let record = launcher_record(&LauncherRecord {
+        links: &links,
+        executable: &executable,
+        pid: child
             .id()
             .ok_or_else(|| std::io::Error::other("child pid missing"))?,
-        database_name,
-        &stop_directory,
-        &status_token,
-    )?;
+        database: database_name,
+        stop: &stop_directory,
+        token: &status_token,
+        adventure: &adventure,
+        created_unix_seconds,
+    })?;
     let mut launcher = child_command(launcher_executable)
         .arg("--data-dir")
         .arg(&directory)
@@ -261,7 +418,7 @@ async fn run_child(
         generation: room.run_identity,
         links: Some(links),
     }));
-    tokio::select! {
+    let outcome = tokio::select! {
         result = child.wait() => {
             result?;
             updates.send_replace(Phase::Failed);
@@ -271,34 +428,40 @@ async fn run_child(
             Ok(())
         }
         result = launcher.wait() => { result?; child.kill().await?; Err(std::io::Error::other("local launcher stopped")) }
-    }
+    };
+    drain.abort();
+    outcome
 }
 
-fn launcher_record(
-    links: &LocalLinks,
-    executable: &std::path::Path,
+struct LauncherRecord<'a> {
+    links: &'a LocalLinks,
+    executable: &'a std::path::Path,
     pid: u32,
-    database: &str,
-    stop: &std::path::Path,
-    token: &str,
-) -> Result<String, std::io::Error> {
+    database: &'a str,
+    stop: &'a std::path::Path,
+    token: &'a str,
+    adventure: &'a str,
+    created_unix_seconds: u64,
+}
+
+fn launcher_record(record: &LauncherRecord<'_>) -> Result<String, std::io::Error> {
     let quote = |text: &str| serde_json::to_string(text).map_err(std::io::Error::other);
-    let adventure = std::env::var("DF_GAMEPLAY_ADVENTURE").unwrap_or_else(|_| "harbor".to_owned());
-    if !matches!(adventure.as_str(), "harbor" | "random" | "free-roam") {
+    if !matches!(record.adventure, "harbor" | "random" | "free-roam") {
         return Err(std::io::Error::other("local adventure invalid"));
     }
     Ok(format!(
-        "pid={pid}\nserver_exe={}\nstop_dir={}\nlog=\"\"\ndisplay_url={}\nplayer_url={}\npostgres_started=false\nplay_root=\"\"\npostgres_bin=\"\"\nstatus_token={}\n[game]\ndatabase={}\nname=\"Your game\"\nadventure=\"{adventure}\"\ncreated=0\nlast_played={}\n",
-        quote(&executable.to_string_lossy())?,
-        quote(&stop.to_string_lossy())?,
-        quote(&links.display_url)?,
-        quote(&links.player_url)?,
-        quote(token)?,
-        quote(database)?,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(std::io::Error::other)?
-            .as_secs()
+        "pid={}\nserver_exe={}\nstop_dir={}\nlog=\"\"\ndisplay_url={}\nplayer_url={}\npostgres_started=false\nplay_root=\"\"\npostgres_bin=\"\"\nstatus_token={}\n[game]\ndatabase={}\nname={}\nadventure=\"{}\"\ncreated={}\nlast_played={}\n",
+        record.pid,
+        quote(&record.executable.to_string_lossy())?,
+        quote(&record.stop.to_string_lossy())?,
+        quote(&record.links.display_url)?,
+        quote(&record.links.player_url)?,
+        quote(record.token)?,
+        quote(record.database)?,
+        quote(adventure_title(record.adventure))?,
+        record.adventure,
+        record.created_unix_seconds,
+        record.created_unix_seconds,
     ))
 }
 
@@ -344,5 +507,105 @@ async fn prepare_database(database: &tokio_postgres::Config) -> Result<(), std::
         _ => Err(std::io::Error::other(
             "local child database preparation failed",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_joining_on_with_a_lan_address_binds_all_interfaces_and_links_use_it() {
+        let network = supervised_network(true, Some(Ipv4Addr::new(192, 168, 0, 96)));
+        assert_eq!(network.listen, "0.0.0.0:0".parse().unwrap());
+        assert_eq!(network.public_origin, "http://192.168.0.96:0");
+        assert!(
+            network
+                .allowed_origins
+                .starts_with("http://192.168.0.96:0,")
+        );
+        let ready = ready_origin(
+            "READY display=http://192.168.0.96:63309/gameplay/display player=http://192.168.0.96:63309/gameplay/player?room=ABCD room=ABCD",
+        )
+        .unwrap();
+        assert_eq!(ready, "http://192.168.0.96:63309");
+        let links = links_from_ready(&ready, "127.0.0.1:4001".parse().unwrap(), "ABCD");
+        assert_eq!(
+            links.display_url,
+            "http://192.168.0.96:63309/gameplay/display"
+        );
+        assert_eq!(
+            links.player_url,
+            "http://192.168.0.96:63309/gameplay/player?room=ABCD"
+        );
+        assert!(!links.display_url.contains("127.0.0.1"));
+        assert_eq!(
+            loopback_control_address(&ready),
+            Some("127.0.0.1:63309".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn network_joining_off_or_without_a_lan_address_stays_loopback() {
+        for network in [
+            supervised_network(false, Some(Ipv4Addr::new(192, 168, 0, 96))),
+            supervised_network(true, None),
+            supervised_network(false, None),
+        ] {
+            assert_eq!(network.listen, "127.0.0.1:0".parse().unwrap());
+            assert_eq!(network.public_origin, "http://127.0.0.1:0");
+        }
+        let links = links_from_ready(
+            "http://127.0.0.1:54321",
+            "127.0.0.1:4001".parse().unwrap(),
+            "WXYZ",
+        );
+        assert!(links.display_url.starts_with("http://127.0.0.1:54321/"));
+        assert!(links.player_url.contains("127.0.0.1:54321"));
+    }
+
+    #[test]
+    fn ready_origin_refuses_non_ready_and_ephemeral_lines() {
+        assert_eq!(ready_origin("ROOM ABCD"), None);
+        assert_eq!(
+            ready_origin("READY display=http://127.0.0.1:0/gameplay/display player=x"),
+            None
+        );
+    }
+
+    #[test]
+    fn child_secret_is_derived_per_session_and_is_not_the_master_secret() {
+        let master = LaunchSecret::new(&"m".repeat(32)).unwrap();
+        let first = child_secret(&master, &[1; 16]).unwrap();
+        let second = child_secret(&master, &[2; 16]).unwrap();
+        assert_ne!(first.header_value(), master.header_value());
+        assert_ne!(first.header_value(), second.header_value());
+        assert!(first.authenticates(first.header_value()));
+        assert!(!first.authenticates(master.header_value()));
+    }
+
+    #[test]
+    fn launcher_record_uses_the_adventure_title_and_the_real_start_time() {
+        let links = LocalLinks {
+            launcher_url: "http://127.0.0.1:4001/".to_owned(),
+            display_url: "http://192.168.0.96:63309/gameplay/display".to_owned(),
+            player_url: "http://192.168.0.96:63309/gameplay/player?room=ABCD".to_owned(),
+        };
+        let record = launcher_record(&LauncherRecord {
+            links: &links,
+            executable: std::path::Path::new("game.exe"),
+            pid: 42,
+            database: "df_gameplay_demo_test",
+            stop: std::path::Path::new("stop"),
+            token: "token",
+            adventure: "harbor",
+            created_unix_seconds: 1_792_800_000,
+        })
+        .unwrap();
+        assert!(record.contains("name=\"The Broken Seal\""), "{record}");
+        assert!(record.contains("created=1792800000"), "{record}");
+        assert!(record.contains("last_played=1792800000"), "{record}");
+        assert!(!record.contains("Your game"));
+        assert!(!record.contains("created=0\n"));
     }
 }

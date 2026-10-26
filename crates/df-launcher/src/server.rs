@@ -34,6 +34,18 @@ pub fn private_address() -> Option<Ipv4Addr> {
     }
 }
 
+/// The LAN address phones use, when this network reaches them.
+pub fn lan_address(network: &Network) -> Option<Ipv4Addr> {
+    let public = network.public_url.as_deref()?;
+    let authority = public.strip_prefix("http://")?.split('/').next()?;
+    authority
+        .split(':')
+        .next()?
+        .parse::<Ipv4Addr>()
+        .ok()
+        .filter(|address| address.is_private())
+}
+
 pub fn network(settings: &Settings, address: Option<Ipv4Addr>) -> Network {
     let port = settings.game_port;
     let localhost_origins = format!("http://127.0.0.1:{port},http://localhost:{port}");
@@ -176,6 +188,17 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
     ];
     if std::env::var_os("DF_RUNTIME_LAUNCH_SECRET").is_some() {
         environment.push(("DF_RUNTIME_SUPERVISOR".into(), "1".into()));
+        environment.push((
+            "DF_RUNTIME_PHONES_ON_NETWORK".into(),
+            if launch.settings.phones_on_network {
+                "1".into()
+            } else {
+                "0".into()
+            },
+        ));
+        if let Some(address) = lan_address(launch.network) {
+            environment.push(("DF_RUNTIME_LAN_ADDRESS".into(), address.to_string()));
+        }
     }
     if let Some(public) = &launch.network.public_url {
         environment.push(("DF_GAMEPLAY_PUBLIC_URL".into(), public.clone()));
@@ -495,6 +518,22 @@ mod tests {
         assert_eq!(
             network(&off, Some(Ipv4Addr::new(10, 0, 0, 2))).listen,
             "127.0.0.1:63309"
+        );
+    }
+
+    #[test]
+    fn lan_address_for_a_supervised_game_comes_from_the_public_url() {
+        let settings = Settings::default();
+        let lan = network(&settings, Some(Ipv4Addr::new(192, 168, 0, 96)));
+        assert_eq!(lan_address(&lan), Some(Ipv4Addr::new(192, 168, 0, 96)));
+        assert_eq!(lan_address(&network(&settings, None)), None);
+        let off = Settings {
+            phones_on_network: false,
+            ..Settings::default()
+        };
+        assert_eq!(
+            lan_address(&network(&off, Some(Ipv4Addr::new(192, 168, 0, 96)))),
+            None
         );
     }
 

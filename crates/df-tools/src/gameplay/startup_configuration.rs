@@ -145,6 +145,18 @@ pub(super) struct SessionSettings {
 }
 
 impl SessionSettings {
+    /// Replaces an ephemeral (`:0`) listener and its `:0` origins with the bound address.
+    pub(super) fn resolve_bound_address(&mut self, bound: SocketAddr) {
+        if self.listen.port() != 0 {
+            return;
+        }
+        self.listen = bound;
+        for origin in &mut self.allowed_origins {
+            *origin = replace_ephemeral_port(origin, bound.port());
+        }
+        self.join_origin = replace_ephemeral_port(&self.join_origin, bound.port());
+    }
+
     /// The short timed qualification run: fixed loopback address, 290 seconds, 128 calls.
     pub(super) fn qualification() -> Self {
         Self {
@@ -168,11 +180,12 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
         Some(value) => SocketAddr::from_str(value).map_err(|_| refused("DF_GAMEPLAY_LISTEN"))?,
         None => SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), QUALIFICATION_PORT),
     };
-    if listen.port() == 0 {
+    if listen.port() == 0 && !listen.ip().is_loopback() && !listen.ip().is_unspecified() {
         return Err(refused("DF_GAMEPLAY_LISTEN"));
     }
+    let ephemeral = listen.port() == 0;
     let public = optional(inputs.public_url)?
-        .map(|value| public_origin(&value))
+        .map(|value| public_origin(&value, ephemeral))
         .transpose()?;
     let mut allowed_origins = match optional(inputs.allowed_origins)? {
         Some(value) => {
@@ -440,7 +453,14 @@ fn optional_bounded_count(
 /// origin (`http` or `https`, a host that is not a wildcard address, an optional port) with no
 /// path, query, fragment or user information. Returns the origin and whether its host is
 /// loopback. The refusal never echoes the value.
-fn public_origin(value: &str) -> Result<(String, bool), io::Error> {
+fn replace_ephemeral_port(origin: &str, port: u16) -> String {
+    match origin.strip_suffix(":0") {
+        Some(base) => format!("{base}:{port}"),
+        None => origin.to_owned(),
+    }
+}
+
+fn public_origin(value: &str, allow_ephemeral_port: bool) -> Result<(String, bool), io::Error> {
     let refused_public = || {
         io::Error::other(
             "DF_GAMEPLAY_PUBLIC_URL refused: expected http:// or https:// with a host and an optional port, and nothing after the port",
@@ -461,7 +481,9 @@ fn public_origin(value: &str) -> Result<(String, bool), io::Error> {
         Some("") => true,
         Some(rest) => rest.strip_prefix(':').is_some_and(|digits| {
             digits.bytes().all(|byte| byte.is_ascii_digit())
-                && digits.parse::<u16>().is_ok_and(|port| port != 0)
+                && digits
+                    .parse::<u16>()
+                    .is_ok_and(|port| port != 0 || allow_ephemeral_port)
         }),
         None => false,
     };
@@ -2042,7 +2064,7 @@ mod tests {
         let cases: [[Option<&str>; 6]; 20] = [
             [Some("localhost:63309"), None, None, None, None, None],
             [Some("127.0.0.1"), None, None, None, None, None],
-            [Some("127.0.0.1:0"), None, None, None, None, None],
+            [Some("192.168.1.20:0"), None, None, None, None, None],
             [None, Some(""), None, None, None, None],
             [
                 None,
@@ -2095,6 +2117,37 @@ mod tests {
                 assert!(!error.to_string().contains(value));
             }
         }
+    }
+
+    #[test]
+    fn ephemeral_loopback_and_wildcard_listeners_resolve_to_the_bound_port() {
+        let mut loopback =
+            session_settings(inputs([Some("127.0.0.1:0"), None, None, None, None, None])).unwrap();
+        assert_eq!(loopback.listen.port(), 0);
+        assert_eq!(loopback.join_origin, "http://127.0.0.1:0");
+        loopback.resolve_bound_address("127.0.0.1:49152".parse().unwrap());
+        assert_eq!(loopback.listen, "127.0.0.1:49152".parse().unwrap());
+        assert_eq!(
+            loopback.allowed_origins,
+            ["http://127.0.0.1:49152", "http://localhost:49152"]
+        );
+        assert_eq!(loopback.join_origin, "http://127.0.0.1:49152");
+        assert!(loopback.join_loopback);
+
+        let mut lan = session_settings(with_public(
+            Some("0.0.0.0:0"),
+            Some("http://192.168.0.96:0,http://127.0.0.1:0"),
+            "http://192.168.0.96:0",
+        ))
+        .unwrap();
+        assert_eq!(lan.join_origin, "http://192.168.0.96:0");
+        assert!(!lan.join_loopback);
+        lan.resolve_bound_address("0.0.0.0:54321".parse().unwrap());
+        assert_eq!(
+            lan.allowed_origins,
+            ["http://192.168.0.96:54321", "http://127.0.0.1:54321"]
+        );
+        assert_eq!(lan.join_origin, "http://192.168.0.96:54321");
     }
 
     #[test]

@@ -1376,14 +1376,14 @@ async fn serve_run(
             timing.browser_request().as_secs()
         );
     }
-    let settings = if interactive {
+    let mut settings = if interactive {
         startup_configuration::session_settings(
             startup_configuration::SessionInputs::from_environment(),
         )?
     } else {
         startup_configuration::SessionSettings::qualification()
     };
-    if first_run {
+    if first_run && settings.listen.port() != 0 {
         join_link::install(&settings.join_origin)?;
     }
     let preparation = if interactive {
@@ -1968,6 +1968,13 @@ async fn serve_run(
             return Err(error.into());
         }
     };
+    if settings.listen.port() == 0 {
+        let bound = listener.local_addr()?;
+        settings.resolve_bound_address(bound);
+        if first_run {
+            join_link::install(&settings.join_origin)?;
+        }
+    }
     startup.step("grant-issuer");
     let mut issuer = match LocalDemoScopeIssuer::new(
         runtime.clone(),
