@@ -148,7 +148,7 @@ fn with_view<R>(
         heading: model.heading,
         choices: &choices,
         draft_label: "Your words",
-        submit_label: "Say it",
+        submit_label: "Do this",
         draft_offer_id: None,
         pending: model.pending,
         rejection: None,

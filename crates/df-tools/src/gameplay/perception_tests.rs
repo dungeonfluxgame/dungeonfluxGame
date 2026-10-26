@@ -419,7 +419,17 @@ fn current_canonical_audience_removal_omits_saved_cue_even_with_a_knowledge_gran
         assert!(view.action_available);
         assert_eq!(view.offers.len(), 2);
         assert_eq!(view.offers[1].offer_id, "opening-talk:bandit");
-        assert_eq!(view.offers[1].label, "Talk to Dain Rusk");
+        assert_eq!(view.offers[1].label, "Talk to the man behind the courier");
+        assert_eq!(
+            view.offers[1].input_groups[0].options[0].label,
+            "The man behind the courier"
+        );
+        assert!(
+            !view
+                .encode_to_vec()
+                .windows(b"Dain Rusk".len())
+                .any(|bytes| bytes == b"Dain Rusk")
+        );
         assert_eq!(
             view.offers[0].action_kind,
             rpc::GameplayActionKind::DefendCourier as i32

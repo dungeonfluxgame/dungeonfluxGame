@@ -42,6 +42,18 @@ const PROBE_ATTEMPTS: u8 = 3;
 const REVIEW_HINT: &str = "Check the words, change them if you like, then send.";
 const RECORDING_HINT: &str = "Tap again when you are done, or press Escape to cancel.";
 
+fn record_button_label(phase: Phase, elapsed_seconds: Option<u64>) -> String {
+    match phase {
+        Phase::Requesting(_) => "Starting…".to_owned(),
+        Phase::Recording { .. } => format!(
+            "Recording… tap to stop · {}s",
+            elapsed_seconds.unwrap_or_default()
+        ),
+        Phase::Listening => "Listening…".to_owned(),
+        Phase::Idle | Phase::Review => "Record".to_owned(),
+    }
+}
+
 type WeakClient = std::rc::Weak<RefCell<Client>>;
 
 /// Whether the server offers speech input, learned once from its status route.
@@ -326,7 +338,7 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     hold.set_attribute("data-talk", "hold")?;
     hold.set_attribute("aria-keyshortcuts", "Space Enter")?;
     node(&document, &hold, "span", "talk-dot", "")?.set_attribute("aria-hidden", "true")?;
-    let label = node(&document, &hold, "span", "talk-label", "Tap to talk")?;
+    let label = node(&document, &hold, "span", "talk-label", "Record")?;
     let status = node(&document, &root, "p", "talk-status", "")?;
     status.set_attribute("role", "status")?;
     let actions = node(&document, &root, "div", "talk-actions", "")?;
@@ -1124,14 +1136,7 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             send.remove_attribute("disabled")?;
         }
     }
-    label.set_text_content(Some(&match phase {
-        Phase::Requesting(_) => "Starting…".to_owned(),
-        Phase::Recording { .. } => {
-            format!("Listening… tap to stop · {}s", elapsed.unwrap_or_default())
-        }
-        Phase::Listening => "Listening…".to_owned(),
-        Phase::Idle | Phase::Review => "Tap to talk".to_owned(),
-    }));
+    label.set_text_content(Some(&record_button_label(phase, elapsed)));
     hold.set_attribute(
         "aria-pressed",
         if matches!(phase, Phase::Recording { .. }) {
@@ -1207,6 +1212,14 @@ fn clear(client: Rc<RefCell<Client>>) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn idle_voice_action_is_labelled_record() {
+        assert_eq!(
+            super::record_button_label(super::Phase::Idle, None),
+            "Record"
+        );
+    }
+
+    #[test]
     fn the_shared_send_does_not_submit_an_old_draft_while_speech_is_being_captured() {
         use super::*;
         let document = web_sys::window().unwrap().document().unwrap();
@@ -1260,12 +1273,10 @@ mod tests {
         client.borrow_mut().dialogue.set_test_editor(editor.clone());
         client.borrow_mut().dialogue.talk.availability = Availability::Available;
         mount(&client, &panel).unwrap();
-        node(&document, &panel, "button", "", "Say it").unwrap();
+        node(&document, &panel, "button", "", "Send").unwrap();
         let buttons = panel.query_selector_all("button").unwrap();
         let sends = (0..buttons.length())
-            .filter(|index| {
-                buttons.item(*index).unwrap().text_content().as_deref() == Some("Say it")
-            })
+            .filter(|index| buttons.item(*index).unwrap().text_content().as_deref() == Some("Send"))
             .count();
         assert_eq!(sends, 1);
         editor.set_value("Words to clear");

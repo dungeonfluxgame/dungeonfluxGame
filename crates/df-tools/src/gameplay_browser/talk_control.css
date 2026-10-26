@@ -1,5 +1,5 @@
 .talk-row{margin:12px 0 0}
-.talk-hold{position:relative;display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:72px;padding:12px 18px;border:1px solid #c9a35f99;border-radius:14px;background:linear-gradient(135deg,#355447,#20392e);color:#f5eedf;font:19px/1.2 Georgia,serif;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+.talk-hold{position:relative;display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:48px;padding:10px 14px;border:1px solid #c9a35f99;border-radius:14px;background:linear-gradient(135deg,#355447,#20392e);color:#f5eedf;font:17px/1.2 Georgia,serif;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .talk-hold:focus-visible{outline:3px solid #f1c782;outline-offset:2px}
 .talk-hold:disabled{opacity:.6;cursor:default}
 .talk-dot{flex:none;width:16px;height:16px;border-radius:50%;background:#8cb498;box-shadow:0 0 0 0 #8cb49800}

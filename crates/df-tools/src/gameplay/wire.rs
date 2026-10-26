@@ -1185,7 +1185,7 @@ pub(super) fn opening_talk_offer(
         label: if super::beat_script_runtime::previous_opening_social(current)?.is_some() {
             "Try another offer"
         } else {
-            "Talk to Dain Rusk"
+            "Talk to the man behind the courier"
         }
         .to_owned(),
         input_groups: vec![rpc::JourneyGroup {
@@ -1193,7 +1193,7 @@ pub(super) fn opening_talk_offer(
             label: "Talk to".to_owned(),
             options: vec![rpc::JourneyOption {
                 option_id: "bandit".to_owned(),
-                label: "Dain Rusk".to_owned(),
+                label: "The man behind the courier".to_owned(),
                 ..Default::default()
             }],
         }],

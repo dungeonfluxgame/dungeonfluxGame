@@ -333,7 +333,7 @@ fn hs28_talk_down_one_four_six_heroes_commits_before_line_roll_and_offers_travel
                     .unwrap()
                     .unwrap()
                     .label,
-                "Talk to Dain Rusk"
+                "Talk to the man behind the courier"
             );
             let request = table.line(
                 90,
