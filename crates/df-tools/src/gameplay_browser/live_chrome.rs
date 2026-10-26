@@ -132,11 +132,12 @@ pub(super) fn mount(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
     })?;
     listen(&mut listeners, &hero, {
-        let (sheet, document) = (sheet.clone(), document.clone());
+        let weak = Rc::downgrade(client);
         move |_| {
-            let _ = sheet.remove_attribute("data-open");
-            if let Some(target) = document.get_element_by_id(HERO_SHEET_ID) {
-                target.scroll_into_view();
+            if let Some(client) = weak.upgrade()
+                && super::live_combat::sheet::open_sheet(&client).is_err()
+            {
+                feedback(&client.borrow(), "The character sheet could not be opened.");
             }
         }
     })?;

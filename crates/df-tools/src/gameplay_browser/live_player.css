@@ -68,6 +68,33 @@ main .client.display{background:transparent}
 .client.player .df-campaign[data-join-phase] .join-panel button{justify-content:center;padding:0 30px;font-weight:400;letter-spacing:.02em}
 .client.player .df-campaign[data-join-phase] .join-lobby button{padding-left:64px;justify-content:flex-start}
 .client.player .df-campaign[data-join-phase] .join-heading{font-family:var(--serif)}
+.client.player .df-campaign[data-join-phase]{--lobby-action-height:60px;--lobby-action-gap:12px;--lobby-navigation-clearance:72px}
+.client.player .live-lobby-share{display:grid;gap:5px;margin:12px 0 0;padding-top:10px;border-top:1px solid #c9a35f44}
+.client.player .live-lobby-share button{min-height:44px;border:1px solid #c9a35f99;border-radius:3px;background:#111922;color:var(--df-film-ivory,#f3e2bd);font:600 15px var(--serif);cursor:pointer}
+.client.player .live-lobby-share-address{margin:0;color:var(--df-film-muted,#9caab5);font:11px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
+.client.player .live-lobby-share-status{min-height:1.3em;color:var(--gold,#d4c19b);font:12px/1.3 system-ui,sans-serif}
+@media(max-width:700px){
+  .client.player .df-campaign[data-join-phase] .join-lobby>button{
+    position:fixed;
+    left:var(--tune-panel-margin,20px);
+    right:var(--tune-panel-margin,20px);
+    bottom:calc(var(--lobby-navigation-clearance) + env(safe-area-inset-bottom));
+    z-index:20;
+    width:auto;
+    box-sizing:border-box;
+    min-height:var(--lobby-action-height);
+    padding:0 40px;
+    justify-content:center;
+    text-align:center;
+    background:#101820;
+    border:1px solid var(--gold,#c9a35f);
+    color:var(--df-film-ivory,#f3e2bd);
+    box-shadow:0 8px 24px #000b;
+  }
+  .client.player .df-campaign[data-join-phase]{
+    padding-bottom:calc(var(--lobby-action-height) + var(--lobby-action-gap) + var(--lobby-navigation-clearance) + env(safe-area-inset-bottom));
+  }
+}
 
 /* Tab bar and menu sheet */
 .live-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;align-items:stretch;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:linear-gradient(180deg,#070c13,#05090f);border-top:1px solid #c9a35f55}

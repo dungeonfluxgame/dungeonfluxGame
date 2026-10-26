@@ -478,6 +478,16 @@ fn party_ready(members: &[rpc::PartyMemberView]) -> bool {
     !members.is_empty() && members.iter().all(|member| member.character_ready)
 }
 
+fn lobby_panel_description(all_ready: bool, own_hero_ready: bool) -> &'static str {
+    if all_ready {
+        "Your party is ready. Start the story together."
+    } else if own_hero_ready {
+        "Your hero is ready. Waiting for your companions."
+    } else {
+        "Create your hero to join the story."
+    }
+}
+
 fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, JsValue> {
     let (members, _) = party_members(input.journey);
     let all_ready = party_ready(&input.journey.party);
@@ -492,14 +502,13 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
         narration: input.narration.to_owned(),
         scene_asset: lobby_art_source(&input.scene.scene_asset, &input.scene.live_backdrop),
         code: input.journey.room_code.clone(),
-        join_url: join_label(join_url),
+        join_url: join_url.to_owned(),
         join_label: "Join this room",
         panel_heading: "Your party gathers",
-        panel_description: if all_ready {
-            "Your party is ready. Step into the story together."
-        } else {
-            "Waiting for your companions to finish their heroes."
-        },
+        panel_description: lobby_panel_description(
+            all_ready,
+            input.journey.own_character.is_some(),
+        ),
         members,
         away_heroes: Vec::new(),
         offer: begin.map(|offer| LobbyOfferModel {
@@ -924,10 +933,6 @@ pub(super) fn render(
             say.remove();
         }
         render_downed_notice(&document, &dock, input.journey)?;
-        if let Some(own) = input.journey.own_character.as_ref() {
-            let token = live_combat::sheet::portrait_token(&input.journey.party, own);
-            live_combat::sheet::mount_inline(client, &dock, own, token)?;
-        }
         let actions = ensure_scene_actions(&document, &dock)?;
         if downed.is_some() {
             // A downed hero sees the banner above, not live action buttons.
@@ -947,6 +952,10 @@ pub(super) fn render(
         render_item_card(&document, &dock, input.scene.item.as_ref(), false)?;
         render_hand_items(&document, &dock, &input.scene.hand_items, false)?;
         render_scene_contents(&document, &dock, &input.scene.scene_contents_json)?;
+        if let Some(own) = input.journey.own_character.as_ref() {
+            let token = live_combat::sheet::portrait_token(&input.journey.party, own);
+            live_combat::sheet::mount_inline(client, &dock, own, token)?;
+        }
     }
     recovery(client, &dock)
 }
@@ -1488,7 +1497,23 @@ mod tests {
         lobby_art_source, phone_choice_label, should_show_dialogue_composer, speaker_portrait,
         tv_model, validated_join_scene_asset,
     };
-    use super::{party_members, party_ready};
+    use super::{lobby_panel_description, party_members, party_ready};
+
+    #[test]
+    fn lobby_guidance_names_the_next_step_for_each_readiness_state() {
+        assert_eq!(
+            lobby_panel_description(false, true),
+            "Your hero is ready. Waiting for your companions."
+        );
+        assert_eq!(
+            lobby_panel_description(false, false),
+            "Create your hero to join the story."
+        );
+        assert_eq!(
+            lobby_panel_description(true, true),
+            "Your party is ready. Start the story together."
+        );
+    }
 
     #[test]
     fn lobby_readiness_requires_every_joined_seat_for_one_through_six_players() {

@@ -67,10 +67,9 @@ const COMBAT_FACTS: [&str; 5] = [
     "Hit Point Dice",
 ];
 const SAVES: [&str; 1] = ["Saving throw proficiencies"];
-const EQUIPMENT: [&str; 8] = [
+const EQUIPMENT: [&str; 7] = [
     "Armor",
     "Weapon",
-    "Starting equipment",
     "Greatsword",
     "Armor training",
     "Weapon proficiencies",
@@ -181,6 +180,7 @@ fn labelled_rows(
 
 fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
     let mut used = Vec::new();
+    used.push("Starting equipment".to_owned());
     let mut vitals = vec![
         OwnedRow {
             key: "vitals-hit-points".to_owned(),
@@ -256,25 +256,11 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
         &mut used,
     ));
     let mut equipment = labelled_rows("equipment", sheet, &EQUIPMENT, "Carried gear", &mut used);
-    equipment.extend(sheet.owned_items.iter().map(|item| {
-        let holder_status = if item.holder_id.is_empty() {
-            "Owned · current place".to_owned()
-        } else if item.holder == sheet.name {
-            "Owned · with you".to_owned()
-        } else {
-            format!("Owned · held by {}", nonblank(&item.holder))
-        };
-        let detail = if item.detail.trim().is_empty() {
-            holder_status.clone()
-        } else {
-            format!("{} · {holder_status}", item.detail)
-        };
-        OwnedRow {
-            key: format!("equipment-item-{}", item.thing_id),
-            title: nonblank(&item.name).to_owned(),
-            value: detail,
-            summary: "Permanently owned item; holder is shown separately",
-        }
+    equipment.extend(sheet.owned_items.iter().map(|item| OwnedRow {
+        key: format!("equipment-item-{}", item.thing_id),
+        title: nonblank(&item.name).to_owned(),
+        value: compact_equipment_detail(item),
+        summary: "Quantity and readiness, when applicable",
     }));
     let other: Vec<OwnedRow> = sheet
         .facts
@@ -344,9 +330,48 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
     .collect()
 }
 
+fn compact_equipment_detail(item: &rpc::SceneItemCard) -> String {
+    let quantity = item
+        .detail
+        .strip_prefix("Quantity: ")
+        .and_then(|detail| detail.split_once('.')?.0.parse::<u64>().ok());
+    let mut details = Vec::new();
+    if let Some(quantity) = quantity.filter(|quantity| *quantity > 1) {
+        details.push(format!("{quantity} ×"));
+    }
+    if item
+        .picture_description
+        .contains(", drawn and ready in hand")
+    {
+        details.push("Drawn".to_owned());
+    } else if item.picture_description.contains("sheathed")
+        && item.picture_description.contains("no blade in hand")
+    {
+        details.push("Sheathed".to_owned());
+    }
+    details.join(" · ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equipment_detail_shows_repeated_quantity_and_current_weapon_readiness() {
+        let drawn = rpc::SceneItemCard {
+            detail: "Quantity: 1. Dagger. It is drawn and ready in hand.".to_owned(),
+            picture_description: "Dagger, drawn and ready in hand by Mira".to_owned(),
+            ..Default::default()
+        };
+        let stacked = rpc::SceneItemCard {
+            detail: "Quantity: 4. Rations. It is stowed; not in hand.".to_owned(),
+            picture_description: "Rations, stowed; not in hand by Mira".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(compact_equipment_detail(&drawn), "Drawn");
+        assert_eq!(compact_equipment_detail(&stacked), "4 ×");
+    }
 
     // SRD 5.2.1 pp. 47, 83–84: Fighter training, Soldier skills, and Dwarf traits.
     #[test]
@@ -380,6 +405,57 @@ mod tests {
         ] {
             assert!(sections.iter().any(|section| section.title == title));
         }
+    }
+
+    #[test]
+    fn hero_sheet_equipment_rows_hide_starting_kit_history_and_keep_compact_item_details() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![rpc::SheetFact {
+                label: "Starting equipment".to_owned(),
+                value: "Long starting kit paragraph".to_owned(),
+            }],
+            owned_items: vec![rpc::SceneItemCard {
+                thing_id: "equipment-1".to_owned(),
+                name: "Dagger".to_owned(),
+                detail: "Quantity: 2. Dagger. It is sheathed or slung; no blade in hand."
+                    .to_owned(),
+                picture_description: "Dagger, sheathed or slung; no blade in hand by Mira"
+                    .to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let equipment = sections(&sheet)
+            .into_iter()
+            .find(|section| section.key == "equipment")
+            .expect("equipment section exists");
+
+        assert!(
+            !equipment
+                .rows
+                .iter()
+                .any(|row| row.title == "Starting equipment")
+        );
+        assert_eq!(equipment.rows[0].title, "Dagger");
+        assert_eq!(equipment.rows[0].value, "2 × · Sheathed");
+    }
+
+    #[test]
+    fn hero_summary_condition_comes_from_the_accepted_sheet() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![rpc::SheetFact {
+                label: "Condition".to_owned(),
+                value: "Poisoned".to_owned(),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            condition_text(&sheet).as_deref(),
+            Some("Condition · Poisoned")
+        );
+        assert_eq!(condition_text(&rpc::CharacterSheet::default()), None);
     }
 }
 
@@ -515,6 +591,10 @@ fn class_line(sheet: &rpc::CharacterSheet) -> String {
     }
 }
 
+fn condition_text(sheet: &rpc::CharacterSheet) -> Option<String> {
+    fact(sheet, "Condition").map(|condition| format!("Condition · {}", nonblank(condition)))
+}
+
 /// The own-sheet image is the unique accepted party hero's server-published personal image.
 pub(in crate::gameplay_browser) fn portrait_token<'a>(
     party: &'a [rpc::PartyMemberView],
@@ -568,13 +648,6 @@ pub(in crate::gameplay_browser) fn sync_personal_portraits(
         }
     }
     Ok(())
-}
-
-/// The modifier printed beside an ability score on a character sheet. This is display
-/// formatting of the published ability-score table only; the wire carries scores alone.
-fn modifier_text(score: &str) -> Option<String> {
-    let score: i32 = score.trim().parse().ok()?;
-    Some(format!("{:+}", (score - 10).div_euclid(2)))
 }
 
 fn portrait(
@@ -648,42 +721,12 @@ pub(super) fn mount_head(
     Ok(())
 }
 
-fn list(
-    client: &Rc<RefCell<Client>>,
-    parent: &Element,
-    heading: &str,
-    items: &[(&str, String)],
-) -> Result<(), JsValue> {
-    if items.is_empty() {
-        return Ok(());
-    }
-    let document = client.borrow().document.clone();
-    let group = node(&document, parent, "div", "", "")?;
-    node(&document, &group, "h3", "", heading)?;
-    let list = node(&document, &group, "ul", "", "")?;
-    for (label, value) in items {
-        let item = node(&document, &list, "li", "", "")?;
-        node(&document, &item, "b", "", label)?;
-        item.append_with_str_1(&format!(" {}", nonblank(value)))?;
-    }
-    Ok(())
-}
-
-fn joined(sheet: &rpc::CharacterSheet, labels: &[&str]) -> String {
-    labels
-        .iter()
-        .filter_map(|label| fact(sheet, label))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The accepted character sheet as an inline `#hero-sheet` section: portrait, name, class,
-/// hit points, the six ability scores, then proficiencies, equipment and features.
+/// Shows only the quick reference on Play; the Hero tab opens the full accepted sheet.
 pub(in crate::gameplay_browser) fn mount_inline(
     client: &Rc<RefCell<Client>>,
     parent: &Element,
     sheet: &rpc::CharacterSheet,
-    token: &str,
+    _token: &str,
 ) -> Result<(), JsValue> {
     let view = crate::player_sheet::player_sheet_view(sheet);
     let sheet = &view;
@@ -694,16 +737,8 @@ pub(in crate::gameplay_browser) fn mount_inline(
     }
     let section = node(&document, parent, "section", "live-sheet-inline", "")?;
     section.set_id("hero-sheet");
-    section.set_attribute("aria-label", "Character sheet")?;
+    section.set_attribute("aria-label", "Hero summary")?;
     let head = node(&document, &section, "div", "live-sheet-head", "")?;
-    if df_render::art_contract::player_hero_image(&sheet.portrait_uri).is_some() {
-        let image = node(&document, &head, "img", "live-portrait", "")?;
-        image.set_attribute("src", &sheet.portrait_uri)?;
-        image.set_attribute("alt", &format!("{} portrait", sheet.name))?;
-        image.set_attribute("style", "object-fit:cover;object-position:center top")?;
-    } else {
-        portrait(client, &head, token, &sheet.name)?;
-    }
     let meta = node(&document, &head, "div", "live-hero-meta", "")?;
     node(
         &document,
@@ -711,13 +746,6 @@ pub(in crate::gameplay_browser) fn mount_inline(
         "strong",
         "live-hero-name",
         nonblank(&sheet.name),
-    )?;
-    node(
-        &document,
-        &meta,
-        "span",
-        "live-hero-line",
-        &class_line(sheet),
     )?;
     hit_point_bar(
         &client.borrow(),
@@ -732,111 +760,16 @@ pub(in crate::gameplay_browser) fn mount_inline(
         "live-hero-line",
         &format!("Armor Class {}", sheet.armor_class),
     )?;
-    if let Some(coin) = fact(sheet, "Coin") {
+    if let Some(condition) = condition_text(sheet) {
         node(
             &document,
             &meta,
             "span",
-            "live-hero-line live-coin-balance",
-            &format!("Coin · {}", nonblank(coin)),
+            "live-hero-line live-hero-condition",
+            &condition,
         )?;
     }
-    node(&document, &section, "h2", "", SHEET_ABILITIES_AND_SAVES)?;
-    let grid = node(&document, &section, "div", "live-abilities", "")?;
-    for (short, long) in ABILITIES {
-        let Some(score) = fact(sheet, short) else {
-            continue;
-        };
-        let cell = node(&document, &grid, "div", "live-ability", "")?;
-        cell.set_attribute("title", long)?;
-        node(&document, &cell, "span", "live-ability-label", short)?;
-        node(
-            &document,
-            &cell,
-            "span",
-            "live-ability-score",
-            nonblank(score),
-        )?;
-        node(
-            &document,
-            &cell,
-            "span",
-            "live-ability-mod",
-            &modifier_text(score).unwrap_or_default(),
-        )?;
-    }
-    let saves: Vec<(&str, String)> = SAVES
-        .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
-        .collect();
-    list(client, &section, "Saving throws", &saves)?;
-    let mut skills = Vec::new();
-    if let Some(soldier) = fact(sheet, "Soldier skill proficiencies") {
-        skills.push(("Soldier skills", soldier.to_owned()));
-    }
-    let class_skills = joined(sheet, &["First class skill", "Second class skill"]);
-    if !class_skills.is_empty() {
-        skills.push(("Fighter skills", class_skills));
-    }
-    list(client, &section, SHEET_SKILLS, &skills)?;
-    let combat: Vec<(&str, String)> = COMBAT_FACTS
-        .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
-        .collect();
-    list(client, &section, SHEET_COMBAT, &combat)?;
-    let mut proficiencies = Vec::new();
-    if let Some(set) = fact(sheet, "Gaming set") {
-        proficiencies.push(("Gaming set", set.to_owned()));
-    }
-    let languages = joined(
-        sheet,
-        &["Base language", "First language", "Second language"],
-    );
-    if !languages.is_empty() {
-        proficiencies.push(("Languages", languages));
-    }
-    list(client, &section, "Other proficiencies", &proficiencies)?;
-    let mut gear: Vec<(String, String)> = EQUIPMENT
-        .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| ((*label).to_owned(), value.to_owned())))
-        .collect();
-    gear.extend(sheet.owned_items.iter().map(|item| {
-        let mut value = item.detail.clone();
-        if !item.holder_id.is_empty() {
-            let holder = if item.holder == sheet.name {
-                "with you".to_owned()
-            } else {
-                format!("held by {}", nonblank(&item.holder))
-            };
-            if value.is_empty() {
-                value = holder;
-            } else {
-                value.push_str(" · ");
-                value.push_str(&holder);
-            }
-        }
-        (item.name.clone(), value)
-    }));
-    let gear_rows: Vec<(&str, String)> = gear
-        .iter()
-        .map(|(label, value)| (label.as_str(), value.clone()))
-        .collect();
-    list(client, &section, SHEET_EQUIPMENT, &gear_rows)?;
-    let features: Vec<(&str, String)> = [
-        "Origin feat",
-        "Masteries",
-        "Alignment",
-        "Size",
-        "Darkvision",
-        "Dwarven Resilience",
-        "Dwarven Toughness",
-        "Stonecunning",
-    ]
-    .iter()
-    .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
-    .collect();
-    list(client, &section, SHEET_FEATURES_AND_TRAITS, &features)?;
-    let open = button(client, &section, "Full character sheet", open_from_button)?;
+    let open = button(client, &section, "Open Hero tab", open_from_button)?;
     open.set_class_name("live-sheet-open");
     Ok(())
 }
@@ -862,7 +795,7 @@ fn open_from_button(client: Rc<RefCell<Client>>) {
 }
 
 /// Opens the designed sheet over the page for the current accepted view.
-pub(super) fn open_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+pub(in crate::gameplay_browser) fn open_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if client.borrow().combat.sheet.is_some() {
         return Ok(());
     }
