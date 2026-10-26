@@ -3128,6 +3128,11 @@ impl TvStage {
             state,
             LineState::Opening | LineState::Speaking | LineState::Lingering
         ) && self.narration.text_content().as_deref() != Some(text);
+        let created = self
+            .narration
+            .get_attribute("data-component-id")
+            .and_then(|existing| existing.parse::<u64>().ok())
+            != Some(id);
         let previous_component = self
             .narration
             .get_attribute("data-component-id")
@@ -3148,6 +3153,9 @@ impl TvStage {
         if opened {
             self.narration.set_text_content(Some(text));
             self.narration.set_attribute("title", text)?;
+        }
+        if opened || (created && state.is_active()) {
+            self.narration.set_scroll_top(0);
         }
         if let Some(caption) = self.narration.parent_element() {
             caption.set_attribute("data-line-id", &id.to_string())?;
@@ -3188,11 +3196,6 @@ impl TvStage {
         let phase = super::live_stage::line_component_phase(state);
         let reason = super::live_stage::line_component_reason(state);
         let read_ms = crate::stage_machines::reading_time_ms(text);
-        let created = self
-            .narration
-            .get_attribute("data-component-id")
-            .and_then(|existing| existing.parse::<u64>().ok())
-            != Some(id);
         self.narration
             .set_attribute("data-component-id", &id.to_string())?;
         self.narration
@@ -4801,6 +4804,69 @@ mod tests {
         document.body().unwrap().append_child(&parent).unwrap();
         let stage = TvStage::mount(&document, &parent).unwrap();
         (parent, stage)
+    }
+
+    fn mounted_stage_in_viewport(width: u32, height: u32) -> (web_sys::Element, TvStage) {
+        let outer = web_sys::window().unwrap().document().unwrap();
+        let frame = outer.create_element("iframe").unwrap();
+        frame
+            .set_attribute(
+                "style",
+                &format!(
+                    "position:fixed;left:-10000px;top:0;width:{width}px;height:{height}px;border:0"
+                ),
+            )
+            .unwrap();
+        outer.body().unwrap().append_child(&frame).unwrap();
+        let document: web_sys::Document = js_sys::Reflect::get(&frame, &"contentDocument".into())
+            .unwrap()
+            .dyn_into()
+            .unwrap();
+        let window = document.default_view().unwrap();
+        assert_eq!(
+            window.inner_width().unwrap().as_f64(),
+            Some(f64::from(width))
+        );
+        assert_eq!(
+            window.inner_height().unwrap().as_f64(),
+            Some(f64::from(height))
+        );
+        super::super::live_theme::install(&document).unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(
+            ".tv-stage *{animation:none!important;transition:none!important}",
+        ));
+        document
+            .query_selector("head")
+            .unwrap()
+            .unwrap()
+            .append_child(&style)
+            .unwrap();
+        let parent: web_sys::Element = document.body().unwrap().into();
+        let stage = TvStage::mount(&document, &parent).unwrap();
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage
+            .root
+            .set_attribute("data-battle-state", "absent")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-scene-state", "awaiting-choice")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-speaker", "narrator")
+            .unwrap();
+        stage
+            .root
+            .query_selector(".tv-figures")
+            .unwrap()
+            .unwrap()
+            .set_attribute("data-arrange", "stage")
+            .unwrap();
+        stage.rules.set_attribute("hidden", "").unwrap();
+        stage.party_bar.append_child(&stage.party).unwrap();
+        (frame, stage)
     }
 
     #[test]
@@ -7422,6 +7488,129 @@ mod tests {
     fn completed_narration_stays_visible_while_the_table_waits() {
         let css = include_str!("live_stage.css");
         assert!(css.contains(".tv-dm[data-line-state=done] .tv-narration:not(:empty)"));
+    }
+
+    #[test]
+    fn opening_narration_clears_the_party_and_wrapped_choices_at_tv_sizes() {
+        const OPENING: &str = "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.";
+        let choice = "Ask the courier what happened and look toward the footsteps. ".repeat(12);
+        for (width, height) in [(1920, 1080), (1280, 720), (375, 812)] {
+            let (frame, stage) = mounted_stage_in_viewport(width, height);
+            let label = stage.root.query_selector(".tv-dm-label").unwrap().unwrap();
+            assert_eq!(label.text_content().as_deref(), Some("Dungeon Master"));
+            let label_style = label
+                .owner_document()
+                .unwrap()
+                .default_view()
+                .unwrap()
+                .get_computed_style(&label)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                label_style.get_property_value("text-transform").unwrap(),
+                "none"
+            );
+            assert_eq!(
+                label_style.get_property_value("letter-spacing").unwrap(),
+                "normal"
+            );
+            let mut id = 0;
+            for (count, hidden) in [(0, false), (0, true), (1, false), (4, false)] {
+                stage
+                    .set_choices(&vec![choice.clone(); count], hidden)
+                    .unwrap();
+                for shot in ["stage", "plate", "establishing"] {
+                    stage.root.set_attribute("data-shot", shot).unwrap();
+                    id += 1;
+                    stage
+                        .narrator_line(id, LineState::Opening, OPENING)
+                        .unwrap();
+                    stage.narrator_line(id, LineState::Done, OPENING).unwrap();
+                    let panel = stage.stagebox.get_bounding_client_rect();
+                    let party = stage.party.get_bounding_client_rect();
+                    let safe = stage
+                        .root
+                        .query_selector(".tv-safe")
+                        .unwrap()
+                        .unwrap()
+                        .get_bounding_client_rect();
+                    assert!(panel.width() > 0.0 && party.height() > 0.0);
+                    assert!(panel.top() >= safe.top() - 1.0, "{width}x{height} {shot}");
+                    assert!(panel.left() >= safe.left() - 1.0, "{width}x{height} {shot}");
+                    assert!(
+                        panel.right() <= safe.right() + 1.0,
+                        "{width}x{height} {shot}"
+                    );
+                    assert!(
+                        panel.bottom() <= party.top() + 1.0,
+                        "{width}x{height} {shot}"
+                    );
+                    if count > 0 && !hidden {
+                        let choices = stage.choices.get_bounding_client_rect();
+                        assert!(choices.height() > 0.0);
+                        assert!(
+                            panel.bottom() <= choices.top() + 1.0,
+                            "{width}x{height} {shot} with {count} choices"
+                        );
+                    }
+                    if width >= 1280 {
+                        assert!(
+                            stage.narration.scroll_height() <= stage.narration.client_height() + 1,
+                            "the opening must fit without scrolling at {width}x{height} in {shot}"
+                        );
+                    }
+                }
+            }
+            let document = stage.root.owner_document().unwrap();
+            let document_element = document.document_element().unwrap();
+            assert!(document_element.scroll_width() <= document_element.client_width());
+            stage.dispose().unwrap();
+            frame.remove();
+        }
+    }
+
+    #[test]
+    fn long_narration_scrolls_and_a_successor_starts_at_its_first_line() {
+        let (frame, stage) = mounted_stage_in_viewport(1280, 720);
+        stage.root.set_attribute("data-shot", "stage").unwrap();
+        stage.set_choices(&[], false).unwrap();
+        let text = "The courier points toward the far end of the wharf. ".repeat(40);
+        stage.narrator_line(1, LineState::Opening, &text).unwrap();
+        let style = stage
+            .root
+            .owner_document()
+            .unwrap()
+            .default_view()
+            .unwrap()
+            .get_computed_style(&stage.narration)
+            .unwrap()
+            .unwrap();
+        assert_eq!(style.get_property_value("overflow-y").unwrap(), "auto");
+        assert_eq!(
+            stage.narration.get_attribute("tabindex").as_deref(),
+            Some("0")
+        );
+        assert!(stage.narration.scroll_height() > stage.narration.client_height());
+        stage
+            .narration
+            .set_scroll_top(stage.narration.scroll_height());
+        let scrolled = stage.narration.scroll_top();
+        assert!(scrolled > 0);
+        stage.narrator_line(1, LineState::Speaking, &text).unwrap();
+        assert_eq!(stage.narration.scroll_top(), scrolled);
+        stage.narrator_line(2, LineState::Opening, &text).unwrap();
+        assert_eq!(stage.narration.scroll_top(), 0);
+        stage
+            .narration
+            .set_scroll_top(stage.narration.scroll_height());
+        assert!(stage.narration.scroll_top() > 0);
+        let successor = "The lanterns sway while the party listens. ".repeat(40);
+        stage
+            .narrator_line(3, LineState::Opening, &successor)
+            .unwrap();
+        assert_eq!(stage.narration.scroll_top(), 0);
+        stage.dispose().unwrap();
+        frame.remove();
     }
 }
 

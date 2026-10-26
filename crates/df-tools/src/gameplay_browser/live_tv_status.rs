@@ -179,6 +179,66 @@ mod tests {
     }
 
     #[test]
+    fn narration_reserves_the_party_bar_and_wrapped_choice_row_in_every_scene_shot() {
+        let styles = include_str!("live_stage.css");
+        let with_choices = styles
+            .split_once(".tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-safe>.tv-stagebox.tv-stagebox {")
+            .unwrap()
+            .1
+            .split_once('}')
+            .unwrap()
+            .0;
+        assert!(with_choices.contains("margin-bottom: calc(var(--u)*7.3 + var(--fs-label)*4.8);"));
+        let without_choices = styles
+            .split_once(".tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])):is([data-chips=\"0\"],[data-chips=off]) .tv-safe>.tv-stagebox.tv-stagebox {")
+            .unwrap()
+            .1
+            .split_once('}')
+            .unwrap()
+            .0;
+        assert!(without_choices.contains("margin-bottom: calc(var(--u)*6.4);"));
+    }
+
+    #[test]
+    fn long_narration_stays_scrollable_after_stage_overrides() {
+        let stage = include_str!("live_stage.css");
+        let rule = stage
+            .split_once(
+                ".tv-narration,\n.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-narration {",
+            )
+            .unwrap()
+            .1
+            .split_once('}')
+            .unwrap()
+            .0;
+        assert!(rule.contains("-webkit-line-clamp: unset;"));
+        assert!(rule.contains("overflow-x: hidden;"));
+        assert!(rule.contains("overflow-y: auto;"));
+        assert!(rule.contains("overflow-wrap: anywhere;"));
+    }
+
+    #[test]
+    fn the_dungeon_master_label_keeps_its_sentence_case() {
+        let styles = include_str!("live_stage.css");
+        let rule = styles
+            .split_once(".tv-dm-label")
+            .unwrap()
+            .1
+            .split_once('{')
+            .unwrap()
+            .1
+            .split_once('}')
+            .unwrap()
+            .0;
+        let declarations: String = rule
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(declarations.contains("letter-spacing:normal;"));
+        assert!(declarations.contains("text-transform:none;"));
+    }
+
+    #[test]
     fn lobby_readiness_and_hero_cards_outweigh_the_wordmark() {
         let styles = include_str!("live_tv.css");
         assert!(styles.contains(".tv-roster .tv-gathered{font-size:"));

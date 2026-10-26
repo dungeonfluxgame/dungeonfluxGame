@@ -186,7 +186,13 @@
 .tv-dm{width:100%;padding:calc(var(--u)*.6) calc(var(--u)*1.4) calc(var(--u)*.8);text-align:center;background:linear-gradient(180deg,#2b2214f0,#17110ae8);border-top:calc(var(--u)*.12) solid #d9b77a;border-bottom:calc(var(--u)*.12) solid #d9b77a;box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #000a}
 .tv-dm-head{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*.7);margin-bottom:calc(var(--u)*.2)}
 .tv-dm-avatar{width:calc(var(--u)*3);height:calc(var(--u)*3);border-radius:50%;object-fit:cover;border:calc(var(--u)*.12) solid #d9b77a}
-.tv-dm-label{font:700 var(--fs-label)/1 var(--serif);letter-spacing:.22em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
+.tv-dm-label {
+    font: 700 var(--fs-label)/1 var(--serif);
+    letter-spacing: normal;
+    text-transform: none;
+    color: #e8cb94;
+    text-shadow: none;
+}
 .tv-dm .tv-narration{margin-inline:auto;text-shadow:0 2px 10px #000}
 .tv-dm:has(.tv-narration.speaking){box-shadow:0 0 0 calc(var(--u)*.2) #f0c985,0 0 calc(var(--u)*2) #e0b87799;animation:df-speak-pulse-box 1.2s ease-in-out infinite}
 @keyframes df-speak-pulse-box{0%,100%{filter:brightness(1)}50%{filter:brightness(1.12)}}
@@ -341,8 +347,15 @@
    the entrance, the exit or the victory card); the battlefield's own cards show the dice */
 .tv-stage[data-battlefield-live=true] .live-screen[data-screen=combat]{visibility:hidden}
 .tv-stage[data-battlefield-live=true] .tv-final-roll{display:none}
-/* the Dungeon Master's line is shown whole, never cut with an ellipsis */
-.tv-narration,.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-narration{display:block;-webkit-line-clamp:unset;overflow:visible}
+/* The whole line remains reachable within the caption, without an ellipsis. */
+.tv-narration,
+.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-narration {
+    display: block;
+    -webkit-line-clamp: unset;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+}
 /* a fight's entrance: the flat combat view never shows before the 3D battlefield; the battle
    machine releases it only when the battlefield will not appear */
 .tv-stage[data-battle-state=entering] :is(.live-screen,.tv-figures){opacity:0;visibility:hidden}
@@ -425,9 +438,15 @@
 
 @media (prefers-reduced-motion:reduce){.tv-stage[data-tv-mode=scene] .tv-scene-graph,.tv-plate-vignette{animation:none!important;transition:none!important}}
 
-/* Reserve the compact party row below both dialogue lanes, including plates with no choices. */
+/* Reserve the compact party row below both dialogue lanes. With choices, allow their four
+   wrapped lines and padding before the narration begins. */
 .tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-caption-lane.tv-caption-lane{bottom:calc(7vh + var(--u)*6.4)}
-.tv-stage[data-tv-mode=scene]:is([data-shot=plate],[data-shot=establishing]):is([data-chips="0"],[data-chips=off]) .tv-safe>.tv-stagebox.tv-stagebox{margin-bottom:calc(var(--u)*6.4)}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-safe>.tv-stagebox.tv-stagebox {
+    margin-bottom: calc(var(--u)*7.3 + var(--fs-label)*4.8);
+}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])):is([data-chips="0"],[data-chips=off]) .tv-safe>.tv-stagebox.tv-stagebox {
+    margin-bottom: calc(var(--u)*6.4);
+}
 
 /* The server-graph composite uses the same fixed second rank as the fallback figures. Its
    inline z-index describes world depth; these four party members stay behind every speaker. */
