@@ -359,10 +359,6 @@ fn can_retain_plate_for_scene(has_active_plate: bool, plate_loaded: bool) -> boo
     has_active_plate && plate_loaded
 }
 
-fn lobby_readiness(ready_seats: usize, seats: usize) -> String {
-    format!("{ready_seats} of {seats} heroes ready")
-}
-
 fn initial(name: &str) -> String {
     name.chars()
         .next()
@@ -3333,7 +3329,7 @@ impl TvStage {
         set_hidden(&self.gathered, !lobby)?;
         if lobby {
             self.gathered
-                .set_text_content(Some(&lobby_readiness(ready_seats, seats)));
+                .set_text_content(Some(&status::lobby_readiness(ready_seats, seats)));
         }
         if newly_ready {
             live_sfx::play(Cue::HeroReady, Duration::ZERO);
@@ -4467,8 +4463,8 @@ mod tests {
     use super::super::rpc;
     use super::{
         PlateState, PlateView, TvStage, can_retain_plate_for_scene, check_display, first_art_asset,
-        is_loopback_join_host, lobby_readiness, plate_asset_key, plate_loading_visible,
-        roll_intention, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
+        is_loopback_join_host, plate_asset_key, plate_loading_visible, roll_intention,
+        scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     use crate::stage_machines::LineState;
     use wasm_bindgen::JsCast;
@@ -5104,7 +5100,7 @@ mod tests {
         assert!(!can_retain_plate_for_scene(false, true));
         assert!(!can_retain_plate_for_scene(true, false));
         assert!(can_retain_plate_for_scene(true, true));
-        assert_eq!(lobby_readiness(2, 4), "2 of 4 heroes ready");
+        assert_eq!(super::status::lobby_readiness(2, 4), "2 of 4 heroes ready");
     }
 
     #[test]

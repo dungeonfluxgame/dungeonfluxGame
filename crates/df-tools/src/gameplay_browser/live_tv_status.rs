@@ -26,6 +26,14 @@ pub(super) fn speaker_entry_ready(
     })
 }
 
+pub(super) fn lobby_readiness(ready_seats: usize, seats: usize) -> String {
+    if seats == 0 {
+        "Waiting for heroes. Join with the room code.".to_owned()
+    } else {
+        format!("{ready_seats} of {seats} heroes ready")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +76,15 @@ mod tests {
             speaker_entry_ready(None, None, 0.0),
             "reload does not replay entry"
         );
+    }
+
+    #[test]
+    fn lobby_invites_heroes_before_the_first_join_and_counts_them_afterward() {
+        assert_eq!(
+            lobby_readiness(0, 0),
+            "Waiting for heroes. Join with the room code."
+        );
+        assert_eq!(lobby_readiness(2, 4), "2 of 4 heroes ready");
     }
 
     #[test]

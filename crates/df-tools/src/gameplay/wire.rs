@@ -1972,8 +1972,27 @@ fn observation_group(current: &Checkpoint) -> Result<Option<rpc::JourneyGroup>, 
         "view-observation-scene",
         super::beat_script_runtime::scene(current.state()),
     )?;
-    let options = super::investigation::offered_targets(&scene)
+    let options = observation_options(&scene);
+    if options.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(rpc::JourneyGroup {
+        group_id: "attempt-thing".to_owned(),
+        label: "What catches your eye?".to_owned(),
+        options,
+    }))
+}
+
+/// Builds player-visible observation choices without party equipment.
+pub(super) fn observation_options(scene: &super::pack::Scene) -> Vec<rpc::JourneyOption> {
+    super::investigation::offered_targets(scene)
         .into_iter()
+        .filter(|target| {
+            !target
+                .id
+                .strip_prefix("thing-")
+                .is_some_and(|id| id.starts_with("equipment-"))
+        })
         .map(|target| rpc::JourneyOption {
             option_id: target.id,
             label: if target.person {
@@ -1988,15 +2007,7 @@ fn observation_group(current: &Checkpoint) -> Result<Option<rpc::JourneyGroup>, 
             requires_group: String::new(),
             requires_options: Vec::new(),
         })
-        .collect::<Vec<_>>();
-    if options.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(rpc::JourneyGroup {
-        group_id: "attempt-thing".to_owned(),
-        label: "What catches your eye?".to_owned(),
-        options,
-    }))
+        .collect()
 }
 
 fn passive_findings(

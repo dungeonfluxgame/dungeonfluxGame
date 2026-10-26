@@ -2034,6 +2034,41 @@ fn observation_journal_duplicate_stale_and_phone_tv_notebook_use_exact_stored_te
 }
 
 #[test]
+fn observation_options_exclude_party_equipment_and_keep_scene_objects() {
+    use crate::gameplay::wire;
+
+    let mut scene = merchant_shop_room();
+    let model = scene.setting.as_mut().unwrap().model.as_mut().unwrap();
+    let mut armor = model
+        .things
+        .iter()
+        .find(|thing| thing.id == "shop-counter")
+        .unwrap()
+        .clone();
+    armor.id = "equipment-party-chain-mail".into();
+    armor.name = "Chain Mail".into();
+    armor.short = "Brannoc's Chain Mail".into();
+    armor.aliases = vec!["chain mail".into()];
+    model.things.push(armor);
+
+    let raw_targets = offered_targets(&scene);
+    assert!(
+        raw_targets
+            .iter()
+            .any(|target| target.id == "thing-equipment-party-chain-mail")
+    );
+    let options = wire::observation_options(&scene);
+    assert!(
+        options
+            .iter()
+            .any(|option| option.option_id == "thing-shop-counter")
+    );
+    assert!(options.iter().all(|option| {
+        !option.option_id.starts_with("thing-equipment-") && !option.label.contains("Chain Mail")
+    }));
+}
+
+#[test]
 fn salt_quay_opening_catalog_has_recorded_visible_objects_and_safe_inspection_sources() {
     let content: pack::PackFile = serde_json::from_slice(include_bytes!(
         "../../../../content/harbor-journey/pack.json"
