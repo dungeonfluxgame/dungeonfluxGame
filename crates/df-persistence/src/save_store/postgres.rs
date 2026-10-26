@@ -12,9 +12,15 @@ pub struct PostgresSaveStore {
 }
 
 impl PostgresSaveStore {
+    /// Applies migration 0028 with a migration-role connection before opening the store.
     pub async fn open(mut client: Client) -> Result<Self, SaveError> {
         migrate(&mut client).await?;
         Ok(Self { client })
+    }
+
+    /// Uses an already migrated database without DDL or access to the migration ledger.
+    pub fn from_migrated_client(client: Client) -> Self {
+        Self { client }
     }
 
     pub fn client_mut(&mut self) -> &mut Client {
@@ -38,6 +44,21 @@ impl PostgresSaveStore {
                 .await
                 .map_err(|_| SaveError::Unavailable)?;
             return Ok(stored);
+        }
+        if let Some(parent) = request.parent_save_point_id {
+            transaction
+                .query_opt(
+                    "SELECT 1 FROM df_save.save_points \
+                     WHERE save_point_id = $1 AND tenant_id = $2 AND campaign_id = $3",
+                    &[
+                        &parent.as_bytes().as_slice(),
+                        &request.tenant_id.as_bytes().as_slice(),
+                        &request.campaign_id.as_bytes().as_slice(),
+                    ],
+                )
+                .await
+                .map_err(|_| SaveError::Unavailable)?
+                .ok_or(SaveError::SavePointNotFound)?;
         }
         transaction
             .execute(
@@ -203,17 +224,26 @@ impl PostgresSaveStore {
         campaign_id: df_types::CampaignId,
         placement_id: [u8; 16],
     ) -> Result<super::OwnerFence, SaveError> {
-        let epoch: i64 = self
+        let transaction = self
             .client
-            .query_one(
-                "SELECT COALESCE((SELECT recovery_epoch FROM df_meta.service_state LIMIT 1), 1)",
-                &[],
-            )
+            .transaction()
             .await
-            .map(|row| row.get(0))
-            .unwrap_or(1);
-        let row = self
-            .client
+            .map_err(|_| SaveError::Unavailable)?;
+        // Keep a restore from changing the epoch between its read and the fence commit.
+        transaction
+            .batch_execute("SELECT df_runtime.enter_service()")
+            .await
+            .map_err(|_| SaveError::Unavailable)?;
+        let epoch_row = transaction
+            .query_one("SELECT df_runtime.current_recovery_epoch()", &[])
+            .await
+            .map_err(|_| SaveError::Unavailable)?;
+        let epoch = epoch_row
+            .try_get::<_, Option<i64>>(0)
+            .map_err(|_| SaveError::Unavailable)?
+            .filter(|epoch| *epoch >= 1)
+            .ok_or(SaveError::Unavailable)?;
+        let row = transaction
             .query_one(
                 "INSERT INTO df_save.resume_fences (tenant_id, campaign_id, recovery_epoch, \
                  claim_seq, placement_id) \
@@ -229,11 +259,16 @@ impl PostgresSaveStore {
             )
             .await
             .map_err(|_| SaveError::Unavailable)?;
-        Ok(super::OwnerFence {
+        let fence = super::OwnerFence {
             recovery_epoch: u64::try_from(epoch).map_err(|_| SaveError::Unavailable)?,
             claim_seq: u64::try_from(row.get::<_, i64>(0)).map_err(|_| SaveError::Unavailable)?,
             placement_id,
-        })
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(|_| SaveError::Unavailable)?;
+        Ok(fence)
     }
 
     pub async fn link_count(&mut self, save_point_id: SavePointId) -> Result<i64, SaveError> {
