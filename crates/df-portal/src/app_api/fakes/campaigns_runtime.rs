@@ -63,9 +63,12 @@ impl LocalRuntime {
         else {
             return Ok(None);
         };
-        if [&launcher_url, &display_url, &player_url]
-            .iter()
-            .any(|url| !valid_local_url(url))
+        // The launcher is the host's screen on this PC; the table display and phones may join over the
+        // host's private network (#1459).
+        if !valid_local_url(&launcher_url, false)
+            || [&display_url, &player_url]
+                .iter()
+                .any(|url| !valid_local_url(url, true))
         {
             return Err(RuntimeError::InvalidReply);
         }
@@ -81,14 +84,19 @@ impl LocalRuntime {
     }
 }
 
-fn valid_local_url(url: &str) -> bool {
+fn valid_local_url(url: &str, allow_private_network: bool) -> bool {
     url.parse::<axum::http::Uri>().ok().is_some_and(|uri| {
         uri.scheme_str() == Some("http")
             && uri.authority().is_some_and(|authority| {
                 authority
-                    .as_str()
-                    .parse::<std::net::SocketAddr>()
-                    .is_ok_and(|address| address.ip().is_loopback() && address.port() != 0)
+                .as_str()
+                .parse::<std::net::SocketAddr>()
+                .is_ok_and(|address| {
+                    let local = address.ip().is_loopback()
+                        || (allow_private_network
+                            && matches!(address.ip(), std::net::IpAddr::V4(ip) if ip.is_private()));
+                    local && address.port() != 0
+                })
             })
     })
 }

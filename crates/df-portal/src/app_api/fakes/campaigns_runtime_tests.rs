@@ -159,3 +159,29 @@ async fn start_places_two_sessions_in_distinct_rooms_and_reconciles_repeated_all
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
 }
+
+#[test]
+fn phones_may_join_over_the_private_network_but_the_launcher_stays_on_this_pc() {
+    assert!(valid_local_url("http://127.0.0.1:4001/", false));
+    assert!(!valid_local_url("http://192.168.0.96:4001/", false));
+    assert!(valid_local_url(
+        "http://192.168.0.96:55773/gameplay/player?room=FAVETE",
+        true
+    ));
+    assert!(valid_local_url(
+        "http://10.0.0.5:55773/gameplay/display",
+        true
+    ));
+    assert!(!valid_local_url(
+        "http://8.8.8.8:55773/gameplay/display",
+        true
+    ));
+    assert!(!valid_local_url(
+        "http://192.168.0.96:0/gameplay/display",
+        true
+    ));
+    assert!(!valid_local_url(
+        "https://192.168.0.96:55773/gameplay/display",
+        true
+    ));
+}
