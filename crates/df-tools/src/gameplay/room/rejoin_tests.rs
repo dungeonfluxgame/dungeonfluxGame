@@ -23,7 +23,7 @@ impl Reducer<actor::Call> for AwayOwner {
 }
 
 #[tokio::test]
-async fn reclaim_rpc_exposes_tv_codes_only_to_the_authenticated_table_display() {
+async fn reclaim_rpc_never_hands_seat_proofs_to_any_caller_including_the_display() {
     let (_, updates) = tokio::sync::watch::channel(journey::initial().unwrap());
     let (actor, inbox) = df_session::inbox::bounded_inbox();
     let thread = std::thread::spawn(move || inbox.run(&mut AwayOwner));
@@ -43,6 +43,8 @@ async fn reclaim_rpc_exposes_tv_codes_only_to_the_authenticated_table_display() 
         layout: super::super::dev_control::layout::LayoutState::new(),
         portraits: super::super::creator_portraits::Portraits::disabled(),
     };
+    // No caller, not even the authenticated table display, receives a token or proof:
+    // the display shows the game and nothing about seats (RECLAIMUX).
     for binding in [None, Some([10; 32]), Some([12; 32]), Some([11; 32])] {
         let mut request = Request::new(rpc::ReclaimRoomRequest {
             room_code: journey::room_code(),
@@ -57,19 +59,29 @@ async fn reclaim_rpc_exposes_tv_codes_only_to_the_authenticated_table_display() 
         let reply = service.reclaim(request).await.unwrap().into_inner();
         assert!(reply.outcome.is_none());
         assert_eq!(reply.away_heroes[0].name, "Brannoc");
+        assert_eq!(reply.away_heroes[0].seat_token, [1; 16]);
         assert!(
             !reply
                 .encode_to_vec()
                 .windows(32)
                 .any(|bytes| bytes == [2; 32])
         );
-        if binding == Some([11; 32]) {
-            assert_eq!(reply.away_heroes[0].seat_token.len(), 32);
-            assert!(reply.away_heroes[0].seat_token.starts_with(b"DFREJOIN"));
-        } else {
-            assert_eq!(reply.away_heroes[0].seat_token, [1; 16]);
-        }
     }
+    // A host decision token sent over the public RPC is refused, never applied.
+    let decision = Request::new(rpc::ReclaimRoomRequest {
+        room_code: journey::room_code(),
+        operation_id: Some(rpc::OperationId {
+            value: Some(vec![7; 16]),
+        }),
+        seat_token: reclaim::decision_token(&[1; 16], true).to_vec(),
+    });
+    let reply = service.reclaim(decision).await.unwrap().into_inner();
+    assert_eq!(
+        reply.outcome,
+        Some(rpc::reclaim_room_response::Outcome::Refused(
+            rpc::SeatReclaimRefusal::SeatTokenUnknown as i32
+        ))
+    );
     let mut malformed = Request::new(rpc::ReclaimRoomRequest::default());
     malformed
         .metadata_mut()

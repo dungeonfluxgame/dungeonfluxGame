@@ -104,7 +104,13 @@ pub(super) async fn actor_view(
 }
 
 mod reclaim;
-pub(in crate::gameplay) use reclaim::{AwayHero, ReclaimRefusal, ReclaimRequest, SeatClock};
+// PendingRejoin, decision_token and rejoin_request_token are consumed by the
+// pending-rejoin actor and launcher-status wiring (RECLAIMUX request.md).
+#[allow(unused_imports)]
+pub(in crate::gameplay) use reclaim::{
+    AwayHero, PendingRejoin, ReclaimRefusal, ReclaimRequest, SeatClock, decision_token,
+    rejoin_request_token,
+};
 fn rpc_failure(call: &'static str, step: &'static str, status: Status) -> Status {
     actor::record_audit_line(
         "seat.rpc_refused",
@@ -552,9 +558,21 @@ impl rpc::room_service_server::RoomService for Service {
         &self,
         request: Request<rpc::ReclaimRoomRequest>,
     ) -> Result<Response<rpc::ReclaimRoomResponse>, Status> {
-        let table_display = request.metadata().contains_key("x-df-local-binding")
-            && super::credential(&request)? == self.display_credential;
+        // The table display gets nothing about seats (RECLAIMUX): no binding branch,
+        // no proofs. A host decision token is refused here; it is accepted only from
+        // the game's own actor callers (the launcher-status handler).
+        if request.metadata().contains_key("x-df-local-binding") {
+            let _ = super::credential(&request)?;
+        }
         let body = request.into_inner();
+        if body.seat_token.starts_with(b"DFRJDEC1") {
+            return Ok(Response::new(rpc::ReclaimRoomResponse {
+                outcome: Some(rpc::reclaim_room_response::Outcome::Refused(
+                    rpc::SeatReclaimRefusal::SeatTokenUnknown as i32,
+                )),
+                away_heroes: Vec::new(),
+            }));
+        }
         if body.room_code.len() > 32 || !matches!(body.seat_token.len(), 0 | 32) {
             return Err(rpc_failure(
                 "reclaim",
@@ -614,7 +632,7 @@ impl rpc::room_service_server::RoomService for Service {
                 })??;
             return Ok(Response::new(rpc::ReclaimRoomResponse {
                 outcome: None,
-                away_heroes: reclaim::listing(away, table_display),
+                away_heroes: reclaim::listing(away),
             }));
         }
         let operation = df_api::operation_id(body.operation_id.as_ref()).map_err(|_| {
@@ -672,6 +690,10 @@ impl rpc::room_service_server::RoomService for Service {
                 away_heroes: Vec::new(),
             }),
             Err(reason) => refused(match reason {
+                ReclaimRefusal::RejoinPending => rpc::SeatReclaimRefusal::SeatRejoinPending,
+                ReclaimRefusal::RejoinDeclined => rpc::SeatReclaimRefusal::SeatRejoinDeclined,
+                // A decision acknowledgement never reaches this RPC (refused above).
+                ReclaimRefusal::RejoinDecided => rpc::SeatReclaimRefusal::SeatTokenUnknown,
                 ReclaimRefusal::WrongRoomCode => rpc::SeatReclaimRefusal::SeatRoomCodeWrong,
                 ReclaimRefusal::Seat(
                     df_persistence::local_demo_scope::SeatReclaimRefusal::NotAway,

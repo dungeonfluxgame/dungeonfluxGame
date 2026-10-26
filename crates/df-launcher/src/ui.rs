@@ -258,6 +258,25 @@ fn post(app: &Arc<App>, path: &str, body: &[u8]) -> Page {
             app.start_new(adventure);
         }
         "/resume" => app.resume(form.get("database").unwrap_or("")),
+        "/rejoin/allow" | "/rejoin/decline" => {
+            let allow = path == "/rejoin/allow";
+            return match app.decide_rejoin(form.get("member").unwrap_or(""), allow) {
+                Ok(()) => Page::redirect("/"),
+                Err(message) => Page::html(
+                    200,
+                    shell(
+                        "Rejoin",
+                        "plain-page",
+                        false,
+                        Animations::default(),
+                        &format!(
+                            "<main class=\"plain\"><h1>That answer did not reach the game.</h1><p>{}</p><p><a href=\"/\">Back to DungeonFlux</a></p></main>",
+                            escape(&message)
+                        ),
+                    ),
+                ),
+            };
+        }
         "/stop" => app.stop(),
         "/force-stop" => app.force_stop(),
         "/retry" => app.retry(),
@@ -949,7 +968,39 @@ fn note_portrait_refusal(reason: &str) {
 
 /// The heroes at the table, for the running page's frame: it reloads itself every few seconds
 /// so the main page and its ambience never do.
+/// The pending-rejoin panel on the Play page (RECLAIMUX): each hero asking to
+/// rejoin on a new device, with the host's Allow and Decline. Nothing when
+/// nobody is asking.
+fn rejoin_panel(pending: &[crate::app::PendingRejoin]) -> String {
+    if pending.is_empty() {
+        return String::new();
+    }
+    let asks: String = pending
+        .iter()
+        .map(|ask| {
+            format!(
+                "<li class=\"rejoin-ask\"><p class=\"rejoin-line\">{} wants to rejoin on a new device</p><div class=\"actions\">{}{}</div></li>",
+                escape(&ask.name),
+                button("/rejoin/allow", "Allow", "", &[("member", &ask.member)]),
+                button("/rejoin/decline", "Decline", "quiet", &[("member", &ask.member)]),
+            )
+        })
+        .collect();
+    format!(
+        "<section class=\"rejoin-panel\" aria-label=\"Rejoin requests\"><h2>Rejoin requests</h2><ul class=\"rejoin-asks\">{asks}</ul></section>"
+    )
+}
+
 fn table_frame(snapshot: &Snapshot) -> String {
+    let panel = match &snapshot.phase {
+        Phase::Running(run) => match run.status_token.as_deref() {
+            Some(token) => crate::app::fetch_pending_rejoins(&run.display_url, token)
+                .map(|pending| rejoin_panel(&pending))
+                .unwrap_or_default(),
+            None => String::new(),
+        },
+        _ => String::new(),
+    };
     let content = match &snapshot.phase {
         Phase::Running(run) => match run.status_token.as_deref() {
             None => {
@@ -972,7 +1023,7 @@ fn table_frame(snapshot: &Snapshot) -> String {
         _ => String::new(),
     };
     format!(
-        "<!doctype html><html lang=\"en\" class=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"dark\"><meta http-equiv=\"refresh\" content=\"5\"><title>The table</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"table-page\">{content}</body></html>",
+        "<!doctype html><html lang=\"en\" class=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"dark\"><meta http-equiv=\"refresh\" content=\"5\"><title>The table</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"table-page\">{content}{panel}</body></html>",
         snapshot.settings.animations.class()
     )
 }
@@ -1867,6 +1918,27 @@ mod tests {
         assert_eq!(room_code("http://x/gameplay/player?room=AB%3Cx"), None);
         assert_eq!(room_code("http://x/gameplay/player"), None);
         std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn a_rejoin_request_appears_in_the_play_pages_table_panel() {
+        assert_eq!(rejoin_panel(&[]), "");
+        let pending = vec![crate::app::PendingRejoin {
+            member: "0123456789abcdef0123456789abcdef".to_owned(),
+            name: "Brannoc".to_owned(),
+        }];
+        let panel = rejoin_panel(&pending);
+        assert!(panel.contains("Brannoc wants to rejoin on a new device"));
+        assert!(panel.contains("action=\"/rejoin/allow\""));
+        assert!(panel.contains("action=\"/rejoin/decline\""));
+        assert!(panel.contains("name=\"member\" value=\"0123456789abcdef0123456789abcdef\""));
+        assert!(panel.contains(">Allow</button>"));
+        assert!(panel.contains(">Decline</button>"));
+        // Status lines carry no member id or credential-shaped text.
+        let parsed = crate::app::parse_pending_rejoins(
+            "phase\troom\nrejoin\t0123456789abcdef0123456789abcdef\tBrannoc\nrejoin\tnope\tX",
+        );
+        assert_eq!(parsed, pending);
     }
 
     #[test]

@@ -710,6 +710,8 @@ fn join_room(client: Rc<RefCell<Client>>) {
         let run = async {
             if let Some(reclaim) = reclaim {
                 return seat_recovery::call(reclaim).await.map(|reply| {
+                    let rejoin_pending = seat_recovery::rejoin_pending(&reply);
+                    let rejoin_declined = seat_recovery::rejoin_declined(&reply);
                     if client.borrow().generation == generation && seat_recovery::wrong_room(&reply)
                     {
                         let mut state = client.borrow_mut();
@@ -726,8 +728,17 @@ fn join_room(client: Rc<RefCell<Client>>) {
                                 rpc::join_room_response::Outcome::Joined(joined)
                             }
                             rpc::reclaim_room_response::Outcome::Refused(_) => {
+                                // Waiting and declined keep distinct codes so the
+                                // refusal branch can keep or clear the ask.
+                                let code = if rejoin_pending {
+                                    rpc::RejectionCode::RecoveryRequired
+                                } else if rejoin_declined {
+                                    rpc::RejectionCode::OperationExpired
+                                } else {
+                                    rpc::RejectionCode::InvalidSelection
+                                };
                                 rpc::join_room_response::Outcome::Refused(rpc::JoinRefusal {
-                                    code: rpc::RejectionCode::InvalidSelection as i32,
+                                    code: code as i32,
                                 })
                             }
                         }),
@@ -886,6 +897,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                         refusal.code as u32,
                         0,
                     );
+                    if reclaiming && refusal.code == rpc::RejectionCode::RecoveryRequired as i32 {
+                        // The host has not answered yet: keep the retained ask and
+                        // let the seat poll ask again. Nothing is cleared.
+                        client.borrow_mut().join_request = None;
+                        feedback(&client.borrow(), seat_recovery::WAITING);
+                        return;
+                    }
                     if reclaiming {
                         client.borrow_mut().join_request = None;
                         if seat_recovery::clear(&client).is_err() {
@@ -901,6 +919,8 @@ fn join_room(client: Rc<RefCell<Client>>) {
                             &state,
                             if state.seat_poll.wrong_room(&state.room_code) {
                                 seat_recovery::ROOM_MOVED
+                            } else if refusal.code == rpc::RejectionCode::OperationExpired as i32 {
+                                seat_recovery::DECLINED
                             } else {
                                 seat_recovery::REFUSED
                             },

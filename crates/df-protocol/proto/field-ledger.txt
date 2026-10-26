@@ -742,6 +742,8 @@ enum-value dungeonflux.public.v1.SeatReclaimRefusal 1 SEAT_NOT_AWAY
 enum-value dungeonflux.public.v1.SeatReclaimRefusal 2 SEAT_TOKEN_UNKNOWN
 enum-value dungeonflux.public.v1.SeatReclaimRefusal 3 SEAT_ROOM_CODE_WRONG
 enum-value dungeonflux.public.v1.SeatReclaimRefusal 4 SEAT_OPERATION_CONFLICT
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 5 SEAT_REJOIN_PENDING
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 6 SEAT_REJOIN_DECLINED
 message dungeonflux.public.v1.ReclaimRoomResponse
 field dungeonflux.public.v1.ReclaimRoomResponse 3 away_heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.AwayHero oneof=-
 method dungeonflux.public.v1.RoomService Reclaim .dungeonflux.public.v1.ReclaimRoomRequest .dungeonflux.public.v1.ReclaimRoomResponse client-stream=false server-stream=false

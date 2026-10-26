@@ -14,6 +14,70 @@ pub(in crate::gameplay) struct SeatClock {
     unix_millis: Result<i64, RepositoryError>,
     pub(in crate::gameplay) next_poll: Instant,
     activity: HashMap<[u8; 32], SeatActivity>,
+    rejoins: HashMap<[u8; 16], RejoinAsk>,
+}
+
+/// One hero's ask to rejoin on a new device, waiting for the host (RECLAIMUX).
+/// Bounded by the party: at most one ask per hero, and it expires unanswered.
+struct RejoinAsk {
+    operation: [u8; 16],
+    token: [u8; 32],
+    expires: Instant,
+    decision: RejoinDecision,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RejoinDecision {
+    Waiting,
+    Allowed,
+    Declined,
+}
+
+/// How long a rejoin ask waits for the host before the phone is told plainly.
+pub(in crate::gameplay) const REJOIN_ASK_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// A pending rejoin ask as the launcher shows it: the hero's name, nothing else.
+/// Constructed through `Actor::pending_rejoins`; its launcher-status caller is in
+/// RECLAIMUX request.md, so dead-code warnings wait for that wiring.
+#[allow(dead_code)]
+pub(in crate::gameplay) struct PendingRejoin {
+    pub(in crate::gameplay) member: [u8; 16],
+    pub(in crate::gameplay) name: String,
+}
+
+const REJOIN_REQUEST_PREFIX: &[u8; 8] = b"DFRJREQ1";
+const REJOIN_DECISION_PREFIX: &[u8; 8] = b"DFRJDEC1";
+
+/// The token a new device sends to ask for (or poll) one away hero's seat.
+/// It carries only the public member id from the listing; it grants nothing.
+#[allow(dead_code)]
+pub(in crate::gameplay) fn rejoin_request_token(member: &[u8; 16]) -> [u8; 32] {
+    let mut token = [0; 32];
+    token[..8].copy_from_slice(REJOIN_REQUEST_PREFIX);
+    token[8..24].copy_from_slice(member);
+    token
+}
+
+/// The token the host's decision submits for one hero. Accepted only from the
+/// game's own actor callers; the public reclaim RPC refuses it (room.rs).
+#[allow(dead_code)]
+pub(in crate::gameplay) fn decision_token(member: &[u8; 16], allow: bool) -> [u8; 32] {
+    let mut token = [0; 32];
+    token[..8].copy_from_slice(REJOIN_DECISION_PREFIX);
+    token[8..24].copy_from_slice(member);
+    token[24] = u8::from(allow);
+    token
+}
+
+fn rejoin_member(token: &[u8; 32], prefix: &[u8; 8]) -> Option<[u8; 16]> {
+    if &token[..8] != prefix {
+        return None;
+    }
+    token[8..24].try_into().ok()
+}
+
+fn prune_rejoins(asks: &mut HashMap<[u8; 16], RejoinAsk>, now: Instant) {
+    asks.retain(|_, ask| ask.expires > now);
 }
 
 struct SeatActivity {
@@ -33,6 +97,7 @@ impl Default for SeatClock {
                 }),
             next_poll: origin,
             activity: HashMap::new(),
+            rejoins: HashMap::new(),
         }
     }
 }
@@ -87,56 +152,16 @@ pub(in crate::gameplay) struct AwayHero {
     pub(in crate::gameplay) token: [u8; 32],
 }
 
-const RECOVERY_PROOF_PREFIX: &[u8; 8] = b"DFREJOIN";
-
-fn recovery_proof(hero: &AwayHero) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"local-room-tv-recovery-v1");
-    hash.update(hero.member);
-    hash.update(hero.token);
-    let digest = hash.finalize();
-    let mut proof = [0; 32];
-    proof[..8].copy_from_slice(RECOVERY_PROOF_PREFIX);
-    proof[8..24].copy_from_slice(&hero.member);
-    proof[24..].copy_from_slice(&digest[..8]);
-    proof
-}
-
-pub(super) fn listing(away: Vec<AwayHero>, table_display: bool) -> Vec<rpc::AwayHero> {
+/// The public listing carries only the hero's name and public member id: no token,
+/// no proof, nothing that can take a seat (#1273, RECLAIMUX). Nothing about seats
+/// is handed to the table display any more.
+pub(super) fn listing(away: Vec<AwayHero>) -> Vec<rpc::AwayHero> {
     away.into_iter()
         .map(|hero| rpc::AwayHero {
-            seat_token: if table_display {
-                recovery_proof(&hero).to_vec()
-            } else {
-                // Public seat identifiers carry no authority; #1273 exposed the raw token here.
-                hero.member.to_vec()
-            },
+            seat_token: hero.member.to_vec(),
             name: hero.name,
         })
         .collect()
-}
-
-struct RecoveryAuthority<'a, A> {
-    issuer: &'a mut A,
-    away: &'a [AwayHero],
-}
-impl<A: SeatAuthority> SeatAuthority for RecoveryAuthority<'_, A> {
-    fn reclaim(
-        &mut self,
-        mut request: LocalSeatReclaim,
-    ) -> Result<Result<LocalReclaimedSeat, SeatReclaimRefusal>, RepositoryError> {
-        if request.token.starts_with(RECOVERY_PROOF_PREFIX)
-            && let Some(hero) = self
-                .away
-                .iter()
-                .find(|hero| recovery_proof(hero) == request.token)
-        {
-            request.token = hero.token;
-        }
-        // The fingerprint remains the submitted proof, so a lost reply replays even after
-        // rotation removes this hero from the away list. The durable authority checks replay first.
-        self.issuer.reclaim(request)
-    }
 }
 
 pub(in crate::gameplay) struct ReclaimRequest {
@@ -149,6 +174,107 @@ pub(in crate::gameplay) struct ReclaimRequest {
 pub(in crate::gameplay) enum ReclaimRefusal {
     WrongRoomCode,
     Seat(SeatReclaimRefusal),
+    /// The ask is recorded and waiting for the host (RECLAIMUX).
+    RejoinPending,
+    /// The host declined, or the ask expired unanswered.
+    RejoinDeclined,
+    /// Acknowledgement of a host decision; only actor-internal callers see it.
+    RejoinDecided,
+}
+
+/// Records or polls one rejoin ask. A first ask for an away hero is stored (one per
+/// hero, expiring after REJOIN_ASK_TTL) and refused as pending; the seat moves only
+/// once the host has allowed that hero, through the same durable reclaim (and its
+/// replay receipts) as a direct reclaim. Decline and expiry refuse plainly.
+#[allow(clippy::too_many_arguments)]
+fn rejoin(
+    issuer: &mut impl SeatAuthority,
+    asks: &mut HashMap<[u8; 16], RejoinAsk>,
+    request: ReclaimRequest,
+    correct_room: bool,
+    current: &df_model::checkpoint::Checkpoint,
+    now: Instant,
+    now_millis: i64,
+    away: &[AwayHero],
+    new_credential: [u8; 32],
+    next_token: [u8; 32],
+) -> Result<Result<rpc::JoinedRoom, ReclaimRefusal>, RepositoryError> {
+    if !correct_room {
+        return Ok(Err(ReclaimRefusal::WrongRoomCode));
+    }
+    let Some(member) = rejoin_member(&request.token, REJOIN_REQUEST_PREFIX) else {
+        return Ok(Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken)));
+    };
+    let operation = *request.operation.as_bytes();
+    if let Some(ask) = asks.get(&member) {
+        if ask.expires <= now {
+            let same_operation = ask.operation == operation;
+            asks.remove(&member);
+            if same_operation {
+                return Ok(Err(ReclaimRefusal::RejoinDeclined));
+            }
+        } else if ask.operation != operation {
+            // One ask per hero; another device is told it is waiting, nothing more.
+            return Ok(Err(ReclaimRefusal::RejoinPending));
+        } else {
+            return match ask.decision {
+                RejoinDecision::Waiting => Ok(Err(ReclaimRefusal::RejoinPending)),
+                RejoinDecision::Declined => Ok(Err(ReclaimRefusal::RejoinDeclined)),
+                RejoinDecision::Allowed => {
+                    let granted = ReclaimRequest {
+                        room_code: request.room_code,
+                        operation: request.operation,
+                        token: ask.token,
+                    };
+                    admit_reclaim(
+                        issuer,
+                        granted,
+                        true,
+                        current,
+                        now_millis,
+                        new_credential,
+                        next_token,
+                    )
+                }
+            };
+        }
+    }
+    let Some(hero) = away.iter().find(|hero| hero.member == member) else {
+        return Ok(Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken)));
+    };
+    asks.insert(
+        member,
+        RejoinAsk {
+            operation,
+            token: hero.token,
+            expires: now + REJOIN_ASK_TTL,
+            decision: RejoinDecision::Waiting,
+        },
+    );
+    Ok(Err(ReclaimRefusal::RejoinPending))
+}
+
+/// Applies the host's Allow or Decline to one hero's waiting ask.
+fn decide_rejoin(
+    asks: &mut HashMap<[u8; 16], RejoinAsk>,
+    token: &[u8; 32],
+    now: Instant,
+) -> ReclaimRefusal {
+    let Some(member) = rejoin_member(token, REJOIN_DECISION_PREFIX) else {
+        return ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken);
+    };
+    prune_rejoins(asks, now);
+    match asks.get_mut(&member) {
+        Some(ask) => {
+            ask.decision = if token[24] == 1 {
+                RejoinDecision::Allowed
+            } else {
+                RejoinDecision::Declined
+            };
+            ReclaimRefusal::RejoinDecided
+        }
+        None => ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken),
+    }
 }
 
 // The test port exercises the same admission and response mapping without starting PostgreSQL.
@@ -355,6 +481,31 @@ impl actor::Actor {
         self.collect_away(now)
     }
 
+    /// The heroes whose rejoin ask is still waiting for the host, for the launcher.
+    /// Its actor call is in RECLAIMUX request.md, so the dead-code warning waits.
+    #[allow(dead_code)]
+    pub(in crate::gameplay) fn pending_rejoins(&mut self) -> Result<Vec<PendingRejoin>, Status> {
+        actor::require_readable(self.fenced)?;
+        let now = Instant::now();
+        prune_rejoins(&mut self.session.seat_clock.rejoins, now);
+        let members: Vec<[u8; 16]> = self
+            .session
+            .seat_clock
+            .rejoins
+            .iter()
+            .filter(|(_, ask)| ask.decision == RejoinDecision::Waiting)
+            .map(|(member, _)| *member)
+            .collect();
+        members
+            .into_iter()
+            .map(|member| {
+                let name =
+                    hero_name(self.owner.checkpoint(), &member).map_err(actor::unavailable)?;
+                Ok(PendingRejoin { member, name })
+            })
+            .collect()
+    }
+
     pub(in crate::gameplay) fn reclaim_seat(
         &mut self,
         request: ReclaimRequest,
@@ -374,20 +525,54 @@ impl actor::Actor {
         } else {
             Vec::new()
         };
-        let mut authority = RecoveryAuthority {
-            issuer: &mut self.issuer,
-            away: &away,
+        let instant = Instant::now();
+        let answer = if rejoin_member(&request.token, REJOIN_DECISION_PREFIX).is_some() {
+            // Host decisions arrive only from the game's own actor callers (the
+            // launcher-status handler); room.rs refuses this token on the public RPC.
+            if !correct_room {
+                Err(ReclaimRefusal::WrongRoomCode)
+            } else {
+                let refusal = decide_rejoin(
+                    &mut self.session.seat_clock.rejoins,
+                    &request.token,
+                    instant,
+                );
+                seat_event(
+                    &format!("SEAT rejoin decided reason={refusal:?}"),
+                    "seat.rejoin_decided",
+                );
+                Err(refusal)
+            }
+        } else if rejoin_member(&request.token, REJOIN_REQUEST_PREFIX).is_some() {
+            let asked = rejoin(
+                &mut self.issuer,
+                &mut self.session.seat_clock.rejoins,
+                request,
+                correct_room,
+                self.owner.checkpoint(),
+                instant,
+                now,
+                &away,
+                model::random().map_err(actor::unavailable)?,
+                model::random().map_err(actor::unavailable)?,
+            )
+            .map_err(actor::unavailable)?;
+            if matches!(asked, Err(ReclaimRefusal::RejoinPending)) {
+                seat_event("SEAT rejoin asked", "seat.rejoin_asked");
+            }
+            asked
+        } else {
+            admit_reclaim(
+                &mut self.issuer,
+                request,
+                correct_room,
+                self.owner.checkpoint(),
+                now,
+                model::random().map_err(actor::unavailable)?,
+                model::random().map_err(actor::unavailable)?,
+            )
+            .map_err(actor::unavailable)?
         };
-        let answer = admit_reclaim(
-            &mut authority,
-            request,
-            correct_room,
-            self.owner.checkpoint(),
-            now,
-            model::random().map_err(actor::unavailable)?,
-            model::random().map_err(actor::unavailable)?,
-        )
-        .map_err(actor::unavailable)?;
         match &answer {
             Ok(joined) => {
                 let member: [u8; 16] = joined

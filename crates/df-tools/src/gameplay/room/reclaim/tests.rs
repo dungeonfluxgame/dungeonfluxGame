@@ -224,6 +224,7 @@ fn seat_clock_uses_controlled_monotonic_elapsed_time() {
         unix_millis: Ok(1000),
         next_poll: origin,
         activity: Default::default(),
+        rejoins: Default::default(),
     };
     assert_eq!(
         clock
@@ -247,6 +248,7 @@ fn seat_activity_is_debounced_per_credential_and_reactivation_is_immediate() {
         unix_millis: Ok(1000),
         next_poll: origin,
         activity: Default::default(),
+        rejoins: Default::default(),
     };
 
     assert!(clock.activity_write_due(&[1; 32], origin));
@@ -269,10 +271,9 @@ fn away_hero(seats: &StoredSeats) -> AwayHero {
 }
 
 #[test]
-fn public_reclaim_listing_never_discloses_tokens_or_tv_proofs() {
+fn public_reclaim_listing_never_discloses_tokens_or_proofs() {
     let (_, seats) = fixture();
-    let proof = recovery_proof(&away_hero(&seats));
-    let public = listing(vec![away_hero(&seats)], false);
+    let public = listing(vec![away_hero(&seats)]);
     assert_eq!(public[0].name, "Brannoc");
     assert_eq!(public[0].seat_token, seats.member);
     assert!(
@@ -281,86 +282,235 @@ fn public_reclaim_listing_never_discloses_tokens_or_tv_proofs() {
             .windows(32)
             .any(|bytes| bytes == seats.token)
     );
-    assert!(
-        !public[0]
-            .encode_to_vec()
-            .windows(32)
-            .any(|bytes| bytes == proof)
-    );
-    let display = listing(vec![away_hero(&seats)], true);
-    assert_eq!(display[0].seat_token, proof);
-    assert_ne!(display[0].seat_token, seats.token);
 }
 
-fn recover_from_tv(
+type Asks = std::collections::HashMap<[u8; 16], RejoinAsk>;
+
+fn ask_rejoin(
     seats: &mut StoredSeats,
+    asks: &mut Asks,
     checkpoint: &df_model::checkpoint::Checkpoint,
-    proof: [u8; 32],
+    member: [u8; 16],
     operation: u8,
-    now: i64,
+    at: (Instant, i64),
     away: &[AwayHero],
 ) -> Result<rpc::JoinedRoom, ReclaimRefusal> {
-    let mut request = request(operation);
-    request.token = proof;
-    let mut authority = RecoveryAuthority {
-        issuer: seats,
-        away,
+    let (instant, now) = at;
+    let request = ReclaimRequest {
+        room_code: "ROOM".to_owned(),
+        operation: df_types::OperationId::from_bytes(&[operation; 16]).unwrap(),
+        token: rejoin_request_token(&member),
     };
-    admit_reclaim(
-        &mut authority,
-        request,
-        true,
-        checkpoint,
-        now,
-        [3; 32],
-        [4; 32],
+    rejoin(
+        seats, asks, request, true, checkpoint, instant, now, away, [3; 32], [4; 32],
     )
     .unwrap()
 }
 
 #[test]
-fn tv_code_reclaims_only_its_away_hero_and_replays_after_the_reply_is_lost() {
+fn rejoin_waits_for_the_host_then_allow_moves_the_seat_and_replays() {
     let (checkpoint, mut seats) = fixture();
     let away = vec![away_hero(&seats)];
-    let proof = recovery_proof(&away[0]);
-    let original = checkpoint.clone();
-    let mut wrong = proof;
-    wrong[31] ^= 1;
+    let member = seats.member;
+    let origin = Instant::now();
+    let mut asks = Asks::new();
+    // The ask alone moves nothing; the phone is told it is waiting.
     assert!(matches!(
-        recover_from_tv(&mut seats, &checkpoint, wrong, 8, 31_000, &away),
-        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            9,
+            (origin, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::RejoinPending)
     ));
     assert_eq!(seats.credential, [1; 32]);
+    // A second device asking for the same hero does not replace the ask.
     assert!(matches!(
-        recover_from_tv(&mut seats, &checkpoint, proof, 9, 30_999, &away),
-        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::NotAway))
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            10,
+            (origin, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::RejoinPending)
     ));
-    let joined = recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_000, &away).unwrap();
+    assert_eq!(asks.len(), 1);
+    // Allow hands this device the seat, rotating the credential.
+    assert_eq!(
+        decide_rejoin(&mut asks, &decision_token(&seats.member, true), origin),
+        ReclaimRefusal::RejoinDecided
+    );
+    let joined = ask_rejoin(
+        &mut seats,
+        &mut asks,
+        &checkpoint,
+        member,
+        9,
+        (origin, 31_000),
+        &away,
+    )
+    .unwrap();
     assert_eq!(
         joined.client_binding_id.unwrap().value.unwrap(),
         seats.member
     );
     assert_eq!(joined.local_binding, journey::hex(&[3; 32]));
     assert_ne!(seats.credential, [1; 32]);
-    assert_eq!(checkpoint, original);
-    let replay = recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_001, &[]).unwrap();
-    assert_eq!(replay.local_binding, joined.local_binding);
-    assert!(replay.receipt.unwrap().replayed);
+    // The old credential's token no longer takes the seat.
     assert!(matches!(
-        recover_from_tv(&mut seats, &checkpoint, proof, 10, 31_001, &[]),
+        reclaim(&mut seats, &checkpoint, 11, 31_001),
         Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
     ));
+    // A lost reply replays the same grant for the same operation.
+    let replay = ask_rejoin(
+        &mut seats,
+        &mut asks,
+        &checkpoint,
+        member,
+        9,
+        (origin, 31_001),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(replay.local_binding, joined.local_binding);
+    assert!(replay.receipt.unwrap().replayed);
 }
 
 #[test]
-fn public_seat_identifier_cannot_reclaim_an_away_seat_for_a_new_person() {
+fn rejoin_decline_and_expiry_refuse_the_phone_plainly() {
     let (checkpoint, mut seats) = fixture();
     let away = vec![away_hero(&seats)];
-    let public = listing(vec![away_hero(&seats)], false);
-    let mut proof = [0; 32];
-    proof[..16].copy_from_slice(&public[0].seat_token);
+    let member = seats.member;
+    let origin = Instant::now();
+    let mut asks = Asks::new();
+    ask_rejoin(
+        &mut seats,
+        &mut asks,
+        &checkpoint,
+        member,
+        9,
+        (origin, 31_000),
+        &away,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        decide_rejoin(&mut asks, &decision_token(&seats.member, false), origin),
+        ReclaimRefusal::RejoinDecided
+    );
     assert!(matches!(
-        recover_from_tv(&mut seats, &checkpoint, proof, 9, 31_000, &away),
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            9,
+            (origin, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::RejoinDeclined)
+    ));
+    assert_eq!(seats.credential, [1; 32]);
+    // An ask nobody answers expires after about five minutes.
+    let mut asks = Asks::new();
+    ask_rejoin(
+        &mut seats,
+        &mut asks,
+        &checkpoint,
+        member,
+        9,
+        (origin, 31_000),
+        &away,
+    )
+    .err()
+    .unwrap();
+    let later = origin + REJOIN_ASK_TTL + Duration::from_secs(1);
+    assert!(matches!(
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            9,
+            (later, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::RejoinDeclined)
+    ));
+    // After expiry a fresh ask can be made again.
+    assert!(matches!(
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            10,
+            (later, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::RejoinPending)
+    ));
+    assert_eq!(seats.credential, [1; 32]);
+}
+
+#[test]
+fn a_brand_new_person_cannot_take_a_seat_without_host_approval() {
+    let (checkpoint, mut seats) = fixture();
+    let away = vec![away_hero(&seats)];
+    let member = seats.member;
+    let origin = Instant::now();
+    let mut asks = Asks::new();
+    // An invented member id is refused and records nothing.
+    assert!(matches!(
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            [9; 16],
+            9,
+            (origin, 31_000),
+            &away
+        ),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+    ));
+    assert!(asks.is_empty());
+    // A hero who is not away (active phone) cannot be asked for at all.
+    assert!(matches!(
+        ask_rejoin(
+            &mut seats,
+            &mut asks,
+            &checkpoint,
+            member,
+            9,
+            (origin, 31_000),
+            &[]
+        ),
+        Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
+    ));
+    // Presenting the public member id as a direct reclaim token also fails.
+    let public = listing(vec![away_hero(&seats)]);
+    let mut forged = [0; 32];
+    forged[..16].copy_from_slice(&public[0].seat_token);
+    let mut forged_request = request(9);
+    forged_request.token = forged;
+    assert!(matches!(
+        admit_reclaim(
+            &mut seats,
+            forged_request,
+            true,
+            &checkpoint,
+            31_000,
+            [3; 32],
+            [4; 32]
+        )
+        .unwrap(),
         Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
     ));
     assert_eq!(seats.credential, [1; 32]);
@@ -368,7 +518,7 @@ fn public_seat_identifier_cannot_reclaim_an_away_seat_for_a_new_person() {
 }
 
 #[test]
-fn tv_reclaim_preserves_the_current_hero_and_adventure_in_every_phase() {
+fn host_allowed_rejoin_preserves_the_current_hero_and_adventure_in_every_phase() {
     use crate::gameplay::beat_script_variety_tests as native;
     let room = native::prepared();
     let opening = native::act(&room, native::first(), 5, "begin-story");
@@ -384,12 +534,32 @@ fn tv_reclaim_preserves_the_current_hero_and_adventure_in_every_phase() {
         let before = checkpoint.clone();
         let (_, mut seats) = fixture();
         let away = vec![away_hero(&seats)];
-        let joined = recover_from_tv(
+        let member = seats.member;
+        let origin = Instant::now();
+        let mut asks = Asks::new();
+        assert!(matches!(
+            ask_rejoin(
+                &mut seats,
+                &mut asks,
+                &checkpoint,
+                member,
+                9,
+                (origin, 31_000),
+                &away
+            ),
+            Err(ReclaimRefusal::RejoinPending)
+        ));
+        assert_eq!(
+            decide_rejoin(&mut asks, &decision_token(&seats.member, true), origin),
+            ReclaimRefusal::RejoinDecided
+        );
+        let joined = ask_rejoin(
             &mut seats,
+            &mut asks,
             &checkpoint,
-            recovery_proof(&away[0]),
+            member,
             9,
-            31_000,
+            (origin, 31_000),
             &away,
         )
         .unwrap();

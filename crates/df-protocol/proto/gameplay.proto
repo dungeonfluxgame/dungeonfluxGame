@@ -137,9 +137,13 @@ message JoinRefusal { RejectionCode code = 1; }
 // SES-04: empty seat_token is a public away-seat read with the room code, with no operation.
 // A nonempty token requires an operation id; exact retries retain both fields unchanged.
 // Tokens are server-minted opaque capabilities, never member ids or prior credentials.
+// RECLAIMUX: a seat_token starting with "DFRJREQ1" followed by the 16-byte public member id
+// asks the host for that away seat (or polls that ask); the seat moves only after the host
+// allows it on the launcher. Decision tokens ("DFRJDEC1") are accepted only from the
+// game's own actor callers, never through this RPC.
 message ReclaimRoomRequest { string room_code = 1; OperationId operation_id = 2; bytes seat_token = 3; }
 message AwayHero { string name = 1; bytes seat_token = 2; }
-enum SeatReclaimRefusal { SEAT_RECLAIM_REFUSAL_UNSPECIFIED = 0; SEAT_NOT_AWAY = 1; SEAT_TOKEN_UNKNOWN = 2; SEAT_ROOM_CODE_WRONG = 3; SEAT_OPERATION_CONFLICT = 4; }
+enum SeatReclaimRefusal { SEAT_RECLAIM_REFUSAL_UNSPECIFIED = 0; SEAT_NOT_AWAY = 1; SEAT_TOKEN_UNKNOWN = 2; SEAT_ROOM_CODE_WRONG = 3; SEAT_OPERATION_CONFLICT = 4; SEAT_REJOIN_PENDING = 5; SEAT_REJOIN_DECLINED = 6; }
 message ReclaimRoomResponse { oneof outcome { JoinedRoom joined = 1; SeatReclaimRefusal refused = 2; } repeated AwayHero away_heroes = 3; }
 enum JourneyPhase { JOURNEY_PHASE_UNSPECIFIED = 0; ROOM = 1; CHARACTER_CREATION = 2; OPENING = 3; DIALOGUE = 4; COMBAT = 5; COMPLETE = 6; }
 // TRAVEL uses GameplayActionOffer.input_groups with group_id "travel" and canonical

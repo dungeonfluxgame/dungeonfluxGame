@@ -553,6 +553,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--brass); box-shad
 .table-empty { color: var(--muted); font-size: 14px; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 14px rgba(0, 0, 0, .8); }
 .table-empty strong { color: var(--brass-bright); letter-spacing: .12em; }
 .heroes { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin: 0; padding: 4px 4px 8px; list-style: none; }
+.rejoin-panel { max-width: 560px; margin: 14px auto 4px; padding: 14px 16px; border: 1px solid rgba(198, 163, 107, .55); border-radius: 12px; background: rgba(11, 24, 32, .88); }
+.rejoin-panel h2 { margin: 0 0 8px; color: var(--ivory); font: 17px/1.3 var(--serif); text-align: center; }
+.rejoin-asks { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.rejoin-ask { display: grid; justify-items: center; gap: 8px; }
+.rejoin-line { margin: 0; color: var(--ivory); font-size: 15px; text-align: center; }
+.rejoin-ask .actions { display: flex; gap: 8px; }
 .hero { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 108px; transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
 .hero:hover { transform: translateY(-4px); }
 .hero-face { position: relative; display: grid; place-items: center; width: 64px; height: 80px; overflow: hidden; border-radius: 32px 32px 4px 4px; background: radial-gradient(ellipse at 50% 32%, #23414b, #0b1820 74%); box-shadow: inset 0 0 0 1px rgba(198, 163, 107, .6), 0 10px 24px rgba(0, 0, 0, .5); transition: box-shadow .3s; }
