@@ -23,9 +23,10 @@
 //! The adventure generator calls [`Storyteller::express_adventure`] with its dice-derived
 //! facts and slots. A result is complete (every slot present, non-empty, within its length,
 //! with its must-mention terms) or the call returns a [`StorytellerError`] so the caller can
-//! fall back to authored text. Identical requests are answered from an on-disk cache and cost
-//! nothing; every model call is recorded on the generation hub's token ledger when it is sent. There is
-//! no token cap: the ledger counts and the audit lines say what was spent, and nothing is refused.
+//! fall back to authored text. Identical requests reuse prose from an on-disk cache, with a fresh SRD
+//! judgement. Every model call is recorded on the generation hub's token ledger when it is sent.
+//! There is no token cap: the ledger counts and the audit lines say what was spent, and nothing is
+//! refused.
 //!
 //! # The text resource
 //!
@@ -950,6 +951,7 @@ impl Storyteller {
                         .iter()
                         .map(|(slot, text)| (slot.clone(), text.clone()))
                         .collect();
+                    let mut srd_complaints = Vec::new();
                     let mut rewrite_was_still_flagged = false;
                     for (slot, text) in candidates {
                         let (judgement, spent) =
@@ -961,7 +963,7 @@ impl Storyteller {
                                 slot.clone(),
                                 ValidationFailure::PublishedNonSrdMaterial { slot: slot.clone() },
                             );
-                            complaint = Some(format!(
+                            srd_complaints.push(format!(
                                 "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
                             ));
                             if rewritten_slots.contains(&slot) || attempt == 2 {
@@ -995,6 +997,7 @@ impl Storyteller {
                             rejected
                                 .values()
                                 .map(ValidationFailure::complaint)
+                                .chain(srd_complaints)
                                 .collect::<Vec<_>>()
                                 .join("; "),
                         );

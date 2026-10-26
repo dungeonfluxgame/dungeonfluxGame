@@ -4543,6 +4543,7 @@ impl Shared {
                 // waits for a fresh render of the scene to be its base.
                 if book.state_images.carried_edit {
                     self.request_chain_refresh(&mut book, now, "face");
+                    return;
                 }
                 let base_key = base.as_str().to_owned();
                 // Cloned only when an edit is queued, not on every one-second poll.

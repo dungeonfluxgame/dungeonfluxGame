@@ -27,6 +27,8 @@ use super::resource::HubMusic;
 use super::spec::{Closed, Energy, Layer, Mood, Palette, Space, TimeOfDay};
 use super::test_support::shop_block;
 
+const FAKE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ---- spec and prompts ----
 
 #[test]
@@ -216,9 +218,7 @@ impl FakeEleven {
                 let Ok(mut socket) = socket else { break };
                 let (log, running, highest) = (log.clone(), running.clone(), highest.clone());
                 thread::spawn(move || {
-                    socket
-                        .set_read_timeout(Some(Duration::from_secs(3)))
-                        .unwrap();
+                    socket.set_read_timeout(Some(FAKE_REQUEST_TIMEOUT)).unwrap();
                     let mut data = Vec::new();
                     let end = loop {
                         let mut block = [0; 2048];

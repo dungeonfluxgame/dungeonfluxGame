@@ -310,7 +310,11 @@ async fn a_valid_answer_is_returned_cached_and_charged_at_the_reported_usage() {
             .to_ascii_lowercase()
             .contains(&format!("authorization: bearer {CREDENTIAL}"))
     );
-    assert_eq!(storyteller.tokens_charged(), Some(140));
+    assert_eq!(
+        storyteller.tokens_charged(),
+        Some(152),
+        "generation and the accepted slot's SRD judgement are charged"
+    );
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -386,7 +390,7 @@ async fn a_non_srd_creature_judgement_rewrites_once_and_degrades_with_an_audit_l
             .iter()
             .any(|line| line.contains("published_non_srd_material"))
     );
-    std::fs::remove_dir_all(cache).unwrap();
+    assert!(!cache.exists(), "rejected prose is never cached");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -483,21 +487,30 @@ async fn an_unknown_structured_srd_entity_id_is_refused() {
         profile: CallProfile::default(),
     };
 
+    let unknown = BTreeMap::from([("creature_id".to_owned(), "published-beholder".to_owned())]);
+    assert_eq!(
+        validate(&request, &unknown),
+        Err(ValidationFailure::InvalidEntityId {
+            slot: "creature_id".to_owned(),
+        })
+    );
+
     let error = storyteller.express(&request).await.unwrap_err();
 
-    assert!(matches!(
+    // The provider enforces the enum before the storyteller can validate the returned fields.
+    assert_eq!(
         error,
         StorytellerError::Rejected {
-            failure: ValidationFailure::InvalidEntityId { .. },
-            ..
+            failure: ValidationFailure::NotTheRequestedShape,
+            words: None,
         }
-    ));
+    );
     assert_eq!(
         endpoint.bodies()[0]["text"]["format"]["schema"]["properties"]["creature_id"]["enum"],
         json!(["owlbear"])
     );
     assert_eq!(endpoint.connections(), 2);
-    std::fs::remove_dir_all(cache).unwrap();
+    assert!(!cache.exists(), "an unknown entity is never cached");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -693,7 +706,11 @@ async fn a_rejected_first_answer_is_retried_once_with_the_complaint_and_can_succ
         !retry.contains(LONG_TEXT),
         "the complaint never repeats the text"
     );
-    assert_eq!(storyteller.tokens_charged(), Some(280));
+    assert_eq!(
+        storyteller.tokens_charged(),
+        Some(292),
+        "two generations and only the accepted slot's SRD judgement are charged"
+    );
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -724,6 +741,7 @@ async fn a_repeated_identical_request_is_served_from_the_cache_without_a_call() 
         .await
         .unwrap();
     let after_first = storyteller.tokens_charged();
+    assert_eq!(after_first, Some(152));
 
     let second = storyteller
         .express(&expression(&facts, &slots))
@@ -736,8 +754,12 @@ async fn a_repeated_identical_request_is_served_from_the_cache_without_a_call() 
     assert_eq!(first, second);
     assert_eq!(first, third);
     assert_eq!(endpoint.connections(), 1);
-    assert_eq!(storyteller.tokens_charged(), after_first);
-    assert_eq!(resumed.tokens_charged(), Some(0));
+    assert_eq!(
+        storyteller.tokens_charged(),
+        Some(164),
+        "cached prose is reviewed again without generating it again"
+    );
+    assert_eq!(resumed.tokens_charged(), Some(12));
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -889,7 +911,10 @@ async fn a_batched_answer_keeps_the_good_slots_and_asks_again_only_for_the_bad_o
     assert_eq!(answer.accepted["first"], "Rain on the slates.");
     assert_eq!(answer.accepted["second"], "A quiet dock.");
     assert!(answer.rejected.is_empty());
-    assert_eq!(answer.tokens, 280);
+    assert_eq!(
+        answer.tokens, 304,
+        "two generations and two accepted-slot judgements are accounted"
+    );
     let bodies = endpoint.bodies();
     assert_eq!(bodies.len(), 2);
     let second_prompt = sent_input(&bodies[1]);
@@ -1322,8 +1347,8 @@ async fn two_identical_concurrent_text_requests_make_one_provider_call() {
     assert_eq!(endpoint.connections(), 1, "one call serves both requests");
     assert_eq!(
         storyteller.tokens_charged(),
-        Some(140),
-        "and is charged once"
+        Some(152),
+        "one generation and one SRD judgement serve both requests"
     );
     let key = hex(&cache_key("gpt-test-model", &expression(&facts, &slots)));
     let lines = crate::gameplay::actor::audit_lines_containing(&key[..32]);

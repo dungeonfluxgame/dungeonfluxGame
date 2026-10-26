@@ -1085,9 +1085,14 @@ fn expression(face: Expression) -> ImageRequest {
 }
 
 async fn get(router: &mut Router, key: &str, etag: Option<&str>) -> (StatusCode, HeaderMap) {
-    let mut request = Request::builder()
-        .method(Method::GET)
-        .uri(format!("/gameplay/imagery/{key}"));
+    let mut url = format!("/gameplay/imagery/{key}");
+    super::super::media_grant::sign_gameplay_url(
+        &mut url,
+        "/gameplay/imagery/",
+        super::super::media_grant::PrincipalAudience::Display,
+        &[7; 32],
+    );
+    let mut request = Request::builder().method(Method::GET).uri(url);
     if let Some(etag) = etag {
         request = request.header(header::IF_NONE_MATCH, etag);
     }
@@ -1999,12 +2004,30 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
     );
 
     let key = service.render(refresh(Mood::Warm)).await.unwrap();
+    for url in [
+        format!("/gameplay/imagery/{}", key.as_str()),
+        format!("/gameplay/imagery/{}?g=invalid", key.as_str()),
+    ] {
+        let request = Request::builder()
+            .uri(url)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = Service::call(&mut router, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+    }
     let (status, headers) = get(&mut router, key.as_str(), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
     assert_eq!(headers[header::ETAG], format!("\"{}\"", key.as_str()));
     let cache_control = headers[header::CACHE_CONTROL].to_str().unwrap();
-    assert!(cache_control.contains("max-age=86400") && cache_control.contains("immutable"));
+    let lifetime = cache_control
+        .strip_prefix("private, max-age=")
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!((1..=900).contains(&lifetime), "{cache_control}");
+    assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
 
     let etag = format!("\"{}\"", key.as_str());
     assert_eq!(
