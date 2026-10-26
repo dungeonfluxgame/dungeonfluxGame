@@ -159,30 +159,48 @@ pub(crate) fn sync_directory(path: &Path) -> Result<(), TelemetryError> {
 }
 impl OwnedRoot {
     pub fn open(path: &Path) -> Result<Self, TelemetryError> {
+        Self::open_inner(path, false)
+    }
+
+    /// Open a root the deployment composition configured (for example the hosted
+    /// portal's telemetry data directory). The caller owns path authority; the
+    /// marker, file allowlist and single-writer lock checks still apply, and an
+    /// existing but empty directory is initialized in place.
+    pub fn open_configured(path: &Path) -> Result<Self, TelemetryError> {
+        Self::open_inner(path, true)
+    }
+
+    fn open_inner(path: &Path, configured: bool) -> Result<Self, TelemetryError> {
         safe_path(path)?;
         let parent = path.parent().ok_or(TelemetryError::ForeignRoot)?;
-        // This foundation deliberately has no deployment path/configuration authority.
-        // Only coordinator-provisioned synthetic roots beneath this local MAIN are writable.
-        if parent
-            != Path::new("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-        {
-            return Err(TelemetryError::ForeignRoot);
-        }
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(TelemetryError::ForeignRoot)?;
-        if !name.starts_with("ownedfixture-")
-            || name.len() > 100
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err(TelemetryError::ForeignRoot);
+        if !configured {
+            // This foundation deliberately has no deployment path/configuration authority.
+            // Only coordinator-provisioned synthetic roots beneath this local MAIN are writable.
+            if parent
+                != Path::new(
+                    "/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06",
+                )
+            {
+                return Err(TelemetryError::ForeignRoot);
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(TelemetryError::ForeignRoot)?;
+            if !name.starts_with("ownedfixture-")
+                || name.len() > 100
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err(TelemetryError::ForeignRoot);
+            }
         }
         let new = match fs::create_dir(path) {
             Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                configured && fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none())
+            }
             Err(_) => return Err(TelemetryError::Io),
         };
         if new {

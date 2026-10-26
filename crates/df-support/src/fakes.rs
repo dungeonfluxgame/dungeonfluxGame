@@ -173,6 +173,93 @@ impl SupportStore for FakeStore {
     }
 }
 
+/// Scripted mail source for ingest tests: queued pages/errors are returned in order;
+/// once the script is exhausted it returns an empty final page. `calls` counts fetches.
+pub struct FakeMailSource {
+    script: Mutex<
+        std::collections::VecDeque<Result<crate::ingest::MailPage, crate::ingest::MailSourceError>>,
+    >,
+    pub calls: std::sync::atomic::AtomicUsize,
+    pub cursors: Mutex<Vec<Option<String>>>,
+}
+
+impl FakeMailSource {
+    pub fn new(
+        script: Vec<Result<crate::ingest::MailPage, crate::ingest::MailSourceError>>,
+    ) -> Self {
+        Self {
+            script: Mutex::new(script.into()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            cursors: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ingest::MailSource for FakeMailSource {
+    async fn fetch_page(
+        &self,
+        cursor: Option<&str>,
+        _limit: usize,
+    ) -> Result<crate::ingest::MailPage, crate::ingest::MailSourceError> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.cursors
+            .lock()
+            .map_err(|_| crate::ingest::MailSourceError::Unavailable)?
+            .push(cursor.map(str::to_owned));
+        self.script
+            .lock()
+            .map_err(|_| crate::ingest::MailSourceError::Unavailable)?
+            .pop_front()
+            .unwrap_or(Ok(crate::ingest::MailPage {
+                messages: Vec::new(),
+                next_cursor: None,
+            }))
+    }
+}
+
+/// Scripted Jev judge for ingest tests: returns canned raw model output (or an error)
+/// in order and counts calls, so malformed-output and retry paths are observable.
+pub struct FakeJevJudge {
+    script: Mutex<std::collections::VecDeque<Result<String, crate::ingest::JudgeError>>>,
+    pub calls: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeJevJudge {
+    pub fn new(script: Vec<Result<String, crate::ingest::JudgeError>>) -> Self {
+        Self {
+            script: Mutex::new(script.into()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ingest::ClassificationJudge for FakeJevJudge {
+    async fn judge(
+        &self,
+        _subject: &str,
+        _body_text: &str,
+    ) -> Result<String, crate::ingest::JudgeError> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.script
+            .lock()
+            .map_err(|_| crate::ingest::JudgeError::Unavailable)?
+            .pop_front()
+            .unwrap_or(Err(crate::ingest::JudgeError::Unusable))
+    }
+}
+
 #[derive(Default)]
 pub struct FakeMeter;
 

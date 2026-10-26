@@ -1,8 +1,9 @@
 //! Consumer-owned ports for support persistence, classification, mail and approved effects.
 use crate::contracts::{
     ActionProposalBatch, ActionProposalRecord, ApprovedAction, AuditEvent, ExecutionOutcome,
-    JevClassification, MessagePage, MessagePageRequest, MeteredCall, OperationId, SupportTicket,
-    TicketId,
+    JevClassification, MessagePage, MessagePageRequest, MeteredCall, OperationId,
+    QueueContentGrant, QueuePage, QueuePageRequest, SupportTicket, TicketId, TriageCommand,
+    TriageReceipt,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,6 +18,10 @@ pub enum SupportStoreError {
     AuditUnavailable,
     #[error("storage is unavailable")]
     Unavailable,
+    #[error("status transition is not allowed")]
+    InvalidTransition,
+    #[error("request is invalid")]
+    InvalidRequest,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -190,6 +195,35 @@ pub trait SupportStore: Send + Sync {
     ) -> Result<(), SupportStoreError>;
     async fn save_proposal(&self, proposal: ActionProposalRecord) -> Result<(), SupportStoreError>;
     async fn record_audit(&self, event: AuditEvent) -> Result<(), SupportStoreError>;
+
+    /// Stable filtered queue page. Without a server-resolved grant all content is concealed.
+    /// The adapter commits a read audit before returning granted content.
+    async fn list_queue(
+        &self,
+        _request: QueuePageRequest,
+        _content: Option<QueueContentGrant>,
+    ) -> Result<QueuePage, SupportStoreError> {
+        Err(SupportStoreError::Unavailable)
+    }
+
+    /// One atomic CAS, classification correction, audit and operation receipt.
+    /// Callers must resolve the operator and authorize current MFA, triage and ticket content first.
+    async fn apply_triage(
+        &self,
+        _command: TriageCommand,
+    ) -> Result<TriageReceipt, SupportStoreError> {
+        Err(SupportStoreError::Unavailable)
+    }
+
+    /// Message content returned only after its read audit commits.
+    async fn read_messages_audited(
+        &self,
+        _ticket_id: &TicketId,
+        _request: MessagePageRequest,
+        _content: QueueContentGrant,
+    ) -> Result<MessagePage, SupportStoreError> {
+        Err(SupportStoreError::AuditUnavailable)
+    }
 }
 
 #[async_trait::async_trait]

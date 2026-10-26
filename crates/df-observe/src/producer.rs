@@ -29,6 +29,7 @@ use std::{
 };
 
 pub use opentelemetry::logs::{AnyValue, Severity};
+pub use opentelemetry_sdk::trace::SpanData as NativeSpanData;
 /// Safe synthetic/native capture input. The owner supplies explicit timestamps and correlation.
 #[derive(Debug)]
 pub struct LogInput {
@@ -133,7 +134,42 @@ pub struct NativeProducer {
     result: Submission,
     scope: InstrumentationScope,
     limits: TelemetryLimits,
+    completed_spans: NativeExporter,
 }
+
+/// Owns the process-wide OTEL provider; its sink must perform bounded, nonblocking admission.
+pub struct NativeTraceBridge(SdkTracerProvider);
+
+#[derive(Debug)]
+struct ForwardSpans(fn(NativeSpanData));
+
+impl SpanExporter for ForwardSpans {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        for span in batch {
+            (self.0)(span);
+        }
+        Ok(())
+    }
+}
+
+impl NativeTraceBridge {
+    /// Install before serving. Application logs have their own unsampled audit bridge.
+    pub fn install(sink: fn(NativeSpanData)) -> Self {
+        let provider = SdkTracerProvider::builder()
+            .with_sampler(Sampler::AlwaysOn)
+            .with_simple_exporter(ForwardSpans(sink))
+            .build();
+        opentelemetry::global::set_tracer_provider(provider.clone());
+        Self(provider)
+    }
+
+    pub fn shutdown(self, timeout: Duration) -> Result<(), TelemetryError> {
+        self.0
+            .shutdown_with_timeout(timeout)
+            .map_err(|_| TelemetryError::Internal)
+    }
+}
+
 impl NativeProducer {
     pub fn new(
         source: ProducerId,
@@ -142,11 +178,45 @@ impl NativeProducer {
         ingress: Arc<dyn TelemetryIngress>,
         limits: TelemetryLimits,
     ) -> Result<Self, TelemetryError> {
+        Self::build(source, first_sequence, build, ingress, limits, None)
+    }
+    /// Production composition identity; capture and durability use the same bounded SDK path.
+    pub fn for_service(
+        source: ProducerId,
+        first_sequence: SourceSequence,
+        build: &BuildIdentity,
+        ingress: Arc<dyn TelemetryIngress>,
+        limits: TelemetryLimits,
+        service: &'static str,
+    ) -> Result<Self, TelemetryError> {
+        if service.is_empty() || service.len() > 128 {
+            return Err(TelemetryError::InvalidIdentity);
+        }
+        Self::build(
+            source,
+            first_sequence,
+            build,
+            ingress,
+            limits,
+            Some(service),
+        )
+    }
+    fn build(
+        source: ProducerId,
+        first_sequence: SourceSequence,
+        build: &BuildIdentity,
+        ingress: Arc<dyn TelemetryIngress>,
+        limits: TelemetryLimits,
+        service: Option<&'static str>,
+    ) -> Result<Self, TelemetryError> {
         let limits = limits.validate()?;
         let result = Arc::new(Mutex::new(None));
         let resource = Resource::builder_empty()
             .with_attributes([
-                KeyValue::new("service.name", "df-telemetry.synthetic-native"),
+                KeyValue::new(
+                    "service.name",
+                    service.unwrap_or("df-telemetry.synthetic-native"),
+                ),
                 KeyValue::new(
                     "df.build",
                     build.revision(BuildRevision::Source).as_str().to_owned(),
@@ -184,6 +254,7 @@ impl NativeProducer {
             .with_simple_exporter(exporter())
             .build();
         let span_exporter = exporter();
+        let completed_spans = exporter();
         let traces = SdkTracerProvider::builder()
             .with_sampler(Sampler::AlwaysOn)
             .with_resource(resource)
@@ -192,7 +263,7 @@ impl NativeProducer {
         let scope = InstrumentationScope::builder("df-observe.native")
             .with_version("0.1.0")
             .with_schema_url("https://dungeonflux.local/telemetry/scope-v1")
-            .with_attributes([KeyValue::new("fixture.synthetic", true)])
+            .with_attributes([KeyValue::new("fixture.synthetic", service.is_none())])
             .build();
         Ok(Self {
             source,
@@ -202,6 +273,7 @@ impl NativeProducer {
             result,
             scope,
             limits,
+            completed_spans,
         })
     }
     /// Reserve identity before dispatch. Failed capture still consumes sequence and creates a
@@ -249,7 +321,7 @@ impl NativeProducer {
         record.set_timestamp(input.timestamp);
         record.set_observed_timestamp(input.observed_timestamp);
         record.set_severity_number(input.severity);
-        record.set_severity_text("synthetic");
+        record.set_severity_text(input.severity.name());
         record.set_event_name("native.capture");
         record.set_body(input.body);
         record.add_attributes(input.attributes);
@@ -265,7 +337,97 @@ impl NativeProducer {
     pub fn emit_span(
         &mut self,
         key: CaptureKey,
+        input: SpanInput,
+    ) -> Result<CapturedBatch, TelemetryError> {
+        self.emit_span_with_id(key, input, None)
+    }
+    /// Capture a completed SDK span without reconstructing away events, status, kind or scope.
+    /// The composition sanitizes payloads first; this shared boundary bounds them before encoding.
+    pub fn emit_finished_span(
+        &mut self,
+        key: CaptureKey,
+        mut span: NativeSpanData,
+    ) -> Result<CapturedBatch, TelemetryError> {
+        if key.producer != self.source
+            || !span.span_context.is_valid()
+            || span.attributes.len() > 64
+            || span.events.events.len() > 128
+            || span.links.links.len() > 16
+        {
+            return Err(TelemetryError::Oversized);
+        }
+        validate_time(span.start_time)?;
+        validate_time(span.end_time)?;
+        if span.end_time < span.start_time {
+            return Err(TelemetryError::Malformed);
+        }
+        let mut budget = InputBudget::new(self.limits.record_bytes);
+        budget.node(span.name.len())?;
+        budget.node(span.instrumentation_scope.name().len())?;
+        budget.node(span.instrumentation_scope.version().map_or(0, str::len))?;
+        budget.node(span.instrumentation_scope.schema_url().map_or(0, str::len))?;
+        for attribute in span.instrumentation_scope.attributes() {
+            budget.node(attribute.key.as_str().len())?;
+            budget.span_value(&attribute.value)?;
+        }
+        if let opentelemetry::trace::Status::Error { description } = &span.status {
+            budget.node(description.len())?;
+        }
+        for attribute in &span.attributes {
+            if matches!(
+                attribute.key.as_str(),
+                "df.producer_id" | "df.record_id" | "df.source_sequence"
+            ) {
+                return Err(TelemetryError::InvalidIdentity);
+            }
+            budget.node(attribute.key.as_str().len())?;
+            budget.span_value(&attribute.value)?;
+        }
+        for event in &span.events.events {
+            validate_time(event.timestamp)?;
+            budget.node(event.name.len())?;
+            for attribute in &event.attributes {
+                budget.node(attribute.key.as_str().len())?;
+                budget.span_value(&attribute.value)?;
+            }
+        }
+        for link in &span.links.links {
+            budget.node(64)?;
+            for attribute in &link.attributes {
+                budget.node(attribute.key.as_str().len())?;
+                budget.span_value(&attribute.value)?;
+            }
+        }
+        span.attributes.extend([
+            KeyValue::new("df.producer_id", key.producer.hex()),
+            KeyValue::new("df.record_id", key.record.hex()),
+            KeyValue::new("df.source_sequence", key.sequence.get()),
+        ]);
+        let resource_spans = vec![ResourceSpans::new(span, &self.completed_spans.resource)];
+        // The exact admission result is retained in the shared capture slot, including refusal.
+        let _sdk_outcome = self.completed_spans.submit(
+            Signal::Spans,
+            ExportTraceServiceRequest { resource_spans }.encode_to_vec(),
+        );
+        self.take_submission()
+    }
+    /// Preserve an already dispatched span identity in correlated logs and exported span data.
+    pub fn emit_correlated_span(
+        &mut self,
+        key: CaptureKey,
+        input: SpanInput,
+        span: opentelemetry::trace::SpanContext,
+    ) -> Result<CapturedBatch, TelemetryError> {
+        if !span.is_valid() {
+            return Err(TelemetryError::InvalidIdentity);
+        }
+        self.emit_span_with_id(key, input, Some(span))
+    }
+    fn emit_span_with_id(
+        &mut self,
+        key: CaptureKey,
         mut input: SpanInput,
+        span: Option<opentelemetry::trace::SpanContext>,
     ) -> Result<CapturedBatch, TelemetryError> {
         if key.producer != self.source
             || input.attributes.len() > 64
@@ -309,11 +471,15 @@ impl NativeProducer {
             KeyValue::new("df.source_sequence", key.sequence.get()),
         ]);
         let tracer = self.traces.tracer_with_scope(self.scope.clone());
-        let builder = tracer
+        let mut builder = tracer
             .span_builder(input.name)
             .with_start_time(input.start)
             .with_attributes(input.attributes)
             .with_links(input.links);
+        if let Some(span) = span {
+            builder.span_id = Some(span.span_id());
+            builder.trace_id = Some(span.trace_id());
+        }
         let mut span = tracer.build_with_context(builder, &input.parent);
         span.end_with_timestamp(input.end);
         self.take_submission()
@@ -449,6 +615,205 @@ fn ordered_resource(resource: &Resource) -> ResourceAttributesWithSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static COMPLETED_SPAN: Mutex<Option<NativeSpanData>> = Mutex::new(None);
+    fn capture_completed_span(span: NativeSpanData) {
+        *COMPLETED_SPAN.lock().unwrap() = Some(span);
+    }
+
+    #[test]
+    fn completed_sdk_span_keeps_events_status_kind_scope_and_enforces_input_budget() {
+        use opentelemetry::trace::{SpanKind, Status};
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(ForwardSpans(capture_completed_span))
+            .build();
+        let tracer = provider.tracer("test.original-scope");
+        let mut span = tracer.build_with_context(
+            tracer
+                .span_builder("test.completed")
+                .with_kind(SpanKind::Client),
+            &Context::new(),
+        );
+        span.add_event("test.event", vec![KeyValue::new("count", 7i64)]);
+        span.set_status(Status::error("test-error-class"));
+        span.end();
+        let completed = COMPLETED_SPAN.lock().unwrap().take().unwrap();
+        let context = completed.span_context.clone();
+        let event_time = completed.events.events[0].timestamp;
+        let build = BuildIdentity::new(
+            Some("build"),
+            Some("native"),
+            Some("none"),
+            Some("config"),
+            Some("none"),
+        )
+        .unwrap();
+        let mut producer = NativeProducer::for_service(
+            ProducerId::new([1; 16]).unwrap(),
+            SourceSequence::new(1).unwrap(),
+            &build,
+            Arc::new(Accepted),
+            TelemetryLimits::default(),
+            "test.service",
+        )
+        .unwrap();
+        let mut oversized = completed.clone();
+        oversized.events.events[0].name = "x".repeat(8192).into();
+        let key = producer.reserve(RecordId::new([2; 16]).unwrap()).unwrap();
+        assert!(matches!(
+            producer.emit_finished_span(key, oversized),
+            Err(TelemetryError::Oversized)
+        ));
+        let key = producer.reserve(RecordId::new([3; 16]).unwrap()).unwrap();
+        let captured = producer.emit_finished_span(key, completed).unwrap();
+        captured.pending.wait(Duration::from_secs(1)).unwrap();
+        let request = ExportTraceServiceRequest::decode(captured.bytes.as_slice()).unwrap();
+        let scope = &request.resource_spans[0].scope_spans[0];
+        assert_eq!(scope.scope.as_ref().unwrap().name, "test.original-scope");
+        let span = &scope.spans[0];
+        assert_eq!(span.trace_id, context.trace_id().to_bytes());
+        assert_eq!(span.span_id, context.span_id().to_bytes());
+        assert_eq!(span.kind, 3);
+        assert_eq!(span.status.as_ref().unwrap().code, 2);
+        assert_eq!(span.status.as_ref().unwrap().message, "test-error-class");
+        assert_eq!(span.events.len(), 1);
+        assert_eq!(span.events[0].name, "test.event");
+        assert_eq!(
+            u128::from(span.events[0].time_unix_nano),
+            event_time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        producer.shutdown(Duration::from_secs(1)).unwrap();
+        provider.shutdown().unwrap();
+    }
+
+    #[derive(Debug)]
+    struct Accepted;
+    impl TelemetryIngress for Accepted {
+        fn submit(&self, _: Signal, _: &[u8]) -> Result<PendingReceipt, TelemetryError> {
+            let (sender, receipt) = PendingReceipt::channel();
+            sender
+                .send(Ok(crate::IngestReceipt {
+                    durability: crate::Durability::Committed,
+                    spool_position: 1,
+                    committed_watermark: 1,
+                    records: 1,
+                }))
+                .unwrap();
+            Ok(receipt)
+        }
+    }
+
+    #[test]
+    fn service_capture_preserves_severity_resource_and_dispatched_span_identity() {
+        use opentelemetry::trace::{
+            SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState,
+        };
+        use opentelemetry_proto::tonic::common::v1::any_value;
+        let build = BuildIdentity::new(
+            Some("build"),
+            Some("native"),
+            Some("none"),
+            Some("config"),
+            Some("none"),
+        )
+        .unwrap();
+        let mut producer = NativeProducer::for_service(
+            ProducerId::new([1; 16]).unwrap(),
+            SourceSequence::new(1).unwrap(),
+            &build,
+            Arc::new(Accepted),
+            TelemetryLimits::default(),
+            "df-portal-hosted",
+        )
+        .unwrap();
+        let span = SpanContext::new(
+            TraceId::from_bytes([3; 16]),
+            SpanId::from_bytes([4; 8]),
+            TraceFlags::SAMPLED,
+            false,
+            TraceState::default(),
+        );
+        let key = producer.reserve(RecordId::new([2; 16]).unwrap()).unwrap();
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let captured = producer
+            .emit_log(
+                key,
+                LogInput {
+                    timestamp: now,
+                    observed_timestamp: now,
+                    severity: Severity::Error,
+                    body: AnyValue::String("failed".into()),
+                    attributes: vec![("count".to_owned(), AnyValue::Int(1))],
+                    trace: Some(span.clone()),
+                },
+            )
+            .unwrap();
+        captured.pending.wait(Duration::from_secs(1)).unwrap();
+        let request = ExportLogsServiceRequest::decode(captured.bytes.as_slice()).unwrap();
+        let resource = &request.resource_logs[0];
+        assert!(resource.resource.as_ref().unwrap().attributes.iter().any(
+            |attribute| attribute.key == "service.name"
+                && attribute.value.as_ref().unwrap().value
+                    == Some(any_value::Value::StringValue("df-portal-hosted".to_owned()))
+        ));
+        let scope = &resource.scope_logs[0];
+        assert!(
+            scope
+                .scope
+                .as_ref()
+                .unwrap()
+                .attributes
+                .iter()
+                .any(|attribute| attribute.key == "fixture.synthetic"
+                    && attribute.value.as_ref().unwrap().value
+                        == Some(any_value::Value::BoolValue(false)))
+        );
+        let record = &scope.log_records[0];
+        assert_eq!(record.severity_number, 17);
+        assert_eq!(record.severity_text, "ERROR");
+        assert_eq!(record.trace_id, [3; 16]);
+        assert_eq!(record.span_id, [4; 8]);
+        assert!(
+            record
+                .attributes
+                .iter()
+                .any(|attribute| attribute.key == "count"
+                    && attribute.value.as_ref().unwrap().value
+                        == Some(any_value::Value::IntValue(1)))
+        );
+        let key = producer.reserve(RecordId::new([5; 16]).unwrap()).unwrap();
+        let parent = SpanContext::new(
+            span.trace_id(),
+            SpanId::from_bytes([6; 8]),
+            TraceFlags::SAMPLED,
+            true,
+            TraceState::default(),
+        );
+        let captured = producer
+            .emit_correlated_span(
+                key,
+                SpanInput {
+                    name: "request".to_owned(),
+                    start: now,
+                    end: now + Duration::from_secs(1),
+                    parent: Context::new().with_remote_span_context(parent),
+                    links: Vec::new(),
+                    attributes: Vec::new(),
+                },
+                span,
+            )
+            .unwrap();
+        captured.pending.wait(Duration::from_secs(1)).unwrap();
+        let request = ExportTraceServiceRequest::decode(captured.bytes.as_slice()).unwrap();
+        let record = &request.resource_spans[0].scope_spans[0].spans[0];
+        assert_eq!(record.trace_id, [3; 16]);
+        assert_eq!(record.span_id, [4; 8]);
+        assert_eq!(record.parent_span_id, [6; 8]);
+        producer.shutdown(Duration::from_secs(1)).unwrap();
+    }
 
     fn tree(depth: usize) -> AnyValue {
         if depth == 0 {

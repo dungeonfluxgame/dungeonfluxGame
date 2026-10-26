@@ -584,7 +584,10 @@ pub use ingress::*;
 #[cfg(not(target_arch = "wasm32"))]
 mod producer;
 #[cfg(not(target_arch = "wasm32"))]
-pub use producer::{AnyValue, CapturedBatch, LogInput, NativeProducer, Severity, SpanInput};
+pub use producer::{
+    AnyValue, CapturedBatch, LogInput, NativeProducer, NativeSpanData, NativeTraceBridge, Severity,
+    SpanInput,
+};
 
 mod dispatch_context;
 pub use dispatch_context::{begin_dispatched, begin_dispatched_with_audit};

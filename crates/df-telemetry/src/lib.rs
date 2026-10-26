@@ -1,5 +1,7 @@
 //! Native synthetic telemetry foundation. This is not an authenticated game collector.
 #![cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod configured_tests;
 mod ownership;
 mod persistence;
 mod query;
@@ -202,6 +204,31 @@ impl Store {
         let worker = thread::Builder::new()
             .name("df-telemetry-spool".into())
             .spawn(move || worker(persistent, receiver, counters, barrier))
+            .map_err(|_| TelemetryError::Internal)?;
+        Ok(Self {
+            ingress,
+            worker: Some(worker),
+            shutdown_reply: None,
+        })
+    }
+    /// Open a store under a root the deployment composition configured. The
+    /// fixture-only `open` path restriction does not apply; marker, allowlist,
+    /// spool and SQLite bounds are unchanged.
+    pub fn open_configured(path: &Path, limits: TelemetryLimits) -> Result<Self, TelemetryError> {
+        let limits = limits.validate()?;
+        let persistent = Persistence::open(OwnedRoot::open_configured(path)?, limits)?;
+        let counters = Arc::new(Counters::default());
+        counters.gaps.store(1, Ordering::Relaxed);
+        update(&persistent, &counters);
+        let (sender, receiver) = mpsc::sync_channel(limits.queue_items);
+        let ingress = LocalIngress {
+            sender,
+            counters: Arc::clone(&counters),
+            limits,
+        };
+        let worker = thread::Builder::new()
+            .name("df-telemetry-spool".into())
+            .spawn(move || worker(persistent, receiver, counters, None))
             .map_err(|_| TelemetryError::Internal)?;
         Ok(Self {
             ingress,

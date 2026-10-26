@@ -5,6 +5,9 @@ use thiserror::Error;
 
 macro_rules! string_id {
     ($name:ident) => {
+        string_id!($name, 128);
+    };
+    ($name:ident, $maximum:literal) => {
         #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(String);
@@ -12,7 +15,7 @@ macro_rules! string_id {
         impl $name {
             pub fn new(value: impl Into<String>) -> Result<Self, ContractError> {
                 let value = value.into();
-                if value.is_empty() || value.len() > 128 {
+                if value.is_empty() || value.len() > $maximum {
                     return Err(ContractError::InvalidIdentifier);
                 }
                 Ok(Self(value))
@@ -37,7 +40,7 @@ string_id!(ProposalId);
 string_id!(OperatorId);
 string_id!(Capability);
 string_id!(MfaProofId);
-string_id!(AuditId);
+string_id!(AuditId, 256);
 string_id!(EvidenceRef);
 string_id!(RepositoryKey);
 string_id!(DisputeId);
@@ -45,7 +48,7 @@ string_id!(RightsCaseId);
 string_id!(OwnerQueue);
 string_id!(CallId);
 string_id!(JobId);
-string_id!(PageCursor);
+string_id!(PageCursor, 256);
 
 /// Failure while creating or validating a support contract value.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -64,6 +67,10 @@ pub enum ContractError {
     TooManyProposals,
     #[error("message page size must be between one and one hundred")]
     InvalidPageSize,
+    #[error("reason must contain between one and five hundred characters")]
+    InvalidReason,
+    #[error("triage must change status or category")]
+    EmptyTriage,
 }
 
 /// Email body bytes interpreted as untrusted text, with no formatting or serialization interface.
@@ -757,6 +764,132 @@ pub enum MeterOutcome {
     Unusable,
     Failed,
     Unknown,
+}
+
+/// Manual status/category correction. Category references the classification
+/// source revision it corrects; it never overwrites prior model evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TriageCommand {
+    pub operation_id: OperationId,
+    pub ticket_id: TicketId,
+    pub operator_id: OperatorId,
+    pub expected_revision: u64,
+    pub source_revision: u64,
+    pub status: Option<TicketStatus>,
+    pub category: Option<ClassificationCategory>,
+    pub reason: String,
+}
+
+impl TriageCommand {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Preserves the frozen triage command constructor"
+    )]
+    pub fn new(
+        operation_id: OperationId,
+        ticket_id: TicketId,
+        operator_id: OperatorId,
+        expected_revision: u64,
+        source_revision: u64,
+        status: Option<TicketStatus>,
+        category: Option<ClassificationCategory>,
+        reason: String,
+    ) -> Result<Self, ContractError> {
+        let trimmed = reason.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > 500 {
+            return Err(ContractError::InvalidReason);
+        }
+        if status.is_none() && category.is_none() {
+            return Err(ContractError::EmptyTriage);
+        }
+        Ok(Self {
+            operation_id,
+            ticket_id,
+            operator_id,
+            expected_revision,
+            source_revision,
+            status,
+            category,
+            reason: trimmed.to_owned(),
+        })
+    }
+}
+
+/// Durable receipt of one applied (or replayed) triage operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TriageReceipt {
+    pub operation_id: OperationId,
+    pub ticket_id: TicketId,
+    pub previous_revision: u64,
+    pub new_revision: u64,
+    pub status: TicketStatus,
+    pub category: Option<ClassificationCategory>,
+    pub audit_id: AuditId,
+    pub replayed: bool,
+    pub created_at_unix_s: i64,
+}
+
+/// Closed queue filters. Absent fields match every ticket.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QueueFilter {
+    pub status: Option<TicketStatus>,
+    pub category: Option<ClassificationCategory>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueuePageRequest {
+    pub filter: QueueFilter,
+    pub cursor: Option<PageCursor>,
+    pub page_size: u8,
+}
+
+impl QueuePageRequest {
+    pub fn new(
+        filter: QueueFilter,
+        cursor: Option<PageCursor>,
+        page_size: u8,
+    ) -> Result<Self, ContractError> {
+        if !(1..=100).contains(&page_size) {
+            return Err(ContractError::InvalidPageSize);
+        }
+        Ok(Self {
+            filter,
+            cursor,
+            page_size,
+        })
+    }
+}
+
+/// Server-resolved ordinary content permission, with explicit restricted ticket scope.
+/// The caller rechecks current capabilities and MFA before constructing this value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueContentGrant {
+    pub operator_id: OperatorId,
+    pub audit_id: AuditId,
+    pub restricted_ticket_ids: Vec<TicketId>,
+}
+
+/// One redacted queue row. Restricted content fields stay `None` without a grant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueEntry {
+    pub ticket_id: TicketId,
+    pub status: TicketStatus,
+    pub revision: u64,
+    pub category: Option<ClassificationCategory>,
+    pub restricted: bool,
+    pub subject: Option<String>,
+    pub snippet: Option<String>,
+    pub attachment_count: Option<u32>,
+    pub message_count: u32,
+    pub created_at_unix_s: i64,
+    pub first_received_at_unix_s: i64,
+    pub last_inbound_at_unix_s: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueuePage {
+    pub entries: Vec<QueueEntry>,
+    pub next_cursor: Option<PageCursor>,
 }
 
 #[cfg(test)]
