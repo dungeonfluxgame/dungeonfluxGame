@@ -170,6 +170,7 @@ pub struct Snapshot {
     pub data: PathBuf,
     pub config_path: PathBuf,
     pub windowed: bool,
+    pub supervised: bool,
 }
 
 struct Inner {
@@ -180,6 +181,7 @@ struct Inner {
     display_open: bool,
     display_full_screen: bool,
     child: Option<Child>,
+    supervised: bool,
 }
 
 pub struct App {
@@ -240,6 +242,7 @@ impl App {
                 display_open: false,
                 display_full_screen: false,
                 child: None,
+                supervised: false,
             }),
             notify,
         });
@@ -348,7 +351,7 @@ impl App {
 
     pub fn snapshot(&self) -> Snapshot {
         self.reload_config();
-        let (phase, settings, settings_problem, display_open, display_full_screen) = {
+        let (phase, settings, settings_problem, display_open, display_full_screen, supervised) = {
             let inner = self.lock();
             (
                 inner.phase.clone(),
@@ -356,6 +359,7 @@ impl App {
                 inner.settings_problem.clone(),
                 inner.display_open,
                 inner.display_full_screen,
+                inner.supervised,
             )
         };
         let install = Install::locate(&settings).map_err(|_| Missing::SHOWN.to_owned());
@@ -373,6 +377,7 @@ impl App {
             data: self.data.clone(),
             config_path: self.config_path.clone(),
             windowed: self.windowed,
+            supervised,
         }
     }
 
@@ -1282,6 +1287,7 @@ impl App {
         }
         self.write_run(&run)
             .map_err(|_| "The session launcher could not retain its game.".to_owned())?;
+        self.lock().supervised = true;
         self.set_phase(Phase::Running(run.clone()));
         self.spawn_monitor(run);
         Ok(())
@@ -1348,7 +1354,18 @@ impl App {
 
     pub fn save_settings(&self, form: &Form) -> Result<(), Vec<FieldError>> {
         let current = self.settings();
-        let next = current.with_form(form)?;
+        let mut next = current.with_form(form)?;
+        if self.lock().supervised {
+            next.keys_from_env_file = current.keys_from_env_file;
+            next.server_mode = current.server_mode;
+            next.external_url.clone_from(&current.external_url);
+            next.dev_control = current.dev_control;
+            next.dev_overrides = current.dev_overrides;
+            next.game_folder.clone_from(&current.game_folder);
+            next.build_folder.clone_from(&current.build_folder);
+            next.postgres_folder.clone_from(&current.postgres_folder);
+            next.play_folder.clone_from(&current.play_folder);
+        }
         log::event(
             "SETTINGS_SAVED",
             format!(
@@ -1643,14 +1660,44 @@ mod tests {
             app.attach_runtime("http://127.0.0.1:45679", &record)
                 .is_err()
         );
+        assert!(!app.snapshot().supervised);
         app.attach_runtime("http://127.0.0.1:45678", &record)
             .unwrap();
-        assert!(matches!(app.snapshot().phase, Phase::Running(_)));
+        let snapshot = app.snapshot();
+        assert!(matches!(snapshot.phase, Phase::Running(_)));
+        assert!(snapshot.supervised);
+        let settings = crate::ui::handle(&app, "GET", "/settings", &[]);
+        let settings = String::from_utf8(settings.body).unwrap();
+        for section in [
+            "Players and network",
+            "Table display",
+            "Story and sound",
+            "Pictures",
+            "Video",
+        ] {
+            assert!(
+                settings.contains(&format!("<h2>{section}</h2>")),
+                "{section}"
+            );
+        }
+        for hidden in [
+            "Developer",
+            "Files and command line",
+            ".env",
+            "dungeonflux start",
+        ] {
+            assert!(
+                !settings.contains(hidden),
+                "unexpected supervised copy: {hidden}"
+            );
+        }
         let page = crate::ui::handle(&app, "GET", "/", &[]);
         let body = String::from_utf8(page.body).unwrap();
         assert!(body.contains("BADEFO"));
         assert!(body.contains("Stop and save"));
         assert!(!body.contains("Developer mode: the game"));
+        assert!(!body.contains("/settings#developer"));
+        assert!(!body.contains("dungeonflux --help"));
         assert_eq!(app.read_run().unwrap().player_url, run.player_url);
         app.set_phase(Phase::Idle { notice: None });
         std::fs::remove_dir_all(data).unwrap();

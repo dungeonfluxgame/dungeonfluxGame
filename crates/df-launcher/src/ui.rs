@@ -483,7 +483,7 @@ fn home(snapshot: &Snapshot) -> String {
             lantern("dimming"),
             escape(&run.game.name)
         ),
-        Phase::Failed(failure) => failed(failure),
+        Phase::Failed(failure) => failed(snapshot, failure),
     };
     let busy = matches!(snapshot.phase, Phase::Starting { .. } | Phase::Stopping(_));
     // While a game is in play the page is about that game alone: no saved-games list.
@@ -1087,6 +1087,14 @@ fn table_portrait(snapshot: &Snapshot, query: &str) -> Page {
 }
 
 fn connected(snapshot: &Snapshot, origin: &str) -> String {
+    if snapshot.supervised {
+        return format!(
+            "<section class=\"state\">{}<div><h1>Connected to your game</h1><p class=\"lede\">Your game is ready. It keeps running if you close this launcher.</p><div class=\"actions\">{}{}</div></div></section>",
+            lantern("lit"),
+            display_controls(snapshot),
+            button("/disconnect", "Disconnect", "quiet", &[])
+        );
+    }
     format!(
         "<section class=\"state\">{}<div><h1>Connected to a running server</h1><p class=\"lede\">Developer mode: the game at <strong>{}</strong> was started outside DungeonFlux, so it keeps running when you disconnect.</p><div class=\"actions\">{}{}</div></div></section>",
         lantern("lit"),
@@ -1096,7 +1104,7 @@ fn connected(snapshot: &Snapshot, origin: &str) -> String {
     )
 }
 
-fn failed(failure: &Failure) -> String {
+fn failed(snapshot: &Snapshot, failure: &Failure) -> String {
     let primary = match &failure.recovery {
         Recovery::Retry(_) => button("/retry", "Try again", "primary", &[]),
         Recovery::StopAgain(_) => format!(
@@ -1106,7 +1114,7 @@ fn failed(failure: &Failure) -> String {
         ),
         Recovery::Nothing => String::new(),
     };
-    let log = if failure.log_tail.trim().is_empty() {
+    let log = if snapshot.supervised || failure.log_tail.trim().is_empty() {
         String::new()
     } else {
         format!(
@@ -1120,7 +1128,7 @@ fn failed(failure: &Failure) -> String {
         escape(&failure.title),
         escape(&failure.message),
         button("/dismiss", "Dismiss", "quiet", &[]),
-        if failure.log_tail.is_empty() {
+        if snapshot.supervised || failure.log_tail.is_empty() {
             String::new()
         } else {
             button("/logs", "Open log folder", "quiet", &[])
@@ -1474,7 +1482,7 @@ fn settings_page(
         }),
         fields.radios("picture_provider", "Picture service", &[
             ("openai", "OpenAI", "The standard picture service."),
-            ("flux", "FLUX through fal", "A developer option. Needs a fal key."),
+            ("flux", "FLUX through fal", if snapshot.supervised { "An alternate picture service. Needs a fal key." } else { "A developer option. Needs a fal key." }),
         ], match settings.picture_provider {
             PictureProvider::Openai => "openai",
             PictureProvider::Flux => "flux",
@@ -1505,19 +1513,36 @@ fn settings_page(
             settings.character_video
         ),
     );
-    let keys_note = fields.check(
-        "keys_from_env_file",
-        "Also use keys from the game folder's .env file",
-        "Keys saved below come first. The .env file is how developers have been providing keys.",
-        settings.keys_from_env_file,
-    );
-    let developer = developer_section(snapshot, &fields);
+    let private_sections = if snapshot.supervised {
+        String::new()
+    } else {
+        let keys_note = fields.check(
+            "keys_from_env_file",
+            "Also use keys from the game folder's .env file",
+            "Keys saved below come first. The .env file is how developers have been providing keys.",
+            settings.keys_from_env_file,
+        );
+        let developer = developer_section(snapshot, &fields);
+        format!(
+            "<section id=\"keys-source\"><h2>Where keys come from</h2>{keys_note}</section>{developer}"
+        )
+    };
     let form = format!(
-        "<form method=\"post\" action=\"/settings\" class=\"settings-form\">{network}{display}{story}{pictures}{video}<section id=\"keys-source\"><h2>Where keys come from</h2>{keys_note}</section>{developer}<div class=\"save-bar\"><button class=\"primary\">Save settings</button><a class=\"quiet-link\" href=\"/settings\">Discard changes</a></div></form>"
+        "<form method=\"post\" action=\"/settings\" class=\"settings-form\">{network}{display}{story}{pictures}{video}{private_sections}<div class=\"save-bar\"><button class=\"primary\">Save settings</button><a class=\"quiet-link\" href=\"/settings\">Discard changes</a></div></form>"
     );
-    let keys = keys_section(snapshot, &fields);
-    let files = files_section(snapshot);
-    let index = "<nav class=\"index\" aria-label=\"Settings sections\"><a href=\"#network\">Players and network</a><a href=\"#display\">Table display</a><a href=\"#story\">Story and sound</a><a href=\"#pictures\">Pictures</a><a href=\"#video\">Video</a><a href=\"#keys\">Keys</a><a href=\"#developer\">Developer</a><a href=\"#files\">Files and command line</a></nav>";
+    let (keys, files, index) = if snapshot.supervised {
+        (
+            String::new(),
+            String::new(),
+            "<nav class=\"index\" aria-label=\"Settings sections\"><a href=\"#network\">Players and network</a><a href=\"#display\">Table display</a><a href=\"#story\">Story and sound</a><a href=\"#pictures\">Pictures</a><a href=\"#video\">Video</a></nav>",
+        )
+    } else {
+        (
+            keys_section(snapshot, &fields),
+            files_section(snapshot),
+            "<nav class=\"index\" aria-label=\"Settings sections\"><a href=\"#network\">Players and network</a><a href=\"#display\">Table display</a><a href=\"#story\">Story and sound</a><a href=\"#pictures\">Pictures</a><a href=\"#video\">Video</a><a href=\"#keys\">Keys</a><a href=\"#developer\">Developer</a><a href=\"#files\">Files and command line</a></nav>",
+        )
+    };
     shell(
         "DungeonFlux settings",
         "settings-page",
@@ -1653,6 +1678,65 @@ mod tests {
 
     fn text(page: &Page) -> String {
         String::from_utf8(page.body.clone()).unwrap()
+    }
+
+    #[test]
+    fn supervised_settings_show_only_gameplay_sections() {
+        let (app, data) = app("supervised-settings");
+        let mut snapshot = app.snapshot();
+        snapshot.supervised = true;
+
+        let page = settings_page(&snapshot, &[], None, None);
+
+        for section in [
+            "Players and network",
+            "Table display",
+            "Story and sound",
+            "Pictures",
+            "Video",
+        ] {
+            assert!(page.contains(&format!("<h2>{section}</h2>")), "{section}");
+        }
+        for hidden in [
+            "<h2>Keys</h2>",
+            "<h2>Developer</h2>",
+            "Folders",
+            "Files and command line",
+            ".env",
+            "dungeonflux start",
+            data.to_string_lossy().as_ref(),
+            snapshot.config_path.to_string_lossy().as_ref(),
+        ] {
+            assert!(
+                !page.contains(hidden),
+                "unexpected supervised copy: {hidden}"
+            );
+        }
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn desktop_settings_keep_developer_sections() {
+        let (app, data) = app("desktop-settings");
+        let snapshot = app.snapshot();
+
+        let page = settings_page(&snapshot, &[], None, None);
+
+        for section in [
+            "Players and network",
+            "Table display",
+            "Story and sound",
+            "Pictures",
+            "Video",
+            "Keys",
+            "Developer",
+            "Folders",
+            "Files and command line",
+            ".env",
+        ] {
+            assert!(page.contains(section), "missing desktop copy: {section}");
+        }
+        std::fs::remove_dir_all(data).unwrap();
     }
 
     #[test]
