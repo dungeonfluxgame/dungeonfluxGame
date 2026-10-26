@@ -23,6 +23,16 @@ pub(super) fn missing_groups(
     groups: &[rpc::JourneyGroup],
     choices: &[rpc::JourneyChoice],
 ) -> Vec<String> {
+    unselected_groups(groups, choices)
+        .into_iter()
+        .map(|group| format!("Choose {}", group.label))
+        .collect()
+}
+
+pub(super) fn unselected_groups<'a>(
+    groups: &'a [rpc::JourneyGroup],
+    choices: &[rpc::JourneyChoice],
+) -> Vec<&'a rpc::JourneyGroup> {
     groups
         .iter()
         .filter(|group| group_available(group, choices))
@@ -34,7 +44,6 @@ pub(super) fn missing_groups(
                     })
             })
         })
-        .map(|group| format!("Choose {}", group.label))
         .collect()
 }
 
@@ -57,6 +66,57 @@ pub(super) fn retain_available(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dwarf_fighter_missing_choices_shrink_after_each_selection_and_exclude_other_ancestries() {
+        let mut groups = crate::gameplay::hero_catalog::species_choice_groups();
+        groups.extend(
+            [
+                ("alignment", "Alignment"),
+                ("language-1", "First language"),
+                ("language-2", "Second language"),
+                ("skill-1", "First Fighter skill"),
+                ("skill-2", "Second Fighter skill"),
+                ("gaming-set", "Gaming set"),
+            ]
+            .map(|(id, label)| rpc::JourneyGroup {
+                group_id: id.to_owned(),
+                label: label.to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "chosen".to_owned(),
+                    ..Default::default()
+                }],
+            }),
+        );
+        let mut choices = vec![rpc::JourneyChoice {
+            group_id: "species".to_owned(),
+            option_id: "dwarf".to_owned(),
+        }];
+        let expected = [
+            "alignment",
+            "language-1",
+            "language-2",
+            "skill-1",
+            "skill-2",
+            "gaming-set",
+        ];
+        for completed in 0..=expected.len() {
+            let missing = unselected_groups(&groups, &choices);
+            assert_eq!(
+                missing
+                    .iter()
+                    .map(|group| group.group_id.as_str())
+                    .collect::<Vec<_>>(),
+                expected[completed..]
+            );
+            if let Some(id) = expected.get(completed) {
+                choices.push(rpc::JourneyChoice {
+                    group_id: (*id).to_owned(),
+                    option_id: "chosen".to_owned(),
+                });
+            }
+        }
+    }
 
     #[test]
     fn species_groups_only_apply_to_the_selected_species_and_hidden_choices_are_removed() {

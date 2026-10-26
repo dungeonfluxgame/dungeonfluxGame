@@ -175,7 +175,7 @@ struct Controls {
     appearance_text: HtmlTextAreaElement,
     backstory_text: HtmlTextAreaElement,
     missing: Element,
-    missing_summary: Element,
+    missing_targets: Rc<RefCell<Vec<Element>>>,
     chips: Element,
     stage_name: Element,
     step_buttons: Vec<Element>,
@@ -406,7 +406,21 @@ impl Controls {
             })
             .map(|(group, _)| group.clone())
             .collect();
-        let mut missing = missing_choices(&draft.name, &groups, &draft.choices);
+        let mut missing = Vec::new();
+        if draft.name.trim().is_empty() {
+            missing.push(("your hero's name".to_owned(), self.name.clone().into()));
+        } else if !df_rules::local_journey::valid_character_name(&draft.name) {
+            missing.push((NAME_RULE.to_owned(), self.name.clone().into()));
+        }
+        for group in creation_choices::unselected_groups(&groups, &draft.choices) {
+            if let Some((_, input)) = self
+                .choices
+                .iter()
+                .find(|(item, _)| item.group_id == group.group_id)
+            {
+                missing.push((group.label.clone(), input.clone().into()));
+            }
+        }
         let name_invalid =
             !draft.name.is_empty() && !df_rules::local_journey::valid_character_name(&draft.name);
         let _ = self
@@ -425,26 +439,58 @@ impl Controls {
             && (!self.appearance_text.value().trim().is_empty()
                 || !self.backstory_text.value().trim().is_empty())
         {
-            missing.push("Use your text to suggest choices and review them".to_owned());
+            let input = if !self.appearance_text.value().trim().is_empty() {
+                &self.appearance_text
+            } else {
+                &self.backstory_text
+            };
+            missing.push((
+                "Use your text to suggest choices and review them".to_owned(),
+                input.clone().into(),
+            ));
         }
         let groups: Vec<_> = self
             .appearance
             .iter()
             .map(|(group, _)| group.clone())
             .collect();
-        missing.extend(missing_choices("hero", &groups, &draft.identity.appearance));
-        for (label, value) in [
-            ("where you are from", draft.identity.origin.as_str()),
-            ("what you did", draft.identity.occupation.as_str()),
-            ("what you want or fear", draft.identity.motivation.as_str()),
-            ("your backstory", draft.identity.backstory.as_str()),
+        for group in creation_choices::unselected_groups(&groups, &draft.identity.appearance) {
+            if let Some((_, input)) = self
+                .appearance
+                .iter()
+                .find(|(item, _)| item.group_id == group.group_id)
+            {
+                missing.push((group.label.clone(), input.clone().into()));
+            }
+        }
+        for (label, input) in [
+            ("where you are from", &self.story.origin),
+            ("what you did", &self.story.occupation),
+            ("what you want or fear", &self.story.motivation),
+            ("your backstory", &self.paragraph),
         ] {
-            if value.trim().is_empty() {
-                missing.push(format!("Add {label}"));
+            if input.value().trim().is_empty() {
+                missing.push((label.to_owned(), input.clone().into()));
             }
         }
         if draft.identity.facts.len() < 3 {
-            missing.push("Add the three story facts".to_owned());
+            for input in self
+                .facts
+                .iter()
+                .take(3)
+                .filter(|input| input.value().trim().is_empty())
+                .take(3 - draft.identity.facts.len())
+            {
+                missing.push(("a story fact".to_owned(), input.clone().into()));
+            }
+        }
+        if !self.scenery_complete() {
+            let input: Element = if self.scenery.value() == "custom" {
+                self.scenery_custom.clone().into()
+            } else {
+                self.scenery.clone().into()
+            };
+            missing.push(("portrait scenery".to_owned(), input));
         }
         let stages = [
             missing_choices(&draft.name, &groups, &draft.identity.appearance).is_empty()
@@ -475,7 +521,18 @@ impl Controls {
             stages.iter().filter(|ready| **ready).count()
         )));
         if !supported {
-            missing.push("Gameplay rules for this combination are not ready".to_owned());
+            let target = self
+                .choices
+                .iter()
+                .find(|(group, _)| group.group_id == "class")
+                .map_or_else(
+                    || self.name.clone().into(),
+                    |(_, input)| input.clone().into(),
+                );
+            missing.push((
+                "a combination with available gameplay rules".to_owned(),
+                target,
+            ));
         }
         let ready = missing.is_empty();
         let chips = self
@@ -548,26 +605,27 @@ impl Controls {
             } else {
                 &draft.name
             }));
-        self.missing_summary
-            .set_text_content(Some(if self.pending.get() {
-                "Confirming your hero…"
-            } else if ready {
-                "Ready for the adventure"
-            } else {
-                missing
-                    .first()
-                    .map_or("Review your choices", String::as_str)
-            }));
-        self.missing.set_text_content(Some(if self.pending.get() {
-            "Confirming your hero…"
-        } else if ready {
-            "Your hero is ready to confirm."
+        self.missing.set_text_content(None);
+        self.missing_targets.borrow_mut().clear();
+        if ready {
+            let _ = self.missing.set_attribute("hidden", "");
         } else {
-            "Still needed:"
-        }));
-        if !ready && !self.pending.get() {
-            self.missing
-                .set_text_content(Some(&format!("Still needed: {}.", missing.join("; "))));
+            let _ = self.missing.remove_attribute("hidden");
+            self.missing.set_text_content(Some("Still to choose: "));
+            if let Some(document) = self.missing.owner_document() {
+                for (index, (label, target)) in missing.iter().enumerate() {
+                    let text = if index == 0 {
+                        label.clone()
+                    } else {
+                        format!(", {label}")
+                    };
+                    if let Ok(link) = node(&document, &self.missing, "a", "", &text) {
+                        let _ = link.set_attribute("href", &format!("#{}", target.id()));
+                        let _ = link.set_attribute("data-required-choice", &index.to_string());
+                        self.missing_targets.borrow_mut().push(target.clone());
+                    }
+                }
+            }
         }
         self.portrait_button.set_disabled(
             self.pending.get()
@@ -595,6 +653,11 @@ impl Controls {
             self.portrait_status
                 .set_text_content(Some("Choose your appearance, then generate a portrait."));
         }
+        self.confirm.set_text_content(Some(if self.pending.get() {
+            "Joining the table..."
+        } else {
+            "Join the table"
+        }));
         self.confirm
             .set_disabled(!ready || self.pending.get() || !self.scenery_complete());
         ready && !self.pending.get() && self.scenery_complete()
@@ -821,6 +884,26 @@ fn select_step(sections: &[(Element, Element)], active: usize) {
         } else {
             let _ = panel.set_attribute("hidden", "");
         }
+    }
+}
+
+fn focus_required_choice(sections: &[(Element, Element)], target: &Element) {
+    if let Some(active) = sections
+        .iter()
+        .position(|(_, panel)| panel.contains(Some(target)))
+    {
+        select_step(sections, active);
+    }
+    let mut ancestor = target.parent_element();
+    while let Some(element) = ancestor {
+        if element.tag_name() == "DETAILS" {
+            let _ = element.set_attribute("open", "");
+        }
+        ancestor = element.parent_element();
+    }
+    target.scroll_into_view();
+    if let Some(input) = target.dyn_ref::<web_sys::HtmlElement>() {
+        let _ = input.focus();
     }
 }
 
@@ -1273,14 +1356,20 @@ impl HeroCreator {
             "hero-help",
             "Your look and story will be shared at the table.",
         )?;
-        let validation = node(document, &footer, "details", "hero-validation", "")?;
-        let missing_summary = node(document, &validation, "summary", "", "Review your choices")?;
-        missing_summary.set_attribute("aria-live", "polite")?;
-        let missing = node(document, &validation, "p", "hero-missing", "")?;
+        let missing = node(document, &footer, "p", "hero-missing", "")?;
         missing.set_attribute("aria-live", "polite")?;
         let confirm = node(document, &footer, "button", "", "Join the table")?
             .dyn_into::<HtmlButtonElement>()?;
         confirm.set_type("button");
+        let fields = root.query_selector_all("select, textarea")?;
+        for index in 0..fields.length() {
+            if let Some(field) = fields
+                .item(index)
+                .and_then(|field| field.dyn_into::<Element>().ok())
+            {
+                field.set_id(&format!("hero-choice-{index}"));
+            }
+        }
         let controls = Controls {
             name,
             scenery,
@@ -1298,7 +1387,7 @@ impl HeroCreator {
             appearance_text,
             backstory_text,
             missing,
-            missing_summary,
+            missing_targets: Rc::new(RefCell::new(Vec::new())),
             chips,
             stage_name,
             step_buttons: tabs.iter().map(|(button, _)| button.clone()).collect(),
@@ -1341,6 +1430,22 @@ impl HeroCreator {
             initial_draft,
             pagehide: None,
         };
+        let controls = surface.controls.clone();
+        let sections = tabs.clone();
+        surface.listen(controls.missing.clone(), "click", move |event| {
+            let Some(index) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+                .and_then(|target| target.get_attribute("data-required-choice"))
+                .and_then(|index| index.parse::<usize>().ok())
+            else {
+                return;
+            };
+            event.prevent_default();
+            if let Some(target) = controls.missing_targets.borrow().get(index) {
+                focus_required_choice(&sections, target);
+            }
+        })?;
         for (active, (button, _)) in tabs.iter().enumerate() {
             let sections = tabs.clone();
             surface.listen(button.clone(), "click", move |_| {
@@ -1366,6 +1471,7 @@ impl HeroCreator {
                     select_step(&sections, index + 1);
                 })?;
             } else {
+                panel.insert_before(&surface.controls.missing, Some(&navigation))?;
                 navigation.append_child(&surface.controls.confirm)?;
             }
         }
@@ -1402,7 +1508,7 @@ impl HeroCreator {
                 button.set_attribute("type", "button")?;
                 button
                     .set_attribute("aria-label", &format!("{}: {}", group.label, option.label))?;
-                button.set_attribute("title", &option.label)?;
+                button.set_attribute("title", &format!("{}: {}", group.label, option.label))?;
                 button.set_attribute("data-option-value", &option.option_id)?;
                 button.set_attribute("style", &format!("--swatch:{color}"))?;
                 button.set_attribute(
@@ -1917,6 +2023,267 @@ impl HeroCreator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn required_choice_surface(document: &Document) -> HeroCreator {
+        let parent = document.create_element("div").unwrap();
+        let mut groups = vec![];
+        for (id, label, selected) in [
+            ("species", "Ancestry", "dwarf"),
+            ("class", "Class", "fighter"),
+            ("background", "Background", "soldier"),
+            ("alignment", "Alignment", "good"),
+            ("language-1", "First language", "dwarvish"),
+            ("language-2", "Second language", "elvish"),
+            ("skill-1", "First Fighter skill", "athletics"),
+            ("skill-2", "Second Fighter skill", "survival"),
+            ("gaming-set", "Gaming set", "dice"),
+            ("elven-lineage", "Elven lineage", "high"),
+        ] {
+            let mut options = vec![rpc::JourneyOption {
+                option_id: selected.to_owned(),
+                label: selected.to_owned(),
+                ..Default::default()
+            }];
+            if !matches!(id, "species" | "class" | "background") {
+                options.push(rpc::JourneyOption {
+                    option_id: "other".to_owned(),
+                    label: "Other".to_owned(),
+                    ..Default::default()
+                });
+            }
+            if id == "elven-lineage" {
+                for option in &mut options {
+                    option.requires_group = "species".to_owned();
+                    option.requires_options = vec!["elf".to_owned()];
+                }
+            }
+            groups.push(rpc::JourneyGroup {
+                group_id: id.to_owned(),
+                label: label.to_owned(),
+                options,
+            });
+        }
+        let appearance = [
+            rpc::JourneyGroup {
+                group_id: "skin".to_owned(),
+                label: "Skin".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "olive".to_owned(),
+                    label: "olive".to_owned(),
+                    ..Default::default()
+                }],
+            },
+            rpc::JourneyGroup {
+                group_id: "hair-color".to_owned(),
+                label: "Hair colour".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "black".to_owned(),
+                    label: "black".to_owned(),
+                    ..Default::default()
+                }],
+            },
+        ];
+        let surface = HeroCreator::create(
+            document,
+            &parent,
+            &rpc::CharacterCreationOffer {
+                groups,
+                supported_designs: vec![rpc::SupportedCharacterDesign {
+                    species_id: "dwarf".to_owned(),
+                    class_id: "fighter".to_owned(),
+                    background_id: "soldier".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            &appearance,
+            &IdentityDraft {
+                public_description: String::new(),
+                appearance: vec![],
+                origin: "Highlands".to_owned(),
+                occupation: "Guard".to_owned(),
+                motivation: "Protect home".to_owned(),
+                backstory: "A highland guard".to_owned(),
+                facts: vec![
+                    "Highlands".to_owned(),
+                    "Guard".to_owned(),
+                    "Protect home".to_owned(),
+                ],
+            },
+            |_| {},
+        )
+        .unwrap();
+        for (_, input) in &surface.controls.choices {
+            input.set_value("");
+        }
+        surface
+            .controls
+            .apply_stored(&surface.initial_draft)
+            .unwrap();
+        surface
+    }
+
+    #[test]
+    fn every_missing_choice_is_visible_beside_join_and_links_open_and_focus_its_field() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let surface = required_choice_surface(&document);
+        document
+            .body()
+            .unwrap()
+            .append_child(surface.root())
+            .unwrap();
+        surface.controls.name.set_value("Brannoc");
+        surface.controls.update_missing();
+        let missing = &surface.controls.missing;
+        assert!(!missing.has_attribute("hidden"));
+        assert!(missing.closest("details").unwrap().is_none());
+        assert_eq!(
+            missing.next_element_sibling().unwrap().class_name(),
+            "hero-step-navigation"
+        );
+        assert_eq!(
+            missing.text_content().unwrap(),
+            "Still to choose: Alignment, First language, Second language, First Fighter skill, Second Fighter skill, Gaming set"
+        );
+        let links = missing.query_selector_all("a").unwrap();
+        assert_eq!(links.length(), 6);
+        let first = links.item(0).unwrap().dyn_into::<Element>().unwrap();
+        first.unchecked_ref::<web_sys::HtmlElement>().click();
+        let target = surface.controls.missing_targets.borrow()[0].clone();
+        assert_eq!(
+            first.get_attribute("href").unwrap(),
+            format!("#{}", target.id())
+        );
+        assert_eq!(document.active_element(), Some(target));
+        assert_eq!(
+            surface
+                .root()
+                .query_selector(".hero-panel:not([hidden])")
+                .unwrap()
+                .unwrap()
+                .get_attribute("aria-label")
+                .as_deref(),
+            Some("Abilities")
+        );
+        for id in [
+            "alignment",
+            "language-1",
+            "language-2",
+            "skill-1",
+            "skill-2",
+            "gaming-set",
+        ] {
+            let (_, input) = surface
+                .controls
+                .choices
+                .iter()
+                .find(|(group, _)| group.group_id == id)
+                .unwrap();
+            input.set_selected_index(1);
+            surface.controls.update_missing();
+            assert!(
+                !surface
+                    .controls
+                    .missing_targets
+                    .borrow()
+                    .contains(&input.clone().into())
+            );
+        }
+        assert!(missing.has_attribute("hidden"));
+        assert!(!surface.controls.confirm.disabled());
+        surface.controls.pending.set(true);
+        surface.controls.update_missing();
+        assert_eq!(
+            surface.controls.confirm.text_content().as_deref(),
+            Some("Joining the table...")
+        );
+        assert!(surface.controls.confirm.disabled());
+        assert!(missing.has_attribute("hidden"));
+        surface.controls.pending.set(false);
+        surface.controls.update_missing();
+        assert_eq!(
+            surface.controls.confirm.text_content().as_deref(),
+            Some("Join the table")
+        );
+        surface.controls.story.origin.set_value("");
+        surface.controls.update_missing();
+        let link = missing.query_selector("a").unwrap().unwrap();
+        link.unchecked_ref::<web_sys::HtmlElement>().click();
+        assert_eq!(
+            document.active_element(),
+            Some(surface.controls.story.origin.clone().into())
+        );
+        surface.controls.story.origin.set_value("Highlands");
+        surface.controls.appearance_text.set_value("Olive skin");
+        surface.controls.text_reviewed.set(false);
+        surface.controls.update_missing();
+        let link = missing.query_selector("a").unwrap().unwrap();
+        link.unchecked_ref::<web_sys::HtmlElement>().click();
+        assert_eq!(
+            document.active_element(),
+            Some(surface.controls.appearance_text.clone().into())
+        );
+        assert!(
+            surface
+                .controls
+                .appearance_text
+                .closest("details")
+                .unwrap()
+                .unwrap()
+                .has_attribute("open")
+        );
+        surface.root().remove();
+    }
+
+    #[test]
+    fn later_story_facts_count_toward_the_three_required_facts() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let surface = required_choice_surface(&document);
+        for input in &surface.controls.facts {
+            input.set_value("");
+        }
+        surface.controls.facts[3].set_value("A later fact");
+        surface.controls.facts[4].set_value("Another later fact");
+        surface.controls.update_missing();
+        assert_eq!(
+            surface
+                .controls
+                .missing
+                .text_content()
+                .unwrap()
+                .matches("a story fact")
+                .count(),
+            1
+        );
+        surface.controls.facts[0].set_value("The third fact");
+        surface.controls.update_missing();
+        assert!(
+            !surface
+                .controls
+                .missing
+                .text_content()
+                .unwrap()
+                .contains("a story fact")
+        );
+    }
+
+    #[test]
+    fn appearance_swatches_name_the_field_and_colour_in_rendered_html() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let surface = required_choice_surface(&document);
+        for name in ["Skin: olive", "Hair colour: black"] {
+            let swatch = surface
+                .root()
+                .query_selector(&format!(".hero-swatch[aria-label='{name}']"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(swatch.get_attribute("title").as_deref(), Some(name));
+            assert_eq!(
+                swatch.get_attribute("aria-pressed").as_deref(),
+                Some("true")
+            );
+        }
+    }
 
     #[test]
     fn corrected_identity_is_included_in_the_confirmed_character_selection() {

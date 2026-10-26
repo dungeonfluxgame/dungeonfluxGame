@@ -39,15 +39,34 @@
 .hero-look-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
 .hero-look-grid .hero-field{margin:9px 0}
 .hero-details{margin:16px 0 0;padding:12px 0;border:0;border-top:1px solid #bda16b30}
-.hero-details summary,.hero-validation summary{min-height:44px;padding:10px 0;color:var(--hero-brass);cursor:pointer;font-size:13px}
+.hero-details summary{min-height:44px;padding:10px 0;color:var(--hero-brass);cursor:pointer;font-size:13px}
 .hero-chips{margin:4px 0;color:var(--hero-muted);font-size:13px;line-height:1.8}
 .hero-read{width:100%;min-height:46px;margin:18px 0 0;padding:10px 16px;border:1px solid #7e9292;border-radius:5px;color:var(--hero-ivory);background:transparent;font:500 14px/1.4 system-ui,sans-serif;cursor:pointer}
 .hero-feedback:empty{display:none}
 .hero-feedback{padding:12px 14px;border-left:2px solid var(--hero-brass);color:var(--hero-ivory);background:#17343c;font-size:13px}
 .hero-confirm{margin-top:22px;padding-top:8px;border-top:1px solid #bda16b40}
 .hero-confirm>.hero-help{margin-bottom:0}
-.hero-validation{margin-bottom:12px}
-.hero-missing{margin:0 0 12px;color:var(--hero-muted);font-size:12px;line-height:1.7}
+.hero-missing {
+ margin: 12px 0;
+ color: var(--hero-ivory);
+ font-size: 14px;
+ line-height: 1.7;
+ overflow-wrap: anywhere;
+}
+.hero-missing[hidden] {
+ display: none;
+}
+.hero-missing a {
+ display: inline-block;
+ min-height: 44px;
+ max-width: 100%;
+ color: var(--hero-brass);
+ text-underline-offset: 4px;
+}
+.hero-missing a:focus-visible {
+ outline: 2px solid var(--hero-brass);
+ outline-offset: 2px;
+}
 .hero-confirm button{width:100%;min-height:52px;padding:12px 18px;border:1px solid var(--hero-brass);border-radius:5px;color:#102029;background:var(--hero-brass);font:600 15px/1.4 system-ui,sans-serif;cursor:pointer}
 .hero-confirm button:disabled{color:#91a3a3;border-color:#425c61;background:#193139;cursor:default}
 .hero-creator [hidden]{display:none!important}
