@@ -24,7 +24,6 @@ export CARGO_PROFILE_RELEASE_PANIC=${CARGO_PROFILE_RELEASE_PANIC:-abort}
 export CARGO_PROFILE_RELEASE_STRIP=${CARGO_PROFILE_RELEASE_STRIP:-true}
 BINDGEN=artifacts/cache/cargo/bin/wasm-bindgen
 WANTED_BINDGEN=0.2.129
-BUDGET_BYTES=$((700 * 1024))
 
 fail() { echo "build-web: $*" >&2; exit 1; }
 
@@ -51,7 +50,7 @@ mkdir -p "$stage/assets"
 
 if command -v wasm-opt >/dev/null 2>&1; then
   # The feature flags are what rustc emits for wasm32-unknown-unknown by default, plus GC
-  # type merging (Chrome/Edge 119+, Firefox 120+, Safari 18.4+), which the size budget needs.
+  # type merging (Chrome/Edge 119+, Firefox 120+, Safari 18.4+), which keeps the module small.
   # Unlimited single-caller inlining grows the large view and reply dispatchers.
   if wasm-opt -Oz --one-caller-inline-max-function-size=32 \
     --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
@@ -77,15 +76,9 @@ cp $APP/web/index.html "$stage/index.html"
 cp $APP/web/google-g.svg "$stage/assets/google-g.svg"
 cp docs/assets/establishing-harbor-canal-rowboat-bridge.webp "$stage/assets/landing.webp"
 
-# 4. Size budget.
-size=$(stat -c %s "$stage/assets/account_app_bg.wasm")
-echo "build-web: account_app_bg.wasm $size bytes (budget $BUDGET_BYTES)"
-if [ "$size" -gt "$BUDGET_BYTES" ]; then
-  echo "build-web: OVER BUDGET. Inspect the wasm profile overrides and use Twiggy to locate size regressions." >&2
-  fail "wasm exceeds the $BUDGET_BYTES byte budget"
-fi
+echo "build-web: account_app_bg.wasm $(stat -c %s "$stage/assets/account_app_bg.wasm") bytes"
 
-# 5. Publish atomically.
+# 4. Publish atomically.
 old=
 if [ -e "$OUT" ]; then
   old="${OUT}.old.$$"

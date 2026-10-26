@@ -29,7 +29,7 @@ const CONTENT_SECURITY_POLICY: &str = concat!(
 const INDEX_FILE: &str = "index.html";
 const ASSETS_PREFIX: &str = "assets/";
 const API_PREFIX: &str = "api";
-/// A bundle file larger than this is not served; the wasm budget is far below it.
+/// A bundle file larger than this is not served; the wasm module is far below it.
 const MAXIMUM_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The content type of a bundle file, by extension; `None` for anything the bundle never holds.

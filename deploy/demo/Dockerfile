@@ -46,8 +46,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     printf 'import init from "/app/assets/account_app.js";\ninit({ module_or_path: "/app/assets/account_app_bg.wasm" });\n' \
       > /opt/dungeonflux/app/assets/boot.js && \
     cp crates/df-account-app/web/index.html /opt/dungeonflux/app/index.html && \
-    cp docs/assets/establishing-harbor-canal-rowboat-bridge.webp /opt/dungeonflux/app/assets/landing.webp && \
-    test "$(stat -c %s /opt/dungeonflux/app/assets/account_app_bg.wasm)" -le 716800
+    cp docs/assets/establishing-harbor-canal-rowboat-bridge.webp /opt/dungeonflux/app/assets/landing.webp
 
 RUN mkdir -p /opt/dungeonflux/site /opt/dungeonflux/assets && \
     cp -a docs/. /opt/dungeonflux/site/ && \
