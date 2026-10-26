@@ -17,6 +17,26 @@ A client role is independent of device type. A laptop can provide the shared
 display or a player client. Player interfaces must accommodate different screen
 sizes and touch, mouse, and keyboard input as appropriate.
 
+## Game start flow (owner decision 2026-10-26, concrete; do not replace)
+
+Starting a game always goes through these four surfaces, in this order:
+
+1. **Web account** (`/app`): the customer signs in and presses Play now. The account owns
+   accounts, membership, credit and the Start of a session, nothing about the table itself.
+2. **Game launcher**: the same screen as the desktop launcher window (`crates/df-launcher`;
+   `dungeonflux --ui-preview` serves it to a browser). It shows the running game, its room
+   code, the heroes gathering, session timers, Open display and Stop and save. The account
+   hands off to it; the account does not rebuild it.
+3. **Table display** (`/gameplay/display`): the shared screen with the QR and room code.
+4. **Player clients** (`/gameplay/player?room=CODE`): each player joins, makes a hero and
+   plays.
+
+Rules that follow from it: heroes, readiness, microphones and display pairing belong to the
+game (launcher, display and player), never to the website; the website never offers its own
+copy of the launcher or of the game's lobby. Hosted play keeps the same four surfaces: Start
+places the session on a game server (RTLOCAL/RTHOSTED) and the account hands off to that
+session's launcher.
+
 ## Implementation language
 
 The application is full-stack Rust: native Rust on the backend and Rust compiled
