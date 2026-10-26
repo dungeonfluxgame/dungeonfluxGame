@@ -37,7 +37,9 @@ copy of the launcher or of the game's lobby. Gameplay settings (content rating, 
 narration voices, music, pictures, video, table pace) live only in the launcher's Settings; the
 website has no campaign creation wizard and asks no gameplay questions (owner order 2026-10-26:
 the wizard and the campaign page's gameplay settings were deleted as false pages). Play now
-creates or resumes the host's campaign with defaults. Hosted play keeps the same four surfaces: Start
+creates or resumes the host's campaign with defaults. The table display is for gameplay only (owner
+order 2026-10-26): no seat recovery codes, account or administration panels on it; a player returning
+on a new device asks from their phone and the host allows it on the launcher. Hosted play keeps the same four surfaces: Start
 places the session on a game server (RTLOCAL/RTHOSTED) and the account hands off to that
 session's launcher.
 
