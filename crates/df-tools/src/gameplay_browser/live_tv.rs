@@ -1302,23 +1302,36 @@ fn check_skill_label(source_revision: &str) -> Option<(&'static str, &'static st
     }
 }
 
+/// Distinguishes an expired roll row from malformed check data.
+#[derive(Debug)]
+pub(super) enum CheckDisplayError {
+    RollerUnavailable,
+    Invalid(JsValue),
+}
+
+impl From<JsValue> for CheckDisplayError {
+    fn from(error: JsValue) -> Self {
+        Self::Invalid(error)
+    }
+}
+
 pub(super) fn check_display(
     check: &rpc::AbilityCheckResult,
     journey: &rpc::JourneyView,
     finding: &str,
-) -> Result<live_stage::CheckDisplay, JsValue> {
+) -> Result<live_stage::CheckDisplay, CheckDisplayError> {
     // SRD 5.2.1 p. 6: add the ability and proficiency modifiers to the d20; p. 7: Advantage
     // and Disadvantage roll two d20s and keep the higher or lower face, respectively.
     let proficiency_modifier = i32::try_from(check.proficiency_bonus)
         .map_err(|_| JsValue::from_str("display check proficiency modifier is invalid"))?;
     if !(1..=20).contains(&check.die) || !matches!(check.roll_mode, -1..=1) {
-        return Err(JsValue::from_str("display check roll is invalid"));
+        return Err(JsValue::from_str("display check roll is invalid").into());
     }
     let expected_faces = if check.roll_mode == 0 { 1 } else { 2 };
     if check.faces.len() != expected_faces
         || check.faces.iter().any(|face| !(1..=20).contains(face))
     {
-        return Err(JsValue::from_str("display check dice are invalid"));
+        return Err(JsValue::from_str("display check dice are invalid").into());
     }
     let kept = check
         .faces
@@ -1327,6 +1340,14 @@ pub(super) fn check_display(
         .ok_or_else(|| JsValue::from_str("display check kept die is absent"))?;
     let (ability, skill) = check_skill_label(&check.source_revision)
         .ok_or_else(|| JsValue::from_str("display check skill is unknown"))?;
+    let modifier = check
+        .ability_modifier
+        .checked_add(proficiency_modifier)
+        .ok_or_else(|| JsValue::from_str("display check modifier is invalid"))?;
+    let finding = finding.trim().to_owned();
+    if finding.is_empty() {
+        return Err(JsValue::from_str("display check finding is absent").into());
+    }
     let roller = journey
         .table_log
         .iter()
@@ -1336,7 +1357,7 @@ pub(super) fn check_display(
                 && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
                 && line.speaker == "Roll"
         })
-        .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
+        .ok_or(CheckDisplayError::RollerUnavailable)?;
     let roller_index = usize::try_from(roller.hero_index)
         .map_err(|_| JsValue::from_str("display check roller is invalid"))?;
     let hero_name = journey
@@ -1345,16 +1366,8 @@ pub(super) fn check_display(
         .map(|hero| hero.name.trim())
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
+        .ok_or_else(|| JsValue::from_str("display check roller is invalid"))?;
     let intention = roll_intention(&roller.text);
-    let modifier = check
-        .ability_modifier
-        .checked_add(proficiency_modifier)
-        .ok_or_else(|| JsValue::from_str("display check modifier is invalid"))?;
-    let finding = finding.trim().to_owned();
-    if finding.is_empty() {
-        return Err(JsValue::from_str("display check finding is absent"));
-    }
     Ok(live_stage::CheckDisplay {
         sequence: roller.sequence,
         hero_name,

@@ -988,6 +988,21 @@ pub(super) fn current_cast(client: &Rc<RefCell<Client>>) -> Vec<crate::presentat
     cast
 }
 
+fn display_check(
+    check: &rpc::AbilityCheckResult,
+    journey: &rpc::JourneyView,
+    finding: &str,
+) -> Option<super::live_stage::CheckDisplay> {
+    match super::live_tv::check_display(check, journey, finding) {
+        Ok(check) => Some(check),
+        Err(super::live_tv::CheckDisplayError::RollerUnavailable) => None,
+        Err(super::live_tv::CheckDisplayError::Invalid(error)) => {
+            web_sys::console::error_2(&JsValue::from_str("display check unavailable:"), &error);
+            None
+        }
+    }
+}
+
 fn render_display(
     client: &Rc<RefCell<Client>>,
     view: &Element,
@@ -1026,8 +1041,7 @@ fn render_display(
     };
     model.check = check
         .as_ref()
-        .map(|check| super::live_tv::check_display(check, input.journey, input.narration))
-        .transpose()?;
+        .and_then(|check| display_check(check, input.journey, input.narration));
     if model.check.is_some() {
         model.speaker = None;
     }
@@ -1558,11 +1572,42 @@ mod tests {
     use super::super::rpc;
     use super::{
         SceneInput, VisualSource, art, art_source, authored_scene_alt, choice_disabled_reason,
-        end_card_contact_ready, ensure_scene_actions, exploration_speech, is_new_private_clue,
-        lobby_art_source, phone_choice_label, should_show_dialogue_composer, speaker_portrait,
-        tv_model, validated_join_scene_asset,
+        display_check, end_card_contact_ready, ensure_scene_actions, exploration_speech,
+        is_new_private_clue, lobby_art_source, phone_choice_label, should_show_dialogue_composer,
+        speaker_portrait, tv_model, validated_join_scene_asset,
     };
     use super::{lobby_panel_description, party_members, party_ready};
+
+    #[test]
+    fn recovered_display_omits_a_check_when_its_roll_row_is_unavailable() {
+        let check = rpc::AbilityCheckResult {
+            die: 16,
+            source_revision: "srd521-p6:apothecary:perception:finding-counter".to_owned(),
+            faces: vec![16],
+            ..Default::default()
+        };
+        assert!(display_check(&check, &rpc::JourneyView::default(), "A clue appears.").is_none());
+        assert!(matches!(
+            super::super::live_tv::check_display(
+                &check,
+                &rpc::JourneyView::default(),
+                "A clue appears."
+            ),
+            Err(super::super::live_tv::CheckDisplayError::RollerUnavailable)
+        ));
+        let invalid = rpc::AbilityCheckResult {
+            faces: vec![],
+            ..check
+        };
+        assert!(matches!(
+            super::super::live_tv::check_display(
+                &invalid,
+                &rpc::JourneyView::default(),
+                "A clue appears."
+            ),
+            Err(super::super::live_tv::CheckDisplayError::Invalid(_))
+        ));
+    }
 
     #[test]
     fn lobby_guidance_names_the_next_step_for_each_readiness_state() {

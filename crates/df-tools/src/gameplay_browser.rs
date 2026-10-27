@@ -3047,23 +3047,17 @@ fn activate_action_offer(
             });
             continue;
         }
-        if key == "finding"
+        if matches!(key.as_str(), "finding" | "attempt-thing")
             && offered.action_kind == rpc::GameplayActionKind::ExamineHarborSeal as i32
         {
-            if !offered.input_groups.iter().any(|group| {
-                group.group_id == *key
-                    && group.options.iter().any(|option| option.option_id == value)
-            }) {
+            let Some(choice) = observation_action_choice(offered, key, &value) else {
                 feedback(
                     &client.borrow(),
                     "Choose something the scene offers to examine.",
                 );
                 return;
-            }
-            action_choices.push(rpc::JourneyChoice {
-                group_id: key.clone(),
-                option_id: value,
-            });
+            };
+            action_choices.push(choice);
             continue;
         }
         if tactical_offer {
@@ -3114,6 +3108,29 @@ fn activate_action_offer(
         }
         Err(error) => feedback(&client.borrow(), &error),
     }
+}
+
+fn observation_action_choice(
+    offer: &rpc::GameplayActionOffer,
+    group_id: &str,
+    option_id: &str,
+) -> Option<rpc::JourneyChoice> {
+    if offer.action_kind != rpc::GameplayActionKind::ExamineHarborSeal as i32
+        || !matches!(group_id, "finding" | "attempt-thing")
+        || !offer.input_groups.iter().any(|group| {
+            group.group_id == group_id
+                && group
+                    .options
+                    .iter()
+                    .any(|option| option.option_id == option_id)
+        })
+    {
+        return None;
+    }
+    Some(rpc::JourneyChoice {
+        group_id: group_id.to_owned(),
+        option_id: option_id.to_owned(),
+    })
 }
 
 fn tactical_action_choice(
@@ -4572,7 +4589,8 @@ mod tests {
         ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, SubmitFailure,
         action_identity, classify_submit_failure, creation_group_description,
         creation_option_description, creation_option_label, dead_hero_notice, is_dead_hero,
-        player_offers_for, record_join_retry, should_replace_feedback, tactical_action_choice,
+        observation_action_choice, player_offers_for, record_join_retry, should_replace_feedback,
+        tactical_action_choice,
     };
 
     #[test]
@@ -4748,6 +4766,30 @@ mod tests {
             ACTION_REFUSAL_FEEDBACK,
             "The game could not accept that. Choose again."
         );
+    }
+
+    #[test]
+    fn observation_forwards_only_a_selected_offered_target() {
+        let offer = df_protocol::common::GameplayActionOffer {
+            action_kind: df_protocol::common::GameplayActionKind::ExamineHarborSeal as i32,
+            input_groups: vec![df_protocol::common::JourneyGroup {
+                group_id: "attempt-thing".to_owned(),
+                options: vec![df_protocol::common::JourneyOption {
+                    option_id: "thing-red-apple".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            observation_action_choice(&offer, "attempt-thing", "thing-red-apple")
+                .map(|choice| (choice.group_id, choice.option_id)),
+            Some(("attempt-thing".to_owned(), "thing-red-apple".to_owned()))
+        );
+        assert!(observation_action_choice(&offer, "attempt-thing", "thing-other").is_none());
+        assert!(observation_action_choice(&offer, "finding", "thing-red-apple").is_none());
     }
 
     #[test]

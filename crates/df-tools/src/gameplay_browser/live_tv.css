@@ -59,8 +59,21 @@ body:has(.tv-stage){overflow:hidden}
 .tv-quote{margin:0;max-width:44ch;font-size:var(--fs-line);line-height:1.28;font-style:italic;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
 
 .tv-partybar{grid-row:5;justify-self:stretch;width:100%}
-.tv-partybar .tv-party{display:grid;grid-template-columns:repeat(var(--seats,6),minmax(0,1fr));gap:calc(var(--u)*.7)}
-.tv-partybar .tv-card{min-width:0;height:calc(var(--u)*5.2);padding:calc(var(--u)*.4) calc(var(--u)*.6);gap:calc(var(--u)*.6);border:1px solid #c9a35f88;border-image:none;border-radius:calc(var(--u)*.35)}
+.tv-partybar .tv-party{
+  display:flex;
+  justify-content:center;
+  gap:calc(var(--u)*.7);
+}
+.tv-partybar .tv-card{
+  flex:0 1 calc(var(--u)*18);
+  min-width:0;
+  height:calc(var(--u)*5.2);
+  padding:calc(var(--u)*.4) calc(var(--u)*.6);
+  gap:calc(var(--u)*.6);
+  border:1px solid #c9a35f88;
+  border-image:none;
+  border-radius:calc(var(--u)*.35);
+}
 .tv-partybar .tv-portrait{width:calc(var(--u)*3.2);border-radius:50%}
 .tv-partybar .tv-member-name{font-size:calc(var(--u)*1.2);line-height:1.15;max-height:2.3em;overflow:hidden}
 .tv-partybar .tv-member-status{font-size:calc(var(--u)*1);white-space:nowrap}
