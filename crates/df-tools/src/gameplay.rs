@@ -2698,6 +2698,10 @@ async fn serve_run(
     let portraits =
         creator_portraits::Portraits::start(imagery.hub().clone(), &std::env::current_dir()?)?;
     let mut restart_updates = receiver.clone();
+    // Configured after the cost ledger opened: a Jev client configured before it has no meter
+    // and refuses every call, so no spoken line would reach a person (#1478).
+    let dialogue_judge =
+        approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
     let service = Service {
         actor: sender.clone(),
         display_credential,
@@ -2706,7 +2710,7 @@ async fn serve_run(
         voice: voice.clone(),
         npc_voice: Arc::new(
             npc_reply::NpcVoice::new(storyteller)
-                .with_approach_model(approach_model)
+                .with_approach_model(dialogue_judge)
                 .with_local_lore(local_lore),
         ),
         // DEVCTL-001: cloned, not moved: the control surface takes one below.
