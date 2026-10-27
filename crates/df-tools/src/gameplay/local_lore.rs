@@ -704,7 +704,20 @@ pub(super) fn check_text(
     if sentence_count(content) != 1 {
         return Err(Rejection::NotOneSentence);
     }
-    let lowered = format!("{name} {content}").to_lowercase();
+    // A known person or place whose name contains a hero's ("Nella Wren", hero "Wren") is not
+    // that hero: blank out the other known names before looking for heroes.
+    let mut lowered = format!("{name} {content}").to_lowercase();
+    for known in names.game_state.iter().filter(|known| {
+        !names
+            .heroes
+            .iter()
+            .any(|hero| hero.trim().eq_ignore_ascii_case(known.trim()))
+    }) {
+        let known = known.trim().to_lowercase();
+        if !known.is_empty() {
+            lowered = lowered.replace(&known, " ");
+        }
+    }
     let words: Vec<&str> = lowered
         .split(|character: char| !character.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -935,6 +948,27 @@ mod tests {
         );
         assert_eq!(rejected, Err(Rejection::NamesHero));
         assert!(canon_of(&lore, "Opening").as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_person_whose_name_contains_a_heros_name_is_not_that_hero() {
+        let heroes = vec!["Wren".to_owned()];
+        let state = vec!["Wren".to_owned(), "Nella Wren".to_owned()];
+        let names = names(&heroes, &state);
+        let fact = "Nella Wren weaves the baskets at her workbench in the basketmakers' shop.";
+        assert_eq!(
+            check_text(FactKind::History, "Goods origin", fact, &names),
+            Ok(())
+        );
+        assert_eq!(
+            check_text(
+                FactKind::History,
+                "Goods origin",
+                "Wren bought a basket from Nella Wren.",
+                &names
+            ),
+            Err(Rejection::NamesHero)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

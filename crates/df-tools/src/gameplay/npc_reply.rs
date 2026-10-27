@@ -3829,10 +3829,17 @@ impl NpcVoice {
                         merchant_spoken_price_cp(&reply),
                         Err(super::journey::merchant_bargaining::QuoteRejection::MissingAmount)
                     ),
-                    ServiceDecisionMeaning::NotServiceRequest => matches!(
-                        merchant_spoken_price_cp(&reply),
-                        Err(super::journey::merchant_bargaining::QuoteRejection::MissingAmount)
-                    ),
+                    // A goods question (a price with no selected item): the reply may name a price
+                    // only when it is one this merchant actually sells at.
+                    ServiceDecisionMeaning::NotServiceRequest => {
+                        match merchant_spoken_price_cp(&reply) {
+                            Err(
+                                super::journey::merchant_bargaining::QuoteRejection::MissingAmount,
+                            ) => true,
+                            Ok(price_cp) => sells_at(&context.facts, price_cp),
+                            Err(_) => false,
+                        }
+                    }
                     ServiceDecisionMeaning::HedgesOrAsks => false,
                 };
             super::actor::record_audit_line(
@@ -4349,6 +4356,24 @@ async fn save_social_ledger(ledger: Arc<SocialLedger>) {
         );
         span.finish_unmeasured("save_failed");
     }
+}
+
+/// Whether `price_cp` lies within the listed range of something this merchant sells (the
+/// `available_trades` the server put in the reply's facts).
+fn sells_at(facts: &Value, price_cp: u32) -> bool {
+    let price_cp = u64::from(price_cp);
+    facts
+        .get("available_trades")
+        .and_then(Value::as_array)
+        .is_some_and(|trades| {
+            trades.iter().any(|trade| {
+                trade["direction"] == "merchant_sells"
+                    && trade["lowest_price_cp"]
+                        .as_u64()
+                        .zip(trade["listed_price_cp"].as_u64())
+                        .is_some_and(|(lowest, listed)| (lowest..=listed).contains(&price_cp))
+            })
+        })
 }
 
 fn reply_persona(context: &NpcReplyContext) -> Option<super::place::PersonPersona> {
@@ -5578,6 +5603,37 @@ pub(super) mod tests {
                 reply
             );
             assert!(endpoint.bodies().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_goods_price_question_without_a_selected_item_keeps_a_listed_price() {
+        // Jev reads a goods price question as no service request: a price is kept only when
+        // the merchant sells something at it.
+        for (name, reply, kept) in [
+            (
+                "goods-price-listed",
+                "The rye loaf's my best, three coppers.",
+                true,
+            ),
+            (
+                "goods-price-invented",
+                "The rye loaf's my best, forty coppers.",
+                false,
+            ),
+        ] {
+            let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply":reply}))]);
+            let jev = FakeEndpoint::start(vec![answer("o4"), answer("o4")]);
+            let (voice, _cache) = voice(&endpoint, name);
+            let voice = voice.with_approach_model(model(&jev));
+            let mut context = question("How much for your best piece?");
+            context.merchant_trade_scope = true;
+            context.facts["available_trades"] = json!([{"item":"rye loaf","direction":"merchant_sells",
+                "listed_price_cp":3,"lowest_price_cp":2}]);
+            let guarded = voice
+                .guard_merchant_reply(&mut context, reply.into(), false)
+                .await;
+            assert_eq!(guarded == reply, kept, "{name}: {guarded}");
         }
     }
 
