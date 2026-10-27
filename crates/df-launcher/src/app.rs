@@ -813,20 +813,20 @@ impl App {
 
     /// The host's answer to one rejoin ask. The game moves the seat only on
     /// Allow; the asking phone hears the outcome when it next asks.
-    pub fn decide_rejoin(&self, member: &str, allow: bool) -> Result<(), String> {
+    pub fn decide_rejoin(&self, member: &str, request: &str, allow: bool) -> Result<(), String> {
         let (display_url, token) = match &self.lock().phase {
             Phase::Running(run) => (run.display_url.clone(), run.status_token.clone()),
             _ => return Err("No game is running.".to_owned()),
         };
         let token = token.ok_or_else(|| "This game cannot take host decisions.".to_owned())?;
-        if member.len() != 32 || !member.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if !valid_rejoin_id(member) || !valid_rejoin_id(request) {
             return Err("That rejoin ask is no longer there.".to_owned());
         }
         log::event(
             "ACTION_REJOIN_DECISION",
             format!("allow={allow} member={}", &member[..8]),
         );
-        post_rejoin_decision(&display_url, &token, member, allow)
+        post_rejoin_decision(&display_url, &token, member, request, allow)
     }
 
     pub fn display_url(&self) -> Option<String> {
@@ -1475,15 +1475,19 @@ fn open_logged(target: impl AsRef<std::ffi::OsStr>, what: &str) {
     }
 }
 
-/// One hero asking to rejoin on a new device (RECLAIMUX): the hero's name and
-/// the public member id the host's decision names. No credential travels here.
+/// One hero asking to rejoin on a new device: member and request identities are not credentials.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingRejoin {
     pub member: String,
+    pub request: String,
     pub name: String,
 }
 
-/// The `rejoin` lines of a launcher status answer: member hex, then the hero's name.
+fn valid_rejoin_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Parse the member, request identity and hero name from each pending line.
 pub fn parse_pending_rejoins(text: &str) -> Vec<PendingRejoin> {
     text.lines()
         .filter_map(|line| {
@@ -1492,15 +1496,18 @@ pub fn parse_pending_rejoins(text: &str) -> Vec<PendingRejoin> {
                 return None;
             }
             let member = fields.next()?;
+            let request = fields.next()?;
             let name = fields.next()?;
-            if member.len() != 32
-                || !member.bytes().all(|byte| byte.is_ascii_hexdigit())
+            if !valid_rejoin_id(member)
+                || !valid_rejoin_id(request)
                 || name.trim().is_empty()
+                || fields.next().is_some()
             {
                 return None;
             }
             Some(PendingRejoin {
                 member: member.to_owned(),
+                request: request.to_owned(),
                 name: name.to_owned(),
             })
         })
@@ -1519,9 +1526,13 @@ fn post_rejoin_decision(
     display_url: &str,
     token: &str,
     member: &str,
+    request: &str,
     allow: bool,
 ) -> Result<(), String> {
-    let body = format!("member={member}\nallow={}", u8::from(allow));
+    let body = format!(
+        "member={member}\nrequest={request}\nallow={}",
+        u8::from(allow)
+    );
     launcher_request(
         display_url,
         "POST",
@@ -1660,6 +1671,80 @@ impl WaitTimeout for Child {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_decision_client_transmits_request_identity_and_accepts_ok() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let thread = std::thread::spawn(move || {
+            for expected in ["1", "0"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut received = Vec::new();
+                let mut buffer = [0; 512];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert_ne!(count, 0);
+                    received.extend_from_slice(&buffer[..count]);
+                    let Some(split) = received.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let header = String::from_utf8_lossy(&received[..split]);
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Content-Length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if received.len() < split + 4 + length {
+                        continue;
+                    }
+                    assert!(header.starts_with("POST /gameplay/launcher-rejoin HTTP/1.1"));
+                    assert!(header.contains("X-DungeonFlux-Launcher: test-token"));
+                    assert_eq!(
+                        &received[split + 4..],
+                        format!(
+                            "member={}\nrequest={}\nallow={expected}",
+                            "01".repeat(16),
+                            "02".repeat(16)
+                        )
+                        .as_bytes()
+                    );
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    break;
+                }
+            }
+        });
+        let display = format!("http://{address}/gameplay/display");
+        assert!(
+            post_rejoin_decision(
+                &display,
+                "test-token",
+                &"01".repeat(16),
+                &"02".repeat(16),
+                true
+            )
+            .is_ok()
+        );
+        assert!(
+            post_rejoin_decision(
+                &display,
+                "test-token",
+                &"01".repeat(16),
+                &"02".repeat(16),
+                false
+            )
+            .is_ok()
+        );
+        thread.join().unwrap();
+    }
 
     #[test]
     fn progress_lines_are_translated_and_others_hidden() {

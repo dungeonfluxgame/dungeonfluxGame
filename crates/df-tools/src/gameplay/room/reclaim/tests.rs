@@ -286,6 +286,53 @@ fn public_reclaim_listing_never_discloses_tokens_or_proofs() {
 
 type Asks = std::collections::HashMap<[u8; 16], RejoinAsk>;
 
+#[test]
+fn a_stale_or_duplicate_host_decision_cannot_authorize_another_request() {
+    let now = Instant::now();
+    let member = [1; 16];
+    let mut asks = Asks::new();
+    asks.insert(
+        member,
+        RejoinAsk {
+            operation: [2; 16],
+            token: [3; 32],
+            expires: now + REJOIN_ASK_TTL,
+            decision: RejoinDecision::Waiting,
+        },
+    );
+    assert!(!decide_expected_rejoin(
+        &mut asks, member, [4; 16], true, now
+    ));
+    assert!(decide_expected_rejoin(
+        &mut asks, member, [2; 16], true, now
+    ));
+    assert!(!decide_expected_rejoin(
+        &mut asks, member, [2; 16], false, now
+    ));
+    asks.insert(
+        member,
+        RejoinAsk {
+            operation: [4; 16],
+            token: [3; 32],
+            expires: now + REJOIN_ASK_TTL,
+            decision: RejoinDecision::Waiting,
+        },
+    );
+    assert!(!decide_expected_rejoin(
+        &mut asks, member, [2; 16], true, now
+    ));
+    assert!(decide_expected_rejoin(
+        &mut asks, member, [4; 16], false, now
+    ));
+    assert!(!decide_expected_rejoin(
+        &mut asks,
+        member,
+        [4; 16],
+        true,
+        now + REJOIN_ASK_TTL
+    ));
+}
+
 fn ask_rejoin(
     seats: &mut StoredSeats,
     asks: &mut Asks,
@@ -343,10 +390,13 @@ fn rejoin_waits_for_the_host_then_allow_moves_the_seat_and_replays() {
     ));
     assert_eq!(asks.len(), 1);
     // Allow hands this device the seat, rotating the credential.
-    assert_eq!(
-        decide_rejoin(&mut asks, &decision_token(&seats.member, true), origin),
-        ReclaimRefusal::RejoinDecided
-    );
+    assert!(decide_expected_rejoin(
+        &mut asks,
+        seats.member,
+        [9; 16],
+        true,
+        origin
+    ));
     let joined = ask_rejoin(
         &mut seats,
         &mut asks,
@@ -401,10 +451,13 @@ fn rejoin_decline_and_expiry_refuse_the_phone_plainly() {
     )
     .err()
     .unwrap();
-    assert_eq!(
-        decide_rejoin(&mut asks, &decision_token(&seats.member, false), origin),
-        ReclaimRefusal::RejoinDecided
-    );
+    assert!(decide_expected_rejoin(
+        &mut asks,
+        seats.member,
+        [9; 16],
+        false,
+        origin
+    ));
     assert!(matches!(
         ask_rejoin(
             &mut seats,
@@ -549,10 +602,13 @@ fn host_allowed_rejoin_preserves_the_current_hero_and_adventure_in_every_phase()
             ),
             Err(ReclaimRefusal::RejoinPending)
         ));
-        assert_eq!(
-            decide_rejoin(&mut asks, &decision_token(&seats.member, true), origin),
-            ReclaimRefusal::RejoinDecided
-        );
+        assert!(decide_expected_rejoin(
+            &mut asks,
+            seats.member,
+            [9; 16],
+            true,
+            origin
+        ));
         let joined = ask_rejoin(
             &mut seats,
             &mut asks,

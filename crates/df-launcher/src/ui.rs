@@ -260,8 +260,12 @@ fn post(app: &Arc<App>, path: &str, body: &[u8]) -> Page {
         "/resume" => app.resume(form.get("database").unwrap_or("")),
         "/rejoin/allow" | "/rejoin/decline" => {
             let allow = path == "/rejoin/allow";
-            return match app.decide_rejoin(form.get("member").unwrap_or(""), allow) {
-                Ok(()) => Page::redirect("/"),
+            return match app.decide_rejoin(
+                form.get("member").unwrap_or(""),
+                form.get("request").unwrap_or(""),
+                allow,
+            ) {
+                Ok(()) => Page::redirect("/table"),
                 Err(message) => Page::html(
                     200,
                     shell(
@@ -270,7 +274,7 @@ fn post(app: &Arc<App>, path: &str, body: &[u8]) -> Page {
                         false,
                         Animations::default(),
                         &format!(
-                            "<main class=\"plain\"><h1>That answer did not reach the game.</h1><p>{}</p><p><a href=\"/\">Back to DungeonFlux</a></p></main>",
+                            "<main class=\"plain\"><h1>The game could not confirm that answer.</h1><p>{}</p><p>Check the rejoin requests before trying again.</p><p><a href=\"/table\">Back to the table</a></p></main>",
                             escape(&message)
                         ),
                     ),
@@ -981,8 +985,8 @@ fn rejoin_panel(pending: &[crate::app::PendingRejoin]) -> String {
             format!(
                 "<li class=\"rejoin-ask\"><p class=\"rejoin-line\">{} wants to rejoin on a new device</p><div class=\"actions\">{}{}</div></li>",
                 escape(&ask.name),
-                button("/rejoin/allow", "Allow", "", &[("member", &ask.member)]),
-                button("/rejoin/decline", "Decline", "quiet", &[("member", &ask.member)]),
+                button("/rejoin/allow", "Allow", "", &[("member", &ask.member), ("request", &ask.request)]),
+                button("/rejoin/decline", "Decline", "quiet", &[("member", &ask.member), ("request", &ask.request)]),
             )
         })
         .collect();
@@ -1925,6 +1929,7 @@ mod tests {
         assert_eq!(rejoin_panel(&[]), "");
         let pending = vec![crate::app::PendingRejoin {
             member: "0123456789abcdef0123456789abcdef".to_owned(),
+            request: "fedcba9876543210fedcba9876543210".to_owned(),
             name: "Brannoc".to_owned(),
         }];
         let panel = rejoin_panel(&pending);
@@ -1936,7 +1941,7 @@ mod tests {
         assert!(panel.contains(">Decline</button>"));
         // Status lines carry no member id or credential-shaped text.
         let parsed = crate::app::parse_pending_rejoins(
-            "phase\troom\nrejoin\t0123456789abcdef0123456789abcdef\tBrannoc\nrejoin\tnope\tX",
+            "phase\troom\nrejoin\t0123456789abcdef0123456789abcdef\tfedcba9876543210fedcba9876543210\tBrannoc\nrejoin\tnope\tX",
         );
         assert_eq!(parsed, pending);
     }

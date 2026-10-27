@@ -36,12 +36,10 @@ enum RejoinDecision {
 /// How long a rejoin ask waits for the host before the phone is told plainly.
 pub(in crate::gameplay) const REJOIN_ASK_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// A pending rejoin ask as the launcher shows it: the hero's name, nothing else.
-/// Constructed through `Actor::pending_rejoins`; its launcher-status caller is in
-/// RECLAIMUX request.md, so dead-code warnings wait for that wiring.
-#[allow(dead_code)]
+/// A pending ask and its request identity; no seat credential is exposed.
 pub(in crate::gameplay) struct PendingRejoin {
     pub(in crate::gameplay) member: [u8; 16],
+    pub(in crate::gameplay) operation: [u8; 16],
     pub(in crate::gameplay) name: String,
 }
 
@@ -58,9 +56,7 @@ pub(in crate::gameplay) fn rejoin_request_token(member: &[u8; 16]) -> [u8; 32] {
     token
 }
 
-/// The token the host's decision submits for one hero. Accepted only from the
-/// game's own actor callers; the public reclaim RPC refuses it (room.rs).
-#[allow(dead_code)]
+#[cfg(test)]
 pub(in crate::gameplay) fn decision_token(member: &[u8; 16], allow: bool) -> [u8; 32] {
     let mut token = [0; 32];
     token[..8].copy_from_slice(REJOIN_DECISION_PREFIX);
@@ -178,8 +174,6 @@ pub(in crate::gameplay) enum ReclaimRefusal {
     RejoinPending,
     /// The host declined, or the ask expired unanswered.
     RejoinDeclined,
-    /// Acknowledgement of a host decision; only actor-internal callers see it.
-    RejoinDecided,
 }
 
 /// Records or polls one rejoin ask. A first ask for an away hero is stored (one per
@@ -254,27 +248,26 @@ fn rejoin(
     Ok(Err(ReclaimRefusal::RejoinPending))
 }
 
-/// Applies the host's Allow or Decline to one hero's waiting ask.
-fn decide_rejoin(
+fn decide_expected_rejoin(
     asks: &mut HashMap<[u8; 16], RejoinAsk>,
-    token: &[u8; 32],
+    member: [u8; 16],
+    operation: [u8; 16],
+    allow: bool,
     now: Instant,
-) -> ReclaimRefusal {
-    let Some(member) = rejoin_member(token, REJOIN_DECISION_PREFIX) else {
-        return ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken);
-    };
+) -> bool {
     prune_rejoins(asks, now);
-    match asks.get_mut(&member) {
-        Some(ask) => {
-            ask.decision = if token[24] == 1 {
-                RejoinDecision::Allowed
-            } else {
-                RejoinDecision::Declined
-            };
-            ReclaimRefusal::RejoinDecided
-        }
-        None => ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken),
+    let Some(ask) = asks.get_mut(&member) else {
+        return false;
+    };
+    if ask.operation != operation || ask.decision != RejoinDecision::Waiting {
+        return false;
     }
+    ask.decision = if allow {
+        RejoinDecision::Allowed
+    } else {
+        RejoinDecision::Declined
+    };
+    true
 }
 
 // The test port exercises the same admission and response mapping without starting PostgreSQL.
@@ -482,28 +475,57 @@ impl actor::Actor {
     }
 
     /// The heroes whose rejoin ask is still waiting for the host, for the launcher.
-    /// Its actor call is in RECLAIMUX request.md, so the dead-code warning waits.
-    #[allow(dead_code)]
     pub(in crate::gameplay) fn pending_rejoins(&mut self) -> Result<Vec<PendingRejoin>, Status> {
         actor::require_readable(self.fenced)?;
+        if self.session_lost() {
+            return Err(actor::session_lost_status());
+        }
         let now = Instant::now();
         prune_rejoins(&mut self.session.seat_clock.rejoins, now);
-        let members: Vec<[u8; 16]> = self
+        let members: Vec<([u8; 16], [u8; 16])> = self
             .session
             .seat_clock
             .rejoins
             .iter()
             .filter(|(_, ask)| ask.decision == RejoinDecision::Waiting)
-            .map(|(member, _)| *member)
+            .map(|(member, ask)| (*member, ask.operation))
             .collect();
         members
             .into_iter()
-            .map(|member| {
+            .map(|(member, operation)| {
                 let name =
                     hero_name(self.owner.checkpoint(), &member).map_err(actor::unavailable)?;
-                Ok(PendingRejoin { member, name })
+                Ok(PendingRejoin {
+                    member,
+                    operation,
+                    name,
+                })
             })
             .collect()
+    }
+
+    pub(in crate::gameplay) fn decide_pending_rejoin(
+        &mut self,
+        member: [u8; 16],
+        operation: [u8; 16],
+        allow: bool,
+    ) -> Result<bool, Status> {
+        actor::require_readable(self.fenced)?;
+        if self.session_lost() {
+            return Err(actor::session_lost_status());
+        }
+        let accepted = decide_expected_rejoin(
+            &mut self.session.seat_clock.rejoins,
+            member,
+            operation,
+            allow,
+            Instant::now(),
+        );
+        seat_event(
+            &format!("SEAT rejoin decision accepted={} allow={}", accepted, allow),
+            "seat.rejoin_decided",
+        );
+        Ok(accepted)
     }
 
     pub(in crate::gameplay) fn reclaim_seat(
@@ -527,22 +549,7 @@ impl actor::Actor {
         };
         let instant = Instant::now();
         let answer = if rejoin_member(&request.token, REJOIN_DECISION_PREFIX).is_some() {
-            // Host decisions arrive only from the game's own actor callers (the
-            // launcher-status handler); room.rs refuses this token on the public RPC.
-            if !correct_room {
-                Err(ReclaimRefusal::WrongRoomCode)
-            } else {
-                let refusal = decide_rejoin(
-                    &mut self.session.seat_clock.rejoins,
-                    &request.token,
-                    instant,
-                );
-                seat_event(
-                    &format!("SEAT rejoin decided reason={refusal:?}"),
-                    "seat.rejoin_decided",
-                );
-                Err(refusal)
-            }
+            Err(ReclaimRefusal::Seat(SeatReclaimRefusal::UnknownToken))
         } else if rejoin_member(&request.token, REJOIN_REQUEST_PREFIX).is_some() {
             let asked = rejoin(
                 &mut self.issuer,

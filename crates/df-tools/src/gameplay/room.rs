@@ -104,12 +104,9 @@ pub(super) async fn actor_view(
 }
 
 mod reclaim;
-// PendingRejoin, decision_token and rejoin_request_token are consumed by the
-// pending-rejoin actor and launcher-status wiring (RECLAIMUX request.md).
 #[allow(unused_imports)]
 pub(in crate::gameplay) use reclaim::{
-    AwayHero, PendingRejoin, ReclaimRefusal, ReclaimRequest, SeatClock, decision_token,
-    rejoin_request_token,
+    AwayHero, PendingRejoin, ReclaimRefusal, ReclaimRequest, SeatClock, rejoin_request_token,
 };
 fn rpc_failure(call: &'static str, step: &'static str, status: Status) -> Status {
     actor::record_audit_line(
@@ -692,8 +689,6 @@ impl rpc::room_service_server::RoomService for Service {
             Err(reason) => refused(match reason {
                 ReclaimRefusal::RejoinPending => rpc::SeatReclaimRefusal::SeatRejoinPending,
                 ReclaimRefusal::RejoinDeclined => rpc::SeatReclaimRefusal::SeatRejoinDeclined,
-                // A decision acknowledgement never reaches this RPC (refused above).
-                ReclaimRefusal::RejoinDecided => rpc::SeatReclaimRefusal::SeatTokenUnknown,
                 ReclaimRefusal::WrongRoomCode => rpc::SeatReclaimRefusal::SeatRoomCodeWrong,
                 ReclaimRefusal::Seat(
                     df_persistence::local_demo_scope::SeatReclaimRefusal::NotAway,

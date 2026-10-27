@@ -405,6 +405,16 @@ pub(super) enum Call {
         room_code: String,
         reply: oneshot::Sender<Result<Vec<super::room::AwayHero>, tonic::Status>>,
     },
+    PendingRejoins {
+        reply: oneshot::Sender<Result<Vec<super::room::PendingRejoin>, tonic::Status>>,
+    },
+    DecideRejoin {
+        member: [u8; 16],
+        operation: [u8; 16],
+        allow: bool,
+        deadline: Instant,
+        reply: oneshot::Sender<Result<bool, tonic::Status>>,
+    },
     Reclaim {
         request: super::room::ReclaimRequest,
         reply: oneshot::Sender<
@@ -634,6 +644,8 @@ impl ActorInput for Call {
                         .map_or(0, |id| bytes(&id.value)),
                 ),
             Self::PublicSceneAsset { .. }
+            | Self::PendingRejoins { .. }
+            | Self::DecideRejoin { .. }
             | Self::QualificationInputs { .. }
             | Self::SpeechMember { .. }
             | Self::NpcEvent { .. }
@@ -5586,6 +5598,8 @@ impl Reducer<Call> for Actor {
             Call::LibraryHero { .. } => "LibraryHero",
             Call::PublicSceneAsset { .. } => "PublicSceneAsset",
             Call::AwaySeats { .. } => "AwaySeats",
+            Call::PendingRejoins { .. } => "PendingRejoins",
+            Call::DecideRejoin { .. } => "DecideRejoin",
             Call::Reclaim { .. } => "Reclaim",
             Call::QualificationInputs { .. } => "QualificationInputs",
             Call::Join { .. } => "Join",
@@ -5738,6 +5752,11 @@ impl Reducer<Call> for Actor {
                     audit_reply(reply, call_name, call_started, self.public_scene_asset());
                 return;
             }
+            Call::PendingRejoins { reply } => {
+                let _delivered =
+                    audit_reply(reply, call_name, call_started, self.pending_rejoins());
+                return;
+            }
             other => other,
         };
         // A speech-intent mark is served first and alone: no budget, heartbeat, grant
@@ -5815,6 +5834,26 @@ impl Reducer<Call> for Actor {
                     );
                 }
                 Call::AwaySeats { reply, .. } => {
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite room budget exhausted",
+                        )),
+                    );
+                }
+                Call::PendingRejoins { reply } => {
+                    let _ = audit_reply(
+                        reply,
+                        call_name,
+                        call_started,
+                        Err(tonic::Status::resource_exhausted(
+                            "finite room budget exhausted",
+                        )),
+                    );
+                }
+                Call::DecideRejoin { reply, .. } => {
                     let _ = audit_reply(
                         reply,
                         call_name,
@@ -6024,6 +6063,33 @@ impl Reducer<Call> for Actor {
                 after_grant_reconnect(reconnected, || self.away_seats(&room_code)),
             )
             .is_ok(),
+            Call::PendingRejoins { reply } => audit_reply(
+                reply,
+                call_name,
+                call_started,
+                after_grant_reconnect(reconnected, || self.pending_rejoins()),
+            )
+            .is_ok(),
+            Call::DecideRejoin {
+                member,
+                operation,
+                allow,
+                deadline,
+                reply,
+            } => {
+                if reply.is_closed() || Instant::now() >= deadline {
+                    return;
+                }
+                audit_reply(
+                    reply,
+                    call_name,
+                    call_started,
+                    after_grant_reconnect(reconnected, || {
+                        self.decide_pending_rejoin(member, operation, allow)
+                    }),
+                )
+                .is_ok()
+            }
             Call::Reclaim { request, reply } => audit_reply(
                 reply,
                 call_name,
