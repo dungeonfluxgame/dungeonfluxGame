@@ -20,6 +20,9 @@ use tokio::{
 
 const MAXIMUM_ROOMS: usize = 8;
 const STARTUP_DEADLINE: Duration = Duration::from_secs(90);
+/// A child's READY waits for its adventure; a free-roam city takes minutes to generate, so this matches the
+/// launcher's own ready limit rather than the setup deadline.
+const CHILD_READY_DEADLINE: Duration = Duration::from_secs(600);
 const EXCHANGE_DEADLINE: Duration = Duration::from_secs(2);
 const STARTUP_POLL: Duration = Duration::from_millis(250);
 
@@ -346,7 +349,7 @@ async fn run_child(
     let mut lines = BufReader::new(stdout).lines();
     // The READY line on this child's own pipe is its identity and bound address; no
     // allocation (and no secret) is sent to any address before it arrives.
-    let ready = tokio::time::timeout(STARTUP_DEADLINE, read_ready(&mut lines))
+    let ready = tokio::time::timeout(CHILD_READY_DEADLINE, read_ready(&mut lines))
         .await
         .map_err(|_| std::io::Error::other("child startup deadline"))??;
     let drain = tokio::spawn(async move {
