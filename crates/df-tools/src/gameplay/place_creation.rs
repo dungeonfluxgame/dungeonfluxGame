@@ -1327,7 +1327,7 @@ pub(in crate::gameplay) async fn create(
     model: &ApproachModel,
     request: &CreationRequest,
 ) -> Result<PlaceRecord, CreationError> {
-    create_with_arrival(storyteller, model, request, false, false).await
+    create_with_arrival(storyteller, model, request, storyteller, false, false).await
 }
 
 /// Free roam arrivals are narration only; locals wait to be addressed.
@@ -1336,7 +1336,7 @@ pub(in crate::gameplay) async fn create_silent(
     model: &ApproachModel,
     request: &CreationRequest,
 ) -> Result<PlaceRecord, CreationError> {
-    create_with_arrival(storyteller, model, request, true, false).await
+    create_with_arrival(storyteller, model, request, storyteller, true, false).await
 }
 
 /// The free-roam gate has four independently addressable adults under the same place schema.
@@ -1344,31 +1344,37 @@ pub(in crate::gameplay) async fn create_gate(
     storyteller: &Storyteller,
     model: &ApproachModel,
     request: &CreationRequest,
+    author: &impl PlaceAuthor,
 ) -> Result<PlaceRecord, CreationError> {
-    create_with_arrival(storyteller, model, request, true, true).await
+    create_with_arrival(storyteller, model, request, author, true, true).await
 }
 
 async fn create_with_arrival(
     storyteller: &Storyteller,
     model: &ApproachModel,
     request: &CreationRequest,
+    author: &impl PlaceAuthor,
     silent: bool,
     gate: bool,
 ) -> Result<PlaceRecord, CreationError> {
     const PLACE_DEADLINE: Duration = Duration::from_secs(40);
-    let mut record = match tokio::time::timeout(
-        PLACE_DEADLINE,
-        express_place(storyteller, request, silent, gate, PLACE_DEADLINE),
-    )
-    .await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            super::actor::record_audit_line(
-                "gameplay.place",
-                "PLACE generation outcome=failed reason=deadline".to_owned(),
-            );
-            return Err(CreationError::Model);
+    let mut record = if gate {
+        express_place(author, request, silent, gate, PLACE_DEADLINE).await?
+    } else {
+        match tokio::time::timeout(
+            PLACE_DEADLINE,
+            express_place(author, request, silent, gate, PLACE_DEADLINE),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                super::actor::record_audit_line(
+                    "gameplay.place",
+                    "PLACE generation outcome=failed reason=deadline".to_owned(),
+                );
+                return Err(CreationError::Model);
+            }
         }
     };
     for person in &mut record.people {
@@ -1395,8 +1401,72 @@ async fn create_with_arrival(
     Ok(record)
 }
 
+/// Generates place text and reports elapsed time for bounded attempts.
+pub(in crate::gameplay) trait PlaceAuthor {
+    /// Requests the three place slots under the supplied deadline.
+    fn express<'a>(
+        &'a self,
+        request: &'a Expression<'_>,
+    ) -> impl std::future::Future<
+        Output = Result<std::collections::BTreeMap<String, String>, StorytellerError>,
+    > + Send
+    + 'a;
+
+    /// Evicts an answer refused by place validation.
+    fn forget<'a>(
+        &'a self,
+        request: &'a Expression<'_>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'a;
+
+    /// Returns the time spent in the current in-play creation.
+    fn elapsed(&self, started: tokio::time::Instant) -> Duration {
+        started.elapsed()
+    }
+}
+
+impl PlaceAuthor for Storyteller {
+    async fn express(
+        &self,
+        request: &Expression<'_>,
+    ) -> Result<std::collections::BTreeMap<String, String>, StorytellerError> {
+        Storyteller::express(self, request).await
+    }
+
+    async fn forget(&self, request: &Expression<'_>) {
+        Storyteller::forget(self, request).await;
+    }
+}
+
+async fn forget_place(
+    storyteller: &impl PlaceAuthor,
+    expression: &Expression<'_>,
+    gate: bool,
+    deadline: Duration,
+) {
+    if gate {
+        if tokio::time::timeout(deadline, storyteller.forget(expression))
+            .await
+            .is_err()
+        {
+            super::actor::record_audit_line(
+                "gameplay.place",
+                "PLACE cache_evict outcome=failed reason=deadline".to_owned(),
+            );
+        }
+    } else {
+        storyteller.forget(expression).await;
+    }
+}
+
+fn record_place_rejection(error: CreationError) {
+    super::actor::record_audit_line(
+        "gameplay.place",
+        format!("PLACE generation outcome=rejected reason={}", error.label()),
+    );
+}
+
 async fn express_place(
-    storyteller: &Storyteller,
+    storyteller: &impl PlaceAuthor,
     request: &CreationRequest,
     silent: bool,
     gate: bool,
@@ -1453,11 +1523,22 @@ async fn express_place(
             profile: CallProfile {
                 reasoning: Some(df_providers::ReasoningEffort::Low),
                 output_tokens: Some(4_000),
-                deadline: Some(deadline.saturating_sub(started.elapsed())),
+                deadline: Some(if gate {
+                    deadline
+                } else {
+                    deadline.saturating_sub(storyteller.elapsed(started))
+                }),
                 guidance: GUIDANCE,
             },
         };
-        let answered = storyteller.express(&expression).await;
+        let answered = if gate {
+            match tokio::time::timeout(deadline, storyteller.express(&expression)).await {
+                Ok(answered) => answered,
+                Err(_) => Err(StorytellerError::DeadlineExceeded),
+            }
+        } else {
+            storyteller.express(&expression).await
+        };
         let values = match answered {
             Ok(values) => values,
             Err(StorytellerError::Off) => return Err(CreationError::Off),
@@ -1473,6 +1554,17 @@ async fn express_place(
                     ),
                     _ => format!("the previous answer was refused for {reason}; {RETRY_GUIDANCE}"),
                 });
+                last = CreationError::Model;
+                continue;
+            }
+            Err(StorytellerError::DeadlineExceeded) if gate => {
+                super::actor::record_audit_line(
+                    "gameplay.place",
+                    "PLACE generation outcome=failed reason=deadline".to_owned(),
+                );
+                problem = Some(format!(
+                    "the previous generation failed for deadline; {RETRY_GUIDANCE}"
+                ));
                 last = CreationError::Model;
                 continue;
             }
@@ -1497,8 +1589,9 @@ async fn express_place(
             .and_then(|slot| slot.get("traders").cloned())
             .is_none_or(|traders| !traders.is_array())
         {
-            storyteller.forget(&expression).await;
+            forget_place(storyteller, &expression, gate, deadline).await;
             let error = CreationError::Invalid("traders_missing");
+            record_place_rejection(error);
             problem = Some(problem_text(error));
             last = error;
             continue;
@@ -1517,21 +1610,19 @@ async fn express_place(
                 return Ok(record);
             }
             Ok(record) => {
-                storyteller.forget(&expression).await;
+                forget_place(storyteller, &expression, gate, deadline).await;
                 let error = CreationError::Invalid(if record.people.len() != 4 {
                     "gate_people"
                 } else {
                     "gate_kind"
                 });
+                record_place_rejection(error);
                 problem = Some(problem_text(error));
                 last = error;
             }
             Err(error) => {
-                storyteller.forget(&expression).await;
-                super::actor::record_audit_line(
-                    "gameplay.place",
-                    format!("PLACE generation outcome=rejected reason={}", error.label()),
-                );
+                forget_place(storyteller, &expression, gate, deadline).await;
+                record_place_rejection(error);
                 problem = Some(problem_text(error));
                 last = error;
             }

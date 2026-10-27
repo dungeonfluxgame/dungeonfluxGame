@@ -1934,6 +1934,329 @@ pub(in crate::gameplay) fn roamstart_round2_endpoint(
     FakeEndpoint::start(replies)
 }
 
+fn gateretry_endpoint(rejected_gate_attempts: u64, rejected_city: bool) -> FakeEndpoint {
+    use std::sync::Arc;
+
+    let compute = Arc::new(move |prompt: &str| {
+        let facts: Value = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("FACTS: "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .unwrap();
+        if facts["task"] == "person_persona" {
+            return persona_answer(prompt);
+        }
+        if facts["task"] == "free_roam_city"
+            && rejected_city
+            && facts["attempt"].as_u64().unwrap_or(0) == 0
+        {
+            return json!({"name": ""});
+        }
+        let mut output = roamstart_city_answer(prompt);
+        if facts["task"] == "create_place"
+            && facts["origin"]["name"] == "Road outside Roamstead"
+            && facts["attempt"].as_u64().unwrap() < rejected_gate_attempts
+        {
+            let mut place: Value = serde_json::from_str(output["place"].as_str().unwrap()).unwrap();
+            place.as_object_mut().unwrap().remove("traders");
+            output["place"] = json!(place.to_string());
+        }
+        output
+    });
+    FakeEndpoint::start((0..64).map(|_| Reply::Compute(compute.clone())).collect())
+}
+
+struct TimedPlaceAuthor {
+    state: std::sync::Mutex<TimedPlaceState>,
+}
+
+struct TimedPlaceState {
+    elapsed: Duration,
+    replies: std::collections::VecDeque<(Duration, Value)>,
+    deadlines: Vec<Duration>,
+}
+
+impl PlaceAuthor for TimedPlaceAuthor {
+    fn express<'a>(
+        &'a self,
+        request: &'a Expression<'_>,
+    ) -> impl std::future::Future<
+        Output = Result<std::collections::BTreeMap<String, String>, StorytellerError>,
+    > + Send
+    + 'a {
+        let mut state = self.state.lock().unwrap();
+        let deadline = request.profile.deadline.unwrap();
+        state.deadlines.push(deadline);
+        let (delay, values) = state.replies.pop_front().unwrap();
+        state.elapsed += delay.min(deadline);
+        let result = if delay > deadline {
+            Err(StorytellerError::DeadlineExceeded)
+        } else {
+            Ok(serde_json::from_value(values).unwrap())
+        };
+        std::future::ready(result)
+    }
+
+    async fn forget(&self, _request: &Expression<'_>) {}
+
+    fn elapsed(&self, _started: tokio::time::Instant) -> Duration {
+        self.state.lock().unwrap().elapsed
+    }
+}
+
+fn timed_place_author(silent: bool) -> TimedPlaceAuthor {
+    let mut place = place_slot();
+    if silent {
+        place["speaker"] = json!("");
+        place["greeting"] = json!("");
+    }
+    let mut people = people_slot();
+    let mut fourth = people[0].clone();
+    fourth["name"] = json!("Nera");
+    people.as_array_mut().unwrap().push(fourth);
+    let accepted = answer(&place, &people, &things_slot());
+    let mut rejected = accepted.clone();
+    let mut rejected_place: Value =
+        serde_json::from_str(rejected["place"].as_str().unwrap()).unwrap();
+    rejected_place.as_object_mut().unwrap().remove("traders");
+    rejected["place"] = json!(rejected_place.to_string());
+    TimedPlaceAuthor {
+        state: std::sync::Mutex::new(TimedPlaceState {
+            elapsed: Duration::ZERO,
+            replies: [
+                (Duration::from_millis(24_400), rejected),
+                (Duration::from_secs(20), accepted),
+            ]
+            .into(),
+            deadlines: Vec::new(),
+        }),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_a_slow_rejected_gate_gives_the_next_answer_a_full_deadline() {
+    let author = timed_place_author(true);
+    let record = express_place(&author, &request(), true, true, Duration::from_secs(40))
+        .await
+        .expect("the second gate answer gets enough time");
+    assert_eq!(record.people.len(), 4);
+    let state = author.state.lock().unwrap();
+    assert_eq!(state.elapsed, Duration::from_millis(44_400));
+    assert_eq!(state.deadlines, [Duration::from_secs(40); 2]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_free_roam_starts_after_a_slow_rejection_and_a_twenty_second_gate_answer() {
+    let author = timed_place_author(true);
+    let endpoint = gateretry_endpoint(0, false);
+    let judge = accepting_persona_judge(8);
+    let directory = cache_directory("gateretry-timed-start");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate_with_gate_author(
+        4_147_604,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+        &author,
+    )
+    .await
+    .expect("free roam starts after the corrected gate answer");
+    let world = generated
+        .pack
+        .beat_script
+        .as_ref()
+        .unwrap()
+        .free_roam
+        .as_ref()
+        .unwrap();
+    assert_eq!(world.gate.people.len(), 4);
+    let state = author.state.lock().unwrap();
+    assert_eq!(state.elapsed, Duration::from_millis(44_400));
+    assert_eq!(state.deadlines, [Duration::from_secs(40); 2]);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_a_timed_out_gate_attempt_does_not_prevent_the_next_attempt() {
+    let author = timed_place_author(true);
+    author.state.lock().unwrap().replies[0].0 = Duration::from_secs(41);
+    let record = express_place(&author, &request(), true, true, Duration::from_secs(40))
+        .await
+        .expect("a later gate attempt can succeed after a timeout");
+    assert_eq!(record.people.len(), 4);
+    let state = author.state.lock().unwrap();
+    assert_eq!(state.elapsed, Duration::from_secs(60));
+    assert_eq!(state.deadlines, [Duration::from_secs(40); 2]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_in_play_retries_still_share_their_bounded_deadline() {
+    let author = timed_place_author(false);
+    assert_eq!(
+        express_place(&author, &request(), false, false, Duration::from_secs(40))
+            .await
+            .unwrap_err(),
+        CreationError::Model
+    );
+    let state = author.state.lock().unwrap();
+    assert_eq!(state.elapsed, Duration::from_secs(40));
+    assert_eq!(
+        state.deadlines,
+        [Duration::from_secs(40), Duration::from_millis(15_600)]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_every_rejected_gate_attempt_still_reports_start_failure() {
+    let endpoint = gateretry_endpoint(3, false);
+    let directory = cache_directory("gateretry-failed-gate");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let error = super::super::adventure::free_roam::generate(
+        4_147_603,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &ApproachModel::default(),
+    )
+    .await
+    .expect_err("a gate that never validates cannot start free roam");
+    assert_eq!(error, CreationError::Invalid("traders_missing"));
+    let gate_count = endpoint
+        .bodies()
+        .iter()
+        .filter(|body| {
+            let Some(prompt) = body["input"].as_str() else {
+                return false;
+            };
+            let facts = prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .and_then(|line| serde_json::from_str::<Value>(line).ok());
+            facts.is_some_and(|facts| {
+                facts["task"] == "create_place"
+                    && facts["origin"]["name"] == "Road outside Roamstead"
+            })
+        })
+        .count();
+    assert_eq!(gate_count, 3);
+    assert!(
+        !super::super::actor::audit_lines_containing(
+            "FREE_ROAM generation stage=gate outcome=failed place=main-gate"
+        )
+        .is_empty()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_a_rejected_gate_is_logged_and_retried_before_free_roam_starts() {
+    let endpoint = gateretry_endpoint(1, false);
+    let judge = accepting_persona_judge(8);
+    let directory = cache_directory("gateretry-gate");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate(
+        4_147_601,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .expect("the corrected gate starts free roam");
+    assert_eq!(
+        generated
+            .pack
+            .beat_script
+            .as_ref()
+            .unwrap()
+            .free_roam
+            .as_ref()
+            .unwrap()
+            .gate
+            .people
+            .len(),
+        4
+    );
+    let gate_requests: Vec<Value> = endpoint
+        .bodies()
+        .iter()
+        .filter_map(|body| {
+            let prompt = body["input"].as_str()?;
+            let facts: Value = prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .and_then(|line| serde_json::from_str(line).ok())?;
+            (facts["task"] == "create_place" && facts["origin"]["name"] == "Road outside Roamstead")
+                .then_some(facts)
+        })
+        .collect();
+    assert_eq!(gate_requests.len(), 2);
+    assert!(
+        gate_requests[1]["previous_answer_problem"]
+            .as_str()
+            .unwrap()
+            .contains("traders_missing")
+    );
+    assert!(
+        !super::super::actor::audit_lines_containing(
+            "PLACE generation outcome=rejected reason=traders_missing"
+        )
+        .is_empty()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateretry_a_rejected_city_is_retried_before_free_roam_starts() {
+    let endpoint = gateretry_endpoint(0, true);
+    let judge = accepting_persona_judge(8);
+    let directory = cache_directory("gateretry-city");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate(
+        4_147_602,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .expect("the corrected city starts free roam");
+    assert_eq!(
+        generated
+            .pack
+            .beat_script
+            .as_ref()
+            .unwrap()
+            .free_roam
+            .as_ref()
+            .unwrap()
+            .city
+            .name,
+        "Roamstead"
+    );
+    let revised_city = endpoint
+        .bodies()
+        .iter()
+        .find_map(|body| {
+            let prompt = body["input"].as_str()?;
+            let facts: Value = prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .and_then(|line| serde_json::from_str(line).ok())?;
+            (facts["task"] == "free_roam_city" && facts["attempt"] == 1).then_some(facts)
+        })
+        .unwrap();
+    assert!(revised_city["problem"].as_str().unwrap().contains("shape"));
+    assert!(
+        !super::super::actor::audit_lines_containing(
+            "FREE_ROAM generation stage=city outcome=rejected reason=shape"
+        )
+        .is_empty()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn roamstart_round2_refused_neighbour_is_retried_with_its_content_category() {
     let endpoint = roamstart_round2_endpoint(false, 1);

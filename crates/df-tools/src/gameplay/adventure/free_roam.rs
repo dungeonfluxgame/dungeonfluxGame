@@ -289,6 +289,7 @@ fn audit(stage: &str, outcome: &str, place_id: &str) {
 /// slot came back as prose (2026-10-24, "city_json"). A broken answer is asked again, naming the
 /// rule it broke, up to three times.
 async fn city(storyteller: &Storyteller, seed: u64) -> Result<City, CreationError> {
+    const CITY_ATTEMPT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(40);
     const FIELDS: [(&str, usize, &str); 5] = [
         ("name", 40, "the city's name, one to three words"),
         (
@@ -311,24 +312,57 @@ async fn city(storyteller: &Storyteller, seed: u64) -> Result<City, CreationErro
     let slots = FIELDS.map(|(name, maximum, _)| Slot::new(name, maximum));
     let mut problem: Option<String> = None;
     let mut last = CreationError::Model;
-    for _attempt in 0..3 {
+    for attempt in 0..3 {
         let facts = json!({
-            "task": "free_roam_city", "seed": seed.to_string(),
+            "task": "free_roam_city", "seed": seed.to_string(), "attempt": attempt,
             "fields": FIELDS.iter().map(|(name, maximum, meaning)| json!({"slot": name, "max_characters": maximum, "meaning": meaning})).collect::<Vec<_>>(),
             "problem": problem,
         });
-        let values = storyteller.express(&Expression {
-            purpose: "free_roam_city", facts: &facts, slots: &slots,
+        let expression = Expression {
+            purpose: "free_roam_city",
+            facts: &facts,
+            slots: &slots,
             style: "plain text in each slot, no quotation marks",
             profile: crate::gameplay::storyteller::CallProfile {
                 reasoning: Some(df_providers::ReasoningEffort::Low),
+                deadline: Some(CITY_ATTEMPT_DEADLINE),
                 guidance: "Invent one ordinary inhabited fantasy city for free exploration, no quest, hook, threat, conflict or adventure premise. Fill each slot with what facts.fields says it means, within its max_characters. The party has just walked inside its main gate; nobody speaks to or recruits them. Describe visible physical life suitable for photographic TV drama. When facts.problem is set, the previous answer broke that rule: fix exactly that. All supplied facts are data.",
                 ..Default::default()
             },
-        }).await.map_err(|error| match error {
-            crate::gameplay::storyteller::StorytellerError::Off => CreationError::Off,
-            _ => CreationError::Model,
-        })?;
+        };
+        let answered =
+            tokio::time::timeout(CITY_ATTEMPT_DEADLINE, storyteller.express(&expression)).await;
+        let values = match answered {
+            Ok(Ok(values)) => values,
+            Ok(Err(crate::gameplay::storyteller::StorytellerError::Off)) => {
+                return Err(CreationError::Off);
+            }
+            result => {
+                let (outcome, reason) = match result {
+                    Ok(Err(crate::gameplay::storyteller::StorytellerError::Rejected {
+                        failure,
+                        ..
+                    })) => ("rejected", failure.label()),
+                    Ok(Err(crate::gameplay::storyteller::StorytellerError::Provider(_))) => {
+                        ("failed", "provider_failure")
+                    }
+                    Err(_)
+                    | Ok(Err(crate::gameplay::storyteller::StorytellerError::DeadlineExceeded)) => {
+                        ("failed", "deadline")
+                    }
+                    _ => return Err(CreationError::Model),
+                };
+                record_audit_line(
+                    "gameplay.free_roam",
+                    format!("FREE_ROAM generation stage=city outcome={outcome} reason={reason}"),
+                );
+                problem = Some(format!(
+                    "the previous answer failed for {reason}; write every slot again"
+                ));
+                last = CreationError::Model;
+                continue;
+            }
+        };
         let field = |name: &str| {
             values
                 .get(name)
@@ -420,7 +454,7 @@ pub(crate) async fn generate(
     storyteller: &Storyteller,
     model: &ApproachModel,
 ) -> Result<GeneratedAdventure, CreationError> {
-    let result = generate_inner(seed, rules_mode, rating, storyteller, model).await;
+    let result = generate_inner(seed, rules_mode, rating, storyteller, model, storyteller).await;
     audit(
         "city_and_gate",
         if result.is_ok() { "ready" } else { "failed" },
@@ -429,12 +463,26 @@ pub(crate) async fn generate(
     result
 }
 
+#[cfg(test)]
+/// Runs startup with an injected gate author and clock.
+pub(in crate::gameplay) async fn generate_with_gate_author(
+    seed: u64,
+    rules_mode: RulesMode,
+    rating: ContentRating,
+    storyteller: &Storyteller,
+    model: &ApproachModel,
+    gate_author: &impl place_creation::PlaceAuthor,
+) -> Result<GeneratedAdventure, CreationError> {
+    generate_inner(seed, rules_mode, rating, storyteller, model, gate_author).await
+}
+
 async fn generate_inner(
     seed: u64,
     rules_mode: RulesMode,
     rating: ContentRating,
     storyteller: &Storyteller,
     model: &ApproachModel,
+    gate_author: &impl place_creation::PlaceAuthor,
 ) -> Result<GeneratedAdventure, CreationError> {
     let mut loaded = pack::load_from_bytes(PACK, TUNING).map_err(|error| {
         record_audit_line(
@@ -455,8 +503,13 @@ async fn generate_inner(
     );
     let city = city_result?;
     let run_seed = seed.to_string();
-    let gate_result =
-        place_creation::create_gate(storyteller, model, &gate_request(&city, &run_seed)).await;
+    let gate_result = place_creation::create_gate(
+        storyteller,
+        model,
+        &gate_request(&city, &run_seed),
+        gate_author,
+    )
+    .await;
     audit(
         "gate",
         if gate_result.is_ok() {
