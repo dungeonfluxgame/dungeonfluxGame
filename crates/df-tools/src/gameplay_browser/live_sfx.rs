@@ -380,6 +380,15 @@ pub(super) fn set_battlefield_owns_combat(owns: bool) {
     BATTLEFIELD_OWNS_COMBAT.with(|flag| flag.set(owns));
 }
 
+/// Drops every cue of earlier views that has not started yet.
+pub(super) fn cancel_unstarted() {
+    ENGINE.with(|slot| {
+        if let Some(engine) = slot.borrow_mut().as_mut() {
+            engine.cancel_unstarted();
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{claim_ending_sting, reset_ending_sting};
@@ -393,13 +402,4 @@ mod tests {
         assert!(claim_ending_sting());
         reset_ending_sting();
     }
-}
-
-/// Drops every cue of earlier views that has not started yet.
-pub(super) fn cancel_unstarted() {
-    ENGINE.with(|slot| {
-        if let Some(engine) = slot.borrow_mut().as_mut() {
-            engine.cancel_unstarted();
-        }
-    });
 }

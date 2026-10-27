@@ -366,104 +366,6 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
     JsValue::from_str(&format!("The lobby could not be displayed: {error}"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{COPIED_LABEL, LobbyModel, SHARE_INVITE_LABEL, is_loopback_join_url, with_view};
-    use df_ui::JoinStage;
-
-    #[test]
-    fn loopback_join_urls_are_not_presented_as_shareable_links() {
-        for join_url in [
-            "http://127.0.0.1:63419/gameplay/player?room=ABCD",
-            "http://127.42.0.9:63419/gameplay/player?room=ABCD",
-            "http://[::1]:63419/gameplay/player?room=ABCD",
-            "http://localhost:63419/gameplay/player?room=ABCD",
-            "127.0.0.1:63419/gameplay/player?room=ABCD",
-            "localhost:63419/gameplay/player?room=ABCD",
-        ] {
-            assert!(is_loopback_join_url(join_url));
-            let model = LobbyModel {
-                stage: JoinStage::Lobby,
-                title: String::new(),
-                narration: String::new(),
-                scene_asset: None,
-                code: "ABCD".to_owned(),
-                join_url: join_url.to_owned(),
-                join_label: "Join this room",
-                panel_heading: "Your party gathers",
-                panel_description: "Waiting for heroes",
-                members: Vec::new(),
-                away_heroes: Vec::new(),
-                offer: None,
-            };
-            let (detail, fallback) = with_view(&model, 1, |view| {
-                (
-                    view.room.as_ref().map(|room| room.detail.to_owned()),
-                    view.pairing_fallback.to_owned(),
-                )
-            });
-            assert_eq!(detail.as_deref(), Some(""));
-            assert_eq!(
-                fallback,
-                "Phones cannot join yet: the game was started for this computer only."
-            );
-        }
-    }
-
-    #[test]
-    fn network_join_url_is_shared_separately_from_the_room_code() {
-        let model = LobbyModel {
-            stage: JoinStage::Lobby,
-            title: String::new(),
-            narration: String::new(),
-            scene_asset: None,
-            code: "ABCD".to_owned(),
-            join_url: "http://192.168.1.20:63419/gameplay/player?room=ABCD".to_owned(),
-            join_label: "Join this room",
-            panel_heading: "Your party gathers",
-            panel_description: "Waiting for heroes",
-            members: Vec::new(),
-            away_heroes: Vec::new(),
-            offer: None,
-        };
-        let (detail, fallback, notice) = with_view(&model, 1, |view| {
-            (
-                view.room.as_ref().map(|room| room.detail.to_owned()),
-                view.pairing_fallback.to_owned(),
-                view.campaign.notice.to_owned(),
-            )
-        });
-        assert_eq!(detail.as_deref(), Some(""));
-        assert_eq!(
-            model.join_url,
-            "http://192.168.1.20:63419/gameplay/player?room=ABCD"
-        );
-        assert_eq!(notice, "Your party · Room ABCD");
-        assert_eq!(
-            fallback,
-            "Share the room code, or open the join link on a second phone."
-        );
-    }
-
-    #[test]
-    fn invite_control_uses_one_share_action_and_a_copied_confirmation() {
-        assert_eq!(SHARE_INVITE_LABEL, "Share invite");
-        assert_eq!(COPIED_LABEL, "Copied");
-        let style = include_str!("live_player.css");
-        assert!(style.contains(".live-lobby-share-address"));
-        assert!(style.contains(".live-lobby-share-status"));
-    }
-
-    #[test]
-    fn ready_lobby_action_stays_above_navigation_with_reserved_page_space() {
-        let style = include_str!("live_player.css");
-        assert!(style.contains("@media(max-width:700px)"));
-        assert!(style.contains(".join-lobby>button{"));
-        assert!(style.contains("position:fixed;"));
-        assert!(style.contains("padding-bottom:calc(var(--lobby-action-height)"));
-    }
-}
-
 /// The player's name is chosen during character creation, so the join form offers no name
 /// field. The room code is filled in from the page or the `?room=` link and can be corrected
 /// by typing the one shown on the display.
@@ -565,5 +467,103 @@ impl LobbyScreen {
         self.surface
             .dispose()
             .map_err(|error| JsValue::from_str(&format!("lobby retirement failed: {error}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COPIED_LABEL, LobbyModel, SHARE_INVITE_LABEL, is_loopback_join_url, with_view};
+    use df_ui::JoinStage;
+
+    #[test]
+    fn loopback_join_urls_are_not_presented_as_shareable_links() {
+        for join_url in [
+            "http://127.0.0.1:63419/gameplay/player?room=ABCD",
+            "http://127.42.0.9:63419/gameplay/player?room=ABCD",
+            "http://[::1]:63419/gameplay/player?room=ABCD",
+            "http://localhost:63419/gameplay/player?room=ABCD",
+            "127.0.0.1:63419/gameplay/player?room=ABCD",
+            "localhost:63419/gameplay/player?room=ABCD",
+        ] {
+            assert!(is_loopback_join_url(join_url));
+            let model = LobbyModel {
+                stage: JoinStage::Lobby,
+                title: String::new(),
+                narration: String::new(),
+                scene_asset: None,
+                code: "ABCD".to_owned(),
+                join_url: join_url.to_owned(),
+                join_label: "Join this room",
+                panel_heading: "Your party gathers",
+                panel_description: "Waiting for heroes",
+                members: Vec::new(),
+                away_heroes: Vec::new(),
+                offer: None,
+            };
+            let (detail, fallback) = with_view(&model, 1, |view| {
+                (
+                    view.room.as_ref().map(|room| room.detail.to_owned()),
+                    view.pairing_fallback.to_owned(),
+                )
+            });
+            assert_eq!(detail.as_deref(), Some(""));
+            assert_eq!(
+                fallback,
+                "Phones cannot join yet: the game was started for this computer only."
+            );
+        }
+    }
+
+    #[test]
+    fn network_join_url_is_shared_separately_from_the_room_code() {
+        let model = LobbyModel {
+            stage: JoinStage::Lobby,
+            title: String::new(),
+            narration: String::new(),
+            scene_asset: None,
+            code: "ABCD".to_owned(),
+            join_url: "http://192.168.1.20:63419/gameplay/player?room=ABCD".to_owned(),
+            join_label: "Join this room",
+            panel_heading: "Your party gathers",
+            panel_description: "Waiting for heroes",
+            members: Vec::new(),
+            away_heroes: Vec::new(),
+            offer: None,
+        };
+        let (detail, fallback, notice) = with_view(&model, 1, |view| {
+            (
+                view.room.as_ref().map(|room| room.detail.to_owned()),
+                view.pairing_fallback.to_owned(),
+                view.campaign.notice.to_owned(),
+            )
+        });
+        assert_eq!(detail.as_deref(), Some(""));
+        assert_eq!(
+            model.join_url,
+            "http://192.168.1.20:63419/gameplay/player?room=ABCD"
+        );
+        assert_eq!(notice, "Your party · Room ABCD");
+        assert_eq!(
+            fallback,
+            "Share the room code, or open the join link on a second phone."
+        );
+    }
+
+    #[test]
+    fn invite_control_uses_one_share_action_and_a_copied_confirmation() {
+        assert_eq!(SHARE_INVITE_LABEL, "Share invite");
+        assert_eq!(COPIED_LABEL, "Copied");
+        let style = include_str!("live_player.css");
+        assert!(style.contains(".live-lobby-share-address"));
+        assert!(style.contains(".live-lobby-share-status"));
+    }
+
+    #[test]
+    fn ready_lobby_action_stays_above_navigation_with_reserved_page_space() {
+        let style = include_str!("live_player.css");
+        assert!(style.contains("@media(max-width:700px)"));
+        assert!(style.contains(".join-lobby>button{"));
+        assert!(style.contains("position:fixed;"));
+        assert!(style.contains("padding-bottom:calc(var(--lobby-action-height)"));
     }
 }

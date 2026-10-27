@@ -236,6 +236,7 @@ pub(crate) fn wav_pcm(body: &[u8]) -> Result<&[u8], ContainerFault> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn tone(samples: usize) -> Vec<f32> {
         (0..samples)
             .map(|index| (index as f32 / 50.0).sin())

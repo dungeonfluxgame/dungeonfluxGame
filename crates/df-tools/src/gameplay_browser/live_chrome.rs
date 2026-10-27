@@ -315,19 +315,6 @@ fn close_menu(client: &Rc<RefCell<Client>>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::super::has_unconfirmed_saved_choice;
-
-    #[test]
-    fn menu_reoffers_only_an_unconfirmed_saved_choice() {
-        assert!(has_unconfirmed_saved_choice(true, false, false));
-        assert!(!has_unconfirmed_saved_choice(false, false, false));
-        assert!(!has_unconfirmed_saved_choice(true, true, false));
-        assert!(!has_unconfirmed_saved_choice(true, false, true));
-    }
-}
-
 /// The toast shared by every screen. It holds the one `.feedback` line and the recovery
 /// prompt, and shows only while either has content.
 fn toast(client: &Rc<RefCell<Client>>) -> Result<Element, JsValue> {
@@ -447,4 +434,17 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         hero.set_attribute("hidden", "")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::has_unconfirmed_saved_choice;
+
+    #[test]
+    fn menu_reoffers_only_an_unconfirmed_saved_choice() {
+        assert!(has_unconfirmed_saved_choice(true, false, false));
+        assert!(!has_unconfirmed_saved_choice(false, false, false));
+        assert!(!has_unconfirmed_saved_choice(true, true, false));
+        assert!(!has_unconfirmed_saved_choice(true, false, true));
+    }
 }

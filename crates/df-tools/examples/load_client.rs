@@ -1,18 +1,26 @@
 //! A TV and five phones using generated RPC over the gameplay server's WebSocket tunnel.
 //! Every join and scripted action requires a confirmed server outcome.
 
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "../src/load_presentation.rs"]
 mod load_presentation;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "../src/load_transport.rs"]
 mod load_transport;
 
+#[cfg(not(target_arch = "wasm32"))]
 use df_protocol::common as rpc;
+#[cfg(not(target_arch = "wasm32"))]
 use rpc::{action_service_client::ActionServiceClient, room_service_client::RoomServiceClient};
+#[cfg(not(target_arch = "wasm32"))]
 use std::{io, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum AudioKey {
     Table(u64),
@@ -20,6 +28,7 @@ enum AudioKey {
     Closing(u64, usize),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Table {
     display: load_transport::Connection,
     display_view: tokio::sync::watch::Receiver<Option<rpc::ViewMessage>>,
@@ -27,18 +36,21 @@ struct Table {
     display_binding: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Phone {
     transport: load_transport::Connection,
     joined: rpc::JoinedRoom,
     view: tokio::sync::watch::Receiver<Option<rpc::ViewMessage>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn operation(sequence: u64) -> rpc::OperationId {
     let mut value = vec![0x4c; 16];
     value[..8].copy_from_slice(&sequence.to_le_bytes());
     rpc::OperationId { value: Some(value) }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn request<T>(body: T, binding: &str) -> Result<tonic::Request<T>, Error> {
     let mut request = tonic::Request::new(body);
     request
@@ -48,6 +60,7 @@ fn request<T>(body: T, binding: &str) -> Result<tonic::Request<T>, Error> {
     Ok(request)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn attribute(page: &str, name: &str) -> Result<String, Error> {
     page.split_once(&format!("{name}=\""))
         .and_then(|(_, rest)| rest.split_once('"'))
@@ -55,6 +68,7 @@ fn attribute(page: &str, name: &str) -> Result<String, Error> {
         .ok_or_else(|| io::Error::other("display bootstrap attribute missing").into())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_hex(value: &str) -> Result<Vec<u8>, Error> {
     if value.len() != 32 || !value.is_ascii() {
         return Err(io::Error::other("display run id invalid").into());
@@ -68,6 +82,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, Error> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn character(index: usize) -> Result<rpc::CharacterSelection, Error> {
     Ok(rpc::CharacterSelection {
         name: ["Brynn", "Vale", "Maren", "Sigrun", "Brakka"]
@@ -100,6 +115,7 @@ fn character(index: usize) -> Result<rpc::CharacterSelection, Error> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn choose_offer<'a>(
     view: &'a rpc::PlayerGameplayView,
     all_ready: bool,
@@ -148,6 +164,7 @@ fn choose_offer<'a>(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_one_shot(kind: i32) -> bool {
     use rpc::GameplayActionKind as Kind;
     [
@@ -161,6 +178,7 @@ fn is_one_shot(kind: i32) -> bool {
     .any(|candidate| *candidate as i32 == kind)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn select_inputs(offer: &rpc::GameplayActionOffer) -> Result<Vec<rpc::JourneyChoice>, Error> {
     if offer.action_kind == rpc::GameplayActionKind::GreatswordAttack as i32
         && !offer
@@ -186,6 +204,7 @@ fn select_inputs(offer: &rpc::GameplayActionOffer) -> Result<Vec<rpc::JourneyCho
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn act(
     phone: &Phone,
     index: usize,
@@ -250,6 +269,7 @@ async fn act(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_ready(phone: &Phone) -> bool {
     match phone
         .view
@@ -265,6 +285,7 @@ fn is_ready(phone: &Phone) -> bool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn join_table(url: &str) -> Result<Table, Error> {
     let page = load_transport::get(url, "/gameplay/display").await?;
     let page = std::str::from_utf8(&page)?;
@@ -334,6 +355,7 @@ async fn join_table(url: &str) -> Result<Table, Error> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn fetch_audio(
     url: &str,
     key: AudioKey,
@@ -361,6 +383,7 @@ async fn fetch_audio(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn consume_display(
     url: &str,
     message: Option<rpc::ViewMessage>,
@@ -440,6 +463,7 @@ async fn consume_display(
     Ok(changed)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn fetch_phone_images(url: &str, phone: &Phone, index: usize) -> Result<bool, Error> {
     let message = phone.view.borrow().clone();
     let Some(rpc::ViewMessage {
@@ -484,6 +508,7 @@ async fn fetch_phone_images(url: &str, phone: &Phone, index: usize) -> Result<bo
     Ok(true)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn verify_silent_wav(bytes: &[u8]) -> Result<(), Error> {
     if bytes.len() != 32_044
         || &bytes[..4] != b"RIFF"
@@ -507,6 +532,7 @@ fn verify_silent_wav(bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn verify_release(submitted: u64, released: u64) -> Result<(), Error> {
     if released < submitted {
         return Err(io::Error::other("TV presentation was not released").into());
@@ -514,6 +540,7 @@ fn verify_release(submitted: u64, released: u64) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn run(url: &str, seconds: u64, pace: Duration) -> Result<(), Error> {
     let Table {
         mut display,
@@ -670,6 +697,7 @@ async fn run(url: &str, seconds: u64, pace: Duration) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let mut url = "http://127.0.0.1:63411".to_owned();
@@ -697,7 +725,12 @@ async fn main() -> Result<(), Error> {
     .await?
 }
 
-#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+fn main() -> Result<(), &'static str> {
+    Err("the load_client example requires a native target")
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

@@ -50,6 +50,36 @@ pub(super) fn bind(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 
+fn simplify_composer(root: &Element) -> Result<(), JsValue> {
+    if let Some(summary) = root.query_selector(".live-dock details.say-more > summary")? {
+        summary.set_attribute("hidden", "")?;
+    }
+    if let Some(editor) = root.query_selector(".dialogue-recovery .dialogue-draft")? {
+        editor.set_attribute("placeholder", ACTION_PLACEHOLDER)?;
+    }
+    if let Some(send) = root.query_selector(".dialogue-recovery [data-dialogue=submit]")? {
+        send.set_text_content(Some("Send"));
+    }
+    Ok(())
+}
+
+fn label_inspection_submit(root: &Element) -> Result<(), JsValue> {
+    let buttons = root.query_selector_all(".offered-action > button.offered[data-action-kind]")?;
+    let inspection_kind = (rpc::GameplayActionKind::ExamineHarborSeal as i32).to_string();
+    for index in 0..buttons.length() {
+        let Some(button) = buttons
+            .item(index)
+            .and_then(|item| item.dyn_into::<Element>().ok())
+        else {
+            continue;
+        };
+        if button.get_attribute("data-action-kind").as_deref() == Some(inspection_kind.as_str()) {
+            button.set_text_content(Some("Do this"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,34 +126,4 @@ mod tests {
         assert_eq!(send.text_content().as_deref(), Some("Send"));
         assert_eq!(inspect.text_content().as_deref(), Some("Do this"));
     }
-}
-
-fn simplify_composer(root: &Element) -> Result<(), JsValue> {
-    if let Some(summary) = root.query_selector(".live-dock details.say-more > summary")? {
-        summary.set_attribute("hidden", "")?;
-    }
-    if let Some(editor) = root.query_selector(".dialogue-recovery .dialogue-draft")? {
-        editor.set_attribute("placeholder", ACTION_PLACEHOLDER)?;
-    }
-    if let Some(send) = root.query_selector(".dialogue-recovery [data-dialogue=submit]")? {
-        send.set_text_content(Some("Send"));
-    }
-    Ok(())
-}
-
-fn label_inspection_submit(root: &Element) -> Result<(), JsValue> {
-    let buttons = root.query_selector_all(".offered-action > button.offered[data-action-kind]")?;
-    let inspection_kind = (rpc::GameplayActionKind::ExamineHarborSeal as i32).to_string();
-    for index in 0..buttons.length() {
-        let Some(button) = buttons
-            .item(index)
-            .and_then(|item| item.dyn_into::<Element>().ok())
-        else {
-            continue;
-        };
-        if button.get_attribute("data-action-kind").as_deref() == Some(inspection_kind.as_str()) {
-            button.set_text_content(Some("Do this"));
-        }
-    }
-    Ok(())
 }

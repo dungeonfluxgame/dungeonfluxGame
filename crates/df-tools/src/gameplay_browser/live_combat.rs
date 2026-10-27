@@ -136,21 +136,6 @@ fn player_facing_rules_note(note: &str) -> String {
     player_note
 }
 
-#[cfg(test)]
-mod rules_note_tests {
-    use super::player_facing_rules_note;
-
-    #[test]
-    fn rewords_every_disclosed_gap_and_custom_rule_without_ids() {
-        let note = "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die. Disclosed gap giant-rat: Keen Smell is not modelled (no scent tracking). Disclosed gap goblin-warrior: Nimble Escape is not modelled (no bonus actions). Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres. Disclosed custom rule potion-weight: healing potions weigh less.";
-
-        assert_eq!(
-            player_facing_rules_note(note),
-            "Fights use a grid: movement, range and cover follow the 2024 rules. A hero at 0 hit points makes death saves. Not used here: Keen Smell is not modelled (no scent tracking). Not used here: Nimble Escape is not modelled (no bonus actions). House rule: cover is adjudicated along the segment between cell centres. House rule: healing potions weigh less."
-        );
-    }
-}
-
 /// The accepted view parts a live screen presents.
 pub(super) struct LiveView<'a> {
     pub(super) surface: &'a Element,
@@ -572,4 +557,19 @@ pub(super) fn dispose(client: &mut Client) -> Result<(), JsValue> {
     }
     live_battlefield::release();
     cleanup.map(|_| ())
+}
+
+#[cfg(test)]
+mod rules_note_tests {
+    use super::player_facing_rules_note;
+
+    #[test]
+    fn rewords_every_disclosed_gap_and_custom_rule_without_ids() {
+        let note = "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die. Disclosed gap giant-rat: Keen Smell is not modelled (no scent tracking). Disclosed gap goblin-warrior: Nimble Escape is not modelled (no bonus actions). Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres. Disclosed custom rule potion-weight: healing potions weigh less.";
+
+        assert_eq!(
+            player_facing_rules_note(note),
+            "Fights use a grid: movement, range and cover follow the 2024 rules. A hero at 0 hit points makes death saves. Not used here: Keen Smell is not modelled (no scent tracking). Not used here: Nimble Escape is not modelled (no bonus actions). House rule: cover is adjudicated along the segment between cell centres. House rule: healing potions weigh less."
+        );
+    }
 }

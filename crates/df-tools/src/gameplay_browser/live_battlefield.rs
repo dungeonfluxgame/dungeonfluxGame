@@ -3811,240 +3811,6 @@ fn cell_of((col, row): GridCell) -> Option<Cell> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Cell, LIVE, has_pending, now_ms};
-
-    #[test]
-    fn large_and_huge_target_highlights_cover_the_supplied_north_west_footprint() {
-        for (size, extent) in [
-            (rpc::CreatureSize::Medium, 1),
-            (rpc::CreatureSize::Large, 2),
-            (rpc::CreatureSize::Huge, 3),
-        ] {
-            let member = rpc::PartyMemberView {
-                size: size as i32,
-                cell: Some(rpc::GridCell { col: 4, row: 2 }),
-                ..Default::default()
-            };
-            let cells = super::participant_cells(&member);
-            assert_eq!(cells.len(), (extent * extent) as usize);
-            assert!(cells.contains(&Cell::new(4, 2)));
-            assert!(cells.contains(&Cell::new(4 + extent - 1, 2 + extent - 1)));
-        }
-    }
-
-    use df_protocol::common as rpc;
-
-    #[test]
-    fn a_late_scene_fighter_depiction_reaches_the_next_snapshot() {
-        let member = rpc::PartyMemberView {
-            name: "Jessa".to_owned(),
-            portrait: "portrait-shop-soldier".to_owned(),
-            ..Default::default()
-        };
-        let mut scene = rpc::GameplayScene {
-            cast: vec![rpc::SceneActor {
-                name: member.name.clone(),
-                portrait: member.portrait.clone(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        assert_eq!(
-            super::participant_live_art(&member, false, &scene, &[]),
-            None
-        );
-
-        let ready = format!("/gameplay/imagery/{}", "a".repeat(64));
-        scene.cast[0].live_sprite = ready.clone();
-        assert_eq!(
-            super::participant_live_art(&member, false, &scene, &[]),
-            Some(ready)
-        );
-        let mut stage = df_render::battle::Stage::new(
-            df_render::battle::load_embedded("salt-quay")
-                .unwrap()
-                .unwrap(),
-        );
-        let fighter = df_render::battle::Member {
-            id: "jessa".to_owned(),
-            name: member.name.clone(),
-            side: super::Side::Enemy,
-            hit_points: 11,
-            maximum_hit_points: 11,
-            height_m: super::PERSON_HEIGHT_M,
-            figure: None,
-            portrait: None,
-            attack: super::AttackStyle::Melee,
-            voice: None,
-            cell: None,
-            position_sequence: 0,
-            statuses: Vec::new(),
-        };
-        let mut hero = fighter.clone();
-        hero.id = "hero".to_owned();
-        hero.name = "Brakka".to_owned();
-        hero.side = super::Side::Hero;
-        let mut snapshot = df_render::battle::CombatSnapshot {
-            members: vec![hero, fighter],
-            ..Default::default()
-        };
-        let mut feed = df_render::battle::CombatFeed::default();
-        assert!(feed.apply(&mut stage, &snapshot).is_some());
-        stage.skip_to_idle();
-        let cell = stage
-            .tokens()
-            .find(|token| token.name == "Jessa")
-            .unwrap()
-            .cell;
-        let ready = super::participant_live_art(&member, false, &scene, &[]).unwrap();
-        snapshot.members[1].figure = Some(ready.clone());
-        snapshot.members[1].portrait = Some(ready.clone());
-        assert!(feed.apply(&mut stage, &snapshot).is_some());
-        let token = stage.tokens().find(|token| token.name == "Jessa").unwrap();
-        assert_eq!(token.figure.as_deref(), Some(ready.as_str()));
-        assert_eq!(token.portrait.as_deref(), Some(ready.as_str()));
-        assert_eq!(token.cell, cell);
-        assert_eq!(stage.tokens().count(), 2);
-        // A different person's art cannot answer this participant.
-        scene.cast[0].portrait = "portrait-shop-adventurer".to_owned();
-        assert_eq!(
-            super::participant_live_art(&member, false, &scene, &[]),
-            None
-        );
-    }
-
-    #[test]
-    fn world_floor_centre_is_open_in_the_largest_connected_area() {
-        use df_render::battle::{self, Vec3};
-        let mut vertices = Vec::new();
-        let mut triangles = Vec::new();
-        for (col, row) in (0..3)
-            .flat_map(|row| (0..3).map(move |col| (col, row)))
-            .filter(|cell| *cell != (1, 1))
-            .chain([(10, 10)])
-        {
-            let offset = vertices.len() as u32;
-            let (x, z) = (col as f32, row as f32);
-            vertices.extend([
-                Vec3::new(x, 0.0, z),
-                Vec3::new(x, 0.0, z + 1.0),
-                Vec3::new(x + 1.0, 0.0, z),
-                Vec3::new(x + 1.0, 0.0, z + 1.0),
-            ]);
-            triangles.extend([
-                [offset, offset + 1, offset + 2],
-                [offset + 2, offset + 1, offset + 3],
-            ]);
-        }
-        let mesh = battle::ColliderMesh::from_triangles(vertices, triangles).unwrap();
-        let grid = battle::world_grid(
-            &mesh,
-            &battle::SplatTransform::IDENTITY,
-            &battle::WorldGridSettings {
-                cell_m: 1.0,
-                ..Default::default()
-            },
-            None,
-        )
-        .unwrap();
-        assert_eq!(grid.largest_open_area().unwrap().squares, 8);
-        // The centre of this ring has no floor. Choose the nearest open square, with a stable tie.
-        assert_eq!(super::open_floor_centre(&grid), Some([1.5, 0.5]));
-    }
-
-    #[test]
-    fn battlefield_uses_the_party_maximum_for_a_hero_health_bar() {
-        let party = [rpc::PartyMemberView {
-            name: "Brakka".to_owned(),
-            maximum_hit_points: 13,
-            ..Default::default()
-        }];
-        let combat = rpc::PartyMemberView {
-            name: "Brakka".to_owned(),
-            maximum_hit_points: 11,
-            ..Default::default()
-        };
-
-        assert_eq!(super::member_maximum_hit_points(&combat, &party), 13);
-        assert_eq!(
-            crate::gameplay_browser::live_health::display_tier(Some((13, 13)), false),
-            Some(crate::health_tier::HealthTier::Healthy)
-        );
-    }
-
-    #[test]
-    fn reaction_prompt_names_the_mover_reactor_and_server_countdown() {
-        assert_eq!(
-            super::reaction_prompt("Brakka", "Sigrun", Some(7)),
-            "Sigrun decides: Opportunity attack as Brakka moves (7s remaining)"
-        );
-    }
-
-    #[test]
-    fn tv_status_badges_spell_out_unconscious_and_bloodied() {
-        let css = include_str!("live_battlefield.css");
-
-        assert!(css.contains("content:\"Unconscious\""));
-        assert!(css.contains("content:\"Bloodied\""));
-    }
-
-    #[test]
-    fn attack_card_and_float_layout_fit_compact_and_tv_viewports() {
-        let css = include_str!("live_battlefield.css");
-        assert!(css.contains(
-            "[data-attack-card=open] .combat-roll-panel .combat-roll{visibility:visible!important}"
-        ));
-        assert!(css.contains("width:min(92vw,calc(var(--u)*76))"));
-        assert!(css.contains("left:50%;right:auto"));
-        assert!(css.contains("max-width:min(51%,calc(100vw - 2 * clamp(12px,3vw,40px)))"));
-
-        for (viewport_width, viewport_height) in [(800.0_f32, 574.0_f32), (1920.0, 1080.0)] {
-            let unit = (viewport_width * 0.01).min(viewport_height * 0.017_778);
-            let card_width = (viewport_width * 0.92).min(unit * 76.0);
-            let card_left = (viewport_width - card_width) * 0.5;
-            let safe_gutter = (viewport_width * 0.03).clamp(12.0, 40.0);
-            let float_max_width = (viewport_width * 0.51).min(viewport_width - safe_gutter * 2.0);
-
-            assert!(card_left >= safe_gutter);
-            assert!(card_left + card_width <= viewport_width - safe_gutter);
-            assert!(float_max_width <= viewport_width - safe_gutter * 2.0);
-        }
-    }
-
-    #[test]
-    fn tv_roll_hides_stale_dm_caption_while_the_card_is_visible() {
-        let css = include_str!("live_tv.css");
-
-        assert!(css.contains(".live-screen[data-role=display]:has(.tv-roll) .tv-dm{display:none}"));
-    }
-
-    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
-    #[test]
-    fn held_enemy_move_keeps_the_beat_unpresented_until_its_attack() {
-        let previous = LIVE.with(|live| {
-            let mut live = live.borrow_mut();
-            let pending_cues = std::mem::replace(&mut live.pending_cues, 0);
-            let held_moves = std::mem::replace(
-                &mut live.held_moves,
-                vec![("Weasel 1".to_owned(), Cell::new(1, 1), now_ms())],
-            );
-            (pending_cues, held_moves)
-        });
-
-        let has_pending_move = has_pending();
-
-        LIVE.with(|live| {
-            let mut live = live.borrow_mut();
-            live.pending_cues = previous.0;
-            live.held_moves = previous.1;
-        });
-
-        assert!(has_pending_move);
-    }
-}
-
 /// Applies the latest accepted snapshot again: called when a turn's beats are over so the turn
 /// label and marker follow the server's active combatant.
 pub(super) fn resync() {
@@ -4336,4 +4102,238 @@ fn battle_component(
     reason: &'static str,
 ) {
     super::presentation_timing::component(element, component, id, scene, phase, reason, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cell, LIVE, has_pending, now_ms};
+
+    #[test]
+    fn large_and_huge_target_highlights_cover_the_supplied_north_west_footprint() {
+        for (size, extent) in [
+            (rpc::CreatureSize::Medium, 1),
+            (rpc::CreatureSize::Large, 2),
+            (rpc::CreatureSize::Huge, 3),
+        ] {
+            let member = rpc::PartyMemberView {
+                size: size as i32,
+                cell: Some(rpc::GridCell { col: 4, row: 2 }),
+                ..Default::default()
+            };
+            let cells = super::participant_cells(&member);
+            assert_eq!(cells.len(), (extent * extent) as usize);
+            assert!(cells.contains(&Cell::new(4, 2)));
+            assert!(cells.contains(&Cell::new(4 + extent - 1, 2 + extent - 1)));
+        }
+    }
+
+    use df_protocol::common as rpc;
+
+    #[test]
+    fn a_late_scene_fighter_depiction_reaches_the_next_snapshot() {
+        let member = rpc::PartyMemberView {
+            name: "Jessa".to_owned(),
+            portrait: "portrait-shop-soldier".to_owned(),
+            ..Default::default()
+        };
+        let mut scene = rpc::GameplayScene {
+            cast: vec![rpc::SceneActor {
+                name: member.name.clone(),
+                portrait: member.portrait.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            None
+        );
+
+        let ready = format!("/gameplay/imagery/{}", "a".repeat(64));
+        scene.cast[0].live_sprite = ready.clone();
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            Some(ready)
+        );
+        let mut stage = df_render::battle::Stage::new(
+            df_render::battle::load_embedded("salt-quay")
+                .unwrap()
+                .unwrap(),
+        );
+        let fighter = df_render::battle::Member {
+            id: "jessa".to_owned(),
+            name: member.name.clone(),
+            side: super::Side::Enemy,
+            hit_points: 11,
+            maximum_hit_points: 11,
+            height_m: super::PERSON_HEIGHT_M,
+            figure: None,
+            portrait: None,
+            attack: super::AttackStyle::Melee,
+            voice: None,
+            cell: None,
+            position_sequence: 0,
+            statuses: Vec::new(),
+        };
+        let mut hero = fighter.clone();
+        hero.id = "hero".to_owned();
+        hero.name = "Brakka".to_owned();
+        hero.side = super::Side::Hero;
+        let mut snapshot = df_render::battle::CombatSnapshot {
+            members: vec![hero, fighter],
+            ..Default::default()
+        };
+        let mut feed = df_render::battle::CombatFeed::default();
+        assert!(feed.apply(&mut stage, &snapshot).is_some());
+        stage.skip_to_idle();
+        let cell = stage
+            .tokens()
+            .find(|token| token.name == "Jessa")
+            .unwrap()
+            .cell;
+        let ready = super::participant_live_art(&member, false, &scene, &[]).unwrap();
+        snapshot.members[1].figure = Some(ready.clone());
+        snapshot.members[1].portrait = Some(ready.clone());
+        assert!(feed.apply(&mut stage, &snapshot).is_some());
+        let token = stage.tokens().find(|token| token.name == "Jessa").unwrap();
+        assert_eq!(token.figure.as_deref(), Some(ready.as_str()));
+        assert_eq!(token.portrait.as_deref(), Some(ready.as_str()));
+        assert_eq!(token.cell, cell);
+        assert_eq!(stage.tokens().count(), 2);
+        // A different person's art cannot answer this participant.
+        scene.cast[0].portrait = "portrait-shop-adventurer".to_owned();
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn world_floor_centre_is_open_in_the_largest_connected_area() {
+        use df_render::battle::{self, Vec3};
+        let mut vertices = Vec::new();
+        let mut triangles = Vec::new();
+        for (col, row) in (0..3)
+            .flat_map(|row| (0..3).map(move |col| (col, row)))
+            .filter(|cell| *cell != (1, 1))
+            .chain([(10, 10)])
+        {
+            let offset = vertices.len() as u32;
+            let (x, z) = (col as f32, row as f32);
+            vertices.extend([
+                Vec3::new(x, 0.0, z),
+                Vec3::new(x, 0.0, z + 1.0),
+                Vec3::new(x + 1.0, 0.0, z),
+                Vec3::new(x + 1.0, 0.0, z + 1.0),
+            ]);
+            triangles.extend([
+                [offset, offset + 1, offset + 2],
+                [offset + 2, offset + 1, offset + 3],
+            ]);
+        }
+        let mesh = battle::ColliderMesh::from_triangles(vertices, triangles).unwrap();
+        let grid = battle::world_grid(
+            &mesh,
+            &battle::SplatTransform::IDENTITY,
+            &battle::WorldGridSettings {
+                cell_m: 1.0,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(grid.largest_open_area().unwrap().squares, 8);
+        // The centre of this ring has no floor. Choose the nearest open square, with a stable tie.
+        assert_eq!(super::open_floor_centre(&grid), Some([1.5, 0.5]));
+    }
+
+    #[test]
+    fn battlefield_uses_the_party_maximum_for_a_hero_health_bar() {
+        let party = [rpc::PartyMemberView {
+            name: "Brakka".to_owned(),
+            maximum_hit_points: 13,
+            ..Default::default()
+        }];
+        let combat = rpc::PartyMemberView {
+            name: "Brakka".to_owned(),
+            maximum_hit_points: 11,
+            ..Default::default()
+        };
+
+        assert_eq!(super::member_maximum_hit_points(&combat, &party), 13);
+        assert_eq!(
+            crate::gameplay_browser::live_health::display_tier(Some((13, 13)), false),
+            Some(crate::health_tier::HealthTier::Healthy)
+        );
+    }
+
+    #[test]
+    fn reaction_prompt_names_the_mover_reactor_and_server_countdown() {
+        assert_eq!(
+            super::reaction_prompt("Brakka", "Sigrun", Some(7)),
+            "Sigrun decides: Opportunity attack as Brakka moves (7s remaining)"
+        );
+    }
+
+    #[test]
+    fn tv_status_badges_spell_out_unconscious_and_bloodied() {
+        let css = include_str!("live_battlefield.css");
+
+        assert!(css.contains("content:\"Unconscious\""));
+        assert!(css.contains("content:\"Bloodied\""));
+    }
+
+    #[test]
+    fn attack_card_and_float_layout_fit_compact_and_tv_viewports() {
+        let css = include_str!("live_battlefield.css");
+        assert!(css.contains(
+            "[data-attack-card=open] .combat-roll-panel .combat-roll{visibility:visible!important}"
+        ));
+        assert!(css.contains("width:min(92vw,calc(var(--u)*76))"));
+        assert!(css.contains("left:50%;right:auto"));
+        assert!(css.contains("max-width:min(51%,calc(100vw - 2 * clamp(12px,3vw,40px)))"));
+
+        for (viewport_width, viewport_height) in [(800.0_f32, 574.0_f32), (1920.0, 1080.0)] {
+            let unit = (viewport_width * 0.01).min(viewport_height * 0.017_778);
+            let card_width = (viewport_width * 0.92).min(unit * 76.0);
+            let card_left = (viewport_width - card_width) * 0.5;
+            let safe_gutter = (viewport_width * 0.03).clamp(12.0, 40.0);
+            let float_max_width = (viewport_width * 0.51).min(viewport_width - safe_gutter * 2.0);
+
+            assert!(card_left >= safe_gutter);
+            assert!(card_left + card_width <= viewport_width - safe_gutter);
+            assert!(float_max_width <= viewport_width - safe_gutter * 2.0);
+        }
+    }
+
+    #[test]
+    fn tv_roll_hides_stale_dm_caption_while_the_card_is_visible() {
+        let css = include_str!("live_tv.css");
+
+        assert!(css.contains(".live-screen[data-role=display]:has(.tv-roll) .tv-dm{display:none}"));
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn held_enemy_move_keeps_the_beat_unpresented_until_its_attack() {
+        let previous = LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            let pending_cues = std::mem::replace(&mut live.pending_cues, 0);
+            let held_moves = std::mem::replace(
+                &mut live.held_moves,
+                vec![("Weasel 1".to_owned(), Cell::new(1, 1), now_ms())],
+            );
+            (pending_cues, held_moves)
+        });
+
+        let has_pending_move = has_pending();
+
+        LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            live.pending_cues = previous.0;
+            live.held_moves = previous.1;
+        });
+
+        assert!(has_pending_move);
+    }
 }

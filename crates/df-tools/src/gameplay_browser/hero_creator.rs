@@ -2092,7 +2092,6 @@ mod tests {
                     species_id: "dwarf".to_owned(),
                     class_id: "fighter".to_owned(),
                     background_id: "soldier".to_owned(),
-                    ..Default::default()
                 }],
                 ..Default::default()
             },
@@ -2334,7 +2333,6 @@ mod tests {
                 option_id: "dwarf".to_owned(),
                 ..Default::default()
             }],
-            ..Default::default()
         };
         assert_eq!(
             missing_choices("", std::slice::from_ref(&group), &[]),
@@ -2406,7 +2404,6 @@ mod tests {
                 label: "Dwarf".to_owned(),
                 ..Default::default()
             }],
-            ..Default::default()
         };
         let initial = IdentityDraft {
             public_description: String::new(),

@@ -1488,6 +1488,71 @@ fn render_scene_contents(
     Ok(())
 }
 
+/// The join screen before a player has a seat: the same lobby surface in its invitation stage.
+pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let (document, view, code, join_scene_asset, has_request, retries) = {
+        let mut state = client.borrow_mut();
+        clear_callbacks(&mut state);
+        (
+            state.document.clone(),
+            state
+                .root
+                .query_selector(".view")?
+                .ok_or_else(|| JsValue::from_str("view missing"))?,
+            state.room_code.clone(),
+            state.root.get_attribute("data-join-scene-asset"),
+            state.join_request.is_some(),
+            state.join_retries,
+        )
+    };
+    let retired = {
+        let mut state = client.borrow_mut();
+        let exploration = state.live.exploration.take();
+        let tv = state.live.tv.take();
+        (exploration, tv)
+    };
+    if let Some(exploration) = retired.0 {
+        exploration.dispose()?;
+    }
+    if let Some(tv) = retired.1 {
+        tv.dispose()?;
+    }
+    prepare_mount(client, &view)?;
+    let model = LobbyModel {
+        stage: JoinStage::Invitation,
+        title: "Join the table".to_owned(),
+        narration: "Connect to the shared room and create your own hero.".to_owned(),
+        scene_asset: validated_join_scene_asset(join_scene_asset.as_deref()),
+        code,
+        join_url: String::new(),
+        join_label: if retries >= crate::reconnect::JOIN_RETRIES {
+            "Try again"
+        } else if has_request {
+            "Confirm the same join"
+        } else {
+            "Join this room"
+        },
+        panel_heading: "Join your companions",
+        panel_description: "Enter the room code from the TV.",
+        members: Vec::new(),
+        away_heroes: client.borrow().away_heroes.clone(),
+        offer: None,
+    };
+    LobbyScreen::present(client, &view, &model)?;
+    for hero in &model.away_heroes {
+        let hero = hero.clone();
+        let key = hex(&hero.seat_token);
+        if let Some(button) = view.query_selector(&format!("[data-reclaim-key='{key}']"))? {
+            bind_click(client, &button, move |client| {
+                seat_recovery::ask_for_code(client, hero.clone())
+            })?;
+        }
+    }
+    let dock = ensure_dock(&document, &view)?;
+    dock.set_text_content(None);
+    recovery_details(client, &dock)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::rpc;
@@ -2279,69 +2344,4 @@ mod tests {
     fn end_card_does_not_wait_for_a_contact_when_the_scene_has_none() {
         assert!(end_card_contact_ready(&rpc::GameplayScene::default(), None));
     }
-}
-
-/// The join screen before a player has a seat: the same lobby surface in its invitation stage.
-pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, view, code, join_scene_asset, has_request, retries) = {
-        let mut state = client.borrow_mut();
-        clear_callbacks(&mut state);
-        (
-            state.document.clone(),
-            state
-                .root
-                .query_selector(".view")?
-                .ok_or_else(|| JsValue::from_str("view missing"))?,
-            state.room_code.clone(),
-            state.root.get_attribute("data-join-scene-asset"),
-            state.join_request.is_some(),
-            state.join_retries,
-        )
-    };
-    let retired = {
-        let mut state = client.borrow_mut();
-        let exploration = state.live.exploration.take();
-        let tv = state.live.tv.take();
-        (exploration, tv)
-    };
-    if let Some(exploration) = retired.0 {
-        exploration.dispose()?;
-    }
-    if let Some(tv) = retired.1 {
-        tv.dispose()?;
-    }
-    prepare_mount(client, &view)?;
-    let model = LobbyModel {
-        stage: JoinStage::Invitation,
-        title: "Join the table".to_owned(),
-        narration: "Connect to the shared room and create your own hero.".to_owned(),
-        scene_asset: validated_join_scene_asset(join_scene_asset.as_deref()),
-        code,
-        join_url: String::new(),
-        join_label: if retries >= crate::reconnect::JOIN_RETRIES {
-            "Try again"
-        } else if has_request {
-            "Confirm the same join"
-        } else {
-            "Join this room"
-        },
-        panel_heading: "Join your companions",
-        panel_description: "Enter the room code from the TV.",
-        members: Vec::new(),
-        away_heroes: client.borrow().away_heroes.clone(),
-        offer: None,
-    };
-    LobbyScreen::present(client, &view, &model)?;
-    for hero in &model.away_heroes {
-        let hero = hero.clone();
-        let key = hex(&hero.seat_token);
-        if let Some(button) = view.query_selector(&format!("[data-reclaim-key='{key}']"))? {
-            bind_click(client, &button, move |client| {
-                seat_recovery::ask_for_code(client, hero.clone())
-            })?;
-        }
-    }
-    let dock = ensure_dock(&document, &view)?;
-    dock.set_text_content(None);
-    recovery_details(client, &dock)
 }

@@ -3579,11 +3579,11 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
             }
         }
     }
-    if role == "display" {
-        if let Some(code) = clean_room_code(&journey.room_code) {
-            client.borrow_mut().room_code = code;
-            seat_recovery::ensure_poll(client)?;
-        }
+    if role == "display"
+        && let Some(code) = clean_room_code(&journey.room_code)
+    {
+        client.borrow_mut().room_code = code;
+        seat_recovery::ensure_poll(client)?;
     }
     let dead_hero = role == "player" && is_dead_hero(&journey);
     if let Some(own) = journey.own_character.as_ref() {

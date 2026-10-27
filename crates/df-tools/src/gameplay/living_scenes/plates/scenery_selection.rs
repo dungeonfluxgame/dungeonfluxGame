@@ -9,7 +9,7 @@ pub(crate) fn saved_option<'a>(
         .map(|option| option.option_id.as_str())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

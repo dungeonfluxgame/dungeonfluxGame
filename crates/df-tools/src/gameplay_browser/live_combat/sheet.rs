@@ -352,113 +352,6 @@ fn compact_equipment_detail(item: &rpc::SceneItemCard) -> String {
     details.join(" · ")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn equipment_detail_shows_repeated_quantity_and_current_weapon_readiness() {
-        let drawn = rpc::SceneItemCard {
-            detail: "Quantity: 1. Dagger. It is drawn and ready in hand.".to_owned(),
-            picture_description: "Dagger, drawn and ready in hand by Mira".to_owned(),
-            ..Default::default()
-        };
-        let stacked = rpc::SceneItemCard {
-            detail: "Quantity: 4. Rations. It is stowed; not in hand.".to_owned(),
-            picture_description: "Rations, stowed; not in hand by Mira".to_owned(),
-            ..Default::default()
-        };
-
-        assert_eq!(compact_equipment_detail(&drawn), "Drawn");
-        assert_eq!(compact_equipment_detail(&stacked), "4 ×");
-    }
-
-    // SRD 5.2.1 pp. 47, 83–84: Fighter training, Soldier skills, and Dwarf traits.
-    #[test]
-    fn srd_p47_p83_p84_character_facts_have_readable_sections() {
-        let facts = [
-            "STR",
-            "Saving throw proficiencies",
-            "Soldier skill proficiencies",
-            "Proficiency Bonus",
-            "Armor training",
-            "Size",
-        ]
-        .into_iter()
-        .map(|label| rpc::SheetFact {
-            label: label.to_owned(),
-            value: "recorded".to_owned(),
-        })
-        .collect();
-        let sheet = rpc::CharacterSheet {
-            facts,
-            ..Default::default()
-        };
-
-        let sections = sections(&sheet);
-        for title in [
-            "Abilities and saves",
-            "Skills",
-            "Combat",
-            "Equipment",
-            "Features and traits",
-        ] {
-            assert!(sections.iter().any(|section| section.title == title));
-        }
-    }
-
-    #[test]
-    fn hero_sheet_equipment_rows_hide_starting_kit_history_and_keep_compact_item_details() {
-        let sheet = rpc::CharacterSheet {
-            facts: vec![rpc::SheetFact {
-                label: "Starting equipment".to_owned(),
-                value: "Long starting kit paragraph".to_owned(),
-            }],
-            owned_items: vec![rpc::SceneItemCard {
-                thing_id: "equipment-1".to_owned(),
-                name: "Dagger".to_owned(),
-                detail: "Quantity: 2. Dagger. It is sheathed or slung; no blade in hand."
-                    .to_owned(),
-                picture_description: "Dagger, sheathed or slung; no blade in hand by Mira"
-                    .to_owned(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let equipment = sections(&sheet)
-            .into_iter()
-            .find(|section| section.key == "equipment")
-            .expect("equipment section exists");
-
-        assert!(
-            !equipment
-                .rows
-                .iter()
-                .any(|row| row.title == "Starting equipment")
-        );
-        assert_eq!(equipment.rows[0].title, "Dagger");
-        assert_eq!(equipment.rows[0].value, "2 × · Sheathed");
-    }
-
-    #[test]
-    fn hero_summary_condition_comes_from_the_accepted_sheet() {
-        let sheet = rpc::CharacterSheet {
-            facts: vec![rpc::SheetFact {
-                label: "Condition".to_owned(),
-                value: "Poisoned".to_owned(),
-            }],
-            ..Default::default()
-        };
-
-        assert_eq!(
-            condition_text(&sheet).as_deref(),
-            Some("Condition · Poisoned")
-        );
-        assert_eq!(condition_text(&rpc::CharacterSheet::default()), None);
-    }
-}
-
 fn with_view<T>(
     sheet: &rpc::CharacterSheet,
     owner: u64,
@@ -885,5 +778,112 @@ pub(in crate::gameplay_browser) fn sync(client: &Rc<RefCell<Client>>) -> Result<
             );
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equipment_detail_shows_repeated_quantity_and_current_weapon_readiness() {
+        let drawn = rpc::SceneItemCard {
+            detail: "Quantity: 1. Dagger. It is drawn and ready in hand.".to_owned(),
+            picture_description: "Dagger, drawn and ready in hand by Mira".to_owned(),
+            ..Default::default()
+        };
+        let stacked = rpc::SceneItemCard {
+            detail: "Quantity: 4. Rations. It is stowed; not in hand.".to_owned(),
+            picture_description: "Rations, stowed; not in hand by Mira".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(compact_equipment_detail(&drawn), "Drawn");
+        assert_eq!(compact_equipment_detail(&stacked), "4 ×");
+    }
+
+    // SRD 5.2.1 pp. 47, 83–84: Fighter training, Soldier skills, and Dwarf traits.
+    #[test]
+    fn srd_p47_p83_p84_character_facts_have_readable_sections() {
+        let facts = [
+            "STR",
+            "Saving throw proficiencies",
+            "Soldier skill proficiencies",
+            "Proficiency Bonus",
+            "Armor training",
+            "Size",
+        ]
+        .into_iter()
+        .map(|label| rpc::SheetFact {
+            label: label.to_owned(),
+            value: "recorded".to_owned(),
+        })
+        .collect();
+        let sheet = rpc::CharacterSheet {
+            facts,
+            ..Default::default()
+        };
+
+        let sections = sections(&sheet);
+        for title in [
+            "Abilities and saves",
+            "Skills",
+            "Combat",
+            "Equipment",
+            "Features and traits",
+        ] {
+            assert!(sections.iter().any(|section| section.title == title));
+        }
+    }
+
+    #[test]
+    fn hero_sheet_equipment_rows_hide_starting_kit_history_and_keep_compact_item_details() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![rpc::SheetFact {
+                label: "Starting equipment".to_owned(),
+                value: "Long starting kit paragraph".to_owned(),
+            }],
+            owned_items: vec![rpc::SceneItemCard {
+                thing_id: "equipment-1".to_owned(),
+                name: "Dagger".to_owned(),
+                detail: "Quantity: 2. Dagger. It is sheathed or slung; no blade in hand."
+                    .to_owned(),
+                picture_description: "Dagger, sheathed or slung; no blade in hand by Mira"
+                    .to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let equipment = sections(&sheet)
+            .into_iter()
+            .find(|section| section.key == "equipment")
+            .expect("equipment section exists");
+
+        assert!(
+            !equipment
+                .rows
+                .iter()
+                .any(|row| row.title == "Starting equipment")
+        );
+        assert_eq!(equipment.rows[0].title, "Dagger");
+        assert_eq!(equipment.rows[0].value, "2 × · Sheathed");
+    }
+
+    #[test]
+    fn hero_summary_condition_comes_from_the_accepted_sheet() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![rpc::SheetFact {
+                label: "Condition".to_owned(),
+                value: "Poisoned".to_owned(),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            condition_text(&sheet).as_deref(),
+            Some("Condition · Poisoned")
+        );
+        assert_eq!(condition_text(&rpc::CharacterSheet::default()), None);
     }
 }

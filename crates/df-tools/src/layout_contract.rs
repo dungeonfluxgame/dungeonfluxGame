@@ -20,9 +20,9 @@ pub(crate) enum LayoutError {
     Id,
     Limit,
     Revision,
-    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[cfg(not(target_arch = "wasm32"))]
     UnknownId,
-    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[cfg(not(target_arch = "wasm32"))]
     Unavailable,
 }
 impl fmt::Display for LayoutError {
@@ -33,9 +33,9 @@ impl fmt::Display for LayoutError {
             Self::Id => "invalid layout ID",
             Self::Limit => "layout capacity exceeded",
             Self::Revision => "stale or future layout revision",
-            #[cfg(any(not(target_arch = "wasm32"), test))]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::UnknownId => "unknown or stale layout ID; refresh layout list",
-            #[cfg(any(not(target_arch = "wasm32"), test))]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Unavailable => "layout controls unavailable",
         })
     }
@@ -301,13 +301,13 @@ impl MoveRequest {
         Ok(p)
     }
 }
-#[cfg(any(not(target_arch = "wasm32"), test))]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResetRequest {
     pub(crate) id: Option<String>,
 }
-#[cfg(any(not(target_arch = "wasm32"), test))]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VisibilityRequest {
@@ -520,7 +520,7 @@ pub(crate) struct LayoutPage {
     pub(crate) elements: Vec<ElementReadback>,
 }
 impl LayoutPage {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn parse(text: &str) -> Result<Self, LayoutError> {
         if text.len() > MAX_PAGE_BYTES {
             return Err(LayoutError::Limit);

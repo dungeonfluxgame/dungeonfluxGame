@@ -53,7 +53,7 @@ pub(crate) enum AmbientKind {
 }
 
 impl AmbientKind {
-    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const ALL: [Self; 10] = [
         Self::Water,
         Self::Rain,
@@ -82,7 +82,7 @@ impl AmbientKind {
         }
     }
 
-    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn description(self) -> &'static str {
         match self {
             Self::Water => "water moving against the public environment's surfaces",
