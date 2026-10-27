@@ -5,6 +5,9 @@ mod browser;
 pub mod build_set;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dev_cli;
+#[cfg(any(target_arch = "wasm32", test))]
+#[path = "gameplay_browser/dialogue_deadline.rs"]
+mod dialogue_deadline;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fake_profile;
 #[cfg(not(target_arch = "wasm32"))]

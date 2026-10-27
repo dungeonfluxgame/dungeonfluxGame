@@ -16,12 +16,11 @@
 /* A quiet status mark lives in the stage corner while a requested plate is still loading and
    decoding. It is independent of the picture layer, so it remains visible over the establishing
    shot without masking the story or implying progress for a queued or failed request. */
-.tv-plate-loading{position:absolute;z-index:8;top:calc(var(--u)*4.2);left:calc(var(--u)*3.2);display:flex;align-items:center;gap:calc(var(--u)*.7);padding:calc(var(--u)*.45) calc(var(--u)*.7);border:1px solid #d9b77a4d;border-radius:999px;background:#090e14a6;color:#ead7b2;font:400 clamp(14px,calc(var(--u)*.8),18px)/1.1 var(--serif);letter-spacing:.02em;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .55s ease,visibility 0s .55s}
-.tv-plate-loading::before{content:'';width:calc(var(--u)*.7);height:calc(var(--u)*.7);border:1px solid #e8cb94b3;border-right-color:transparent;border-radius:50%;animation:df-plate-loading-turn 1.8s linear infinite}
-.tv-stage[data-tv-mode=scene][data-plate-loading] .tv-plate-loading{opacity:.82;visibility:visible;transition:opacity .55s ease,visibility 0s}
+.tv-plate-loading,.tv-room-loading{position:absolute;z-index:8;top:calc(var(--u)*4.2);left:calc(var(--u)*3.2);display:flex;align-items:center;gap:calc(var(--u)*.7);padding:calc(var(--u)*.45) calc(var(--u)*.7);border:1px solid #d9b77a4d;border-radius:999px;background:#090e14a6;color:#ead7b2;font:400 clamp(14px,calc(var(--u)*.8),18px)/1.1 var(--serif);letter-spacing:.02em;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .55s ease,visibility 0s .55s}
+.tv-plate-loading::before,.tv-room-loading::before{content:'';width:calc(var(--u)*.7);height:calc(var(--u)*.7);border:1px solid #e8cb94b3;border-right-color:transparent;border-radius:50%;animation:df-plate-loading-turn 1.8s linear infinite}
+.tv-stage[data-tv-mode=scene][data-plate-loading] .tv-plate-loading,.tv-stage[data-tv-mode=lobby]:is([data-room-image-pending],[data-place-loading]) .tv-room-loading{opacity:.82;visibility:visible;transition:opacity .55s ease,visibility 0s}
+.tv-stage[data-tv-mode=lobby] .tv-room-loading{top:5vh;left:50%;transform:translateX(-50%)}
 @keyframes df-plate-loading-turn{to{transform:rotate(360deg)}}
-/* The spinner is the only sign the scene is still coming, so it keeps turning, slower, under reduced motion. */
-@media (prefers-reduced-motion:reduce){.tv-plate-loading::before{animation-duration:2.8s}.tv-plate-loading{transition:none}}
 .tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
 .tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:none}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
@@ -145,11 +144,10 @@
 .tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{--plate-scale:var(--tune-narrator-scale,.98);--plate-zoom-duration:var(--tune-narrator-zoom-duration,8s);--plate-zoom-ease:cubic-bezier(.22,.6,.3,1)}
 .tv-stage[data-shot=plate] .tv-plate-drift{animation:df-plate-drift 47s ease-in-out infinite alternate}
 /* A held camera: the faintest uneven sway on the frame, under the image's slow drift, so the picture
-   breathes like a shot rather than a still (owner 2026-10-24). Off with reduced motion or drift off. */
+   breathes like a shot rather than a still (owner 2026-10-24). Off when drift is disabled. */
 .tv-stage[data-shot=plate] .tv-plate-frame{animation:df-plate-handheld var(--tune-handheld-period,9.7s) ease-in-out infinite}
 @keyframes df-plate-handheld{0%,100%{transform:translate(0,0) rotate(0)}17%{transform:translate(calc(.12%*var(--tune-handheld-amount,1)),calc(-.08%*var(--tune-handheld-amount,1))) rotate(calc(.03deg*var(--tune-handheld-amount,1)))}33%{transform:translate(calc(-.06%*var(--tune-handheld-amount,1)),calc(.1%*var(--tune-handheld-amount,1))) rotate(calc(-.02deg*var(--tune-handheld-amount,1)))}52%{transform:translate(calc(.09%*var(--tune-handheld-amount,1)),calc(.05%*var(--tune-handheld-amount,1))) rotate(calc(.04deg*var(--tune-handheld-amount,1)))}71%{transform:translate(calc(-.11%*var(--tune-handheld-amount,1)),calc(-.04%*var(--tune-handheld-amount,1))) rotate(calc(-.03deg*var(--tune-handheld-amount,1)))}86%{transform:translate(calc(.04%*var(--tune-handheld-amount,1)),calc(.09%*var(--tune-handheld-amount,1))) rotate(calc(.01deg*var(--tune-handheld-amount,1)))}}
 .tv-stage[data-fx-drift=off][data-shot=plate] .tv-plate-frame{animation:none}
-@media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-frame{animation:none}}
 .tv-stage[data-shot=plate] .tv-plate-drift[data-i="1"]{animation-duration:53s;animation-direction:alternate-reverse}
 @keyframes df-plate-drift{0%{transform:scale(1.07) translate(-1.4%,-.6%) rotate(-.25deg)}50%{transform:scale(1.1) translate(.4%,.7%) rotate(.1deg)}100%{transform:scale(1.08) translate(1.4%,-.4%) rotate(.3deg)}}
 .tv-plate-vignette::before,.tv-plate-vignette::after{content:'';position:absolute;inset:0;pointer-events:none}
@@ -157,8 +155,6 @@
 .tv-plate-vignette::after{background:radial-gradient(ellipse 45% 40% at 18% 30%,#ffd08a1f,#ffd08a00 70%),radial-gradient(ellipse 40% 36% at 84% 26%,#ffd08a1a,#ffd08a00 70%);mix-blend-mode:screen;animation:df-lanterns 3.7s ease-in-out infinite alternate}
 @keyframes df-firelight{0%{opacity:.75}9%{opacity:1}17%{opacity:.6}26%{opacity:.92}38%{opacity:.7}47%{opacity:1}58%{opacity:.66}69%{opacity:.88}81%{opacity:.62}90%{opacity:.95}}
 @keyframes df-lanterns{0%{opacity:.55}35%{opacity:.85}60%{opacity:.6}100%{opacity:1}}
-/* Camera zoom stays on under reduced motion by preference. */
-@media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-drift,.tv-plate-vignette::before,.tv-plate-vignette::after{animation:none}}
 .live-scene-item{padding:1rem;margin:1rem 0;background:#201c18;color:#eee2ca;border:1px solid #927650;border-radius:.6rem}
 .live-scene-item-name{margin:0 0 .6rem;font-size:1.2rem}
 .live-scene-item-image{display:block;width:100%;max-height:22rem;object-fit:contain;border-radius:.4rem}
@@ -193,7 +189,6 @@
 .tv-check-result[data-check-managed]:is([data-check-phase=result],[data-check-phase=closing]) .tv-check-outcome{opacity:1;visibility:visible}
 .tv-check-result[data-check-managed]:is([data-check-phase=result],[data-check-phase=closing]) .tv-check-finding{opacity:1;visibility:visible}
 @keyframes df-check-card-in{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){.tv-check-result[data-check-managed]{animation:df-check-card-in .25s ease-out backwards;transition:opacity .35s ease-in-out}}
 
 .tv-fig-bubbles[data-anchor-fallback=named-check-panel] .tv-check-result{width:100%}
 
@@ -231,4 +226,3 @@
 .tv-stage[data-shot=plate][data-speaker-focus=on] .tv-plate-img{filter:blur(calc(var(--u)*var(--tune-focus-blur,.18))) saturate(.8) contrast(1.04) brightness(var(--tune-focus-dim,.84))}
 .tv-stage[data-shot=plate][data-speaker-focus=on] .tv-focus-subject{opacity:1}
 .tv-stage[data-shot=plate][data-speaker-focus=on] .tv-focus-rim{opacity:var(--tune-focus-rim-opacity,.16)}
-@media (prefers-reduced-motion:reduce){.tv-speaker-focus>div,.tv-stage[data-shot=plate] .tv-plate-img{transition:none}}

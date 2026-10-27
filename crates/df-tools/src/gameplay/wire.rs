@@ -1808,6 +1808,7 @@ pub(super) fn project_journey(
             hand_items: Vec::new(),
             interior: false,
             floor: None,
+            room_image_pending: false,
         }
     };
     scene.cast = combat_cast(state, &authored, journey.combat.as_mut())?;

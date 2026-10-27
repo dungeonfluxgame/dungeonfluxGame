@@ -101,6 +101,8 @@ pub(super) struct TvModel {
     pub(super) home_video: Option<String>,
     /// PLAY-V09: the scene's composed plate, which replaces the painting and the cut-outs.
     pub(super) plate: PlateView,
+    /// The selected lobby room photograph is being prepared by the server.
+    pub(super) room_image_pending: bool,
     /// PLAY-V12: the adventure's own title, for the establishing shot's title card.
     pub(super) adventure_name: String,
     /// PLAY-V12: the scene has narration, which plays over its establishing shot.
@@ -511,13 +513,16 @@ impl PlacePicture {
         }
         *self.selected.borrow_mut() = Some(candidates.clone());
         self.root.remove_attribute("data-place-request")?;
+        self.root.remove_attribute("data-place-loading")?;
         self.request.borrow_mut().take();
         let Some(first) = candidates.first().cloned() else {
             retain_loaded_place(&self.root);
+            sync_room_loading(&self.root);
             return Ok(());
         };
         if self.root.get_attribute("data-place-picture").as_deref() == Some(first.as_str()) {
             loaded_place_shot(&self.root, true);
+            sync_room_loading(&self.root);
             return Ok(());
         }
         let generation = self
@@ -528,6 +533,8 @@ impl PlacePicture {
         self.generation.set(generation);
         let generation = generation.to_string();
         self.root.set_attribute("data-place-request", &generation)?;
+        self.root.set_attribute("data-place-loading", "")?;
+        sync_room_loading(&self.root);
         let document = self.root.owner_document().ok_or("document absent")?;
         let image = document.create_element("img")?;
         let attempt = Rc::new(RefCell::new(PlaceAttempt::new(
@@ -553,6 +560,8 @@ impl PlacePicture {
                     attempt.borrow_mut().loaded(&scene, generation.as_deref())
                 {
                     let _ = show_loaded_place(&stage, &url);
+                    let _ = stage.remove_attribute("data-place-loading");
+                    sync_room_loading(&stage);
                     loaded_place_shot(&stage, primary);
                 }
             }) as Box<dyn FnMut(Event)>)
@@ -579,7 +588,11 @@ impl PlacePicture {
                     PlaceOutcome::Retry(url) => {
                         let _ = image.set_attribute("src", &url);
                     }
-                    PlaceOutcome::Keep => retain_loaded_place(&stage),
+                    PlaceOutcome::Keep => {
+                        let _ = stage.remove_attribute("data-place-loading");
+                        sync_room_loading(&stage);
+                        retain_loaded_place(&stage);
+                    }
                     PlaceOutcome::Ignore | PlaceOutcome::Show { .. } => {}
                 }
             }) as Box<dyn FnMut(Event)>)
@@ -589,6 +602,50 @@ impl PlacePicture {
         image.set_attribute("src", &first)?;
         *self.request.borrow_mut() = Some(PlaceRequest { image, load, error });
         Ok(())
+    }
+}
+
+fn sync_room_loading(stage: &Element) {
+    let Some(indicator) = stage.query_selector(".tv-room-loading").ok().flatten() else {
+        return;
+    };
+    let visible = stage.get_attribute("data-tv-mode").as_deref() == Some("lobby")
+        && (stage.has_attribute("data-room-image-pending")
+            || stage.has_attribute("data-place-loading"));
+    let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+    let active_scene = indicator.get_attribute("data-loading-component-scene");
+    if let Some(active) = active_scene.as_deref()
+        && (!visible || active != scene)
+    {
+        let id = indicator
+            .get_attribute("data-loading-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+            .unwrap_or_else(super::presentation_timing::next_component_id);
+        super::presentation_timing::component(
+            Some(&indicator),
+            df_observe::presentation::PresentationComponent::ThinkingLoader,
+            id,
+            active,
+            df_observe::presentation::ComponentPhase::Hidden,
+            "settled",
+            0,
+        );
+        let _ = indicator.remove_attribute("data-loading-component-id");
+        let _ = indicator.remove_attribute("data-loading-component-scene");
+    }
+    if visible && active_scene.as_deref() != Some(scene.as_str()) {
+        let id = super::presentation_timing::next_component_id();
+        let _ = indicator.set_attribute("data-loading-component-id", &id.to_string());
+        let _ = indicator.set_attribute("data-loading-component-scene", &scene);
+        super::presentation_timing::component(
+            Some(&indicator),
+            df_observe::presentation::PresentationComponent::ThinkingLoader,
+            id,
+            &scene,
+            df_observe::presentation::ComponentPhase::Opened,
+            "queued",
+            0,
+        );
     }
 }
 
@@ -627,6 +684,7 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
     let visible = plate_loading_visible(
         plate_state.as_deref(),
         stage.has_attribute("data-plate-server-pending"),
+        stage.has_attribute("data-plate-fetching"),
     );
     let was_visible = stage.has_attribute("data-plate-loading");
     if visible {
@@ -1452,6 +1510,16 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
     loading.set_attribute("aria-atomic", "true")?;
     loading.set_attribute("data-layout-id", "plate-loading")?;
     loading.set_attribute("data-layout-owner-id", "plate")?;
+    let room_loading = node(
+        document,
+        stage,
+        "div",
+        "tv-room-loading",
+        "Preparing scene image…",
+    )?;
+    room_loading.set_attribute("role", "status")?;
+    room_loading.set_attribute("aria-live", "polite")?;
+    room_loading.set_attribute("aria-atomic", "true")?;
     node(document, &root, "div", "tv-plate-dust", "")?;
     node(document, &root, "div", "tv-plate-vignette", "")?;
     Ok(PlateLayer {
@@ -1524,10 +1592,7 @@ fn bind_plate_events(
                         return;
                     }
                     if decoded.is_ok() {
-                        if plate_request_matches(&decode_root, &image)
-                            && let Some(request) = decode_root.get_attribute("data-request")
-                            && image.set_attribute("data-decoded", &request).is_ok()
-                        {
+                        if mark_plate_decoded(&decode_stage, &decode_root, image.as_ref()) {
                             super::presentation_timing::media(
                                 "plate-decoded",
                                 &decode_stage
@@ -2112,6 +2177,8 @@ fn activate_plate_request_at(
     let _set = stage.set_attribute("data-plate-loaded", "");
     if let Some(url) = image.get_attribute("data-src") {
         let _ = stage.remove_attribute("data-place-request");
+        let _ = stage.remove_attribute("data-place-loading");
+        sync_room_loading(stage);
         let _ = remember_loaded_place(stage, &url);
         let _ = stage.remove_attribute("data-place-picture-fallback");
     }
@@ -2132,6 +2199,25 @@ fn activate_plate_request_at(
     let _synced = sync_shot(stage);
 }
 
+fn mark_plate_decoded(stage: &Element, root: &Element, image: &Element) -> bool {
+    if !plate_request_matches(root, image) {
+        return false;
+    }
+    let Some(request) = root.get_attribute("data-request") else {
+        return false;
+    };
+    if image.set_attribute("data-decoded", &request).is_err() {
+        return false;
+    }
+    let _ = stage.remove_attribute("data-plate-fetching");
+    sync_plate_loading(
+        stage,
+        None,
+        &stage.get_attribute("data-scene-key").unwrap_or_default(),
+    );
+    true
+}
+
 fn fail_plate_request(
     stage: &Element,
     root: &Element,
@@ -2145,6 +2231,7 @@ fn fail_plate_request(
         return;
     }
     let _removed = root.remove_attribute("data-loading");
+    let _ = stage.remove_attribute("data-plate-fetching");
     sync_plate_loading(
         stage,
         None,
@@ -2701,6 +2788,7 @@ impl TvStage {
                     .root
                     .set_attribute("data-request", &request.to_string())?;
                 self.plate.root.set_attribute("data-loading", "")?;
+                self.root.set_attribute("data-plate-fetching", "")?;
                 sync_plate_loading(
                     &self.root,
                     None,
@@ -3480,11 +3568,17 @@ impl TvStage {
             .set_attribute("data-scene-key", &model.scene_key)?;
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
+        if lobby && model.room_image_pending {
+            self.root.set_attribute("data-room-image-pending", "")?;
+        } else {
+            self.root.remove_attribute("data-room-image-pending")?;
+        }
         self.root
             .set_attribute("data-art-source", model.art_source.label())?;
         self.root
             .set_attribute("data-visual-scene-id", &model.visual_scene_id)?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
+        sync_room_loading(&self.root);
         live_home::apply(&self.root, &self.atmosphere, model.home.as_ref())?;
         // The loop plays only in the lobby; a story scene or a fight never shows it.
         // HOME-01: the loop is paired with the still on screen, so its records name it.
@@ -4269,6 +4363,7 @@ impl TvStage {
         self.root.remove_attribute("data-plate-loaded")?;
         self.root.remove_attribute("data-place-plate-retained")?;
         layer.root.remove_attribute("data-loading")?;
+        self.root.remove_attribute("data-plate-fetching")?;
         layer.root.remove_attribute("data-active")?;
         sync_plate_loading(&self.root, None, scene_key);
         layer.root.remove_attribute("data-want")?;
@@ -4322,6 +4417,7 @@ impl TvStage {
             layer.root.remove_attribute("data-request")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-loading")?;
+            self.root.remove_attribute("data-plate-fetching")?;
             sync_plate_loading(&self.root, None, scene_key);
         }
         let failed = layer.root.get_attribute("data-failed");
@@ -4429,6 +4525,7 @@ impl TvStage {
             .root
             .set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-loading", "")?;
+        self.root.set_attribute("data-plate-fetching", "")?;
         sync_plate_loading(&self.root, None, scene_key);
         image.set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-want-i", &next.to_string())?;
@@ -5185,6 +5282,28 @@ mod tests {
     }
 
     #[test]
+    fn lobby_picture_loading_flag_tracks_success_failure_and_replacement() {
+        let (parent, stage) = mounted_stage();
+        let first = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let second = format!("/gameplay/imagery/{}", "b".repeat(64));
+        stage.root.set_attribute("data-tv-mode", "lobby").unwrap();
+        stage.root.set_attribute("data-scene-key", "lobby").unwrap();
+        stage.set_art(&super::image_layers(&first, "")).unwrap();
+        assert!(stage.root.has_attribute("data-place-loading"));
+        dispatch_loaded_place(&stage);
+        assert!(!stage.root.has_attribute("data-place-loading"));
+        stage.set_art(&super::image_layers(&second, "")).unwrap();
+        assert!(stage.root.has_attribute("data-place-loading"));
+        place_probe(&stage)
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert!(!stage.root.has_attribute("data-place-loading"));
+        stage.set_art(&super::image_layers("", "")).unwrap();
+        assert!(!stage.root.has_attribute("data-place-loading"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
     fn a_failed_first_scene_picture_keeps_the_loaded_lobby_picture_under_its_figures() {
         let (parent, stage) = mounted_stage();
         let harbor = format!("/gameplay/imagery/{}", "a".repeat(64));
@@ -5415,6 +5534,8 @@ mod tests {
         image.set_attribute("data-src", incoming_plate).unwrap();
         image.set_attribute("data-request", "1").unwrap();
         image.set_attribute("data-decoded", "1").unwrap();
+        stage.root.set_attribute("data-place-request", "1").unwrap();
+        stage.root.set_attribute("data-place-loading", "").unwrap();
         super::activate_plate_request_at(
             &stage.root,
             &stage.plate.root,
@@ -5428,6 +5549,7 @@ mod tests {
             stage.root.get_attribute("data-place-picture").as_deref(),
             Some(incoming_plate)
         );
+        assert!(!stage.root.has_attribute("data-place-loading"));
         assert_eq!(set.get_attribute("style"), previous_set);
         assert_eq!(art.get_attribute("style"), previous_art);
         *stage.plate.seen.borrow_mut() = "first".to_owned();
@@ -5950,6 +6072,7 @@ mod tests {
             home: None,
             home_video: None,
             plate: PlateView::default(),
+            room_image_pending: false,
             adventure_name: String::new(),
             narrated: false,
             end: None,
@@ -6013,10 +6136,10 @@ mod tests {
 
     #[test]
     fn ready_plate_suppresses_stale_loading_state() {
-        assert!(!plate_loading_visible(Some("ready"), true));
-        assert!(!plate_loading_visible(Some("failed"), true));
-        assert!(plate_loading_visible(Some("pending"), true));
-        assert!(!plate_loading_visible(Some("pending"), false));
+        assert!(!plate_loading_visible(Some("ready"), true, false));
+        assert!(!plate_loading_visible(Some("failed"), true, false));
+        assert!(plate_loading_visible(Some("pending"), true, false));
+        assert!(!plate_loading_visible(Some("pending"), false, false));
     }
 
     #[test]
@@ -6045,7 +6168,7 @@ mod tests {
                 .apply_plate(
                     &PlateView {
                         state,
-                        // Old same-revision metadata and client decode cannot extend this notice.
+                        // Old same-revision metadata cannot extend the server pending notice.
                         update_pending: true,
                         url: (state == PlateState::Ready)
                             .then(|| "/gameplay/imagery/ready".to_owned()),
@@ -7708,6 +7831,114 @@ mod tests {
         stage.dispose().unwrap();
         frame.remove();
     }
+}
+
+/// Provider-free check of server pending and current plate fetch, decode, and failure.
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+#[cfg_attr(
+    feature = "public-scene-delivery-fixture",
+    wasm_bindgen::prelude::wasm_bindgen
+)]
+pub fn plate_loading_dom_check() -> Result<String, JsValue> {
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| JsValue::from_str("document absent"))?;
+    let parent = document.create_element("section")?;
+    document
+        .body()
+        .ok_or_else(|| JsValue::from_str("body absent"))?
+        .append_child(&parent)?;
+    let result = (|| {
+        let stage = TvStage::mount(&document, &parent)?;
+        stage.root.set_attribute("data-tv-mode", "scene")?;
+        stage.root.set_attribute("data-scene-key", "market")?;
+        stage.set_plate(
+            &PlateView {
+                state: PlateState::Pending,
+                ..Default::default()
+            },
+            "market",
+            true,
+        )?;
+        if !stage.root.has_attribute("data-plate-loading") {
+            return Err(JsValue::from_str("server pending did not show loader"));
+        }
+        let ready = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/market-picture".into()),
+            ..Default::default()
+        };
+        stage.set_plate(&ready, "market", true)?;
+        let index = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| JsValue::from_str("plate frame absent"))?;
+        let image = stage
+            .plate
+            .images
+            .get(index)
+            .ok_or_else(|| JsValue::from_str("plate image absent"))?;
+        let request = image
+            .get_attribute("data-request")
+            .ok_or_else(|| JsValue::from_str("request absent"))?;
+        if !stage.root.has_attribute("data-plate-fetching")
+            || !stage.root.has_attribute("data-plate-loading")
+        {
+            return Err(JsValue::from_str("browser fetch did not show loader"));
+        }
+        image.set_attribute("data-request", "stale")?;
+        if mark_plate_decoded(&stage.root, &stage.plate.root, image)
+            || !stage.root.has_attribute("data-plate-loading")
+        {
+            return Err(JsValue::from_str("stale decode cleared current loader"));
+        }
+        image.set_attribute("data-request", &request)?;
+        if !mark_plate_decoded(&stage.root, &stage.plate.root, image)
+            || stage.root.has_attribute("data-plate-loading")
+        {
+            return Err(JsValue::from_str("current decode did not clear loader"));
+        }
+        stage.root.set_attribute("data-scene-key", "inn")?;
+        let failed = PlateView {
+            url: Some("/gameplay/imagery/inn-picture".into()),
+            ..ready
+        };
+        stage.set_plate(&failed, "inn", true)?;
+        let index = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| JsValue::from_str("failed request frame absent"))?;
+        let image = stage
+            .plate
+            .images
+            .get(index)
+            .ok_or_else(|| JsValue::from_str("failed request image absent"))?;
+        if !stage.root.has_attribute("data-plate-loading") {
+            return Err(JsValue::from_str("replacement fetch did not show loader"));
+        }
+        fail_plate_request(
+            &stage.root,
+            &stage.plate.root,
+            image,
+            &Rc::downgrade(&stage.figures),
+            &stage.plate.pending_layout,
+            &stage.plate.picture_size,
+            "failed",
+        );
+        if stage.root.has_attribute("data-plate-loading")
+            || stage.root.has_attribute("data-plate-fetching")
+        {
+            return Err(JsValue::from_str("failed request kept loader"));
+        }
+        stage.dispose()?;
+        Ok("plate loading: pending, fetch, stale decode, decode and failure passed".to_owned())
+    })();
+    parent.remove();
+    result
 }
 
 /// Executes the real WASM DOM boundary in the owned, provider-free browser fixture.

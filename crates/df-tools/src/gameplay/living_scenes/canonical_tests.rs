@@ -609,6 +609,26 @@ fn run_pack_layout_and_entity_identity_are_distinct_and_unrelated_observations_d
 }
 
 #[test]
+fn room_loading_tracks_only_actionable_selected_room_work() {
+    let mut canonical = references("room-loading");
+    assert!(!canonical.room_pending("same-place", true));
+    room(&mut canonical, "layout");
+    assert!(canonical.room_pending("same-place", true));
+    assert!(!canonical.room_pending("other-place", true));
+    assert!(!canonical.room_pending("same-place", false));
+    let Job::Canonical(work) = canonical.take_jobs().remove(0) else {
+        panic!("canonical room job");
+    };
+    assert!(canonical.room_pending("same-place", true));
+    let entry = canonical.entries.get_mut(&work.target).unwrap();
+    entry.status = Status::Failed(ImageFailure::Provider);
+    assert!(!canonical.room_pending("same-place", true));
+    canonical.entries.get_mut(&work.target).unwrap().status =
+        Status::Ready(ImageKey::parse(&"a".repeat(64)).unwrap());
+    assert!(!canonical.room_pending("same-place", true));
+}
+
+#[test]
 fn stale_run_completion_cannot_replace_current_room_and_failure_is_terminal_for_the_binding() {
     let mut canonical = references("run-a");
     room(&mut canonical, "layout-a");

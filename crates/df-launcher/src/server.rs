@@ -12,7 +12,7 @@ use crate::{
     credentials::{Credential, Keys},
     install::Install,
     saves::Adventure,
-    settings::Settings,
+    settings::{PictureProvider, Settings},
 };
 
 /// How phones reach this game.
@@ -283,8 +283,12 @@ fn environment_with_openai_block(
     }
     // Character portraits read their own dedicated keys (see launch-reference.md).
     if launch.settings.creator_portraits {
+        let portrait_key = match launch.settings.picture_provider {
+            PictureProvider::Openai => ("DF_GAMEPLAY_CREATOR_OPENAI_KEY", Credential::Openai),
+            PictureProvider::Flux => ("DF_GAMEPLAY_CREATOR_FAL_KEY", Credential::Fal),
+        };
         for (name, credential) in [
-            ("DF_GAMEPLAY_CREATOR_OPENAI_KEY", Credential::Openai),
+            portrait_key,
             ("DF_GAMEPLAY_CREATOR_JEV_API_KEY", Credential::Jev),
         ] {
             if (!openai_disabled || credential != Credential::Openai)
@@ -304,22 +308,44 @@ fn environment_with_openai_block(
 
 /// Settings the server would refuse at startup, caught before anything starts.
 pub fn missing_keys(settings: &Settings, keys: &Keys) -> Option<String> {
-    match std::env::var("DF_GAMEPLAY_CODEX_MODE") {
-        Ok(value) if value == "on" && settings.creator_portraits => return Some("Character portraits need the OpenAI API, which Codex mode disables. Turn off character portraits to start.".to_owned()),
-        Ok(value) if value == "on" || value == "off" => {},
-        Err(std::env::VarError::NotPresent) => {},
-        _ => return Some("DF_GAMEPLAY_CODEX_MODE must be on or off.".to_owned()),
-    }
-    match std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API") {
-        Ok(value) if value == "on" && settings.creator_portraits => return Some(
-            "Character portraits require the OpenAI API, which is disabled. Turn off character portraits in Settings to start.".to_owned(),
-        ),
-        Ok(value) if value == "on" || value == "off" => {},
-        Err(std::env::VarError::NotPresent) => {},
-        _ => return Some("DF_GAMEPLAY_DISABLE_OPENAI_API must be on or off.".to_owned()),
+    missing_keys_with_modes(
+        settings,
+        keys,
+        std::env::var("DF_GAMEPLAY_CODEX_MODE"),
+        std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API"),
+    )
+}
+
+fn missing_keys_with_modes(
+    settings: &Settings,
+    keys: &Keys,
+    codex: Result<String, std::env::VarError>,
+    block: Result<String, std::env::VarError>,
+) -> Option<String> {
+    let mode = |value: Result<String, std::env::VarError>| match value {
+        Ok(value) if value == "on" => Some(true),
+        Ok(value) if value == "off" => Some(false),
+        Err(std::env::VarError::NotPresent) => Some(false),
+        _ => None,
+    };
+    let codex = mode(codex).ok_or("DF_GAMEPLAY_CODEX_MODE must be on or off.");
+    let block = mode(block).ok_or("DF_GAMEPLAY_DISABLE_OPENAI_API must be on or off.");
+    let (codex, block) = match (codex, block) {
+        (Err(message), _) | (_, Err(message)) => return Some(message.to_owned()),
+        (Ok(codex), Ok(block)) => (codex, block),
+    };
+    if (codex || block)
+        && settings.creator_portraits
+        && settings.picture_provider == PictureProvider::Openai
+    {
+        return Some("OpenAI pictures are disabled. Choose FLUX under Picture service to generate character portraits.".to_owned());
     }
     let has = |credential| keys.value(credential).is_some();
-    if settings.creator_portraits && !(has(Credential::Openai) && has(Credential::Jev)) {
+    let portrait_provider = match settings.picture_provider {
+        PictureProvider::Openai => Credential::Openai,
+        PictureProvider::Flux => Credential::Fal,
+    };
+    if settings.creator_portraits && !(has(portrait_provider) && has(Credential::Jev)) {
         return Some(
             "Character portraits aren't set up yet. Settings, under Pictures, shows what they need; or turn them off there."
                 .to_owned(),
@@ -331,8 +357,7 @@ pub fn missing_keys(settings: &Settings, keys: &Keys) -> Option<String> {
                 .to_owned(),
         );
     }
-    if settings.picture_provider == crate::settings::PictureProvider::Flux && !has(Credential::Fal)
-    {
+    if settings.picture_provider == PictureProvider::Flux && !has(Credential::Fal) {
         return Some(
             "FLUX pictures aren't set up yet. Settings, under Pictures, shows what they need; or choose OpenAI pictures there."
                 .to_owned(),
@@ -776,10 +801,16 @@ mod tests {
             credentials::resolve(&std::collections::BTreeMap::new(), Some(&missing_fal_file))
                 .unwrap();
         assert!(
-            missing_keys(&settings, &missing_fal)
+            missing_keys_with_modes(&settings, &missing_fal, Ok("on".into()), Ok("on".into()))
                 .unwrap()
-                .contains("FLUX pictures")
+                .contains("Character portraits")
         );
+        assert_eq!(
+            missing_keys_with_modes(&settings, &keys, Ok("on".into()), Ok("on".into())),
+            None
+        );
+        settings.scene_pictures = false;
+        settings.scene_plates = false;
         let flux = environment_with_openai_block(
             &Launch {
                 install: &install,
@@ -793,7 +824,15 @@ mod tests {
             },
             Some("on"),
         );
-        assert_eq!(value(&flux, "FAL_KEY").as_deref(), Some("fal-test"));
+        assert_eq!(
+            value(&flux, "DF_GAMEPLAY_CREATOR_FAL_KEY").as_deref(),
+            Some("fal-test")
+        );
+        assert_eq!(value(&flux, "DF_GAMEPLAY_CREATOR_OPENAI_KEY"), None);
+        assert_eq!(
+            value(&flux, "DF_GAMEPLAY_CREATOR_JEV_API_KEY").as_deref(),
+            Some("jev-key")
+        );
         assert_eq!(
             value(&flux, "DF_GAMEPLAY_IMAGERY_PROVIDER").as_deref(),
             Some("flux")

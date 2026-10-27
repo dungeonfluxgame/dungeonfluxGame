@@ -1328,7 +1328,7 @@ pub(super) fn storyteller_mode(
 /// Raw `DF_GAMEPLAY_IMAGERY*` inputs.
 pub(super) struct ImageryInputs {
     pub(super) credential: Result<String, VarError>,
-    pub(super) independent_flux: bool,
+    pub(super) independent_provider: bool,
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
     pub(super) quality: Result<String, VarError>,
@@ -1342,7 +1342,7 @@ impl ImageryInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("OPENAI_API_KEY"),
-            independent_flux: std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref()
+            independent_provider: std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref()
                 == Ok("on")
                 && std::env::var("DF_GAMEPLAY_IMAGERY_PROVIDER").as_deref() == Ok("flux")
                 && std::env::var("FAL_KEY").is_ok_and(|key| !key.is_empty()),
@@ -1525,7 +1525,7 @@ pub(super) fn imagery_settings(
         .filter(|value| {
             value.len() <= 8192 && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
         });
-    if credential.is_none() && !inputs.independent_flux {
+    if credential.is_none() && !inputs.independent_provider {
         return Ok(ImagerySettings::Off(ImageryOff::NoCredential));
     }
     let cache = std::path::PathBuf::from(cache);

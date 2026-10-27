@@ -335,14 +335,6 @@
 .tv-intent[data-intent=thinking] .tv-intent-name{font-style:italic;opacity:.78}
 .tv-intent[data-intent=thinking] .tv-intent-dots i{background:#8a6a3c;animation-duration:var(--tune-thinking-dots,1.6s)}
 @keyframes df-think-breathe{0%,100%{opacity:1}50%{opacity:.82}}
-@media (prefers-reduced-motion:reduce){.tv-intent[data-intent=thinking]{animation:none}.tv-intent[data-intent=thinking] .tv-intent-dots i{animation:none;opacity:.7}}
-@media (prefers-reduced-motion:reduce){
-  .tv-hud{transition:none}
-  .tv-hud[data-party-hud=visible]{transition:none}
-  .tv-fig-hp-fill{transition:none}
-  .tv-check-finding{animation:df-check-finding-reveal var(--check-finding-reveal-duration,200ms) step-end var(--check-finding-delay,5s) both;transform:none}
-  .tv-check-result{animation:df-check-result-out var(--check-fade-duration,500ms) step-end var(--check-close-delay,10s) both}
-}
 /* while the 3D battlefield shows the fight, the flat combat screen and its dice card never do (not during
    the entrance, the exit or the victory card); the battlefield's own cards show the dice */
 .tv-stage[data-battlefield-live=true] .live-screen[data-screen=combat]{visibility:hidden}
@@ -414,7 +406,6 @@
 .tv-scene-graph[data-exterior=false] .tv-scene-atmosphere[data-weather=rain],.tv-scene-graph[data-exterior=false] .tv-scene-atmosphere[data-weather=snow]{background:none;animation:none}
 @keyframes df-scene-fog{from{transform:translateX(-2%);opacity:.12}to{transform:translateX(2%);opacity:.42}}
 @keyframes df-scene-rain{from{background-position:0 0}to{background-position:-8px 14px}}
-@media (prefers-reduced-motion:reduce){.tv-scene-camera,.tv-scene-actor,.tv-scene-actor-art,.tv-scene-atmosphere{animation:none!important;transition:none!important;translate:none!important}}
 
 /* Film treatment: a restrained grade and fine grain on the scene image, not the cast or captions. */
 .tv-scene-set{filter:saturate(.88) contrast(1.04) brightness(.94)}
@@ -436,7 +427,6 @@
 .tv-stage[data-tv-mode=scene] .tv-scene-graph{transition:opacity .8s cubic-bezier(.2,.65,.25,1),visibility 0s}
 .tv-stage[data-tv-mode=scene] .tv-scene-graph[data-inactive],.tv-stage[data-tv-mode=scene][data-shot=plate] .tv-scene-graph,.tv-stage[data-tv-mode=scene][data-battlefield-live=true] .tv-scene-graph,.tv-stage[data-tv-mode=scene][data-battle-state]:not([data-battle-state=absent]) .tv-scene-graph{transition:opacity .8s cubic-bezier(.2,.65,.25,1),visibility 0s .8s}
 
-@media (prefers-reduced-motion:reduce){.tv-stage[data-tv-mode=scene] .tv-scene-graph,.tv-plate-vignette{animation:none!important;transition:none!important}}
 
 /* Reserve the compact party row below both dialogue lanes. With choices, allow their four
    wrapped lines and padding before the narration begins. */

@@ -350,6 +350,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
             .then(|| input.journey.home_video_path.clone()),
         // PLAY-V09: the scene as one composed picture, when the server has made it.
         plate: crate::presentation::plate_of(input.scene),
+        room_image_pending: input.scene.room_image_pending,
         adventure_name: input.journey.adventure_name.clone(),
         narrated: !input.narration.trim().is_empty(),
         end: input.journey.adventure_ended.then(|| {

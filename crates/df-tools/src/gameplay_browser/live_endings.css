@@ -46,11 +46,6 @@
   animation: df-aftermath-in 0.6s ease;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
-    animation: none;
-  }
-}
 
 /* The story uses the full column: the grid's implicit column would size to the
  * headline's content and stack the paragraph into a tall tower, pushing the
@@ -239,11 +234,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tv-stage[data-ended][data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-bigcard {
-    animation-duration: 0.01s;
-  }
-}
 
 /* END-03: the scene can settle while the final line lingers; hold the end card through its close. */
 .tv-stage[data-ended][data-scene-state=awaiting-choice]:is([data-line-state=lingering], [data-line-state=closing]) .tv-bigcard {

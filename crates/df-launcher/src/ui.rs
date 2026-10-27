@@ -1542,7 +1542,7 @@ fn settings_page(
             PictureProvider::Openai => "openai",
             PictureProvider::Flux => "flux",
         }),
-        fields.check("creator_portraits", "Character portraits", &format!("Players can generate a portrait of their hero while creating it. Each portrait is a paid picture.{}", needs(snapshot, &[Credential::Openai, Credential::Jev])), settings.creator_portraits),
+        fields.check("creator_portraits", "Character portraits", &format!("Players can generate a portrait of their hero while creating it using the selected picture service. Each portrait is a paid picture.{}", needs(snapshot, match settings.picture_provider { PictureProvider::Openai => &[Credential::Openai, Credential::Jev], PictureProvider::Flux => &[Credential::Fal, Credential::Jev] })), settings.creator_portraits),
         fields.check("creator_alternate_route", "Alternate route for mature portraits", &format!("Portraits with adult anatomy, nudity or fantasy violence go to Black Forest Labs. Needs character portraits.{}", needs(snapshot, &[Credential::Bfl])), settings.creator_alternate_route),
         fields.check("splat_worlds", "Explorable 3D places", &format!("Some places become 3D scenes the camera moves through. Each place is a costly generation, so this is off unless you turn it on.{}", needs(snapshot, &[Credential::Worldlabs])), settings.splat_worlds),
     );

@@ -41,10 +41,6 @@ const BLUR_GRACE_MS: u32 = 250;
 
 /// A model-voiced reply is a short line; anything longer is not shown.
 const MAXIMUM_REPLY_BYTES: usize = 1024;
-/// The typed-dialogue request also waits for the speaker's reply, so it gets longer than the
-/// ordinary five seconds.
-const RAW_DIALOGUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
 /// The recovery revision as (epoch, sequence). Tuples compare epoch first, which is the
 /// canonical recovery order. An absent component or a zero epoch cannot be ordered.
 fn ordered_revision(revision: Option<&rpc::SessionRevision>) -> Option<(u64, u64)> {
@@ -429,7 +425,10 @@ impl DialogueRecovery {
         if let Some(button) = &self.send_button {
             let _disabled = button.set_attribute("disabled", "");
         }
-        if let Some((_, abort)) = self.active.take() {
+        let interrupted = self.active.take();
+        let awaiting_line = self.awaiting.take().is_some();
+        let uncertain_line = interrupted.is_some() && awaiting_line;
+        if let Some((_, abort)) = interrupted {
             abort.abort();
         }
         self.channel = None;
@@ -438,6 +437,9 @@ impl DialogueRecovery {
             self.message =
                 "Confirmation outcome unknown. Reconnect, then retry the same confirmation."
                     .to_owned();
+        } else if uncertain_line {
+            self.message = "The connection was interrupted. Your line may have reached the table; check before sending again. Your draft remains editable."
+                .to_owned();
         }
     }
 
@@ -1192,14 +1194,24 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
             async {
                 match &call {
                     Call::Raw(body) => {
-                        let mut raw = request(body.clone(), &credential).map_err(|_| {
+                        let raw = request(body.clone(), &credential).map_err(|_| {
                             tonic::Status::unauthenticated("input binding unavailable")
                         })?;
-                        raw.set_timeout(RAW_DIALOGUE_TIMEOUT);
-                        channel
-                            .submit(raw)
-                            .await
-                            .map(|reply| (Some(reply.into_inner()), None))
+                        // gRPC metadata bounds the server, but a half-open browser tunnel may
+                        // never deliver its response. Keep the local wait bounded by the same
+                        // server-advertised duration.
+                        let timeout = request_timeout();
+                        let timeout_ms = u32::try_from(timeout.as_millis()).map_err(|_| {
+                            tonic::Status::internal("dialogue timeout outside browser range")
+                        })?;
+                        crate::dialogue_deadline::submit(
+                            raw,
+                            timeout,
+                            |request| channel.submit(request),
+                            |_| gloo_timers::future::TimeoutFuture::new(timeout_ms),
+                        )
+                        .await
+                        .map(|reply| (Some(reply.into_inner()), None))
                     }
                     Call::Cancel(body) => channel
                         .cancel(request(body.clone(), &credential).map_err(|_| {
@@ -1378,6 +1390,10 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                             .to_owned()
                     } else {
                         match error.code() {
+                            tonic::Code::DeadlineExceeded => {
+                                "The reply timed out. Your line may have reached the table; check before sending again. Your draft remains editable."
+                                    .to_owned()
+                            }
                             tonic::Code::FailedPrecondition => {
                                 scope_changed_notice(&composer_draft(&state.dialogue))
                                     .unwrap_or_default()
@@ -1390,12 +1406,12 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                                 "The native owner refused this input. Edit the bounded draft."
                                     .to_owned()
                             }
-                            _ => "Dialogue is unavailable. Your draft remains editable.".to_owned(),
+                            _ => "Dialogue is unavailable. Your line may have reached the table; check before sending again. Your draft remains editable.".to_owned(),
                         }
                     }
                 }
                 Err(_) => {
-                    "The dialogue request was cancelled. Your draft remains editable.".to_owned()
+                    "The dialogue request was cancelled. Your line may have reached the table; check before sending again. Your draft remains editable.".to_owned()
                 }
                 _ => "The native dialogue response is absent. Reconnect.".to_owned(),
             };
@@ -1413,6 +1429,21 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retiring_a_raw_dialogue_clears_thinking_and_warns_of_an_unknown_outcome() {
+        use super::*;
+        let (abort, _) = AbortHandle::new_pair();
+        let mut dialogue = DialogueRecovery {
+            active: Some((Rc::new(()), abort)),
+            awaiting: Some("Hello".to_owned()),
+            ..DialogueRecovery::default()
+        };
+        dialogue.retire_transport();
+        assert!(dialogue.active.is_none());
+        assert!(dialogue.awaiting.is_none());
+        assert!(dialogue.message.contains("may have reached the table"));
+    }
+
     #[test]
     fn the_same_send_button_remains_callable_after_page_callbacks_are_cleared() {
         use super::*;

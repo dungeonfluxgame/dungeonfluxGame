@@ -20,7 +20,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{Notify, Semaphore, broadcast};
 use tonic::{Request, Response, Status};
 
 const PLAYER: &str = "5151515151515151515151515151515151515151515151515151515151515151";
@@ -35,6 +35,12 @@ struct Service {
     stale_sent: Arc<AtomicUsize>,
     input: Arc<Mutex<Option<(u64, u64)>>>,
     streams: Arc<Semaphore>,
+    dialogue_started: Arc<AtomicUsize>,
+    dialogue_cancelled: Arc<AtomicUsize>,
+    dialogue_finished: Arc<AtomicUsize>,
+    dialogue_timeout: Arc<Mutex<Option<String>>>,
+    dialogue_release: Arc<Notify>,
+    heartbeat: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +55,7 @@ enum FixtureFrame {
     Current(FixtureSnapshot),
     Stale,
     ConflictingDuplicate(FixtureSnapshot),
+    Disconnect,
 }
 
 fn revision(epoch: u64, sequence: u64) -> rpc::SessionRevision {
@@ -190,7 +197,7 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
     let conflicting = matches!(frame, FixtureFrame::ConflictingDuplicate(_));
     let snapshot = match frame {
         FixtureFrame::Current(snapshot) | FixtureFrame::ConflictingDuplicate(snapshot) => snapshot,
-        FixtureFrame::Stale => FixtureSnapshot {
+        FixtureFrame::Stale | FixtureFrame::Disconnect => FixtureSnapshot {
             epoch: 1,
             sequence: 99,
             creation: false,
@@ -395,6 +402,7 @@ impl rpc::session_service_server::SessionService for Service {
             .current
             .lock()
             .map_err(|_| Status::internal("fixture snapshot unavailable"))?;
+        let heartbeat = self.heartbeat;
         let stream = futures::stream::unfold(
             (true, events, permit, false),
             move |(first, mut events, permit, ended)| {
@@ -406,7 +414,18 @@ impl rpc::session_service_server::SessionService for Service {
                     let result = if first {
                         Ok(view(player, FixtureFrame::Current(snapshot)))
                     } else {
-                        match events.recv().await {
+                        let event = if heartbeat {
+                            tokio::select! {
+                                event = events.recv() => event,
+                                () = tokio::time::sleep(Duration::from_secs(5)) => Ok(FixtureFrame::Current(snapshot)),
+                            }
+                        } else {
+                            events.recv().await
+                        };
+                        match event {
+                            Ok(FixtureFrame::Disconnect) => {
+                                Err(Status::unavailable("fixture disconnected watch"))
+                            }
                             Ok(frame) => {
                                 if matches!(frame, FixtureFrame::Stale) {
                                     sent.fetch_add(1, Ordering::SeqCst);
@@ -435,6 +454,78 @@ impl rpc::session_service_server::SessionService for Service {
         Ok(Response::new(rpc::PresentedResponse {
             released_sequence: request.into_inner().sequence,
         }))
+    }
+}
+
+struct PendingDialogue {
+    cancelled: Arc<AtomicUsize>,
+    finished: bool,
+}
+
+impl Drop for PendingDialogue {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.cancelled.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl rpc::dialogue_service_server::DialogueService for Service {
+    async fn submit(
+        &self,
+        request: Request<rpc::RawDialogueRequest>,
+    ) -> Result<Response<rpc::DialogueResponse>, Status> {
+        if !role(&request)? {
+            return Err(Status::permission_denied("display cannot submit dialogue"));
+        }
+        *self
+            .dialogue_timeout
+            .lock()
+            .map_err(|_| Status::internal("timeout record unavailable"))? = request
+            .metadata()
+            .get("grpc-timeout")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = request.into_inner();
+        self.dialogue_started.fetch_add(1, Ordering::SeqCst);
+        let mut pending = PendingDialogue {
+            cancelled: self.dialogue_cancelled.clone(),
+            finished: false,
+        };
+        self.dialogue_release.notified().await;
+        pending.finished = true;
+        self.dialogue_finished.fetch_add(1, Ordering::SeqCst);
+        Ok(Response::new(rpc::DialogueResponse {
+            input_id: body.input_id,
+            disposition: rpc::DialogueDisposition::Social as i32,
+            revision: Some(revision(2, 1)),
+            npc_reply: "The fixture seller answers after the held reply.".to_owned(),
+            npc_speaker: "Fixture seller".to_owned(),
+            ..Default::default()
+        }))
+    }
+
+    async fn compose(
+        &self,
+        request: Request<rpc::ComposeRequest>,
+    ) -> Result<Response<rpc::ComposeResponse>, Status> {
+        role(&request)?;
+        Ok(Response::new(rpc::ComposeResponse {}))
+    }
+
+    async fn confirm(
+        &self,
+        _: Request<rpc::ConfirmDialogueRequest>,
+    ) -> Result<Response<rpc::SubmitActionResponse>, Status> {
+        Err(Status::unimplemented("fixture only tests raw dialogue"))
+    }
+
+    async fn cancel(
+        &self,
+        _: Request<rpc::CancelDialogueRequest>,
+    ) -> Result<Response<rpc::DialogueResponse>, Status> {
+        Err(Status::unimplemented("fixture only tests raw dialogue"))
     }
 }
 
@@ -717,13 +808,33 @@ async fn fixture_status(State(state): State<PageState>) -> Result<String, Status
             .collect::<String>()
     });
     Ok(format!(
-        "watches={} stale_sent={} current_epoch={} current_sequence={} creation={} last_binding={binding:?} last_input={input:?}",
+        "watches={} stale_sent={} current_epoch={} current_sequence={} creation={} last_binding={binding:?} last_input={input:?} dialogue_started={} dialogue_finished={} dialogue_cancelled={} timeout={:?}",
         state.service.watches.load(Ordering::SeqCst),
         state.service.stale_sent.load(Ordering::SeqCst),
         current.epoch,
         current.sequence,
-        current.creation
+        current.creation,
+        state.service.dialogue_started.load(Ordering::SeqCst),
+        state.service.dialogue_finished.load(Ordering::SeqCst),
+        state.service.dialogue_cancelled.load(Ordering::SeqCst),
+        state
+            .service
+            .dialogue_timeout
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     ))
+}
+
+async fn release_dialogue(State(state): State<PageState>) -> &'static str {
+    state.service.dialogue_release.notify_one();
+    "dialogue released"
+}
+
+async fn disconnect_watch(State(state): State<PageState>) -> (StatusCode, String) {
+    match state.service.events.send(FixtureFrame::Disconnect) {
+        Ok(receivers) => (StatusCode::OK, format!("disconnected {receivers} watchers")),
+        Err(_) => (StatusCode::CONFLICT, "no active watcher".to_owned()),
+    }
 }
 async fn socket(
     State(state): State<PageState>,
@@ -782,7 +893,7 @@ async fn serve_actual_gameplay_client_with_late_old_epoch() -> Result<(), Box<dy
     }
     let html = std::fs::read_to_string(std::env::var("DF_REVISION_FIXTURE_HTML")?)?;
     let roots = format!(
-        "<section class=\"client player\" id=\"player\" data-room=\"LANTERN\"><div class=\"connection\" role=\"status\"></div><div class=\"view\"></div></section><section class=\"client display\" id=\"display\" data-local-binding=\"{DISPLAY}\"><div class=\"connection\" role=\"status\"></div><div class=\"view\"></div></section>"
+        "<section class=\"client player\" id=\"player\" data-room=\"LANTERN\" data-request-timeout-ms=\"305000\"><div class=\"connection\" role=\"status\"></div><div class=\"view\"></div></section><section class=\"client display\" id=\"display\" data-local-binding=\"{DISPLAY}\"><div class=\"connection\" role=\"status\"></div><div class=\"view\"></div></section>"
     );
     let html = html
         .replace("__ROOTS__", &roots)
@@ -806,6 +917,12 @@ async fn serve_actual_gameplay_client_with_late_old_epoch() -> Result<(), Box<dy
         stale_sent: Arc::new(AtomicUsize::new(0)),
         input: Arc::new(Mutex::new(None)),
         streams: Arc::new(Semaphore::new(8)),
+        dialogue_started: Arc::new(AtomicUsize::new(0)),
+        dialogue_cancelled: Arc::new(AtomicUsize::new(0)),
+        dialogue_finished: Arc::new(AtomicUsize::new(0)),
+        dialogue_timeout: Arc::new(Mutex::new(None)),
+        dialogue_release: Arc::new(Notify::new()),
+        heartbeat: std::env::var_os("DF_REVISION_FIXTURE_HEARTBEAT").is_some(),
     };
     let (admission, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("connection bound")?)?;
@@ -830,6 +947,9 @@ async fn serve_actual_gameplay_client_with_late_old_epoch() -> Result<(), Box<dy
                 .max_decoding_message_size(8192)
                 .max_encoding_message_size(8192),
         )
+        .add_service(rpc::dialogue_service_server::DialogueServiceServer::new(
+            service.clone(),
+        ))
         .serve_with_incoming(incoming);
     let state = PageState {
         service,
@@ -847,6 +967,8 @@ async fn serve_actual_gameplay_client_with_late_old_epoch() -> Result<(), Box<dy
         .route("/fixture/creation", get(creation))
         .route("/fixture/creation-new-epoch", get(creation_new_epoch))
         .route("/fixture/status", get(fixture_status))
+        .route("/fixture/release-dialogue", get(release_dialogue))
+        .route("/fixture/disconnect-watch", get(disconnect_watch))
         .nest_service("/pkg", tower_http::services::ServeDir::new(web))
         .nest_service("/assets", tower_http::services::ServeDir::new(assets))
         .with_state(state);

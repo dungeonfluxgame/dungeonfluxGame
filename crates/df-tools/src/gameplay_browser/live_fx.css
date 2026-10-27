@@ -57,7 +57,7 @@
 /* A seat whose hero is being made (owner 2026-10-24: "more classy"): one calm, deliberate motion
    instead of four busy ones. The die rests, dimmed, with an ember breathing in it; a single fine
    gold arc travels the portrait's rim; a soft light passes over the card every few seconds; the
-   name sits in italic and the status line breathes. Reduced motion keeps the still die and arc. */
+   name sits in italic and the status line breathes. */
 .tv-card[data-state=creating]{box-shadow:0 0 calc(var(--u)*1.1) #e0b87733,0 calc(var(--u)*1) calc(var(--u)*3) #000a}
 .tv-card[data-state=creating]::after{content:'';position:absolute;inset:0;width:auto;pointer-events:none;background:linear-gradient(105deg,transparent 30%,#f0d9a81f 46%,#fff1d22e 50%,#f0d9a81f 54%,transparent 70%);background-size:260% 100%;background-position:130% 0;animation:df-forge-sheen 7s cubic-bezier(.45,0,.25,1) infinite}
 @keyframes df-forge-sheen{0%,35%{background-position:130% 0}100%{background-position:-130% 0}}
@@ -70,7 +70,6 @@
 .tv-card[data-state=creating] .tv-member-name{font-style:italic;letter-spacing:.01em}
 .tv-card[data-state=creating] .tv-member-status{animation:df-forge-status 3.6s ease-in-out infinite}
 @keyframes df-forge-status{0%,100%{opacity:.6}50%{opacity:1}}
-@media (prefers-reduced-motion:reduce){.tv-card[data-state=creating]::after,.tv-card[data-state=creating] .tv-portrait-img,.tv-card[data-state=creating] .tv-member-status{animation:none}.tv-card[data-state=creating] .tv-portrait::before{animation-duration:40s}}
 @keyframes df-turn{to{transform:rotate(360deg)}}
 .tv-card[data-state=creating] .tv-member-role{display:none}
 @keyframes df-dots{to{clip-path:inset(0 0 0 0)}}
@@ -183,8 +182,6 @@
 .table-name{flex:none;color:#e8cb94;font-weight:600}
 .table-line[data-kind=action] .table-text{font-style:italic}
 
-/* ---------- reduced motion: fades and colour only ---------- */
-
 /* Damage faces use the server's roll, then settle beside the attack card. */
 .tv-damage-dice{display:grid;grid-template-columns:repeat(4,calc(var(--u)*3));align-content:center;gap:calc(var(--u)*.25);pointer-events:none;animation:df-damage-clear 320ms ease forwards;animation-delay:calc(var(--damage-roll-ms,1000ms) + 800ms)}
 .tv-damage-dice[data-host=battlefield],.tv-damage-dice[data-host=panel]{position:static;transform:none;z-index:auto}
@@ -193,7 +190,6 @@
 @keyframes df-damage-tumble{0%{opacity:0;transform:translateY(-70%) rotate(-240deg) scale(.55);color:transparent}70%{opacity:1;transform:translateY(10%) rotate(580deg) scale(1.1);color:transparent}100%{opacity:1;transform:none;color:#ffe0a2}}
 @keyframes df-damage-clear{to{opacity:0}}
 .live-screen .combat-roll-panel>.tv-damage-dice{position:static;transform:none;z-index:auto;margin:0 auto calc(var(--u)*1)}
-@media (prefers-reduced-motion:reduce){.tv-damage-dice{animation:none}.tv-damage-die{animation:none;color:#ffe0a2}}
 
 /* Phone page changes ease as a cut or camera settle, without a spring-like slide. */
 .client.player .view[data-swap=a],.client.player .view[data-swap=b]{animation-duration:.32s;animation-timing-function:cubic-bezier(.2,.65,.3,1)}

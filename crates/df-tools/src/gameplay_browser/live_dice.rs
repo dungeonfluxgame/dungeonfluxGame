@@ -20,7 +20,7 @@
 //! TV was never a probe failure: the pane reports `prefers-reduced-motion: reduce`, and the
 //! die used to honour it by showing the resting frame only. The dice are the game's one
 //! indispensable visual on a shared screen, so the clip now plays whatever the machine's
-//! motion preference says; the surrounding decoration still follows it.
+//! motion preference says; game decoration also stays animated.
 //!
 //! The canvas calls are untyped on purpose: the canvas web-sys features would need another
 //! worker's `Cargo.toml`, so this one small module calls the half-dozen DOM methods through

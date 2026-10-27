@@ -1795,6 +1795,15 @@ impl Inner {
                     return;
                 }
                 if let Some(scene) = display.scene.as_mut() {
+                    scene.room_image_pending = stage
+                        .story_scene
+                        .as_ref()
+                        .and_then(|scene| scene.setting.as_ref())
+                        .is_some_and(|setting| {
+                            state
+                                .canonical
+                                .room_pending(&setting.place_id, self.imagery.is_on())
+                        });
                     if let Some(key) = stage
                         .story_scene
                         .as_ref()

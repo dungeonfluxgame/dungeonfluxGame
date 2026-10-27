@@ -1010,3 +1010,4 @@ field dungeonflux.public.v1.DeleteHeroResponse 1 removed type=8 label=1 presence
 message dungeonflux.public.v1.DeleteHeroRequest
 message dungeonflux.public.v1.DeleteHeroResponse
 method dungeonflux.public.v1.HeroLibraryService DeleteHero .dungeonflux.public.v1.DeleteHeroRequest .dungeonflux.public.v1.DeleteHeroResponse client-stream=false server-stream=false
+field dungeonflux.public.v1.GameplayScene 33 room_image_pending type=8 label=1 presence=false target=- oneof=-

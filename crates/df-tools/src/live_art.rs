@@ -247,7 +247,9 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
                 return loop_changed;
             };
             shown_scene.scene_asset.clone_from(&new_scene.scene_asset);
-            let mut changed = !same_image(&shown_scene.live_backdrop, &new_scene.live_backdrop);
+            let mut changed = !same_image(&shown_scene.live_backdrop, &new_scene.live_backdrop)
+                || shown_scene.room_image_pending != new_scene.room_image_pending;
+            shown_scene.room_image_pending = new_scene.room_image_pending;
             shown_scene
                 .live_backdrop
                 .clone_from(&new_scene.live_backdrop);
@@ -399,6 +401,26 @@ mod tests {
                 },
             )),
         }
+    }
+
+    #[test]
+    fn same_revision_room_image_pending_is_merged_even_without_art_changes() {
+        let mut shown = view("", "", "Current line.", "The Heron Shrine");
+        let mut pending = shown.clone();
+        let Some(rpc::view_message::Audience::Display(display)) = pending.audience.as_mut() else {
+            panic!("display view");
+        };
+        display.scene.as_mut().unwrap().room_image_pending = true;
+        assert!(merge_art(&mut shown, &pending));
+        assert!(!merge_art(&mut shown, &pending));
+        let mut settled = pending.clone();
+        let Some(rpc::view_message::Audience::Display(display)) = settled.audience.as_mut() else {
+            panic!("display view");
+        };
+        display.scene.as_mut().unwrap().room_image_pending = false;
+        assert!(merge_art(&mut shown, &settled));
+        assert_eq!(shown, settled);
+        assert!(!merge_art(&mut shown, &settled));
     }
 
     #[test]

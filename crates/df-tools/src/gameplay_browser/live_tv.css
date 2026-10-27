@@ -206,7 +206,6 @@ DC or AC, verdict), held for its reading time and faded by the line machine. */
 /* The outcome lands like a stamp: large and soft, then hard and settled. */
 .tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) .tv-roll-verdict{animation:df-roll-stamp .62s cubic-bezier(.2,.9,.2,1) .18s both}
 @keyframes df-roll-stamp{0%{opacity:0;transform:scale(1.65);filter:blur(7px);letter-spacing:.32em}55%{opacity:1;transform:scale(.96);filter:blur(0);letter-spacing:.08em}100%{opacity:1;transform:none;filter:none;letter-spacing:.1em}}
-@media (prefers-reduced-motion:reduce){.tv-stage>.tv-roll,.tv-stage>.tv-roll::before,.tv-stage>.tv-roll .tv-roll-label{animation-duration:.01s}.tv-stage>.tv-roll:is([data-phase=result],[data-phase=closing]) :is(.tv-roll-sum,.tv-roll-verdict){animation:df-roll-sum .3s ease both}}
 /* FIGHT-001: on the flat stage the dice join the roll panel in flow, so they never cover
 its text and never hide behind it. The panel is a flex column; the dice ride centered
 above its entries. */
@@ -241,7 +240,6 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
 .tv-stage[data-tv-mode=scene]>.tv-art::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,#d49b6800 38%,#d49b6812 100%),linear-gradient(135deg,#42618018 0%,transparent 55%);mix-blend-mode:soft-light}
 .tv-stage[data-shot=plate] .tv-plate-img{filter:saturate(.88) contrast(1.04) brightness(.97)}
 .tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{filter:saturate(.88) contrast(1.04) brightness(.97)}
-.tv-plate-dust{display:none}
 .tv-plate-vignette{opacity:.66;animation:none}
 .tv-plate::before,.tv-plate::after{content:'';position:absolute;z-index:5;inset:0;pointer-events:none}
 .tv-plate::before{background:linear-gradient(180deg,#d49b6800 38%,#d49b6814 100%),linear-gradient(135deg,#42618018 0%,transparent 55%);mix-blend-mode:soft-light}
@@ -315,7 +313,6 @@ body:has(.tv-stage[data-sound-opted-out]) .tv-voice-control{opacity:.84!importan
 .tv-stage .tv-check-result[data-succeeded=true]:is([data-check-phase=result],[data-check-phase=closing]){border-color:#a9cf95b0}
 .tv-stage .tv-check-result[data-succeeded=false]:is([data-check-phase=result],[data-check-phase=closing]){border-color:#d98c7c99}
 .tv-stage .tv-check-finding{font:400 var(--fs-label)/1.38 var(--check-face);color:#ece3cc}
-@media (prefers-reduced-motion:reduce){.tv-stage .tv-check-result::before,.tv-stage .tv-check-result[data-check-managed]{animation-duration:.01s}.tv-stage .tv-check-result[data-check-managed]:is([data-check-phase=result],[data-check-phase=closing]) .tv-check-outcome{animation:none}}
 /* The sound control waits for the mouse: hidden until it moves, shown for 15 s after the last
    movement, then faded (owner 2026-10-24). live_voice.rs flips data-pointer between a and b on
    movement so the animation restarts; keyboard focus always shows it. !important: the control's
@@ -341,4 +338,3 @@ body:has(.tv-stage[data-sound-opted-out]) .tv-voice-control{opacity:.84!importan
 .tv-stage[data-arrival-mural] .tv-mural-art{animation:df-mural-settle 1.8s cubic-bezier(.2,.8,.2,1) both,df-mural-breathe 16s ease-in-out 1.8s infinite alternate}
 @keyframes df-mural-settle{from{opacity:0;transform:scale(1.035)}to{opacity:1;transform:none}}
 @keyframes df-mural-breathe{to{transform:scale(1.018)}}
-@media (prefers-reduced-motion:reduce){.tv-stage[data-arrival-mural] .tv-mural-art{animation:df-mural-settle .01s both}}

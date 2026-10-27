@@ -2565,7 +2565,7 @@ mod settings {
     fn inputs() -> ImageryInputs {
         ImageryInputs {
             credential: Ok("sk-test-credential".to_owned()),
-            independent_flux: false,
+            independent_provider: false,
             mode: Err(NotPresent),
             model: Err(NotPresent),
             quality: Err(NotPresent),
@@ -2581,10 +2581,10 @@ mod settings {
     }
 
     #[test]
-    fn independent_flux_does_not_require_an_openai_credential() {
+    fn independent_provider_does_not_require_an_openai_credential() {
         let mut request = inputs();
         request.credential = Err(NotPresent);
-        request.independent_flux = true;
+        request.independent_provider = true;
         let ImagerySettings::On(configuration) = settings(request).unwrap() else {
             panic!("configured independent FLUX should remain available");
         };

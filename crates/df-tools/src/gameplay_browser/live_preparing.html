@@ -47,7 +47,6 @@ animation:prep-twinkle 5s ease-in-out infinite alternate}
 @keyframes prep-rise{0%{transform:translate(0,0) scale(1);opacity:0}10%{opacity:.9}70%{opacity:.5}100%{transform:translate(24px,-46vh) scale(.3);opacity:0}}
 @keyframes prep-line{0%{opacity:0;transform:translateY(.35em)}4%,21%{opacity:1;transform:none}25%,100%{opacity:0;transform:translateY(-.35em)}}
 @keyframes prep-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(290%)}}
-@media (prefers-reduced-motion:reduce){.prep *,.prep-stars{animation:none!important}.prep-lines span:first-child{opacity:1}.prep-bar::after{width:100%;opacity:.5}.prep-embers{display:none}}
 @media (orientation:portrait){.prep{--u:2.4vw}.prep-moon{left:72%;top:4%;width:calc(var(--u)*6);height:calc(var(--u)*6)}.prep-card{margin-top:-16vh}.prep-land{height:40%}}
 /* A neutral, graded hold card while the live scene is being prepared. */
 .prep{background:linear-gradient(180deg,#101519,#090c0f 58%,#050708);color:#f1eee6}
@@ -60,7 +59,6 @@ animation:prep-twinkle 5s ease-in-out infinite alternate}
 .prep-lines{font-style:normal;color:#c9c3b7}
 .prep-bar{height:2px;border-radius:0;background:#d2c9b622}
 .prep-bar::after{background:#d2c9b7}
-@media (prefers-reduced-motion:reduce){.prep-bar::after{width:100%;opacity:.5}}
 </style>
 <div class="prep" data-df-preparing>
 <div class="prep-stars"></div>

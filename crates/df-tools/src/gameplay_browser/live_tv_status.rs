@@ -1,6 +1,10 @@
-/// Fetch/decode and crossfade lifetimes cannot extend the server's pending notice.
-pub(super) fn plate_loading_visible(state: Option<&str>, server_pending: bool) -> bool {
-    server_pending && state == Some("pending")
+/// Loading covers server preparation and the current browser fetch/decode, but not crossfade.
+pub(super) fn plate_loading_visible(
+    state: Option<&str>,
+    server_pending: bool,
+    client_loading: bool,
+) -> bool {
+    (server_pending && state == Some("pending")) || (client_loading && state == Some("ready"))
 }
 
 pub(super) const PLATE_TRANSITION_RECOVERY_MS: f64 = 1_100.0;
@@ -122,16 +126,24 @@ mod tests {
     #[test]
     fn terminal_server_plate_state_clears_the_notice_even_with_stale_pending() {
         for state in ["ready", "failed"] {
-            assert!(!plate_loading_visible(Some(state), true));
-            assert!(!plate_loading_visible(Some(state), false));
+            assert!(!plate_loading_visible(Some(state), true, false));
+            assert!(!plate_loading_visible(Some(state), false, false));
         }
     }
 
     #[test]
     fn only_server_pending_keeps_the_plate_notice_visible() {
-        assert!(plate_loading_visible(Some("pending"), true));
-        assert!(!plate_loading_visible(Some("pending"), false));
-        assert!(!plate_loading_visible(Some("none"), false));
+        assert!(plate_loading_visible(Some("pending"), true, false));
+        assert!(!plate_loading_visible(Some("pending"), false, false));
+        assert!(!plate_loading_visible(Some("none"), false, false));
+    }
+
+    #[test]
+    fn ready_plate_stays_loading_only_during_its_browser_request() {
+        assert!(plate_loading_visible(Some("ready"), false, true));
+        assert!(!plate_loading_visible(Some("ready"), false, false));
+        assert!(!plate_loading_visible(Some("failed"), false, true));
+        assert!(!plate_loading_visible(Some("none"), false, true));
     }
 
     #[test]

@@ -4,9 +4,7 @@ mod policy;
 use super::{
     creator_classification::{self, Classifier, Route},
     imagery::{self, ImageKind, ImageRequest, Imagery, OutputSpec},
-    resources::{
-        CreatorPortraitSpec, Generated, Hub, ResourceFailure, ResourceKey, ResourceStatus,
-    },
+    resources::{CreatorPortraitSpec, Generated, ResourceFailure, ResourceKey, ResourceStatus},
     startup_configuration as config,
 };
 use axum::{
@@ -20,13 +18,15 @@ use df_protocol::common as rpc;
 pub(super) fn frozen_metadata<T>(uncertain: Option<T>, committed: Option<T>, fresh: T) -> T {
     policy::frozen_metadata(uncertain, committed, fresh)
 }
+#[cfg(test)]
+use super::resources::Hub;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
-    io,
     path::Path,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use tonic::{Request, Status};
 
@@ -58,146 +58,30 @@ struct Entry {
     grant: [u8; 32],
 }
 impl Portraits {
-    #[cfg(test)]
-    pub(super) fn disabled() -> Self {
+    /// Receives the already admitted providers from the gameplay composition root.
+    pub(super) fn new(
+        imagery: Option<Imagery>,
+        alternate: Option<Imagery>,
+        classifier: Option<Arc<Classifier>>,
+        cache: std::path::PathBuf,
+    ) -> Self {
         Self {
-            imagery: None,
-            alternate: None,
-            classifier: None,
-            requests: Arc::new(Mutex::new(BTreeMap::new())),
-            cache: std::path::PathBuf::from("artifacts/tmp/disabled-creator-portraits"),
-        }
-    }
-
-    pub(super) fn start(hub: Hub, current: &Path) -> Result<Self, io::Error> {
-        let enabled = match crate::gameplay::media_policy::gates()
-            .input(crate::gameplay::media_policy::Capability::CreatorPortraits)
-            .ok()
-            .as_deref()
-        {
-            None | Some("" | "off") => false,
-            Some("on") => true,
-            Some(_) => {
-                return Err(io::Error::other(
-                    "DF_GAMEPLAY_CREATOR_PORTRAITS must be on or off",
-                ));
-            }
-        };
-        let mut alternate = None;
-        let mut classifier = None;
-        let imagery = if enabled {
-            let mut inputs = config::ImageryInputs::from_environment();
-            inputs.credential = std::env::var("DF_GAMEPLAY_CREATOR_OPENAI_KEY");
-            inputs.mode = Ok("on".into());
-            inputs.quality = Ok("medium".into());
-            inputs.deadline_seconds = Ok("170".into());
-            let config::ImagerySettings::On(mut settings) =
-                config::imagery_settings(inputs, current, config::content_rating())?
-            else {
-                return Err(io::Error::other(
-                    "Creator portraits require an OpenAI credential",
-                ));
-            };
-            settings.deadline = Duration::from_secs(180);
-            let jev = config::approach_settings(
-                std::env::var("DF_GAMEPLAY_CREATOR_JEV_API_KEY"),
-                std::env::var("DF_GAMEPLAY_CREATOR_JEV_BASE_URL"),
-            )?
-            .ok_or_else(|| {
-                io::Error::other("Creator portraits require the dedicated Jev credential")
-            })?;
-            classifier = Some(Arc::new(Classifier::new(
-                &jev.credential,
-                &jev.base_url,
-                Arc::clone(hub.ledger()),
-            )?));
-            let provider = df_providers::NativeImageEditProvider::new(
-                df_providers::ImageEditConfig::live(),
-                settings
-                    .credential
-                    .as_ref()
-                    .ok_or_else(|| {
-                        io::Error::other("Creator portrait OpenAI credential unavailable")
-                    })?
-                    .expose(),
-                settings.deadline,
-            )
-            .map_err(|_| io::Error::other("Creator portrait provider configuration refused"))?;
-            let manifest = current
-                .join("artifacts/tmp/creator-portraits")
-                .join(format!("run-{}", std::process::id()));
-            std::fs::create_dir_all(&manifest)?;
-            if let Ok(key) = std::env::var("DF_GAMEPLAY_CREATOR_BFL_KEY")
-                && !key.is_empty()
-            {
-                let provider = df_providers::NativeBflImageProvider::new(
-                    df_providers::BflImageConfig::live(),
-                    &key,
-                    settings.deadline,
-                )
-                .map_err(|_| {
-                    io::Error::other("Alternate portrait provider configuration refused")
-                })?;
-                let mut inputs = config::ImageryInputs::from_environment();
-                inputs.credential = std::env::var("DF_GAMEPLAY_CREATOR_OPENAI_KEY");
-                inputs.mode = Ok("on".into());
-                inputs.quality = Ok("medium".into());
-                inputs.deadline_seconds = Ok("170".into());
-                let config::ImagerySettings::On(mut alternate_settings) =
-                    config::imagery_settings(inputs, current, config::content_rating())?
-                else {
-                    return Err(io::Error::other("Alternate portrait configuration refused"));
-                };
-                alternate_settings.deadline = settings.deadline;
-                alternate = Some(Imagery::new_in_hub(
-                    alternate_settings,
-                    imagery::ImageRoute::Bfl(provider),
-                    Some(&manifest),
-                    hub.clone(),
-                    true,
-                )?);
-            }
-            hub.set_limits(
-                super::resources::ResourceKind::CreatorPortrait,
-                super::resources::Limits {
-                    timeout: Duration::from_secs(210),
-                    attempts: 1,
-                },
-            );
-            let imagery = Imagery::new_in_hub(
-                settings,
-                imagery::ImageRoute::OpenAi(provider),
-                Some(&manifest),
-                hub.clone(),
-                true,
-            )?;
-            hub.set_limits(
-                super::resources::ResourceKind::CreatorPortrait,
-                super::resources::Limits {
-                    timeout: Duration::from_secs(210),
-                    attempts: 1,
-                },
-            );
-            Some(imagery)
-        } else {
-            None
-        };
-        let cache = std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| current.join("artifacts/tmp/play/imagery-cache"));
-        Ok(Self {
-            cache: if cache.is_absolute() {
-                cache
-            } else {
-                current.join(cache)
-            },
             imagery,
             alternate,
             classifier,
             requests: Arc::new(Mutex::new(BTreeMap::new())),
-        })
+            cache,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn disabled() -> Self {
+        Self::new(
+            None,
+            None,
+            None,
+            std::path::Path::new("artifacts/tmp/disabled-creator-portraits").to_path_buf(),
+        )
     }
 }
 
@@ -614,6 +498,186 @@ pub(super) async fn handle(
     result
 }
 
+/// A single admitted creator operation. Keeping this unit separate makes the actual
+/// classifier-to-provider dispatch testable with the same adapters used in play.
+struct PortraitJob {
+    audit: df_observe::AuditContext,
+    classifier: Arc<Classifier>,
+    source: String,
+    operation: String,
+    primary: Imagery,
+    alternate: Option<Imagery>,
+    request: ImageRequest,
+    general_request: ImageRequest,
+    progress: Arc<Mutex<String>>,
+}
+impl PortraitJob {
+    async fn run(self) -> Result<Generated, ResourceFailure> {
+        let Self {
+            audit,
+            classifier,
+            source,
+            operation,
+            primary,
+            alternate,
+            request,
+            general_request,
+            progress,
+        } = self;
+        portrait_event_scoped(
+            &audit,
+            &operation,
+            "classification-start",
+            "pending",
+            0,
+            0,
+            "preparing",
+        );
+        let assessment = classifier
+            .classify(&source, &operation)
+            .await
+            .map_err(|_| {
+                portrait_event_scoped(
+                    &audit,
+                    &operation,
+                    "classification-finish",
+                    "failed",
+                    0,
+                    0,
+                    "classifier_unavailable",
+                );
+                ResourceFailure::Permanent("classifier_unavailable")
+            })?;
+        portrait_event_scoped(
+            &audit,
+            &operation,
+            "classification-finish",
+            assessment.category(),
+            0,
+            0,
+            "classified",
+        );
+        let route = assessment
+            .route_for_rating(config::content_rating() == config::ContentRating::Mature)
+            .map_err(|_| {
+                portrait_event_scoped(
+                    &audit,
+                    &operation,
+                    "route",
+                    "failed",
+                    0,
+                    0,
+                    "rating_disallows_appearance",
+                );
+                ResourceFailure::Permanent("rating_disallows_appearance")
+            })?;
+        let (chosen, provider, request) = match route {
+            Route::General => {
+                let provider = primary.model_label();
+                (primary, provider, general_request)
+            }
+            Route::Bfl => (
+                alternate.ok_or_else(|| {
+                    portrait_event_scoped(
+                        &audit,
+                        &operation,
+                        "route",
+                        "failed",
+                        0,
+                        0,
+                        "alternate_unavailable",
+                    );
+                    ResourceFailure::Permanent("alternate_unavailable")
+                })?,
+                "BFL FLUX 3",
+                if assessment.requires_mature_prompt() {
+                    request
+                } else {
+                    general_request
+                },
+            ),
+            Route::Revise => {
+                portrait_event_scoped(
+                    &audit,
+                    &operation,
+                    "route",
+                    "refused",
+                    0,
+                    0,
+                    "content_requires_revision",
+                );
+                return Err(ResourceFailure::Permanent("content_requires_revision"));
+            }
+            Route::Uncertain => {
+                portrait_event_scoped(
+                    &audit,
+                    &operation,
+                    "route",
+                    "unknown",
+                    0,
+                    0,
+                    "classification_uncertain",
+                );
+                return Err(ResourceFailure::Permanent("classification_uncertain"));
+            }
+        };
+        let appearance_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let model = chosen.model_label();
+        let request_hash = format!("{:x}", Sha256::digest(request.prompt.as_str().as_bytes()));
+        {
+            let _scope = df_observe::audit_scope(audit.clone());
+            super::actor::record_audit_diagnostic(
+                "gameplay.creator_portrait_route",
+                format!(
+                    "CREATOR_ROUTE classifier=jev-latest category={} provider={provider} model={model} operation={operation} appearance_hash={appearance_hash} request_hash={request_hash}",
+                    assessment.category()
+                ),
+                serde_json::Map::from_iter([
+                    ("request_hash".into(), serde_json::json!(request_hash)),
+                    ("classifier".into(), serde_json::json!("jev-latest")),
+                    ("category".into(), serde_json::json!(assessment.category())),
+                    ("provider".into(), serde_json::json!(provider)),
+                    ("model".into(), serde_json::json!(model)),
+                    ("operation".into(), serde_json::json!(operation)),
+                    ("appearance_hash".into(), serde_json::json!(appearance_hash)),
+                ]),
+                &[],
+            );
+        }
+        if let Ok(mut message) = progress.lock() {
+            *message = CREATING_PORTRAIT.to_owned();
+        }
+        portrait_event_scoped(
+            &audit,
+            &operation,
+            "provider-start",
+            "pending",
+            0,
+            0,
+            "creating",
+        );
+        let started = std::time::Instant::now();
+        let result = chosen.render_creator(request).await;
+        {
+            let _scope = df_observe::audit_scope(audit.clone());
+            super::actor::record_audit_line(
+                "gameplay.creator_portrait_provider",
+                format!(
+                    "CREATOR_PORTRAIT event=provider-finish operation_hash={operation} outcome={} elapsed_ms={}",
+                    result
+                        .as_ref()
+                        .map_or_else(|failure| failure.label(), |_| "ready"),
+                    started.elapsed().as_millis()
+                ),
+            );
+        }
+        let key = result.map_err(|failure| ResourceFailure::Permanent(failure.label()))?;
+        let mut generated = Generated::new(key.as_str());
+        generated.note = READY_PORTRAIT.to_owned();
+        Ok(generated)
+    }
+}
+
 async fn handle_inner(
     service: &super::Service,
     request: Request<rpc::HeroPortraitRequest>,
@@ -792,11 +856,13 @@ async fn handle_inner(
             let alternate = portraits.alternate.clone();
             // A frozen operation owns one classifier attempt and exactly one selected image route.
             let versioned_input = format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}",
                 creator_classification::VERSION,
                 operation_key,
                 public,
-                alternate.is_some()
+                alternate.is_some(),
+                primary.model_label(),
+                alternate.as_ref().map_or("off", Imagery::model_label)
             );
             let spec = CreatorPortraitSpec::new(
                 &format!("creator:{operation_key}"),
@@ -811,7 +877,15 @@ async fn handle_inner(
                 &spec,
                 Arc::new(move || {
                     let audit = audit.clone();
-                    let (classifier, source, operation, primary, alternate, request, general_request) = (
+                    let (
+                        classifier,
+                        source,
+                        operation,
+                        primary,
+                        alternate,
+                        request,
+                        general_request,
+                    ) = (
                         classifier.clone(),
                         source.clone(),
                         operation.clone(),
@@ -821,76 +895,20 @@ async fn handle_inner(
                         general_request.clone(),
                     );
                     let progress = job_progress.clone();
-                    Box::pin(async move {
-                        portrait_event_scoped(&audit,&operation, "classification-start", "pending", 0, 0, "preparing");
-                        let assessment = classifier
-                            .classify(&source, &operation)
-                            .await
-                            .map_err(|_| {
-                                portrait_event_scoped(&audit,&operation, "classification-finish", "failed", 0, 0, "classifier_unavailable");
-                                ResourceFailure::Permanent("classifier_unavailable")
-                            })?;
-                        portrait_event_scoped(&audit,&operation, "classification-finish", assessment.category(), 0, 0, "classified");
-                        let route = assessment
-                            .route_for_rating(
-                                config::content_rating() == config::ContentRating::Mature,
-                            )
-                            .map_err(|_| {
-                                portrait_event_scoped(&audit,&operation, "route", "failed", 0, 0, "rating_disallows_appearance");
-                                ResourceFailure::Permanent("rating_disallows_appearance")
-                            })?;
-                        let (chosen, provider, request) = match route {
-                            Route::OpenAi => (primary, "OpenAI", general_request),
-                            Route::Bfl => (
-                                alternate
-                                    .ok_or_else(|| {
-                                        portrait_event_scoped(&audit,&operation, "route", "failed", 0, 0, "alternate_unavailable");
-                                        ResourceFailure::Permanent("alternate_unavailable")
-                                    })?,
-                                "BFL FLUX 3",
-                                if assessment.requires_mature_prompt() { request } else { general_request },
-                            ),
-                            Route::Revise => {
-                                portrait_event_scoped(&audit,&operation, "route", "refused", 0, 0, "content_requires_revision");
-                                return Err(ResourceFailure::Permanent(
-                                    "content_requires_revision",
-                                ));
-                            }
-                            Route::Uncertain => {
-                                portrait_event_scoped(&audit,&operation, "route", "unknown", 0, 0, "classification_uncertain");
-                                return Err(ResourceFailure::Permanent("classification_uncertain"));
-                            },
-                        };
-                        let appearance_hash = format!("{:x}",Sha256::digest(source.as_bytes()));
-                        let model = chosen.model_label();
-                        let request_hash = format!("{:x}",Sha256::digest(request.prompt.as_str().as_bytes()));
-                        {
-                        let _scope = df_observe::audit_scope(audit.clone());
-                        super::actor::record_audit_diagnostic("gameplay.creator_portrait_route",
-                            format!("CREATOR_ROUTE classifier=jev-latest category={} provider={provider} model={model} operation={operation} appearance_hash={appearance_hash} request_hash={request_hash}",assessment.category()),
-                            serde_json::Map::from_iter([
-                                ("request_hash".into(),serde_json::json!(request_hash)),("classifier".into(),serde_json::json!("jev-latest")),("category".into(),serde_json::json!(assessment.category())),("provider".into(),serde_json::json!(provider)),("model".into(),serde_json::json!(model)),("operation".into(),serde_json::json!(operation)),("appearance_hash".into(),serde_json::json!(appearance_hash))
-                            ]),&[]);
+                    Box::pin(
+                        PortraitJob {
+                            audit,
+                            classifier,
+                            source,
+                            operation,
+                            primary,
+                            alternate,
+                            request,
+                            general_request,
+                            progress,
                         }
-                        if let Ok(mut message) = progress.lock() {
-                            *message = CREATING_PORTRAIT.to_owned();
-                        }
-                        portrait_event_scoped(&audit,&operation, "provider-start", "pending", 0, 0, "creating");
-                        let started = std::time::Instant::now();
-                        let result = chosen.render_creator(request).await;
-                        {
-                        let _scope = df_observe::audit_scope(audit.clone());
-                        super::actor::record_audit_line("gameplay.creator_portrait_provider", format!(
-                            "CREATOR_PORTRAIT event=provider-finish operation_hash={operation} outcome={} elapsed_ms={}",
-                            result.as_ref().map_or_else(|failure| failure.label(), |_| "ready"), started.elapsed().as_millis()
-                        ));
-                        }
-                        let key = result.map_err(|failure| ResourceFailure::Permanent(failure.label()))?;
-                        let mut generated = Generated::new(key.as_str());
-                        generated.note =
-                            READY_PORTRAIT.to_owned();
-                        Ok(generated)
-                    })
+                        .run(),
+                    )
                 }),
             );
             let sequence = requests.len();
@@ -1243,6 +1261,10 @@ fn portrait_image(bytes: impl IntoResponse) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+#[path = "creator_portrait_route_tests.rs"]
+mod route_tests;
 
 #[cfg(test)]
 mod catalog_tests {

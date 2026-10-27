@@ -78,7 +78,6 @@
 @media(max-width:600px){.hero-creator{padding:16px 18px 28px}.hero-brand{font-size:22px}.hero-session{font-size:11px}.hero-masthead{padding-bottom:14px}.hero-layout{gap:22px;padding-top:16px}.hero-stage{height:140px;border-radius:60px 4px 4px 4px}.hero-figure{left:-8px;top:10px;width:154px;height:231px}.hero-stage-caption{left:140px;padding:10px 12px 10px 0}.hero-stage h2{font-size:22px;line-height:1.1;margin-bottom:6px}.hero-art-label{font-size:12px}.hero-art-note{font-size:11px;line-height:1.4}.hero-intro{font-size:14px;margin:10px 0 20px}.hero-tabs{gap:16px;margin-bottom:20px}.hero-tab{font-size:12px}.hero-basics,.hero-look-grid{column-gap:12px}.hero-card{padding:10px}.hero-card span{font-size:11px}.hero-name-help{margin-bottom:20px}.hero-confirm{padding-bottom:12px}}
 @media(max-width:359px){.hero-creator{padding:14px 14px 24px}.hero-session{max-width:85px;text-align:right}.hero-stage{height:120px}.hero-stage-caption{left:126px;padding-right:8px}.hero-stage h2{display:none}.hero-figure{left:-12px;width:148px;height:222px}.hero-look-grid{grid-template-columns:1fr}.hero-basics{column-gap:10px}.hero-tabs{gap:8px;justify-content:space-between}.hero-tab{min-width:0;font-size:11px}.hero-creator h1{font-size:32px}.hero-card strong{font-size:18px}.hero-card span{font-size:11px}}
 @media(max-height:500px) and (min-width:601px){.hero-creator{padding:14px 22px 28px}.hero-masthead{padding-bottom:12px}.hero-layout{grid-template-columns:160px minmax(0,1fr);gap:24px;padding-top:18px}.hero-stage{position:sticky;top:12px;height:180px;min-height:0;border-radius:60px 60px 4px 4px}.hero-figure{left:0;top:8px;width:160px;height:240px}.hero-stage-caption{inset:auto 0 0;padding:42px 12px 12px;background:linear-gradient(transparent,#0b1820 48%);text-align:center}.hero-stage h2,.hero-art-note{display:none}.hero-art-label{font-size:11px}.hero-creator h1{font-size:32px}.hero-intro{margin-bottom:16px}.hero-basics{margin-bottom:16px}}
-@media(prefers-reduced-motion:reduce){.hero-creator *,.hero-creator *::before,.hero-creator *::after{scroll-behavior:auto;animation:none;transition:none}}
 
 .hero-custom-summary{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;color:var(--hero-ivory);padding:14px 0;border-bottom:1px solid #bda16b40}
 .hero-custom-summary:empty{display:none}
@@ -98,7 +97,6 @@
 @keyframes hero-portrait-breathe{from{opacity:.65}to{opacity:1}}
 @media(max-width:900px){.hero-portrait-shadow{width:210px}.hero-portrait-orbit{top:10px;left:calc(50% - 45px);width:90px;height:90px}.hero-stage-caption{overflow:auto}.hero-portrait-button{flex-shrink:0;font-size:13px}.hero-art-note{flex-shrink:0}.hero-stage h2{flex-shrink:0}}
 @media(max-width:600px){.hero-portrait-shadow{width:140px}.hero-stage-caption{padding-top:6px;padding-bottom:6px}.hero-art-label{display:none}.hero-stage h2{font-size:18px;margin-bottom:2px}.hero-art-note{font-size:12px;line-height:1.25;margin:2px 0 5px}.hero-portrait-button{padding:8px;font-size:12px}}
-@media(prefers-reduced-motion:reduce){.hero-portrait-shadow[data-pending=true],.hero-portrait-shadow[data-pending=true] .hero-portrait-orbit{animation:none}}
 
 /* Name and the first rules choices lead; the portrait follows them as an optional tool. */
 .hero-layout {
@@ -302,15 +300,7 @@
 .hero-portrait-orbit::after{content:'';position:absolute;inset:11px;border:1px dashed #e6c88790;border-radius:50%}
 .hero-figure[data-loaded=true]{animation:hero-portrait-reveal .7s ease-out both}
 @keyframes hero-portrait-reveal{from{opacity:0;filter:brightness(.7)}to{opacity:1;filter:brightness(1)}}
-@media(prefers-reduced-motion:reduce){.hero-figure[data-loaded=true]{animation:none}.hero-portrait-shadow[data-pending=true] .hero-portrait-orbit{animation:none;border-color:#d6ba7c;border-right-color:#6a9999}}
 
-/* Portrait status stays legible with restrained automatic motion on reduced-motion devices. */
-@keyframes hero-portrait-opacity{from{opacity:0}to{opacity:1}}
-@media(prefers-reduced-motion:reduce){
- .hero-portrait-shadow[data-pending=true]{animation:none}
- .hero-portrait-shadow[data-pending=true] .hero-portrait-orbit{animation:hero-portrait-turn 6s linear infinite;box-shadow:none}
- .hero-figure[data-loaded=true]{animation:hero-portrait-opacity .12s linear both;filter:none}
-}
 
 .hero-choice-description{display:block;margin-top:7px;font-size:13px;line-height:1.5;color:#aebfc3;font-weight:400;overflow-wrap:anywhere}
 .hero-design-status{margin:14px 0 20px;padding:10px 13px;border-left:3px solid #c6a36b;color:#d7dcda;font-size:14px;line-height:1.5;background:#10252e}
@@ -342,7 +332,6 @@
 .hero-name-help[data-invalid=true]{color:var(--hero-ember)}
 .hero-creator .hero-field textarea[aria-invalid=true]{border-color:var(--hero-ember)}
 @media(max-width:600px){.hero-library{padding:18px 0 16px}.hero-library h2{font-size:22px}.hero-library-list{gap:12px;margin-top:12px}.hero-library-new,.hero-library-item{flex-basis:84px}.hero-library-arch{width:84px;height:108px;border-radius:42px 42px 4px 4px}.hero-library-arch::after{border-radius:37px 37px 2px 2px}.hero-library-initial,.hero-library-new .hero-library-arch{font-size:38px}.hero-library-new strong,.hero-library-item strong{font-size:15px}}
-@media(prefers-reduced-motion:reduce){.hero-library-arch{transition:none}}
 
 .hero-library-removal{margin-top:4px;min-height:44px;font-size:13px;color:#d2ceb9}
 .hero-library-removal[hidden]{display:none}
@@ -356,6 +345,5 @@
 .hero-library-removal button:disabled{opacity:.5;cursor:wait}
 .hero-library-item{transition:opacity 180ms ease}
 .hero-library-removing{opacity:0;pointer-events:none}
-@media(prefers-reduced-motion:reduce){.hero-library-item{transition:none}}
 
 .hero-library-remove-quiet:focus-visible,.hero-library-remove-keep:focus-visible{outline:none}

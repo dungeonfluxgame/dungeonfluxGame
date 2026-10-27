@@ -1193,6 +1193,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     hand_items: Vec::new(),
                     interior: false,
                     floor: None,
+                    room_image_pending: false,
                 }),
                 journey: Some(rpc::JourneyView {
                     party: vec![rpc::PartyMemberView {

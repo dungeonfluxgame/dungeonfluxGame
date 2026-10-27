@@ -442,6 +442,17 @@ impl References {
         }
     }
 
+    /// True only while work for the selected room can actually produce its photograph.
+    pub(super) fn room_pending(&self, place: &str, imagery_on: bool) -> bool {
+        self.selected_rooms
+            .get(place)
+            .and_then(|target| self.entries.get(target))
+            .is_some_and(|entry| {
+                matches!(entry.status, Status::Queued | Status::Generating)
+                    && (imagery_on || matches!(entry.work.source, Source::ReviewedRoom { .. }))
+            })
+    }
+
     pub(super) fn room(&self, place: &str) -> Option<ImageKey> {
         self.ready(self.selected_rooms.get(place)?)
     }
