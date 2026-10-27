@@ -54,7 +54,7 @@ fn service(rating: ContentRating, out: &Path) -> Imagery {
     let credential = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY");
     Imagery::start(
         ImagerySettings::On(ImageryConfiguration {
-            credential: ImageryCredential::for_test(&credential),
+            credential: Some(ImageryCredential::for_test(&credential)),
             model: ImageEditModel::from_model_id(
                 &std::env::var("DF_L01_MODEL").unwrap_or_else(|_| "gpt-image-2.5-flare".to_owned()),
             )

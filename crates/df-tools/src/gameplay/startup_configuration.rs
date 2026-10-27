@@ -1190,6 +1190,7 @@ const DEFAULT_TEXT_CACHE: &str = "artifacts/tmp/play/text-cache";
 /// Raw storyteller inputs. The credential is read from the process environment only.
 pub(super) struct StorytellerInputs {
     pub(super) credential: Result<String, VarError>,
+    pub(super) codex: bool,
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
     pub(super) cache: Result<String, VarError>,
@@ -1222,6 +1223,7 @@ impl StorytellerInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("OPENAI_API_KEY"),
+            codex: std::env::var("DF_GAMEPLAY_CODEX_MODE").as_deref() == Ok("on"),
             mode: crate::gameplay::media_policy::gates()
                 .input(crate::gameplay::media_policy::Capability::Storyteller),
             model: std::env::var("DF_GAMEPLAY_TEXT_MODEL"),
@@ -1234,6 +1236,7 @@ impl StorytellerInputs {
 /// Everything the storyteller needs to call the text model. Debug never shows the credential.
 pub(super) struct StorytellerSettings {
     pub(super) credential: String,
+    pub(super) codex: bool,
     pub(super) model: String,
     pub(super) cache_directory: std::path::PathBuf,
     /// Covers every attempt of one expression, including the single retry.
@@ -1264,19 +1267,28 @@ pub(super) fn storyteller_mode(
     if optional(inputs.mode)?.is_some_and(|mode| mode.trim().eq_ignore_ascii_case("off")) {
         return Ok(StorytellerMode::Off("DF_GAMEPLAY_STORYTELLER=off"));
     }
-    let credential = match optional(inputs.credential)? {
-        None => return Ok(StorytellerMode::Off("OPENAI_API_KEY not set")),
-        Some(value) if value.is_empty() => {
-            return Ok(StorytellerMode::Off("OPENAI_API_KEY empty"));
+    let credential = if inputs.codex {
+        String::new()
+    } else {
+        match optional(inputs.credential)? {
+            None => return Ok(StorytellerMode::Off("OPENAI_API_KEY not set")),
+            Some(value) if value.is_empty() => {
+                return Ok(StorytellerMode::Off("OPENAI_API_KEY empty"));
+            }
+            Some(value)
+                if value.len() > 8192
+                    || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
+            {
+                return Ok(StorytellerMode::Off("OPENAI_API_KEY not usable"));
+            }
+            Some(value) => value,
         }
-        Some(value)
-            if value.len() > 8192 || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
-        {
-            return Ok(StorytellerMode::Off("OPENAI_API_KEY not usable"));
-        }
-        Some(value) => value,
     };
-    let model = optional(inputs.model)?.unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_owned());
+    let model = if inputs.codex {
+        "codex-cli".to_owned()
+    } else {
+        optional(inputs.model)?.unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_owned())
+    };
     if model.is_empty()
         || model.len() > 128
         || !model
@@ -1300,6 +1312,7 @@ pub(super) fn storyteller_mode(
     let cache = std::path::PathBuf::from(cache);
     Ok(StorytellerMode::On(StorytellerSettings {
         credential,
+        codex: inputs.codex,
         model,
         cache_directory: if cache.is_absolute() {
             cache
@@ -1315,6 +1328,7 @@ pub(super) fn storyteller_mode(
 /// Raw `DF_GAMEPLAY_IMAGERY*` inputs.
 pub(super) struct ImageryInputs {
     pub(super) credential: Result<String, VarError>,
+    pub(super) independent_flux: bool,
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
     pub(super) quality: Result<String, VarError>,
@@ -1328,6 +1342,10 @@ impl ImageryInputs {
     pub(super) fn from_environment() -> Self {
         Self {
             credential: std::env::var("OPENAI_API_KEY"),
+            independent_flux: std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref()
+                == Ok("on")
+                && std::env::var("DF_GAMEPLAY_IMAGERY_PROVIDER").as_deref() == Ok("flux")
+                && std::env::var("FAL_KEY").is_ok_and(|key| !key.is_empty()),
             mode: crate::gameplay::media_policy::gates()
                 .input(crate::gameplay::media_policy::Capability::Pictures),
             model: std::env::var("DF_GAMEPLAY_IMAGERY_MODEL"),
@@ -1422,7 +1440,7 @@ impl ImageryOff {
 
 #[derive(Debug)]
 pub(super) struct ImageryConfiguration {
-    pub(super) credential: ImageryCredential,
+    pub(super) credential: Option<ImageryCredential>,
     pub(super) model: df_providers::ImageEditModel,
     pub(super) quality: df_providers::ImageQuality,
     /// Production draws every kind at `quality` and full size; dev trades fidelity for cost.
@@ -1502,17 +1520,17 @@ pub(super) fn imagery_settings(
     if disabled {
         return Ok(ImagerySettings::Off(ImageryOff::Disabled));
     }
-    let Some(credential) = optional(inputs.credential)?
+    let credential = optional(inputs.credential)?
         .filter(|value| !value.is_empty())
         .filter(|value| {
             value.len() <= 8192 && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        })
-    else {
+        });
+    if credential.is_none() && !inputs.independent_flux {
         return Ok(ImagerySettings::Off(ImageryOff::NoCredential));
-    };
+    }
     let cache = std::path::PathBuf::from(cache);
     Ok(ImagerySettings::On(ImageryConfiguration {
-        credential: ImageryCredential(credential),
+        credential: credential.map(ImageryCredential),
         model,
         quality,
         profile,
@@ -1812,11 +1830,25 @@ mod tests {
             values.map(|value| value.map(str::to_owned).ok_or(VarError::NotPresent));
         StorytellerInputs {
             credential,
+            codex: false,
             mode,
             model,
             cache,
             deadline_seconds: deadline,
         }
+    }
+
+    #[test]
+    fn codex_storyteller_needs_no_openai_credential() {
+        let mut input = storyteller_inputs([None; 5]);
+        input.codex = true;
+        let StorytellerMode::On(settings) = storyteller_mode(input, Path::new("/work")).unwrap()
+        else {
+            panic!("Codex storyteller was not enabled")
+        };
+        assert!(settings.codex);
+        assert!(settings.credential.is_empty());
+        assert_eq!(settings.model, "codex-cli");
     }
 
     #[test]

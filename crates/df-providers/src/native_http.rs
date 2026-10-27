@@ -101,8 +101,11 @@ impl From<ProviderLimits> for NativeHttpLimits {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeHttpRefusal {
     InvalidLimits,
+    InvalidConfiguration,
     InvalidEndpoint,
     InvalidCredential,
+    /// An explicitly selected provider policy refused the request before transmission.
+    ProviderDisabled,
     RequestTooLarge,
     ResponseTooLarge,
     HeadersTooLarge,
@@ -121,8 +124,10 @@ impl NativeHttpRefusal {
             Self::Deadline => ProviderFailureClass::Deadline,
             Self::Unknown => ProviderFailureClass::Unknown,
             Self::InvalidLimits
+            | Self::InvalidConfiguration
             | Self::InvalidEndpoint
             | Self::InvalidCredential
+            | Self::ProviderDisabled
             | Self::RequestTooLarge => ProviderFailureClass::InvalidRequest,
             _ => ProviderFailureClass::Contract,
         }
@@ -132,6 +137,7 @@ impl NativeHttpRefusal {
 pub(crate) struct NativeHttp {
     client: reqwest::Client,
     limits: NativeHttpLimits,
+    openai_api_disabled: bool,
 }
 
 pub(crate) struct NativeHttpResponse {
@@ -203,7 +209,12 @@ impl NativeHttp {
             .timeout(limits.total_timeout)
             .build()
             .map_err(|_| NativeHttpRefusal::Unknown)?;
-        Ok(Self { client, limits })
+        Ok(Self {
+            client,
+            limits,
+            openai_api_disabled: openai_api_block(std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API"))?
+                | openai_api_block(std::env::var("DF_GAMEPLAY_CODEX_MODE"))?,
+        })
     }
 
     pub(crate) async fn execute(
@@ -253,6 +264,9 @@ impl NativeHttp {
         profile: NativeResponseProfile,
         captured: &mut NativeHttpMetadata,
     ) -> Result<NativeHttpResponse, NativeHttpRefusal> {
+        if self.openai_api_disabled && is_openai_api(request.url()) {
+            return Err(NativeHttpRefusal::ProviderDisabled);
+        }
         if request.body().len() > self.limits.maximum_request_bytes {
             return Err(NativeHttpRefusal::RequestTooLarge);
         }
@@ -402,10 +416,137 @@ impl NativeHttp {
     }
 }
 
+fn openai_api_block(value: Result<String, std::env::VarError>) -> Result<bool, NativeHttpRefusal> {
+    match value {
+        Ok(value) if value == "on" => Ok(true),
+        Ok(value) if value == "off" => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(NativeHttpRefusal::InvalidConfiguration),
+    }
+}
+
+fn is_openai_api(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            host.trim_end_matches('.')
+                .eq_ignore_ascii_case("api.openai.com")
+        })
+}
+
 fn classify_transport_error(error: reqwest::Error) -> NativeHttpRefusal {
     if error.is_timeout() {
         NativeHttpRefusal::Deadline
     } else {
         NativeHttpRefusal::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_openai_api_authority_without_blocking_other_suppliers() {
+        assert!(is_openai_api("https://API.OPENAI.COM./v1/responses"));
+        assert!(!is_openai_api(
+            "https://api.openai.com.example.test/v1/responses"
+        ));
+        assert!(!is_openai_api(
+            "https://api.elevenlabs.io/v1/text-to-speech"
+        ));
+        assert!(!is_openai_api("http://127.0.0.1:8000/v1/responses"));
+    }
+
+    #[test]
+    fn openai_api_block_refuses_unrecognized_configuration() {
+        assert_eq!(openai_api_block(Ok("on".into())), Ok(true));
+        assert_eq!(openai_api_block(Ok("off".into())), Ok(false));
+        assert_eq!(
+            openai_api_block(Err(std::env::VarError::NotPresent)),
+            Ok(false)
+        );
+        assert_eq!(
+            openai_api_block(Ok("enabled".into())),
+            Err(NativeHttpRefusal::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn configured_process_mode_is_applied_to_new_transports() {
+        if let Ok(value) = std::env::var("DF_TEST_HTTP_BLOCK_MODE") {
+            let limits = ProviderLimits::new(Duration::from_secs(1), 1024, 1024).build();
+            let result = NativeHttp::new(limits, false);
+            match value.as_str() {
+                "on" => assert!(result.unwrap().openai_api_disabled),
+                "off" => assert!(!result.unwrap().openai_api_disabled),
+                "invalid" => assert!(matches!(
+                    result,
+                    Err(NativeHttpRefusal::InvalidConfiguration)
+                )),
+                _ => panic!("unexpected test mode"),
+            }
+            return;
+        }
+        for mode in ["on", "off", "invalid"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native_http::tests::configured_process_mode_is_applied_to_new_transports",
+                ])
+                .env("DF_TEST_HTTP_BLOCK_MODE", mode)
+                .env("DF_GAMEPLAY_DISABLE_OPENAI_API", mode)
+                .status()
+                .unwrap();
+            assert!(status.success(), "child failed for {mode}");
+        }
+    }
+
+    #[test]
+    fn codex_mode_alone_still_blocks_openai() {
+        if std::env::var_os("DF_TEST_CODEX_GUARD_CHILD").is_some() {
+            let limits = ProviderLimits::new(Duration::from_secs(1), 1024, 1024).build();
+            assert!(NativeHttp::new(limits, false).unwrap().openai_api_disabled);
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_http::tests::codex_mode_alone_still_blocks_openai",
+            ])
+            .env("DF_TEST_CODEX_GUARD_CHILD", "1")
+            .env("DF_GAMEPLAY_CODEX_MODE", "on")
+            .env_remove("DF_GAMEPLAY_DISABLE_OPENAI_API")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn openai_api_block_refuses_all_openai_adapter_endpoints_before_sending() {
+        let limits = ProviderLimits::new(Duration::from_secs(1), 1024, 1024).build();
+        let mut transport = NativeHttp::new(limits, false).unwrap();
+        transport.openai_api_disabled = true;
+        for path in [
+            "responses",
+            "images/generations",
+            "images/edits",
+            "embeddings",
+            "chat/completions",
+        ] {
+            let request = HttpRequest::bearer_native(
+                &format!("https://api.openai.com/v1/{path}"),
+                "test-credential",
+                "application/json".to_owned(),
+                Vec::new(),
+            );
+            let failure = transport
+                .execute(request, Duration::from_secs(1), std::future::pending())
+                .await
+                .err()
+                .expect("policy must reject before attempting a connection");
+            assert_eq!(failure.reason, NativeHttpRefusal::ProviderDisabled);
+        }
     }
 }

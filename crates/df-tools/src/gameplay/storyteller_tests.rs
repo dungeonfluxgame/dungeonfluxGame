@@ -13,6 +13,22 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn blocked_text_request_is_never_sent_even_when_observed() {
+    let blocked = TextResponseError::Observed {
+        failure: Box::new(TextResponseError::Transport(
+            NativeHttpRefusal::ProviderDisabled,
+        )),
+        provider_request_id: None,
+        transport_request_id: None,
+        usage: None,
+    };
+    assert!(text_request_never_sent(&blocked));
+    assert!(!text_request_never_sent(&TextResponseError::Transport(
+        NativeHttpRefusal::Deadline
+    )));
+}
+
 const CREDENTIAL: &str = "credential-private-sentinel";
 type ResponseComputer = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
@@ -244,6 +260,7 @@ pub(in crate::gameplay) fn teller(
 ) -> Storyteller {
     Storyteller::new(StorytellerSettings {
         credential: CREDENTIAL.to_owned(),
+        codex: false,
         model: "gpt-test-model".to_owned(),
         cache_directory: cache.to_owned(),
         deadline,

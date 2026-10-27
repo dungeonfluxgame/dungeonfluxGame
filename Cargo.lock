@@ -1044,6 +1044,7 @@ dependencies = [
  "web-sys",
  "web-time",
  "winapi-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

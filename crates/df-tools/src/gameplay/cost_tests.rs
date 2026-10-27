@@ -1162,6 +1162,7 @@ fn a_speech_request_refused_before_billable_work_is_not_billed() {
         SpeechAdapterReason::InvalidCredential,
         SpeechAdapterReason::Owner(df_provider_api::RequestError::DeadlineExceeded),
         SpeechAdapterReason::Transport(NativeHttpRefusal::RequestTooLarge),
+        SpeechAdapterReason::Transport(NativeHttpRefusal::ProviderDisabled),
         SpeechAdapterReason::Supplier(ProviderFailureClass::InvalidRequest),
         SpeechAdapterReason::Supplier(ProviderFailureClass::Denied),
         SpeechAdapterReason::Supplier(ProviderFailureClass::Capacity),

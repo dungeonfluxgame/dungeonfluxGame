@@ -1062,7 +1062,7 @@ mod tests {
         };
         Imagery::new(
             ImageryConfiguration {
-                credential: ImageryCredential::for_test("fixture-key"),
+                credential: Some(ImageryCredential::for_test("fixture-key")),
                 model: df_providers::ImageEditModel::Gpt25Flare,
                 quality: df_providers::ImageQuality::Medium,
                 profile: Default::default(),

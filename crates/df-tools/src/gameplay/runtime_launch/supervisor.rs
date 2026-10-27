@@ -517,6 +517,33 @@ async fn prepare_database(database: &tokio_postgres::Config) -> Result<(), std::
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn supervised_child_inherits_the_openai_block() {
+        match std::env::var("DF_TEST_SUPERVISOR_GUARD").as_deref() {
+            Ok("child") => {
+                assert_eq!(
+                    std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref(),
+                    Ok("on")
+                );
+            }
+            Ok("parent") => {
+                let status = child_command(std::env::current_exe().unwrap())
+                    .args(["--exact", "gameplay::runtime_launch::supervisor::tests::supervised_child_inherits_the_openai_block"])
+                    .env("DF_TEST_SUPERVISOR_GUARD", "child")
+                    .status().await.unwrap();
+                assert!(status.success());
+            }
+            _ => {
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "gameplay::runtime_launch::supervisor::tests::supervised_child_inherits_the_openai_block"])
+                    .env("DF_TEST_SUPERVISOR_GUARD", "parent")
+                    .env("DF_GAMEPLAY_DISABLE_OPENAI_API", "on")
+                    .status().unwrap();
+                assert!(status.success());
+            }
+        }
+    }
+
     #[test]
     fn network_joining_on_with_a_lan_address_binds_all_interfaces_and_links_use_it() {
         let network = supervised_network(true, Some(Ipv4Addr::new(192, 168, 0, 96)));

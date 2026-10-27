@@ -69,6 +69,8 @@ pub fn network(settings: &Settings, address: Option<Ipv4Addr>) -> Network {
 /// Inherited names the launcher always replaces or removes, so a developer shell's settings
 /// never change a launcher game behind the player's back.
 fn inherited_setting(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    let name = name.as_str();
     name.starts_with("DF_GAMEPLAY_")
         || name.starts_with("DF_JEV_")
         || name.starts_with("DF_HOME_VIDEO_")
@@ -82,6 +84,14 @@ fn inherited_setting(name: &str) -> bool {
                 | "BFL_API_KEY"
                 | "WORLDLABS_API_KEY"
         )
+}
+
+fn scrub_inherited_settings(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(inherited_setting) {
+            command.env_remove(name);
+        }
+    }
 }
 
 /// Whether any feature this game runs with uses `credential`. A key nothing needs is never
@@ -125,6 +135,50 @@ pub struct Launch<'a> {
 }
 
 pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
+    let codex = match std::env::var("DF_GAMEPLAY_CODEX_MODE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => Some("invalid".to_owned()),
+    };
+    let block = match std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => Some("invalid".to_owned()),
+    };
+    environment_with_modes(launch, codex.as_deref(), block.as_deref())
+}
+
+fn environment_with_modes(
+    launch: &Launch<'_>,
+    codex: Option<&str>,
+    block: Option<&str>,
+) -> Vec<(String, String)> {
+    let effective_block = if codex.is_some_and(|value| value != "off") {
+        Some("on")
+    } else {
+        block
+    };
+    let mut result = environment_with_openai_block(launch, effective_block);
+    if let Some(mode) = codex {
+        result.push(("DF_GAMEPLAY_CODEX_MODE".into(), mode.to_owned()));
+        for name in [
+            "DF_GAMEPLAY_CODEX_HOME",
+            "DF_GAMEPLAY_CODEX_WORKDIR",
+            "DF_GAMEPLAY_CODEX_EXECUTABLE",
+            "DF_GAMEPLAY_CODEX_SHA256",
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                result.push((name.into(), value));
+            }
+        }
+    }
+    result
+}
+
+fn environment_with_openai_block(
+    launch: &Launch<'_>,
+    block: Option<&str>,
+) -> Vec<(String, String)> {
     let play_root = &launch.install.play_root;
     let install_root = &launch.install.root;
     let display_path = |value: PathBuf| value.display().to_string();
@@ -186,6 +240,10 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
             display_path(play_root.join("display-tuning.css")),
         ),
     ];
+    let openai_disabled = block.is_some_and(|value| value != "off");
+    if let Some(value) = block {
+        environment.push(("DF_GAMEPLAY_DISABLE_OPENAI_API".into(), value.into()));
+    }
     if std::env::var_os("DF_RUNTIME_LAUNCH_SECRET").is_some() {
         environment.push(("DF_RUNTIME_SUPERVISOR".into(), "1".into()));
         environment.push((
@@ -214,7 +272,9 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
         ("DF_JEV_API_KEY", Credential::Jev),
         ("WORLDLABS_API_KEY", Credential::Worldlabs),
     ] {
-        if !needed(launch.settings, credential) {
+        if (openai_disabled && credential == Credential::Openai)
+            || !needed(launch.settings, credential)
+        {
             continue;
         }
         if let Some(value) = keys.value(credential) {
@@ -227,7 +287,9 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
             ("DF_GAMEPLAY_CREATOR_OPENAI_KEY", Credential::Openai),
             ("DF_GAMEPLAY_CREATOR_JEV_API_KEY", Credential::Jev),
         ] {
-            if let Some(value) = keys.value(credential) {
+            if (!openai_disabled || credential != Credential::Openai)
+                && let Some(value) = keys.value(credential)
+            {
                 environment.push((name.into(), value.into()));
             }
         }
@@ -242,6 +304,20 @@ pub fn environment(launch: &Launch<'_>) -> Vec<(String, String)> {
 
 /// Settings the server would refuse at startup, caught before anything starts.
 pub fn missing_keys(settings: &Settings, keys: &Keys) -> Option<String> {
+    match std::env::var("DF_GAMEPLAY_CODEX_MODE") {
+        Ok(value) if value == "on" && settings.creator_portraits => return Some("Character portraits need the OpenAI API, which Codex mode disables. Turn off character portraits to start.".to_owned()),
+        Ok(value) if value == "on" || value == "off" => {},
+        Err(std::env::VarError::NotPresent) => {},
+        _ => return Some("DF_GAMEPLAY_CODEX_MODE must be on or off.".to_owned()),
+    }
+    match std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API") {
+        Ok(value) if value == "on" && settings.creator_portraits => return Some(
+            "Character portraits require the OpenAI API, which is disabled. Turn off character portraits in Settings to start.".to_owned(),
+        ),
+        Ok(value) if value == "on" || value == "off" => {},
+        Err(std::env::VarError::NotPresent) => {},
+        _ => return Some("DF_GAMEPLAY_DISABLE_OPENAI_API must be on or off.".to_owned()),
+    }
     let has = |credential| keys.value(credential).is_some();
     if settings.creator_portraits && !(has(Credential::Openai) && has(Credential::Jev)) {
         return Some(
@@ -281,11 +357,7 @@ pub fn spawn(launch: &Launch<'_>, log: &Path) -> Result<Child, io::Error> {
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
         .stderr(output);
-    for (name, _) in std::env::vars_os() {
-        if name.to_str().is_some_and(inherited_setting) {
-            command.env_remove(name);
-        }
-    }
+    scrub_inherited_settings(&mut command);
     command.envs(environment(launch));
     detached_spawn(&mut command)
 }
@@ -439,6 +511,42 @@ fn valid_marker(marker: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_case_openai_credentials_are_scrubbed_from_a_child() {
+        match std::env::var("DF_TEST_SCRUB_CHILD").as_deref() {
+            Ok("checked") => {
+                assert!(std::env::var_os("OPENAI_API_KEY").is_none());
+                assert!(std::env::var_os("DF_GAMEPLAY_CREATOR_OPENAI_KEY").is_none());
+            }
+            Ok("source") => {
+                let mut command = Command::new(std::env::current_exe().unwrap());
+                scrub_inherited_settings(&mut command);
+                let status = command
+                    .args([
+                        "--exact",
+                        "server::tests::mixed_case_openai_credentials_are_scrubbed_from_a_child",
+                    ])
+                    .env("DF_TEST_SCRUB_CHILD", "checked")
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+            _ => {
+                let status = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "server::tests::mixed_case_openai_credentials_are_scrubbed_from_a_child",
+                    ])
+                    .env("DF_TEST_SCRUB_CHILD", "source")
+                    .env("openai_api_key", "test-only")
+                    .env("df_gameplay_creator_openai_key", "test-only")
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+        }
+    }
     use crate::credentials;
 
     #[test]
@@ -544,7 +652,7 @@ mod tests {
         let env_file = data.join(".env");
         std::fs::write(
             &env_file,
-            "OPENAI_API_KEY=sk-openai\nDF_JEV_API_KEY=jev-key\nBFL_API_KEY=bfl\n",
+            "OPENAI_API_KEY=sk-openai\nDF_JEV_API_KEY=jev-key\nBFL_API_KEY=bfl\nFAL_KEY=fal-test\n",
         )
         .unwrap();
         let keys =
@@ -588,7 +696,7 @@ mod tests {
             Some("sk-openai")
         );
         assert_eq!(value(&plain, "DF_GAMEPLAY_CREATOR_OPENAI_KEY"), None);
-        assert_eq!(value(&plain, "FAL_KEY"), None);
+        assert_eq!(value(&plain, "FAL_KEY").as_deref(), Some("fal-test"));
         assert_eq!(value(&plain, "DF_GAMEPLAY_PUBLIC_URL"), None);
         assert_eq!(
             value(&plain, "DF_GAMEPLAY_LAUNCHER_TOKEN").as_deref(),
@@ -606,13 +714,94 @@ mod tests {
             value(&portraits, "DF_GAMEPLAY_CREATOR_BFL_KEY").as_deref(),
             Some("bfl")
         );
+        let guarded = environment_with_openai_block(
+            &Launch {
+                install: &install,
+                settings: &settings,
+                keys: &keys,
+                network: &network,
+                database: "df_gameplay_demo_play_x",
+                adventure: Adventure::Harbor,
+                stop_dir: Path::new("/game/play/run/stop.1"),
+                status_token: "0123456789abcdef0123456789abcdef",
+            },
+            Some("on"),
+        );
+        assert_eq!(
+            value(&guarded, "DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref(),
+            Some("on")
+        );
+        assert_eq!(value(&guarded, "OPENAI_API_KEY"), None);
+        assert_eq!(value(&guarded, "DF_GAMEPLAY_CREATOR_OPENAI_KEY"), None);
+        assert_eq!(
+            value(&guarded, "DF_GAMEPLAY_CREATOR_JEV_API_KEY").as_deref(),
+            Some("jev-key")
+        );
+        assert_eq!(
+            value(&guarded, "DF_GAMEPLAY_CREATOR_BFL_KEY").as_deref(),
+            Some("bfl")
+        );
+        let codex = environment_with_modes(
+            &Launch {
+                install: &install,
+                settings: &settings,
+                keys: &keys,
+                network: &network,
+                database: "df_gameplay_demo_play_x",
+                adventure: Adventure::Harbor,
+                stop_dir: Path::new("/game/play/run/stop.1"),
+                status_token: "0123456789abcdef0123456789abcdef",
+            },
+            Some("on"),
+            Some("off"),
+        );
+        assert_eq!(
+            value(&codex, "DF_GAMEPLAY_CODEX_MODE").as_deref(),
+            Some("on")
+        );
+        assert_eq!(
+            value(&codex, "DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref(),
+            Some("on")
+        );
+        assert_eq!(value(&codex, "OPENAI_API_KEY"), None);
+        assert_eq!(value(&codex, "DF_GAMEPLAY_CREATOR_OPENAI_KEY"), None);
         settings.picture_provider = crate::settings::PictureProvider::Flux;
+        let missing_fal_file = data.join("no-fal.env");
+        std::fs::write(
+            &missing_fal_file,
+            "OPENAI_API_KEY=sk-openai\nDF_JEV_API_KEY=jev-key\nBFL_API_KEY=bfl\n",
+        )
+        .unwrap();
+        let missing_fal =
+            credentials::resolve(&std::collections::BTreeMap::new(), Some(&missing_fal_file))
+                .unwrap();
         assert!(
-            missing_keys(&settings, &keys)
+            missing_keys(&settings, &missing_fal)
                 .unwrap()
                 .contains("FLUX pictures")
         );
+        let flux = environment_with_openai_block(
+            &Launch {
+                install: &install,
+                settings: &settings,
+                keys: &keys,
+                network: &network,
+                database: "df_gameplay_demo_play_x",
+                adventure: Adventure::Harbor,
+                stop_dir: Path::new("/game/play/run/stop.1"),
+                status_token: "0123456789abcdef0123456789abcdef",
+            },
+            Some("on"),
+        );
+        assert_eq!(value(&flux, "FAL_KEY").as_deref(), Some("fal-test"));
+        assert_eq!(
+            value(&flux, "DF_GAMEPLAY_IMAGERY_PROVIDER").as_deref(),
+            Some("flux")
+        );
+        assert_eq!(value(&flux, "OPENAI_API_KEY"), None);
         assert!(inherited_setting("DF_GAMEPLAY_HOME_VIDEO"));
+        assert!(inherited_setting("df_gameplay_creator_openai_key"));
+        assert!(inherited_setting("openai_api_key"));
         assert!(inherited_setting("WORLDLABS_API_KEY"));
         assert!(inherited_setting("DF_HOME_VIDEO_KEY_FILE"));
         assert!(!inherited_setting("PATH"));

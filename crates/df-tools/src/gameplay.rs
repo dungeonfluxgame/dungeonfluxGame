@@ -10,6 +10,7 @@ mod beat_script_tests;
 #[cfg(test)]
 mod beat_script_variety_tests;
 mod character_clips;
+mod codex_cli;
 #[cfg(test)]
 mod connection_tests;
 #[cfg(test)]
@@ -1176,6 +1177,16 @@ async fn credits() -> Html<&'static str> {
 pub async fn serve(
     #[cfg(windows)] console_stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    match std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API") {
+        Ok(value) if value == "on" || value == "off" => {}
+        Err(std::env::VarError::NotPresent) => {}
+        _ => {
+            return Err(
+                std::io::Error::other("DF_GAMEPLAY_DISABLE_OPENAI_API must be on or off").into(),
+            );
+        }
+    }
+    codex_cli::validate_startup().await?;
     df_observe::install_audit_sink(actor::record_audit_line);
     if let Some(command) = std::env::args_os().nth(1)
         && (command == "--campaign-run" || command == "--campaign-status")

@@ -11,6 +11,42 @@ Run from the repository root so relative content paths resolve consistently.
 The executable reads process environment settings; it does **not** automatically
 read `.env` or a general launcher JSON/TOML configuration file.
 
+### Blocking the OpenAI API for local tests
+
+Set `DF_GAMEPLAY_DISABLE_OPENAI_API=on` in the environment before starting the
+server or Windows launcher. New game processes refuse OpenAI API requests before
+sending them; the launcher also withholds OpenAI credentials. Set it to `off`, or
+remove it, for ordinary configuration. Other values are rejected at startup.
+Already-running processes retain their prior settings. OpenAI-backed features will
+be unavailable, and enabled creator portraits prevent launcher startup. Explicitly
+configured FLUX pictures remain available, but OpenAI head location and image
+judging are unavailable. Other providers, including fal, Jev and ElevenLabs, are
+unchanged and may incur charges. This switch does not provide a Codex-backed
+image generator.
+
+### Experimental Codex storyteller on Windows
+
+The optional local-development storyteller uses a separately signed-in ChatGPT Codex
+home. Create an empty private folder outside a repository for that home, sign in with
+`CODEX_HOME` set to the folder, and create a separate empty scratch directory outside
+the repository. Do not copy or link credentials from another home. Start a new launcher
+or direct server with `DF_GAMEPLAY_CODEX_MODE=on`, `DF_GAMEPLAY_DISABLE_OPENAI_API=on`,
+and absolute paths in `DF_GAMEPLAY_CODEX_HOME`, `DF_GAMEPLAY_CODEX_WORKDIR`, and
+`DF_GAMEPLAY_CODEX_EXECUTABLE`. Set `DF_GAMEPLAY_CODEX_SHA256` to the executable's
+SHA-256 (PowerShell: `(Get-FileHash -Algorithm SHA256 <path>).Hash`). The tested CLI
+version is 0.150.1; a different binary or version is refused.
+
+The CLI runs with a restricted environment and a one-process Windows job. At startup and
+before each turn, it checks ChatGPT authentication, refuses system Codex configuration
+files and configured MCP servers;
+shell, apps, plugins, hooks, web, code mode, and image tools are disabled. This is a
+local testing boundary: system or cloud configuration can change between the MCP check
+and the CLI turn, and network-based MCP tools are not prevented by the process limit.
+Use it only with trusted local users and configuration. The output schema is checked
+after generation; the CLI cannot enforce the game's output-token limit during generation,
+and its startup and model latency can exceed gameplay deadlines. Codex consumes account
+allowance and applicable credits. It does not provide game image generation in this mode.
+
 | Invocation | Behavior |
 | --- | --- |
 | `df-transport-fixture.exe --gameplay-demo <web_dir> <asset_dir>` | Run the interactive game server. `web_dir` contains generated `df_tools.js` and `df_tools_bg.wasm`; `asset_dir` normally points to `assets/ui`. PostgreSQL must already be running. |
@@ -199,10 +235,10 @@ remain separate. Existing cached character clips are not deleted by these switch
 
 `DF_GAMEPLAY_IMAGERY_PROVIDER` unset/empty/`openai` selects OpenAI. Explicit `flux`
 requires `FAL_KEY`; unknown values refuse. OpenAI was already the model default;
-this changes automatic routing when both keys are present. The existing imagery
-configuration still requires a usable OpenAI credential before routing, so this is
-not a new promise that a fal-only environment works. No provider call is implied by
-reading configuration or listing the planned species/class catalog.
+this changes automatic routing when both keys are present. In the OpenAI-blocked
+local testing mode, explicit FLUX can start without an OpenAI credential; in ordinary
+mode the existing imagery configuration still requires one. No provider call is implied
+by reading configuration or listing the planned species/class catalog.
 
 ### Generation gates
 

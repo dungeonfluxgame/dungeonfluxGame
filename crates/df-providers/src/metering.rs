@@ -95,8 +95,10 @@ pub const fn refusal_may_be_billed(refusal: NativeHttpRefusal) -> bool {
     !matches!(
         refusal,
         NativeHttpRefusal::InvalidLimits
+            | NativeHttpRefusal::InvalidConfiguration
             | NativeHttpRefusal::InvalidEndpoint
             | NativeHttpRefusal::InvalidCredential
+            | NativeHttpRefusal::ProviderDisabled
             | NativeHttpRefusal::RequestTooLarge
     )
 }
@@ -215,6 +217,7 @@ mod tests {
         }
         for (refusal, refused) in [
             (NativeHttpRefusal::InvalidEndpoint, true),
+            (NativeHttpRefusal::ProviderDisabled, true),
             (NativeHttpRefusal::RequestTooLarge, true),
             (NativeHttpRefusal::Deadline, false),
             (NativeHttpRefusal::Unknown, false),

@@ -76,6 +76,18 @@ impl TextOutputSchema {
         serde_json::json!({"type":"json_schema","name":self.name,"strict":true,"schema":self.schema})
     }
 
+    /// The validated schema, for adapters that provide their own transport.
+    pub fn json_schema(&self) -> &Value {
+        &self.schema
+    }
+
+    /// Parse a bounded, duplicate-free output and validate it against this schema.
+    pub fn parse_output(&self, bytes: &[u8]) -> Result<Value, TextSchemaError> {
+        let value = parse_unique_json(bytes, self.limits)?;
+        self.validate_output(&value)?;
+        Ok(value)
+    }
+
     pub(crate) fn limits(&self) -> TextSchemaLimits {
         self.limits
     }

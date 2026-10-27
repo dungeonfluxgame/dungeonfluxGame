@@ -121,6 +121,8 @@ pub(in crate::gameplay) fn now_ms() -> u64 {
 pub(in crate::gameplay) enum Provider {
     #[serde(rename = "openai")]
     OpenAi,
+    #[serde(rename = "codex_subscription")]
+    CodexSubscription,
     #[serde(rename = "elevenlabs")]
     ElevenLabs,
     #[serde(rename = "fal")]
@@ -134,8 +136,9 @@ pub(in crate::gameplay) enum Provider {
 }
 
 impl Provider {
-    pub(in crate::gameplay) const ALL: [Self; 6] = [
+    pub(in crate::gameplay) const ALL: [Self; 7] = [
         Self::OpenAi,
+        Self::CodexSubscription,
         Self::ElevenLabs,
         Self::Fal,
         Self::Bfl,
@@ -146,6 +149,7 @@ impl Provider {
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::CodexSubscription => "codex_subscription",
             Self::ElevenLabs => "elevenlabs",
             Self::Fal => "fal",
             Self::Bfl => "bfl",
@@ -871,6 +875,21 @@ pub(in crate::gameplay) fn text_call(model: &str, purpose: &str) -> CallSpec {
     CallSpec::new(Provider::OpenAi, model, Cause::Storyteller, purpose)
 }
 
+/// A subscription call is counted separately, without inventing an API tariff.
+pub(in crate::gameplay) fn codex_text_call(purpose: &str) -> CallSpec {
+    CallSpec::new(
+        Provider::CodexSubscription,
+        "codex-cli",
+        Cause::Storyteller,
+        purpose,
+    )
+    .with_maxima(vec![(Category::Calls, 1)])
+}
+
+pub(in crate::gameplay) fn subscription_usage() -> Usage {
+    Usage::reported(vec![(Category::Calls, 1)])
+}
+
 /// A text call's supplier-reported tokens. Cached and cache-written tokens are part of the
 /// reported input, so the plain input line is what remains.
 pub(in crate::gameplay) fn text_usage(usage: &TextTokenUsage) -> Usage {
@@ -917,8 +936,10 @@ pub(in crate::gameplay) const fn speech_failure_may_be_billed(reason: SpeechAdap
         | SpeechAdapterReason::Owner(_)
         | SpeechAdapterReason::Transport(
             NativeHttpRefusal::InvalidLimits
+            | NativeHttpRefusal::InvalidConfiguration
             | NativeHttpRefusal::InvalidEndpoint
             | NativeHttpRefusal::InvalidCredential
+            | NativeHttpRefusal::ProviderDisabled
             | NativeHttpRefusal::RequestTooLarge,
         )
         | SpeechAdapterReason::Supplier(

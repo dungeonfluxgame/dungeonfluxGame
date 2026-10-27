@@ -113,7 +113,13 @@ impl Portraits {
             )?));
             let provider = df_providers::NativeImageEditProvider::new(
                 df_providers::ImageEditConfig::live(),
-                settings.credential.expose(),
+                settings
+                    .credential
+                    .as_ref()
+                    .ok_or_else(|| {
+                        io::Error::other("Creator portrait OpenAI credential unavailable")
+                    })?
+                    .expose(),
                 settings.deadline,
             )
             .map_err(|_| io::Error::other("Creator portrait provider configuration refused"))?;

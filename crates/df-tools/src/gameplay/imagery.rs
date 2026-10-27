@@ -747,7 +747,11 @@ impl ImageRoute {
             .map_err(|_| io::Error::other("imagery provider configuration refused")),
             None => NativeImageEditProvider::new(
                 ImageEditConfig::live(),
-                configuration.credential.expose(),
+                configuration
+                    .credential
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("OpenAI imagery credential unavailable"))?
+                    .expose(),
                 configuration.deadline,
             )
             .map(Self::OpenAi)
@@ -867,20 +871,34 @@ impl Imagery {
         let provider = ImageRoute::configured(&configuration)?;
         let hub = super::resources::Hub::new();
         let ledger = Arc::clone(hub.ledger());
-        let locator = NativeHeadLocator::new(
-            HeadLocateConfig::live(),
-            configuration.credential.expose(),
-            configuration.deadline,
-            super::cost::LedgerMeter::shared(&ledger, "head_locator"),
-        )
-        .ok();
-        let judge = NativePlateJudge::new(
-            PlateJudgeConfig::live(),
-            configuration.credential.expose(),
-            PHOTO_CHECK_DEADLINE,
-            super::cost::LedgerMeter::shared(&ledger, "photo_check"),
-        )
-        .ok();
+        let openai_disabled =
+            std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref() == Ok("on");
+        let locator = (!openai_disabled)
+            .then(|| {
+                configuration.credential.as_ref().and_then(|credential| {
+                    NativeHeadLocator::new(
+                        HeadLocateConfig::live(),
+                        credential.expose(),
+                        configuration.deadline,
+                        super::cost::LedgerMeter::shared(&ledger, "head_locator"),
+                    )
+                    .ok()
+                })
+            })
+            .flatten();
+        let judge = (!openai_disabled)
+            .then(|| {
+                configuration.credential.as_ref().and_then(|credential| {
+                    NativePlateJudge::new(
+                        PlateJudgeConfig::live(),
+                        credential.expose(),
+                        PHOTO_CHECK_DEADLINE,
+                        super::cost::LedgerMeter::shared(&ledger, "photo_check"),
+                    )
+                    .ok()
+                })
+            })
+            .flatten();
         let imagery = Self::new_in_hub(configuration, provider, manifest_directory, hub, false)?;
         if let Mode::On { engine, .. } = &imagery.inner.mode {
             engine.figure_masks.configure();
@@ -2434,6 +2452,9 @@ fn failure_of(error: ImageEditError) -> ImageFailure {
         ImageEditError::QuotaExhausted => ImageFailure::QuotaExhausted,
         ImageEditError::Unauthorized | ImageEditError::Provider(_) => ImageFailure::Provider,
         ImageEditError::Transport(NativeHttpRefusal::Deadline) => ImageFailure::DeadlineExceeded,
+        ImageEditError::Transport(NativeHttpRefusal::ProviderDisabled) => {
+            ImageFailure::InvalidRequest
+        }
         ImageEditError::Transport(NativeHttpRefusal::Unknown | NativeHttpRefusal::Cancelled) => {
             ImageFailure::Interrupted
         }

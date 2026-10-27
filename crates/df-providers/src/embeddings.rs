@@ -64,7 +64,10 @@ impl EmbeddingError {
     pub const fn was_sent(self) -> bool {
         !matches!(
             self,
-            Self::InvalidRequest | Self::Transport(NativeHttpRefusal::InvalidEndpoint)
+            Self::InvalidRequest
+                | Self::Transport(
+                    NativeHttpRefusal::InvalidEndpoint | NativeHttpRefusal::ProviderDisabled
+                )
         )
     }
 
@@ -261,6 +264,12 @@ fn parse_response(body: &[u8], expected: usize) -> Result<EmbeddingBatch, Embedd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_provider_is_not_sent() {
+        assert!(!EmbeddingError::Transport(NativeHttpRefusal::ProviderDisabled).was_sent());
+        assert!(EmbeddingError::Transport(NativeHttpRefusal::Deadline).was_sent());
+    }
 
     fn answer(indexes: &[usize], width: usize) -> Vec<u8> {
         let data: Vec<Value> = indexes

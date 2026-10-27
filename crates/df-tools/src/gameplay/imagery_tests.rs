@@ -33,6 +33,16 @@ use super::{
     *,
 };
 
+#[test]
+fn blocked_image_request_is_a_local_refusal() {
+    assert!(matches!(
+        failure_of(ImageEditError::Transport(
+            NativeHttpRefusal::ProviderDisabled
+        )),
+        ImageFailure::InvalidRequest
+    ));
+}
+
 const SIZE: (u32, u32) = (1024, 640);
 /// What a successful fake call reports: 100 text, 900 image and 300 output tokens.
 const FAKE_MICRO_DOLLARS: u64 = 100 * 5 + 900 * 8 + 300 * 30;
@@ -919,7 +929,7 @@ fn imagery_in(
     .unwrap();
     Imagery::new(
         ImageryConfiguration {
-            credential: ImageryCredential::for_test("test-credential"),
+            credential: Some(ImageryCredential::for_test("test-credential")),
             model: ImageEditModel::Gpt25Flare,
             quality: ImageQuality::Medium,
             profile: Default::default(),
@@ -2555,6 +2565,7 @@ mod settings {
     fn inputs() -> ImageryInputs {
         ImageryInputs {
             credential: Ok("sk-test-credential".to_owned()),
+            independent_flux: false,
             mode: Err(NotPresent),
             model: Err(NotPresent),
             quality: Err(NotPresent),
@@ -2567,6 +2578,72 @@ mod settings {
 
     fn settings(inputs: ImageryInputs) -> Result<ImagerySettings, std::io::Error> {
         imagery_settings(inputs, Path::new("/run"), ContentRating::Mature)
+    }
+
+    #[test]
+    fn independent_flux_does_not_require_an_openai_credential() {
+        let mut request = inputs();
+        request.credential = Err(NotPresent);
+        request.independent_flux = true;
+        let ImagerySettings::On(configuration) = settings(request).unwrap() else {
+            panic!("configured independent FLUX should remain available");
+        };
+        assert!(configuration.credential.is_none());
+        let mut request = inputs();
+        request.credential = Err(NotPresent);
+        assert!(matches!(
+            settings(request).unwrap(),
+            ImagerySettings::Off(_)
+        ));
+    }
+
+    #[test]
+    fn guarded_flux_starts_from_the_actual_environment() {
+        if let Ok(mode) = std::env::var("DF_TEST_GUARDED_FLUX") {
+            let current = std::env::current_dir().unwrap();
+            let parsed = imagery_settings(
+                ImageryInputs::from_environment(),
+                &current,
+                ContentRating::Mature,
+            )
+            .unwrap();
+            if mode == "on" {
+                let imagery = Imagery::start(parsed, None).unwrap();
+                let Mode::On { engine, .. } = &imagery.inner.mode else {
+                    panic!("FLUX was not started")
+                };
+                assert!(matches!(engine.provider, ImageRoute::Flux(_)));
+                assert!(engine.locator.get().is_none());
+                assert!(engine.judge.get().is_none());
+                use super::super::super::startup_configuration::{
+                    StorytellerInputs, StorytellerMode, storyteller_mode,
+                };
+                assert!(matches!(
+                    storyteller_mode(StorytellerInputs::from_environment(), &current).unwrap(),
+                    StorytellerMode::Off(_)
+                ));
+            } else {
+                assert!(matches!(parsed, ImagerySettings::Off(_)));
+            }
+            return;
+        }
+        for mode in ["on", "off"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.env_clear();
+            for name in ["SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP"] {
+                if let Some(value) = std::env::var_os(name) {
+                    command.env(name, value);
+                }
+            }
+            let status = command.args(["--exact", "gameplay::imagery::tests::settings::guarded_flux_starts_from_the_actual_environment"])
+                .env("DF_TEST_GUARDED_FLUX", mode)
+                .env("DF_GAMEPLAY_DISABLE_OPENAI_API", mode)
+                .env("DF_GAMEPLAY_IMAGERY_PROVIDER", "flux")
+                .env("DF_GAMEPLAY_IMAGERY", "on")
+                .env("FAL_KEY", "test-key")
+                .status().unwrap();
+            assert!(status.success(), "child failed for {mode}");
+        }
     }
 
     #[test]

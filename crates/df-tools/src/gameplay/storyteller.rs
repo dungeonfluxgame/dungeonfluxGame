@@ -459,6 +459,7 @@ impl std::error::Error for StorytellerError {}
 
 struct Online {
     credential: String,
+    codex: bool,
     model: String,
     cache_directory: PathBuf,
     deadline: Duration,
@@ -472,6 +473,16 @@ struct Online {
     usage_log: Mutex<Vec<df_providers::TextTokenUsage>>,
     #[cfg(test)]
     loopback: Option<SocketAddr>,
+}
+
+impl Online {
+    fn provider_label(&self) -> &'static str {
+        if self.codex {
+            "codex_subscription"
+        } else {
+            "openai"
+        }
+    }
 }
 
 /// The server's language-model voice. Cheap to share behind an `Arc`.
@@ -513,6 +524,7 @@ impl Storyteller {
         Self {
             online: Some(Online {
                 credential: settings.credential,
+                codex: settings.codex,
                 model: settings.model,
                 cache_directory: settings.cache_directory,
                 deadline: settings.deadline,
@@ -645,7 +657,7 @@ impl Storyteller {
         let prompt = build_prompt(request, None);
         let reserved = online.estimate(&prompt, request);
         match online
-            .attempt(request, &key, 1, &prompt, reserved, Instant::now())
+            .attempt(request, &key, 1, &prompt, reserved, Instant::now(), None)
             .await?
         {
             Attempt::Text(values, _) => Ok(Some(values)),
@@ -939,7 +951,15 @@ impl Storyteller {
             );
             record_text_attempt(online, request, key, attempt, reserved);
             match online
-                .attempt(&narrowed, key, attempt, &prompt, reserved, started)
+                .attempt(
+                    &narrowed,
+                    key,
+                    attempt,
+                    &prompt,
+                    reserved,
+                    started,
+                    complaint.as_deref(),
+                )
                 .await
             {
                 Ok(Attempt::Text(values, spent)) => {
@@ -1117,7 +1137,15 @@ impl Storyteller {
             );
             record_text_attempt(online, request, key, attempt, reserved);
             let answer = online
-                .attempt(request, key, attempt, &prompt, reserved, started)
+                .attempt(
+                    request,
+                    key,
+                    attempt,
+                    &prompt,
+                    reserved,
+                    started,
+                    complaint.as_deref(),
+                )
                 .await;
             match answer {
                 Ok(Attempt::Text(values, _)) => match validate(request, &values)
@@ -1236,7 +1264,7 @@ async fn judge_srd_material(
     let prompt = build_prompt(&review, None);
     let reserved = online.estimate(&prompt, &review);
     match online
-        .attempt(&review, &key, 1, &prompt, reserved, started)
+        .attempt(&review, &key, 1, &prompt, reserved, started, None)
         .await?
     {
         Attempt::Text(values, spent)
@@ -1328,6 +1356,20 @@ fn record_srd_guard_degraded(
     );
 }
 
+fn text_request_never_sent(error: &TextResponseError) -> bool {
+    matches!(
+        error.reason(),
+        TextResponseError::UnregisteredRoute
+            | TextResponseError::InvalidConfiguration
+            | TextResponseError::InvalidCredential
+            | TextResponseError::InvalidInput
+            | TextResponseError::ModeDoesNotDispatch
+            | TextResponseError::SchemaConfigurationMismatch
+            | TextResponseError::Owner(_)
+            | TextResponseError::Transport(NativeHttpRefusal::ProviderDisabled)
+    )
+}
+
 impl Online {
     /// A conservative estimate of what the call will use, charged when it is sent and corrected
     /// when the supplier reports the real usage.
@@ -1360,6 +1402,7 @@ impl Online {
         prompt: &str,
         reserved: u64,
         started: Instant,
+        complaint: Option<&str>,
     ) -> Result<Attempt, StorytellerError> {
         let remaining_time = request
             .profile
@@ -1368,6 +1411,84 @@ impl Online {
             .saturating_sub(started.elapsed());
         if remaining_time.is_zero() {
             return Err(StorytellerError::DeadlineExceeded);
+        }
+        if self.codex {
+            let schema = output_schema(request.slots).map_err(StorytellerError::InvalidRequest)?;
+            let current =
+                storyteller_binding(request, key, attempt, schema.clone(), remaining_time)
+                    .ok_or(StorytellerError::InvalidRequest("identity"))?;
+            let declared = u128::from(reserved);
+            let ceiling = declared.saturating_mul(2);
+            let request_binding = TextRequest::new(
+                storyteller_binding(request, key, attempt, schema.clone(), remaining_time)
+                    .ok_or(StorytellerError::InvalidRequest("identity"))?,
+                prompt.as_bytes(),
+                RequestUsage::new(
+                    declared,
+                    Duration::ZERO,
+                    Usage::new(declared, UsageUnit::Token),
+                ),
+                RequestLimits::new(
+                    MAXIMUM_PROMPT_BYTES + 1024,
+                    ceiling,
+                    remaining_time,
+                    Usage::new(ceiling, UsageUnit::Token),
+                )
+                .map_err(|_| StorytellerError::InvalidRequest("limits"))?,
+                RequestOwnerState {
+                    current: Some(&current),
+                    elapsed: Duration::ZERO,
+                    cancelled: false,
+                },
+            )
+            .map_err(|_| StorytellerError::InvalidRequest("provider request"))?;
+            let submitted_at = Instant::now();
+            self.kit.get().charge(Unit::TextToken, reserved);
+            let billed = self.kit.get().hub().ledger().begin_call(
+                super::cost::codex_text_call(request.purpose),
+                &[(super::cost::Category::Calls, 1)],
+            );
+            let task = build_prompt_inner(request, complaint, false);
+            let answer =
+                match super::codex_cli::text(&task, request.facts, &schema, remaining_time).await {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        if matches!(
+                            error,
+                            super::codex_cli::CodexError::Authentication
+                                | super::codex_cli::CodexError::Configuration
+                        ) {
+                            self.release(reserved);
+                            billed.not_billed();
+                        } else {
+                            drop(billed);
+                        }
+                        return Err(match error {
+                            super::codex_cli::CodexError::Deadline => {
+                                StorytellerError::DeadlineExceeded
+                            }
+                            _ => StorytellerError::Provider(ProviderFailureClass::Unavailable),
+                        });
+                    }
+                };
+            billed.settle(super::cost::subscription_usage());
+            self.reconcile(reserved, u128::from(answer.tokens));
+            request_binding
+                .checked()
+                .validate_current(RequestOwnerState {
+                    current: Some(&current),
+                    elapsed: submitted_at.elapsed(),
+                    cancelled: false,
+                })
+                .map_err(|_| StorytellerError::DeadlineExceeded)?;
+            if answer.output_tokens > u64::try_from(output_token_limit(request)).unwrap_or(u64::MAX)
+            {
+                return Err(StorytellerError::Provider(ProviderFailureClass::Contract));
+            }
+            return Ok(match answer.value.as_ref().and_then(string_fields) {
+                Some(values) => Attempt::Text(values, answer.tokens),
+                None => Attempt::BadShape,
+            });
         }
         let call = self.build_call(request, key, attempt, prompt, reserved, remaining_time)?;
         // The call is about to be sent: the estimate is charged from here. It stays charged if
@@ -1430,16 +1551,7 @@ impl Online {
         billed: super::cost::BilledCall,
     ) -> Result<Attempt, StorytellerError> {
         let reason = error.reason();
-        let never_sent = matches!(
-            error,
-            TextResponseError::UnregisteredRoute
-                | TextResponseError::InvalidConfiguration
-                | TextResponseError::InvalidCredential
-                | TextResponseError::InvalidInput
-                | TextResponseError::ModeDoesNotDispatch
-                | TextResponseError::SchemaConfigurationMismatch
-                | TextResponseError::Owner(_)
-        );
+        let never_sent = text_request_never_sent(&error);
         let refused_by_supplier = matches!(
             reason,
             TextResponseError::Supplier(
@@ -1914,8 +2026,9 @@ fn record_text_resource(
         .map_or(("none".to_owned(), "none".to_owned()), |(a, r)| {
             (a.to_string(), r.to_string())
         });
+    let provider = online.provider_label();
     let line = format!(
-        "TEXT_MODEL {stage} status={status} provider=openai model={} resource_id={resource_id} purpose={} elapsed_ms={elapsed} failure_category={failure} accepted_slots={accepted} rejected_slots={rejected}",
+        "TEXT_MODEL {stage} status={status} provider={provider} model={} resource_id={resource_id} purpose={} elapsed_ms={elapsed} failure_category={failure} accepted_slots={accepted} rejected_slots={rejected}",
         online.model, request.purpose,
     );
     let fields = Map::from_iter([
@@ -1924,7 +2037,7 @@ fn record_text_resource(
             Value::String("text_model".to_owned()),
         ),
         ("resource_id".to_owned(), Value::String(resource_id.clone())),
-        ("provider".to_owned(), Value::String("openai".to_owned())),
+        ("provider".to_owned(), Value::String(provider.to_owned())),
         ("model".to_owned(), Value::String(online.model.clone())),
         (
             "purpose".to_owned(),
@@ -1949,7 +2062,7 @@ fn record_text_resource(
     let attributes = [
         ("gameplay.resource.type", "text_model".to_owned()),
         ("gameplay.resource.id", resource_id),
-        ("gameplay.text_model.provider", "openai".to_owned()),
+        ("gameplay.text_model.provider", provider.to_owned()),
         ("gameplay.text_model.model", online.model.clone()),
         ("gameplay.text_model.purpose", request.purpose.to_owned()),
         ("gameplay.resource.stage", stage.to_owned()),
@@ -1970,8 +2083,9 @@ fn record_text_attempt(
     tokens_reserved: u64,
 ) {
     let resource_id = hex(key);
+    let provider = online.provider_label();
     let line = format!(
-        "TEXT_MODEL queued provider=openai model={} resource_id={resource_id} purpose={} attempt={attempt} tokens_reserved={tokens_reserved}",
+        "TEXT_MODEL queued provider={provider} model={} resource_id={resource_id} purpose={} attempt={attempt} tokens_reserved={tokens_reserved}",
         online.model, request.purpose,
     );
     let fields = Map::from_iter([
@@ -1980,7 +2094,7 @@ fn record_text_attempt(
             Value::String("text_model".to_owned()),
         ),
         ("resource_id".to_owned(), Value::String(resource_id.clone())),
-        ("provider".to_owned(), Value::String("openai".to_owned())),
+        ("provider".to_owned(), Value::String(provider.to_owned())),
         ("model".to_owned(), Value::String(online.model.clone())),
         (
             "purpose".to_owned(),
@@ -1994,7 +2108,7 @@ fn record_text_attempt(
     let attributes = [
         ("gameplay.resource.type", "text_model".to_owned()),
         ("gameplay.resource.id", resource_id),
-        ("gameplay.text_model.provider", "openai".to_owned()),
+        ("gameplay.text_model.provider", provider.to_owned()),
         ("gameplay.text_model.model", online.model.clone()),
         ("gameplay.text_model.purpose", request.purpose.to_owned()),
         ("gameplay.resource.stage", "queued".to_owned()),
@@ -2071,6 +2185,14 @@ fn provider_reason_label(reason: &TextResponseError) -> &'static str {
 }
 
 pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
+    build_prompt_inner(request, complaint, true)
+}
+
+fn build_prompt_inner(
+    request: &Expression<'_>,
+    complaint: Option<&str>,
+    include_facts: bool,
+) -> String {
     let slots: Vec<Value> = request
         .slots
         .iter()
@@ -2100,7 +2222,9 @@ pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) ->
         prompt.push_str(&format!("STYLE: {}\n", request.style));
     }
     prompt.push_str(&format!("SLOTS: {}\n", Value::Array(slots)));
-    prompt.push_str(&format!("FACTS: {}\n", canonical(request.facts)));
+    if include_facts {
+        prompt.push_str(&format!("FACTS: {}\n", canonical(request.facts)));
+    }
     prompt.push_str("Answer with the JSON object holding exactly the requested slots.\n");
     if let Some(complaint) = complaint {
         prompt.push_str(&format!(
