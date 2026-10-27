@@ -848,28 +848,41 @@ impl ImageRoute {
 
 impl Imagery {
     /// An image service that registers nothing and never renders.
+    #[cfg(test)]
     pub(super) fn disabled(reason: ImageryOff) -> Self {
+        Self::disabled_in_hub(reason, super::resources::Hub::new())
+    }
+
+    fn disabled_in_hub(reason: ImageryOff, hub: super::resources::Hub) -> Self {
         Self {
             inner: Arc::new(Inner {
                 registry: Mutex::new(Registry::default()),
                 mode: Mode::Off(reason),
-                hub: super::resources::Hub::new(),
+                hub,
             }),
         }
     }
 
     /// Builds the production OpenAI image-edit route from validated settings. The run-local
     /// manifest is written to `manifest_directory` when given.
+    #[cfg(test)]
     pub(super) fn start(
         settings: ImagerySettings,
         manifest_directory: Option<&Path>,
     ) -> Result<Self, io::Error> {
+        Self::start_in_hub(settings, manifest_directory, super::resources::Hub::new())
+    }
+
+    pub(super) fn start_in_hub(
+        settings: ImagerySettings,
+        manifest_directory: Option<&Path>,
+        hub: super::resources::Hub,
+    ) -> Result<Self, io::Error> {
         let configuration = match settings {
-            ImagerySettings::Off(reason) => return Ok(Self::disabled(reason)),
+            ImagerySettings::Off(reason) => return Ok(Self::disabled_in_hub(reason, hub)),
             ImagerySettings::On(configuration) => configuration,
         };
         let provider = ImageRoute::configured(&configuration)?;
-        let hub = super::resources::Hub::new();
         let ledger = Arc::clone(hub.ledger());
         let openai_disabled =
             std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API").as_deref() == Ok("on");
@@ -1108,6 +1121,7 @@ impl Imagery {
     }
 
     /// Uses `provider`; tests pass one pointed at a loopback fake.
+    #[cfg(test)]
     pub(super) fn new(
         configuration: ImageryConfiguration,
         provider: impl Into<ImageRoute>,

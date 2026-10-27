@@ -390,6 +390,54 @@ pub(in crate::gameplay) fn model(endpoint: &FakeEndpoint) -> ApproachModel {
     }))
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn startup_jev_uses_the_run_ledger_before_the_cost_book_opens() {
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let hub = crate::gameplay::resources::Hub::new();
+    let model = ApproachModel::configured_with_ledger(
+        Some(ApproachSettings {
+            credential: "jev-fixture-sentinel".to_owned(),
+            base_url: format!("http://{}", endpoint.address),
+        }),
+        hub.ledger(),
+    );
+    assert_eq!(
+        model
+            .choose_option(
+                &json!({}),
+                "Choose an option.",
+                &["First".to_owned(), "Second".to_owned()],
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(endpoint.bodies().len(), 1);
+
+    let imagery = crate::gameplay::dev_control::direct::start_imagery(
+        crate::gameplay::startup_configuration::ImagerySettings::Off(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
+        None,
+        None,
+        hub.clone(),
+    )
+    .unwrap();
+    assert!(std::sync::Arc::ptr_eq(hub.ledger(), imagery.hub().ledger()));
+
+    hub.ledger()
+        .costs()
+        .open(
+            "fixture",
+            None,
+            crate::gameplay::cost::PriceTable::default(),
+            crate::gameplay::cost::PricingStatus::NotLoaded,
+            1,
+        )
+        .unwrap();
+    assert_eq!(hub.ledger().costs().totals().calls, 1);
+}
+
 pub(in crate::gameplay) fn answer(option: &str) -> Reply {
     Reply::Status(
         200,

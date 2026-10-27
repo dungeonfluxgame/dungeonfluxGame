@@ -912,6 +912,21 @@ impl ApproachModel {
         }
     }
 
+    pub(super) fn configured_with_ledger(
+        settings: Option<ApproachSettings>,
+        ledger: &std::sync::Arc<super::resources::SpendLedger>,
+    ) -> Self {
+        Self {
+            provider: settings.map(|settings| {
+                SystemOneChoiceProvider::new(
+                    settings.credential,
+                    &settings.base_url,
+                    LedgerMeter::shared(ledger, "approach"),
+                )
+            }),
+        }
+    }
+
     pub(super) fn startup_line(&self) -> &'static str {
         if self.provider.is_some() {
             "APPROACH on model=jev-latest"

@@ -1411,6 +1411,8 @@ async fn serve_run(
         }
         println!("{}", rating.startup_line());
     }
+    let resource_hub = resources::Hub::new();
+    let resource_kit = resource_adapters::Kit::over(resource_hub.clone());
     startup.step("storyteller");
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
@@ -1429,9 +1431,12 @@ async fn serve_run(
     } else {
         storyteller::Storyteller::disabled()
     });
+    storyteller.attach_kit(&resource_kit);
     startup.step("approach-model");
-    let approach_model =
-        approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
+    let approach_model = approach_model::ApproachModel::configured_with_ledger(
+        if interactive { jev_settings()? } else { None },
+        resource_hub.ledger(),
+    );
     if interactive && !media_policy::gates().allows(media_policy::Capability::Jev) {
         // The model's own line would blame a missing key; the switch turned it off.
         println!("APPROACH off (DF_GAMEPLAY_JEV=off): neutral reads only");
@@ -2317,6 +2322,7 @@ async fn serve_run(
             .as_ref()
             .map(|prepared| prepared.directory.as_path()),
         image_fixture,
+        resource_hub,
     )?;
     startup.step("living-scenes");
     let living = living_scenes::LivingScenes::start_with_local_lore(
@@ -2448,10 +2454,8 @@ async fn serve_run(
     )?;
     // The voice, the video, the text and the transcription run on the one generation hub the
     // imagery owns, so every kind's state, failures and spend are listed in one place.
-    let resource_kit = resource_adapters::Kit::over(imagery.hub().clone());
     voice.attach_kit(&resource_kit);
     speech.attach_kit(&resource_kit);
-    storyteller.attach_kit(&resource_kit);
     home_video::attach_kit(&resource_kit)?;
     // The cost engine: every billed call on the hub's ledger is priced and kept per run.
     if interactive {
