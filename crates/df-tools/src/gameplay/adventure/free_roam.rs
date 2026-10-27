@@ -81,7 +81,8 @@ impl World {
             .validate()
             .map_err(|_| CreationError::Invalid("gate"))?;
         if self.gate.people.len() != 4
-            || self.ahead.len() != 2
+            || self.gate.exits.len() != 2
+            || self.ahead.len() > 2
             || !self.gate.speaker.is_empty()
             || !self.gate.greeting.is_empty()
             || self.gate.origin.time_of_day != self.city.time_of_day
@@ -479,13 +480,23 @@ async fn generate_inner(
         .take(2)
     {
         let request = onward_request(&city, &gate, exit.clone(), &ahead, &run_seed);
-        let result = place_creation::create_silent(storyteller, model, &request).await;
-        audit(
-            "look_ahead",
-            if result.is_ok() { "ready" } else { "failed" },
-            &exit.id,
-        );
-        let made = result?;
+        let made = match place_creation::create_silent(storyteller, model, &request).await {
+            Ok(made) => {
+                audit("look_ahead", "ready", &exit.id);
+                made
+            }
+            Err(error) => {
+                record_audit_line(
+                    "gameplay.free_roam",
+                    format!(
+                        "FREE_ROAM generation stage=look_ahead outcome=deferred place={} reason={}",
+                        exit.id,
+                        error.label()
+                    ),
+                );
+                continue;
+            }
+        };
         audit("look_ahead", "ready", &made.place_id);
         ahead.push(PreparedPlace {
             from: gate.place_id.clone(),
@@ -798,6 +809,101 @@ mod tests {
             };
             let _ = reply.send(outcome);
         }
+    }
+
+    #[test]
+    fn roamstart_round2_deferred_exit_is_generated_when_the_party_takes_it() {
+        use crate::gameplay::{
+            Service, actor, creator_portraits::Portraits, dev_control::layout::LayoutState,
+            living_scenes::LivingScenes, npc_reply::NpcVoice, place_move::MoveTarget,
+            startup_configuration::VoiceOff, table_log::TableLog, voice::Voice,
+        };
+        use df_session::inbox::{ActorLoop, bounded_inbox};
+        use tokio::sync::{Semaphore, watch};
+
+        let endpoint = fixtures::roamstart_round2_endpoint(false, 3);
+        let directory = cache_directory("roamstart-round2-on-demand");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let storyteller = teller(endpoint.address, 0, Duration::from_secs(10), &directory);
+        let judge = fixtures::accepting_persona_judge(32);
+        let generated = runtime
+            .block_on(generate(
+                4_017_476,
+                RulesMode::Standard,
+                ContentRating::default(),
+                &storyteller,
+                &fixtures::jev(&judge),
+            ))
+            .unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded.clone(), || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let world = world().unwrap();
+            assert_eq!(world.ahead.len(), 1);
+            let gate = world.gate;
+            let scene = runtime::scene(opening.state()).unwrap();
+            let missing = scene
+                .setting
+                .as_ref()
+                .unwrap()
+                .model
+                .as_ref()
+                .unwrap()
+                .ways_out
+                .iter()
+                .find(|way| way.id != world.ahead[0].exit)
+                .unwrap()
+                .id
+                .clone();
+            assert_eq!(prepared(&opening), world.ahead);
+            let (updates_in, updates) = watch::channel(opening.clone());
+            let (sender, inbox): (_, ActorLoop<actor::Call>) = bounded_inbox();
+            let service = Service {
+                portraits: Portraits::disabled(),
+                display_credential: [0; 32],
+                layout: LayoutState::new(),
+                actor: sender.clone(),
+                updates: updates.clone(),
+                streams: Arc::new(Semaphore::new(2)),
+                voice: Voice::disabled(VoiceOff::Qualification),
+                npc_voice: Arc::new(
+                    NpcVoice::new(Arc::new(storyteller)).with_approach_model(fixtures::jev(&judge)),
+                ),
+                table_log: TableLog::new(),
+                social: SocialLedger::none(),
+                living: LivingScenes::disabled(),
+                look_ahead: Arc::default(),
+            };
+            let owner = std::thread::spawn(move || {
+                pack::with_test_pack(loaded, || {
+                    let mut owner = Owner {
+                        current: opening,
+                        updates: updates_in,
+                    };
+                    let _ = inbox.run(&mut owner);
+                })
+            });
+            let moved = runtime
+                .block_on(service.move_party_toward(
+                    [1; 32],
+                    df_types::OperationId::from_bytes(&[81; 16]).unwrap(),
+                    MoveTarget::Exit(missing),
+                    "",
+                ))
+                .unwrap_or_else(|_| panic!("the deferred destination is created on demand"));
+            runtime.block_on(service.look_ahead.wait());
+            assert!(moved.created);
+            let created = place::created(updates.borrow().state()).unwrap();
+            assert_eq!(created[&moved.to].origin.id, gate.place_id);
+            assert_ne!(moved.to, world.ahead[0].place.place_id);
+            sender.stop().unwrap();
+            owner.join().unwrap();
+        });
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

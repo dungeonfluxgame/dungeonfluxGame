@@ -985,9 +985,20 @@ async fn creation_gives_the_storyteller_the_canon_and_the_table_and_retries_once
     assert!(first.contains("I follow Brakka out of the shop into the market street."));
     assert!(first.contains("place_names_in_use") && first.contains("Tavin Reed"));
     assert!(first.contains("landmarks"));
-    assert!(!first.contains("previous_answer_problem"));
-    assert!(second.contains("previous_answer_problem"));
-    assert!(second.contains("invalid_place"));
+    let facts = |input: &str| -> Value {
+        input
+            .lines()
+            .find_map(|line| line.strip_prefix("FACTS: "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .unwrap()
+    };
+    assert!(facts(first).get("previous_answer_problem").is_none());
+    assert!(
+        facts(second)["previous_answer_problem"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_place")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1015,7 +1026,11 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
         CreationError::Invalid("kind")
     );
     assert_eq!(endpoint.connections(), 3, "two retries, then it stops");
-    let down = FakeEndpoint::start(vec![Reply::Status(500, json!({"error": "down"}))]);
+    let down = FakeEndpoint::start(
+        (0..3)
+            .map(|_| Reply::Status(500, json!({"error": "down"})))
+            .collect(),
+    );
     let storyteller = teller(
         down.address,
         0,
@@ -1028,6 +1043,7 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
             .unwrap_err(),
         CreationError::Model
     );
+    assert_eq!(down.connections(), 3, "provider failures are retried twice");
 }
 
 #[test]
@@ -1336,6 +1352,483 @@ async fn hs69_jev_rejection_regenerates_only_the_rejected_person() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_retry_supplies_job_and_logs_the_jev_rejection_reason() {
+    let mut record = built();
+    record.place_id = "place-roamstart-retry".into();
+    let endpoint = FakeEndpoint::start(persona_replies(4));
+    let judge = FakeEndpoint::start(vec![choice("o2"), choice("o1"), choice("o1"), choice("o1")]);
+    let directory = cache_directory("roamstart-retry");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    author_personas(&storyteller, &jev(&judge), &request(), &mut record)
+        .await
+        .unwrap();
+
+    let bodies = endpoint.bodies();
+    let facts: Vec<Value> = bodies
+        .iter()
+        .map(|body| {
+            body["input"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .map(|line| serde_json::from_str(line).unwrap())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(facts[0]["person_job"], "carter");
+    assert_eq!(facts[0]["place"]["kind"], "market-street");
+    assert_eq!(facts[0]["place"]["person_position"], "beside the wagon");
+    assert_eq!(facts[0]["drawn_temperament"], facts[1]["drawn_temperament"]);
+    assert!(
+        facts[1]["previous_answer_problem"]
+            .as_str()
+            .unwrap()
+            .contains("job")
+    );
+    let lines = super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-retry");
+    assert!(lines.iter().any(|line| {
+        line.contains("person=Hobb attempt=0 outcome=rejected reason=job_or_history")
+    }));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("person=Hobb attempt=1 outcome=accepted"))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_encoded_forbidden_name_is_audited_with_its_own_reason() {
+    use std::sync::Arc;
+
+    let mut record = built();
+    record.place_id = "place-roamstart-forbidden-name".into();
+    let rejected = Arc::new(|prompt: &str| {
+        let mut answer = persona_answer(prompt);
+        let mut persona: Value = serde_json::from_str(answer["persona"].as_str().unwrap()).unwrap();
+        persona["backstory"] = json!("Brynn worked there.");
+        let encoded = persona.to_string().replace("Brynn", r"\u0042rynn");
+        answer["persona"] = json!(encoded);
+        answer
+    });
+    let endpoint = FakeEndpoint::start(
+        [vec![Reply::Compute(rejected)], persona_replies(3)]
+            .into_iter()
+            .flatten()
+            .collect(),
+    );
+    let judge = accepting_persona_judge(3);
+    let directory = cache_directory("roamstart-forbidden-name");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    author_personas(&storyteller, &jev(&judge), &request(), &mut record)
+        .await
+        .unwrap();
+
+    let lines =
+        super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-forbidden-name");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=rejected reason=forbidden_hero_name"))
+    );
+    assert!(lines.iter().all(|line| !line.contains("Brynn")));
+    assert_eq!(endpoint.connections(), 4);
+    assert_eq!(judge.connections(), 3);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_wrong_temperament_is_audited_and_retried() {
+    use std::sync::Arc;
+
+    let mut record = built();
+    record.place_id = "place-roamstart-wrong-draw".into();
+    let rejected = Arc::new(|prompt: &str| {
+        let mut answer = persona_answer(prompt);
+        let mut persona: Value = serde_json::from_str(answer["persona"].as_str().unwrap()).unwrap();
+        persona["temperament"]["energy"] = if persona["temperament"]["energy"] == "low" {
+            json!("high")
+        } else {
+            json!("low")
+        };
+        answer["persona"] = json!(persona.to_string());
+        answer
+    });
+    let endpoint = FakeEndpoint::start(
+        [vec![Reply::Compute(rejected)], persona_replies(3)]
+            .into_iter()
+            .flatten()
+            .collect(),
+    );
+    let judge = accepting_persona_judge(3);
+    let directory = cache_directory("roamstart-wrong-draw");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    author_personas(&storyteller, &jev(&judge), &request(), &mut record)
+        .await
+        .unwrap();
+
+    let lines =
+        super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-wrong-draw");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=rejected reason=shape_or_draw"))
+    );
+    assert_eq!(endpoint.connections(), 4);
+    assert_eq!(judge.connections(), 3);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn roamstart_city_answer(prompt: &str) -> Value {
+    use sha2::{Digest, Sha256};
+
+    let facts: Value = prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("FACTS: "))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .unwrap();
+    if facts["task"] == "person_persona" {
+        let mut answer = persona_answer(prompt);
+        let mut persona: Value = serde_json::from_str(answer["persona"].as_str().unwrap()).unwrap();
+        persona["backstory"] = json!("Rejected private sentinel.");
+        answer["persona"] = json!(persona.to_string());
+        return answer;
+    }
+    if facts["task"] == "free_roam_city" {
+        return json!({
+            "name": "Roamstead", "character": "a canal city of pale stone and busy workshops",
+            "mood": "unhurried civic life", "time_of_day": "afternoon", "weather": "dry and cool",
+        });
+    }
+    let gate = facts["origin"]["name"] == "Road outside Roamstead";
+    let identity = format!("{:x}", Sha256::digest(facts.to_string().as_bytes()));
+    let identity = &identity[..8];
+    let mut place = place_slot();
+    place["name"] = json!(if gate {
+        "Roamstead Main Gate".to_owned()
+    } else {
+        format!("Roamstead Walk {identity}")
+    });
+    place["short"] = json!("a public street within Roamstead's walls");
+    place["narration"] = json!("You stand inside the city walls as carts roll past the arch.");
+    place["speaker"] = json!("");
+    place["greeting"] = json!("");
+    place["wares"] = json!([]);
+    place["services"] = json!([]);
+    let roles = if gate {
+        vec!["guard", "carter", "hawker", "traveller"]
+    } else {
+        vec!["potter", "gardener"]
+    };
+    let people = roles
+        .iter()
+        .enumerate()
+        .map(|(index, role)| {
+            json!({
+                "name": format!("Local{identity}{index}"), "role": role,
+                "description": format!("An adult {role} in a plain coat."),
+                "position": format!("beside post {index}"), "gender": "they",
+                "wants": "Finish the day's work.", "attitude": "indifferent",
+                "stat_block": if *role == "guard" { "guard" } else { "commoner" },
+                "knowledge": ["This is Roamstead.", "The Bell Tower is uphill.", "I work here."],
+            })
+        })
+        .collect::<Vec<_>>();
+    answer(&place, &json!(people), &things_slot())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_city_and_lookahead_start_when_every_persona_is_rejected() {
+    use std::sync::Arc;
+
+    let compute = Arc::new(roamstart_city_answer);
+    let endpoint = FakeEndpoint::start((0..64).map(|_| Reply::Compute(compute.clone())).collect());
+    let judge = FakeEndpoint::start((0..48).map(|_| choice("o2")).collect());
+    let directory = cache_directory("roamstart-rejected-city");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    let generated = super::super::adventure::free_roam::generate(
+        3_917_472,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .unwrap();
+    let world = generated
+        .pack
+        .beat_script
+        .as_ref()
+        .unwrap()
+        .free_roam
+        .as_ref()
+        .unwrap();
+    assert_eq!(world.gate.people.len(), 4);
+    assert_eq!(world.ahead.len(), 2);
+    let documents = generated.documents(true).unwrap();
+    let (loaded, _) = super::super::adventure::record::reload(&documents).unwrap();
+    assert_eq!(
+        loaded.pack.beat_script.as_ref().unwrap().free_roam.as_ref(),
+        Some(world)
+    );
+    let mut saw_rejection = false;
+    for place in std::iter::once(&world.gate).chain(world.ahead.iter().map(|item| &item.place)) {
+        place.validate().unwrap();
+        for person in &place.people {
+            let persona = person.persona.as_ref().unwrap();
+            assert!(persona.validate());
+            assert!(persona.speech.contains(person.role.trim()));
+            assert!(!format!("{persona:?}").contains("Rejected private sentinel"));
+        }
+        let lines = super::super::actor::audit_lines_containing(&format!(
+            "PERSONA place={}",
+            place.place_id
+        ));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("outcome=fallback"))
+                .count(),
+            place.people.len()
+        );
+        saw_rejection |= lines
+            .iter()
+            .any(|line| line.contains("outcome=rejected reason=job_or_history"));
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("Rejected private sentinel"))
+        );
+    }
+    assert!(saw_rejection);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_five_rejections_exhaust_the_retry_limit_and_use_fallback() {
+    let mut record = built();
+    record.place_id = "place-roamstart-five-rejections".into();
+    let person = &record.people[0];
+    let asked = request();
+    let temperament =
+        place::Temperament::draw(&asked.run_seed, &record.place_id, &person.name, &[]).unwrap();
+    let endpoint = FakeEndpoint::start(persona_replies(5));
+    let judge = FakeEndpoint::start((0..5).map(|_| choice("o2")).collect());
+    let directory = cache_directory("roamstart-five-rejections");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    let persona = author_persona(
+        &storyteller,
+        &jev(&judge),
+        &asked,
+        &record,
+        person,
+        temperament,
+        Duration::from_secs(120),
+    )
+    .await;
+
+    assert!(persona.validate());
+    assert!(persona.speech.contains(person.role.trim()));
+    assert_eq!(endpoint.connections(), 5);
+    assert_eq!(judge.connections(), 5);
+    let lines = super::super::actor::audit_lines_containing(
+        "PERSONA place=place-roamstart-five-rejections",
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("outcome=rejected reason=job_or_history"))
+            .count(),
+        5
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=fallback reason=attempts_exhausted"))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_disabled_storyteller_uses_valid_job_and_drawn_temperament() {
+    let mut record = built();
+    record.place_id = "place-roamstart-disabled".into();
+    record.people[0].role = "   Dr. gate! guard?   ".into();
+    let job = record.people[0].role.trim().to_owned();
+    let expected = place::Temperament::draw(
+        &request().run_seed,
+        &record.place_id,
+        &record.people[0].name,
+        &[],
+    )
+    .unwrap();
+
+    author_personas(
+        &Storyteller::disabled(),
+        &ApproachModel::default(),
+        &request(),
+        &mut record,
+    )
+    .await
+    .unwrap();
+
+    let persona = record.people[0].persona.as_ref().unwrap();
+    assert_eq!(persona.temperament, expected);
+    assert!(persona.validate());
+    assert!(persona.speech.contains(&job));
+    let traits = serde_json::to_value(expected).unwrap();
+    assert!(
+        persona
+            .backstory
+            .contains(traits["energy"].as_str().unwrap())
+    );
+    for axis in ["nerve", "warmth", "talk", "humour"] {
+        assert!(persona.speech.contains(traits[axis].as_str().unwrap()));
+    }
+    assert!(
+        record
+            .people
+            .iter()
+            .all(|person| person.persona.as_ref().unwrap().validate())
+    );
+    let lines =
+        super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-disabled");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=fallback reason=storyteller_off"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_unavailable_jev_uses_fallback_without_copying_model_text() {
+    let mut record = built();
+    record.place_id = "place-roamstart-no-jev".into();
+    let endpoint = FakeEndpoint::start(persona_replies(3));
+    let directory = cache_directory("roamstart-no-jev");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    author_personas(
+        &storyteller,
+        &ApproachModel::default(),
+        &request(),
+        &mut record,
+    )
+    .await
+    .unwrap();
+
+    assert!(record.people.iter().all(|person| {
+        let persona = person.persona.as_ref().unwrap();
+        persona.validate() && persona.speech.contains(person.role.trim())
+    }));
+    let lines = super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-no-jev");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=fallback reason=jev_provider_unavailable"))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_storyteller_failure_uses_fallback_without_logging_provider_content() {
+    let mut record = built();
+    record.place_id = "place-roamstart-provider-failure".into();
+    let endpoint = FakeEndpoint::start(
+        (0..12)
+            .map(|_| {
+                Reply::Status(
+                    500,
+                    json!({"error": {"message": "private provider sentinel"}}),
+                )
+            })
+            .collect(),
+    );
+    let directory = cache_directory("roamstart-provider-failure");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    author_personas(
+        &storyteller,
+        &ApproachModel::default(),
+        &request(),
+        &mut record,
+    )
+    .await
+    .unwrap();
+
+    assert!(record.people.iter().all(|person| {
+        let persona = person.persona.as_ref().unwrap();
+        persona.validate() && persona.speech.contains(person.role.trim())
+    }));
+    let lines = super::super::actor::audit_lines_containing(
+        "PERSONA place=place-roamstart-provider-failure",
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("outcome=fallback reason=storyteller_provider_failure"))
+            .count(),
+        record.people.len()
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("private provider sentinel"))
+    );
+    assert!(super::super::actor::audit_lines_containing("private provider sentinel").is_empty());
+    if directory.exists() {
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_expired_persona_deadline_uses_safe_fallback() {
+    assert_eq!(PERSONA_DEADLINE, Duration::from_secs(20));
+    let mut record = built();
+    record.place_id = "place-roamstart-deadline".into();
+    let person = &record.people[0];
+    let asked = request();
+    let temperament =
+        place::Temperament::draw(&asked.run_seed, &record.place_id, &person.name, &[]).unwrap();
+    let endpoint = FakeEndpoint::start(vec![Reply::Hang]);
+    let judge = accepting_persona_judge(1);
+    let directory = cache_directory("roamstart-deadline");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+
+    let persona = author_persona(
+        &storyteller,
+        &jev(&judge),
+        &asked,
+        &record,
+        person,
+        temperament,
+        Duration::ZERO,
+    )
+    .await;
+
+    assert_eq!(persona.temperament, temperament);
+    assert!(persona.validate());
+    assert!(persona.speech.contains(person.role.trim()));
+    assert_eq!(judge.connections(), 0);
+    let lines =
+        super::super::actor::audit_lines_containing("PERSONA place=place-roamstart-deadline");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("outcome=fallback reason=deadline"))
+    );
+    if directory.exists() {
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
 #[test]
 fn hs69_draw_uses_run_place_and_name_and_persona_bounds_are_strict() {
     let draw = |run: &str, place: &str, name: &str| {
@@ -1401,4 +1894,283 @@ async fn hs69_identity_pass_cannot_supply_an_unjudged_persona() {
     assert_eq!(judge.connections(), 3);
     assert_eq!(endpoint.connections(), 4);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+pub(in crate::gameplay) fn roamstart_round2_endpoint(
+    rejected_gate: bool,
+    rejected_neighbour_attempts: usize,
+) -> FakeEndpoint {
+    use std::sync::Arc;
+
+    let compute = Arc::new(|prompt: &str| {
+        let facts: Value = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("FACTS: "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .unwrap();
+        if facts["task"] == "person_persona" {
+            persona_answer(prompt)
+        } else {
+            roamstart_city_answer(prompt)
+        }
+    });
+    let mut replies = vec![Reply::Compute(compute.clone())];
+    if !rejected_gate {
+        replies.extend((0..5).map(|_| Reply::Compute(compute.clone())));
+    }
+    for _ in 0..(if rejected_gate {
+        3
+    } else {
+        rejected_neighbour_attempts
+    }) {
+        for _ in 0..2 {
+            replies.push(Reply::Compute(compute.clone()));
+            replies.push(Reply::Output(json!({
+                "decision": "published_non_srd", "flagged_span": ""
+            })));
+        }
+    }
+    replies.extend((0..64).map(|_| Reply::Compute(compute.clone())));
+    FakeEndpoint::start(replies)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_refused_neighbour_is_retried_with_its_content_category() {
+    let endpoint = roamstart_round2_endpoint(false, 1);
+    let judge = accepting_persona_judge(8);
+    let directory = cache_directory("roamstart-round2-retry");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate(
+        4_017_472,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .expect("a revised neighbour permits the city to start");
+    let world = generated
+        .pack
+        .beat_script
+        .as_ref()
+        .unwrap()
+        .free_roam
+        .as_ref()
+        .unwrap();
+    assert_eq!(world.ahead.len(), 2);
+    let bodies = endpoint.bodies();
+    assert!(bodies.iter().any(|body| {
+        body["input"]
+            .as_str()
+            .is_some_and(|input| input.contains("the server reports the previous refusal"))
+    }));
+    let retry = bodies
+        .iter()
+        .find_map(|body| {
+            let input = body["input"].as_str()?;
+            let facts: Value = input
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .and_then(|line| serde_json::from_str(line).ok())?;
+            (facts["task"] == "create_place" && facts["attempt"] == 1).then_some(facts)
+        })
+        .expect("a second place expression was sent");
+    let feedback = retry["previous_answer_problem"].as_str().unwrap();
+    assert!(feedback.contains("published_non_srd_material"));
+    assert!(feedback.contains("original") && feedback.contains("SRD 5.2.1"));
+    assert!(!feedback.contains("Rejected private sentinel"));
+    assert!(
+        super::super::actor::audit_lines_containing("PLACE generation")
+            .iter()
+            .any(|line| line.contains("published_non_srd_material"))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_permanently_refused_neighbour_is_deferred_and_other_place_survives() {
+    let endpoint = roamstart_round2_endpoint(false, 3);
+    let judge = accepting_persona_judge(6);
+    let directory = cache_directory("roamstart-round2-deferred");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate(
+        4_017_473,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .expect("a speculative neighbour cannot prevent the city from starting");
+    let world = generated
+        .pack
+        .beat_script
+        .as_ref()
+        .unwrap()
+        .free_roam
+        .as_ref()
+        .unwrap();
+    assert_eq!(world.gate.people.len(), 4);
+    assert_eq!(world.ahead.len(), 1);
+    let mut malformed = world.clone();
+    assert!(malformed.gate.exits.pop().is_some());
+    malformed.ahead.clear();
+    malformed.gate.validate().unwrap();
+    assert!(malformed.validate(&generated.pack).is_err());
+    let scene = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .unwrap();
+    let ways = &scene
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .ways_out;
+    let missing = ways
+        .iter()
+        .find(|way| way.id != world.ahead[0].exit)
+        .unwrap();
+    assert!(
+        missing.open,
+        "the deferred exit remains available for on-demand creation"
+    );
+    let (loaded, _) =
+        super::super::adventure::record::reload(&generated.documents(true).unwrap()).unwrap();
+    assert_eq!(
+        loaded.pack.beat_script.as_ref().unwrap().free_roam.as_ref(),
+        Some(world)
+    );
+    let expected = format!(
+        "FREE_ROAM generation stage=look_ahead outcome=deferred place={}",
+        missing.id
+    );
+    assert!(!super::super::actor::audit_lines_containing(&expected).is_empty());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_refused_starting_gate_still_reports_start_failure() {
+    let endpoint = roamstart_round2_endpoint(true, 0);
+    let directory = cache_directory("roamstart-round2-failed-gate");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let error = super::super::adventure::free_roam::generate(
+        4_017_474,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &ApproachModel::default(),
+    )
+    .await
+    .expect_err("a refused starting gate fails the start");
+    assert_eq!(error, CreationError::Model);
+    assert!(
+        !super::super::actor::audit_lines_containing(
+            "FREE_ROAM generation stage=gate outcome=failed place=main-gate"
+        )
+        .is_empty()
+    );
+    assert!(
+        !super::super::actor::audit_lines_containing(
+            "FREE_ROAM generation stage=city_and_gate outcome=failed place=main-gate"
+        )
+        .is_empty()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_both_refused_neighbours_leave_both_exits_available() {
+    let endpoint = roamstart_round2_endpoint(false, 6);
+    let judge = accepting_persona_judge(4);
+    let directory = cache_directory("roamstart-round2-both-deferred");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let generated = super::super::adventure::free_roam::generate(
+        4_017_475,
+        super::super::adventure::RulesMode::Standard,
+        super::super::startup_configuration::ContentRating::default(),
+        &storyteller,
+        &jev(&judge),
+    )
+    .await
+    .unwrap();
+    let world = generated
+        .pack
+        .beat_script
+        .as_ref()
+        .unwrap()
+        .free_roam
+        .as_ref()
+        .unwrap();
+    assert!(world.ahead.is_empty());
+    let opening = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .unwrap();
+    let ways = &opening
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .ways_out;
+    assert_eq!(ways.len(), 2);
+    assert!(ways.iter().all(|way| way.open));
+    let (loaded, _) =
+        super::super::adventure::record::reload(&generated.documents(true).unwrap()).unwrap();
+    assert_eq!(
+        loaded.pack.beat_script.as_ref().unwrap().free_roam.as_ref(),
+        Some(world)
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_provider_failure_is_retried_with_a_safe_category() {
+    let endpoint = FakeEndpoint::start(
+        [
+            vec![
+                Reply::Status(500, json!({"error": "private provider sentinel"})),
+                Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
+            ],
+            persona_replies(3),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    let judge = accepting_persona_judge(3);
+    let directory = cache_directory("roamstart-round2-provider-retry");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let record = create(&storyteller, &jev(&judge), &request())
+        .await
+        .unwrap();
+    assert_eq!(record.name, "Market Street");
+    let bodies = endpoint.bodies();
+    let retry = bodies[1]["input"].as_str().unwrap();
+    assert!(retry.contains("provider_failure"));
+    assert!(!retry.contains("private provider sentinel"));
+    assert_eq!(endpoint.connections(), 5);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roamstart_round2_expired_place_deadline_does_not_send_an_attempt() {
+    let endpoint = FakeEndpoint::start(vec![Reply::Hang]);
+    let directory = cache_directory("roamstart-round2-expired-deadline");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    assert_eq!(
+        express_place(&storyteller, &request(), false, false, Duration::ZERO)
+            .await
+            .unwrap_err(),
+        CreationError::Model
+    );
+    assert_eq!(endpoint.connections(), 0);
 }
