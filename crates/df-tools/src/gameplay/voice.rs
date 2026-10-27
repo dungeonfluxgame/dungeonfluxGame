@@ -1754,6 +1754,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authored_narration_without_a_log_row_is_signed_and_served_by_the_voice_route() {
+        use tonic::codegen::Service;
+        let cache = scratch("signed-authored-voice");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache);
+        let mut message = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    narration: "The lanterns flicker on the water.".into(),
+                    scene: Some(Default::default()),
+                    journey: Some(Default::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        voice.register_view(&message);
+        attach_urls(&mut message);
+        super::super::media_grant::sign_view(&mut message, true, &[7; 32]);
+        let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+            unreachable!()
+        };
+        let contents: serde_json::Value =
+            serde_json::from_str(&display.scene.as_ref().unwrap().scene_contents_json).unwrap();
+        let url = contents["voice_urls"][0][0].as_str().unwrap();
+        let line = narrator(&display.narration);
+        assert!(url.starts_with(&format!("/gameplay/voice/{}?g=", line.key())));
+        let request = axum::http::Request::builder()
+            .uri(url)
+            .header("x-gameplay-presentation-id", "12")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = Service::call(&mut router(voice), request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
+            AUDIO
+        );
+    }
+
+    #[tokio::test]
     async fn hs54_dispatched_voice_prewarm_finishes_in_the_shared_cache_after_waiter_drop() {
         let cache = scratch("hs54-prefetch-drop");
         let fake = FakeEleven::start(Duration::from_millis(100), true);

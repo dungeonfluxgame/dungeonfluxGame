@@ -103,40 +103,25 @@ pub(super) fn update_urls(view: &rpc::ViewMessage) {
     if let Some(rpc::view_message::Audience::Display(display)) = &view.audience
         && let Some(journey) = display.journey.as_ref()
     {
-        let check_voice = crate::voice_line::check_voice_line(display);
+        if let Some(scene) = display.scene.as_ref()
+            && let Ok(serde_json::Value::Object(contents)) =
+                serde_json::from_str(&scene.scene_contents_json)
+            && let Some(serde_json::Value::Array(entries)) = contents.get("voice_urls")
+        {
+            for entry in entries.iter().take(2) {
+                if let Some(parts) = entry.as_array()
+                    && let Some(parts) = parts
+                        .iter()
+                        .map(|part| part.as_str().map(str::to_owned))
+                        .collect::<Option<Vec<_>>>()
+                    && let Some((first, rest)) = parts.split_first()
+                {
+                    insert_signed_urls(&mut urls, first, rest);
+                }
+            }
+        }
         for line in &journey.table_log {
-            let role = match rpc::TableRole::try_from(line.role) {
-                Ok(rpc::TableRole::Narrator) => crate::voice_line::NARRATOR_ROLE.to_owned(),
-                Ok(rpc::TableRole::Npc) if !line.actor_id.is_empty() => {
-                    format!("npc-id:{}|{}", line.actor_id, line.speaker)
-                }
-                Ok(rpc::TableRole::Npc) if !line.speaker.is_empty() => {
-                    format!("npc:{}", line.speaker)
-                }
-                _ => continue,
-            };
-            if line.audio_url.is_empty() && line.audio_part_urls.is_empty() {
-                continue;
-            }
-            let key = check_voice
-                .as_ref()
-                .filter(|check| check.result_sequence == line.sequence)
-                .map_or_else(
-                    || {
-                        crate::voice_line::VoiceLine {
-                            role,
-                            text: line.text.clone(),
-                        }
-                        .key()
-                    },
-                    |check| check.voice.key(),
-                );
-            let mut line_urls = Vec::with_capacity(1 + line.audio_part_urls.len());
-            if !line.audio_url.is_empty() {
-                line_urls.push(line.audio_url.clone());
-            }
-            line_urls.extend(line.audio_part_urls.iter().cloned());
-            urls.insert(key, line_urls);
+            insert_signed_urls(&mut urls, &line.audio_url, &line.audio_part_urls);
         }
         if let Some(combat) = journey.combat.as_ref() {
             for outcome in combat
@@ -146,41 +131,59 @@ pub(super) fn update_urls(view: &rpc::ViewMessage) {
                 .chain(&combat.death_save_outcomes)
             {
                 for line in &outcome.lines {
-                    if let Some(voice) = crate::voice_line::fight_voice_line(line) {
-                        insert_fight_urls(
-                            &mut urls,
-                            &voice,
-                            &line.audio_url,
-                            &line.audio_part_urls,
-                        );
-                    }
+                    insert_signed_urls(&mut urls, &line.audio_url, &line.audio_part_urls);
                 }
             }
             for line in &combat.closing_lines {
-                if let Some(voice) = crate::voice_line::fight_voice_line(line) {
-                    insert_fight_urls(&mut urls, &voice, &line.audio_url, &line.audio_part_urls);
-                }
+                insert_signed_urls(&mut urls, &line.audio_url, &line.audio_part_urls);
             }
         }
     }
     SIGNED_URLS.with(|current| *current.borrow_mut() = urls);
 }
 
-fn insert_fight_urls(
+fn signed_voice_key(url: &str, index: usize) -> Option<&str> {
+    let (path, grant) = url.strip_prefix("/gameplay/voice/")?.split_once('?')?;
+    let grant = grant.strip_prefix("g=")?;
+    if grant.is_empty() || !grant.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let (key, part) = path
+        .split_once('/')
+        .map_or((path, None), |(key, part)| (key, Some(part)));
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || match part {
+            None => index != 0,
+            Some(part) => index == 0 || part != index.to_string(),
+        }
+    {
+        return None;
+    }
+    Some(key)
+}
+
+fn insert_signed_urls(
     urls: &mut HashMap<String, Vec<String>>,
-    voice: &crate::voice_line::VoiceLine,
     audio_url: &str,
     audio_part_urls: &[String],
 ) {
-    if audio_url.is_empty() && audio_part_urls.is_empty() {
+    let Some(key) = signed_voice_key(audio_url, 0) else {
+        return;
+    };
+    if !audio_part_urls
+        .iter()
+        .enumerate()
+        .all(|(index, url)| signed_voice_key(url, index + 1) == Some(key))
+    {
         return;
     }
     let mut line_urls = Vec::with_capacity(1 + audio_part_urls.len());
-    if !audio_url.is_empty() {
-        line_urls.push(audio_url.to_owned());
-    }
+    line_urls.push(audio_url.to_owned());
     line_urls.extend(audio_part_urls.iter().cloned());
-    urls.insert(voice.key(), line_urls);
+    urls.insert(key.to_owned(), line_urls);
 }
 
 fn voice_prompt_visibility(playback_failed: bool) -> &'static str {
@@ -900,11 +903,51 @@ async fn fetch_clip(url: &str, presentation_id: LineId) -> Result<(String, usize
 
 #[cfg(test)]
 mod tests {
-    use super::voice_prompt_visibility;
+    use super::super::rpc;
+    use super::{SIGNED_URLS, signed_voice_key, update_urls, voice_prompt_visibility};
 
     #[test]
     fn sound_opt_out_hides_the_nudge_until_requested_playback_fails() {
         assert_eq!(voice_prompt_visibility(false), "false");
         assert_eq!(voice_prompt_visibility(true), "true");
+    }
+
+    #[test]
+    fn signed_authored_narration_is_selected_by_the_playback_key() {
+        let line = crate::voice_line::VoiceLine {
+            role: "narrator".into(),
+            text: "The lanterns flicker.".into(),
+        };
+        let key = line.key();
+        let url = format!("/gameplay/voice/{key}?g=abcd");
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    narration: line.text.clone(),
+                    scene: Some(rpc::GameplayScene {
+                        scene_contents_json: serde_json::json!({"voice_urls":[[url]]}).to_string(),
+                        ..Default::default()
+                    }),
+                    journey: Some(Default::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        update_urls(&view);
+        SIGNED_URLS.with(|urls| assert_eq!(urls.borrow().get(&key), Some(&vec![url.clone()])));
+        for bad in [
+            format!("{url}&x=1"),
+            format!("https://foreign.test{url}"),
+            "/gameplay/voice/../secret?g=abcd".to_owned(),
+            format!("/gameplay/voice/{key}?g="),
+        ] {
+            assert!(signed_voice_key(&bad, 0).is_none());
+        }
+        assert_eq!(
+            signed_voice_key(&format!("/gameplay/voice/{key}/1?g=ff"), 1),
+            Some(key.as_str())
+        );
+        assert!(signed_voice_key(&format!("/gameplay/voice/{key}/2?g=ff"), 1).is_none());
     }
 }

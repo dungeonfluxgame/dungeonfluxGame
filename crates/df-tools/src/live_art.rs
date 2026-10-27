@@ -22,12 +22,68 @@ fn well_formed(path: &str) -> bool {
     path.is_empty() || imagery_url(path).is_some()
 }
 
-fn faces_well_formed(journey: Option<&rpc::JourneyView>) -> bool {
+fn image_identity(path: &str) -> Option<&str> {
+    df_render::art_contract::player_hero_image(path)?;
+    Some(path.split_once('?').map_or(path, |(identity, _)| identity))
+}
+
+fn same_image(left: &str, right: &str) -> bool {
+    left == right
+        || image_identity(left)
+            .zip(image_identity(right))
+            .is_some_and(|(left, right)| left == right)
+}
+
+fn mask_identity<'a>(plate: &str, mask: &'a str, index: u32) -> Option<&'a str> {
+    let plate = image_identity(plate)?.strip_prefix("/gameplay/imagery/")?;
+    let (path, query) = mask
+        .split_once('?')
+        .map_or((mask, None), |(path, query)| (path, Some(query)));
+    if path != format!("/gameplay/imagery/{plate}/figure/{index}") {
+        return None;
+    }
+    if let Some(query) = query {
+        let grant = query.strip_prefix("g=")?;
+        if grant.is_empty() || !grant.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+    }
+    Some(path)
+}
+
+fn same_layout(
+    old: Option<&rpc::PlateLayout>,
+    old_plate: &str,
+    new: Option<&rpc::PlateLayout>,
+    new_plate: &str,
+) -> bool {
+    let (Some(old), Some(new)) = (old, new) else {
+        return old.is_none() && new.is_none();
+    };
+    let normalize = |layout: &rpc::PlateLayout, plate: &str| {
+        let mut layout = layout.clone();
+        for mask in &mut layout.figure_masks {
+            if let Some(identity) = mask_identity(plate, &mask.mask_url, mask.mask_index) {
+                mask.mask_url = identity.to_owned();
+            }
+        }
+        layout
+    };
+    normalize(old, old_plate) == normalize(new, new_plate)
+}
+
+fn faces_well_formed(journey: Option<&rpc::JourneyView>, player: bool) -> bool {
+    let allowed = |path: &str| {
+        well_formed(path)
+            || (player
+                && path.starts_with("/gameplay/creator-portrait/")
+                && image_identity(path).is_some())
+    };
     journey.is_none_or(|journey| {
         journey
             .live_faces
             .iter()
-            .all(|face| well_formed(&face.sprite) && well_formed(&face.battle_sprite))
+            .all(|face| allowed(&face.sprite) && allowed(&face.battle_sprite))
     })
 }
 
@@ -43,11 +99,21 @@ fn merge_faces(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyVi
             .iter()
             .zip(&new.party)
             .all(|(old, new)| old.name == new.name);
-    if !same_party || shown.live_faces == new.live_faces {
+    if !same_party {
         return false;
     }
+    let changed = shown.live_faces.len() != new.live_faces.len()
+        || !shown
+            .live_faces
+            .iter()
+            .zip(&new.live_faces)
+            .all(|(old, new)| {
+                old.name == new.name
+                    && same_image(&old.sprite, &new.sprite)
+                    && same_image(&old.battle_sprite, &new.battle_sprite)
+            });
     shown.live_faces.clone_from(&new.live_faces);
-    true
+    changed
 }
 
 /// PLAY-V10: copies the home loop's state and served path (`JourneyView.home_video_*`) of `new`
@@ -68,6 +134,28 @@ fn merge_loop(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyVie
     shown.home_video_state = new.home_video_state;
     shown.home_video_path.clone_from(&new.home_video_path);
     true
+}
+
+fn merge_voice_urls(shown: &mut String, new: &str) {
+    let Ok(serde_json::Value::Object(incoming)) = serde_json::from_str(new) else {
+        return;
+    };
+    let Some(urls) = incoming.get("voice_urls").filter(|value| value.is_array()) else {
+        return;
+    };
+    let mut contents = if shown.is_empty() {
+        serde_json::Map::new()
+    } else {
+        let Ok(serde_json::Value::Object(contents)) = serde_json::from_str(shown) else {
+            return;
+        };
+        contents
+    };
+    if contents.get("voice_urls") == Some(urls) {
+        return;
+    }
+    contents.insert("voice_urls".into(), urls.clone());
+    *shown = serde_json::Value::Object(contents).to_string();
 }
 
 /// Content-free condition names for refused art; an unchanged valid snapshot is not a refusal.
@@ -100,7 +188,7 @@ pub(crate) fn refusal_reason(
             {
                 return Some("plate-path");
             }
-            return (!faces_well_formed(new.journey.as_ref())).then_some("face-path");
+            return (!faces_well_formed(new.journey.as_ref(), true)).then_some("face-path");
         }
         _ => return Some("audience"),
     };
@@ -109,7 +197,7 @@ pub(crate) fn refusal_reason(
     };
     if shown.title != new.title {
         Some("scene-title")
-    } else if shown.scene_asset != new.scene_asset {
+    } else if !same_image(&shown.scene_asset, &new.scene_asset) {
         Some("scene-asset")
     } else if shown.cast.len() != new.cast.len() {
         Some("cast-count")
@@ -126,7 +214,7 @@ pub(crate) fn refusal_reason(
         Some("plate-path")
     } else if !new.cast.iter().all(|actor| well_formed(&actor.live_sprite)) {
         Some("sprite-path")
-    } else if !faces_well_formed(journey) {
+    } else if !faces_well_formed(journey, false) {
         Some("face-path")
     } else {
         None
@@ -149,19 +237,29 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
         ) => {
             // PLAY-V10: the lobby's loop belongs to the lobby's painting, which the audience names
             // directly, so it is merged even when the view carries no scene.
-            let loop_changed = shown.scene_asset == new.scene_asset
+            let loop_changed = same_image(&shown.scene_asset, &new.scene_asset)
                 && merge_loop(&mut shown.journey, new.journey.as_ref());
+            if same_image(&shown.scene_asset, &new.scene_asset) {
+                shown.scene_asset.clone_from(&new.scene_asset);
+            }
             let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
             else {
                 return loop_changed;
             };
-            let mut changed = shown_scene.live_backdrop != new_scene.live_backdrop;
+            shown_scene.scene_asset.clone_from(&new_scene.scene_asset);
+            let mut changed = !same_image(&shown_scene.live_backdrop, &new_scene.live_backdrop);
             shown_scene
                 .live_backdrop
                 .clone_from(&new_scene.live_backdrop);
             // PLAY-V09: the scene plate, its layout and its state are generated art too.
-            changed |= shown_scene.live_plate != new_scene.live_plate
-                || shown_scene.plate_layout != new_scene.plate_layout
+            let picture_changed = !same_image(&shown_scene.live_plate, &new_scene.live_plate)
+                || !same_layout(
+                    shown_scene.plate_layout.as_ref(),
+                    &shown_scene.live_plate,
+                    new_scene.plate_layout.as_ref(),
+                    &new_scene.live_plate,
+                );
+            changed |= picture_changed
                 || shown_scene.plate_state != new_scene.plate_state
                 || shown_scene.plate_update_pending != new_scene.plate_update_pending;
             shown_scene.live_plate.clone_from(&new_scene.live_plate);
@@ -172,8 +270,12 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
                 &mut shown_scene.scene_contents_json,
                 &new_scene.scene_contents_json,
             );
+            merge_voice_urls(
+                &mut shown_scene.scene_contents_json,
+                &new_scene.scene_contents_json,
+            );
             for (old, new) in shown_scene.cast.iter_mut().zip(&new_scene.cast) {
-                changed |= old.live_sprite != new.live_sprite;
+                changed |= !same_image(&old.live_sprite, &new.live_sprite);
                 old.live_sprite.clone_from(&new.live_sprite);
             }
             changed | merge_faces(&mut shown.journey, new.journey.as_ref()) | loop_changed
@@ -186,8 +288,14 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             let mut changed = false;
             if let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
             {
-                changed |= shown_scene.live_plate != new_scene.live_plate
-                    || shown_scene.plate_layout != new_scene.plate_layout
+                let picture_changed = !same_image(&shown_scene.live_plate, &new_scene.live_plate)
+                    || !same_layout(
+                        shown_scene.plate_layout.as_ref(),
+                        &shown_scene.live_plate,
+                        new_scene.plate_layout.as_ref(),
+                        &new_scene.live_plate,
+                    );
+                changed |= picture_changed
                     || shown_scene.plate_state != new_scene.plate_state
                     || shown_scene.plate_update_pending != new_scene.plate_update_pending;
                 shown_scene.live_plate.clone_from(&new_scene.live_plate);
@@ -340,6 +448,106 @@ mod tests {
             &view(&key('a'), "", "x", "The Heron Shrine")
         ));
         assert_eq!(shown, original);
+    }
+
+    #[test]
+    fn refreshed_image_grants_keep_the_scene_identity_and_the_latest_fetch_urls() {
+        let plate = key('a');
+        let scene_asset = key('b');
+        let mut shown = view("", "", "Current.", "The Heron Shrine");
+        let mut incoming = shown.clone();
+        for (message, grant) in [(&mut shown, "abcd"), (&mut incoming, "ef01")] {
+            let Some(rpc::view_message::Audience::Display(display)) = &mut message.audience else {
+                unreachable!()
+            };
+            let scene = display.scene.as_mut().unwrap();
+            scene.scene_asset = format!("{scene_asset}?g={grant}");
+            scene.live_plate = format!("{plate}?g={grant}");
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            scene.plate_layout = Some(rpc::PlateLayout {
+                figure_masks: vec![rpc::PlateFigureMask {
+                    mask_index: 2,
+                    mask_url: format!("{plate}/figure/2?g={grant}"),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        assert_eq!(refusal_reason(&shown, &incoming), None);
+        assert!(!merge_art(&mut shown, &incoming));
+        let Some(rpc::view_message::Audience::Display(display)) = shown.audience else {
+            unreachable!()
+        };
+        let scene = display.scene.unwrap();
+        assert_eq!(scene.live_plate, format!("{plate}?g=ef01"));
+        assert_eq!(
+            scene.plate_layout.unwrap().figure_masks[0].mask_url,
+            format!("{plate}/figure/2?g=ef01")
+        );
+    }
+
+    #[test]
+    fn mask_identity_ignores_only_a_valid_grant_and_preserves_layout_changes() {
+        let plate = key('a');
+        let old = rpc::PlateLayout {
+            figure_masks: vec![rpc::PlateFigureMask {
+                mask_index: 2,
+                mask_url: format!("{plate}/figure/2?g=abcd"),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut new = old.clone();
+        new.figure_masks[0].mask_url = format!("{plate}/figure/2?g=ef01");
+        assert!(same_layout(Some(&old), &plate, Some(&new), &plate));
+        new.figure_masks[0].mask_url.push_str("&extra=1");
+        assert!(!same_layout(Some(&old), &plate, Some(&new), &plate));
+        new.figure_masks[0].mask_url = format!("{plate}/figure/3?g=ef01");
+        assert!(!same_layout(Some(&old), &plate, Some(&new), &plate));
+        new.figure_masks[0].mask_url = format!("{plate}/figure/2?g=ef01");
+        new.head_x_permille = 1;
+        assert!(!same_layout(Some(&old), &plate, Some(&new), &plate));
+    }
+
+    #[test]
+    fn creator_portrait_faces_are_accepted_only_in_the_player_view() {
+        let portrait = format!("/gameplay/creator-portrait/{}?g=abcd", "c".repeat(64));
+        let mut player = player_view(&[], &["Rowan"]);
+        let incoming = player_view(&[("Rowan", &portrait)], &["Rowan"]);
+        assert_eq!(refusal_reason(&player, &incoming), None);
+        assert!(merge_art(&mut player, &incoming));
+        let mut display = view("", "", "", "The Heron Shrine");
+        let mut incoming_display = display.clone();
+        for message in [&mut display, &mut incoming_display] {
+            let Some(rpc::view_message::Audience::Display(view)) = &mut message.audience else {
+                unreachable!()
+            };
+            view.journey = Some(rpc::JourneyView {
+                party: vec![rpc::PartyMemberView {
+                    name: "Rowan".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        let Some(rpc::view_message::Audience::Display(view)) = &mut incoming_display.audience
+        else {
+            unreachable!()
+        };
+        view.journey
+            .as_mut()
+            .unwrap()
+            .live_faces
+            .push(rpc::LiveFace {
+                name: "Rowan".into(),
+                sprite: portrait,
+                ..Default::default()
+            });
+        assert_eq!(
+            refusal_reason(&display, &incoming_display),
+            Some("face-path")
+        );
+        assert!(!merge_art(&mut display, &incoming_display));
     }
 
     #[test]

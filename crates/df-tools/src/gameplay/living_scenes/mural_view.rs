@@ -30,10 +30,10 @@ impl MuralView {
             return false;
         }
         match self.state {
-            MuralState::Ready => self
-                .url
-                .strip_prefix("/gameplay/imagery/")
-                .is_some_and(digest),
+            MuralState::Ready => {
+                self.url.starts_with("/gameplay/imagery/")
+                    && df_render::art_contract::player_hero_image(&self.url).is_some()
+            }
             MuralState::Pending | MuralState::Failed => self.url.is_empty(),
         }
     }
@@ -54,6 +54,18 @@ pub(crate) fn merge_scene_contents(shown: &mut String, new: &str) -> bool {
     let Some(mural) = MuralView::from_scene_contents(new) else {
         return false;
     };
+    let same_picture = MuralView::from_scene_contents(shown).is_some_and(|old| {
+        old.state == mural.state
+            && old.key == mural.key
+            && old
+                .url
+                .split_once('?')
+                .map_or(old.url.as_str(), |(path, _)| path)
+                == mural
+                    .url
+                    .split_once('?')
+                    .map_or(mural.url.as_str(), |(path, _)| path)
+    });
     let mut contents = if shown.is_empty() {
         serde_json::Map::new()
     } else {
@@ -68,7 +80,7 @@ pub(crate) fn merge_scene_contents(shown: &mut String, new: &str) -> bool {
     }
     contents.insert("party_mural".into(), mural);
     *shown = serde_json::Value::Object(contents).to_string();
-    true
+    !same_picture
 }
 
 #[cfg(test)]
@@ -114,5 +126,39 @@ mod tests {
             "{\"party_mural\":{\"state\":\"ready\",\"url\":\"https://untrusted/image\"}}"
         ));
         assert_eq!(shown, accepted);
+    }
+
+    #[test]
+    fn signed_mural_is_accepted_and_retained_for_initial_and_same_revision_views() {
+        let path = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let signed = format!("{path}?g=abcd");
+        let initial = serde_json::json!({"party_mural":{"state":"ready","url":signed}}).to_string();
+        assert_eq!(
+            MuralView::from_scene_contents(&initial).unwrap().url,
+            signed
+        );
+        let mut shown = r#"{"party_mural":{"state":"pending","url":""}}"#.to_owned();
+        assert!(merge_scene_contents(&mut shown, &initial));
+        assert_eq!(MuralView::from_scene_contents(&shown).unwrap().url, signed);
+        let renewed =
+            serde_json::json!({"party_mural":{"state":"ready","url":format!("{path}?g=ef01")}})
+                .to_string();
+        assert!(!merge_scene_contents(&mut shown, &renewed));
+        assert_eq!(
+            MuralView::from_scene_contents(&shown).unwrap().url,
+            format!("{path}?g=ef01")
+        );
+        for bad in [
+            format!("{path}?g="),
+            format!("{path}?g=abcd&other=1"),
+            format!("{path}?g=abcd?g=ef"),
+            format!("https://foreign.test{path}?g=abcd"),
+            "/gameplay/imagery/../secret?g=abcd".to_owned(),
+        ] {
+            let invalid =
+                serde_json::json!({"party_mural":{"state":"ready","url":bad}}).to_string();
+            assert!(MuralView::from_scene_contents(&invalid).is_none());
+            assert!(!merge_scene_contents(&mut shown, &invalid));
+        }
     }
 }

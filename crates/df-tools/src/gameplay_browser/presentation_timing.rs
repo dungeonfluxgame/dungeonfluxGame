@@ -139,6 +139,22 @@ pub(super) fn identity(text: &str) -> u64 {
     df_observe::presentation::local_identity(text)
 }
 
+pub(super) fn image_identity(asset: &str) -> u64 {
+    if asset.starts_with("/gameplay/imagery/")
+        && df_render::art_contract::player_hero_image(asset).is_some()
+    {
+        return identity(asset.split_once('?').map_or(asset, |(path, _)| path));
+    }
+    if asset.len() == 64
+        && asset
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return identity(&format!("/gameplay/imagery/{asset}"));
+    }
+    identity(asset)
+}
+
 /// Unique page-local identity for short-lived presentation elements without a server line id.
 pub(super) fn next_component_id() -> u64 {
     NEXT_COMPONENT_ID.with(|next| {
@@ -217,7 +233,12 @@ pub(super) fn media(
     let Some(now) = now_ms() else {
         return;
     };
-    let mut event = TimingEvent::lifecycle(kind, reason, identity(asset), identity(scene), now);
+    let asset_id = if kind.starts_with("plate-") || asset.starts_with("/gameplay/imagery/") {
+        image_identity(asset)
+    } else {
+        identity(asset)
+    };
+    let mut event = TimingEvent::lifecycle(kind, reason, asset_id, identity(scene), now);
     event.crossfade_ms = crossfade_ms;
     displays(|capture| retain(capture, event.clone()));
 }
@@ -1424,5 +1445,24 @@ mod tests {
         assert_eq!(identity("scene"), identity("scene"));
         assert_ne!(identity("scene"), identity("other-scene"));
         assert!(identity("speaker private text") <= i64::MAX as u64);
+    }
+
+    #[test]
+    fn imagery_timing_uses_the_unsigned_route_identity() {
+        let key = "a".repeat(64);
+        let path = format!("/gameplay/imagery/{key}");
+        assert_eq!(
+            super::image_identity(&format!("{path}?g=abcd")),
+            identity(&path)
+        );
+        assert_eq!(
+            super::image_identity(&format!("{path}?g=ef01")),
+            identity(&path)
+        );
+        assert_eq!(super::image_identity(&key), identity(&path));
+        assert_ne!(
+            super::image_identity(&format!("{path}?g=bad&x=1")),
+            identity(&path)
+        );
     }
 }

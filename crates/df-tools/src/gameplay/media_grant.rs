@@ -346,6 +346,7 @@ pub(super) fn sign_view(
             }
         }
         crate::gameplay::rpc::view_message::Audience::Display(view) => {
+            sign_authored_voice_urls(view, principal_audience, principal);
             sign_image_url(&mut view.scene_asset, principal_audience, principal);
             if let Some(scene) = view.scene.as_mut() {
                 sign_scene(scene, principal_audience, principal);
@@ -365,6 +366,65 @@ pub(super) fn sign_view(
             }
         }
     }
+}
+
+fn sign_authored_voice_urls(
+    view: &mut crate::gameplay::rpc::DisplayGameplayView,
+    principal_audience: PrincipalAudience,
+    principal: &[u8; KEY_BYTES],
+) {
+    let authored_count = usize::from(!view.narration.trim().is_empty())
+        + usize::from(
+            view.journey
+                .as_ref()
+                .is_some_and(|journey| !journey.dialogue.trim().is_empty()),
+        );
+    let urls: Vec<Vec<String>> = crate::voice_line::display_lines(view)
+        .into_iter()
+        .take(authored_count)
+        .filter_map(|line| {
+            let key = line.key();
+            let count = crate::voice_line::voice_segments(&line.text).len();
+            let mut parts: Vec<String> = (0..count)
+                .map(|index| {
+                    let suffix = if index == 0 {
+                        String::new()
+                    } else {
+                        format!("/{index}")
+                    };
+                    let mut url = format!("/gameplay/voice/{key}{suffix}");
+                    sign_voice_url(&mut url, principal_audience, principal);
+                    url
+                })
+                .collect();
+            if parts.iter().any(String::is_empty) {
+                parts.clear();
+            }
+            (!parts.is_empty()).then_some(parts)
+        })
+        .collect();
+    let Some(scene) = view.scene.as_mut() else {
+        return;
+    };
+    if urls.is_empty() && scene.scene_contents_json.is_empty() {
+        return;
+    }
+    let mut contents = if scene.scene_contents_json.is_empty() {
+        serde_json::Map::new()
+    } else {
+        let Ok(serde_json::Value::Object(contents)) =
+            serde_json::from_str(&scene.scene_contents_json)
+        else {
+            return;
+        };
+        contents
+    };
+    if urls.is_empty() {
+        contents.remove("voice_urls");
+    } else {
+        contents.insert("voice_urls".into(), serde_json::json!(urls));
+    }
+    scene.scene_contents_json = serde_json::Value::Object(contents).to_string();
 }
 
 fn sign_scene(
@@ -512,6 +572,7 @@ fn sign_voice_url(
     let Some(path) = value.strip_prefix("/gameplay/voice/") else {
         return;
     };
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
     let (key, suffix) = match path.split_once('/') {
         Some((key, part)) => (key, format!("/{part}")),
         None => (path, String::new()),
@@ -966,6 +1027,47 @@ mod tests {
                 &voice_key,
                 Audience::Voice,
                 &[PrincipalAudience::Seat, PrincipalAudience::Display]
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn authored_narration_without_a_table_row_has_a_signed_voice_url_in_the_display_view() {
+        let narration = "The lanterns flicker on the water.";
+        let mut view = crate::gameplay::rpc::ViewMessage {
+            audience: Some(crate::gameplay::rpc::view_message::Audience::Display(
+                crate::gameplay::rpc::DisplayGameplayView {
+                    narration: narration.to_owned(),
+                    scene: Some(Default::default()),
+                    journey: Some(Default::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        crate::gameplay::voice::attach_urls(&mut view);
+        sign_view(&mut view, true, &[7; KEY_BYTES]);
+        let Some(crate::gameplay::rpc::view_message::Audience::Display(display)) = view.audience
+        else {
+            unreachable!()
+        };
+        let contents: serde_json::Value =
+            serde_json::from_str(&display.scene.unwrap().scene_contents_json).unwrap();
+        let url = contents["voice_urls"][0][0].as_str().unwrap();
+        let key = crate::voice_line::VoiceLine {
+            role: "narrator".into(),
+            text: narration.into(),
+        }
+        .key();
+        assert!(url.starts_with(&format!("/gameplay/voice/{key}?g=")));
+        assert!(
+            verify_request(
+                &HeaderMap::new(),
+                &url.parse().unwrap(),
+                &key,
+                Audience::Voice,
+                &[PrincipalAudience::Display]
             )
             .is_some()
         );

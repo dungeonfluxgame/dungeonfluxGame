@@ -840,8 +840,18 @@ fn first_art_asset(style: &str) -> Option<&str> {
         .filter(|asset| !asset.is_empty())
 }
 
+fn plate_identity(asset: &str) -> &str {
+    if asset.starts_with("/gameplay/imagery/")
+        && df_render::art_contract::player_hero_image(asset).is_some()
+    {
+        asset.split_once('?').map_or(asset, |(path, _)| path)
+    } else {
+        asset
+    }
+}
+
 fn plate_asset_key(asset: &str) -> &str {
-    asset
+    plate_identity(asset)
         .rsplit('/')
         .next()
         .filter(|key| !key.is_empty())
@@ -921,14 +931,14 @@ fn record_visual_source(
         .or_else(|| stage.get_attribute("data-scene-key"))
         .unwrap_or_default();
     let requested_asset_id = requested_asset.as_deref().map(|asset| {
-        super::presentation_timing::identity(if requested == VisualSource::ScenePlate {
+        super::presentation_timing::image_identity(if requested == VisualSource::ScenePlate {
             plate_asset_key(asset)
         } else {
             asset
         })
     });
     let effective_asset_id = effective_asset.as_deref().map(|asset| {
-        super::presentation_timing::identity(if effective == VisualSource::ScenePlate {
+        super::presentation_timing::image_identity(if effective == VisualSource::ScenePlate {
             plate_asset_key(asset)
         } else {
             asset
@@ -1800,7 +1810,9 @@ fn plate_request_matches(root: &Element, image: &Element) -> bool {
     };
     root.is_connected()
         && image.is_connected()
-        && Some(wanted) == image.get_attribute("data-src")
+        && image
+            .get_attribute("data-src")
+            .is_some_and(|source| plate_identity(&wanted) == plate_identity(&source))
         && Some(wanted_index) == image.get_attribute("data-i")
         && Some(request) == image.get_attribute("data-request")
 }
@@ -4333,7 +4345,15 @@ impl TvStage {
             return Ok(());
         };
         self.root.set_attribute("data-plate-state", "ready")?;
-        if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
+        let same_picture = layer
+            .root
+            .get_attribute("data-want")
+            .is_some_and(|wanted| plate_identity(&wanted) == plate_identity(url));
+        let retry = failed
+            .as_deref()
+            .is_some_and(|failed| failed != url && plate_identity(failed) == plate_identity(url));
+        if same_picture && !retry {
+            layer.root.set_attribute("data-want", url)?;
             // The same picture can arrive with a new layout: its speaker has moved.
             let layout = plate.layout.clone();
             *layer.pending_layout.borrow_mut() = layout.clone();
@@ -4400,11 +4420,7 @@ impl TvStage {
         image.set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-want-i", &next.to_string())?;
         layer.next.set(1 - next);
-        let key = url
-            .rsplit('/')
-            .next()
-            .filter(|key| !key.is_empty())
-            .ok_or_else(|| JsValue::from_str("plate URL has no asset key"))?;
+        let key = plate_asset_key(url);
         layer.root.set_attribute("data-want-key", key)?;
         let component_id = super::presentation_timing::identity(key);
         layer.root.set_attribute("data-want", url)?;
@@ -6877,7 +6893,6 @@ mod tests {
             url: None,
             layout: None,
             update_pending: true,
-            ..Default::default()
         };
 
         stage.set_plate(&pending, "new-scene", true).unwrap();
@@ -7126,6 +7141,74 @@ mod tests {
             Some("0")
         );
         assert!(stage.root.has_attribute("data-plate-loaded"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn renewed_plate_grant_keeps_the_pending_decode_and_a_failed_fetch_uses_the_new_grant() {
+        let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-scene-key", "entry").unwrap();
+        let path = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let old = format!("{path}?g=abcd");
+        let fresh = format!("{path}?g=ef01");
+        let plate = |url: &str| PlateView {
+            state: PlateState::Ready,
+            url: Some(url.to_owned()),
+            ..Default::default()
+        };
+        stage.apply_plate(&plate(&old), "entry").unwrap();
+        let index: usize = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let image = &stage.plate.images[index];
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        stage.apply_plate(&plate(&fresh), "entry").unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-request"),
+            Some(request.clone())
+        );
+        assert_eq!(image.get_attribute("data-src"), Some(old.clone()));
+        assert!(super::plate_request_matches(&stage.plate.root, image));
+        assert!(!stage.plate.root.has_attribute("data-transition"));
+        assert_eq!(
+            stage.plate.root.get_attribute("data-want-key"),
+            Some("a".repeat(64))
+        );
+        image
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+        assert_eq!(stage.plate.root.get_attribute("data-failed"), Some(old));
+        stage.apply_plate(&plate(&fresh), "entry").unwrap();
+        assert_ne!(
+            stage.plate.root.get_attribute("data-request"),
+            Some(request)
+        );
+        let retry_index: usize = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            stage.plate.images[retry_index].get_attribute("data-src"),
+            Some(fresh)
+        );
+        let replacement = format!("/gameplay/imagery/{}?g=abcd", "b".repeat(64));
+        let retry_request = stage.plate.root.get_attribute("data-request");
+        stage.apply_plate(&plate(&replacement), "entry").unwrap();
+        assert_ne!(
+            stage.plate.root.get_attribute("data-request"),
+            retry_request
+        );
+        assert_eq!(
+            stage.plate.root.get_attribute("data-want-key"),
+            Some("b".repeat(64))
+        );
         finish_stage(parent, stage);
     }
 
