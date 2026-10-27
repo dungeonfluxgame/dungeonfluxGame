@@ -66,6 +66,13 @@ fn refused(name: &str) -> io::Error {
     ))
 }
 
+fn reply_setting(reply: Result<String, VarError>, codex: bool) -> Result<String, VarError> {
+    match reply {
+        Err(VarError::NotPresent) if codex => Ok("300".to_owned()),
+        value => value,
+    }
+}
+
 impl Timing {
     pub(super) fn from_inputs(
         commit: Result<String, VarError>,
@@ -105,9 +112,13 @@ impl Timing {
     }
 
     pub(super) fn from_environment() -> Result<Self, io::Error> {
+        let reply = reply_setting(
+            std::env::var("DF_GAMEPLAY_REPLY_SECONDS"),
+            std::env::var("DF_GAMEPLAY_CODEX_MODE").as_deref() == Ok("on"),
+        );
         Self::from_inputs(
             std::env::var("DF_GAMEPLAY_COMMIT_SECONDS"),
-            std::env::var("DF_GAMEPLAY_REPLY_SECONDS"),
+            reply,
             std::env::var("DF_GAMEPLAY_LEASE_SECONDS"),
         )
     }
@@ -169,6 +180,19 @@ mod tests {
         assert_eq!(bounds.rollback, Duration::from_secs(2));
         assert_eq!(bounds.driver_join, Duration::from_secs(5));
         assert_eq!(timing.browser_request(), Duration::from_secs(25));
+    }
+
+    #[test]
+    fn codex_reply_default_allows_the_backfill_chain_and_preserves_overrides() {
+        assert_eq!(
+            reply_setting(Err(VarError::NotPresent), true).unwrap(),
+            "300"
+        );
+        assert!(matches!(
+            reply_setting(Err(VarError::NotPresent), false),
+            Err(VarError::NotPresent)
+        ));
+        assert_eq!(reply_setting(Ok("45".to_owned()), true).unwrap(), "45");
     }
 
     #[test]

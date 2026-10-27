@@ -1968,6 +1968,7 @@ fn gateretry_endpoint(rejected_gate_attempts: u64, rejected_city: bool) -> FakeE
 
 struct TimedPlaceAuthor {
     state: std::sync::Mutex<TimedPlaceState>,
+    codex: bool,
 }
 
 struct TimedPlaceState {
@@ -1977,6 +1978,10 @@ struct TimedPlaceState {
 }
 
 impl PlaceAuthor for TimedPlaceAuthor {
+    fn is_codex(&self) -> bool {
+        self.codex
+    }
+
     fn express<'a>(
         &'a self,
         request: &'a Expression<'_>,
@@ -2021,6 +2026,7 @@ fn timed_place_author(silent: bool) -> TimedPlaceAuthor {
     rejected_place.as_object_mut().unwrap().remove("traders");
     rejected["place"] = json!(rejected_place.to_string());
     TimedPlaceAuthor {
+        codex: false,
         state: std::sync::Mutex::new(TimedPlaceState {
             elapsed: Duration::ZERO,
             replies: [
@@ -2031,6 +2037,23 @@ fn timed_place_author(silent: bool) -> TimedPlaceAuthor {
             deadlines: Vec::new(),
         }),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn codex_gate_timeout_does_not_repeat_the_expensive_attempt() {
+    let mut author = timed_place_author(true);
+    author.codex = true;
+    author.state.lock().unwrap().replies[0].0 = Duration::from_secs(181);
+    assert_eq!(
+        express_place(&author, &request(), true, true, Duration::from_secs(180))
+            .await
+            .unwrap_err(),
+        CreationError::Model
+    );
+    assert_eq!(
+        author.state.lock().unwrap().deadlines,
+        [Duration::from_secs(180)]
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

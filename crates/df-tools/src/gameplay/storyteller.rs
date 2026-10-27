@@ -559,6 +559,11 @@ impl Storyteller {
         self.online.is_some()
     }
 
+    /// Codex runs each generation and content check in a separate CLI process.
+    pub(super) fn is_codex(&self) -> bool {
+        self.online.as_ref().is_some_and(|online| online.codex)
+    }
+
     /// The configured model identifier, when a model is configured.
     pub(super) fn model(&self) -> Option<&str> {
         self.online.as_ref().map(|online| online.model.as_str())
@@ -1255,6 +1260,7 @@ async fn judge_srd_material(
         slots: &slots,
         style: "Classify whether the candidate appears to reproduce published non-SRD material.",
         profile: CallProfile {
+            deadline: request.profile.deadline,
             guidance: "Judge meaning and resemblance, not keywords. Choose campaign_or_srd only when the candidate uses original campaign material or material supported by the supplied SRD catalog. Choose published_non_srd when it appears to reproduce a published non-SRD creature, spell, subclass, setting, character, or text. Return the shortest exact span that supports a positive judgement; return an empty span when clear.",
             ..CallProfile::default()
         },

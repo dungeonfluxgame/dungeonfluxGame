@@ -45,6 +45,14 @@ use super::{
 
 /// How long the whole creation of a place may take: two storyteller attempts at most.
 const CREATION_DEADLINE: Duration = Duration::from_secs(90);
+
+fn creation_deadline() -> Duration {
+    if std::env::var("DF_GAMEPLAY_CODEX_MODE").as_deref() == Ok("on") {
+        Duration::from_secs(290)
+    } else {
+        CREATION_DEADLINE
+    }
+}
 /// Recent public table lines given to the storyteller.
 const RECENT_LINES: usize = 10;
 const RECENT_LINE_CHARACTERS: usize = 200;
@@ -168,7 +176,7 @@ impl LookAhead {
                     .collect()
             })
             .unwrap_or_default();
-        tokio::time::timeout(CREATION_DEADLINE, async {
+        tokio::time::timeout(creation_deadline(), async {
             for mut outcome in waits {
                 while matches!(*outcome.borrow_and_update(), AheadOutcome::Pending) {
                     outcome.changed().await.unwrap();
@@ -1530,7 +1538,7 @@ impl Service {
             return Ok(());
         }
         let mut prepared = tokio::time::timeout(
-            CREATION_DEADLINE,
+            creation_deadline(),
             self.prepare_move(operation, MoveTarget::Exit(exit.clone()), ""),
         )
         .await
@@ -1753,7 +1761,7 @@ impl Service {
                 let made = match ready {
                     Some(ready) => Ok(Ok(ready.place)),
                     None => {
-                        tokio::time::timeout(CREATION_DEADLINE, async {
+                        tokio::time::timeout(creation_deadline(), async {
                             if free_roam.is_some() || spot.is_some() {
                                 place_creation::create_silent(storyteller, persona_model, &request)
                                     .await
@@ -1956,7 +1964,7 @@ impl Service {
         let Some(mut waiting) = waiting else {
             return Ok(None);
         };
-        tokio::time::timeout(CREATION_DEADLINE, async {
+        tokio::time::timeout(creation_deadline(), async {
             loop {
                 match waiting.borrow_and_update().clone() {
                     AheadOutcome::Ready(record) => return Ok(Some(record.as_ref().clone())),
@@ -2104,7 +2112,7 @@ impl Service {
         operation: Option<u64>,
     ) {
         let mut cancellation = outcome.subscribe();
-        let generation = tokio::time::timeout(CREATION_DEADLINE, async {
+        let generation = tokio::time::timeout(creation_deadline(), async {
             let world = super::adventure::free_roam::world().ok_or(())?;
             let home = place::home_id(&pack::scene(pack::SceneKey::Opening)).map_err(|_| ())?;
             let destination = place::destination(current.state(), &home, &origin.place_id, &exit)

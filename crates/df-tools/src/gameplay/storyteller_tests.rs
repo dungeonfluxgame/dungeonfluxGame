@@ -32,6 +32,28 @@ fn blocked_text_request_is_never_sent_even_when_observed() {
 const CREDENTIAL: &str = "credential-private-sentinel";
 type ResponseComputer = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
+#[tokio::test(flavor = "current_thread")]
+async fn content_review_uses_the_parent_expression_deadline() {
+    let endpoint = FakeEndpoint::start(vec![]);
+    let cache = cache_directory("review-parent-deadline");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(1), &cache);
+    let (facts, slots) = (facts(), slots());
+    let mut request = expression(&facts, &slots);
+    request.profile.deadline = Some(Duration::from_secs(5));
+    let started = std::time::Instant::now() - Duration::from_secs(2);
+
+    let (flagged, _) = judge_srd_material(
+        storyteller.online.as_ref().unwrap(),
+        &request,
+        "reply",
+        "A clear original reply.",
+        started,
+    )
+    .await
+    .expect("review retains the parent's remaining time");
+    assert!(flagged.is_none());
+}
+
 /// What the fake endpoint answers to one connection.
 pub(in crate::gameplay) enum Reply {
     /// A complete response whose assistant text is this JSON.

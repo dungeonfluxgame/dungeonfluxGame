@@ -1005,6 +1005,14 @@ const MAXIMUM_PERSONA_ATTEMPTS: usize = 5;
 /// Bounds storytelling, judging and cache cleanup together for one person.
 const PERSONA_DEADLINE: Duration = Duration::from_secs(20);
 
+fn persona_deadline(storyteller: &Storyteller) -> Duration {
+    if storyteller.is_codex() {
+        Duration::from_secs(90)
+    } else {
+        PERSONA_DEADLINE
+    }
+}
+
 const PERSONA_GUIDANCE: &str = concat!(
     "Write only the persona JSON object under output_schema. ",
     "The server has already drawn temperament: copy it exactly, never infer or change it from words. ",
@@ -1158,7 +1166,7 @@ async fn express_persona(
             profile: CallProfile {
                 reasoning: Some(df_providers::ReasoningEffort::Low),
                 output_tokens: Some(700),
-                deadline: Some(PERSONA_DEADLINE),
+                deadline: Some(persona_deadline(storyteller)),
                 guidance: PERSONA_GUIDANCE,
             },
         };
@@ -1312,7 +1320,7 @@ pub(in crate::gameplay) async fn author_personas(
             record,
             person,
             temperament,
-            PERSONA_DEADLINE,
+            persona_deadline(storyteller),
         )
         .await;
         record.people[index].persona = Some(persona);
@@ -1357,13 +1365,13 @@ async fn create_with_arrival(
     silent: bool,
     gate: bool,
 ) -> Result<PlaceRecord, CreationError> {
-    const PLACE_DEADLINE: Duration = Duration::from_secs(40);
+    let place_deadline = Duration::from_secs(if storyteller.is_codex() { 180 } else { 40 });
     let mut record = if gate {
-        express_place(author, request, silent, gate, PLACE_DEADLINE).await?
+        express_place(author, request, silent, gate, place_deadline).await?
     } else {
         match tokio::time::timeout(
-            PLACE_DEADLINE,
-            express_place(author, request, silent, gate, PLACE_DEADLINE),
+            place_deadline,
+            express_place(author, request, silent, gate, place_deadline),
         )
         .await
         {
@@ -1403,6 +1411,11 @@ async fn create_with_arrival(
 
 /// Generates place text and reports elapsed time for bounded attempts.
 pub(in crate::gameplay) trait PlaceAuthor {
+    /// Whether each generation uses the Codex CLI and its longer startup cost.
+    fn is_codex(&self) -> bool {
+        false
+    }
+
     /// Requests the three place slots under the supplied deadline.
     fn express<'a>(
         &'a self,
@@ -1425,6 +1438,10 @@ pub(in crate::gameplay) trait PlaceAuthor {
 }
 
 impl PlaceAuthor for Storyteller {
+    fn is_codex(&self) -> bool {
+        Storyteller::is_codex(self)
+    }
+
     async fn express(
         &self,
         request: &Expression<'_>,
@@ -1562,6 +1579,9 @@ async fn express_place(
                     "gameplay.place",
                     "PLACE generation outcome=failed reason=deadline".to_owned(),
                 );
+                if storyteller.is_codex() {
+                    return Err(CreationError::Model);
+                }
                 problem = Some(format!(
                     "the previous generation failed for deadline; {RETRY_GUIDANCE}"
                 ));
