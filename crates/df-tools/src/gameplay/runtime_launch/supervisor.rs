@@ -20,9 +20,10 @@ use tokio::{
 
 const MAXIMUM_ROOMS: usize = 8;
 const STARTUP_DEADLINE: Duration = Duration::from_secs(90);
-/// A child's READY waits for its adventure; a free-roam city takes minutes to generate, so this matches the
-/// launcher's own ready limit rather than the setup deadline.
-const CHILD_READY_DEADLINE: Duration = Duration::from_secs(600);
+/// A child's READY waits for its adventure, which can take minutes to generate.
+fn child_ready_deadline(codex_mode: bool) -> Duration {
+    Duration::from_secs(if codex_mode { 1200 } else { 600 })
+}
 const EXCHANGE_DEADLINE: Duration = Duration::from_secs(2);
 const STARTUP_POLL: Duration = Duration::from_millis(250);
 
@@ -349,7 +350,9 @@ async fn run_child(
     let mut lines = BufReader::new(stdout).lines();
     // The READY line on this child's own pipe is its identity and bound address; no
     // allocation (and no secret) is sent to any address before it arrives.
-    let ready = tokio::time::timeout(CHILD_READY_DEADLINE, read_ready(&mut lines))
+    let deadline =
+        child_ready_deadline(std::env::var("DF_GAMEPLAY_CODEX_MODE").as_deref() == Ok("on"));
+    let ready = tokio::time::timeout(deadline, read_ready(&mut lines))
         .await
         .map_err(|_| std::io::Error::other("child startup deadline"))??;
     let drain = tokio::spawn(async move {
@@ -516,6 +519,12 @@ async fn prepare_database(database: &tokio_postgres::Config) -> Result<(), std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_child_ready_deadline_is_bounded() {
+        assert_eq!(child_ready_deadline(false), Duration::from_secs(600));
+        assert_eq!(child_ready_deadline(true), Duration::from_secs(1200));
+    }
 
     #[tokio::test]
     async fn supervised_child_inherits_the_openai_block() {

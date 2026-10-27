@@ -193,8 +193,11 @@ pub struct App {
 }
 
 const RUN_FILE: &str = "running-game.toml";
-const READY_LIMIT: Duration = Duration::from_secs(600);
 const STOP_LIMIT: Duration = Duration::from_secs(30);
+
+fn ready_limit(codex_mode: bool) -> Duration {
+    Duration::from_secs(if codex_mode { 1200 } else { 600 })
+}
 
 impl App {
     /// `windowed` is false for the headless preview, which cannot show a display window.
@@ -705,7 +708,9 @@ impl App {
         self.write_run_logged(&run, "start");
 
         self.step(game, Step::Waiting, "Loading the adventure");
-        let waited = server::wait_ready(&mut child, &log, READY_LIMIT, |line| {
+        let ready_limit =
+            ready_limit(std::env::var("DF_GAMEPLAY_CODEX_MODE").as_deref() == Ok("on"));
+        let waited = server::wait_ready(&mut child, &log, ready_limit, |line| {
             if let Some(detail) = progress_detail(line) {
                 self.step(game, Step::Waiting, &detail);
             }
@@ -740,7 +745,7 @@ impl App {
             Ok(server::Wait::TimedOut) | Err(_) => {
                 log::event(
                     "SERVER_NOT_READY",
-                    format!("limit_s={}", READY_LIMIT.as_secs()),
+                    format!("limit_s={}", ready_limit.as_secs()),
                 );
                 let stop_request = server::request_stop(&run.stop_dir).is_ok();
                 let (killed, reaped) = if child.wait_timeout(STOP_LIMIT).is_none() {
@@ -756,7 +761,10 @@ impl App {
                 self.clear_run();
                 return Err(failure_with_log(
                     "The game didn't get ready",
-                    "It wasn't ready after 10 minutes, so DungeonFlux stopped it. The last lines it printed are below.",
+                    &format!(
+                        "It wasn't ready after {} minutes, so DungeonFlux stopped it. The last lines it printed are below.",
+                        ready_limit.as_secs() / 60
+                    ),
                 ));
             }
         };
@@ -1671,6 +1679,12 @@ impl WaitTimeout for Child {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_mode_gets_a_bounded_longer_ready_limit() {
+        assert_eq!(ready_limit(false), Duration::from_secs(600));
+        assert_eq!(ready_limit(true), Duration::from_secs(1200));
+    }
 
     #[test]
     fn host_decision_client_transmits_request_identity_and_accepts_ok() {
