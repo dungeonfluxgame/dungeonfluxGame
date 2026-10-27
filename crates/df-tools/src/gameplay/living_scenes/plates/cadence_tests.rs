@@ -629,3 +629,59 @@ fn hs41_plates_player_text_cannot_be_mistaken_for_a_cadence_completion_marker() 
     assert!(book.accepts_state(&format!("{}|cadence_context=none", book.observed)));
     assert!(!book.accepts_state("other state|cadence_context=none"));
 }
+
+#[test]
+fn a_fresh_conversation_plate_survives_an_older_state_render_finishing_late() {
+    let (shared, mut queue, current, mut projected) = pipeline_fixture();
+    commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
+    shared.poll_state_images_at(Duration::from_secs(3));
+    let older = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+    let id = {
+        let mut book = locked(&shared.book);
+        let current = book.current.as_mut().unwrap();
+        current.graph_revision = 2;
+        current.id.clone().unwrap()
+    };
+    shared.finish(super::super::Done::Fresh {
+        id,
+        graph_revision: 2,
+        ahead: false,
+        elapsed: Duration::from_secs(1),
+        result: Ok((key('b'), None)),
+    });
+    let mut output = rpc::GameplayScene::default();
+    assert_eq!(
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(30)),
+        Some(2)
+    );
+    assert_eq!(output.live_plate, key('b').path());
+    older.complete(&shared, Duration::from_secs(65));
+    shared.poll_state_images_at(Duration::from_secs(65));
+    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(65));
+    assert_eq!(output.live_plate, key('b').path());
+}
+
+#[test]
+fn a_person_subject_in_an_opening_scene_uses_a_conversation_camera() {
+    let (shared, mut queue, current, mut projected) = pipeline_fixture();
+    locked(&shared.book).state_images.subject_selection = Some(subject::Selection {
+        scene: projected.scene_key.clone(),
+        hero: "Hero 1".into(),
+        target: current.cast[0].id.clone(),
+    });
+    commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
+    shared.poll_state_images_at(Duration::from_secs(3));
+    let super::super::Job::State(Job::Bake {
+        pending,
+        identities,
+        ..
+    }) = drain(&mut queue).remove(0)
+    else {
+        panic!("person-subject composition")
+    };
+    assert!(pending.framed_subject.is_some());
+    assert_eq!(
+        story_camera(&pending, identities.as_deref().unwrap()),
+        Some(shot::Camera::DialogueMedium)
+    );
+}
