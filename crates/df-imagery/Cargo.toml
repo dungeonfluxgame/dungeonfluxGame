@@ -1,0 +1,9 @@
+[package]
+name = "df-imagery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+df-types = { path = "../df-types" }
+df-assets = { path = "../df-assets" }

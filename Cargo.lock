@@ -661,6 +661,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "df-imagery"
+version = "0.1.0"
+dependencies = [
+ "df-assets",
+ "df-types",
+]
+
+[[package]]
 name = "df-intent"
 version = "0.1.0"
 dependencies = [
