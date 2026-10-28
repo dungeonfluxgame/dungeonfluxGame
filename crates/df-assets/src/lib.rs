@@ -87,7 +87,10 @@ pub use audience::{Audience, MemberSet};
 #[cfg(not(target_arch = "wasm32"))]
 mod media_request_key;
 #[cfg(not(target_arch = "wasm32"))]
-pub use media_request_key::{MEDIA_REQUEST_SCHEMA, MediaRequest, MediaRequestKey};
+pub use media_request_key::{
+    MEDIA_RECIPE_SCHEMA, MEDIA_REQUEST_SCHEMA, MediaKeyError, MediaRecipeRequest, MediaRequest,
+    MediaRequestKey,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod quota;
