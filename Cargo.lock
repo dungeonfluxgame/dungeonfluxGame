@@ -751,6 +751,7 @@ dependencies = [
  "df-assets",
  "df-auth",
  "df-customer",
+ "df-imagery",
  "df-model",
  "df-observe",
  "df-rules",

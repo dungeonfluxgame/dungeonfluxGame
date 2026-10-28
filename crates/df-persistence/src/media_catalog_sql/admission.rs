@@ -6,6 +6,9 @@ use df_assets::{
     Admission, AdmitOutcome, AssetId, AssetRecord, CatalogError, CatalogLookup, DedupeScope,
     MediaRequestKey, NotAdmitted, QuotaRefusal, VariantRecord,
 };
+// Root wires the shared `df_assets` re-exports for these two helpers; the SQL adapter
+// calls them by their final exported paths once `lib.rs` gains them.
+// Expected `df_assets` additions: `admission_owner`, `record_owner`, `StorageOwner`.
 use tokio_postgres::{Row, Transaction};
 
 /// Reserves quota and inserts the row, inside the caller's transaction (F's admission calls this
@@ -15,6 +18,10 @@ pub(crate) async fn admit_in(
     admission: &Admission,
     now_ms: i64,
 ) -> Result<AdmitOutcome, CatalogError> {
+    let incoming = match df_assets::admission_owner(admission) {
+        Ok(owner) => owner,
+        Err(reason) => return Ok(AdmitOutcome::NotAdmitted(reason)),
+    };
     let usage = lock_quota(tx, admission.charge_scope).await?;
     let (scope_kind, scope_id) = scope_columns(admission.charge_scope);
     let audience = audience_columns(&admission.audience);
@@ -55,7 +62,7 @@ pub(crate) async fn admit_in(
         .await
         .map_err(unavailable)?;
     if inserted.is_none() {
-        return conflicting_row(tx, admission).await;
+        return conflicting_row(tx, admission, incoming).await;
     }
     let held = usage.committed_bytes.checked_add(usage.reserved_bytes);
     let wanted = held.and_then(|held| held.checked_add(admission.reserve_bytes));
@@ -114,11 +121,12 @@ pub(crate) async fn admit_in(
 pub(super) async fn conflicting_row(
     tx: &Transaction<'_>,
     admission: &Admission,
+    incoming: Option<df_assets::StorageOwner>,
 ) -> Result<AdmitOutcome, CatalogError> {
     let row = tx
         .query_opt(
             &format!(
-                "SELECT asset_id, attempt, state FROM media.asset WHERE dedupe_scope = $1 \
+                "SELECT {ASSET_COLUMNS} FROM media.asset WHERE dedupe_scope = $1 \
                  AND request_key = $2 AND state IN {LIVE_STATES}"
             ),
             &[
@@ -130,14 +138,25 @@ pub(super) async fn conflicting_row(
         .map_err(unavailable)?;
     // A conflict whose row vanished again (its transaction rolled back) is a transient failure.
     let row = row.ok_or(CatalogError::Unavailable)?;
-    let state: String = row.get("state");
-    Ok(AdmitOutcome::NotAdmitted(if state == "ready" {
+    let existing = record_of(&row)?;
+    let existing_owner = df_assets::record_owner(&existing);
+    let draft_involved = matches!(
+        incoming,
+        Some(df_assets::StorageOwner::AccountDraft(_))
+    ) || matches!(
+        existing_owner,
+        Some(df_assets::StorageOwner::AccountDraft(_))
+    );
+    if draft_involved && incoming != existing_owner {
+        return Ok(AdmitOutcome::NotAdmitted(NotAdmitted::OwnerUnsupported));
+    }
+    Ok(AdmitOutcome::NotAdmitted(if existing.state == df_assets::AssetState::Ready {
         NotAdmitted::Ready {
-            asset: asset_of(&row.get::<_, Vec<u8>>("asset_id"))?,
+            asset: existing.asset,
         }
     } else {
         NotAdmitted::InFlight {
-            attempt: attempt_of(&row.get::<_, Vec<u8>>("attempt"))?,
+            attempt: existing.attempt,
         }
     }))
 }

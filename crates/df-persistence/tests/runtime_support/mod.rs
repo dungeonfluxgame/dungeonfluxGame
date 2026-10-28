@@ -55,7 +55,7 @@ macro_rules! migration {
 /// The whole hosted migration set in order (0004 needs pgvector and 0002 is local-only), so the
 /// catalog walk sees every owner's grants. `every_hosted_migration_file_is_in_the_harness`
 /// fails when a file is added to the directory and not listed here.
-pub const MIGRATIONS: [Migration; 25] = [
+pub const MIGRATIONS: [Migration; 33] = [
     migration!("0001", "0001_game_decisions.sql"),
     migration!("0003", "0003_story_memory.sql"),
     migration!("0005", "0005_accounts.sql", in "accounts"),
@@ -77,10 +77,18 @@ pub const MIGRATIONS: [Migration; 25] = [
     migration!("0023", "0023_finance_refunds_disputes.sql"),
     migration!("0024", "0024_finance_boundary.sql"),
     migration!("0025", "0025_finance_refunds_disputes_boundary.sql"),
+    migration!("0027", "0027_support_inbox.sql"),
     migration!("0028", "0028_save_points.sql"),
     migration!("0029", "0029_google_oauth.sql", in "accounts"),
     migration!("0030", "0030_personal_tenants.sql", in "accounts"),
     migration!("0031", "0031_host_funding.sql"),
+    migration!("0032", "0032_integration_tokens.sql", in "accounts"),
+    migration!("0033", "0033_session_shares.sql"),
+    migration!("0034", "0034_support_triage.sql"),
+    migration!("0035", "0035_operator_access.sql"),
+    migration!("0036", "0036_campaign_settings.sql"),
+    migration!("0037", "0037_campaign_preferences_owner_boundary.sql"),
+    migration!("0038", "0038_imagery_operations.sql"),
 ];
 
 /// Migration files that are deliberately not applied to the hosted database.

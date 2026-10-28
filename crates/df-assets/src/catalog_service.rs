@@ -25,13 +25,15 @@ use crate::catalog_record::{
 use crate::catalog_store::{
     Admission, AdmitOutcome, CatalogError, CatalogLookup, CatalogStore, ClaimOutcome,
     FinalizeRequest, FinalizeResult, LeaseOutcome, NotAdmitted, RejectGuard, RejectResult,
-    StageOutcome, StepClaim, VariantIntent, VariantWritten, Winner,
+    StageOutcome, StepClaim, VariantIntent, VariantWritten, Winner, admission_owner,
+    record_owner,
 };
 use crate::catalog_sweep::RefetchBackoff;
 use crate::media_ids::{AssetId, AttemptId, ClaimToken, IdSource, WriteId, mint};
 use crate::media_request_key::MediaRequestKey;
 use crate::object_store::{
-    AssetVariant, Deadline, KeyLayout, ObjectKey, ObjectStore, ObjectStoreError, StoredObject,
+    AssetVariant, Deadline, KeyLayout, ObjectKey, ObjectStore, ObjectStoreError, StorageOwner,
+    StoredObject,
 };
 use crate::upload_ticket::{
     UploadPurpose, UploadTicket, UploadTicketClaim, UploadTicketRejection, validate_upload_ticket,
@@ -243,15 +245,6 @@ where
             ));
             return Ok(GenerationAdmission::NotAdmitted(NotAdmitted::AudienceEmpty));
         }
-        if request.campaign.is_none() {
-            audit(format!(
-                "ASSET admission_refused reason=owner_unsupported attempt={}",
-                request.attempt.to_hex()
-            ));
-            return Ok(GenerationAdmission::NotAdmitted(
-                NotAdmitted::OwnerUnsupported,
-            ));
-        }
         let asset = mint(self.ids.as_ref(), AssetId::from_bytes);
         let admission = Admission {
             asset,
@@ -269,6 +262,13 @@ where
             byte_limit: self.config.quota.byte_limit(request.charge_scope),
             in_flight_upload_limit: None,
         };
+        if let Err(reason) = admission_owner(&admission) {
+            audit(format!(
+                "ASSET admission_refused reason={reason:?} attempt={}",
+                request.attempt.to_hex()
+            ));
+            return Ok(GenerationAdmission::NotAdmitted(reason));
+        }
         match self.catalog.admit(&admission, self.clock.now_ms()).await? {
             AdmitOutcome::Admitted => {
                 audit(format!(
@@ -598,7 +598,7 @@ where
         let Some(staged) = row.staged.clone() else {
             return Err(ServiceFailure::Catalog(CatalogError::InvalidRecord));
         };
-        if row.campaign.is_none() {
+        if record_owner(&row).is_none() {
             return Err(ServiceFailure::UnsupportedOwner);
         }
         let now_ms = self.clock.now_ms();
@@ -735,7 +735,7 @@ where
         held: HeldStep,
         media: ValidatedMedia,
     ) -> Result<Advance, ServiceFailure> {
-        let Some(campaign) = row.campaign else {
+        let Some(owner) = record_owner(row) else {
             return Err(ServiceFailure::UnsupportedOwner);
         };
         let now_ms = self.clock.now_ms();
@@ -754,7 +754,7 @@ where
         );
         let mut winners = Vec::with_capacity(variants.len());
         for (variant, bytes) in &variants {
-            match self.write_variant(&campaign, held, *variant, bytes).await? {
+            match self.write_variant(&owner, held, *variant, bytes).await? {
                 Written::Winner(winner) => winners.push(winner),
                 Written::Stop(stop) => return Ok(stop),
             }
@@ -766,13 +766,13 @@ where
             height_px: media.height_px,
             byte_limit: self.config.quota.byte_limit(row.charge_scope),
         };
-        self.finalize_with_rewrites(&campaign, held, request, &variants)
+        self.finalize_with_rewrites(&owner, held, request, &variants)
             .await
     }
 
     async fn finalize_with_rewrites(
         &self,
-        campaign: &CampaignId,
+        owner: &StorageOwner,
         held: HeldStep,
         mut request: FinalizeRequest,
         variants: &[(AssetVariant, Vec<u8>)],
@@ -817,7 +817,7 @@ where
                     else {
                         return Err(ServiceFailure::Catalog(CatalogError::InvalidRecord));
                     };
-                    match self.write_variant(campaign, held, variant, bytes).await? {
+                    match self.write_variant(owner, held, variant, bytes).await? {
                         Written::Winner(winner) => replace_winner(&mut request.winners, winner),
                         Written::Stop(stop) => return Ok(stop),
                     }
@@ -831,7 +831,7 @@ where
     /// then the object, then the `written` mark.
     async fn write_variant(
         &self,
-        campaign: &CampaignId,
+        owner: &StorageOwner,
         held: HeldStep,
         variant: AssetVariant,
         bytes: &[u8],
@@ -839,7 +839,7 @@ where
         let write = mint(self.ids.as_ref(), WriteId::from_bytes);
         let key = self
             .layout
-            .campaign_asset(campaign, held.asset, held.attempt, write, variant);
+            .owned_asset(owner, held.asset, held.attempt, write, variant);
         let intent = VariantIntent {
             variant,
             write,

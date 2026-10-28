@@ -134,20 +134,23 @@ impl NativeHttpRefusal {
     }
 }
 
-pub(crate) struct NativeHttp {
+/// Owned native HTTPS transport for provider calls.
+pub struct NativeHttp {
     client: reqwest::Client,
     limits: NativeHttpLimits,
     openai_api_disabled: bool,
 }
 
-pub(crate) struct NativeHttpResponse {
+/// Completed provider response with bytes and supplier facts.
+pub struct NativeHttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
     pub transport_request_id: Option<ProviderRequestId>,
     pub metadata: NativeHttpMetadata,
 }
 
-pub(crate) struct NativeHttpFailure {
+/// Typed transport failure with supplier facts for diagnosis.
+pub struct NativeHttpFailure {
     pub reason: NativeHttpRefusal,
     pub transport_request_id: Option<ProviderRequestId>,
     pub metadata: Box<NativeHttpMetadata>,
@@ -155,7 +158,7 @@ pub(crate) struct NativeHttpFailure {
 
 /// Retained supplier facts, never billing or resend authority.
 #[derive(Clone, Default)]
-pub(crate) struct NativeHttpMetadata {
+pub struct NativeHttpMetadata {
     pub request_id: Option<ProviderRequestId>,
     pub transport_request_id: Option<ProviderRequestId>,
     pub trace_id: Option<String>,
@@ -170,10 +173,12 @@ pub(crate) enum NativeResponseProfile {
 }
 
 impl NativeHttp {
-    pub(crate) fn limits(&self) -> NativeHttpLimits {
+    /// Validated transport bounds used to build this transport.
+    pub fn limits(&self) -> NativeHttpLimits {
         self.limits
     }
-    pub(crate) fn new(
+    /// Builds a bounded transport; `loopback_fixture` allows plain HTTP.
+    pub fn new(
         limits: NativeHttpLimits,
         loopback_fixture: bool,
     ) -> Result<Self, NativeHttpRefusal> {
@@ -217,7 +222,8 @@ impl NativeHttp {
         })
     }
 
-    pub(crate) async fn execute(
+    /// Sends one request within `remaining_deadline` without redirects.
+    pub async fn execute(
         &self,
         request: HttpRequest,
         remaining_deadline: Duration,

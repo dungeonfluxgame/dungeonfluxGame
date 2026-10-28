@@ -7,6 +7,7 @@
 //! caller-claimed source pins onto `df-assets` at the publication boundary.
 
 mod config;
+mod journal;
 mod output;
 mod policy;
 mod request;
@@ -17,6 +18,12 @@ pub use config::{
     SchedulerBounds, TransformLimits,
 };
 pub use df_assets::{AssetId, Audience, MemberSet};
+pub use journal::{
+    AcceptCommand, AcceptOutcome, AcceptTarget, FreezeCommand, FreezeOutcome, ImageInterest,
+    ImageInterestId, ImageJob, ImageJobId, ImageJournal, InterestState, JobState, JoinRefusal,
+    JournalError, JournalIdError, OperationReceipt, OperationView, SharingIdentity, SnapshotError,
+    VersionedSnapshot, WithdrawOutcome, Withdrawal, is_expired, owner_of_bytes, owner_scope_bytes,
+};
 pub use output::{
     AlphaHandling, DEFAULT_JPEG_QUALITY_0_100, Dimensions, Encoding, LossyQuality,
     MAXIMUM_OUTPUT_PIXELS, OutputError, OutputFormat, OutputProfile, RasterOutputSpec, Rgb,

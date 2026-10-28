@@ -214,7 +214,7 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
 /// (up to 16 MiB), so it must not hold an async worker. The bytes move into the job and come
 /// back with the facts, so nothing is copied. The caller's await owns the handle; once the
 /// job starts it runs to completion, which is bounded and touches no sockets or game state.
-pub(crate) async fn inspect_png_off_worker(
+pub async fn inspect_png_off_worker(
     bytes: Vec<u8>,
 ) -> Result<(Vec<u8>, EncodedMediaFacts), MediaContainerRefusal> {
     match tokio::task::spawn_blocking(move || {

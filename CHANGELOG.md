@@ -14,6 +14,536 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-27T18:00:00-04:00 to 2026-10-27T20:50:26-04:00
+
+Range: 6c6c0d4a797fe817a474fb5dcae548a834879f4f..703267289d580d933e07b623fbea6fbba4ec4578
+
+- 9da16bff376662ab470d4064fd8cf5d5d20a3a57 — Checkpoint portrait routing, dialogue recovery, and presentation changes
+- d20ce3317f53796df9dabaf66ba370aeffbd47a8 — Import unified image and presentation architecture plans
+- 10624f047f1dd2e99ead67441f049f7220b9e846 — Add versioned canonical image recipe keys without changing legacy cache identity
+- 6fe8cce4358bf76b61787384b6f4719ad6abacbd — Introduce validated imagery requests, transform contracts and configurable execution policy
+- 703267289d580d933e07b623fbea6fbba4ec4578 — Freeze durable imagery operation-store scope and record remaining dispatch prerequisites
+
+## 2026-10-27T12:00:00-04:00 to 2026-10-27T18:00:00-04:00
+
+Range: 35710242a2d3a5d0d7d6396daa3ae37aaaabe8fd..6c6c0d4a797fe817a474fb5dcae548a834879f4f
+
+- 2842392d029fe5fb45d3b830311104fe9830d19c — Allow Codex storytelling longer bounded deadlines
+- 4b47cd25ff2c1c4b6dd737e3371580e7f5ee6833 — Extend startup readiness for Codex games
+- 6c6c0d4a797fe817a474fb5dcae548a834879f4f — Initialize startup Jev with the shared ledger
+
+## 2026-10-27T06:00:00-04:00 to 2026-10-27T12:00:00-04:00
+
+Range: c380efd384a2e89d0d84859c3b31687b19ae90e5..35710242a2d3a5d0d7d6396daa3ae37aaaabe8fd
+
+- e1416642326b6cb87f9497cc4b52a01dfb947634 — Fix host-approved hero rejoining
+- 6bc165208e2669d5a483e54ae9027020abd4cd17 — Fix market actions and gameplay displays
+- b8fbba0d4c9f58c4261068c2352b679fe44e7f6a — Add experimental Codex storyteller mode
+- 35710242a2d3a5d0d7d6396daa3ae37aaaabe8fd — Add scene plate cadence regression tests
+
+## 2026-10-26T18:00:00-04:00 to 2026-10-27T00:00:00-04:00
+
+Range: 1b55c4083958e90543fe4881af00908dfbc9896d..c380efd384a2e89d0d84859c3b31687b19ae90e5
+
+- 71acc170c6d3fdf8e99f09589527225c57a614df — Phones join a per-session game over the Wi-Fi; its launcher shows the real name and date; child ports are self-chosen (#1459, #1460, #1457)
+- 1698477cbbfc1cd333618e5ba6e64859f9cabbc7 — df-hosted: drop the removed campaign-wizard methods so the hosted adapter compiles again
+- 5eb2249c34210a7002e5041ab44353b4553e6f59 — Imagery: stop the missing-presentation warning storm; prove session pictures through the real route (#1468, part)
+- 6950cfe7a34017533a8b261fea63947c759858b1 — Tests: make 25 journey and tactical tests reliable (#1456, part)
+- 872bd4ecd0d8069e87a691f910e03584a5ab1c6d — Tests: imagery, plate and preview tests follow intentional changes and stop sharing state (#1456, part)
+- 75e524379f48ae7c398ca5b6e89b30982a106358 — Drop the cross-owner foreign key from campaign preferences; fix three gameplay tests (#1456, part)
+- ad5c2315e47ed67b7d982e548b4ea1ee39be3c90 — Table display accepts signed picture addresses: scene pictures load instead of 404 (#1468, part)
+- 2a3c1b2f533f858dbe4a033f4542b6cd718183b0 — Table display: the opening narration panel stays above the party bars (#1469)
+- 8069c000a8f388b4f25cc6164997b7a3b811c7a0 — Seat recovery moves off the TV: a returning player asks from the phone and the host allows it in the launcher (#1466)
+- 773dc6df2c1ce2e2f8f8a44f9133d8f2d8920819 — Player lobby and play screen: start action in reach, Share invite, next-step guidance, compact hero summary, readable gear (#1444, #1445, #1446, #1449, #1450)
+- 4d03db43c87cb4a1e3c54376c6175e03a1ebc9db — Signed pictures and voices reach the table display; a grant refresh never restarts a picture (#1468)
+- a00ee8ef892a2b861ae439a59b90fa9d88db0c4f — Free roam always starts: personas and neighbouring places degrade instead of aborting the city (#1472)
+- 263021909af496314bcfdda383f5a58368936ba4 — A per-session free-roam game gets the launcher's ready limit, not 90 s, to build its city (#1477)
+- 41544239bde2ede979e9464a9e126cf0f7beed08 — df-tools passes wasm32 Clippy: native-only items gated, test modules last (#1471)
+- 8a15eff09fb1acd8516ba48eaf7253fbb2b8c803 — NPCs hear spoken lines again: the dialogue judge is configured after the cost ledger opens (#1478)
+- f908f6d0c5b48c059a8b9309e0ea9d03f63f2fca — Free roam start: each gate and city attempt gets its own deadline and its rejection is fed back (#1476)
+- c380efd384a2e89d0d84859c3b31687b19ae90e5 — Vendors answer price, origin and gossip questions within the reply bound (#1473)
+
+## 2026-10-26T12:00:00-04:00 to 2026-10-26T18:00:00-04:00
+
+Range: bcc59c01e943b2bcbb7f7ef24a5a9f556bdeb10a..1b55c4083958e90543fe4881af00908dfbc9896d
+
+- 106f2e58f30b509968f30814051bedc04ba74c23 — Player rejoin: closed tabs return to their hero; TV-code reclaim; reclaim listing no longer leaks tokens (#1273)
+- b8b5d6774efeaf886037f38a2e5f3fcde26daa73 — Local runtime supervisor: Start places each session in its own game process and launcher (#1422, part)
+- c3774a5363c6231ab036a81753114cc75be04b78 — One name per game: saves and the preview catalog use the adventure's own title
+- c8b75451fe90b21085445952b4adb958a734a822 — Table display: caption stays above the party bars, last place picture kept, quiet sound control, clearer lobby (#1426, #1427, #1452, #1453)
+- d9d96b95def8fd0c804cf294c3f2dbd11a728312 — Player play screen: no unintroduced names, one clear action entry, honest submit labels (#1447, #1448, #1451)
+- 4eab116e1c6616a389b87cde5dd62fad87c46a95 — Account dashboard: price beside Play now, Resume first, one spend figure, no broken thumbnails, compact phone nav (#1430, #1431, #1432, #1433, #1434, #1437)
+- 10ccad0efe3f1999331e61ca4125664ae02fc554 — Saved heroes keep every creator choice, not only species, class and background
+- 4b774eb5bd646e354f62cc7e52c2ffb8c9100e33 — Game launcher: open the table display and the room code without scrolling; honest display status (#1428, #1429)
+- 4a983e9260198de24da3750ef81c6be9ad557651 — Fix six tests that failed on main (#1456, part)
+- f9da7e75f2950cad828728a541946ecb21287668 — Account start page opens each session's own game launcher (#1422)
+- 96ee53e9607cb1f4020b922b513d3f4d2b630858 — Planning: gameplay settings live only in the launcher; the website has no campaign wizard
+- 299a1f4cbb992b110d80480899bf56c305400c15 — Planning: the table display is for gameplay only
+- b9f02e1a7de6de9bd00fa2cf7a9f34a9d363d1da — Game launcher: a session the account started shows only gameplay settings (#1461)
+- c784fbac3122e72b5ca8f8089213127054c36e1a — Delete the website's campaign wizard and gameplay settings (owner order)
+- 5f020176a3406c636ea5b83d27aa0612413eb5f3 — Portal: remove the campaign wizard's endpoints (owner order, part 2)
+- 433e023a5707e6eb7469ca0d6d89afd40c3ade21 — Remembered player seats expire with the run and offer "Not me" (#1458)
+- 6d0a378a688b8e629efcaa8a17776d2d8cc51bfc — Hero creator: name and basics first, Next between steps, optional portrait, plain labels (#1438, #1439, #1440, #1441, #1442)
+- 6a7b9504f9dcda05efd3697224dc77440e97c8b1 — Scene inspect list leaves out party gear; TV lobby invites heroes before anyone joins (#1462, #1463)
+- fd31ef1b8c455adff053097c75bebdb711ba2972 — Preview: accept table display and player links on the host's private network (#1459, part)
+- 6dc3b5299aa6d28f0b96ad610db884d471015a94 — Hero creator: say plainly which choices are still missing before Confirm; name the swatches (#1464)
+- 919232c1e1e2a73b2fb67a41c3a5710f58a30b17 — Table display keeps the last place picture when a scene picture fails; no broken-image icon (#1467)
+- 46c91e1712dee73b1484077adb15ffc892492a1b — Tests: repair dialogue and NPC dossier fixtures that lagged intentional changes (#1456, part)
+- 1b55c4083958e90543fe4881af00908dfbc9896d — Account dashboard: thumbnails as images within the Content Security Policy (#1470)
+
+## 2026-10-26T06:00:00-04:00 to 2026-10-26T12:00:00-04:00
+
+Range: 39a3d5651380b01042efc0842e5a5da0ba855438..bcc59c01e943b2bcbb7f7ef24a5a9f556bdeb10a
+
+- 0540e76b09a1969748bbc6ece754da57c0ee3e21 — Remove the 700 KiB account-app wasm size budget
+- cd1b49ca5e4b5a29027d1e3db3f817d153912431 — Play now: one click from the dashboard to a session; one lobby, the game's
+- 4be5cba32bd8a20d06b6a7bc72542a3379a4f4fe — Play now approves credit and starts the session in the same click
+- 95433e9744ef26522a8b6b3b003446b996314a4b — Pre-game launcher: web account -> Play now -> launcher page -> table and player screens
+- e7373cc67efe9b9e13a812f5cdfcbf002e0a22ef — Planning: the concrete game start flow (account -> game launcher -> display + players)
+- 1c2cf77d8e5cc94991297cd7d9403a9448a5502b — Account hands off to the game launcher; tunnel tests fixed
+- 2972acca949011842439c1048aea1b2b5c3c8ac1 — Player client: fix garbled separators (Â·) in hero creation and status text
+- d1f791867e3728f6013d2477d7901e53cd6e40e8 — Start flow hardening: Play now resumes your running table; start page stops idle polling
+- f9af19cf6f9cd4b47b835159c9055911764c525f — df-campaign: make the delayed invite-lookup test deterministic
+- bcc59c01e943b2bcbb7f7ef24a5a9f556bdeb10a — Account start page: launcher link for session managers only; polling backs off and stops (#1421, #1423)
+
+## 2026-10-26T00:00:00-04:00 to 2026-10-26T06:00:00-04:00
+
+Range: 975667d8174ac7042895d48665e779c2b6a8c5c6..39a3d5651380b01042efc0842e5a5da0ba855438
+
+- ff44a9f37e7a699b1e00537232310188330637d2 — df-tools: fix 29 long-failing lib tests (storyteller, plates, imagery, place music)
+- be3814c2ba9e36fcfff28b48a6e4ec485e4c5217 — Launcher: player-facing install errors, developer detail only in the log
+- 39a3d5651380b01042efc0842e5a5da0ba855438 — Text provider: an OpenAI account out of credit is denied, and the log says so
+
+## 2026-10-25T18:00:00-04:00 to 2026-10-26T00:00:00-04:00
+
+Range: d3d45ce2c53bee8d22bdb27665505b80c109a745..975667d8174ac7042895d48665e779c2b6a8c5c6
+
+- 2cd49ec6234f17aab86e54905fb8866aca4a6e1c — Deploy: hosted portal release, provisioning and rollback; private logs; account switches
+- 3383f8927b90dc04bb338b46123651b123295358 — Add the end-to-end flow suite and the direct Google sign-in design
+- e88a1ff407bd878333fcc7a331c60022f07af372 — Site: stop the how-it-works steps and status pills overflowing at phone width
+- 7be7af979abd3f5e4ad82768c9fad792ef045c8b — Pin the e2e Playwright version; customer MFA and locale decisions
+- a56af1379ad38aa2fd01330fb6b93ae1202ed4ed — Finance: refunds and disputes through the ledger boundary, host funding hooks
+- 794491d23a9ae15414e524d284e2483585c6303c — Save store: tenant-scoped row security, epoch and parent checks on checkpoints
+- 136511436ac97c4e7b3b55600498d4aca6ce6e53 — Accounts: direct Google sign-in, personal tenants, account store and migration registry
+- 82bce6157995392fd7dc9cacd655b11078cfe92e — Portal app API and account app: guards, OAuth routes, campaigns, operator bootstrap
+- 6018a3a64d8f1cc7e0247a610a5ea342fa7e7bd6 — Support inbox ingest with Jev triage; telemetry export
+- f7325332ea0cc209ff4473ef567000f955360540 — Prices content, portal env names, coming-soon and operator e2e checks, issue triage
+- 8f1b01e0f8783923e789bee93694dad48c5d301d — Integrate remaining lane work: gameplay tools, hosted funding, portal, refunds, bug-hunt fixes
+- 34942d33509a58a42d25256bdc18b8e0ba471998 — Fix CI: rustfmt, test-only tunnel authority constants, demo image target dir
+- 975667d8174ac7042895d48665e779c2b6a8c5c6 — Clippy-clean workspace; df-tools test suite no longer aborts
+
+## 2026-10-25T12:00:00-04:00 to 2026-10-25T18:00:00-04:00
+
+Range: 404dd5820c9924f64d480231402ea713f0d0b004..d3d45ce2c53bee8d22bdb27665505b80c109a745
+
+- 73450c2de90cef563559fd0182918ec61a8dbf26 — planning: design the support inbox queue for the admin console
+- f134d06f272e2709674725de0a85ba58b4b845e1 — deploy: demo image on GHCR, nginx edge, deploy by digest, and production/development profiles
+- 3a42996d9ea07ca675381e6a884b17f74e050da2 — release: baseline revocations on every verified release, never a movable tag
+- dc272dbbde340c8d9cfdbc1b402b4db27974f516 — licences: per-target dependency inventory, third-party notices and a licence check
+- 7980557beb01b971dca18ac061eb08d75be6bc98 — core: shared identity, auth, observability, protocol, session and UI types for the launch stack
+- c468a126a3e96cf590e07bccbdc05d43b82fc867 — persistence and money: account, campaign, media, runtime and finance stores with migrations 0005-0024
+- 0ea6949af6cc074516fa02cae63d598c761b98dc — accounts, campaigns and the account app: df-customer, df-workos, df-campaign, df-portal, df-account-app, df-support
+- ed9586d4b70a9a1cb21f15b268a5c9bac4dfa6dc — media, providers and runtime: df-assets, df-providers, df-server, df-runner and the transport
+- b7d58e6528d6b71aa1d6c8ce45d3e92905c2559b — game: metering, imagery quota breaker, SRD guard, latency and test fixes in df-tools; acceptance tests
+- c53f3d8908b3a489628daea581fe3866d0b16aa7 — workspace, CI, ops scripts and planning updates
+- 3413e866045df3cf6c2d479853a8155c8d0f28af — providers: use expect_err in the fal media refusal test
+- bc4e78cd0afad7f123e7b0f5634dfe196420bd8f — imagery: tell the table when the image quota breaker opens, once, and clear it on recovery
+- 032f6bd19a6cb329e3be7f19ffada2aa8c0b93d7 — transport: exact fault boundaries, an owned reconnect loop and seat fencing on reconnect
+- c1b6900c45f29be00b001818eb1641176287cb5d — tests: complete the player view initializer with the new notice and spend fields
+- 3b88179e4618a0385e174fa6f804c6cf2a5a232a — support: df-support contracts, ports and fakes for the support inbox (SUP-A)
+- b05d677a17c1004a5a52f4d5a096a87ab7d2e14d — finance: per-period reconciliation and a read-only journal verifier (OPS-04)
+- 865923161ebdd0b19a3adba39a9db7657d8befe8 — persistence: enable and force row-level security on every df_game table that has a policy
+- 4917a176b209ec1918a8856589866ce8d24ece1f — finance: bookkeeping exports, reserve report and bank and payout reconciliation
+- 86dab2f886e9eee88a1a5fa98900385b1be5c4e7 — deploy: business identity hooks, seller line rendered at deploy time, and Resend mail settings
+- e09cbafe541d63cc2b40b5bc3a8420993d26b6e9 — game: meter the SRD guard's own calls and never price an unquoted call at zero
+- f2e7fbe4ce4b41e805ada726707e70f085867ab9 — tests: measure the free-roam view budget in thread CPU time at the original 500 ms
+- 4a91b790efac5e06f8e13e4cff7f6100b8e21299 — game: signed short-lived media links on every private gameplay media route
+- 299a0c913837b6d41ab192c3dd60620d1c85033b — accounts: sign the user in after verify-and-set-password, explain why, and switch site copy when the pilot opens
+- 48bafb5d199d7f2456bbbc990a7890badaa370a8 — campaigns: session link from a started session to its game room
+- 2a572f4bc4098ad659385008454b9b1b965de02b — Upload demo deploy files to a private directory with hash checks
+- 4127bf9a319d88e3c5ae1586f79681492b81efa3 — Add df-hosted: the portal on real PostgreSQL accounts and finance
+- 0cf762ccdcff944eabcb638ef8789462a7645e51 — Bring Cargo.lock in line with the committed manifests
+- d6a1c0e51da4e7a6caff62e8bce42655c7c5d656 — Site in Spanish, German and French, with a language switcher
+- 60d77b917048b5a677ac53630db9bef3f07a59e7 — Fix French page asset paths and add translated 404 pages
+- 2d44e0297801d3f398d5eb150860aadbf29521e0 — Stop media grant tokens carrying the raw seat credential
+- 39fbf5bf586f09f935c426b11d28a9272df7cc30 — Wire hero choice, campaign drafts and the lobby on the hosted stack
+- 9dfea641d94350fe3b4ab95bc27ad8f77756b76d — Take Stripe test-mode payments in the hosted portal
+- 0dc8f571f9836d07dfcd20e29ce3568767dd40a8 — Let a started campaign session allocate the game room and enter it
+- 681cee3bf1a2ca0c36c10244dec3fc09b4fbbc65 — Bound idle and long-lived game tunnels and cap them per seat
+- 8d943fb6af3ed2879d1d5415ed26b8437869a14a — Bind media grants to their route and to the real seat credential
+- 1ab58e1847126e788056de53cc7fc5258bc00b2d — Call Stripe without holding the checkout database lock
+- df9f3ed2b46938d9c6d2c7d9a26616737243fc4a — Restore seat-only creator portraits with per-route principal allowlists
+- 52bc4b30d83ec06e599e2e41bdd8447f57d2b19c — Test tunnel idle, lifetime and per-seat limits on a paused clock
+- 9ad3c68dde6b6bd851e33db02c67f9639c6582e9 — Mark the shell scripts executable
+- 651f46cb0aa9b14122f0a53906d13d3ae574e846 — Repair HEAD builds: lock file and renamed verify contract callers
+- 32bb500b8694031ad4e66d50af7534534e6b7e27 — Fix five browser-client lint findings that fail CI
+- bc87938a41a9b82b90e5c5665baf6c4407c00efb — Add the hosted server entry point, save points and the support inbox store
+- 415c76948366dde1d46fa534f5244b32939c639d — Site: coming-soon accounts, operator hooks on legal pages, new org links
+- cfaafdf49955dc8f1dd772abcfd2b2c73e7a237e — Repository presence for the dungeonfluxgame organization
+- f9a8e571cefc8865ac72dadaa0b52b594a967ffd — Clear wasm and customer clippy findings that fail CI
+- d3d45ce2c53bee8d22bdb27665505b80c109a745 — Nightly PostgreSQL backups and a scratch restore drill for the demo host
+
+## 2026-10-25T06:00:00-04:00 to 2026-10-25T12:00:00-04:00
+
+Range: 99c865809e11d7fe836086626bf480cfc04c5cb3..404dd5820c9924f64d480231402ea713f0d0b004
+
+- c78f8816b379f884e58caf7dfc605814c6a76053 — imagery: keep held pictures servable without exposing the shared cache
+- 559269470d2d3dd59c9c2cd55309b67b3983fbc3 — campaigns: add membership, invitations, display pairing and the event feed
+- 5c06fc863043dedf97bfcac5e06ac986dd71adec — deploy: refuse duplicate binds and add a staging qualification list
+- 2a07f4b5b388d1818d280049803709317156d881 — planning: design Google sign-up and sign-in through WorkOS
+- 6dd065d88f3daa6100e64f34bf6946d72b39a350 — site: link to the account app, and make every page previewable and search-ready
+- 41963498247965b4c85522f3fcb200d1f4894257 — planning: research compression and resilience for gRPC over WebSocket on poor networks
+- 127134c8a9b0b1b25ab0e6bb625711621c0cea5a — planning: design the integration API, session embeds and share links
+- 03c376b4da53dff7d699551e2a4071c7619e81d9 — planning: legal risk review of rules use, trademarks, libraries, providers and money
+- 78250e2ec5c50a60aea2517951eec10f1174dd41 — planning: privacy and online-service compliance review with build tasks
+- a3133bce36a6e837543a2d2cbc03213e9ac13188 — rules: bound level-one hit points by the recorded character and keep legacy saves resumable
+- a7748329a8ab3071fc415b471e3053fb938dedf4 — Restore the gameplay view delivery test build
+- f888dfd3754bbf6b563149368935eb84e69a0fa1 — site: say what is live today and add account placeholders for the static host
+- 53dbaf75b237c12a79c4535f2b3e602dc6332772 — Format the df-tools files that rustfmt flagged at HEAD
+- 3f94977a0ea555c5d5c7ec0cf40c55bdbaeaf3ea — development: one tooling entry point, editor defaults and the versioning policy
+- 55130c9258443ece8cc911f7465efbc8d1f6c12e — ci: pin the signing workflows' actions and refuse to sign without protected environments
+- 3f990907273c80f893ec01d113255b13457ab5cb — gitignore: keep an owner-only /private/ folder out of git
+- ce938ef91d6a206da50f96c4d691149c9acd6b9b — tests: restore the gameplay view revision peer test build
+- 364a37dbeba8f69bd08d57e5c4bfd03cb0efa368 — site: publish support@dungeonfluxdnd.com as the support contact
+- 404dd5820c9924f64d480231402ea713f0d0b004 — release: find the previous signed release automatically instead of trusting the dispatcher
+
+## 2026-10-25T00:00:00-04:00 to 2026-10-25T06:00:00-04:00
+
+Range: ea2a8b94710aa3512552ce515b8e25c2f08e247a..99c865809e11d7fe836086626bf480cfc04c5cb3
+
+- 31420f68545203d093ed4a56d56f1ee1cbb957dd — docs: redesign the public site around the game's own imagery
+- 817f5d3d0aecf386a17ea1e11d024ba5f47204e2 — planning: add the campaigns and table design
+- 1c9692d17461bad9f1ac49497fa6ebb73a6ababd — deploy: add container, staging, secrets, database and Terraform setup
+- ff3c0fe2cd74f8274effb1fda0290f329e095094 — rules: stop Goliath reactions from stalling a fight
+- af1fadd6628ef6f906c2f1b538c08984e8dd168c — planning: add the money core and accounting design
+- e6e098c24f43c2810937221cb753f2dfd8df01d1 — deploy: add production stack, Docker API proxy and signed releases
+- 600ab603b94cbcab8b989e55337be1aa19e41a26 — tests: add the launch acceptance suite and a sharded test runner
+- bb29291640964744ec55ea5ea80e9895f3caa5ab — gameplay: never take a ride fare while travel is blocked
+- 63de9f9e5e43d223aaecd36b6f14ae8788a4fd9f — deploy: gated activation, monitoring, backups and PKI hardening
+- 3fcfac09561477b619d9e7495fd1a02b63942135 — cost: parse sources to prove every charge is metered
+- 869a2ea0e5631dbcdfe593de917408ab1011be8a — resources: settle only the active attempt and bound idle entries
+- 30b20537f26710d1bb47f934078c6b474a35e440 — deploy: limit the database bridge to the cluster's own addresses
+- 99c865809e11d7fe836086626bf480cfc04c5cb3 — telemetry: use the right O_NOFOLLOW value on ARM Linux
+
+## 2026-10-24T18:00:00-04:00 to 2026-10-25T00:00:00-04:00
+
+Range: 95ca8684a62f6c0966b3477b44ac347fcada3a63..ea2a8b94710aa3512552ce515b8e25c2f08e247a
+
+- 231bd4e6a257d2fe15cc0d47a474d24fb4518634 — Narrative and NPC dialogue: names learned, personas, concrete answers, item looks and requested rolls
+- ff640c034be7c08e64719434f3a8384ea1a6eb00 — Pictures: item focus, foreground pools, measured plates, plate cadence, lore-aware rooms, dev image profile
+- 7fe4aa0e249a4a5963336914e68fcfde0f6a1a72 — Places and free roam: stall walks keep the market's people, background look-ahead, stall owners, personas
+- e208377bf429f90129003a3b7fb900462a979888 — TV client: speaker close-up, focus layer, thinking dots, arrival mural, narration once, no scroll bars, tuning
+- 5fab25c0f04657ec31c0dfb05e988d1bc614506f — Launcher: picture cost profile, display tuning path, fal key for scene pictures
+- 41cfebc802715f65c1dd1f744275a3603dd7166c — Planning: issue triage RP-103..140, REF-070 item focus
+- 9ccc1e26a9a7c5c4e8707815d0be5563d9971c63 — Server core: lore and social memory persist per run, look-ahead owner, view-size guard, voice casting report, dev control
+- 422f2d11b5a9565299036cb2d826094b5024d7a1 — Dev pictures: every kind at low quality and the smallest size the provider accepts
+- 7d6bb6f16f8ec42175e49d2d87c0f86146f610ff — Providers: table-driven PNG CRC-32 and move request bodies instead of copying (W6 round 1)
+- 4cfcad33ad206610181a0757482dba86bc2412ab — Client: outcome fingerprints include the outcome sequence; drop the inert catch-up impact branch (W5 round 1)
+- 50bdb5c7903b995fcad2b0fab8733dd1e31c833a — Coding style: one governing standard (naming, comments, structure, typed errors, performance, defined patterns, tests, reviewer checklist)
+- 1f946f65a9753e814b1608811a2e50a3afb9109c — Planning: observed image spend 2026-10-18..24, triage RP-141
+- 57b5432b08542bb28da9a9d31c94102cad3ffc38 — Pictures: per-frame clip gates; the presented and shown plates keep their layouts (W2 round 1)
+- ca083756e9d516cb6263c0b6835ae17d91c0c2f5 — Style sweep S07 batch 1: clearer private names in the TV client (units, MAXIMUM_ limits, domain words)
+- 26d9d8d96177d54b127c8f8737e8a899e8bfa088 — Style sweep S08 batch 1: two comments that state why (server-owned health variants, the camp-art override)
+- eda2113e82a20d46a68594783a298d228cf054a7 — Style sweep S07 batch 2: units in TV client names (real_ms vs development now_ms, intensity_permille, maximum_bytes)
+- 69183d7f61852c32e88d2be77f36c46f35188cd8 — Research server concurrency for hero-line latency
+- 6a81e5b2533be35886f0e1d9f40a319a8177ebcf — Sweep S07 batch 3: units and booleans in TV client private names
+- 727c6c2a30c911af3e24d71c672869c5f9056ae8 — Launcher review fixes: bounded log tails, poison-safe records, request lines
+- a215e2279a49c1faf610e8e86a131858e5ff8e91 — Keep a native-only music test out of the wasm test build
+- 648aaa4b2481d76359fee7d8c20f594ddebf082f — Server core review: pin the 4 s Jev approach deadline, share the journey audit
+- 4d39adf82f2771203152c12f87e4326f2def0954 — Sweep S08 batch 2: drop banner and restating comments, clearer TV names
+- 9337388537eabccd2c9a20a84fdc2b39ee540d0c — Fight witnesses: validate the observation before asking anyone; bound dice pools
+- ace8bba0c9ce1f392f7f5a1f1f04425502a74b45 — Sweep S07 batch 4: permille in head-box parameter names, MAXIMUM_ bounds
+- acabba76a70ed96b5a968ab230a9edcf699bc42e — Sweep S15 batch 1: byte units and bounded-append names in df-ai and df-assets
+- 183e506f4f1f2c6b44f45779c8949312420f18eb — Sweep S16 batch 1: byte units in range reads and capture bounds
+- 35d98173976d5c9cd4689b0deefa30a2213969c5 — Sweep S16 batch 2: descriptive parameter names in df-audio and df-content import
+- b55fa98612459494134383598af8188de8a36fee — Sweep S15 batch 2: clearer fixture helper names in asset and audio tests
+- 441908c461975453090eb0c543dab0ffd7b74131 — Sweep S01 batch 1: clearer locals in courier, foresight, witness and combat entry
+- 10de8c09abf9fa1f2fb786d8b4a1b795cc59e852 — Sweep S15 batch 3: name the graph walks and their state in df-content
+- 3b2a95af3e3709fef55ab13e4a83b6fc93f5a1cf — Sweep S16 batch 3: spell out closure parameters in pairing tests and launcher keys
+- 742762a2f62a07274634ffebc26deadb24acc91d — Sweep S09 batch 1: clearer names in combat beats and dev CLI dice and place
+- b959db663c436935bddbeb22fa69637841372f1f — Tactical AI: one route search per cell shared across targets
+- b509d6cdd7e70a0ef55d57d0dfdf1c8edcfeb748 — Sweep S16 batch 4: MAXIMUM_ bounds and byte units in the launcher
+- 404cfa39e253c3449d34ac4ced14f18cde89193f — Sweep S15 batch 4: predicate and helper names in df-display
+- d46b41e1766ab2cd75a0938316f70edecc0b874e — Sweep S08 batch 3: share units in scene placement crop math
+- 715c2156a7404afdb3e7fe56008978984d01caf3 — Sweep S02 batch 1: result names in affordances, encounter outcome and fight lines
+- 9c23c3794be72cb7273ec16c10974a0309bbc739 — Sweep S14 batch 1: clearer names in combat candidates and utility ranking
+- 3b6f4436579cd4cf8b07adb4e22de64423566a36 — Sweep S15 batch 5: MAXIMUM_ bounds in df-experience
+- 8f40025694e7b095521f19ba7a478873881fc494 — Sweep S16 batch 5: predicate and unit names in df-locale and df-media
+- e0380be9ef0296fac0bd83005d8d56995c574190 — Sweep S13 batch 1: feet and byte units in combat movement and tactics names
+- 61e4f20068f84ac383a004df92e846d459864cf9 — Sweep S10 batch 1: byte units in build-set manifests, step limit in dev play
+- cd3bcbc43e8aba2b33870b2fd7ffaa44403f7f4b — Sweep S15 batch 6: descriptive buffer and offset names in the launcher
+- a937e45c8f8cb7341d79b8095fe0340f0edbf7fd — Sweep S14 batch 2: next_state and admission names in commerce and encounters
+- d910459805f72d5c7c11d0be6c2ce94d31aba974 — Sweep S15 batch 7: unit and role names in launcher platform, saves and server
+- 87f44ffe75a8dabdd4cb13513742a91f43a6b354 — Sweep S16 batch 6: role names in speech tests, checkpoint transitions, observe fields
+- f221895c4fdb25f3da33a547c4c9cdb36d9b7790 — Sweep S13 batch 2: liability, ammunition and fixture names in combat and commerce
+- 1822647bb0815a613905012d56a955ec14edf6f2 — Creator portraits: drafts open only with a per-draft capability
+- 6e6c20d1b65bfff63bde05ec3ef516b424ba4614 — Sweep S14 batch 3: initiative, basis and byte names in df-engine
+- bd6ae1089f88b1e7d19e1bfcf58c2ce83eb59dc1 — Sweep S13 batch 3: byte and id names in encounter escalation and fixtures
+- 0fc8b9b98a5c86fd981a3477883590b7a0a15837 — Sweep S15 batch 8: selection and dependency names in df-media and df-model
+- 77c7a4f0f644a7a060ed28450ee91dd2b3f99282 — Sweep S07 batch 5: units in TV clip, party and seat-recovery names
+- 208b4f11db1195d38fb159be45c5c2578e886607 — Sweep S13 batch 4: basis, byte and selection names in df-engine staging
+- 1431143d68ce2dc19b22e6a38b5325a3b8559c3b — Sweep S14 batch 4: record and byte names in world staging and fulfilment
+- 2ca661a479c48c10504ac38cdaa90c453cfbc0f1 — Sweep S15 batch 9: MAXIMUM_ bounds in df-observe
+- 43c915d58687c219113baa97f8076fd9600066f9 — Sweep S16 batch 7: fixture helper names in observe tests and persistence
+- 4ddb4e4ee299f36f4fadb1afd6eec39592b795d8 — Sweep S01 batch 2: clearer names in journey sessions, outcomes and rewards
+- eade3ab2acd666f4717662af288b6859908330ce — Sweep S02 batch 2: predicate names in enemy tactics and narrative phase
+- cceb2687732335122012a28fae3fb8593aedd822 — Sweep S10 batch 2: units in roleplay wait, fixture sizes and approach timing
+- d5632b980fdd7a9368b439e016fb97ed303b220f — Sweep S08 batch 4: hit-point names in presentation tests, drop banner comments
+- 248f475825bae1e410f181d182d89a7082ef79a6 — Sweep S09 batch 2: units and a named deadline in courier NPC qualification
+- 7b9eda175ef1a3f9e644a7911d350eec329cf449 — Sweep S16 batch 8: count and byte names in persistence fixtures and scopes
+- 4148440dae43d78b59d06c37f9e33765fe9fd363 — Sweep S14 batch 5: fixture helper names in df-engine tests
+- 04ea98bb08dd827018b119692109d582093e788a — Sweep S13 batch 5: basis, byte and limit names in witness and tempo staging
+- f2742e5169b67561e8ecc778ab36f9eaf86b7dac — Sweep S15 batch 10: schema-check and unit names in persistence and observe tests
+- 8ec111715210c120db54c3b393a2d65bbfe1c505 — Sweep S14 batch 6: byte and destination names in df-engine test support
+- a99cd89d0f98cb7f073ec558cbac667313dbcc64 — Sweep S15 batch 11: result and id names in native persistence and action drafts
+- f3c33265ebcf4e17e404ee27bc10ce555f4ee350 — Sweep S14 batch 7: retained-byte names in df-intent tests
+- 536c004c0a02a0e3473f4dd6246a0f05ccfcac71 — Sweep S13 batch 6: name tempo policy and limit tuples, byte units in plans
+- 1217d10f77684d39fde7c9cce3e869585dad2a7e — Sweep S14 batch 8: predicate names in knowledge perception checks
+- 776bf874094a229d928598c58034bdb93cc6de3d — Sweep S16 batch 9: proof-reader and backend names in persistence fixtures
+- e861bcac3093bf0ca4de879da529cf9af15c5afe — Sweep S08 batch 5: brightness, opacity and seconds in home video names
+- e3d746bfb759bd96d11de072665a6835feb0bdf7 — Sweep S13 batch 7: record count name in intent targets
+- bfce3955534454b071feb6e9f0e2af250f5d12e2 — Sweep S15 batch 12: is_ predicates in df-player and its test fixtures
+- c3a62bdcc28ca03a00d853f792c51241d338b9c8 — Record the owner's concurrency decisions
+- b311fe204b18d54bb3871f2bda4798c72ffc6f97 — Sweep S15 batch 13: count, byte and tick names in df-presentation bounds
+- a521fcc03a8d3496f46fc0c871f980ff54cff143 — Sweep S13 batch 8: retained-byte names in rules command handling
+- bb8b3f8a00a7fab40ca9e82ac1096e254e843e0d — Sweep S14 batch 9: byte, count and scan-unit names in rules preconditions
+- 64f2b227d38ad0750e04c8d8e0243e8e5bc24e69 — Sweep S15 batch 14: stop-count and duration names in the battle director
+- 43aad2787e5844d96308d00f31026d91a40b70c6 — Sweep S01 batch 3: drop section banners in scene fights
+- 34a479994d0b0376bef13f9e49dd9fe26779d7a6 — Sweep S10 batch 3: millisecond names in courier qualification, rating parser
+- 804dab3e5db2b45d8078221ce05a2a2ce939a588 — Sweep S13 batch 9: feet units and geometry names in tactical rules
+- 6e9a1984f4a7e817f26b0aae1781518f42c39e99 — Sweep S13 batch 10: unit names in tempo recovery policy and its contract test
+- 97d8fe770f14cb612b21c04533933d9961d1ab9e — Sweep S15 batch 15: MAXIMUM_/MINIMUM_ bounds in battle rendering
+- 4e4b0ee5ec2be31bb114c894297ec71c9f23e978 — Sweep S13 batch 11: reduced-motion and policy names in tempo tests, world bounds
+- 15d0a9e32f8c8f6164c93658dff43449e770871e — Make every wasm-only fixture and test target compile again
+- 9e2d058011fdf2a1152347fa91e64fee5d9444c7 — Sweep S16 batch 10: result, sibling and mode names in df-player overlays and fixtures
+- 24e12b02912f5ced336d36620421f3a294088388 — Sweep S15 batch 16: frame, progress and height names in battle rendering
+- 824bc0b329b6f1b70c8a9f52c87dc73c95783069 — Sweep S13 batch 12: fixture helper names in df-world tests
+- d40596f0f8555512850624a1883fb5c7111c1525 — Sweep S14 batch 10: spelled-out names in offer expiry tests and tempo
+- 7350b151e863b2797d16f3999579f48453cfd5fe — Rewrite the README for the current state of the project
+- 1445b9f082f7b865ccbc4c19a6729b77726e6d9e — Sweep S16 batch 11: fixture and unit names in presentation tests and splat tools
+- d5e9f5dfa6c1babd7f915238cd06d02f9ad9b211 — Sweep S10 batch 4: hero, step and count names in dev economy, heroes and jumps
+- cb6fedd587bcf5371c9ec301839e223cdffb6b1a — Sweep S15 batch 17: asset cache name in render resource lifecycle
+- a08b77fb9bd8f51215e1758faaf19b45496df008 — Sweep S02 batch 3: sanitized fact text without an extra copy in kill shots
+- 702f1926a84657ee5dcdb85c78b100126c342c10 — Sweep S14 batch 11: ms, permille and share units in tempo presentation and world
+- b2101cdfffac098ba82accfff422c3a62c05dba0 — Sweep S14 batch 12: fixture parameter and state names in df-world tests
+- c6dbbd4df6a6feefc65f873091c85632795a14b2 — Sweep S16 batch 12: count, index and axis names in battle colliders and feed
+- 8a188e0ee822c901fc67633ede16539219508abd — Sweep S15 batch 18: result and byte names in render tests and telemetry
+- dc38b89f797694e57e2f8d2a1b165daad65edd98 — Sweep S15 batch 19: fixture helper and count names in telemetry quota and replay
+- ee297625c390e7306dcff7b6be31a995a15fcd04 — Sweep S16 batch 13: chunk, splat and ms names in splat streaming
+- d84d89a65bee4691e5d68d481804c83d8800a462 — Sweep S16 batch 14: delta-time, instance and clip names in battle effects
+- 61d9fe83af31395db638abf14e039f55f6717b5e — Sweep S10 batch 5: hero, NPC and diagnostics names in dev roleplay and social reads
+- a2d8e4dff75bd31634be09dc09eafc8ca894f77d — Sweep S02 batch 4: journey_phase local in the session machine
+- 5713248a8d3f75d2671ad1b7803db12f97ae98b4 — Sweep S15 batch 20: revision and identity names in df-types tests and df-ui phases
+- a680b0d2b0ad19824a5ccc528fddc2cbff8ad4b6 — Sweep S16 batch 15: status and metre names in battle status and world grid
+- 5fa35fe91d52de4104807ab492e0a3ebb36a29dd — Sweep S10 batch 6: character units in line cleanup bounds
+- 4a0d8eb1dad7f3143f7922a4794d2f4c3556b595 — Sweep S15 batch 21: MAXIMUM_TEXT_BYTES in the scene transition phase
+- e8d22ace3372d6b77972198a1d4a34b5115239bb — Plan customer accounts, billing, operator dashboard and the business site
+- ffec3e42d7a41b8a1f8476e8b617b6d38dfe4d2e — Sweep S15 batch 22: fixture helper names in df-ui browser fixtures
+- 0826ff036e87307b6a1236adb62c49004bfac03b — Sweep S16 batch 16: work_bytes name in the render resource lifecycle fixture
+- 44b2a13bc8c8721cd43e991031ee22ed252f00c3 — Sweep S10 batch 7: page and candidate bounds named in story memory
+- 9d2b28af79014f7da05f18d9e6a7ef0890c10350 — Sweep S16 batch 17: byte and argument names in the telemetry store
+- d6a6226a16806a8f83a116d887187489b0a68e82 — Sweep S16 batch 18: timeout and fixture names in telemetry tests and evidence
+- b236f1ae5cbabc88430535925a676f82126df67e — Narrative engine: kinds of conversation and SRD Influence for generated people
+- e7842ab7b9a270e712e7f75782c9240e0fa090a1 — Sweep S16 batch 19: drop getter comments that restate names in df-types money
+- 5331f697d99706b210957db251bb87891a00bac1 — Cost engine: meter and record what playing the game costs
+- cbe10e425df744f5bbd7edf7444b59488d6d28bb — Sweep S16 batch 20: validation and art names in df-ui campaign and exploration
+- b7dab941e8ea62233662fd4f061e5d38df44e695 — Home page: a strong sell with a $10 free trial
+- 4975bf3942871eeff18c376228b64f76cd818abe — Creator portraits: one size bound for drafts, constant-time capability compare
+- 2db972206d9767eba7fa7dfbb5f25579f0fb8855 — Home page: critic-reviewed copy and layout refinements
+- f011f1463adcb1e94a82d655013899c6629b707d — Transport and providers: no lost owner wakeups, bounded pinned fetch pools
+- f37032428deca9281e28d847c9c217235efe37f0 — Add the master launch plan: business, billing, hosting and storage
+- 9d5c990ea848f8afdd965e9e7e3adbcf6e773494 — Transactional notification copy for the hosted launch
+- 76aaff7f6fd75f3af357773c6d392c10ca961492 — Home page: everyone signs in; only funders pay
+- 3cfa672c24f6b7ff0c001d4d27436de43f2b33ca — docs: add the public site pages and honest home copy
+- 11e21435b8e5e10c85bd6ddda2489ab164fa0ccd — docs: show only what a table pays
+- d35791ac467c80a35cf8960530a573e8502e5276 — docs: add news and a player-facing changelog
+- 10373d0801bef7650b98b76ea00203e03b90d544 — planning: add the asset, character and storage design
+- c2e93007016315c112f7ac38a80e4d427a5f39a4 — planning: add the hosted runtime and production server design
+- ea2a8b94710aa3512552ce515b8e25c2f08e247a — df-tools: keep TV telemetry alive and placement finite
+
+## 2026-10-24T12:00:00-04:00 to 2026-10-24T18:00:00-04:00
+
+Range: 84a230ad824a62fd8e3e654da45f616d61739b2d..95ca8684a62f6c0966b3477b44ac347fcada3a63
+
+- d04dd99bf22dd1058a975be41db33f0d61964fa6 — Add free-roam adventure choice, start free-roam CLI, and dev_overrides setting
+- 0b0d68a48da87e7cb87b02b35e1c9e74b24db50b — docs: REF-066..REF-069 and six-hero roleplay findings RP-16..RP-87
+- 5a220949fe9a64f96aaad41685001a4e01213850 — Restyle TV and phone stage CSS for dice, portraits, party strip, and stage
+- 1c6c927f4c4225c678d0b2cf0a762e0197a97b8b — Add the free-roam adventure content (city schema, pack, tuning, persona)
+- fcffc056365bd6cda4c10b03be7eaae8498984a9 — Refresh TV and phone client for mural, plate masks and seat recovery
+- 46ab0b883b01fc416c71b8542995cf462cad16b2 — Update species, dialogue and NPC rules with fact backfill and social flows
+- f54a2b79cc876ea2c473572e66e0246058d34ec3 — Add free-roam adventure flow, city generation slots and place look-ahead
+- c050f956dcd1ef747d094bbf31dfd5c9997092a7 — Build SAM plate masks, party mural prompts and image review for scenes
+- f7d1de0855290a018ad0c87938d74fc5f1199f35 — Rebuild custody, merchant bargaining and journey phases from source receipts
+- d361f4c582f8b1128936d85f21e1dd523d881e77 — Add place music pacing bands, voice casting and character clip resources
+- eebe59e6ea37b0185e66435b7574417de530bfe2 — Add roleplay and tempo dev commands with seat parsing and audit logs
+- 50aea37c6508abf8711e492e5d894f28a7edcae6 — Refresh scene content, dispatch diagnostics and hero and room state
+- 95ca8684a62f6c0966b3477b44ac347fcada3a63 — Hand the fal key to games with scene pictures for figure segmentation
+
+## 2026-10-24T06:00:00-04:00 to 2026-10-24T12:00:00-04:00
+
+Range: ce32e4d4ced880d8e56ca4d87d49d85b70be804d..84a230ad824a62fd8e3e654da45f616d61739b2d
+
+- 84a230ad824a62fd8e3e654da45f616d61739b2d — docs: REF-062 map exception, REF-065 exact hero count, six-hero roleplay findings (RP-01..15)
+
+## 2026-10-24T00:00:00-04:00 to 2026-10-24T06:00:00-04:00
+
+Range: e4205952da4055391db08869734ac82249588026..ce32e4d4ced880d8e56ca4d87d49d85b70be804d
+
+- d9f725cf817c817c8a2bc69030312bc567f15993 — Player heroes from their own character sheets, with a long-term hero library (REF-046-049, REF-058)
+- 0ac7d9b6dfb49e16ba9c6ab653b26e554b693f0c — Let dev direct plate work while phones hold every seat
+- dedceef751818f1e64b7afadef6ac069963bddf3 — Name the exact cause of every refusal and log each portrait, library and reconnect step
+- ca09026282c1ff90c604d793de605fe8d931479a — Let heroes have names of several words in any alphabet, and redesign the saved-heroes strip
+- 7f802f3dbe6bb823156f48ad98c0d76bc3701b21 — Show all six seats in the TV lobby
+- c9e9b19ef5da77a2454b5df34f553d1618f4251e — Record REF-059 to REF-063 and the custom-hero play-test findings
+- fe3dd82350ad70fd7f2606b3dffd6c51a762432e — Give a running game the launcher's Play page to itself, centred under a flickering lantern
+- 74a5e9df1a55f733b52dc5fc1592462f8ef7e546 — Show live session and total play time and the heroes at the table in the launcher, with interactive motion and dust on every Play page
+- d70b5eaf76661bd7ff787748931b44c748b053ec — Turn the launcher's Play backdrop into a random slideshow of ten harbor scenes
+- ce32e4d4ced880d8e56ca4d87d49d85b70be804d — Log every launcher failure that used to pass silently
+
+## 2026-10-23T18:00:00-04:00 to 2026-10-24T00:00:00-04:00
+
+Range: f2af44f7e4fc9334ff21d7ee344c7d611fa4d390..e4205952da4055391db08869734ac82249588026
+
+- b122518b9834d51346706fc4af7c26aaf2cb281f — Add the DungeonFlux desktop launcher (dungeonflux.exe)
+- dadbe225f7fbdf1b6ab4f759191e736cb2b7c32f — Keep provider keys off the launcher's Play page
+- f5fb28bb892b77b96447151db79a731b35d0bf07 — Log every launcher action and fix the launcher review findings
+- 5ac9ffd0b94e38b3b48981302962c35a5cf20e03 — Let agents read and set every launcher setting and window property
+- 5a0f038d3b50233705da52f99eac76464d57a8f2 — Add the BFL FLUX 3 image adapter and actionable provider failure detail (REF-039, REF-041)
+- d47ca07e7ad5507eed1cd7692d68762191593de9 — Turn generated video off by default and prefer OpenAI for images (REF-027, REF-028)
+- 47aa057cf247e451415d9486ab44a7fcf34f4659 — Character workshop: catalog design, explicit portraits and portrait scenery (REF-032-045)
+- bf96551c59c886409665602f437a78fd15919589 — Development launch cleanup, direct screen entry and a Windows desktop entry
+- 4efab15d933e4e55e943d7754979ad9838b4a568 — Validate dev economy edit requests before answering unavailable
+- 4ddab36d29a12a320e8f8156182245ecd4d1b7f6 — Game refinement record, character creation research and catalog notes
+- 9023232ae2f177730a11ee86a16e898acb1d53d8 — Hand the game server only the provider keys its enabled features need
+- 3bddfab132d0d97bfeb4816f2affbbaf4a9f8866 — Gate every paid server capability through one Gates structure
+- a5b20b33fd6f0e0c3954871ee310eb78641e2a94 — Make the Play/Settings transition play, and add a launcher animations setting
+- 5638521f4810612e5f82cdf9a4d9cb52327072ed — Let the dev CLI read the generation gates
+- e4205952da4055391db08869734ac82249588026 — Record the launcher, gates and transition work in the docs and todos
+
+## 2026-10-18T12:00:00-04:00 to 2026-10-18T18:00:00-04:00
+
+Range: 12a32d3a841a1bd66547fa6ca0e826fc874c9038..f2af44f7e4fc9334ff21d7ee344c7d611fa4d390
+
+- cfe072f00b6bc315b3529b57317e9ffc470d3a8c — Battle presentation, home camera, full dev battle control and character clips
+- f7eb2782930f5ce9144d5953fd2a003d277c8e26 — Keep tests that touch the forced-dice queue or the dev overrides setting from leaking into parallel tests
+- 1868ae81e5686bc29773d33e72e2db20f70033e9 — Fix server startup refused by the character clip providers
+- 43a53447751471f7d58e23ae8c2239bb8440467b — Fix the server deadlock at fight start that froze the TV and dev tools
+- 2ed94f3d9bc816ccab84d230ecb61362caf7c338 — CR 2-5 SRD foes, a dedicated Action Surge action and explicit group initiative (MECH-02..05)
+- f2af44f7e4fc9334ff21d7ee344c7d611fa4d390 — Continuation notes for the 2026-10-18 battle play-test session
+
+## 2026-10-18T06:00:00-04:00 to 2026-10-18T12:00:00-04:00
+
+Range: 0aeaced73fcc8d6bff612e4e917566474b4fb5eb..12a32d3a841a1bd66547fa6ca0e826fc874c9038
+
+- 6017891eb4eb8b271d77fb021aecd3ff1a241a70 — Give people in created places SRD stat blocks so they can be fought (B-01, part 1)
+- d8e58fe1205cf0c738a91057edd74c2b5357cf0f — Generate requested World Labs worlds in play and judge each line where it was said (W4)
+- ea8cfe8735705baafc778789b8556fd8ddb1ebed — Report combat presentation through the DISPLAY timing log (TIME-03)
+- 8f78b21bde66d1aa28f4efca744c56b9426d12ef — Give the blow that ends a fight its kill shot (KS-02)
+- 3b3977570bdf5746c8c4d2b687ec0c6e9058724c — Word a missed attack like every other attack row (LOG-05)
+- 3d27397602b090d0e84ea17928b6dcc2998a66df — Make the browser test target compile again (TEST-02)
+- 99b07fab9b3adfb9806a05ab0495c7c9fe1a59d4 — Commit and recover fights with people from created places, and refuse unstartable attacks out loud (B-01)
+- abd23dbcbe78bb90b66fb64cf58bbf54a64f97c5 — Repair four long-failing living-scenes test fixtures (TEST-01, part 1)
+- c0b17a882a32f0e476750f3873639bb3386a4897 — Move fights out of small rooms into a large space, and build a world only for that space (ARENA-01)
+- 67027770802824224cab2fd6b79000568ba491d3 — Keep a spilled fight's fighters and name its new place (B-16, B-17)
+- d230fda6213cfa461353486955fd6464ae2c4175 — Keep retrying a place's room photo, keep the rejects, and prepare a fight's destination early (ARENA-02, ARENA-03)
+- 361dba34cbfdbd53cd6846268165c543a7da8228 — Repair the last eleven living-scenes plate fixtures (TEST-01, part 2)
+- 95cd03b564928c72797f98f5bcf60059ab328c1b — Never address someone who left, move the party when a hero leaves, and never drop a line (NAV-03)
+- 7cdcd3132eddaef9fd47bbdf7e918e06f3f67f95 — Record what a fight did to the room and its witnesses (SOC-05, SCN-07, SCN-08, part 1)
+- 8994058da9e5fa93f2f17415c21fd3e25e089655 — Title the battlefield from the server and hold a figure's picture while its new one loads (B-16)
+- d149ad44fa7ce12861e265dd79973e845f454e82 — Restore the pack's enemy stats in legacy fights and bring stale journey tests up to date (TEST-04)
+- eed43437cd07f787cf0c7275209b189314b4d83b — Give legacy enemy turns the pack's own creature, and repair five stale journey and script tests (TEST-04, TEST-05)
+- 8af3f3985e988e6b933b168a9190eb7c8323e4ba — Send the dev CLI's --knockout to the server (CLI-08)
+- ab4f1b15d708a635d87bccfd9a9df3a97f56a5ee — Pass a good empty street photo and ask for empty, period-correct places (JUDGE-01)
+- 7096f1137ed5d896fea4a6a91c81430f5027aec8 — Play out a fight's aftermath: the room, the body search and the witnesses (SOC-05, SCN-07, SCN-08, part 2)
+- 3a232ff36e77344d945c346fc4a7d67893bfed78 — Level-5 Fighters: Extra Attack, Action Surge and the Champion, from SRD 5.2.1
+- 12a32d3a841a1bd66547fa6ca0e826fc874c9038 — Research video-model character clips at the battle camera's home angle
+
+## 2026-10-18T00:00:00-04:00 to 2026-10-18T06:00:00-04:00
+
+Range: 8f6b896fdfc8f230a4727836431ca92516f4b725..0aeaced73fcc8d6bff612e4e917566474b4fb5eb
+
+- 910bd37c2cb5a1d5d1dec37b700f48aa9a76a30f — Add a native World Labs Marble client for splat worlds (W1)
+- 94af3e5b35c83b77f29d36bb90f7a3f44f45ed3a — Make the flat battlefield read as the photographed place on the TV (B-04, B-05, P6-68)
+- 09abae5af5065dd9272dba2939bb3ec7ded760ad — Add kill-shot videos: the clip spec, engine, view field and TV player (K1)
+- 63e561b6cdcb610184e5840cedb82566affd2e51 — Seat the battle die on the side away from the fighters
+- 7b906ed90fe29a536dff4f63530078640929fd11 — Tell a fight's start before anyone acts and its end one line at a time (B-02, B-03, P6-66, P6-72, P6-73)
+- 929b0791f9fcd548076f36a40de2e11766b42bcf — Generate, store and serve World Labs splat worlds through the resource hub (W2)
+- ce18b9ff2c1751558dca61015ac7a19c3850d442 — Dress every hero on the battlefield in their own picture (B-08)
+- 21a0e267c08e88b93c22e6519477511eb61f1e8a — Keep the battle readable while the camera moves (B-13, B-14)
+- 516dc912a16fd7b616045f1db0bfd4dca1708712 — Request a kill-shot video after every committed killing blow (K2)
+- 53ff8a40a451f9e6cc5b81bd11f006400a2cc0ea — Load World Labs 3DGS levels into live fights (W3)
+- d6e71a8239973f39ecb1c519a6b2f4f766a43ebe — Stop posting turn ends and the story opener as table rows (B-09)
+- 02eb52a48fb0255488c75f9dcdcb1f0cc1ec0865 — Let the dev CLI choose the knock-out option on an attack (CLI-07)
+- 84f22c6b7df1eb742046f8179439e81cd613713d — Ask the photo check outright whether an empty room has anyone in it (B-12)
+- 0aeaced73fcc8d6bff612e4e917566474b4fb5eb — Never let a battle beat outrun the figure walking it (B-06), and keep the finishing blow whole
+
+## 2026-10-17T18:00:00-04:00 to 2026-10-18T00:00:00-04:00
+
+Range: 9ae91811319fd746a2205538846bc7507e3306cf..8f6b896fdfc8f230a4727836431ca92516f4b725
+
+- 53e59dfda5f549f5ca147d1dc272fa416cc1abd8 — Turn an accepted merchant quote into a purchase request (lane L24, P6-94)
+- f9eb26845ae3d5c435a5e649d1ee16a2357a36a7 — Serve .ply and .sog splat worlds and key world requests through the hub (lane M6)
+- 0c8b483c59baf6c8b4e4de750eee3cb490ed5c5f — Show every roll as a die on the TV, and let the party leave through real exits
+- e33455161b27be60ff785d3fb6ba22e178a3adb9 — Phone dialogue: keep refused drafts, Enter sends, portraits by actor id (lane M2)
+- b0a9c2fbba7ade6f622d5f860aee7f66e3f76aea — Name the acting hero in investigation narration (lane L25, P6-90)
+- 9a8062623263be8ae856ed0eadc7c4c5d31570aa — Repair the imagery prompt tests and restore the hero scale rule (lanes L06, L28)
+- 2a815a0390f388b89b2d2c7e01fa29ee3a1702bd — Show a scene's place line only when it differs from the title (P6-108)
+- 981724209e16da294919d22167b347c38273156e — Align the NPC dossier tests with Jev's question reading (lane L05)
+- d29863451acd00efabdf950ce5686977f59f5467 — Knock-out choice, declared target first, provoke warnings in combat (lane M1)
+- dd41448e6cff361330ca4181de19bb5d896005d7 — Accepted quotes buy, services in words, speech with an act reaches the NPC (lane L29)
+- 71237c8feaebc31fa05df6a4af9c5d122f5802e5 — Judge a handover as give, never quote the player's words in narration (lane L30)
+- 45983523f82a0be6e6e02b100a0a87ab57b2a2de — Backlog: rebuild 8-9 play-test findings and landed fixes
+- a3453a08719b52ec07c5c089ed3bcd14b068d5f4 — Let NPCs decide what is theirs to decide (lane L31, P6-103)
+- 8309f43da8ddf39642e33b7fab392942575ed588 — Keep plate identities whole and the cast in period clothing (lane L32, P6-110)
+- 4cee8946a01fbd902a5cd0b938dd182235cdc744 — Answer a pending reaction from the dev CLI (lane L34, CLI-06)
+- b5d7ce2a9ac1794f567ee3b21af2181d6613ba4a — Drop the battlefield at once when a fight ends; no stale scene pictures (lane L35)
+- d2abdee31f6203dec0ceac6168553df0676d7b39 — Route attempts to the person spoken to, not to a search (lane L33)
+- fdf377fc36fd3eb957a670a2fa4ae4fbbc574021 — Let an offered action carry four input groups on the phone (P6-141)
+- 591e25b01158c5f1f95e44c0b0d602dfddde70cd — Combat rows name opportunity attacks and critical hits (lane L36)
+- 5789eacf8144d6f2106707555906e7abf936163c — Allow the closed service-choice labels in the phrase-table guard
+- d444400eb87d5a30b9934c62ec60339bd54933f2 — Let a fight action carry four choices on the server (P6-146)
+- 0fde4c705e14c614a2f5fb8ff6ed9881b0a90252 — Keep a strike on a person an action; bounds and a reply for trades and services (lane L38)
+- 6aaf613cd4101529988f5b1de05bc35210685a28 — Repair the adventure suite: scene roles, custody fixtures, unrepeated endings (lanes L26, L27, L37)
+- bcc12759e7357c20dd08af4ca032322dae48ec17 — Name coins and the seller in trade lines; capitalise NPC sentences (lane L39)
+- d052b5b42d771e7f7a58f757000a39b4532e0b66 — Expire an unanswered reaction after 17 seconds (P6-80, CLI-06)
+- fdcfa6e15a5bdad58d0f3279a82ab9d13c906afd — Route typed lines by Jev's explicit addressee, not the default speaker
+- ffb4bd5d19e42c9efed2c2f395a5a3806f543e23 — Restart the TV timeline after a restore and keep sound attached (lane L40)
+- 73b316aafea3c2d4a7fb01ea057cda39c5a9929f — Give people in created places wares and services (lane L42, P6-126)
+- b3123d5b9d1d9181d4b7efbb1ee48a7a7eef42d5 — Clear the TV's line cache when a restore arrives (lane L44, P6-109)
+- 8ff0597f78542b68af5c99eec6b8b2c0fbd464d0 — Close a fight with one short, current account at the table (lanes L41, L43)
+- fd99faf6d48a2660c5dac4f7e1204a1915b87c99 — Check a merchant's price before the reply is spoken (lane L45, P6-97b)
+- 201fc51f0dd4709dd2a478c18687022a0284c108 — Honour try-on consent; third-person self acts; people by role (lane L46)
+- 38b9e678deec0b3e2828cee33e5ba18096a03fd4 — Readable condition badges; hide the DM caption while a die shows (lane L47)
+- e4c425172ea44cafc21c311f27adb682f837fad0 — Phone: keep the responding NPC on the chip; name the attack target (lane L48)
+- 6d7ba5fbdc7250dd6db5a3a85feceb9ce697281e — Third-person ownership and visibility lines when examining things (P6-167)
+- 644932548e2d1ce5801c7d15e0274e2f6fe415e1 — Show the TV's pictures as photographs: painting effects start off (ART-01)
+- 51f51c0d5093acb191c82a99326d82147a312bbe — Replay a created place from its own record so a purchase there keeps the game alive (P6-169)
+- abf2cfcf36bced7521c791c2e8e830acafc87655 — Show the TV one reconnect notice, not two (P6-173)
+- 91d70affd19447950525d4cb18f5edb0a8ae3350 — Travel the country from created places, look around without rolls, and answer pleas and paid services
+- 26c98b29770808be70802251b15fa3211f815fdd — Keep every picture a photograph: no other medium named, one frame, and a photo check before a plate is kept (ART-01)
+- 5fd09ef4d499fd5e1ba8c47cbcdb9db8aa5a8433 — Keep the last plate on the TV while the next one renders (P6-181)
+- 903e2c6c90eb8865d707eba460cb58de1218821b — Keep a retried picture whose only defect is lettering (P6-183)
+- 02409626512bcf0d8a6cdaf40de0795879d4bc37 — Stage a plate when a reference is too big, and keep modern places out of a pre-industrial town (P6-184)
+- abc42a238dc60c535f84f58a35279d198444cc77 — Let merchants of created places make offers that commit (P6-179)
+- 5319a847f6899ff10668f50e5d3e8ad31fdcb3f4 — Seat the battle die beside the fight at 80% of its size
+- 8f6b896fdfc8f230a4727836431ca92516f4b725 — Leave out the look-around offer when nothing is left to look at (B-11)
+
+## 2026-10-17T12:00:00-04:00 to 2026-10-17T18:00:00-04:00
+
+Range: 9f98619a3659dff3036e54ec9c0131bdb2186ce5..9ae91811319fd746a2205538846bc7507e3306cf
+
+- 60fcb9bd372fe54a131541a5ef18567a613b6944 — Changelog blocks for 2026-10-16/17 and backlog statuses for landed fixes
+- 17482111a458c34f8d20e7f4da76b66ae8198050 — Send each distinct FLUX Kontext reference once
+- dcc6040d18ce97c9292358ba77e58c8212cdb72a — Capitalise sentence starts in cleaned lines, harden speech uploads, put lore NPCs establish into story memory
+- 341221589f401844ac578e4ee5fbf60471abb6f6 — Show what is inside the starting pack on the character sheet
+- 78acd2c01f5176fe2da2af35fe7041e792e4fb5d — Make the asset store's directory durability work on Windows
+- 8abaadb9172023df3b5014b83005882ab325f026 — Clippy-clean the df-narrative scene entry test helper (lane L20)
+- 137a983ae16a7de45f9ad188b481d444147fb597 — Merchant haggling and services, try-on consent, noticed thefts, sharper approach judgements
+- 5aa15c0e03d131bbca20f034626674305e05ab42 — Clippy-clean df-commerce, df-intent and df-observe (lane L21)
+- 3c97bf21ae1824e55fb79dc632a6680a0859d166 — Bound speech refusal drains and send STT keyterms (lane M5)
+- ab1865efa900f468320df3a198499ec69c70e9d0 — Narrate investigation in the third person (lane L23, P6-90)
+- 9ae91811319fd746a2205538846bc7507e3306cf — Judge dev lore additions like NPC replies; fix the layout round-trip test (lane L08)
+
 ## 2026-10-17T12:00:00-04:00 to 2026-10-17T15:46:31-04:00
 
 Range: a221b240c0102a1e3375c7ca54b69a3378e63e68..9f98619a3659dff3036e54ec9c0131bdb2186ce5

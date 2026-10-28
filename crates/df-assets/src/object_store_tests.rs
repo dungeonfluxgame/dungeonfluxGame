@@ -504,6 +504,70 @@ fn an_environment_named_after_a_windows_device_is_refused() {
 }
 
 #[test]
+fn account_draft_keys_use_private_media_with_draft_segments() {
+    let account = AccountId::from_bytes(&id(7)).unwrap();
+    let asset = AssetId::from_bytes(&id(1)).unwrap();
+    let attempt = AttemptId::from_bytes(&id(2)).unwrap();
+    let write = WriteId::from_bytes(&id(3)).unwrap();
+    let key = layout().account_draft_asset(&account, asset, attempt, write, AssetVariant::Master);
+    assert_eq!(key.domain(), StorageDomain::PrivateMedia);
+    let hex_id = |byte: u8| {
+        let mut out = String::new();
+        for byte in id(byte) {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    };
+    assert_eq!(
+        key.path(),
+        format!(
+            "test/users/{}/draft-assets/{}/{}/{}/master",
+            hex_id(7),
+            hex_id(1),
+            hex_id(2),
+            hex_id(3)
+        )
+    );
+    let campaign = CampaignId::from_bytes(&id(7)).unwrap();
+    let campaign_key = layout().campaign_asset(
+        &campaign,
+        asset,
+        attempt,
+        write,
+        AssetVariant::Master,
+    );
+    assert_eq!(
+        campaign_key.path(),
+        format!(
+            "test/campaigns/{}/assets/{}/{}/{}/master",
+            hex_id(7),
+            hex_id(1),
+            hex_id(2),
+            hex_id(3)
+        )
+    );
+    assert_ne!(key.path(), campaign_key.path());
+    let other_write = layout().account_draft_asset(
+        &account,
+        asset,
+        attempt,
+        WriteId::from_bytes(&id(4)).unwrap(),
+        AssetVariant::Master,
+    );
+    assert_ne!(key, other_write);
+    for segment in key.path().split('/') {
+        let is_id = segment.len() == 32
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        assert!(
+            is_id || ["test", "users", "draft-assets", "master"].contains(&segment),
+            "unexpected segment {segment}"
+        );
+    }
+}
+
+#[test]
 fn the_native_listing_is_in_key_order_and_pages_cover_it_exactly() {
     let (runtime, store, _root) = native_store();
     let _entered = runtime.enter();

@@ -155,6 +155,14 @@ pub struct CharacterRevision {
     pub revision: u64,
 }
 
+/// Who owns a `PrivateMedia` asset's bytes. The key prefix names the owner; the
+/// catalog and delivery gateway authorize, never this layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageOwner {
+    Campaign(CampaignId),
+    AccountDraft(AccountId),
+}
+
 /// The 13.2 key layout. Every `PrivateMedia` key carries the attempt and a random write id, so two
 /// attempts, or two lease holders of one attempt, can never write the same key (5).
 #[derive(Clone, Debug)]
@@ -189,6 +197,47 @@ impl KeyLayout {
                 variant.label()
             ),
         )
+    }
+
+    /// `<env>/users/<account>/draft-assets/<asset>/<attempt>/<write>/<variant>`
+    pub fn account_draft_asset(
+        &self,
+        account: &AccountId,
+        asset: AssetId,
+        attempt: AttemptId,
+        write: WriteId,
+        variant: AssetVariant,
+    ) -> ObjectKey {
+        self.key(
+            StorageDomain::PrivateMedia,
+            format!(
+                "users/{}/draft-assets/{}/{}/{}/{}",
+                hex(account.as_bytes()),
+                asset.to_hex(),
+                attempt.to_hex(),
+                write.to_hex(),
+                variant.label()
+            ),
+        )
+    }
+
+    /// One published variant under whichever owner the catalog validated.
+    pub fn owned_asset(
+        &self,
+        owner: &StorageOwner,
+        asset: AssetId,
+        attempt: AttemptId,
+        write: WriteId,
+        variant: AssetVariant,
+    ) -> ObjectKey {
+        match owner {
+            StorageOwner::Campaign(campaign) => {
+                self.campaign_asset(campaign, asset, attempt, write, variant)
+            }
+            StorageOwner::AccountDraft(account) => {
+                self.account_draft_asset(account, asset, attempt, write, variant)
+            }
+        }
     }
 
     /// `<env>/campaigns/<campaign>/assets/<asset>/<attempt>/<write>/<variant>`

@@ -12,6 +12,10 @@ mod decision_adapter;
 #[cfg(not(target_arch = "wasm32"))]
 mod decision_rows;
 #[cfg(not(target_arch = "wasm32"))]
+mod imagery_sql;
+#[cfg(not(target_arch = "wasm32"))]
+mod imagery_store;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod local_demo_scope;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod media_catalog;
@@ -96,3 +100,9 @@ mod story_memory_pg_fixture;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hero_library;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use imagery_store::{
+    ImageJournalOpenError, PostgresImageJournal, accept_in, freeze_in, lookup_in, read_in,
+    withdraw_in,
+};

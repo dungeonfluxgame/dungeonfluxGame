@@ -240,6 +240,10 @@ impl CatalogStore for InMemoryCatalog {
         admission: &Admission,
         now_ms: i64,
     ) -> Result<AdmitOutcome, CatalogError> {
+        let incoming = match crate::catalog_store::admission_owner(admission) {
+            Ok(owner) => owner,
+            Err(reason) => return Ok(AdmitOutcome::NotAdmitted(reason)),
+        };
         let mut state = locked(&self.state);
         if let Some(key) = &admission.request_key
             && let Some(existing) = state.rows.values().find(|row| {
@@ -249,6 +253,17 @@ impl CatalogStore for InMemoryCatalog {
             })
         {
             let record = &existing.record;
+            let existing_owner = crate::catalog_store::record_owner(record);
+            let draft_involved = matches!(
+                incoming,
+                Some(crate::object_store::StorageOwner::AccountDraft(_))
+            ) || matches!(
+                existing_owner,
+                Some(crate::object_store::StorageOwner::AccountDraft(_))
+            );
+            if draft_involved && incoming != existing_owner {
+                return Ok(AdmitOutcome::NotAdmitted(NotAdmitted::OwnerUnsupported));
+            }
             return Ok(AdmitOutcome::NotAdmitted(
                 if record.state == AssetState::Ready {
                     NotAdmitted::Ready {

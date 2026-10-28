@@ -8,6 +8,7 @@ publish = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 df-types = { path = "../df-types" }
+df-imagery = { path = "../df-imagery" }
 df-model = { path = "../df-model" }
 df-session = { path = "../df-session" }
 df-auth = { path = "../df-auth" }

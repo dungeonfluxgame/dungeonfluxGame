@@ -43,6 +43,32 @@ pub enum FinanceError {
     Lifecycle(LifecycleRefusal),
     Fence(FenceVerdict),
     Media(MediaVerdict),
+    /// An image-stage binding failed preflight: nothing was written.
+    ImageStageBinding(crate::image_stage::BindingRefusal),
+    /// The image catalog refused the stage: the admission rolls back.
+    ImageStageRefusal(crate::image_stage::StageRefusal),
+    /// The stored image linkage names another mapping: never repaired in place.
+    ImageStageConflict,
+    /// A replay found no stored image linkage: admit first, never send.
+    ImageStageMissingLink,
+    /// The image port left no answer: nothing was written.
+    ImageStageUnavailable {
+        /// The SQLSTATE when a database call failed, else `None`.
+        sqlstate: Option<String>,
+        /// The database message, never a payload.
+        detail: String,
+    },
+    /// The image port left the linkage uncertain: replay the same operation to resolve.
+    ImageStageUncertain {
+        sqlstate: Option<String>,
+        detail: String,
+    },
+    /// The admission commit failed after the linkage step: the outcome is unknown, so replay
+    /// the same operation with the identical binding to resolve it; never release or resend.
+    ImageStageCommitUnknown {
+        sqlstate: Option<String>,
+        detail: String,
+    },
     /// A port could not answer in time; nothing was written.
     PortUnavailable,
     /// The reservation or attempt was settled or released by another flow first.

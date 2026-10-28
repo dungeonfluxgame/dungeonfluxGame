@@ -223,7 +223,8 @@ fn matches_schema(schema: &Value, value: &Value) -> bool {
     }
 }
 
-pub(crate) fn parse_unique_json(
+/// Parses bounded duplicate-free JSON within caller-selected limits.
+pub fn parse_unique_json(
     bytes: &[u8],
     limits: TextSchemaLimits,
 ) -> Result<Value, TextSchemaError> {

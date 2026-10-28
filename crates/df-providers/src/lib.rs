@@ -47,7 +47,7 @@ pub use speech_adapter::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_http::{NativeHttpLimits, NativeHttpRefusal, ProviderLimits};
+pub use native_http::{NativeHttp, NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal, NativeHttpResponse, ProviderLimits};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,7 +57,7 @@ pub use text_response::{
     ValidatedTextOutput,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use text_schema::{TextOutputSchema, TextSchemaError, TextSchemaLimits};
+pub use text_schema::{TextOutputSchema, TextSchemaError, TextSchemaLimits, parse_unique_json};
 
 pub use df_provider_api::ProviderFailureClass;
 pub use http_contract::{
@@ -99,9 +99,9 @@ pub use fal_media::{
     KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider, PreparedFalMediaResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use media_container::{EncodedMediaFacts, MediaContainerRefusal, MediaTimebase};
+pub use media_container::{EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_png_off_worker};
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_media_fetch::FalCdnPin;
+pub use native_media_fetch::{FalCdnPin, fetch_bfl_delivery};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_fal_media_provider;
 #[cfg(not(target_arch = "wasm32"))]
@@ -166,3 +166,6 @@ pub use plate_judge::{
     PhotoMedium, PhotoPeopleCount, PhotoQualityAnswer, PhotoSetting, PhotoText, PlateJudgeConfig,
     PlateJudgeError,
 };
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_transport_tests;

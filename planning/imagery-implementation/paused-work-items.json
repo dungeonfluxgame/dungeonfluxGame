@@ -1,0 +1,371 @@
+{
+  "paused_at": "2026-10-28T02:07:39.392505+00:00",
+  "checkpoint_base": "703267289d580d933e07b623fbea6fbba4ec4578",
+  "note": "Snapshot of unfinished work, not approval. No contributor remains running. Artifact paths are retained local evidence, not required source dependencies. Reconcile interrupted leases before resuming.",
+  "items": [
+    {
+      "name": "store-repair",
+      "attempt": "IMG-OPERATION-STORE-A7",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/journal.rs",
+          "crates/df-imagery/src/journal_tests.rs",
+          "crates/df-imagery/src/journal/",
+          "crates/df-persistence/src/imagery_store.rs",
+          "crates/df-persistence/src/imagery_sql.rs",
+          "crates/df-persistence/src/imagery_sql/",
+          "crates/df-persistence/tests/imagery_operations.rs",
+          "crates/df-persistence/migrations/0037_imagery_operations.sql",
+          "crates/df-persistence/migrations/0038_imagery_operations.sql"
+        ],
+        "objective": "Repair A1 against planning/imagery-implementation/operation-store.md. A1 terminal. journal.rs extra final brace; sibling journal_tests needs #[path=\"journal_tests.rs\"]. df_imagery::journal must become root reexports (root keeps module private). Missing AcceptTarget test import.0037 occupied by campaign_preferences_owner_boundary: rename ONLY your imagery migration to0038 after checking free, update version38/references. Freeze existing facts BEFORE retirement/expiry: identical->AlreadyFrozen, differentkey OR recipe->RecipeConflict even retired/expired; add real PG regression cases. Invalidhex not InvalidLength32. Inspect all code for compile/semantic errors. Unknown test kills BEFORE commit, not applied/acklost; correct claims. Preserve owner/replay/join/lastwithdraw/atomicity. Root owns sharedwiring, PG55471 ready for root. Implement repairs and exact exports.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-OPERATION-STORE-A6",
+        "repair_requirements": "A6 test SQL cast repaired but independent PG reproduction found reverse-link integrity still broken. Read store-a6-independent-probes.log and forthcoming independent review: operation->interest exact4tupleFK is fixed, interest->operation checks only(owner_scope,operation_id). Can COMMIT a second fresh interest for existing operation pointing to another same-owner job or samejob, not receipt interest; phantom demand prevents retirement. Require exact reverse composite FK on(owner_scope,operation_id,job_id,interest_id) referencing matching operation UNIQUE tuple; both directions deferred. Preserve validaccept transaction ordering and exactreplay. Add regressions for duplicateextra interest samejob AND anotherjob, both must fail COMMIT; verify noorphan demand. StrictClippy integrated-clippy-first.log also fails parse_interest_parts9args rows.rs197 and collapsibleif213. Use a small named mapping/expectedlink struct, no blanket lintallow. Root runs actualPG/fmt/Clippy. No other semantic redesign. Preserve previous5reviewfixes. Do nottouchsharedlibs/harness/manifests.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\store-a6-independent-probes.log"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\store-repair-a7.jsonl"
+      ]
+    },
+    {
+      "name": "raster",
+      "attempt": "IMG-RASTER-EXECUTOR-A3",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/raster.rs",
+          "crates/df-imagery/src/raster/",
+          "crates/df-imagery/src/raster_tests.rs"
+        ],
+        "objective": "Implement private synchronous CPU raster executor for accepted TransformSpec/ImageTransform/RasterOutputSpec/TransformLimits with existing pinned image/imageproc libs. Inject authorized immutable-byte resolver and digest checks; no network/file/provider/publication. All defined variants: ordered crop/resize contain/cover/stretch/pad anchors/no-upscale, rotate/flip, brightness/exposure/color, blur/sharpen, masks/feather/invert/alpha/composite/canvas/coverage, PNG/JPEG/WebP and final dimension/alpha semantics. Bound decode and live intermediate bytes BEFORE allocation and output; checkedmath; explicit EXIF orientation/matte; injected cancellation/deadline check, no ambientclock/spawns. Unsupportedformat explicit error. Analytical tiny pixel fixtures order/geometry/color/mask/alpha/limits/corruption/encoding. Contracts unchanged; report genuine missing requirement, no inventedstub. Private entries for later bounded worker; root wires deps/modules.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-RASTER-EXECUTOR-A2",
+        "repair_requirements": "A2 still fails compile3 errors: CompositeLayer missing import in raster_tests around870, image::ImageEncoder trait missing in encode.rs for write_image at197/245. Remove genuinely unused imports listed in log, no blanket suppression. Reread full owned code for consistent API use and all A1 semantic fixes. No redesign needed for compiler repair; root runs analytical pixel/memory/cancel tests next. Separately keep lossyWebP gap explicit and include exact minimal pinned dependency proposal in FINAL terminal (previous handoff path inaccessible); do not silently claim all formats supported.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\raster-returned-tests.log"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\raster-a3.jsonl"
+      ]
+    },
+    {
+      "name": "intent-codec",
+      "attempt": "IMG-INTENT-CODEC-A3",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/intent_codec.rs",
+          "crates/df-imagery/src/intent_codec/",
+          "crates/df-imagery/src/intent_codec_tests.rs"
+        ],
+        "objective": "Implement private canonical binary consumer-intent and config snapshot codec. Intent includes owner,purpose+role, fulloperation(prompt/template/orderedrefs/transforms),execution,freshness,audience,expected_source_revision,completeoutput. EXCLUDE operationID, callerfingerprint, schedulingurgency. No resolvedrouting/classification inintent. Config separately allfields. Explicit stableversion/tags/checkedlengths/integerwidths, deterministicMemberSet, finitefloat/negativezero canonicalization, redactingDebug. Validate and enforce injected bytebound during encode. Return private version+bytes+SHA256 intentfingerprint using pinnedsha2, avoid unfinishedjournaldependency. No Debugserialization/hash-onlysnapshot. Bounded decode for restart reconstruction with validatedconstructors if feasible; reject malformed/trailing/version. Tests materialfield sensitivity, excludedfields stable, orderedreferences, set/zero canonicalization, bytebounds,pinnedvectors. Don't edit foundations or recipekey. Realcode, exact root hooks.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-INTENT-CODEC-A2",
+        "repair_requirements": "A2 compiled,34 passed18 failed. Read full codec-returned-tests.log. Most request fixtures encode -> TooLong at373 despite normal limits; diagnose bounds logic from actual encoder not loosening limits. Pinned config vector/hash mismatch also. Independently derive wire vectors field-by-field from specified bytes, do not replace expected with actual encoder output or weaken literal/digest checks. Inspect Decoder minimum remaining arithmetic and negativezero/set behavior. Preserve budget-before-allocation and all A1 review fixes. Complete allroundtrip/materialfields/fullgolden regressiontests; root snapshots and reruns.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\codec-returned-tests.log"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\intent-codec-a3.jsonl"
+      ]
+    },
+    {
+      "name": "config-loader",
+      "attempt": "IMG-CONFIG-OVERLAYS-A3",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/config_overlay.rs",
+          "crates/df-imagery/src/config_overlay/",
+          "crates/df-imagery/src/config_overlay_tests.rs"
+        ],
+        "objective": "Implement private PURE ImageConfig parser/overlays from supplied configtext,envpairs,overrides. Inspect real launcher schema/aliases. No ambient reads. Strictunknownfield rejection, precedence defaults<file<legacyenv<newimageryenv<runtimeoverride, deterministicaliasconflicts, typedredactedfield errors, invalid updates preserve original. All4modes/12purposes/backendoverrides/4backendgates inclCodex/account/concurrency/scheduler/request/transformbounds. No arbitrarymax/secrets/silentreroute. Return validatedconfig and nonsecret provenance. Missing suppliermodel/processfields report to root, don't invent foundationchanges. Existing pinnedserde/JSON/TOML matching actual format. Tests everyfield/enum,precedence,unknowns,zero/overflow,disable,atomicrejection. Root owns launcher wiring; handoff exactaliases/hooks. Actualcode.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-CONFIG-OVERLAYS-A2",
+        "repair_requirements": "A2 compiled54 pass2 fail: every_purpose_toggles_from_file_with_provenance and full_example_file_parses_with_expected_winners both animation_frame incorrectly enabled. Diagnose actual precedence/apply logic and fix; do not change expectations without contract evidence. Preserve supplied inputs only, ignore unrelated environment before allocating, all requested enable/disable/tuning controls. Read full log. Root snapshots/reruns tests; no manifest edits.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\config-returned-tests.log"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\config-loader-a3.jsonl"
+      ]
+    },
+    {
+      "name": "api-backends",
+      "attempt": "IMG-API-BACKEND-EXTRACTION-A2",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/backends/api.rs",
+          "crates/df-imagery/src/backends/api/"
+        ],
+        "objective": "Extract current OpenAI image_edit/fal_image/bfl_image into PRIVATE df-imagery backends/api.rs and api/. Leave oldfiles untouched until root migrates callers/removes bypass. Reuse df-providers sharedHTTP/mediafetch/schema/validation primitives, no transportduplication/cycle. Report narrow privatehelper exports root must expose; imageonlycodec may move privately. Preserve models/prompts/request/output/alpha/refusal/nofallback behavior; operationalbounds injectable with current compatibilitydefaults. Crateprivate executors/config; internal legacyvalue contracts allowed during migration. Split fal generation and paidalpha extraction into explicit separatelymeteredstages, never hide2paidcalls. Actualbytes/usage/receipt/typedfailure-or-unknown, no newledger/freecost. Faithful loopback tests malformed/refusal/timeouts/uncertainty/outputchecks, no livecalls. Root owns parentmodule/lib/deps/sharedproviderchanges. Codex owns separate codex_cli files. Exact genericfal submit_image bypass disposition. Real relocatedcode and exact integration/removalhooks.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-API-BACKEND-EXTRACTION-A1",
+        "repair_requirements": "A1 isolated conventional harness failed syntax: extra closing brace openai.rs359 following decode. Fix syntax and inspect all owned code for compilation/type/import/test errors. Shared transport exports now registered in df-providers: NativeHttp/response/failure/metadata, parse_unique_json, inspect_png_off_worker, fetch_bfl_delivery. Actual dependency harness wave2/api-harness supports base64/serde_json/tokio. Keep modules private; consumer migration goes through ImageService, never callers -> privatebackends (handoff correction). Generic fal submit_image remains public legacy bypass and must later remove, not claimed already private. Preserve paidalpha as separately admitted/metered stages; no convenience path may hide secondpaidcall from service. BFL delivery64KiB issue assigned transport contributor, do notedittransport. Root reruns loopbacktests; no liveproviders.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\api-returned-tests.log"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\api-backends-a2.jsonl"
+      ]
+    },
+    {
+      "name": "codex-backend",
+      "attempt": "IMG-CODEX-BACKEND-A2",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-imagery/src/backends/codex_cli.rs",
+          "crates/df-imagery/src/backends/codex_cli/"
+        ],
+        "objective": "Implement PRIVATE Codex imagebackend process/protocol/artifacts. Read artifacts/tmp/imagery-20261027/codex-protocol-evidence.json and codex-schema/ and existing gameplay/codex_cli lifecycle. Use evidenced appserver JSONRPC, not guessedexecJSONL or text-onlyprohibitions. Normalconfigurablebackend, no exactbinary/versionpin/modelallowlist/localonlyrestriction. Ownchild/stdin/stdout/stderr/termination, no shellstrings/visiblewindows; boundedstreams/deadline/cancel/processtree/privateattemptscratch. Text+orderedauthorizedrefs, explicit output/alpha/dimensions. ImageGeneration fileId/savedPath/result distinct: schema doesn'tprove resultencoding/fileIdendpoint. Implement verified artifactpath only; explicit unsupported/Unknown without actual validatedbytes. No fabricatedendpoint/costzero/success/autofallback/retryafteruncertainty. No liveCodex/imagecalls. Actualschemafixtures/fakeprocess tests timeout/cancel/partial/foreignpath/oversize/digest/content/unknownusage. Private request/outcomes; root wiresparent/deps. Implement verifiedfunctionality with honest protocolgaps, no stubs.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-CODEX-BACKEND-A1",
+        "repair_requirements": "Repair Codex A1 using artifacts/tmp/imagery-20261027/wave2/codex-a1-review.json as mandatory exact findings and acceptance cases. Read the approved imagery plans and prior brief/handoff; preserve the private backend contract. Fix compilation, schema-backed initialize/initialized handshake, explicit operation/dimensions/format/alpha/output instructions and actual output verification, turn/item correlation and failure precedence, Windows normalized path equivalence and reference containment, bounded reads/allocations and a total deadline including writes/verification/shutdown. Implement owned process-tree cleanup without indefinite stderr joins. Parse the real tokenUsage.last/total notifications, retain observed usage on uncertain outcomes, avoid duplicate accounting and fabricated zero costs. Remove payload-leaking Debug, expose configuration through typed private construction as appropriate. Use existing local Codex schema evidence and codex-initialize-evidence.json; no paid/live image turns. Add focused fixtures for every defect. Do not add arbitrary model/version restrictions. Root owns manifests/lib registration and runs tests. Explicitly report any necessary dependency rather than editing manifests. Handoff path is under artifacts/tmp, not tmp alone; if writing unavailable include complete handoff in final terminal response.\n",
+        "evidence": "artifacts/tmp/imagery-20261027/wave2/codex-a1-review.json"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\codex-backend-a2.jsonl"
+      ]
+    },
+    {
+      "name": "service-contract",
+      "attempt": "IMG-SERVICE-COMPOSITION-A2",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "planning/imagery-implementation/service-composition.md"
+        ],
+        "objective": "Produce concise implementation-ready servicecomposition contract against actual acceptedtypes/policy/key/journalcandidate and existingassets/catalog/finance/Hub/SpendLedger. Read rejectedcontractA3 evidence. Exact submit/status/watch/cancel,auth/sourcepins,snapshots/freeze,scheduler/cancel/restart,parentjob vs paidstageattempt, existingmoneyauthority and atomicpublicationlinkage. Cite actualmethods/schema paths+lines. Concrete first endtoend localcreator+plate slice, no weakenedhostedsecurity/fakeReady/duplicatemoney/cache/flightloop/nonatomicdualwrites/constructorpermissionclaim. Sequential exactfileownership/adaptertypes/crashmatrix uncertainty. Resolve evidencedchoices and concise remainingdecisions root can settle. Othercontributors code independently; don'tredefineacceptedtypes. No appcode; independentreview decidesacceptance. Also perform nonmutating periodiccleanupeligibility ADR0002 inhandoff: retain all currentwave/build/evidence/DBs, no deletion, only proveneligible. Short exactcontract not repeatedessay.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-SERVICE-COMPOSITION-A1",
+        "repair_requirements": "A1 REJECTED by independent reviewer. Read the complete artifacts/tmp/imagery-20261027/wave2/service-composition-review.json and address EVERY finding/recommendation in your sole doc. This must resolve concrete contracts, not repeat open blockers or illustrative placeholder types. Read ACTUAL df-finance/src/{admit,ports,held,service}.rs and df-assets/src/{catalog_store,catalog_service,catalog_ports,catalog_record,object_store}.rs plus df-persistence media_catalog SQL and creator draft path. Actual FinanceService::admit owns its tx; no CommerceRepository::transact. Use a FINANCE-OWNED image-stage admission entry with an injected transaction-taking persistence hook, preserving lock order. Both new and AlreadyAdmitted replay must verify exact immutable child operation/attempt/effect/job/stage/publication linkage and payload digest; replay not send permission. Define full ImageStageAdmission fields + typed Deferred/Admit(full Admission)/VerifyExisting action, exact hook signatures/error mapping/production ownership. Map EVERY Admission field, including owner/account/campaign/audience/quota/dedupe/requestkey/retention/reserve/limits. Paid classification precedes final recipe freeze: persist intent, admit classifier stage, store result, resolve and freeze outputrecipe, admit generation. Pure PreparedOnly/Replay misses must not create runnablejobs. Choose ASYNC catalog lifecycle; transaction-taking finalize records jobready only on FinalizeResult::Ready with exact HeldStep/FinalizeRequest/writes/manifests. Do not conflate generic publication::publish receipt. Explicitly resolve account-owned creator drafts: current catalog rejects campaign=None, personal objectlayout requires CharacterRevision, financeAdmitCommand requires campaign/session. Specify necessary source-backed extensions for pre-character accountdraft storage/auth/funding and localmetering policy without inventing fake campaigns/characters or shrinking to localtransforms. Define actual proposed Rust types/signatures and stage schema/CAS/checks/indexes/lock order/config disable linearization, auth principal capability minting, result/revision/status/watch/cancel and recovery mappings. Existing cost adapter must accept durable childattempt+usage revision dedupe; Reservation drop/refund is not uncertainliability. Map usable/unusable/provenunsent/Unknown/Codex unpriced explicitly. No new money ledger. Include concrete first FULL Generate/Edit/Transform service integration and exact file/task dependencies, not local-only substitute. Remove fake proven assertions and wrongcitations; source versions exact. Proposed additions are designs but must be complete enough to implement; acceptance independent. No appsource edits. Short precise tables/types okay; do not truncate files. Append cleanup eligibility result from A1 only as retained evidence, no repeatedscan needed.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\service-composition-review.json"
+      },
+      "evidence": [
+        "artifacts\\tmp\\imagery-20261027\\wave2\\service-contract-a2.jsonl",
+        "artifacts\\tmp\\imagery-20261027\\wave2\\service-contract-a2-handoff.md"
+      ]
+    },
+    {
+      "name": "consumer-migration",
+      "attempt": "IMG-CONSUMER-MIGRATION-MAP-A3",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "planning/imagery-implementation/consumer-migration.md",
+          "development/check-imagery-boundary.py",
+          "development/tests/test_imagery_boundary.py"
+        ],
+        "objective": "Map ALL imagegen/rasterconsumers and implement boundarychecker. Exactmethods/identity/prompt/output/default/privacy/tests for creatorportrait/classification/startup/privateacceptance; canonicalheroNPCroom; plates direct/state/ahead/items/helditems/expressions/mural/combat; characterclips guard/fallenframe retryfence; referenceprep/masks/thumbs; devfixtures/genericfal/Codex. Preserve no-portrait playablecreation/pollnotgenerate/privacy/video. Servicecontract owned elsewhere; no caller edits against inventedAPI. Implement Python development/check-imagery-boundary.py and unittest: tokenaware source/dependency scanner for directimageexecutors; comments/strings notfalsepositives. Narrow currentlegacy file+symbol allowances; strictmode fails until legacyremoved, newbypassalwaysfails, nodirectoryblanket. Forbiddenfixtures qualifiedcalls/newpaths/comments/strings; disclosealiaslimits and export/dependencyaudit. No appsourceedits. Real inventory/checker and exact migrationpatchoutline.",
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root",
+        "repair_of": "IMG-CONSUMER-MIGRATION-MAP-A2",
+        "repair_requirements": "A2 independent review REJECTED. Read exact consumer-migration-a2-review.json and independent fixtures/evidence.48/49tests pass, default13legacy,strict13fail. Fix testexemption leaking beyond cfg(test) scope; unrelated nearby loopback_fixture calls exemptingliveconstructors; _provider payload confusedwithwildcard; grouped import aliases missing; indirectbackend reexports via aliases; workspace renamed forbiddendependencies; filewidelegacytoken laundering callsite changes. Bind exemptions to syntax scope and associated constructor, legacyhash to exact tokens/callsite, not anywherefile. Fix diagnosticline expectation with evidence. Complete primary imagery startup/sharedregistry migration contracts. Preserve corrected freshplateGenerate and actual13legacy strictfail. Add regressionforEVERY independentprobe; no broad exclusions/falsegreen. Root reruns Python suite and adversarial tests.",
+        "evidence": "artifacts\\tmp\\imagery-20261027\\wave2\\consumer-migration-a2-review.json"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\consumer-migration-a3.jsonl"
+      ]
+    },
+    {
+      "name": "transport-port",
+      "attempt": "IMG-IMAGE-TRANSPORT-PORT-A1",
+      "database_status": "submitted",
+      "pause_state": "submitted_unapproved",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "objective": "Implement the minimal shared transport integration required by the submitted private image API extraction. Read AGENTS.md/coding-style/image-generation plan plus artifacts/tmp/imagery-20261027/wave2/api-backends-handoff.md and ACTUAL candidate imports. You own only the listed existing transport/helper sources and a new focused test file; NO root lib/Cargo/index/DB or private imagery module edits. Preserve unrelated text/audio/video behavior, defaults, validated endpoints, DNS/address pinning, auth redaction, response metadata and limits. Promote only necessary existing helper types/methods to public with small doc contracts: HttpRequest::{bfl_native,fal_native,bearer_native}; NativeHttp::{new,execute,limits}; NativeHttpResponse/Failure and their required metadata types (actual types carry transport_request_id/metadata, don't drop those fields); parse_unique_json; inspect_png_off_worker. Keep implementation modules PRIVATE, root adds explicit reexports. Add shared credential-free fetch_bfl_delivery matching candidate signature (&NativeHttp, locator:&str, max_bytes:usize, remaining:Duration, fixture:Option<SocketAddr>) -> Result<(Vec<u8>,String,Option<u16>),(NativeHttpRefusal,&'static str)> by reusing NativeMediaFetch::bfl, fetch_bfl_image and observed_status. Preserve actual strict BFL allowlist and public-address DNS pinning, fixture loopback validation, no credential forwarding/redirect/fallback, enforce one total remaining deadline across DNS/construction/fetch (not fresh deadline per phase). Keep typed static reason mapping and payloads out of errors; don't introduce provider image executor in df-providers. No duplicate transport engine. Ensure helper introspection/publicfields doesn't leak credentials or make arbitrary-image-generation API. Add focused local tests verifying rejected locator/fixture, deadline coverswholeoperation and successful credential-free pinnedfixture content/status. Use current dependencies only. Root compiles/tests/sharedexports after submission. No shell available; report exact rootlib reexports/cfg(test) registration and any genuine signature mismatch in candidate. Do not silently change non-image global env gates or caps; record required followup if they impede tunability. Root handles wiring, no livecalls. User explicitly authorized Muse Spark1.3 contributor-mode sharedmain and relevantsource to Muse/Meta; no recursiveagents. Root independentreview/test required; handoff exact snippets/results(unperformed).",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-providers/src/http_contract.rs",
+          "crates/df-providers/src/native_http.rs",
+          "crates/df-providers/src/text_schema.rs",
+          "crates/df-providers/src/media_container.rs",
+          "crates/df-providers/src/native_media_fetch.rs",
+          "crates/df-providers/src/image_transport_tests.rs"
+        ],
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root lib/manifests/lock"
+      },
+      "evidence": [
+        "C:\\Users\\mreca\\Desktop\\dungeonfluxGame\\artifacts\\tmp\\imagery-20261027\\wave2\\transport-port.jsonl"
+      ]
+    },
+    {
+      "name": "finance-hook",
+      "attempt": "IMG-FINANCE-IMAGE-STAGE-A1",
+      "database_status": "active",
+      "pause_state": "interrupted_without_submission",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "objective": "Implement additive campaign image-stage finance admission in existing FinanceService<F,M,S>, preserving its constructor and admit behavior. Human explicitly requires Muse Spark1.3 contributor-mode and shared main; root owns integration/manifests/lib/index/commits/tests. Read AGENTS/coding-style, image-generation-architecture (single authority/cost/recovery), finance-ledger-research11.2/19.1, commerce-service, service-operations, commercial-validation and actual service/admit/ports/wire/commerce admission plan, plus service-composition-a2-review.json. Do not trust rejected service-composition.md as frozen API.\nConcrete API: add FinanceService::admit_image_stage taking an ImageStageAdmission command and per-call injected ImageStagePort. Command wraps existing AdmitCommand and an immutable typed image binding with owner scope bytes, job ID, logical stage ID, asset ID, publication attempt ID and child finance operation/attempt/effect IDs; tenant/campaign/session must bind actual AdmitCommand, and shared IDs must compare equal before transaction. Preserve dependency direction: no df-tools or df-imagery dependency, no new money ledger. Own types with checked nonzero IDs and bounded owner bytes; existing finance ID types for finance identities. Include complete immutable binding (and original request digest) in domain-separated SHA256 request digest BEFORE decide_admission so business receipt rejects changed image mapping. Add quote-digest helper so callers can use exactly the same digest for quote/admit rather than impossible quote comparison. Never silently discard media request; reject incompatible simultaneous legacy media command or validate exact binding, explicitly document choice.\nRefactor existing admission transaction minimally so both new/replayed decisions flow through optional hook while ordinary admit behavior stays identical. Hook takes existing Transaction, binding, and explicit NEW vs REPLAY phase derived ONLY from finance AdmissionDecision, with full receipt fields. On NEW, finance plan then existing fence then transaction hook; hook atomically admits/verifies catalog linkage and exact image stage mapping. On REPLAY, hook only verifies identical existing binding and never admits/repairs/dispatches; missing/mismatched link is error and does not authorize send. Hook result must distinguish accepted/existing, typed catalog refusal (inflight/ready/empty/quota or explicit extensible reason), conflict, unavailable/uncertain; no lossy bool. Refusal/error rolls back finance+catalog+linkage. Commit error is explicitly unknown admission status, replay resolves via same operation; no release/resend based on error. Hook timeout uses existing port deadline and preserves transaction rollback. New stage success returns existing finance receipt; existing receipt never send permission. Retain actual database/SQLSTATE evidence in errors without payloads.\nEnsure finance provider_attempt.media_asset_id is written in SAME plan/event as admission. Existing pure plan fields are public: adjust exactly one ProviderAttemptInsert row with checked unique expected attempt match before commit; do not manually UPDATE finance tables or bypass definer boundary. No df-commerce schema/API edits unless necessary: report prerequisite if existing allowlist rejects supported field. A proper narrow internal helper is okay, no duplicate full finance workflow. No outgoing provider/network calls.\nTests in new integration file use real existing finance support harness and a test-only transaction hook/linkage table to prove new atomic success, catalog refusal rollback (no hold/receipt/link), timeout rollback, exact replay verified without another write, missing link fails rather than repairs, changed job/stage/asset/publicationattempt/owner/payload/finance IDs conflict, effect/attempt mismatch preflight, media_asset_id retained, and post-commit acknowledgment uncertainty where feasible. Existing campaign finance tests must continue unchanged. Add deterministic pure digest tests for all fields. No fake pass claims; shell disabled, root runs tests at owned PG55471 and handles lib registration. Do not change shared harness, other crates, manifests, schema or root lib. This campaign finance primitive does not solve hosted account-draft funding; retain that as separate full-goal prerequisite. No fabricated campaign/session. Handoff exact exports, errors, tests, limitations. Only owned paths. No recursive agents/live providers/Git/DB mutation.",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-finance/src/admit.rs",
+          "crates/df-finance/src/service.rs",
+          "crates/df-finance/src/image_stage.rs",
+          "crates/df-finance/src/image_stage/",
+          "crates/df-finance/tests/image_stage.rs"
+        ],
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root"
+      },
+      "evidence": []
+    },
+    {
+      "name": "account-draft",
+      "attempt": "IMG-ACCOUNT-DRAFT-STORAGE-A1",
+      "database_status": "active",
+      "pause_state": "interrupted_without_submission",
+      "model": "muse-spark-1.3",
+      "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+      "brief": {
+        "dispatch_ready": true,
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "objective": "Human requires Muse Spark1.3 contributor-mode, authorizes relevant source to Muse/Meta and shared main. Root owns integration/tests/lib/manifests/Git/workflow. No recursive agents, paid providers, or modifications outside listed paths. Read AGENTS/coding-style and relevant image-generation/storage/asset/commerce plans. Implement the following reviewed source-backed brief completely for storage; do not claim funding or end-to-end auth complete. Keep oldcampaign behavior exact. Root will add explicit lib exports for shared helper/typedstorageowner; no public implementationmodules. Existing tests meaningful, no weakened assertions/stubs/uncheckedownerfallback. Shell disabled; report unperformedchecks. Atomic sharedcatalog storage and allrecoverypaths mandatory. Files exclusively yours, other contributors editing separate areas. Reread completed files for compilation mistakes. Handoff exact exports plus tests/results/remainingintegration.\n\n# Account draft image storage implementation brief\n\nSource: Desktop checkout, inspected 2026-10-27. Planning only; no application edits, database actions, or test execution. Scope: authenticated account-owned generated draft images before campaign/template/revision exists. Reuse catalog and storage quota; no new ledger or assumed account funding support.\n\n## Evidence and minimum design\n\n`crates/df-assets/src/catalog_service.rs:246` refuses campaign None; advance at601 and publish at738 repeat it. Publication/rewrite/write_variant at732/773/832 carry CampaignId, and line842 constructs campaign_asset. Changing admission alone leaves drafts permanently stuck on recovery/publication.\n\n`object_store.rs:153-195` requires CharacterRevision(account, template, revision) for character_asset. Add typed `StorageOwner::{Campaign(CampaignId), AccountDraft(AccountId)}` in this existing module and account_draft_asset with PrivateMedia key `<env>/users/<account>/draft-assets/<asset>/<attempt>/<write>/<variant>`. Preserve campaign layout byte-for-byte. Never fabricate a character revision, campaign, or account. Retain fresh WriteId, intent-before-put, fencing, winner verification and orphan cleanup. Thread validated owner through publish, missing-winner rewrites and write_variant, including restart paths. Quarantine layout stays unchanged.\n\nAdmission (`catalog_store.rs:35`) and AssetRecord (`catalog_record.rs:185`) already contain charge_scope, origin_account, nullable campaign, audience, dedupe_scope and retention. Derive ownership from these canonical fields instead of storing a redundant owner column. Add one shared validation helper callable by service and persistence; validate persisted account draft metadata again on recovery.\n\nFor the new no-campaign Generated Image branch require: QuotaScope::Account(A), origin_account Some(A), Audience::OwnerPrivate(A), DedupeScope::account(A), RetentionClass::Personal, and normal generated request-key presence. Refuse every mismatch before reservation/insertion/object I/O. Preserve Withheld -> AudienceEmpty. Unsupported no-campaign non-image generation remains refused. Scope this new guard carefully: do not accidentally reject existing Uploaded/Reviewed/library paths, or tighten existing campaign charge/origin semantics in this patch.\n\n`catalog_fake.rs:238` and `df-persistence/src/media_catalog_sql/admission.rs:18` currently trust supplied metadata. Both must use the shared guard, not only CatalogService. `media_catalog.rs:47` admits within an existing finance transaction, bypassing service validation; no new finance behavior is authorized here.\n\n## Quota, dedupe, retention and authorization\n\n`quota.rs:10-13,41-66` already supports account storage bytes (100 MiB default). Existing finalization/tombstone transitions use row.charge_scope and quota-before-asset locking. Reuse reservations, actual-byte reconciliation, checked arithmetic, refusal rollback, terminal release and transactional outbox. This is storage capacity, not money or spend permission.\n\n`df-persistence/migrations/0010_media_catalog.sql` already supports account scope/reservations, nullable campaign, OwnerPrivate audience/account, Personal retention and account_deletion tombstones. No schema migration is needed for this extension. Existing SQL row mapping supports these values.\n\n`catalog_record.rs:103-128` DedupeScope is untagged 16-byte account/campaign identity. SQL live uniqueness is (dedupe_scope,request_key); `admission.rs:114` conflicting_row returns IDs/state without owner validation. For conflicts involving the new draft branch validate existing row ownership before returning Ready/InFlight; mismatch must fail without disclosing another owner's asset ID. Mirror fake behavior. Keep current index/request-key format; do not introduce a broad migration. Test forced identical raw account/campaign IDs and deliberately reused request keys, even though normal audience-aware keys distinguish them.\n\n`catalog_service.rs:225-231` preflight lookup is an internal unauthenticated catalog read. Root must authorize the returned record before exposing asset/completion/content. Storage ownership is not delivery authorization. Account identity comes from authenticated context, never a client-provided arbitrary owner. Anonymous drafts need a separate explicit policy and are out of scope.\n\n`audience.rs:47,85-96` OwnerPrivate only meets the same account; meeting campaign or another account becomes Withheld. Preserve this. Personal retention does not mean intermediate/quarantine. `catalog_sweep.rs:107-154` resumes in-progress rows through advance, but does not expire Ready personal assets. Do not invent a draft TTL. Explicit discard/account deletion use existing tombstone lifecycle; unreferenced Ready drafts continue consuming bytes until tombstoned. Root must supply authenticated deletion/abandonment integration or explicitly leave it pending. Preserve live-reference deletion refusal.\n\nOn character acceptance attach the real template revision reference, without silently widening audience, moving quota or rewriting keys. Existing schema asset_reference at0010:156 includes template_revision; no draft-holder kind is needed just to protect unfinished assets. Campaign share/copy or ownership transfer is separate.\n\n## Exclusive implementation paths\n\nGive implementer ownership of exactly:\n\n- crates/df-assets/src/object_store.rs\n- crates/df-assets/src/object_store_tests.rs\n- crates/df-assets/src/catalog_store.rs\n- crates/df-assets/src/catalog_service.rs\n- crates/df-assets/src/catalog_fake.rs\n- crates/df-assets/src/catalog_service_tests.rs\n- crates/df-assets/src/catalog_fake_tests.rs\n- crates/df-persistence/src/media_catalog_sql/admission.rs\n- crates/df-persistence/src/media_catalog_tests.rs\n\nKeep helper/types in these existing modules. Other files are read-only; request any extra path from root before editing. No manifests, lockfiles, lib module registrations, migrations, migration registry, imagery contracts, creator consumers, finance, auth gateway, or devlog modifications. Root owns these integration surfaces and serialized test execution.\n\n## Acceptance cases\n\n1. Valid account/no-campaign generated image admits and publishes expected PrivateMedia path; account reservation becomes actual committed bytes; campaign usage unchanged; metadata survives reload.\n2. One-field mismatches (charge/origin/audience/dedupe/retention/kind/missing owner) refuse before side effects. Exercise direct fake and SQL admission, not only service. Existing uploads/reviewed/campaign cases retain behavior.\n3. Same-account same-key Ready/InFlight dedupes with one reservation; different owners do not. Forced conflicting ownership never leaks IDs. Concurrent account admissions cannot oversubscribe quota.\n4. Validation failure, oversize, rejection and terminal cancellation release once; repeated terminal calls do not double-credit. Storage outages remain recoverable.\n5. Restart at Quarantined/Validated via existing sweep, lease loss, missing winning object rewrite and stale writer cleanup retain account owner/path and existing fencing.\n6. Existing campaign keys/lifecycle fixtures remain unchanged. No-campaign unsupported kinds stay refused.\n7. Explicit discard/account-deletion tombstone debits committed bytes once, respects live references, and deletes objects through existing grace/fence rules. No invented Ready-draft expiry.\n8. Root integration: another account cannot request/read/subscribe/discard/reattach known draft AssetId or request key. OwnerPrivate/campaign reference meet remains Withheld. This storage patch alone cannot claim these authenticated tests pass.\n\n## Root hooks and required handoff\n\nRoot wires authenticated account context and canonical audience-aware keys into imagery/creator requests; attaches actual template references on acceptance; supplies authorized discard/account-deletion handling and delivery checks. Paid provider admission remains conditional on existing accepted finance/funding capability: enabling account storage grants none. Do not silently label local derived transforms Generated without checking their provenance contract.\n\nImplementer reports changed paths/hashes, focused test outcomes or explicit unexecuted status, and integration gaps. Root runs cargo serially and owns devlog. Reject a handoff that merely removes campaign guards, supplies fake revision IDs, omits recovery/rewrite handling, treats byte quota as spend authorization, or claims end-to-end creator authorization from this storage work alone.\n",
+        "source_revision": "703267289d580d933e07b623fbea6fbba4ec4578",
+        "permitted_paths": [
+          "crates/df-assets/src/object_store.rs",
+          "crates/df-assets/src/object_store_tests.rs",
+          "crates/df-assets/src/catalog_store.rs",
+          "crates/df-assets/src/catalog_service.rs",
+          "crates/df-assets/src/catalog_fake.rs",
+          "crates/df-assets/src/catalog_service_tests.rs",
+          "crates/df-assets/src/catalog_fake_tests.rs",
+          "crates/df-persistence/src/media_catalog_sql/admission.rs",
+          "crates/df-persistence/src/media_catalog_tests.rs"
+        ],
+        "required_capabilities": {
+          "computer_use": false,
+          "vision": false,
+          "audio": false
+        },
+        "shared_branch": "main",
+        "shared_files_owner": "root"
+      },
+      "evidence": []
+    }
+  ]
+}

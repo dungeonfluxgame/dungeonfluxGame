@@ -48,8 +48,9 @@ pub struct HttpRequest {
 }
 
 impl HttpRequest {
+    /// Native BFL request with an `x-key` credential header.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn bfl_native(
+    pub fn bfl_native(
         method: HttpMethod,
         endpoint: &str,
         credential: &str,
@@ -65,8 +66,9 @@ impl HttpRequest {
             body,
         }
     }
+    /// Native fal request with a `Key` credential header and no retry.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn fal_native(
+    pub fn fal_native(
         method: HttpMethod,
         endpoint: &str,
         credential: &str,
@@ -105,7 +107,7 @@ impl HttpRequest {
 
     /// A bearer-authenticated `POST` with a caller-built body, such as a multipart image edit.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn bearer_native(
+    pub fn bearer_native(
         endpoint: &str,
         credential: &str,
         content_type: String,

@@ -102,6 +102,20 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         &mut self,
         command: &AdmitCommand,
     ) -> Result<AdmissionOutcome, FinanceError> {
+        self.admit_with_hook(command, None).await
+    }
+
+    /// The admission transaction with an optional image-stage hook. `None` is an ordinary
+    /// admission; `Some` folds the binding into the request digest, stamps the asset into the
+    /// same plan, and runs the hook on both the new and the replayed decision before commit.
+    pub(crate) async fn admit_with_hook(
+        &mut self,
+        command: &AdmitCommand,
+        image: Option<(
+            &crate::image_stage::ImageStageBinding,
+            &dyn crate::image_stage::ImageStageHook,
+        )>,
+    ) -> Result<AdmissionOutcome, FinanceError> {
         let now_ms = self.clock.now_ms();
         let event_id = EventId::from_array(self.id());
         let entry_id = EntryId::from_array(self.id());
@@ -131,6 +145,13 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
                 .authorized_payers(command.fence.campaign, &payers),
         )
         .await?;
+        let request_digest = match image {
+            Some((binding, _)) => crate::image_stage::image_stage_request_digest(
+                binding,
+                &command.request_digest,
+            ),
+            None => command.request_digest,
+        };
         let request = AdmissionRequest {
             event_id,
             entry_id,
@@ -146,7 +167,7 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
             maximum_units: command.maximum_units.clone(),
             estimate_units: command.estimate_units.clone(),
             quote: command.quote,
-            request_digest: command.request_digest,
+            request_digest,
             authorized_payers: authorized,
             now_ms,
             reserved_expiry_ms,
@@ -154,6 +175,22 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         let admitted =
             match decide_admission(&snapshot, &request).map_err(FinanceError::Admission)? {
                 AdmissionDecision::AlreadyAdmitted(receipt) => {
+                    if let Some((binding, hook)) = image {
+                        let verified = crate::image_stage::bounded_hook(
+                            deadline,
+                            hook.on_image_stage(
+                                &transaction,
+                                binding,
+                                crate::image_stage::ImageStagePhase::Replay,
+                                &receipt,
+                            ),
+                        )
+                        .await;
+                        if let Err(error) = verified {
+                            transaction.rollback().await?;
+                            return Err(error);
+                        }
+                    }
                     transaction.rollback().await?;
                     return Ok(AdmissionOutcome::AlreadyAdmitted {
                         reservation: receipt.reservation,
@@ -164,10 +201,38 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
                 }
                 AdmissionDecision::Admitted(admitted) => admitted,
             };
-        Self::commit_plan(&transaction, &admitted.plan).await?;
-        ask_fence_and_media(&self.fence, &self.media, &transaction, command, deadline).await?;
-        transaction.commit().await?;
+        let mut plan = admitted.plan;
         let receipt = admitted.receipt;
+        if let Some((binding, _)) = image {
+            crate::image_stage::stamp_media_asset(
+                &mut plan,
+                &request.attempt,
+                binding.asset.as_bytes(),
+            )?;
+        }
+        Self::commit_plan(&transaction, &plan).await?;
+        ask_fence_and_media(&self.fence, &self.media, &transaction, command, deadline).await?;
+        if let Some((binding, hook)) = image {
+            let linked = crate::image_stage::bounded_hook(
+                deadline,
+                hook.on_image_stage(
+                    &transaction,
+                    binding,
+                    crate::image_stage::ImageStagePhase::New,
+                    &receipt,
+                ),
+            )
+            .await;
+            if let Err(error) = linked {
+                transaction.rollback().await?;
+                return Err(error);
+            }
+        }
+        if image.is_some() {
+            transaction.commit().await.map_err(crate::image_stage::commit_unknown)?;
+        } else {
+            transaction.commit().await?;
+        }
         Ok(AdmissionOutcome::Admitted {
             reservation: receipt.reservation,
             attempt: receipt.attempt,

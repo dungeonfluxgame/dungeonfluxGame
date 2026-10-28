@@ -166,7 +166,18 @@ impl NativeMediaFetch {
         locator: &str,
         fixture: Option<SocketAddr>,
     ) -> Result<Self, (NativeHttpRefusal, &'static str)> {
-        if !strict_bfl_delivery(locator) {
+        if let Some(fixture_address) = fixture {
+            if !fixture_address.ip().is_loopback() || fixture_address.port() == 0 {
+                return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
+            }
+            let expected = format!("http://{fixture_address}/");
+            let fixture_locator = locator.len() <= 8192
+                && locator.starts_with(&expected)
+                && !locator.contains(['\\', '\0', '@', '#']);
+            if !(strict_bfl_delivery(locator) || fixture_locator) {
+                return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+            }
+        } else if !strict_bfl_delivery(locator) {
             return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
         }
         let url = reqwest::Url::parse(locator)
@@ -277,7 +288,11 @@ impl NativeMediaFetch {
         cancellation: impl Future<Output = ()>,
     ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
         let allowed = if self.bfl {
-            strict_bfl_delivery(locator)
+            strict_bfl_delivery(locator) || self.fixture.is_some_and(|address| {
+                locator.len() <= 8192
+                    && locator.starts_with(&format!("http://{address}/"))
+                    && !locator.contains(['\\', '\0', '@', '#'])
+            })
         } else {
             strict_fal_locator(locator)
         };
@@ -428,6 +443,67 @@ impl NativeMediaFetch {
             return Err(NativeHttpRefusal::Unknown);
         }
         Ok((body, observed))
+    }
+}
+
+/// Credential-free BFL delivery over one total `remaining` deadline.
+///
+/// Reuses the pinned allowlisted [`NativeMediaFetch::bfl`] construction, the
+/// bounded [`NativeMediaFetch::fetch_bfl_image`] read and
+/// [`NativeMediaFetch::observed_status`]. No credential is accepted or
+/// forwarded, redirects and fallbacks are refused by the helpers.
+pub async fn fetch_bfl_delivery(
+    http: &crate::native_http::NativeHttp,
+    locator: &str,
+    max_bytes: usize,
+    remaining: Duration,
+    fixture: Option<SocketAddr>,
+) -> Result<(Vec<u8>, String, Option<u16>), (NativeHttpRefusal, &'static str)> {
+    if remaining.is_zero() {
+        return Err((NativeHttpRefusal::Deadline, "deadline"));
+    }
+    if max_bytes == 0 {
+        return Err((NativeHttpRefusal::InvalidEndpoint, "request_bounds"));
+    }
+    let started = std::time::Instant::now();
+    let constructed = tokio::time::timeout(
+        remaining,
+        NativeMediaFetch::bfl(http.limits(), locator, fixture),
+    )
+    .await
+    .map_err(|_| (NativeHttpRefusal::Deadline, "deadline"))??;
+    let elapsed = started.elapsed();
+    let left = remaining
+        .checked_sub(elapsed)
+        .ok_or((NativeHttpRefusal::Deadline, "deadline"))?;
+    if left.is_zero() {
+        return Err((NativeHttpRefusal::Deadline, "deadline"));
+    }
+    let (bytes, mime) = constructed
+        .fetch_bfl_image(locator, max_bytes, left)
+        .await
+        .map_err(|reason| (reason, fetch_reason(reason)))?;
+    let observed = constructed.observed_status();
+    Ok((bytes, mime, observed))
+}
+
+/// Closed static reason for a delivery fetch refusal; no payload is carried.
+fn fetch_reason(reason: NativeHttpRefusal) -> &'static str {
+    match reason {
+        NativeHttpRefusal::Deadline => "deadline",
+        NativeHttpRefusal::Cancelled => "cancelled",
+        NativeHttpRefusal::InvalidEndpoint => "url_contract",
+        NativeHttpRefusal::Redirect => "redirect_refused",
+        NativeHttpRefusal::ContentType => "content_type",
+        NativeHttpRefusal::ResponseTooLarge => "response_too_large",
+        NativeHttpRefusal::HeadersTooLarge => "headers_too_large",
+        NativeHttpRefusal::TooManyChunks => "too_many_chunks",
+        NativeHttpRefusal::RequestTooLarge => "request_too_large",
+        NativeHttpRefusal::InvalidLimits
+        | NativeHttpRefusal::InvalidConfiguration
+        | NativeHttpRefusal::InvalidCredential
+        | NativeHttpRefusal::ProviderDisabled => "transport_configuration",
+        NativeHttpRefusal::Unknown => "fetch_failed",
     }
 }
 

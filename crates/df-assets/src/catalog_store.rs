@@ -11,7 +11,7 @@ use crate::catalog_record::{
 };
 use crate::media_ids::{AssetId, AttemptId, ClaimToken, WriteId};
 use crate::media_request_key::MediaRequestKey;
-use crate::object_store::{AssetVariant, ObjectKey, ObjectVersion};
+use crate::object_store::{AssetVariant, ObjectKey, ObjectVersion, StorageOwner};
 use crate::upload_ticket::{UploadTicket, UploadTicketClaim};
 use crate::{AssetManifest, QuotaRefusal, QuotaScope};
 use df_types::{AccountId, CampaignId};
@@ -75,6 +75,82 @@ pub enum NotAdmitted {
 pub enum AdmitOutcome {
     Admitted,
     NotAdmitted(NotAdmitted),
+}
+
+/// One field of a no-campaign generated image admission names a different account.
+fn draft_account_of(
+    charge_scope: QuotaScope,
+    origin_account: Option<AccountId>,
+    audience: &Audience,
+    dedupe_scope: DedupeScope,
+    request_key_present: bool,
+    retention: RetentionClass,
+) -> Option<AccountId> {
+    let QuotaScope::Account(account) = charge_scope else {
+        return None;
+    };
+    if origin_account != Some(account)
+        || *audience != Audience::OwnerPrivate(account)
+        || dedupe_scope != DedupeScope::account(&account)
+        || retention != RetentionClass::Personal
+        || !request_key_present
+    {
+        return None;
+    }
+    Some(account)
+}
+
+/// The validated owner of an admission. `Some` is publishable; `None` is a legacy
+/// no-campaign non-generated row, admittable as before but never publishable. Campaign
+/// rows are returned untouched so this guard cannot tighten their semantics.
+pub fn admission_owner(admission: &Admission) -> Result<Option<StorageOwner>, NotAdmitted> {
+    if let Some(campaign) = admission.campaign {
+        return Ok(Some(StorageOwner::Campaign(campaign)));
+    }
+    if admission.audience == Audience::Withheld {
+        return Err(NotAdmitted::AudienceEmpty);
+    }
+    if admission.provenance != Provenance::Generated {
+        return Ok(None);
+    }
+    if admission.kind != AssetKind::Image {
+        return Err(NotAdmitted::OwnerUnsupported);
+    }
+    draft_account_of(
+        admission.charge_scope,
+        admission.origin_account,
+        &admission.audience,
+        admission.dedupe_scope,
+        admission.request_key.is_some(),
+        admission.retention,
+    )
+    .map_or(
+        Err(NotAdmitted::OwnerUnsupported),
+        |account| Ok(Some(StorageOwner::AccountDraft(account))),
+    )
+}
+
+/// The validated owner of a persisted row, rechecked on recovery. `None` keeps the
+/// previous `UnsupportedOwner` behaviour for legacy or mismatched no-campaign rows.
+pub fn record_owner(record: &AssetRecord) -> Option<StorageOwner> {
+    if let Some(campaign) = record.campaign {
+        return Some(StorageOwner::Campaign(campaign));
+    }
+    if record.audience == Audience::Withheld
+        || record.provenance != Provenance::Generated
+        || record.kind != AssetKind::Image
+    {
+        return None;
+    }
+    draft_account_of(
+        record.charge_scope,
+        record.origin_account,
+        &record.audience,
+        record.dedupe_scope,
+        record.request_key.is_some(),
+        record.retention,
+    )
+    .map(StorageOwner::AccountDraft)
 }
 
 /// What the hub learns for a request key (6.3).
