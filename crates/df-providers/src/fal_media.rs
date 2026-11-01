@@ -5,15 +5,14 @@ use std::{fmt, future::Future, net::SocketAddr, time::Duration};
 
 use df_model::checkpoint::{AssetKind, AssetReference, ExecutionMode};
 use df_provider_api::{
-    CheckedModalityRequest, ImageRequest, ImageSemantics, RequestBasis, RequestError,
-    RequestOwnerState, SoundRequest, SoundSemantics, VideoRequest, VideoSemantics,
+    CheckedModalityRequest, RequestBasis, RequestError, RequestOwnerState, SoundRequest,
+    SoundSemantics, VideoRequest, VideoSemantics,
 };
 use df_types::{Usage, UsageUnit};
 use serde_json::{Value, json};
 
 use crate::media_container::{
-    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_png_off_worker,
-    inspect_wave,
+    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_wave,
 };
 use crate::native_http::{NativeHttp, NativeHttpResponse};
 use crate::native_media_fetch::{FalCdnPin, NativeMediaFetch};
@@ -26,7 +25,6 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FalMediaFamily {
-    Image,
     Video,
     Sound,
 }
@@ -34,31 +32,16 @@ pub enum FalMediaFamily {
 impl FalMediaFamily {
     fn model(self) -> &'static str {
         match self {
-            Self::Image => "fal-ai/flux/schnell",
             Self::Video => "fal-ai/wan-25-preview/image-to-video",
             Self::Sound => "fal-ai/stable-audio-25/text-to-audio",
         }
     }
     fn unit(self) -> UsageUnit {
         match self {
-            Self::Image => UsageUnit::Image,
             Self::Video => UsageUnit::VideoMillisecond,
             Self::Sound => UsageUnit::AudioMillisecond,
         }
     }
-}
-
-/// Explicit request settings; unsupported choices refuse before submission.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FalImageProfile {
-    pub model: String,
-    pub width: u32,
-    pub height: u32,
-    pub images: u32,
-    pub steps: u32,
-    pub seed: u32,
-    pub safety: bool,
-    pub format: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -108,19 +91,15 @@ pub struct FalLoopFrames {
     pub end_exclusive: u64,
 }
 
-pub type FalImageSemantics = ImageSemantics<String, FalImageProfile>;
 pub type FalVideoSemantics = VideoSemantics<String, FalVideoProfile, FalReferenceFrame>;
 pub type FalSoundSemantics = SoundSemantics<String, FalSoundProfile, Option<FalLoopFrames>>;
-pub type FalImageBasis = RequestBasis<FalImageSemantics>;
 pub type FalVideoBasis = RequestBasis<FalVideoSemantics>;
 pub type FalSoundBasis = RequestBasis<FalSoundSemantics>;
-pub type FalImageJob<'a> = FalMediaJob<'a, FalImageSemantics>;
 pub type FalVideoJob<'a> = FalMediaJob<'a, FalVideoSemantics>;
 pub type FalSoundJob<'a> = FalMediaJob<'a, FalSoundSemantics>;
 pub type FalVideoCompletionEvent =
     df_provider_api::VideoEvent<ProviderRequestId, (), FalQueueObservation, Vec<EncodedFalMedia>>;
 
-pub type FalImageRequest = ImageRequest<String, FalImageProfile>;
 pub type FalVideoRequest = VideoRequest<String, FalVideoProfile, FalReferenceFrame>;
 pub type FalSoundRequest = SoundRequest<String, FalSoundProfile, Option<FalLoopFrames>>;
 
@@ -333,44 +312,6 @@ impl NativeFalMediaProvider {
             http,
             fetch,
         })
-    }
-
-    pub async fn submit_image<'a>(
-        &'a self,
-        request: &'a FalImageRequest,
-        owner: RequestOwnerState<'_, FalImageBasis>,
-        cancellation: impl Future<Output = ()>,
-    ) -> Result<FalImageJob<'a>, FalMediaError> {
-        let semantic = &request.checked().binding().semantic_basis.semantic;
-        let profile = &semantic.output_profile;
-        if self.config.family != FalMediaFamily::Image
-            || profile.model != FalMediaFamily::Image.model()
-            || !bounded_dimensions(profile.width, profile.height)
-            || profile.images == 0
-            || profile.images > 4
-            || profile.steps == 0
-            || profile.steps > 12
-            || profile.format != "png"
-        {
-            return Err(error(FalMediaReason::Profile, None));
-        }
-        if !semantic.references.is_empty() {
-            return Err(error(FalMediaReason::Reference, None));
-        }
-        validate_prompt(&semantic.prompt, 10_000)?;
-        let declared = request.checked().usage();
-        if declared.usage().unit() != UsageUnit::Image
-            || declared.usage().quantity() != u128::from(profile.images)
-            || !declared.duration().is_zero()
-            || declared.tokens() != 0
-        {
-            return Err(error(FalMediaReason::Profile, None));
-        }
-        self.submit(request.checked(), owner, json!({
-            "prompt":semantic.prompt,"image_size":{"width":profile.width,"height":profile.height},
-            "num_images":profile.images,"output_format":profile.format,"num_inference_steps":profile.steps,
-            "seed":profile.seed,"enable_safety_checker":profile.safety
-        }), ExpectedMedia::Image(profile.clone()), cancellation).await
     }
 
     pub async fn submit_video<'a>(
@@ -858,7 +799,6 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                 )
             })?;
             let (body, facts) = match self.expected {
-                ExpectedMedia::Image(_) => inspect_png_off_worker(body).await,
                 ExpectedMedia::Video(_) => inspect_mp4(&body).map(|facts| (body, facts)),
                 ExpectedMedia::Sound(_, _) => inspect_wave(&body).map(|facts| (body, facts)),
             }
@@ -955,14 +895,12 @@ impl<Semantic: Eq> PreparedFalMediaResponse<'_, Semantic> {
 }
 
 enum ExpectedMedia {
-    Image(FalImageProfile),
     Video(FalVideoProfile),
     Sound(FalSoundProfile, Option<FalLoopFrames>),
 }
 impl ExpectedMedia {
     fn mime(&self) -> &'static str {
         match self {
-            Self::Image(_) => "image/png",
             Self::Video(_) => "video/mp4",
             Self::Sound(_, _) => "audio/wav",
         }
@@ -980,16 +918,6 @@ fn output_files(
     id: &ProviderRequestId,
 ) -> Result<Vec<OutputFile>, FalMediaError> {
     let items: Vec<&Value> = match expected {
-        ExpectedMedia::Image(profile) => {
-            let values = value
-                .get("images")
-                .and_then(Value::as_array)
-                .ok_or_else(|| error(FalMediaReason::Metadata, Some(id)))?;
-            if values.len() != profile.images as usize {
-                return Err(error(FalMediaReason::Metadata, Some(id)));
-            }
-            values.iter().collect()
-        }
         ExpectedMedia::Video(_) => vec![
             value
                 .get("video")
@@ -1047,15 +975,6 @@ fn validate_output(
 ) -> Result<u128, FalMediaError> {
     let mismatch = || error(FalMediaReason::Metadata, Some(id));
     match (expected, facts) {
-        (ExpectedMedia::Image(p), EncodedMediaFacts::Png { width, height }) => {
-            if (width, height) != (p.width, p.height)
-                || metadata.get("width").and_then(Value::as_u64) != Some(u64::from(width))
-                || metadata.get("height").and_then(Value::as_u64) != Some(u64::from(height))
-            {
-                return Err(mismatch());
-            }
-            Ok(1)
-        }
         (
             ExpectedMedia::Video(p),
             EncodedMediaFacts::Mp4 {
@@ -1288,22 +1207,6 @@ fn parse_json(
     })
 }
 impl FalMediaCompletion {
-    pub fn into_image_event(
-        self,
-    ) -> Result<df_provider_api::ImageEvent<ProviderRequestId, Vec<EncodedFalMedia>>, FalMediaError>
-    {
-        if self.usage.unit() != UsageUnit::Image {
-            return Err(error(FalMediaReason::Profile, Some(&self.request_id)));
-        }
-        Ok(df_provider_api::ProviderEvent {
-            provider_request_id: df_provider_api::ProviderRequestId(self.request_id),
-            usage: self.usage,
-            kind: df_provider_api::ImageEventKind::Completed {
-                identity: self.identity,
-                output: self.outputs,
-            },
-        })
-    }
     pub fn into_video_event(self) -> Result<FalVideoCompletionEvent, FalMediaError> {
         if self.usage.unit() != UsageUnit::VideoMillisecond {
             return Err(error(FalMediaReason::Profile, Some(&self.request_id)));

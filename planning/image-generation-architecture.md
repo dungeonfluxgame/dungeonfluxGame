@@ -4,6 +4,8 @@ Date: 2026-10-27
 
 Status: Proposed architecture and implementation plan. No runtime changes made.
 
+Revised: 2026-11-01. Service-surface refinements: one public type, Generate authorization, watch with wait, deferred capacity, revocation, identity derivation, generic classification payloads, service invariants, a gap register and open decisions. The revision changes the proposal only; it implies no runtime change.
+
 Source inspected: `C:/Users/mreca/Desktop/dungeonfluxGame`. This document is saved in the chat workspace, separately from that checkout. Findings describe the inspected source, not a passing build or a live deployment. Freeze the exact commit and working-tree changes before implementation.
 
 ## Decision
@@ -108,7 +110,7 @@ Suggested internal modules, created only with their implementation:
 df-imagery/src/
   lib.rs              narrow public exports
   request.rs          validated inputs and profiles
-  service.rs          submit/status/watch/cancel facade
+  service.rs          request/read/watch/cancel/revoke facade
   recipe.rs           frozen stage plans and route policy
   scheduler.rs        bounded queues, permits, worker ownership
   attempts.rs         retry/recovery decisions using existing authority
@@ -128,19 +130,80 @@ Deterministically composed party/cast reference sheets currently exist as in-mem
 One service API means one route into generation, generative editing and local transformation, with a small lifecycle surface. It does not mean hiding polling or cancellation inside a single long blocking function. Proposed signatures are design sketches, not a frozen new duplicate type system:
 
 ```rust
-impl ImageService {
-    async fn submit(&self, request: AuthorizedImageRequest)
-        -> Result<Submission, SubmitError>;
-    async fn status(&self, access: ImageAccess, job: ImageJobId)
-        -> Result<ImageStatus, LookupError>;
-    async fn watch(&self, access: ImageAccess, job: ImageJobId)
-        -> Result<ImageUpdates, LookupError>;
-    async fn cancel(&self, access: ImageAccess, interest: ImageInterestId, reason: CancelReason)
-        -> Result<CancelOutcome, CancelError>;
+impl ImageService {   // one public type; ports are injected as trait objects (see Surface and layering)
+    async fn request(&self, principal: &P, request: &ImageRequest)
+        -> Result<RequestOutcome, ImageServiceError>;
+    async fn read(&self, principal: &P, handle: &OperationHandle)
+        -> Result<ImageDemandView, ImageServiceError>;
+    async fn watch(&self, principal: &P, handle: &OperationHandle, after_revision: u64, wait: WaitBudget)
+        -> Result<WatchObservation, ImageServiceError>;
+    async fn cancel(&self, principal: &P, handle: &OperationHandle)
+        -> Result<CancelOutcome, ImageServiceError>;
+    async fn revoke(&self, admin: &AdminAccess, scope: RevocationScope, reason: RevocationReason)
+        -> Result<RevocationReport, ImageServiceError>;   // operator path only
 }
 ```
 
-The composition root separately starts and drains the service. `watch` is bounded/coalesced state notification with revision numbers; `status` is the recovery path. Dropping a watcher does not cancel the job. `Submission` includes a consumer-interest identity bound to its authenticated operation and lifetime. Consumer cancellation withdraws only that interest; another authorized consumer's interest keeps shared work alive. Owner-wide shutdown/revocation is a separately authorized administrative operation. There is no public `render_creator`, `raw_edit`, vendor factory, arbitrary callback executor, or special frame bypass.
+The composition root separately starts and drains the service. `watch` is a bounded, coalesced notification with revision numbers (see Watch); `read` is the recovery path. Dropping a watcher does not cancel the job. `RequestOutcome` carries a consumer-interest handle bound to its authenticated operation and lifetime. Consumer cancellation withdraws only that interest; another authorized consumer's interest keeps shared work alive. Owner-wide revocation is a separate, administrator-only operation (see Revocation). There is no public `render_creator`, `raw_edit`, vendor factory, arbitrary callback executor, or special frame bypass.
+
+The method names above are the names in the code (`request`, `read`, `watch`, `cancel`). The earlier sketch used `submit` and `status`; those names are retired. The sketch is the target surface, and the gap register at the end of this section records where the code differs.
+
+### Surface and layering
+
+- **One public type.** `ImageService` takes one type parameter, the principal. Its ports (journal, clock, identifiers, authorizer, results, observations) are injected as trait objects at composition. The six-parameter form (`crates/df-imagery/src/service.rs:65`) becomes an internal detail. Hosts hold `Arc<dyn ImageServiceApi<Principal = P>>` (`service/consumer.rs`). Consumers and wrappers see one shape, and tests still inject fakes through the same trait objects.
+- **No defaulted analysis methods.** `request_analysis` and `canonical_analysis_fingerprint` become required methods of `ImageServiceApi`, or move to a separate `ImageAnalysisApi` trait. A default that returns `Unavailable` is not allowed, because a missing override must fail at compile time rather than return a quiet refusal.
+- **Wrappers do not decide policy.** A host wrapper may establish the principal and resolve references. It must not make a second policy decision for an action the service also decides. Each request has one decision point per action (see Authorization).
+
+### Authorization
+
+- **Actions.** `ServiceAction` gains `Generate`, which covers creating new paid demand or starting new work for an operation, and `Analyze`, which covers analysis requests. `Read` and `Cancel` keep their meaning. Creating paid demand is never authorized as `Read`.
+- **Current gap.** `request_inner` checks new demand with `authorize_owner(..., ServiceAction::Read)` (`service.rs:277`). A principal allowed to view an owner's images would pass that check, and would also create paid work if `authorize_request` allowed the request. The owner-level check for new demand must be `Generate`. `authorize_request` keeps the per-request scope: references, audience, purpose and budget.
+- **Denial stays opaque.** `AuthDenied` carries no reason. Denial, absence and cross-owner access all return `NotAuthorizedOrNotFound`.
+- **One decision per action.** Each public call makes one policy decision per action. Re-checking stored views on read (`authorize_stored`) is not a duplicate: it checks current grants each time a view is produced.
+
+### Watch
+
+- `watch(principal, handle, after_revision, wait)` returns `Changed` as soon as the job revision exceeds `after_revision`. It returns `Unchanged { revision }` when `wait` elapses. `wait` is capped (proposed: 30 seconds) and defaults to zero for a plain check.
+- Wake-ups come from an in-process transition signal per job. Each wake-up, and each timeout, is followed by one database read. Waiters are bounded per owner and in total. A caller over the bound receives a typed, retryable `Unavailable`; it is not queued.
+- Dropping a watch call does not cancel work and does not hold waiter capacity after the call returns.
+- Polling at `poll_interval` remains a fallback for hosts without the signal. In-process consumers use `watch` with a wait.
+- **Current gap.** `watch` returns immediately (`service.rs:330`), and the caller in `gameplay/imagery/central.rs` sleeps and polls. Each waiting caller therefore costs one database round trip per interval.
+
+### Admission outcomes and deferred capacity
+
+- `RequestOutcome` covers the submission cases. A ready cache result is `ReusedArtifact`. An existing job is `Replayed`, or `Reused` when the caller shares a compatible job. A new job is `Recorded`. Capacity pressure is `Deferred`, which is new. A rejected request is `Refused(Refusal)`.
+- `Deferred { reason: CapacityReason, retry_after_ms: Option<u64> }` is returned when a queue-count, queued-byte, memory or per-account concurrency bound is reached. A deferred request writes no journal row and creates no interest. The caller retries with the same operation ID.
+- A refusal is final for that request. A deferral is retryable and leaves no trace in the journal.
+- **Current gap.** `RequestOutcome` has no deferred variant (`service/types.rs`), so capacity pressure has no typed, retryable answer at the boundary.
+
+### Revocation
+
+- `revoke` is an operator path with its own `AdminAccess` principal. Consumer principals cannot hold it. The scope is one owner, or one owner plus one run.
+- Effect: unsent work is retired and every interest in the scope is withdrawn. Work already dispatched continues under its existing uncertainty rules. No supplier cancellation is claimed.
+- The report gives counts of retired jobs, withdrawn interests, jobs still in flight and uncertain liabilities. Each revocation is audited with actor, scope and reason through `df-observe`. Cached output follows its own retention rules.
+- **Current gap.** No owner-wide operation exists at the service boundary. Runtime shutdown drains workers but does not retire demand.
+
+### Classification payloads
+
+- Classification becomes a generic pipeline stage. A stage names a `ClassifierId` and a schema version. Its request payload and result are opaque to `df-imagery`. The owning consumer's adapter validates them as versioned, typed bytes. The stage keeps the admission, attempt identity and durable attachment described above.
+- Creator types (`CreatorAssessment`, `CreatorCategory`, `CreatorRoute` in `service/types.rs`) and `ImageRequest.creator` (`request.rs:334`) move into the creator consumer's module. Until the consumer migration phase, the current names remain as re-exports so that existing callers compile.
+- **Current gap.** The generic request and public types name creator categories and routes directly, so each new classifier changes the shared API.
+
+### Gap register (current code, 2026-11-01 working tree)
+
+| Area | Current code | Resolved in |
+| --- | --- | --- |
+| Surface names | `request`, `read`, `watch`, `cancel`; the sketch used `submit` and `status` | Surface and layering |
+| Layering | Six-parameter `ImageService<J, C, I, A, R, O>` (`service.rs:65`) | Surface and layering |
+| Defaults | Analysis trait methods default to `Unavailable` (`service/consumer.rs:18`, `:25`) | Surface and layering |
+| Authorization | New demand checked as `Read` (`service.rs:277`); actions are `Read` and `Cancel` only (`service/ports.rs:21`) | Authorization |
+| Watch | Returns immediately (`service.rs:330`); the caller polls (`gameplay/imagery/central.rs`) | Watch |
+| Capacity | No deferred outcome in `RequestOutcome` (`service/types.rs`) | Admission outcomes and deferred capacity |
+| Revocation | No owner-wide operation at the boundary | Revocation |
+| Identity | Consumer-side SHA-256 derivation (`gameplay/imagery/central.rs`, about lines 886–892); configuration fingerprint included (dungeonfluxgame/dungeonfluxGame#1484) | Identity, and open decision D1 |
+| Classification | Creator types in the generic API (`request.rs:334`, `service/types.rs`) | Classification payloads |
+
+Paths in the register are relative to `crates/df-imagery/src/` unless the row names the `df-tools` crate.
 
 ### Request contents
 
@@ -160,13 +223,13 @@ The composition root separately starts and drains the service. `watch` is bounde
 
 For provider-backed stages, the service freezes the resolved provider-account identity, backend/profile, controllable model/version settings, route/classification version, effective output settings, quality policy and retry policy before each affected dispatch. Local stages freeze their transform/executor profile without a supplier identity. For CLI-managed image models, freeze the capability contract and record the actual image-model identity afterward when exposed; unknown identity remains unknown. Callers select the intended picture, not a supplier. Existing CLI/settings provider choices are mapped into versioned service configuration at bootstrap.
 
-Creator classification is itself a potentially paid stage, not a free admission preflight. Submission first freezes a classification-stage plan without network I/O. That stage gets its own recorded admission/attempt, and its result is durably attached to the job. The service then resolves and freezes the selected generation route and obtains that stage's admission. A refusal/uncertain classification stops there. Repeated polling or duplicate submissions reuse the recorded decision. Directly controlled classification, inspection and background-removal calls require their corresponding dispatch record/accounting admission. Opaque work inside Codex CLI uses the admitted execution-envelope contract below; observable internal calls are evidence, not falsely claimed independent admissions.
+Creator classification is itself a potentially paid stage, not a free admission preflight. The request first freezes a classification-stage plan without network I/O. That stage gets its own recorded admission/attempt, and its result is durably attached to the job. The service then resolves and freezes the selected generation route and obtains that stage's admission. A refusal/uncertain classification stops there. Repeated polling or duplicate submissions reuse the recorded decision. Directly controlled classification, inspection and background-removal calls require their corresponding dispatch record/accounting admission. Opaque work inside Codex CLI uses the admitted execution-envelope contract below; observable internal calls are evidence, not falsely claimed independent admissions.
 
-### Submission and result
+### Request outcome and result
 
-`Submission` distinguishes a ready cache result, an existing job, a newly accepted job, and deferred capacity. Typed refusals distinguish authorization, invalid request, operation conflict, unsupported profile, disabled capability, unavailable references, and admission refusal.
+`RequestOutcome` distinguishes a ready cache result, an existing job, a newly accepted job, deferred capacity and refusal (see Admission outcomes and deferred capacity). Typed refusals distinguish authorization, invalid request, operation conflict, unsupported profile, disabled capability, unavailable references, and admission refusal.
 
-`ImageStatus` exposes queued/processing/ready/failed/cancelled/awaiting-reconciliation with a revision and a safe reason. A ready result contains a primary `AssetRef`, dimensions, MIME, alpha facts, digest, source binding, and explicit quality evidence. For recipes with variants, it also contains named required/optional variant statuses and authorized references as defined in the companion plan. Ready requires all required outputs; optional failure does not discard the primary result, and pending optional work retains an owned lifecycle visible in status. Source and variant quality evidence remain distinct. It contains no provider credentials, signed remote supplier URL, or raw private prompt.
+The demand view returned by `read` (`ImageDemandView`) exposes queued/processing/ready/failed/cancelled/awaiting-reconciliation with a revision and a safe reason. The code's `ImageExecutionState` maps onto these states, with `Withdrawn` standing for cancelled. It also has `NeedsRevision`, `Uncertain` and `Unknown`, which must remain distinct from failure. A ready result contains a primary `AssetRef`, dimensions, MIME, alpha facts, digest, source binding, and explicit quality evidence. For recipes with variants, it also contains named required/optional variant statuses and authorized references as defined in the companion plan. Ready requires all required outputs; optional failure does not discard the primary result, and pending optional work retains an owned lifecycle visible in status. Source and variant quality evidence remain distinct. It contains no provider credentials, signed remote supplier URL, or raw private prompt.
 
 Quality is separate from availability: `Passed`, `Unjudged(reason)`, or `AcceptedWithKnownDefect(reason)` may describe a ready result under the selected compatibility policy; rejected candidates are not ready. Strict verification can be a separately selected later policy. Preserve today's fail-open and visible-text exceptions explicitly during extraction, rather than relabeling them as passed or changing behavior unnoticed.
 
@@ -178,7 +241,7 @@ There are three different identities:
 2. **Image request key**: reuse-compatible resolved recipe, inputs, audience and scope.
 3. **Provider attempt/stage**: one potentially billable controlled dispatch, plus its provider job ID if returned. Direct classification, generation, alpha extraction, inspection and a corrective generation each have distinct durable child attempt IDs under the parent image job. Polling the same supplier job retains its child attempt ID. A CLI invocation with opaque internal work is one admitted execution envelope; recorded inner calls are linked observations and are not charged again as independent attempts.
 
-Use the existing `df-assets::MediaRequestKey` length-prefixed, audience-aware scheme as the base. Extend/version its schema where necessary for output format, effective dimensions/quality, template/route/inspection policy revisions, stage recipe, and regeneration identity. Do not assume the existing v2 struct already contains every required field. Centralize derivation; callers do not hand-roll hashes. Distinguish a reusable base content key from an explicitly fresh generation key so a new operation can still reuse ordinary cached content.
+Use the existing `df-assets::MediaRequestKey` length-prefixed, audience-aware scheme as the base. Extend/version its schema where necessary for output format, effective dimensions/quality, template/route/inspection policy revisions, stage recipe, and regeneration identity. Do not assume the existing v2 struct already contains every required field. Centralize derivation; callers do not hand-roll hashes. Concretely, `df-imagery` exposes one constructor that derives the scoped `OperationIdentity` from the authenticated scope, a typed consumer subject and the canonical request fingerprint. Consumers pass typed subjects and never compute digests themselves. The consumer-side SHA-256 derivation in `gameplay/imagery/central.rs` (about lines 886–892) is a gap to close during consumer migration, not a pattern to copy. Whether the configuration fingerprint belongs in the derived ID is open decision D1. Distinguish a reusable base content key from an explicitly fresh generation key so a new operation can still reuse ordinary cached content.
 
 The catalog's storage lifecycle (`Uploading/Quarantined/Validated/Ready/...`) is not the supplier attempt lifecycle. Preserve each authority. Compose the existing media admission and finance attempt records under the established lock/transaction contract; extend missing fields in those owners after an implementation audit. The current catalog has one asset-attempt field: phase 1 must freeze an explicit parent job/catalog-attempt to child supplier-attempt mapping before dispatch is enabled. Do not overload that single field to settle several billed calls, assume currently separate Rust ID types are interchangeable, or silently override the existing single-attempt correlation contract. Record the necessary multi-stage extension in the ownership ADR and persistence/finance contract. Do not create an independent imagery SQLite journal or monetary ledger.
 
@@ -195,6 +258,22 @@ Required execution sequence for provider-backed recipes follows below. Local sta
 Providers without an idempotent submit or lookup cannot support an absolute exactly-once guarantee across a network crash. The contract is **no automatic duplicate paid dispatch after uncertainty**. A fresh explicit retry requires a new admitted attempt, while the old liability remains recorded. Preserve the character-frame prior-attempt fence throughout migration.
 
 Local development preserves its current accounting policy via an explicit local adapter; the extraction does not silently add a user spend cap, require a customer wallet, or enable hosted billing. **Local and hosted execution both require durable attempt identity and the same conservative unknown-outcome recovery semantics.** Their financial admission policies may differ. Neither mode may regress an existing durable prior-attempt guard. Project-wide completion requires proving restart protection in both modes, not just providing a hosted interface.
+
+## Service invariants and preserved guarantees
+
+The current design and code already provide these guarantees. The migration must not regress any of them. Each one is a test target in the verification matrix.
+
+1. The same operation ID with a different fingerprint or intent returns `OperationConflict`. It is never reinterpreted.
+2. Denial, absence and cross-owner access look the same to the caller.
+3. Replay returns the original stored outcome, including after expiry, and never creates work.
+4. `Unknown` is a distinct terminal fact. No path resubmits a request whose dispatch may have been accepted, except a new admitted attempt that an operator explicitly requests.
+5. A ready-cache hit makes no provider call and reserves no spend.
+6. Cancelling one interest never affects another interest's job.
+7. Stored snapshots (intent, configuration and recipe) are immutable. A later configuration change never alters a replayed operation.
+8. Every public call makes one policy decision per action. No wrapper overrides it.
+9. Private audiences never produce a cross-audience read, even when the bytes match.
+10. Refused and deferred are distinct. A deferral writes nothing.
+11. Purposes, operations, refusals and execution states are closed typed enums. No free-text status is part of the contract.
 
 ## Scheduling, cancellation and retry ownership
 
@@ -243,14 +322,14 @@ Read-only inspection on 2026-10-27 found installed `codex-cli 0.164.0`, with `im
 ### Execution through the shared API
 
 ```text
-ImageService::submit(authorized request)
+ImageService::request(principal, request)
     -> normal operation lookup / stage admission / backend selection
     -> resolve and stage authorized reference images
     -> Codex CLI invocation owned by the image worker
     -> parse progress + collect generated image artifacts
     -> normal byte/format/quality validation
     -> df-assets publication
-    -> ordinary ImageStatus::Ready and AssetRef
+    -> ordinary ready demand view (read) and AssetRef
 ```
 
 The backend assembles the CLI prompt and arguments from the frozen request. Use native argument arrays and stdin, not interpolated shell commands. Treat user-supplied appearance/scene text as image content. Reference files are exact authorized, digest-verified inputs staged in the job's working area. Deterministic reference-sheet composition and output normalization remain supported.
@@ -287,11 +366,11 @@ Official documentation checked for this design: [non-interactive execution and J
 
 `df-imagery::ImageConfig` is the canonical validated configuration. The launcher, run scripts, server bootstrap and development control surface all translate into that model; consumers never independently read image environment variables or decide whether to start a provider. The crate reads a supplied snapshot, not ambient environment on every call.
 
-Use the existing `config/dungeonflux.toml` as the operator-facing file, with an `[imagery]` section. Keep the old `[pictures]` fields and environment variables as documented compatibility aliases while callers migrate. Configuration fields and examples below are **proposed**, not already implemented. The existing launcher serializes settings into environment variables today; that adapter must preserve explicit overrides and their source rather than accidentally giving generated defaults higher priority.
+Use the existing `config/dungeonflux.toml` as the operator-facing file, with an `[imagery]` section. Keep the old `[pictures]` fields and environment variables as documented compatibility aliases while callers migrate. Configuration fields and examples below are the preserved full target; actual current support versus missing work is mapped field-by-field in [the development configuration amendment](imagery-implementation/development-configuration.md), which also governs flexible dev profiles and the no-arbitrary-restriction rule. The supplied-input overlay (precedence, aliases, refusal) is implemented in `df-imagery/src/config_overlay.rs`; the local runtime owner is implemented (`df-imagery/src/config_control.rs`), while named output/CLI profiles and the global dispatch fence are still target. The existing launcher serializes settings into environment variables today; that adapter must preserve explicit overrides and their source rather than accidentally giving generated defaults higher priority.
 
-Precedence, low to high: built-in defaults -> saved TOML -> explicitly supplied environment overrides -> explicit launch arguments -> authorized runtime override. Legacy aliases are normalized within their source layer; contradictory new/legacy values in the same layer produce a useful field-level configuration error. Read effective configuration with its source and revision so an environment override cannot silently defeat a launcher setting.
+Precedence, low to high: built-in defaults -> saved TOML -> legacy environment overrides -> new `DF_IMAGERY_*` environment overrides -> explicit launch arguments -> authorized runtime override. Within the file layer contradictory new/legacy spellings for one field conflict when their values differ; legacy-env and new-env are distinct layers and a present new value wins silently over a legacy one. This deliberately amends any looser same-layer wording elsewhere: same-layer conflict applies to the file layer only. Read effective configuration with its source and revision so an environment override cannot silently defeat a launcher setting.
 
-The development/configuration interface exposes read-effective, validate, apply-with-expected-revision, reset-runtime-overrides, and save-to-file actions through the existing authenticated control surface. This is an administrative configuration API alongside `ImageService`, not another generation method. Runtime changes apply without a rebuild. Saving persists them for future starts; a runtime-only change is identified as temporary. Launcher controls and CLI tooling use the same validator and clearly show overridden values. Hosted deployment uses its existing operator configuration channel.
+The development/configuration interface exposes a local read-effective, pure validate/preview, apply-with-expected-revision, reset-runtime-overrides, and launcher-owned revision-consistent save through the existing authenticated control surface. This is an administrative configuration API alongside `ImageService`, not another generation method; its exact contract, local-only application versus the acknowledged dispatch fence, and invalid-update rollback are specified in [the development configuration amendment](imagery-implementation/development-configuration.md#8-runtime-configuration-owner-contract). The local owner is implemented; the global fence is still target: `ImageService::new` binds one snapshot for the service lifetime today, and binding service snapshots to owner revisions is later integration work. Runtime changes apply without a rebuild. Saving persists them for future starts through the launcher file owner; a runtime-only change is identified as temporary. Launcher controls and CLI tooling use the same validator and clearly show overridden values. Hosted deployment uses its existing operator configuration channel.
 
 ### Settings to expose
 
@@ -301,7 +380,7 @@ The development/configuration interface exposes read-effective, validate, apply-
 | Local transforms | Enabled state, profiles, CPU concurrency, decoded-memory/output limits, queue/deadline | Separate local resource permits; no supplier calls; see companion plan |
 | Purpose | Enabled state and optional backend/output overrides for every `ImagePurpose` | Independently control portraits, canonical art, scene plates/edits, expressions, items, murals, combat stills and animation frames |
 | Backend | Enabled state, account/auth reference, backend-supported model/profile settings, concurrency | API and CLI backends use the same selection mechanism; no hidden secondary enable switch |
-| CLI | Executable, supported CLI profile, optional agent model, job working directory, concurrency | Authentication uses the configured CLI account; agent model selection is not an image-model guarantee |
+| CLI (TARGET settings; no executable allowlist shape) | Executable, supported CLI profile, optional agent model, job working directory, concurrency | Authentication uses the configured CLI account; agent model selection is not an image-model guarantee; executable choice is intentional deployment policy at composition, never an admission allowlist |
 | Scheduling | Foreground/presence/background limits, pending count/bytes, queue age, job/stage deadlines | Finite resource bounds with configurable defaults rather than hard-coded product ceilings |
 | Refresh/prefetch | Minimum refresh interval, speculative enablement, lead time, successor count | Tune image churn and preparation separately from gameplay/presentation timing |
 | Output | Quality, size, format/alpha and development/production profile by purpose | Checked against backend capabilities and the consumer's actual output contract |
@@ -322,7 +401,7 @@ job_deadline_seconds = 240
 
 [imagery.backends.codex_cli]
 enabled = true
-executable = "codex"
+# TARGET, refused as unknown today; no allowlist shape: executable = "codex"
 max_concurrent_jobs = 2
 
 [imagery.purposes.creator_portrait]
@@ -369,7 +448,7 @@ Disable the entire image interface with `[imagery].mode = "off"` or `DF_IMAGERY_
 | Change | New/queued work | Already dispatched work | Existing authorized images |
 | --- | --- | --- | --- |
 | `mode = off` | New submissions return `Disabled`; retire unstarted stages, including classifier, checks and transforms | Finish the already-started stage without starting another effect/provider stage; publish only if the frozen acceptance contract can be satisfied | Remain readable; current displays keep their fallback/current image |
-| `mode = cache-only` | Matching ready results may be reused; misses return `PreparedMiss`; no new provider or local transform stage, including from the old queue | Same drain rule as off | Remain readable |
+| `mode = cache-only` | Matching ready results may be reused; misses return `CacheOnlyMiss`; no new provider or local transform stage, including from the old queue | Same drain rule as off | Remain readable |
 | `mode = local-only` | Ready results and local transforms allowed; no new provider-backed stage or CLI launch | Started provider stages drain; local completion allowed only when no further provider stage is required | Remain readable |
 | Purpose disabled | New demand for that purpose returns `Disabled`; remove its queued interest | Other coalesced interests may still need the work; no new stages solely for the disabled purpose | Remain readable; disablement does not revoke sharing |
 | Backend disabled | No new dispatch to that backend; unresolved demand reports its disabled route | Drain already-started work; preserve result/usage evidence | Valid cache hits remain reusable without dispatch |
@@ -435,9 +514,9 @@ Rollout selects exactly one execution owner for a request. Shadow comparisons ma
 | Phase | Deliverable | Gate before proceeding |
 | --- | --- | --- |
 | 0. Freeze baseline | Exact revision/configuration; inventory of every constructor/call site; recorded current creator/frame/plate behaviors; audit existing catalog, finance and request-key capabilities; inspect CLI image invocation/artifact contract | Every consumer/provider in this document mapped to reachable code or explicitly test-only; existing failures recorded separately; CLI text-only behavior distinguished from new image support |
-| 1. Freeze contract | Add `df-imagery` with narrow validated types, service facade, fake backend, configuration schema/precedence, shared cost contract, ownership rules and architecture guard | Contract tests prove operation conflict/reuse, prepared-only behavior, unauthorized input refusal and bounded status/watch; validate legacy setting mapping and cost identity; no new live feature |
+| 1. Freeze contract | Add `df-imagery` with narrow validated types, service facade, fake backend, configuration schema/precedence, shared cost contract, ownership rules and architecture guard | Contract tests prove operation conflict/reuse, prepared-only behavior, unauthorized input refusal and bounded read/watch; `Generate` is distinct from `Read`; watch wakes on revision change and times out to `Unchanged`; a deferred outcome writes no journal row; revocation is admin-only and audited; identity derivation goes only through the central constructor; validate legacy setting mapping and cost identity; no new live feature |
 | 2. Central execution | Move image backends, routing, normalization, retries, quota breaker, inspection policy and worker ownership; add the Codex CLI backend/event adapter; adapt current storage/metering | Loopback/fake-process tests for each backend and failure stage; old imagery facade only delegates; one dispatch owner; no exact-version CLI pin or inherited one-process restriction |
-| 3. Migrate every consumer | Canonical/scene/item/mural/kill stills, creator workflow, animation frames, directed dev paths; launcher/run-script/config controls and image cost reporting | Each consumer uses `submit`; creator private preview/accept and frame retry fence preserved; global disable reaches every path; cost attribution complete; no live shadow requests |
+| 3. Migrate every consumer | Canonical/scene/item/mural/kill stills, creator workflow, animation frames, directed dev paths; launcher/run-script/config controls and image cost reporting | Each consumer uses `request`; creator private preview/accept and frame retry fence preserved; global disable reaches every path; cost attribution complete; no live shadow requests |
 | 4. Durable integration | Reuse/extend asset catalog, finance admission, attempt records, request key and publication; import legacy cache/attempt metadata safely | Crash matrix below passes on actual local PostgreSQL adapters; local and hosted policy modes remain distinct; no unknown-outcome resend |
 | 5. Delete bypasses | Remove old public image adapters and `submit_image`, redundant image flights/cache/retry owners and temporary execution shims; keep necessary read compatibility only | Dependency/AST/endpoint guards enforced with no migration exemptions; all known consumers pass focused integration checks |
 | 6. Integrated acceptance | Native/WASM checks, browser creator/TV/phone flows, cold/warm cache and restart runs, Codex CLI generation/edit acceptance, scoped live-provider visual sample | Independent evaluation against current build; no acceptance based only on unit-test counts; source/docs map updated; CLI support demonstrated through the same consumer API |
@@ -477,6 +556,12 @@ Required documentation changes at implementation: crate/dependency map, subsyste
 | Crash recovery | In both local and hosted modes: crash before admission commit, after commit/before send, after send/before receipt, after job ID, after classification/before route freeze, after bytes staged, after publication/before settlement; recover without blind paid resend or repeated paid classification |
 | Scheduling | Foreground remains responsive with speculative backlog; bounded memory and queue age; per-account concurrency; no late prefetch replacing current plate |
 | Compatibility | Existing accepted portrait URLs and stored images survive import/restart; legacy attempt evidence blocks automatic paid replay |
+| Surface | One public type; analysis methods have no defaulted `Unavailable` body, so an implementer without them fails to compile |
+| Authorization | A read-only grant cannot create demand; a `Generate` denial is indistinguishable from absence; one policy decision per call |
+| Watch | Wake-up on revision change; timeout returns `Unchanged`; N waiters produce a bounded number of reads; a caller over the waiter cap gets a retryable `Unavailable` |
+| Deferred | Capacity bound returns `Deferred` with no journal row; the same operation ID succeeds after capacity frees |
+| Revocation | Admin principal only; unsent work retired; in-flight and uncertain counts reported; no supplier-cancel claim |
+| Classification | Opaque versioned stage payload; the creator adapter refuses an unknown schema version as `InvalidRequest` |
 
 Use controlled clocks, faithful fake providers and fault-injected stores for ordinary tests. Run targeted native tests and Clippy for affected crates, native compilation, and the established `df-tools` WASM check for consumer changes. Classify inherited failing/skipped tests; never claim a clean baseline by hiding them.
 
@@ -499,7 +584,20 @@ Completion means:
 - Unknown provider outcomes never trigger automatic duplicate paid generation.
 - Old assets remain usable without a regeneration bill or broader access.
 - Regression guards, focused integration/fault tests and independent browser acceptance pass on the same recorded build.
+- `ImageService` has one public type. Each invariant in the service-invariants section has a passing test, and each gap in the gap register is closed or explicitly deferred by a recorded decision.
 - Remaining policy changes, such as strict quality gates or new local spend caps, are separate decisions rather than hidden in this refactor.
+
+## Open decisions
+
+These need an owner's decision before the phase that depends on them. Each row gives the proposed default that the spec assumes until the decision is recorded.
+
+| ID | Decision | Proposed default | Decision owner |
+| --- | --- | --- | --- |
+| D1 | Whether the configuration fingerprint belongs in the derived operation ID (dungeonfluxgame/dungeonfluxGame#1484) | Exclude it. Replay follows the frozen configuration snapshot. Starting new work requires an explicit `Regenerate` nonce, and the spend is shown before it starts. | Project owner |
+| D2 | Who holds `Generate` | Host policy grants it per principal and owner. Read-only roles are denied by default. | Project owner, with hosted security |
+| D3 | Maximum watch wait and waiter caps | 30-second wait cap. Waiter caps derive from scheduler capacity. | Runtime owner |
+| D4 | Principal allowed to call `revoke` | A dedicated operator role, audited. No consumer principal may hold it. | Project owner |
+| D5 | Classifier payload versioning | Each classifier declares its schema versions. An unknown version is refused as `InvalidRequest`. | Creator consumer owner |
 
 ## Source anchors
 

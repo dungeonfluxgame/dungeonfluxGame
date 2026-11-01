@@ -2,14 +2,14 @@
 //!
 //! The encoded bytes always describe the delivered variant exactly: opaque
 //! outputs carry no alpha, preserved alpha round-trips, and matte outputs
-//! are flattened onto their explicit color in linear light. Lossy WebP has
-//! no encoder in the pinned library, so it is refused instead of silently
-//! mapped to lossless. Every encoder writes through the bounded writer, so
-//! encoding stops at the output limit instead of measuring afterwards.
+//! are flattened onto their explicit color in linear light. Lossless codecs
+//! write through the bounded writer; lossy WebP goes through the pinned
+//! native encoder with the same output limit on its writer, so encoding
+//! stops at the limit instead of measuring afterwards.
 
 use std::io::{Seek, SeekFrom, Write};
 
-use image::{ExtendedColorType, GenericImageView, ImageEncoder, RgbImage, RgbaImage};
+use image::{ExtendedColorType, ImageEncoder, RgbImage, RgbaImage};
 
 use super::RasterError;
 use super::bounds::LiveBudget;
@@ -55,21 +55,37 @@ impl BoundedWriter {
         }
         Ok(())
     }
+
+    fn reserve_exact_for(&mut self, additional: usize) -> std::io::Result<()> {
+        // Vec growth can otherwise retain capacity above the logical limit,
+        // so every growth requests exactly what the write needs. Failure
+        // stays QuotaExceeded so the existing mapper reports OutputTooLarge.
+        if self.buf.try_reserve_exact(additional).is_err() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                "output limit",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Write for BoundedWriter {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
         self.check_capacity(data.len())?;
         if self.pos == self.buf.len() {
+            self.reserve_exact_for(data.len())?;
             self.buf.extend_from_slice(data);
         } else {
-            let end = self.pos + data.len();
+            let end = self.pos.saturating_add(data.len());
             if end > self.buf.len() {
+                let grown = end.saturating_sub(self.buf.len());
+                self.reserve_exact_for(grown)?;
                 self.buf.resize(end, 0);
             }
             self.buf[self.pos..end].copy_from_slice(data);
         }
-        self.pos += data.len();
+        self.pos = self.pos.saturating_add(data.len());
         Ok(data.len())
     }
 
@@ -84,7 +100,9 @@ impl Seek for BoundedWriter {
         // integer boundary; `i128` keeps the delta math overflow-free.
         let next = match pos {
             SeekFrom::Start(offset) => offset,
-            SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128).max(0) as u64,
+            SeekFrom::Current(delta) => {
+                (self.pos as i128).saturating_add(delta as i128).max(0) as u64
+            }
             SeekFrom::End(delta) => (self.buf.len() as i128)
                 .saturating_add(delta as i128)
                 .max(0) as u64,
@@ -101,21 +119,23 @@ impl Seek for BoundedWriter {
 }
 
 fn map_image_error(error: image::ImageError, budget: &LiveBudget) -> RasterError {
-    if let image::ImageError::IoError(io) = &error {
-        if io.kind() == std::io::ErrorKind::QuotaExceeded {
-            return RasterError::OutputTooLarge {
-                len_bytes: budget.max_output_bytes().saturating_add(1),
-            };
-        }
+    // The bounded writer's only failure mode is the output quota, so any
+    // I/O error out of an encoder writing through it is the limit, whatever
+    // kind the pinned encoder preserved. Other encoder failures stay
+    // EncodeFailed and the post-write length check keeps its own mapping.
+    if matches!(error, image::ImageError::IoError(_)) {
+        return RasterError::OutputTooLarge {
+            len_bytes: budget.max_output_bytes().saturating_add(1),
+        };
     }
     RasterError::EncodeFailed
 }
 
 /// Validates the output against the actual raster alpha, flattens when the
-/// spec names a matte, and encodes once through the bounded writer. Large
-/// pixel loops yield to the cancellation check; library encoders are bounded
-/// by the writer and checked before and after because they cannot yield
-/// mid-call.
+/// spec names a matte, and encodes once. Large pixel loops yield to the
+/// cancellation check; both the bounded writer and the native WebP writer
+/// stop at the output limit, and outputs are checked before and after
+/// because encoders cannot yield mid-call.
 pub(crate) fn encode_output(
     image: &RgbaImage,
     output: &RasterOutputSpec,
@@ -128,15 +148,26 @@ pub(crate) fn encode_output(
         .map_err(RasterError::InvalidOutput)?;
     let encoding = output.encoding();
     check_cancel()?;
+    let (width_px, height_px) = image.dimensions();
+    let caller_rgba_bytes = super::bounds::rgba_bytes(width_px, height_px);
     let (bytes, has_alpha) = match output.alpha() {
         AlphaHandling::PreserveAlpha => match encoding {
             Encoding::Png => (encode_png_rgba(image, budget, check_cancel)?, true),
             Encoding::WebP { quality: None } => {
                 (encode_webp_lossless(image, budget, check_cancel)?, true)
             }
-            Encoding::WebP { quality: Some(_) } => {
-                return Err(RasterError::UnsupportedFormat);
-            }
+            Encoding::WebP {
+                quality: Some(quality),
+            } => (
+                super::webp_lossy::encode_lossy_rgba(
+                    image,
+                    quality,
+                    budget,
+                    check_cancel,
+                    caller_rgba_bytes,
+                )?,
+                source_has_alpha,
+            ),
             Encoding::Jpeg { .. } => {
                 // Unreachable: the constructor refuses JPEG with preserved
                 // alpha, but the executor never trusts the caller alone.
@@ -145,11 +176,21 @@ pub(crate) fn encode_output(
                 ));
             }
         },
-        AlphaHandling::Opaque => (encode_opaque(image, encoding, budget, check_cancel)?, false),
+        AlphaHandling::Opaque => (
+            encode_opaque(image, encoding, budget, check_cancel, caller_rgba_bytes)?,
+            false,
+        ),
         AlphaHandling::Matte(fill) => {
             let flattened = flatten_onto_matte(image, fill, budget, check_cancel)?;
+            let matte_retained_bytes = caller_rgba_bytes.saturating_add(caller_rgba_bytes);
             (
-                encode_opaque(&flattened, encoding, budget, check_cancel)?,
+                encode_opaque(
+                    &flattened,
+                    encoding,
+                    budget,
+                    check_cancel,
+                    matte_retained_bytes,
+                )?,
                 false,
             )
         }
@@ -171,13 +212,12 @@ fn encode_opaque(
     encoding: Encoding,
     budget: &LiveBudget,
     check_cancel: super::CancelCheck<'_>,
+    caller_retained_bytes: u64,
 ) -> Result<Vec<u8>, RasterError> {
     let (width_px, height_px) = image.dimensions();
     let pixels = u64::from(width_px).saturating_mul(u64::from(height_px));
-    budget.check_retained(
-        super::bounds::rgba_bytes(width_px, height_px),
-        pixels.saturating_mul(3),
-    )?;
+    let rgb_bytes = pixels.saturating_mul(3);
+    budget.check_retained(caller_retained_bytes, rgb_bytes)?;
     check_cancel()?;
     let mut rgb = RgbImage::new(width_px, height_px);
     for y in 0..height_px {
@@ -194,12 +234,7 @@ fn encode_opaque(
         Encoding::Png => {
             let mut out = BoundedWriter::new(budget.max_output_bytes());
             image::codecs::png::PngEncoder::new(&mut out)
-                .write_image(
-                    rgb.as_raw(),
-                    width_px,
-                    height_px,
-                    ExtendedColorType::Rgb8,
-                )
+                .write_image(rgb.as_raw(), width_px, height_px, ExtendedColorType::Rgb8)
                 .map_err(|error| map_image_error(error, budget))?;
             Ok(out.into_inner())
         }
@@ -229,7 +264,24 @@ fn encode_opaque(
             }
             Ok(bytes)
         }
-        Encoding::WebP { quality: Some(_) } => Err(RasterError::UnsupportedFormat),
+        Encoding::WebP {
+            quality: Some(quality),
+        } => {
+            let total_retained_bytes = caller_retained_bytes.saturating_add(rgb_bytes);
+            let bytes = super::webp_lossy::encode_lossy_rgb(
+                &rgb,
+                quality,
+                budget,
+                check_cancel,
+                total_retained_bytes,
+            )?;
+            if (bytes.len() as u64) > budget.max_output_bytes() {
+                return Err(RasterError::OutputTooLarge {
+                    len_bytes: bytes.len() as u64,
+                });
+            }
+            Ok(bytes)
+        }
     }
 }
 
@@ -316,4 +368,76 @@ fn flatten_onto_matte(
         }
     }
     Ok(flattened)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TransformLimits;
+    use crate::output::{Dimensions, LossyQuality, Rgb};
+
+    #[test]
+    fn lossy_admission_retains_source_rgb_and_matte_until_native_return() {
+        let width_px = 7;
+        let height_px = 5;
+        let pixels = u64::from(width_px) * u64::from(height_px);
+        for (alpha, retained_bytes_per_pixel) in [
+            (AlphaHandling::PreserveAlpha, 4),
+            (AlphaHandling::Opaque, 7),
+            (
+                AlphaHandling::Matte(Rgb {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                }),
+                11,
+            ),
+        ] {
+            let source_alpha = if alpha == AlphaHandling::Opaque {
+                255
+            } else {
+                128
+            };
+            let image = RgbaImage::from_pixel(
+                width_px,
+                height_px,
+                image::Rgba([200, 30, 30, source_alpha]),
+            );
+            let output = RasterOutputSpec::new(
+                Dimensions::new(width_px, height_px).unwrap(),
+                alpha,
+                Encoding::WebP {
+                    quality: Some(LossyQuality::new(100).unwrap()),
+                },
+            )
+            .unwrap();
+            let required_bytes = super::super::webp_lossy::estimate_native_peak_bytes(
+                width_px,
+                height_px,
+                alpha == AlphaHandling::PreserveAlpha,
+                1_024,
+            ) + pixels * retained_bytes_per_pixel;
+            let mut limits = TransformLimits {
+                enabled: true,
+                max_concurrency: 1,
+                max_decoded_bytes: required_bytes - 1,
+                max_output_bytes: 1_024,
+                queue_capacity: 1,
+                deadline_secs: 30,
+            };
+            let check = || Ok(());
+            let refused =
+                encode_output(&image, &output, &LiveBudget::new(&limits).unwrap(), &check);
+            assert!(matches!(refused,
+                Err(RasterError::LiveBudgetExceeded { needed_bytes })
+                    if needed_bytes == required_bytes
+            ));
+            limits.max_decoded_bytes = required_bytes;
+            let encoded =
+                encode_output(&image, &output, &LiveBudget::new(&limits).unwrap(), &check).unwrap();
+            let decoded = image::load_from_memory(&encoded.bytes).unwrap();
+            assert_eq!(decoded.width(), width_px);
+            assert_eq!(decoded.height(), height_px);
+        }
+    }
 }

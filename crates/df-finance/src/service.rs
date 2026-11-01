@@ -51,6 +51,8 @@ pub enum FinanceError {
     ImageStageConflict,
     /// A replay found no stored image linkage: admit first, never send.
     ImageStageMissingLink,
+    /// Exact retained usage exists, but its execution/economic result is not yet qualified.
+    ImageStageEconomicProofPending,
     /// The image port left no answer: nothing was written.
     ImageStageUnavailable {
         /// The SQLSTATE when a database call failed, else `None`.
@@ -219,6 +221,11 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         &self.client
     }
 
+    /// The same injected clock used by financial transactions and their typed admission ports.
+    pub fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
     pub(crate) fn id(&self) -> [u8; 16] {
         self.ids.next_id()
     }
@@ -319,7 +326,9 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
     /// Commits a caller-built plan as one event (event-only flows and the tests' raw plans).
     pub async fn record_event(&mut self, plan: &FinancePlan) -> Result<Committed, FinanceError> {
         let transaction = self.begin().await?;
+        let locked = Self::guard_recorded_stage_plan(&transaction, plan).await?;
         let committed = Self::commit_plan(&transaction, plan).await?;
+        Self::recheck_recorded_stage_plan(&transaction, &locked).await?;
         transaction.commit().await?;
         Ok(committed)
     }

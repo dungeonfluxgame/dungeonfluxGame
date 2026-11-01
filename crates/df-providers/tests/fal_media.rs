@@ -14,23 +14,21 @@ use std::{
 
 use df_model::checkpoint::{AssetKind, AssetReference, Basis, ContentDigest, ExecutionMode, JobId};
 use df_provider_api::{
-    ImageEventKind, ImageSemantics, RequestBasis, RequestBinding, RequestIdentity, RequestLimits,
-    RequestModality, RequestOwnerState, RequestUsage, SoundEventKind, SoundSemantics,
-    VideoEventKind, VideoSemantics,
+    RequestBasis, RequestBinding, RequestIdentity, RequestLimits, RequestModality,
+    RequestOwnerState, RequestUsage, SoundEventKind, SoundSemantics, VideoEventKind,
+    VideoSemantics,
 };
 use df_providers::{
-    EncodedMediaFacts, FalCancellationObservation, FalCdnPin, FalImageProfile, FalImageRequest,
-    FalLoopFrames, FalMediaConfig, FalMediaFamily, FalMediaReason, FalQueueObservation,
-    FalReferenceFrame, FalSoundProfile, FalSoundRequest, FalVideoProfile, FalVideoRequest,
-    MediaTimebase, NativeFalMediaProvider, NativeHttpLimits, NativeHttpRefusal,
-    registered_fal_media_provider,
+    EncodedMediaFacts, FalCancellationObservation, FalCdnPin, FalLoopFrames, FalMediaConfig,
+    FalMediaFamily, FalMediaReason, FalQueueObservation, FalReferenceFrame, FalSoundProfile,
+    FalSoundRequest, FalVideoProfile, FalVideoRequest, MediaTimebase, NativeFalMediaProvider,
+    NativeHttpLimits, NativeHttpRefusal, registered_fal_media_provider,
 };
 use df_types::{
     OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage, UsageUnit,
 };
 use serde_json::{Value, json};
 
-type ImageBasis = RequestBinding<RequestBasis<ImageSemantics<String, FalImageProfile>>>;
 type VideoBasis =
     RequestBinding<RequestBasis<VideoSemantics<String, FalVideoProfile, FalReferenceFrame>>>;
 type SoundBasis =
@@ -251,26 +249,6 @@ fn owner<S>(binding: &RequestBinding<RequestBasis<S>>) -> RequestOwnerState<'_, 
         cancelled: false,
     }
 }
-fn image_basis() -> ImageBasis {
-    binding(
-        RequestModality::Image,
-        ImageSemantics {
-            locale: None,
-            prompt: "A lantern-lit hall".into(),
-            references: Vec::new(),
-            output_profile: FalImageProfile {
-                model: "fal-ai/flux/schnell".into(),
-                width: 2,
-                height: 2,
-                images: 1,
-                steps: 4,
-                seed: 7,
-                safety: true,
-                format: "png".into(),
-            },
-        },
-    )
-}
 fn video_basis() -> VideoBasis {
     binding(
         RequestModality::Video,
@@ -326,26 +304,6 @@ fn sound_basis() -> SoundBasis {
         },
     )
 }
-fn image_request(current: &ImageBasis) -> FalImageRequest {
-    FalImageRequest::new(
-        binding(
-            RequestModality::Image,
-            current.semantic_basis.semantic.clone(),
-        ),
-        b"",
-        RequestUsage::new(
-            0,
-            Duration::ZERO,
-            Usage::new(
-                u128::from(current.semantic_basis.semantic.output_profile.images),
-                UsageUnit::Image,
-            ),
-        ),
-        RequestLimits::new(16_384, 0, Duration::ZERO, Usage::new(4, UsageUnit::Image)).unwrap(),
-        owner(current),
-    )
-    .unwrap()
-}
 fn video_request(current: &VideoBasis) -> FalVideoRequest {
     FalVideoRequest::new(
         binding(
@@ -394,7 +352,6 @@ fn sound_request(current: &SoundBasis) -> FalSoundRequest {
 }
 fn submit(family: FalMediaFamily) -> Reply {
     let model = match family {
-        FalMediaFamily::Image => "fal-ai/flux/schnell",
         FalMediaFamily::Video => "fal-ai/wan-25-preview/image-to-video",
         FalMediaFamily::Sound => "fal-ai/stable-audio-25/text-to-audio",
     };
@@ -406,9 +363,6 @@ fn submit(family: FalMediaFamily) -> Reply {
 }
 fn completed() -> Reply {
     Reply::json(json!({"request_id":ID,"status":"COMPLETED","metrics":{"inference_time":0.5}}))
-}
-fn image_result() -> Reply {
-    Reply::json(json!({"images":[{"url":PNG_URL,"content_type":"image/png","width":2,"height":2}]}))
 }
 fn video_result() -> Reply {
     Reply::json(
@@ -582,27 +536,27 @@ fn mp4_with_mappings(multiple: bool) -> Vec<u8> {
     [ftyp, mdat, moov].concat()
 }
 
-async fn image_completion(
+async fn sound_completion(
     binary: Reply,
 ) -> Result<df_providers::FalMediaCompletion, df_providers::FalMediaError> {
     let mut fixture = Fixture::new(vec![
-        submit(FalMediaFamily::Image),
+        submit(FalMediaFamily::Sound),
         completed(),
-        image_result(),
+        sound_result(),
         binary,
     ]);
-    let provider = provider(FalMediaFamily::Image, &fixture);
-    let current = image_basis();
-    let request = image_request(&current);
+    let provider = provider(FalMediaFamily::Sound, &fixture);
+    let current = sound_basis();
+    let request = sound_request(&current);
     let mut job = provider
-        .submit_image(&request, owner(&current), future::pending())
+        .submit_sound(&request, owner(&current), future::pending())
         .await?;
     job.status(owner(&current), future::pending()).await?;
     let prepared = job.result(owner(&current), future::pending()).await?;
     let output = prepared.complete(owner(&current));
     let captured = fixture.finish();
     assert_eq!(captured.len(), 4);
-    assert!(captured[3].head.starts_with("GET /output/image.png "));
+    assert!(captured[3].head.starts_with("GET /output/audio.wav "));
     assert!(
         !captured[3]
             .head
@@ -610,75 +564,6 @@ async fn image_completion(
             .contains("authorization")
     );
     output
-}
-
-#[tokio::test]
-async fn image_normal_maps_explicit_fields_and_finishes_actual_bytes() {
-    let mut fixture = Fixture::new(vec![
-        submit(FalMediaFamily::Image),
-        completed(),
-        image_result(),
-        Reply::binary("image/png", png()),
-    ]);
-    let provider = provider(FalMediaFamily::Image, &fixture);
-    let current = image_basis();
-    let request = image_request(&current);
-    let mut job = provider
-        .submit_image(&request, owner(&current), future::pending())
-        .await
-        .unwrap();
-    assert_eq!(job.request_id().as_str(), ID);
-    assert!(matches!(
-        job.status(owner(&current), future::pending())
-            .await
-            .unwrap(),
-        FalQueueObservation::Completed { .. }
-    ));
-    let prepared = job
-        .result(owner(&current), future::pending())
-        .await
-        .unwrap();
-    let event = prepared
-        .complete(owner(&current))
-        .unwrap()
-        .into_image_event()
-        .unwrap();
-    assert_eq!(event.usage, Usage::new(1, UsageUnit::Image));
-    match event.kind {
-        ImageEventKind::Completed { identity, output } => {
-            assert_eq!(identity, current.identity);
-            assert_eq!(output[0].bytes(), png());
-            assert_eq!(
-                output[0].facts(),
-                EncodedMediaFacts::Png {
-                    width: 2,
-                    height: 2
-                }
-            );
-        }
-        _ => panic!("completion required"),
-    }
-    let captured = fixture.finish();
-    assert_eq!(captured.len(), 4);
-    assert!(captured[0].head.starts_with("POST /fal-ai/flux/schnell "));
-    let sent: Value = serde_json::from_slice(&captured[0].body).unwrap();
-    assert_eq!(
-        sent,
-        json!({"prompt":"A lantern-lit hall","image_size":{"width":2,"height":2},
-        "num_images":1,"output_format":"png","num_inference_steps":4,"seed":7,"enable_safety_checker":true})
-    );
-    assert!(
-        captured[0]
-            .head
-            .to_ascii_lowercase()
-            .contains("x-fal-no-retry: 1")
-    );
-    assert!(
-        !captured[3]
-            .head
-            .to_ascii_lowercase()
-            .contains("authorization")
-    );
 }
 
 #[tokio::test]
@@ -864,37 +749,53 @@ async fn sound_normal_retains_pcm_frames_loop_bounds_and_usage() {
 #[tokio::test]
 async fn invalid_profiles_payloads_and_modes_refuse_before_send() {
     let mut fixture = Fixture::new(Vec::new());
-    let provider = provider(FalMediaFamily::Image, &fixture);
+    let provider = provider(FalMediaFamily::Sound, &fixture);
     for mutation in 0..5 {
-        let mut current = image_basis();
+        let mut current = sound_basis();
         match mutation {
             0 => current.semantic_basis.semantic.output_profile.model = "other-model".into(),
-            1 => current.semantic_basis.semantic.output_profile.format = "jpeg".into(),
-            2 => current.semantic_basis.semantic.prompt = " ".into(),
+            1 => {
+                current
+                    .semantic_basis
+                    .semantic
+                    .output_profile
+                    .bits_per_sample = 0
+            }
+            2 => current.semantic_basis.semantic.intent = " ".into(),
             3 => current.semantic_basis.semantic.output_profile.steps = 0,
-            _ => current.semantic_basis.semantic.output_profile.width = 0,
+            _ => current.semantic_basis.semantic.output_profile.sample_rate = 0,
         }
-        let request = image_request(&current);
+        let request = sound_request(&current);
         assert!(
             provider
-                .submit_image(&request, owner(&current), future::pending())
+                .submit_sound(&request, owner(&current), future::pending())
                 .await
                 .is_err()
         );
     }
-    let mut current = image_basis();
+    let mut current = sound_basis();
     current.mode = ExecutionMode::PreparedOnly;
-    let request = FalImageRequest::new(
+    let request = FalSoundRequest::new(
         binding_with_mode(&current),
         b"",
-        RequestUsage::new(0, Duration::ZERO, Usage::new(1, UsageUnit::Image)),
-        RequestLimits::new(1024, 0, Duration::ZERO, Usage::new(1, UsageUnit::Image)).unwrap(),
+        RequestUsage::new(
+            0,
+            Duration::from_secs(1),
+            Usage::new(1000, UsageUnit::AudioMillisecond),
+        ),
+        RequestLimits::new(
+            1024,
+            0,
+            Duration::from_secs(1),
+            Usage::new(1000, UsageUnit::AudioMillisecond),
+        )
+        .unwrap(),
         owner(&current),
     )
     .unwrap();
     assert!(matches!(
         provider
-            .submit_image(&request, owner(&current), future::pending())
+            .submit_sound(&request, owner(&current), future::pending())
             .await
             .unwrap_err()
             .reason,
@@ -902,9 +803,9 @@ async fn invalid_profiles_payloads_and_modes_refuse_before_send() {
     ));
     assert!(fixture.finish().is_empty());
 }
-fn binding_with_mode(current: &ImageBasis) -> ImageBasis {
+fn binding_with_mode(current: &SoundBasis) -> SoundBasis {
     let mut result = binding(
-        RequestModality::Image,
+        RequestModality::Sound,
         current.semantic_basis.semantic.clone(),
     );
     result.mode = current.mode;
@@ -956,38 +857,22 @@ async fn canonical_reference_count_kind_locator_and_current_digest_are_fenced() 
             .reason,
         FalMediaReason::Owner(df_provider_api::RequestError::SemanticBasisMismatch)
     ));
-    let image_provider = provider(FalMediaFamily::Image, &fixture);
-    let mut current = image_basis();
-    current.semantic_basis.semantic.references.push(
-        video_basis().semantic_basis.semantic.reference_frames[0]
-            .asset
-            .clone(),
-    );
-    let request = image_request(&current);
-    assert!(matches!(
-        image_provider
-            .submit_image(&request, owner(&current), future::pending())
-            .await
-            .unwrap_err()
-            .reason,
-        FalMediaReason::Reference
-    ));
     assert!(fixture.finish().is_empty());
 }
 
 #[tokio::test]
 async fn owner_identity_cancel_and_deadline_fence_each_action_and_final_consume() {
     let mut fixture = Fixture::new(vec![
-        submit(FalMediaFamily::Image),
+        submit(FalMediaFamily::Sound),
         completed(),
-        image_result(),
-        Reply::binary("image/png", png()),
+        sound_result(),
+        Reply::binary("audio/wav", wave(8000)),
     ]);
-    let provider = provider(FalMediaFamily::Image, &fixture);
-    let mut current = image_basis();
-    let request = image_request(&current);
+    let provider = provider(FalMediaFamily::Sound, &fixture);
+    let mut current = sound_basis();
+    let request = sound_request(&current);
     let mut job = provider
-        .submit_image(&request, owner(&current), future::pending())
+        .submit_sound(&request, owner(&current), future::pending())
         .await
         .unwrap();
     current.identity.generation += 1;
@@ -1012,13 +897,13 @@ async fn owner_identity_cancel_and_deadline_fence_each_action_and_final_consume(
     assert_eq!(failure.request_id.unwrap().as_str(), ID);
     assert_eq!(
         failure.observed_usage,
-        Some(Usage::new(1, UsageUnit::Image))
+        Some(Usage::new(1000, UsageUnit::AudioMillisecond))
     );
     let mut expired = owner(&current);
     expired.elapsed = current.deadline;
     assert!(matches!(
         provider
-            .submit_image(&request, expired, future::pending())
+            .submit_sound(&request, expired, future::pending())
             .await
             .unwrap_err()
             .reason,
@@ -1030,29 +915,30 @@ async fn owner_identity_cancel_and_deadline_fence_each_action_and_final_consume(
 #[tokio::test]
 async fn captured_queue_urls_refuse_cross_origin_id_and_substituted_paths() {
     for mutation in 0..4 {
-        let mut reply = submit(FalMediaFamily::Image);
+        let mut reply = submit(FalMediaFamily::Sound);
         let mut value: Value = serde_json::from_slice(&reply.body).unwrap();
         match mutation {
             0 => value["request_id"] = json!("invalid/id"),
             1 => value["response_url"] = json!("https://attacker.invalid/response"),
             2 => {
-                value["status_url"] =
-                    json!("https://queue.fal.run/fal-ai/flux/schnell/requests/other/status")
+                value["status_url"] = json!(
+                    "https://queue.fal.run/fal-ai/stable-audio-25/text-to-audio/requests/other/status"
+                )
             }
             _ => {
                 value["cancel_url"] = json!(format!(
-                    "https://queue.fal.run/fal-ai/flux/schnell/requests/{ID}/cancel?x=1"
+                    "https://queue.fal.run/fal-ai/stable-audio-25/text-to-audio/requests/{ID}/cancel?x=1"
                 ))
             }
         }
         reply.body = serde_json::to_vec(&value).unwrap();
         let mut fixture = Fixture::new(vec![reply]);
-        let provider = provider(FalMediaFamily::Image, &fixture);
-        let current = image_basis();
-        let request = image_request(&current);
+        let provider = provider(FalMediaFamily::Sound, &fixture);
+        let current = sound_basis();
+        let request = sound_request(&current);
         assert!(
             provider
-                .submit_image(&request, owner(&current), future::pending())
+                .submit_sound(&request, owner(&current), future::pending())
                 .await
                 .is_err()
         );
@@ -1067,12 +953,12 @@ async fn pending_failed_unknown_status_never_publishes_result() {
         if status == "COMPLETED" {
             value["error"] = json!("supplier failure");
         }
-        let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Image), Reply::json(value)]);
-        let provider = provider(FalMediaFamily::Image, &fixture);
-        let current = image_basis();
-        let request = image_request(&current);
+        let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Sound), Reply::json(value)]);
+        let provider = provider(FalMediaFamily::Sound, &fixture);
+        let current = sound_basis();
+        let request = sound_request(&current);
         let mut job = provider
-            .submit_image(&request, owner(&current), future::pending())
+            .submit_sound(&request, owner(&current), future::pending())
             .await
             .unwrap();
         let result = job
@@ -1114,12 +1000,12 @@ async fn cancellation_uses_put_and_keeps_ambiguous_remote_liability() {
     ] {
         let mut cancel = Reply::json(json!({"request_id":ID,"status":status}));
         cancel.status = http;
-        let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Image), cancel]);
-        let provider = provider(FalMediaFamily::Image, &fixture);
-        let current = image_basis();
-        let request = image_request(&current);
+        let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Sound), cancel]);
+        let provider = provider(FalMediaFamily::Sound, &fixture);
+        let current = sound_basis();
+        let request = sound_request(&current);
         let mut job = provider
-            .submit_image(&request, owner(&current), future::pending())
+            .submit_sound(&request, owner(&current), future::pending())
             .await
             .unwrap();
         assert_eq!(
@@ -1132,18 +1018,16 @@ async fn cancellation_uses_put_and_keeps_ambiguous_remote_liability() {
         drop(job);
         let captured = fixture.finish();
         assert_eq!(captured.len(), 2);
-        assert!(
-            captured[1]
-                .head
-                .starts_with(&format!("PUT /fal-ai/flux/schnell/requests/{ID}/cancel "))
-        );
+        assert!(captured[1].head.starts_with(&format!(
+            "PUT /fal-ai/stable-audio-25/text-to-audio/requests/{ID}/cancel "
+        )));
     }
 }
 
 #[tokio::test]
 async fn json_requires_unique_complete_eof_and_classifies_transport_failures() {
     for mutation in 0..7 {
-        let mut reply = submit(FalMediaFamily::Image);
+        let mut reply = submit(FalMediaFamily::Sound);
         match mutation {
             0 => reply.body.extend(b" trailing"),
             1 => reply.body = br#"{"request_id":"first","request_id":"second"}"#.to_vec(),
@@ -1160,11 +1044,11 @@ async fn json_requires_unique_complete_eof_and_classifies_transport_failures() {
             _ => reply.status = 503,
         }
         let mut fixture = Fixture::new(vec![reply]);
-        let provider = provider(FalMediaFamily::Image, &fixture);
-        let current = image_basis();
-        let request = image_request(&current);
+        let provider = provider(FalMediaFamily::Sound, &fixture);
+        let current = sound_basis();
+        let request = sound_request(&current);
         let failure = provider
-            .submit_image(&request, owner(&current), future::pending())
+            .submit_sound(&request, owner(&current), future::pending())
             .await
             .unwrap_err();
         assert_ne!(
@@ -1178,10 +1062,10 @@ async fn json_requires_unique_complete_eof_and_classifies_transport_failures() {
 #[tokio::test]
 async fn binary_acquisition_rejects_partial_size_mime_redirect_and_credentials() {
     for mutation in 0..5 {
-        let mut reply = Reply::binary("image/png", png());
+        let mut reply = Reply::binary("audio/wav", wave(8000));
         match mutation {
             0 => reply.declared = Some(reply.body.len() + 1),
-            1 => reply.mime = "image/jpeg",
+            1 => reply.mime = "audio/mpeg",
             2 => {
                 reply.status = 302;
                 reply.extra_headers = "Location: http://127.0.0.1:1/\r\n";
@@ -1192,7 +1076,7 @@ async fn binary_acquisition_rejects_partial_size_mime_redirect_and_credentials()
                 reply.terminal = false;
             }
         }
-        assert!(image_completion(reply).await.is_err());
+        assert!(sound_completion(reply).await.is_err());
     }
     assert!(FalCdnPin::new("v3.fal.media", &["127.0.0.1".parse().unwrap()]).is_err());
     assert!(FalCdnPin::new("other.invalid", &["8.8.8.8".parse().unwrap()]).is_err());
@@ -1201,7 +1085,7 @@ async fn binary_acquisition_rejects_partial_size_mime_redirect_and_credentials()
 
 #[tokio::test]
 async fn png_crc_critical_animation_truncation_trailing_and_dimensions_are_checked() {
-    for mutation in 0..6 {
+    for mutation in 0..5 {
         let mut data = png();
         match mutation {
             0 => data[29] ^= 1,
@@ -1216,20 +1100,18 @@ async fn png_crc_critical_animation_truncation_trailing_and_dimensions_are_check
             3 => {
                 data.pop();
             }
-            4 => data.push(0),
-            _ => {
-                let mut header = 3u32.to_be_bytes().to_vec();
-                header.extend(2u32.to_be_bytes());
-                header.extend([8, 2, 0, 0, 0]);
-                data.splice(8..33, png_chunk(b"IHDR", &header));
-            }
+            _ => data.push(0),
         }
-        assert!(
-            image_completion(Reply::binary("image/png", data))
-                .await
-                .is_err()
-        );
+        assert!(df_providers::inspect_png_off_worker(data).await.is_err());
     }
+    let (_, facts) = df_providers::inspect_png_off_worker(png()).await.unwrap();
+    assert_eq!(
+        facts,
+        df_providers::EncodedMediaFacts::Png {
+            width: 2,
+            height: 2
+        }
+    );
 }
 
 #[tokio::test]
@@ -1401,18 +1283,18 @@ async fn actual_usage_ceil_and_overrun_are_retained_without_clipping() {
 
 #[tokio::test]
 async fn dropped_job_and_cancelled_future_never_resubmit_or_fetch() {
-    let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Image)]);
-    let provider = provider(FalMediaFamily::Image, &fixture);
-    let current = image_basis();
-    let request = image_request(&current);
+    let mut fixture = Fixture::new(vec![submit(FalMediaFamily::Sound)]);
+    let provider = provider(FalMediaFamily::Sound, &fixture);
+    let current = sound_basis();
+    let request = sound_request(&current);
     let job = provider
-        .submit_image(&request, owner(&current), future::pending())
+        .submit_sound(&request, owner(&current), future::pending())
         .await
         .unwrap();
     assert_eq!(job.request_id().as_str(), ID);
     drop(job);
     let failed = provider
-        .submit_image(&request, owner(&current), future::ready(()))
+        .submit_sound(&request, owner(&current), future::ready(()))
         .await
         .unwrap_err();
     assert_eq!(
@@ -1425,17 +1307,17 @@ async fn dropped_job_and_cancelled_future_never_resubmit_or_fetch() {
 #[tokio::test]
 async fn native_registry_hook_redacts_private_fields_and_keeps_dated_routes() {
     let mut fixture = Fixture::new(Vec::new());
-    let provider = provider(FalMediaFamily::Image, &fixture);
+    let provider = provider(FalMediaFamily::Sound, &fixture);
     assert!(!format!("{provider:?}").contains("fixture-private-key"));
-    let current = image_basis();
-    let request = image_request(&current);
+    let current = sound_basis();
+    let request = sound_request(&current);
     let mut cancelled = owner(&current);
     cancelled.cancelled = true;
     let failure = provider
-        .submit_image(&request, cancelled, future::pending())
+        .submit_sound(&request, cancelled, future::pending())
         .await
         .unwrap_err();
-    assert!(!format!("{failure:?}").contains("A lantern-lit hall"));
+    assert!(!format!("{failure:?}").contains("Quiet hall ambience"));
     assert_eq!(df_providers::candidate_routes().len(), 2);
     assert!(df_providers::candidate_for(df_providers::Capability::Video).is_err());
     assert!(fixture.finish().is_empty());

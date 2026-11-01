@@ -47,6 +47,7 @@ pub(crate) mod fight;
 mod fx;
 mod heroes;
 pub(crate) mod history;
+mod imagery;
 mod jumps;
 mod latency;
 pub(super) mod layout;
@@ -72,6 +73,7 @@ pub(super) mod timeline;
 /// the read and add surface; it is not part of a rewind.
 #[derive(Clone)]
 pub(super) struct Bundle {
+    pub image_diagnostics: Option<super::image_startup::ImageDiagnostics>,
     pub history: Arc<std::sync::Mutex<history::History>>,
     pub table: Arc<super::table_log::TableLog>,
     pub social: Arc<super::social::SocialLedger>,
@@ -82,6 +84,7 @@ pub(super) struct Bundle {
 /// Shared development control state, cloned into every route handler.
 #[derive(Clone)]
 struct Shared {
+    image_diagnostics: Option<super::image_startup::ImageDiagnostics>,
     service: super::Service,
     display_credential: [u8; 32],
     token: Arc<str>,
@@ -196,6 +199,7 @@ pub(super) fn setup(
     let token_file = config::write_token_file(&run_dir, &token)?;
     let seat_file = run_dir.join("dev-control-seats");
     let shared = Shared {
+        image_diagnostics: bundle.image_diagnostics,
         service,
         display_credential,
         token: Arc::from(token),
@@ -216,6 +220,10 @@ pub(super) fn setup(
     let mut router = Router::new()
         .merge(roleplay::routes())
         .route("/dev/health", get(health))
+        .route("/dev/imagery", get(imagery::show))
+        .route("/dev/imagery/events", get(imagery::events))
+        .route("/dev/imagery/config", post(imagery::config))
+        .route("/dev/imagery/reset", post(imagery::reset))
         .route("/dev/heroes", get(heroes::list))
         .route("/dev/heroes/{id}", get(heroes::show))
         .route("/dev/heroes/{id}/revisions", get(heroes::revisions))

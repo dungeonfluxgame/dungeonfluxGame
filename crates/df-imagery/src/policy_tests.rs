@@ -3,7 +3,9 @@ use crate::config::{BackendId, GlobalMode, ImageConfig};
 use crate::request::{ExecutionMode, Purpose};
 
 fn live_config() -> ImageConfig {
-    ImageConfig::defaults().unwrap()
+    let mut config = ImageConfig::defaults().unwrap();
+    config.backends[BackendId::OpenAi.index()].enabled = true;
+    config
 }
 
 fn input(

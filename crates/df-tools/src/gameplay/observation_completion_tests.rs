@@ -165,6 +165,9 @@ fn service(
         thread: Some(thread),
     };
     let service = Arc::new(Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         look_ahead: Default::default(),
         portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
         display_credential: [0x82; 32],

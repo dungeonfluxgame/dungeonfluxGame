@@ -14,9 +14,14 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+#[cfg(not(windows))]
 use std::process::Stdio;
 
+#[cfg(not(windows))]
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+
+#[cfg(windows)]
+use super::job;
 
 /// Why the child could not be driven to a protocol exchange.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,12 +80,17 @@ pub(crate) trait ProcessSession {
 pub(crate) trait ProcessRunner {
     type Session: ProcessSession;
 
-    async fn spawn(&self, spec: &ProcessSpec, limits: &StreamLimits) -> Result<Self::Session, ProcessError>;
+    async fn spawn(
+        &self,
+        spec: &ProcessSpec,
+        limits: &StreamLimits,
+    ) -> Result<Self::Session, ProcessError>;
 }
 
-/// The real runner: `tokio` child with piped stdio and kill-on-drop.
+/// The real runner: an owned child with piped stdio and kill-on-drop.
 pub(crate) struct TokioProcessRunner;
 
+#[cfg(not(windows))]
 pub(crate) struct TokioSession {
     child: tokio::process::Child,
     stdin: Option<tokio::process::ChildStdin>,
@@ -88,35 +98,30 @@ pub(crate) struct TokioSession {
     stderr_drain: Option<tokio::task::JoinHandle<()>>,
     stdout_total_bytes: u64,
     max_stdout_bytes: u64,
-    #[cfg(windows)]
-    _job: Option<OwnedJobHandle>,
-}
-
-#[cfg(windows)]
-pub(crate) struct OwnedJobHandle {
-    #[allow(dead_code, reason = "job handle is owned for kill-on-close; assignment is wired by the harness")]
-    handle: std::os::windows::io::OwnedHandle,
-}
-
-#[cfg(windows)]
-impl OwnedJobHandle {
-    fn current_process_job() -> Option<Self> {
-        None
-    }
+    /// Process group of the helper, retained so a dropped session can signal
+    /// the same tree an explicit kill would. The group is created by a
+    /// checked `setsid` before exec, so the child is its own group leader.
+    #[cfg(unix)]
+    process_group: Option<i32>,
 }
 
 #[cfg(unix)]
 fn enable_process_group(command: &mut tokio::process::Command) {
     use std::os::unix::process::CommandExt as _;
     // SAFETY: `setsid` in the child before exec isolates helpers in one group.
+    // A failed `setsid` refuses the spawn, so a running child is always its
+    // own group leader and the retained group identity below stays valid.
     unsafe {
         command.pre_exec(|| {
-            libc::setsid();
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
 }
 
+#[cfg(not(windows))]
 impl ProcessRunner for TokioProcessRunner {
     type Session = TokioSession;
 
@@ -134,12 +139,6 @@ impl ProcessRunner for TokioProcessRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(windows)]
-        {
-            // Helpers must never flash a visible window on the operator screen.
-            use std::os::windows::process::CommandExt as _;
-            command.creation_flags(0x0800_0000);
-        }
         #[cfg(unix)]
         {
             enable_process_group(&mut command);
@@ -170,6 +169,8 @@ impl ProcessRunner for TokioProcessRunner {
                 }
             }
         });
+        #[cfg(unix)]
+        let process_group = child.id().map(|id| id as i32);
         Ok(TokioSession {
             child,
             stdin: Some(stdin),
@@ -177,37 +178,80 @@ impl ProcessRunner for TokioProcessRunner {
             stderr_drain: Some(stderr_drain),
             stdout_total_bytes: 0,
             max_stdout_bytes: limits.max_stdout_bytes,
-            #[cfg(windows)]
-            _job: OwnedJobHandle::current_process_job(),
+            #[cfg(unix)]
+            process_group,
         })
     }
 }
 
+#[cfg(windows)]
+impl ProcessRunner for TokioProcessRunner {
+    type Session = job::JobSession;
+
+    async fn spawn(
+        &self,
+        spec: &ProcessSpec,
+        limits: &StreamLimits,
+    ) -> Result<Self::Session, ProcessError> {
+        job::spawn(spec, limits)
+    }
+}
+
+#[cfg(not(windows))]
 impl Drop for TokioSession {
     fn drop(&mut self) {
         if let Some(handle) = self.stderr_drain.take() {
             handle.abort();
         }
-    }
-}
-
-async fn join_drain(handle: Option<tokio::task::JoinHandle<()>>) {
-    if let Some(handle) = handle {
-        match tokio::time::timeout(std::time::Duration::from_secs(2), handle).await {
-            Ok(_) => {}
-            Err(_) => {}
+        // The direct child also dies through kill_on_drop, but descendants
+        // joined only the process group: signal the whole group so a dropped
+        // session owns the same tree cleanup as an explicit kill. The group
+        // identity was retained at spawn from a checked `setsid`, so it names
+        // exactly this helper tree; ESRCH only means the tree already exited.
+        #[cfg(unix)]
+        if let Some(group) = self.process_group {
+            // SAFETY: `killpg` with SIGKILL on our own process group.
+            unsafe {
+                libc::killpg(group, libc::SIGKILL);
+            }
         }
     }
 }
 
+/// How long the owner waits for the owned stderr drain to finish before it
+/// aborts that task and rejoins it. The absolute turn deadline always
+/// outranks this grace; this constant only bounds the drain itself.
+pub(crate) const DRAIN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Joins an owned stderr drain under a bound without ever detaching it: the
+/// handle stays borrowed while the timeout runs, and a slow drain is aborted
+/// and rejoined instead of dropped into the background.
+pub(crate) async fn join_drain(slot: &mut Option<tokio::task::JoinHandle<()>>) {
+    join_drain_timeout(slot, DRAIN_JOIN_TIMEOUT).await;
+}
+
+pub(crate) async fn join_drain_timeout(
+    slot: &mut Option<tokio::task::JoinHandle<()>>,
+    timeout: std::time::Duration,
+) {
+    let Some(handle) = slot.as_mut() else {
+        return;
+    };
+    if tokio::time::timeout(timeout, &mut *handle).await.is_ok() {
+        let _ = slot.take();
+        return;
+    }
+    handle.abort();
+    let _ = (&mut *handle).await;
+    let _ = slot.take();
+}
+
+#[cfg(not(windows))]
 impl ProcessSession for TokioSession {
     async fn send(&mut self, bytes: &[u8]) -> Result<(), ProcessError> {
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or(ProcessError::StreamFailed {
-                kind: std::io::ErrorKind::BrokenPipe,
-            })?;
+        let stdin = self.stdin.as_mut().ok_or(ProcessError::StreamFailed {
+            kind: std::io::ErrorKind::BrokenPipe,
+        })?;
         stdin
             .write_all(bytes)
             .await
@@ -215,7 +259,9 @@ impl ProcessSession for TokioSession {
     }
 
     async fn next_line(&mut self, max_line_bytes: usize) -> Result<Option<Vec<u8>>, ProcessError> {
-        let remaining_total = self.max_stdout_bytes.saturating_sub(self.stdout_total_bytes);
+        let remaining_total = self
+            .max_stdout_bytes
+            .saturating_sub(self.stdout_total_bytes);
         let cap = (max_line_bytes as u64)
             .saturating_add(1)
             .min(remaining_total);
@@ -248,7 +294,9 @@ impl ProcessSession for TokioSession {
         self.stdin.take();
         let mut chunk = [0u8; 8192];
         loop {
-            let remaining = self.max_stdout_bytes.saturating_sub(self.stdout_total_bytes);
+            let remaining = self
+                .max_stdout_bytes
+                .saturating_sub(self.stdout_total_bytes);
             if remaining == 0 {
                 return Err(ProcessError::OutputTooLarge);
             }
@@ -262,24 +310,27 @@ impl ProcessSession for TokioSession {
             }
             self.stdout_total_bytes = self.stdout_total_bytes.saturating_add(count as u64);
         }
-        join_drain(self.stderr_drain.take()).await;
+        join_drain(&mut self.stderr_drain).await;
         let status = self
             .child
             .wait()
             .await
             .map_err(|error| ProcessError::StreamFailed { kind: error.kind() })?;
-        Ok(ProcessEnd { code: status.code() })
+        Ok(ProcessEnd {
+            code: status.code(),
+        })
     }
 
     async fn kill(&mut self) -> Result<(), ProcessError> {
         self.stdin.take();
         kill_tree(&mut self.child);
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.child.wait()).await;
-        join_drain(self.stderr_drain.take()).await;
+        join_drain(&mut self.stderr_drain).await;
         Ok(())
     }
 }
 
+#[cfg(not(windows))]
 fn kill_tree(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     {
@@ -296,18 +347,22 @@ fn kill_tree(child: &mut tokio::process::Child) {
 
 /// Scripted child for tests: no processes, no filesystem, no network.
 #[cfg(test)]
+#[derive(Debug)]
 pub(crate) struct FakeRunner {
     lines: Vec<Vec<u8>>,
     delay_ms: u64,
     spawn_error: Option<ProcessError>,
     send_fail_after: Option<usize>,
     hang_after_lines: bool,
+    hang_after_sends: Option<usize>,
     pub(crate) shared: std::sync::Arc<FakeShared>,
 }
 
 #[cfg(test)]
+#[derive(Debug)]
 pub(crate) struct FakeShared {
     pub sends: std::sync::Mutex<Vec<Vec<u8>>>,
+    pub turn_dispatched: tokio::sync::Notify,
     pub spawns: std::sync::atomic::AtomicUsize,
     pub kills: std::sync::atomic::AtomicUsize,
     pub drops: std::sync::atomic::AtomicUsize,
@@ -316,11 +371,13 @@ pub(crate) struct FakeShared {
 }
 
 #[cfg(test)]
+#[derive(Debug)]
 pub(crate) struct FakeSession {
     lines: std::collections::VecDeque<Vec<u8>>,
     delay_ms: u64,
     send_fail_after: Option<usize>,
     hang_after_lines: bool,
+    hang_after_sends: Option<usize>,
     shared: std::sync::Arc<FakeShared>,
     drain: Option<tokio::task::JoinHandle<()>>,
 }
@@ -334,8 +391,10 @@ impl FakeRunner {
             spawn_error: None,
             send_fail_after: None,
             hang_after_lines: false,
+            hang_after_sends: None,
             shared: std::sync::Arc::new(FakeShared {
                 sends: std::sync::Mutex::new(Vec::new()),
+                turn_dispatched: tokio::sync::Notify::new(),
                 spawns: std::sync::atomic::AtomicUsize::new(0),
                 kills: std::sync::atomic::AtomicUsize::new(0),
                 drops: std::sync::atomic::AtomicUsize::new(0),
@@ -362,6 +421,14 @@ impl FakeRunner {
 
     pub(crate) fn with_hang_after_lines(mut self) -> Self {
         self.hang_after_lines = true;
+        self
+    }
+
+    /// Makes request writes stall once `sends` writes already succeeded, so
+    /// cancellation and deadline paths can prove the owned tree still dies
+    /// with a blocked stdin pipe. Zero stalls every write.
+    pub(crate) fn with_hang_after_sends(mut self, sends: usize) -> Self {
+        self.hang_after_sends = Some(sends);
         self
     }
 }
@@ -398,6 +465,7 @@ impl ProcessRunner for FakeRunner {
             delay_ms: self.delay_ms,
             send_fail_after: self.send_fail_after,
             hang_after_lines: self.hang_after_lines,
+            hang_after_sends: self.hang_after_sends,
             shared: self.shared.clone(),
             drain: Some(drain),
         })
@@ -426,14 +494,25 @@ impl Drop for FakeSession {
 impl ProcessSession for FakeSession {
     async fn send(&mut self, bytes: &[u8]) -> Result<(), ProcessError> {
         let count = self.shared.sends.lock().unwrap().len();
-        if let Some(limit) = self.send_fail_after {
-            if count >= limit {
-                return Err(ProcessError::StreamFailed {
-                    kind: std::io::ErrorKind::BrokenPipe,
-                });
-            }
+        if let Some(limit) = self.hang_after_sends
+            && count >= limit
+        {
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
+        if let Some(limit) = self.send_fail_after
+            && count >= limit
+        {
+            return Err(ProcessError::StreamFailed {
+                kind: std::io::ErrorKind::BrokenPipe,
+            });
         }
         self.shared.sends.lock().unwrap().push(bytes.to_vec());
+        if serde_json::from_slice::<serde_json::Value>(bytes)
+            .is_ok_and(|value| value["method"] == "turn/start")
+        {
+            self.shared.turn_dispatched.notify_one();
+        }
         Ok(())
     }
 
@@ -492,11 +571,23 @@ impl ProcessSession for FakeSession {
 mod tests {
     use super::*;
 
+    fn fixture_base() -> std::path::PathBuf {
+        // The fake runner validates the spec without launching it, so the
+        // fixture must be absolute on every platform; the executable itself
+        // need not exist. Production validation is unchanged.
+        if let Some(dir) = std::env::var_os("TMPDIR")
+            && !dir.is_empty()
+        {
+            return std::path::PathBuf::from(dir);
+        }
+        std::env::temp_dir()
+    }
+
     fn spec() -> ProcessSpec {
         ProcessSpec {
-            executable: std::path::PathBuf::from("/bin/codex"),
+            executable: fixture_base().join("df-codex-fake-codex.exe"),
             args: vec![std::ffi::OsString::from("app-server")],
-            cwd: std::path::PathBuf::from("/tmp/scratch"),
+            cwd: fixture_base().join("df-codex-fake-scratch"),
         }
     }
 
@@ -504,10 +595,7 @@ mod tests {
     fn relative_executable_is_rejected() {
         let mut bad = spec();
         bad.executable = std::path::PathBuf::from("codex");
-        assert_eq!(
-            bad.validate().unwrap_err(),
-            ProcessError::Configuration
-        );
+        assert_eq!(bad.validate().unwrap_err(), ProcessError::Configuration);
     }
 
     #[tokio::test]
@@ -520,22 +608,27 @@ mod tests {
         };
         let mut session = runner.spawn(&spec(), &limits).await.unwrap();
         session.send(b"hello").await.unwrap();
-        assert_eq!(session.next_line(512).await.unwrap(), Some(b"{\"a\":1}".to_vec()));
+        assert_eq!(
+            session.next_line(512).await.unwrap(),
+            Some(b"{\"a\":1}".to_vec())
+        );
         assert_eq!(session.next_line(512).await.unwrap(), None);
         assert_eq!(session.finish().await.unwrap().code, Some(0));
         assert_eq!(runner.shared.sends.lock().unwrap().len(), 1);
         assert_eq!(
-            runner.shared.kills.load(std::sync::atomic::Ordering::SeqCst),
+            runner
+                .shared
+                .kills
+                .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
     }
 
     #[tokio::test]
     async fn spawn_failure_reports_transport_without_a_session() {
-        let runner = FakeRunner::new(Vec::new())
-            .with_spawn_error(ProcessError::SpawnFailed {
-                kind: std::io::ErrorKind::NotFound,
-            });
+        let runner = FakeRunner::new(Vec::new()).with_spawn_error(ProcessError::SpawnFailed {
+            kind: std::io::ErrorKind::NotFound,
+        });
         let limits = StreamLimits {
             max_stdout_bytes: 1024,
             max_stderr_bytes: 256,
@@ -549,7 +642,10 @@ mod tests {
             }
         );
         assert_eq!(
-            runner.shared.spawns.load(std::sync::atomic::Ordering::SeqCst),
+            runner
+                .shared
+                .spawns
+                .load(std::sync::atomic::Ordering::SeqCst),
             1
         );
     }
@@ -566,6 +662,82 @@ mod tests {
         assert_eq!(
             session.next_line(16).await.unwrap_err(),
             ProcessError::OutputTooLarge
+        );
+    }
+
+    #[tokio::test]
+    async fn join_drain_timeout_reaps_a_stuck_task_without_detaching() {
+        struct DropMark(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for DropMark {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark = DropMark(flag.clone());
+        let handle = tokio::spawn(async move {
+            let _mark = mark;
+            std::future::pending::<()>().await;
+        });
+        let mut slot = Some(handle);
+        join_drain_timeout(&mut slot, std::time::Duration::from_millis(20)).await;
+        assert!(slot.is_none(), "the drained slot is consumed");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "the stuck drain was aborted and reaped, never detached"
+        );
+        let mut empty: Option<tokio::task::JoinHandle<()>> = None;
+        join_drain_timeout(&mut empty, std::time::Duration::from_millis(1)).await;
+    }
+
+    #[tokio::test]
+    async fn completed_drain_is_not_polled_twice() {
+        // A handle that already finished is consumed without a second poll:
+        // the old take-then-timeout-then-await panicked here.
+        let finished = tokio::spawn(async {});
+        let mut slot = Some(finished);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        join_drain_timeout(&mut slot, std::time::Duration::from_secs(1)).await;
+        assert!(slot.is_none(), "the completed drain is consumed once");
+    }
+
+    #[tokio::test]
+    async fn cancelled_drain_wait_keeps_the_slot_for_cleanup() {
+        struct DropMark(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for DropMark {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark = DropMark(flag.clone());
+        let handle = tokio::spawn(async move {
+            let _mark = mark;
+            std::future::pending::<()>().await;
+        });
+        let mut slot = Some(handle);
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            join_drain_timeout(&mut slot, std::time::Duration::from_secs(10)),
+        )
+        .await;
+        assert!(
+            slot.is_some(),
+            "cancelling the wait must keep the owned handle"
+        );
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::SeqCst),
+            "the stuck drain is still owned, not detached"
+        );
+        join_drain_timeout(&mut slot, std::time::Duration::from_millis(20)).await;
+        assert!(slot.is_none(), "cleanup reaps the retained drain");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "the retained drain was aborted and reaped"
         );
     }
 

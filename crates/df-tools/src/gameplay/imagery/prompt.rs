@@ -148,6 +148,7 @@ pub(in crate::gameplay) struct AssembledPrompt {
     scene_party: Option<super::plate_prompt::SceneParty>,
     scene_hand_custody: String,
     staging_order: Vec<StagedPerson>,
+    artwork: Option<df_imagery::ArtworkBinding>,
 }
 
 impl AssembledPrompt {
@@ -166,7 +167,18 @@ impl AssembledPrompt {
             scene_party: None,
             scene_hand_custody: String::new(),
             staging_order: Vec::new(),
+            artwork: None,
         }
+    }
+
+    /// Public artwork identity and run selection remain typed immutable metadata.
+    pub(in crate::gameplay) fn with_artwork(mut self, artwork: df_imagery::ArtworkBinding) -> Self {
+        self.artwork = Some(artwork);
+        self
+    }
+
+    pub(in crate::gameplay) fn artwork(&self) -> Option<&df_imagery::ArtworkBinding> {
+        self.artwork.as_ref()
     }
 
     pub(in crate::gameplay) fn with_scene_party(

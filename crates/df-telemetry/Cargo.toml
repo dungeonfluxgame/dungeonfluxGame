@@ -19,3 +19,6 @@ opentelemetry-proto = { version = "=0.31.0", default-features = false, features 
 [[bin]]
 name = "df-telemetry"
 path = "src/main.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-imagery = { path = "../df-imagery" }

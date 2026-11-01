@@ -224,6 +224,15 @@ async fn settle_scene(engine: &Arc<home_video::Engine>, plate_key: &str) -> Stri
     }
 }
 
+async fn scene_reference_key(fixture: &super::imagery::test_support::TransformFixture) -> String {
+    fixture
+        .keyed_reference(df_providers::ImageFormat::Jpeg, scene_still().into())
+        .await
+        .0
+        .as_str()
+        .to_owned()
+}
+
 fn scene_still() -> Vec<u8> {
     let pixels = image::RgbImage::from_pixel(8, 4, image::Rgb([23, 81, 144]));
     let mut bytes = Vec::new();
@@ -431,16 +440,18 @@ async fn a_cached_clip_symlink_to_an_outside_file_is_not_served() {
 
 #[tokio::test]
 async fn a_cached_loop_is_served_at_once_with_no_provider_call() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("cached");
     let root = asset_root();
     let engine = test_engine(
+        fixture.imagery().clone(),
         root.clone(),
         directory.clone(),
         endpoints(&fake),
         Duration::from_secs(30),
     );
-    let still = home_video::prepare_still_for_test(&root, PAINTING)
+    let still = home_video::prepare_still_for_test(fixture.imagery(), &root, PAINTING)
         .await
         .expect("the still");
     let key = clip_key(&still);
@@ -462,13 +473,17 @@ async fn a_cached_loop_is_served_at_once_with_no_provider_call() {
     assert_eq!(fake.count("pricing"), 0, "nor a price check");
     assert_eq!(engine.clips_charged(), 0, "nor any charge");
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn one_submit_serves_every_display_that_asks_for_the_same_painting() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("one-submit");
     let engine = test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory.clone(),
         endpoints(&fake),
@@ -488,13 +503,17 @@ async fn one_submit_serves_every_display_that_asks_for_the_same_painting() {
     assert_eq!(fake.count("POST"), 1, "three displays, one submit");
     assert_eq!(engine.clips_charged(), 1, "one clip charged");
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn every_clip_that_is_sent_is_charged_and_nothing_is_ever_refused_for_cost() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("no-cap");
     let engine = test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory.clone(),
         endpoints(&fake),
@@ -539,13 +558,17 @@ async fn every_clip_that_is_sent_is_charged_and_nothing_is_ever_refused_for_cost
     assert_eq!(run["unknown_events"], 2);
     assert_eq!(run["by_cause"][0]["cause"], "home_video");
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_refusal_or_failure_from_the_provider_leaves_the_still_with_a_diagnostic() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let directory = scratch("refused");
     let engine = test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory.clone(),
         endpoints(&fake),
@@ -572,13 +595,17 @@ async fn a_refusal_or_failure_from_the_provider_leaves_the_still_with_a_diagnost
         "no path is served for a failed loop"
     );
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_malformed_clip_fails_closed_and_is_not_cached() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("malformed");
     let engine = test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory.clone(),
         endpoints(&fake),
@@ -590,13 +617,17 @@ async fn a_malformed_clip_fails_closed_and_is_not_cached() {
     let cached = std::fs::read_dir(&directory).map_or(0, |entries| entries.count());
     assert_eq!(cached, 0, "a refused file is never written to the cache");
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_timeout_leaves_the_still_and_the_spend_is_kept() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::NeverFinishes);
     let directory = scratch("timeout");
     let engine = test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory.clone(),
         endpoints(&fake),
@@ -614,20 +645,24 @@ async fn a_timeout_leaves_the_still_and_the_spend_is_kept() {
         "a timed-out clip stays charged, never refunded"
     );
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     // Arrange: a cached loop for the farm's still and the engine the view reads.
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("display-view");
     let root = asset_root();
-    let still = home_video::prepare_still_for_test(&root, PAINTING)
+    let still = home_video::prepare_still_for_test(fixture.imagery(), &root, PAINTING)
         .await
         .expect("the still");
     let key = clip_key(&still);
     std::fs::write(directory.join(format!("{key}.mp4")), vec![0u8; 64]).expect("a cached clip");
     let engine = test_engine(
+        fixture.imagery().clone(),
         root,
         directory.clone(),
         endpoints(&fake),
@@ -676,6 +711,9 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
         format!("/gameplay/home-video/{key}")
     );
     let _ = std::fs::remove_dir_all(&directory);
+    home_video::retire().expect("retire test engine");
+    drop(engine);
+    fixture.close().await;
 }
 
 #[test]
@@ -717,10 +755,11 @@ fn the_lobby_keeps_the_still_it_shows_and_pairs_no_loop_made_from_another() {
 
 #[tokio::test]
 async fn a_lobby_view_never_pairs_a_loop_with_a_still_other_than_its_source() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     // Arrange: the loop that is ready for the harbour painting, and a lobby view that
     // shows a different still (the adventure's own opening picture).
     let root = asset_root();
-    let painting_still = home_video::prepare_still_for_test(&root, PAINTING)
+    let painting_still = home_video::prepare_still_for_test(fixture.imagery(), &root, PAINTING)
         .await
         .expect("the painting still");
     let painting_path = format!("/gameplay/home-video/{}", clip_key(&painting_still));
@@ -762,7 +801,7 @@ async fn a_lobby_view_never_pairs_a_loop_with_a_still_other_than_its_source() {
         "a loop made from another still is never paired with this one"
     );
     if !journey.home_video_path.is_empty() {
-        let other_still = home_video::prepare_still_for_test(&root, OTHER)
+        let other_still = home_video::prepare_still_for_test(fixture.imagery(), &root, OTHER)
             .await
             .expect("the other still");
         assert_eq!(
@@ -771,21 +810,24 @@ async fn a_lobby_view_never_pairs_a_loop_with_a_still_other_than_its_source() {
             "the only loop a view may carry is the one made from its shown still"
         );
     }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_ready_loop_is_only_ever_observed_for_the_still_it_was_made_from() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     // Arrange: a cached loop for the harbour painting only.
     let fake = fake(Scenario::MalformedClip);
     let directory = scratch("pairing");
     let root = asset_root();
     let engine = test_engine(
+        fixture.imagery().clone(),
         root.clone(),
         directory.clone(),
         endpoints(&fake),
         Duration::from_secs(30),
     );
-    let still = home_video::prepare_still_for_test(&root, PAINTING)
+    let still = home_video::prepare_still_for_test(fixture.imagery(), &root, PAINTING)
         .await
         .expect("the still");
     let key = clip_key(&still);
@@ -804,6 +846,8 @@ async fn a_ready_loop_is_only_ever_observed_for_the_still_it_was_made_from() {
     );
     assert_eq!(other, LoopView::Pending);
     let _ = std::fs::remove_dir_all(&directory);
+    drop(engine);
+    fixture.close().await;
 }
 
 /// Development check: one real generation of a painting's loop through the engine, reporting the
@@ -815,6 +859,7 @@ async fn live_generation_of_one_painting() {
     let Ok(painting) = std::env::var("DF_HOME_VIDEO_LIVE_GENERATE") else {
         return;
     };
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let credential = std::env::var("FAL_KEY").expect("FAL_KEY is set for this check");
     // The same two CDN hosts the server pins.
     let pins: Vec<df_providers::FalCdnPin> = ["v3.fal.media", "v3b.fal.media"]
@@ -832,6 +877,7 @@ async fn live_generation_of_one_painting() {
         std::env::var("DF_HOME_VIDEO_LIVE_CACHE").expect("the live cache directory is named"),
     );
     let engine = home_video::live_test_engine(
+        fixture.imagery().clone(),
         asset_root(),
         directory,
         credential,
@@ -849,6 +895,8 @@ async fn live_generation_of_one_painting() {
         stage.starts_with("ready:"),
         "the generation did not produce a loop: {stage}"
     );
+    drop(engine);
+    fixture.close().await;
 }
 
 /// Waits for an outcome for as long as a real generation can take.
@@ -913,11 +961,13 @@ async fn print_the_cache_key_of_a_painting_for_seeding() {
     let Some(path) = std::env::var_os("DF_HOME_VIDEO_KEY_FILE") else {
         return;
     };
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let painting = std::env::var("DF_HOME_VIDEO_PAINTING").unwrap_or_else(|_| PAINTING.to_owned());
-    let still = home_video::prepare_still_for_test(&asset_root(), &painting)
+    let still = home_video::prepare_still_for_test(fixture.imagery(), &asset_root(), &painting)
         .await
         .expect("the still is prepared");
     std::fs::write(path, clip_key(&still)).expect("the key file is writable");
+    fixture.close().await;
 }
 
 fn inputs(
@@ -982,15 +1032,17 @@ fn the_scene_video_switch_is_opt_in_independent_of_provider_credentials() {
 
 #[tokio::test]
 async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keeps_the_still() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let directory = scratch("scene-request");
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         directory.clone(),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let plate_key = "a".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     let still = scene_still();
     let description = "the innkeeper at mid-left rolls dice beside the fire";
     engine.request_scene_for_test(
@@ -1023,9 +1075,14 @@ async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keep
         bodies[0].clone()
     };
     let request: serde_json::Value = serde_json::from_slice(&body).expect("fal JSON");
-    let prepared = home_video::prepare_scene_still_for_test(still)
-        .await
-        .expect("the first frame is normalized");
+    let prepared = home_video::prepare_scene_still_for_test(
+        fixture.imagery(),
+        &fixture
+            .reference(df_providers::ImageFormat::Jpeg, still.into())
+            .await,
+    )
+    .await
+    .expect("the first frame is normalized");
     let expected_frame = format!(
         "data:image/jpeg;base64,{}",
         home_video::base64_encode(&prepared)
@@ -1038,10 +1095,13 @@ async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keep
     assert!(prompt.contains("camera completely still"));
     assert!(prompt.contains("breathe, blink, and shift their weight"));
     assert!(prompt.contains("dust drifts slowly"));
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_cached_scene_clip_is_ready_with_no_provider_call_and_an_edited_plate_gets_its_own() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let directory = scratch("scene-cache");
     let description = "a dice game beside the fire";
@@ -1049,12 +1109,13 @@ async fn a_cached_scene_clip_is_ready_with_no_provider_call_and_an_edited_plate_
     std::fs::write(directory.join(format!("{cached_key}.mp4")), vec![0u8; 64])
         .expect("cached scene clip");
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         directory.clone(),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let plate_key = "b".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     engine.request_scene_for_test(
         &plate_key,
         scene_still(),
@@ -1079,7 +1140,7 @@ async fn a_cached_scene_clip_is_ready_with_no_provider_call_and_an_edited_plate_
     );
     assert_eq!(engine.clips_charged(), 0, "and costs nothing");
 
-    let edited_key = "c".repeat(64);
+    let edited_key = scene_reference_key(&fixture).await;
     engine.request_scene_for_test(
         &edited_key,
         scene_still(),
@@ -1094,19 +1155,23 @@ async fn a_cached_scene_clip_is_ready_with_no_provider_call_and_an_edited_plate_
         1,
         "the edited plate has its own request"
     );
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_changed_description_for_the_same_plate_is_a_new_clip_not_the_old_loop() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let directory = scratch("scene-changed-prompt");
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         directory.clone(),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let plate_key = "9".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     let old_key = scene_clip_key(&scene_still(), "the innkeeper rolls dice").expect("a key");
     std::fs::write(directory.join(format!("{old_key}.mp4")), vec![0u8; 64]).expect("an old loop");
 
@@ -1136,19 +1201,23 @@ async fn a_changed_description_for_the_same_plate_is_a_new_clip_not_the_old_loop
     );
     assert_eq!(fake.count("POST "), 1);
     assert_eq!(engine.clips_charged(), 1, "and the new clip is charged");
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn each_scene_clip_is_charged_on_the_ledger_with_a_spend_line() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         scratch("scene-charge"),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let first = "7".repeat(64);
-    let second = "8".repeat(64);
+    let first = scene_reference_key(&fixture).await;
+    let second = scene_reference_key(&fixture).await;
     engine.request_scene_for_test(&first, scene_still(), "a quiet hearth", "plate", false);
     settle_scene(&engine, &first).await;
     assert_eq!(engine.clips_charged(), 1);
@@ -1162,18 +1231,22 @@ async fn each_scene_clip_is_charged_on_the_ledger_with_a_spend_line() {
         !crate::gameplay::actor::audit_lines_containing("SPEND commit unit=video_clip").is_empty(),
         "the ledger writes a line for every charge"
     );
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn a_failed_clip_is_not_asked_for_again_and_the_hub_lists_it_until_it_is_invalidated() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         scratch("scene-failed-memory"),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let plate_key = "6".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     for _ in 0..3 {
         engine.request_scene_for_test(&plate_key, scene_still(), "a still room", "plate", false);
         settle_scene(&engine, &plate_key).await;
@@ -1228,13 +1301,17 @@ async fn a_failed_clip_is_not_asked_for_again_and_the_hub_lists_it_until_it_is_i
         2,
         "invalidating the key lets it be asked for again"
     );
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn scene_clips_are_not_requested_during_combat_or_a_roll() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let directory = scratch("scene-blocked");
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         directory,
         endpoints(&fake),
         Duration::from_secs(30),
@@ -1250,18 +1327,22 @@ async fn scene_clips_are_not_requested_during_combat_or_a_roll() {
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert_eq!(fake.count("POST "), 0);
     assert_eq!(engine.scene_stage_of(&"d".repeat(64)), None);
+    drop(engine);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn keyless_scene_clips_fail_without_provider_traffic() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Refused);
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         scratch("scene-keyless"),
         endpoints(&fake),
         Duration::from_secs(30),
         None,
     );
-    let plate_key = "e".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     engine.request_scene_for_test(
         &plate_key,
         scene_still(),
@@ -1272,6 +1353,8 @@ async fn keyless_scene_clips_fail_without_provider_traffic() {
     let stage = settle_scene(&engine, &plate_key).await;
     assert!(stage.contains("no FAL_KEY"), "{stage}");
     assert_eq!(fake.count("POST "), 0, "a keyless engine never submits");
+    drop(engine);
+    fixture.close().await;
 }
 
 #[test]
@@ -1364,14 +1447,16 @@ fn the_view_carries_the_loop_state_and_its_served_path_only_when_ready() {
 
 #[tokio::test]
 async fn a_submit_the_provider_rejects_logs_its_http_status_and_redacted_body() {
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
     let fake = fake(Scenario::Rejected);
     let engine = scene_test_engine(
+        fixture.imagery().clone(),
         scratch("scene-rejected"),
         endpoints(&fake),
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
-    let plate_key = "5".repeat(64);
+    let plate_key = scene_reference_key(&fixture).await;
     engine.request_scene_for_test(&plate_key, scene_still(), "a rejected room", "plate", false);
 
     let stage = settle_scene(&engine, &plate_key).await;
@@ -1391,4 +1476,39 @@ async fn a_submit_the_provider_rejects_logs_its_http_status_and_redacted_body() 
         1,
         "a submit that was sent is charged"
     );
+    drop(engine);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn the_scene_still_matches_the_preserved_legacy_jpeg_85_bytes() {
+    use sha2::{Digest, Sha256};
+    let fixture = super::imagery::test_support::TransformFixture::new().await;
+    let pixels = image::RgbaImage::from_fn(17, 23, |x, y| {
+        image::Rgba([
+            u8::try_from((x * 19 + y * 7) % 256).unwrap(),
+            u8::try_from((x * 3 + y * 37) % 256).unwrap(),
+            u8::try_from((x * 53 + y * 11) % 256).unwrap(),
+            [0, 64, 128, 192, 255][usize::try_from((x + y) % 5).unwrap()],
+        ])
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(pixels)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let source = fixture
+        .reference(df_providers::ImageFormat::Png, bytes.into_inner().into())
+        .await;
+    let actual = home_video::prepare_scene_still_for_test(fixture.imagery(), &source)
+        .await
+        .unwrap();
+    // Frozen pre-migration preparation at its actual STILL_QUALITY=85, including hidden RGB.
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&actual)),
+        "8b0249eb202d9d619b19bfe8fc168262bec0d26fe22d4926901b6b67d3fe6c55"
+    );
+    let decoded = image::load_from_memory_with_format(&actual, image::ImageFormat::Jpeg).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (1920, 1080));
+    assert!(!decoded.color().has_alpha());
+    fixture.close().await;
 }

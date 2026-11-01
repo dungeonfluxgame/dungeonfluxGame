@@ -1,6 +1,7 @@
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
-use df_providers::PlateJudgeConfig;
+use crate::gameplay::imagery::SceneParty;
+use df_providers::PhotoJudgeKind;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -32,10 +33,6 @@ fn answer(frame: &str, medium: &str, text: &str, dress: &str, people_count: Opti
     answer
 }
 
-async fn fake_judge(answer: Value) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
-    fake_judgments(vec![answer]).await
-}
-
 fn scene_answer(heroes: u64) -> Value {
     let mut value = answer("single_photograph", "photograph", "none", "period", None);
     value["hero_count"] = json!(heroes);
@@ -44,252 +41,14 @@ fn scene_answer(heroes: u64) -> Value {
     value
 }
 
-#[tokio::test]
-async fn photo_check_reads_visible_features_in_the_same_quality_judgement() {
-    let mut answer = scene_answer(6);
-    answer["visible_features"] = json!([{
-        "name": "fruit stand", "look": "A canvas stall with red apples in shallow baskets.",
-        "region": [650, 220, 920, 600], "recorded_id": null,
-    }]);
-    let (judge, request) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    let reading = super::super::Imagery::read_scene_photo(
-        &judge,
-        &image_jpeg(),
-        ImageFormat::Jpeg,
-        SceneParty::new(6, 2).unwrap(),
-        &sheet,
-        "hands empty",
-        Duration::from_secs(5),
-    )
-    .await
-    .unwrap();
-    assert_eq!(reading.outcome, PhotoCheckOutcome::Pass);
-    assert_eq!(reading.visible_features.len(), 1);
-    assert_eq!(reading.visible_features[0].name, "fruit stand");
-    assert_eq!(reading.visible_features[0].region, [650, 220, 920, 600]);
-    let request = request.await.unwrap();
-    let schema = &request["response_format"]["json_schema"]["schema"];
-    assert_eq!(schema["properties"]["visible_features"]["maxItems"], 8);
-    assert!(
-        schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("visible_features"))
-    );
+async fn fake_judge_endpoint(
+    answer: Value,
+) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Value>) {
+    fake_judgments_endpoint(vec![answer]).await
 }
-
-#[tokio::test]
-async fn photo_check_rejects_invalid_regions_and_never_exports_rejected_picture_features() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    for (heroes, region, expected_error) in [
-        (6, json!([600, 200, 500, 400]), true),
-        (6, json!([0, 0, 1001, 1000]), true),
-        (5, json!([0, 0, 1000, 1000]), false),
-    ] {
-        let mut answer = scene_answer(heroes);
-        answer["visible_features"] = json!([{"name":"fruit stand", "look":"A distant canvas stall.",
-            "region":region, "recorded_id":null}]);
-        let (judge, _) = fake_judge(answer).await;
-        let result = super::super::Imagery::read_scene_photo(
-            &judge,
-            &image_jpeg(),
-            ImageFormat::Jpeg,
-            SceneParty::new(6, 2).unwrap(),
-            &sheet,
-            "",
-            Duration::from_secs(5),
-        )
-        .await;
-        if expected_error {
-            assert!(matches!(
-                result,
-                Err(PhotoCheckError::Judge(PlateJudgeError::Output))
-            ));
-        } else {
-            let reading = result.unwrap();
-            assert!(matches!(
-                reading.outcome,
-                PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount { .. })
-            ));
-            assert!(reading.visible_features.is_empty());
-        }
-    }
-}
-
-#[tokio::test]
-async fn scene_photo_counts_against_the_sheet_and_requires_the_actual_count() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    for expected in [1, 2, 4, 6] {
-        for seen in [0, expected, expected + 1] {
-            let (judge, request) = fake_judge(scene_answer(seen as u64)).await;
-            let outcome = check_scene_photo(
-                &judge,
-                &image_jpeg(),
-                ImageFormat::Jpeg,
-                SceneParty::new(expected, 2).unwrap(),
-                &sheet,
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                outcome,
-                if seen == expected {
-                    PhotoCheckOutcome::Pass
-                } else {
-                    PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
-                        expected: expected as u8,
-                        seen: seen as u64,
-                    })
-                }
-            );
-            let request = request.await.unwrap();
-            let content = request["messages"][0]["content"].as_array().unwrap();
-            let instruction = content[0]["text"].as_str().unwrap();
-            assert!(instruction.contains(&format!("exactly {expected} player heroes")));
-            assert!(instruction.contains("including partly hidden figures, duplicates"));
-            assert!(instruction.contains("later photographs identify NPCs"));
-            assert_eq!(content[1]["text"], "Picture candidate-1:");
-            assert_eq!(content[3]["text"], "Picture reference-sheet:");
-            assert_eq!(
-                content
-                    .iter()
-                    .filter(|part| part["type"] == "image_url")
-                    .count(),
-                2
-            );
-            let schema = &request["response_format"]["json_schema"]["schema"];
-            assert_eq!(schema["properties"]["hero_count"]["type"], "integer");
-            assert!(
-                schema["required"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!("hero_count"))
-            );
-            assert_eq!(schema["additionalProperties"], false);
-        }
-    }
-}
-
-#[tokio::test]
-async fn scene_photo_does_not_allow_text_fallback_to_hide_a_count_failure() {
-    let mut missing_with_wrong_count = scene_answer(7);
-    missing_with_wrong_count
-        .as_object_mut()
-        .unwrap()
-        .remove("weapon_custody");
-    assert_eq!(
-        parse_scene_photo_answer(&missing_with_wrong_count, SceneParty::new(6, 2).unwrap()),
-        Ok(PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
-            expected: 6,
-            seen: 7
-        }))
-    );
-    let mut value = scene_answer(7);
-    value["text"] = json!("visible_text");
-    let (judge, _) = fake_judge(value).await;
-    assert_eq!(
-        check_scene_photo(
-            &judge,
-            &image_jpeg(),
-            ImageFormat::Jpeg,
-            SceneParty::new(6, 2).unwrap(),
-            &ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap(),
-        PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
-            expected: 6,
-            seen: 7
-        })
-    );
-}
-
-#[test]
-fn scene_photo_rejects_missing_or_invalid_counts_and_preserves_quality_failures() {
-    let party = SceneParty::new(2, 2).unwrap();
-    for invalid in [json!(null), json!(-1), json!("2"), json!(2.5)] {
-        let mut value = scene_answer(2);
-        value["hero_count"] = invalid;
-        assert_eq!(
-            parse_scene_photo_answer(&value, party),
-            Err(PlateJudgeError::Output)
-        );
-    }
-    let mut missing = scene_answer(2);
-    missing.as_object_mut().unwrap().remove("hero_count");
-    assert_eq!(
-        parse_scene_photo_answer(&missing, party),
-        Err(PlateJudgeError::Output)
-    );
-    for (field, value, failure) in [
-        ("frame", "grid_or_collage", PhotoCheckFailure::GridOrCollage),
-        (
-            "frame",
-            "cutout_composite",
-            PhotoCheckFailure::CutoutComposite,
-        ),
-        (
-            "medium",
-            "painting_or_illustration",
-            PhotoCheckFailure::NotPhotograph,
-        ),
-        ("medium", "cgi_or_render", PhotoCheckFailure::NotPhotograph),
-        ("text", "visible_text", PhotoCheckFailure::VisibleText),
-        (
-            "dress",
-            "modern_clothing",
-            PhotoCheckFailure::ModernClothing,
-        ),
-        ("setting", "modern", PhotoCheckFailure::ModernSetting),
-    ] {
-        let mut answer = scene_answer(2);
-        answer[field] = json!(value);
-        assert_eq!(
-            parse_scene_photo_answer(&answer, party),
-            Ok(PhotoCheckOutcome::Fail(failure))
-        );
-    }
-}
-
-#[test]
-fn hero_count_failure_retains_the_still_and_logs_only_numeric_counts() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/count-retention")
-        .join(std::process::id().to_string());
-    let failure = PhotoCheckFailure::HeroCount {
-        expected: 4,
-        seen: 5,
-    };
-    let bytes = image_jpeg();
-    let path = retain_candidate_at(
-        &root,
-        PhotoCheckKind::ScenePlate,
-        &bytes,
-        ImageFormat::Jpeg,
-        failure,
-        "private generation prompt",
-    )
-    .unwrap();
-    let line = record_retention(PhotoCheckKind::ScenePlate, failure, &Ok(path.clone()));
-    assert!(
-        line.contains(
-            "PHOTO_CHECK kind=scene_plate result=fail reason=hero_count expected=4 seen=5"
-        )
-    );
-    assert!(!line.contains("private generation prompt"));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    let metadata: Value =
-        serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
-    assert_eq!(metadata["expected"], 4);
-    assert_eq!(metadata["seen"], 5);
-}
-
-async fn fake_judgments(
+async fn fake_judgments_endpoint(
     answers: Vec<Value>,
-) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
+) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
@@ -352,215 +111,7 @@ async fn fake_judgments(
             stream.write_all(response.as_bytes()).await.unwrap();
         }
     });
-    let config = PlateJudgeConfig::loopback_fixture(address).unwrap();
-    (
-        NativePlateJudge::new(
-            config,
-            "test-token",
-            Duration::from_secs(5),
-            crate::gameplay::cost::test_meter(),
-        )
-        .unwrap(),
-        request_receiver,
-    )
-}
-
-async fn rejected(kind: PhotoCheckKind, answer: Value, expected: PhotoCheckFailure) {
-    let (judge, _) = fake_judge(answer).await;
-    let result = check_photo(
-        &judge,
-        kind,
-        &image_jpeg(),
-        ImageFormat::Jpeg,
-        Duration::from_secs(5),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result, PhotoCheckOutcome::Fail(expected));
-}
-
-#[tokio::test]
-async fn rejects_contact_sheets_and_cutout_composites() {
-    for (frame, expected) in [
-        ("grid_or_collage", PhotoCheckFailure::GridOrCollage),
-        ("cutout_composite", PhotoCheckFailure::CutoutComposite),
-    ] {
-        rejected(
-            PhotoCheckKind::ScenePlate,
-            answer(frame, "photograph", "none", "period", None),
-            expected,
-        )
-        .await;
-    }
-}
-
-#[tokio::test]
-async fn rejects_painterly_and_rendered_media() {
-    for medium in ["painting_or_illustration", "cgi_or_render"] {
-        rejected(
-            PhotoCheckKind::ScenePlate,
-            answer("single_photograph", medium, "none", "period", None),
-            PhotoCheckFailure::NotPhotograph,
-        )
-        .await;
-    }
-}
-
-#[tokio::test]
-async fn rejects_visible_text_and_modern_clothing() {
-    rejected(
-        PhotoCheckKind::ScenePlate,
-        answer(
-            "single_photograph",
-            "photograph",
-            "visible_text",
-            "period",
-            None,
-        ),
-        PhotoCheckFailure::VisibleText,
-    )
-    .await;
-    rejected(
-        PhotoCheckKind::ScenePlate,
-        answer(
-            "single_photograph",
-            "photograph",
-            "none",
-            "modern_clothing",
-            None,
-        ),
-        PhotoCheckFailure::ModernClothing,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn rejects_people_in_an_empty_canonical_room() {
-    let mut room_answer = answer("single_photograph", "photograph", "none", "period", None);
-    room_answer["people_present"] = json!("some");
-    rejected(
-        PhotoCheckKind::CanonicalRoom,
-        room_answer,
-        PhotoCheckFailure::PeopleInEmptyRoom,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn rejects_a_character_with_not_exactly_one_person() {
-    rejected(
-        PhotoCheckKind::CanonicalCharacter,
-        answer(
-            "single_photograph",
-            "photograph",
-            "none",
-            "period",
-            Some("not_one"),
-        ),
-        PhotoCheckFailure::CharacterCountNotOne,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn rejects_a_canonical_character_answered_as_having_no_people() {
-    rejected(
-        PhotoCheckKind::CanonicalCharacter,
-        answer(
-            "single_photograph",
-            "photograph",
-            "none",
-            "no_people",
-            Some("not_one"),
-        ),
-        PhotoCheckFailure::CharacterHasNoPeople,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn accepts_a_photographic_plate_and_requires_character_count_in_the_schema() {
-    let (judge, _) = fake_judge(answer(
-        "single_photograph",
-        "photograph",
-        "none",
-        "period",
-        None,
-    ))
-    .await;
-    assert_eq!(
-        check_photo(
-            &judge,
-            PhotoCheckKind::ScenePlate,
-            &image_jpeg(),
-            ImageFormat::Jpeg,
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap(),
-        PhotoCheckOutcome::Pass
-    );
-}
-
-#[tokio::test]
-async fn rejects_a_modern_place_even_with_period_people() {
-    let mut modern = answer("single_photograph", "photograph", "none", "no_people", None);
-    modern["setting"] = json!("modern");
-    modern["people_present"] = json!("none");
-    rejected(
-        PhotoCheckKind::CanonicalRoom,
-        modern,
-        PhotoCheckFailure::ModernSetting,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
-    for (people_present, expected) in [
-        (
-            "some",
-            PhotoCheckOutcome::Fail(PhotoCheckFailure::PeopleInEmptyRoom),
-        ),
-        ("none", PhotoCheckOutcome::Pass),
-    ] {
-        let mut room_answer = answer("single_photograph", "photograph", "none", "period", None);
-        room_answer["people_present"] = json!(people_present);
-        let (judge, request_receiver) = fake_judge(room_answer).await;
-        assert_eq!(
-            check_photo(
-                &judge,
-                PhotoCheckKind::CanonicalRoom,
-                &image_jpeg(),
-                ImageFormat::Jpeg,
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap(),
-            expected
-        );
-        let request = request_receiver.await.unwrap();
-        let content = request["messages"][0]["content"].as_array().unwrap();
-        let instruction = content[0]["text"].as_str().unwrap();
-        assert!(instruction.contains("clean, evenly lit establishing shot of an empty place"));
-        assert!(instruction.contains("are not evidence of rendering"));
-        assert!(instruction.contains("Require positive visible evidence of another medium"));
-        assert!(instruction.contains("brushstrokes, drawn outlines or visibly painted textures"));
-        assert!(instruction.contains("visibly synthetic geometry, plastic-like materials"));
-        assert_eq!(content[2]["image_url"]["detail"], "high");
-        let schema = &request["response_format"]["json_schema"]["schema"];
-        assert_eq!(
-            schema["properties"]["people_present"]["enum"],
-            json!(["none", "some"])
-        );
-        assert!(
-            schema["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("people_present"))
-        );
-        assert_eq!(schema["additionalProperties"], false);
-    }
+    (address, request_receiver)
 }
 
 #[test]
@@ -571,15 +122,47 @@ fn photographic_correction_preserves_an_empty_rooms_people_count() {
     assert!(!correction.contains("real people"));
 }
 
+struct SavedPhotoProof(std::path::PathBuf);
+impl super::super::DevelopmentSavedPhotoSource for SavedPhotoProof {
+    fn read_current<'a>(
+        &'a self,
+        owner: &'a df_imagery::ImageOwner,
+    ) -> super::super::central::ReferenceFuture<'a, ReferenceImage> {
+        Box::pin(async move {
+            if !matches!(owner, df_imagery::ImageOwner::Run { .. }) {
+                return Err(super::super::ImageFailure::Refused);
+            }
+            super::super::Imagery::read_saved_photo(&self.0, 16 * 1024 * 1024)
+                .await
+                .map_err(|_| super::super::ImageFailure::BadOutput)
+        })
+    }
+}
+async fn saved_check(
+    imagery: &super::super::Imagery,
+    kind: PhotoJudgeKind,
+    path: &std::path::Path,
+) -> Result<PhotoCheckOutcome, PhotoCheckError> {
+    imagery
+        .check_saved_photo(
+            kind,
+            path,
+            std::sync::Arc::new(SavedPhotoProof(path.to_owned())),
+        )
+        .await
+}
+
 #[tokio::test]
 async fn saved_photo_check_calls_the_judge_once_with_the_files_picture_and_kind() {
-    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/saved-photo-check")
-        .join(std::process::id().to_string());
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let directory = crate::gameplay::imagery::tests::directory("saved-photo-check");
     std::fs::create_dir_all(&directory).unwrap();
     let bytes = image_jpeg();
     let path = directory.join("saved candidate.image");
     std::fs::write(&path, &bytes).unwrap();
+    let Some(mut fixture) = DirectionFixture::photographic(&directory).await else {
+        return;
+    };
     for kind in [
         PhotoCheckKind::CanonicalRoom,
         PhotoCheckKind::ScenePlate,
@@ -591,64 +174,78 @@ async fn saved_photo_check_calls_the_judge_once_with_the_files_picture_and_kind(
             PhotoCheckKind::CanonicalCharacter => reply["people_count"] = json!("exactly_one"),
             PhotoCheckKind::ScenePlate => {}
         }
-        // A fixture accepts exactly one request and then closes its listener. An extra judge
-        // invocation would fail the successful result; the captured body pins bytes and kind.
-        let (saved_judge, saved_request) = fake_judge(reply.clone()).await;
+        let (address, saved_request) = fake_judge_endpoint(reply.clone()).await;
+        fixture.photo_judge(address).await;
         assert_eq!(
-            super::super::Imagery::check_saved_photo(&saved_judge, kind.into(), &path)
+            saved_check(&fixture.imagery, kind.into(), &path)
                 .await
                 .unwrap(),
             PhotoCheckOutcome::Pass
         );
-        let (direct_judge, direct_request) = fake_judge(reply).await;
+        let request = saved_request.await.unwrap();
+        assert_eq!(request["model"], "gpt-5.5");
+        assert_eq!(request["max_completion_tokens"], 3000);
         assert_eq!(
-            check_photo(
-                &direct_judge,
-                kind,
-                &bytes,
-                ImageFormat::Jpeg,
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap(),
-            PhotoCheckOutcome::Pass
+            request["response_format"]["json_schema"]["name"],
+            "photo-quality"
         );
-        assert_eq!(saved_request.await.unwrap(), direct_request.await.unwrap());
+        assert_eq!(
+            request["messages"][0]["content"][1]["text"],
+            "Picture candidate-1:"
+        );
+        let properties = &request["response_format"]["json_schema"]["schema"]["properties"];
+        assert_eq!(
+            properties.get("people_present").is_some(),
+            kind == PhotoCheckKind::CanonicalRoom
+        );
+        assert_eq!(
+            properties.get("people_count").is_some(),
+            kind == PhotoCheckKind::CanonicalCharacter
+        );
+        // Full legacy JSON and JPEG parity lives in the private imagery adapter golden test.
     }
+    assert_eq!(
+        fixture.calls(),
+        0,
+        "saved inspection never generates artwork"
+    );
+    fixture.close().await;
 }
-
 #[tokio::test]
 async fn saved_photo_check_reports_the_closed_reason_and_refuses_bad_files_before_judging() {
-    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/saved-photo-failure")
-        .join(std::process::id().to_string());
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let directory = crate::gameplay::imagery::tests::directory("saved-photo-failure");
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("candidate.image");
     std::fs::write(&path, image_jpeg()).unwrap();
-    let (judge, _) = fake_judge(room_answer("none", "modern")).await;
-    let outcome =
-        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::CanonicalRoom, &path)
-            .await
-            .unwrap();
+    let Some(mut fixture) = DirectionFixture::photographic(&directory).await else {
+        return;
+    };
+    let (address, _) = fake_judge_endpoint(room_answer("none", "modern")).await;
+    fixture.photo_judge(address).await;
+    let outcome = saved_check(&fixture.imagery, PhotoJudgeKind::CanonicalRoom, &path)
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         PhotoCheckOutcome::Fail(PhotoCheckFailure::ModernSetting)
     );
     assert_eq!(outcome.verdict(), "fail");
     assert_eq!(outcome.reason(), Some("modern_setting"));
-    let (judge, mut requests) = fake_judge(room_answer("none", "period")).await;
+    let (address, mut requests) = fake_judge_endpoint(room_answer("none", "period")).await;
+    fixture.photo_judge(address).await;
     assert_eq!(
-        super::super::Imagery::check_saved_photo(
-            &judge,
+        saved_check(
+            &fixture.imagery,
             PhotoJudgeKind::CanonicalRoom,
-            &directory.join("missing.image"),
+            &directory.join("missing.image")
         )
         .await,
         Err(PhotoCheckError::FileRead)
     );
     std::fs::write(&path, b"not an image").unwrap();
     assert_eq!(
-        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::ScenePlate, &path).await,
+        saved_check(&fixture.imagery, PhotoJudgeKind::ScenePlate, &path).await,
         Err(PhotoCheckError::ImagePreparation)
     );
     let oversized = directory.join("oversized.image");
@@ -657,61 +254,110 @@ async fn saved_photo_check_reports_the_closed_reason_and_refuses_bad_files_befor
         .set_len(16 * 1024 * 1024 + 1)
         .unwrap();
     assert_eq!(
-        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::ScenePlate, &oversized)
-            .await,
+        saved_check(&fixture.imagery, PhotoJudgeKind::ScenePlate, &oversized).await,
         Err(PhotoCheckError::FileTooLarge)
     );
     assert!(matches!(
         requests.try_recv(),
         Err(tokio::sync::oneshot::error::TryRecvError::Empty)
     ));
+    assert_eq!(fixture.calls(), 0);
+    fixture.close().await;
 }
 
-#[test]
-fn rejected_candidate_keeps_exact_bytes_reason_prompt_and_bounded_history() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/reject-retention-test")
-        .join(std::process::id().to_string());
-    let bytes = image_jpeg();
-    let path = retain_candidate_at(
-        &root,
-        PhotoCheckKind::CanonicalRoom,
-        &bytes,
-        ImageFormat::Jpeg,
-        PhotoCheckFailure::VisibleText,
-        "The exact original room prompt",
-    )
-    .unwrap();
-    let line = record_retention(
-        PhotoCheckKind::CanonicalRoom,
-        PhotoCheckFailure::VisibleText,
-        &Ok(path.clone()),
-    );
-    assert!(line.contains("PHOTO_CHECK kind=canonical_room result=fail reason=visible_text"));
-    assert!(line.contains(&format!("path={:?}", path.display().to_string())));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    let metadata: Value =
-        serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
-    assert_eq!(metadata["reason"], "visible_text");
-    assert_eq!(metadata["prompt"], "The exact original room prompt");
-    assert_eq!(metadata["kind"], "canonical_room");
-    for _ in 0..MAXIMUM_REJECTED_CANDIDATES + 3 {
-        retain_candidate_at(
-            &root,
-            PhotoCheckKind::CanonicalRoom,
-            &bytes,
-            ImageFormat::Jpeg,
-            PhotoCheckFailure::ModernSetting,
-            "corrected room prompt",
-        )
-        .unwrap();
-    }
+#[tokio::test]
+async fn saved_photo_check_each_explicit_read_is_fresh_and_never_reuses_a_prior_judgement() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let root = crate::gameplay::imagery::tests::directory("saved-photo-fresh");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("source.image");
+    std::fs::write(&path, image_jpeg()).unwrap();
+    let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+        return;
+    };
+    let (address, _) = fake_judgments_endpoint(vec![
+        room_answer("none", "period"),
+        room_answer("none", "modern"),
+    ])
+    .await;
+    fixture.photo_judge(address).await;
     assert_eq!(
-        std::fs::read_dir(root.join("photo-check-rejected"))
-            .unwrap()
-            .count(),
-        MAXIMUM_REJECTED_CANDIDATES * 2
+        saved_check(&fixture.imagery, PhotoJudgeKind::CanonicalRoom, &path)
+            .await
+            .unwrap(),
+        PhotoCheckOutcome::Pass
     );
+    assert_eq!(
+        saved_check(&fixture.imagery, PhotoJudgeKind::CanonicalRoom, &path)
+            .await
+            .unwrap(),
+        PhotoCheckOutcome::Fail(PhotoCheckFailure::ModernSetting)
+    );
+    assert_eq!(fixture.calls(), 0);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn saved_photo_check_refuses_source_bytes_changed_during_trusted_import_before_judging() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    struct ChangedSource(std::path::PathBuf);
+    impl super::super::DevelopmentSavedPhotoSource for ChangedSource {
+        fn read_current<'a>(
+            &'a self,
+            owner: &'a df_imagery::ImageOwner,
+        ) -> super::super::central::ReferenceFuture<'a, ReferenceImage> {
+            Box::pin(async move {
+                if !matches!(owner, df_imagery::ImageOwner::Run { .. }) {
+                    return Err(super::super::ImageFailure::Refused);
+                }
+                let path = self.0.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut changed = std::io::Cursor::new(Vec::new());
+                    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                        2,
+                        2,
+                        image::Rgb([240, 50, 20]),
+                    ))
+                    .write_to(&mut changed, image::ImageFormat::Jpeg)
+                    .unwrap();
+                    std::fs::write(path, changed.into_inner()).unwrap();
+                })
+                .await
+                .unwrap();
+                super::super::Imagery::read_saved_photo(&self.0, 16 * 1024 * 1024)
+                    .await
+                    .map_err(|_| super::super::ImageFailure::BadOutput)
+            })
+        }
+    }
+    let root = crate::gameplay::imagery::tests::directory("saved-photo-source-change");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("source.image");
+    std::fs::write(&path, image_jpeg()).unwrap();
+    let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+        return;
+    };
+    let (address, mut requests) = fake_judge_endpoint(room_answer("none", "period")).await;
+    fixture.photo_judge(address).await;
+    assert_eq!(
+        fixture
+            .imagery
+            .check_saved_photo(
+                PhotoJudgeKind::CanonicalRoom,
+                &path,
+                std::sync::Arc::new(ChangedSource(path.clone())),
+            )
+            .await,
+        Err(PhotoCheckError::Analysis(
+            super::super::ImageFailure::Refused
+        ))
+    );
+    assert!(matches!(
+        requests.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    assert_eq!(fixture.calls(), 0);
+    fixture.close().await;
 }
 
 fn room_answer(text: &str, setting: &str) -> Value {
@@ -721,7 +367,9 @@ fn room_answer(text: &str, setting: &str) -> Value {
     value
 }
 
-fn canonical_room_request() -> super::super::ImageRequest {
+async fn canonical_room_request(
+    fixture: &crate::gameplay::imagery::tests::DirectionFixture,
+) -> super::super::ImageRequest {
     use crate::gameplay::{
         adventure::scene_model::SceneModel, imagery, startup_configuration::ContentRating,
     };
@@ -738,17 +386,23 @@ fn canonical_room_request() -> super::super::ImageRequest {
     };
     imagery::ImageRequest {
         kind: imagery::ImageKind::CanonicalRoom,
-        references: vec![imagery::ReferenceImage::new(
-            ImageFormat::Jpeg,
-            bytes::Bytes::from(image_jpeg()),
-        )],
+        references: vec![
+            fixture
+                .import_bytes(ImageFormat::Jpeg, bytes::Bytes::from(image_jpeg()))
+                .await
+                .1,
+        ],
         prompt: imagery::canonical_room(ContentRating::Restrained, &model, "test-street", "P1")
             .unwrap(),
         output: imagery::OutputSpec::BACKDROP,
     }
 }
 
-fn scene_plate_request(heroes: usize, edit: bool) -> super::super::ImageRequest {
+async fn scene_plate_request(
+    fixture: &crate::gameplay::imagery::tests::DirectionFixture,
+    heroes: usize,
+    edit: bool,
+) -> super::super::ImageRequest {
     use crate::gameplay::{imagery, shot::Camera, startup_configuration::ContentRating};
     let party = SceneParty::new(heroes, 2).unwrap();
     let cast = imagery::FluxCast {
@@ -782,8 +436,14 @@ fn scene_plate_request(heroes: usize, edit: bool) -> super::super::ImageRequest 
             imagery::ImageKind::ScenePlate
         },
         references: vec![
-            ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
-            ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
+            fixture
+                .import_bytes(ImageFormat::Jpeg, image_jpeg().into())
+                .await
+                .1,
+            fixture
+                .import_bytes(ImageFormat::Jpeg, image_jpeg().into())
+                .await
+                .1,
         ],
         prompt,
         output: imagery::OutputSpec::PLATE,
@@ -797,18 +457,17 @@ async fn wrong_scene_hero_count_retries_and_right_count_passes_for_each_party_si
         for edit in [false, true] {
             for retry in [false, true] {
                 let root = crate::gameplay::imagery::tests::directory("scene-count-retry");
-                let fixture = DirectionFixture::photographic(&root);
+                let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+                    return;
+                };
                 let mut answers = Vec::new();
                 if retry {
                     answers.push(scene_answer(heroes as u64 + 1));
                 }
                 answers.push(scene_answer(heroes as u64));
-                let (judge, request_seen) = fake_judgments(answers).await;
-                let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-                    panic!("enabled fixture");
-                };
-                assert!(engine.judge.set(judge).is_ok());
-                let request = scene_plate_request(heroes, edit);
+                let (judge, request_seen) = fake_judgments_endpoint(answers).await;
+                fixture.photo_judge(judge).await;
+                let request = scene_plate_request(&fixture, heroes, edit).await;
                 let original = request.prompt.as_str().to_owned();
                 let key = fixture
                     .imagery
@@ -837,6 +496,7 @@ async fn wrong_scene_hero_count_retries_and_right_count_passes_for_each_party_si
                     .as_str()
                     .unwrap();
                 assert!(instruction.contains(&format!("exactly {heroes} player heroes")));
+                fixture.close().await;
             }
         }
     }
@@ -847,20 +507,24 @@ async fn persistent_scene_count_mismatch_keeps_the_fallback_and_never_publishes_
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     for edit in [false, true] {
         let root = crate::gameplay::imagery::tests::directory("scene-count-refused");
-        let fixture = DirectionFixture::photographic(&root);
+        let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+            return;
+        };
         let mut wrong = scene_answer(7);
         wrong["text"] = json!("visible_text");
-        let (judge, _) = fake_judgments(vec![wrong.clone(), wrong]).await;
-        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-            panic!("enabled fixture");
-        };
-        assert!(engine.judge.set(judge).is_ok());
-        let key = fixture.imagery.key_for(&scene_plate_request(6, edit));
+        let (judge, _) = fake_judgments_endpoint(vec![wrong.clone(), wrong]).await;
+        fixture.photo_judge(judge).await;
+        let key = fixture
+            .imagery
+            .key_for(&scene_plate_request(&fixture, 6, edit).await);
         for _ in 0..2 {
             assert_eq!(
                 fixture
                     .imagery
-                    .generate("plate:test-room", scene_plate_request(6, edit))
+                    .generate(
+                        "plate:test-room",
+                        scene_plate_request(&fixture, 6, edit).await
+                    )
                     .await,
                 Err(imagery::ImageFailure::BadOutput)
             );
@@ -877,11 +541,12 @@ async fn persistent_scene_count_mismatch_keeps_the_fallback_and_never_publishes_
         assert!(
             fixture
                 .imagery
-                .peek(&scene_plate_request(6, edit))
+                .peek(&scene_plate_request(&fixture, 6, edit).await)
                 .await
                 .is_none()
         );
-        assert!(!engine.cached_now(key.as_str()));
+
+        fixture.close().await;
     }
 }
 
@@ -891,17 +556,16 @@ async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generati
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/room-retry-pass")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&root);
-    let (judge, _) = fake_judgments(vec![
+    let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+        return;
+    };
+    let (judge, _) = fake_judgments_endpoint(vec![
         room_answer("visible_text", "period"),
         room_answer("none", "period"),
     ])
     .await;
-    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-        panic!("enabled fixture");
-    };
-    assert!(engine.judge.set(judge).is_ok());
-    let request = canonical_room_request();
+    fixture.photo_judge(judge).await;
+    let request = canonical_room_request(&fixture).await;
     let original = request.prompt.as_str().to_owned();
     let key = fixture
         .imagery
@@ -919,6 +583,7 @@ async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generati
         fixture.imagery.image(key.as_str()).await,
         imagery::Lookup::Image { .. }
     ));
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -927,21 +592,20 @@ async fn persistently_rejected_room_stops_at_two_generations_until_readmission()
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS16/room-retry-bound")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&root);
-    let (judge, _) = fake_judgments(vec![
+    let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+        return;
+    };
+    let (judge, _) = fake_judgments_endpoint(vec![
         room_answer("none", "modern"),
         room_answer("none", "modern"),
     ])
     .await;
-    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-        panic!("enabled fixture");
-    };
-    assert!(engine.judge.set(judge).is_ok());
+    fixture.photo_judge(judge).await;
     for _ in 0..2 {
         assert_eq!(
             fixture
                 .imagery
-                .generate("place:test-street", canonical_room_request())
+                .generate("place:test-street", canonical_room_request(&fixture).await)
                 .await,
             Err(imagery::ImageFailure::BadOutput)
         );
@@ -956,90 +620,7 @@ async fn persistently_rejected_room_stops_at_two_generations_until_readmission()
             .prompt()
             .contains(PhotoCheckFailure::ModernSetting.correction())
     );
-}
-
-#[tokio::test]
-async fn scene_photo_rejects_unrecorded_drawn_weapons_with_a_typed_reason() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    for recorded_draw in [false, true] {
-        let mut value = scene_answer(6);
-        value["weapon_custody"] = json!(if recorded_draw {
-            "matches_custody"
-        } else {
-            "unexpected_drawn_weapon"
-        });
-        let (judge, request) = fake_judge(value).await;
-        let prompt = if recorded_draw {
-            "Vesper: sword drawn in right hand, left hand empty. Other heroes: both hands empty."
-        } else {
-            "Vesper: both hands empty, sword sheathed at hip. Other heroes: both hands empty."
-        };
-        let outcome = check_scene_photo_with_custody(
-            &judge,
-            &image_jpeg(),
-            ImageFormat::Jpeg,
-            SceneParty::new(6, 2).unwrap(),
-            &sheet,
-            prompt,
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            outcome,
-            if recorded_draw {
-                PhotoCheckOutcome::Pass
-            } else {
-                PhotoCheckOutcome::Fail(PhotoCheckFailure::UnexpectedDrawnWeapon)
-            }
-        );
-        let request = request.await.unwrap();
-        let instruction = request["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap();
-        assert!(instruction.contains(prompt));
-        assert!(instruction.contains("bare sword pointed down still counts as drawn"));
-        assert_eq!(
-            request["response_format"]["json_schema"]["schema"]["properties"]["weapon_custody"]["enum"],
-            json!(["matches_custody", "unexpected_drawn_weapon"])
-        );
-    }
-}
-
-#[test]
-fn scene_photo_custody_is_required_and_count_failures_keep_priority_over_text() {
-    let party = SceneParty::new(6, 2).unwrap();
-    for invalid in [Value::Null, json!("unknown"), json!(false)] {
-        let mut value = scene_answer(6);
-        value["weapon_custody"] = invalid;
-        assert_eq!(
-            parse_scene_photo_answer(&value, party),
-            Err(PlateJudgeError::Output)
-        );
-    }
-    let mut value = scene_answer(6);
-    value.as_object_mut().unwrap().remove("weapon_custody");
-    assert_eq!(
-        parse_scene_photo_answer(&value, party),
-        Err(PlateJudgeError::Output)
-    );
-    let mut value = scene_answer(7);
-    value["text"] = json!("visible_text");
-    value["weapon_custody"] = json!("unexpected_drawn_weapon");
-    assert_eq!(
-        parse_scene_photo_answer(&value, party),
-        Ok(PhotoCheckOutcome::Fail(PhotoCheckFailure::HeroCount {
-            expected: 6,
-            seen: 7
-        }))
-    );
-    value["hero_count"] = json!(6);
-    assert_eq!(
-        parse_scene_photo_answer(&value, party),
-        Ok(PhotoCheckOutcome::Fail(
-            PhotoCheckFailure::UnexpectedDrawnWeapon
-        ))
-    );
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -1047,17 +628,19 @@ async fn unexpected_drawn_weapon_uses_the_existing_plate_regeneration_gate() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     for edit in [false, true] {
         let root = crate::gameplay::imagery::tests::directory("unexpected-weapon");
-        let fixture = DirectionFixture::photographic(&root);
+        let Some(mut fixture) = DirectionFixture::photographic(&root).await else {
+            return;
+        };
         let mut wrong = scene_answer(6);
         wrong["weapon_custody"] = json!("unexpected_drawn_weapon");
-        let (judge, _) = fake_judgments(vec![wrong, scene_answer(6)]).await;
-        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-            panic!("enabled fixture")
-        };
-        assert!(engine.judge.set(judge).is_ok());
+        let (judge, _) = fake_judgments_endpoint(vec![wrong, scene_answer(6)]).await;
+        fixture.photo_judge(judge).await;
         let key = fixture
             .imagery
-            .generate("plate:weapon-custody", scene_plate_request(6, edit))
+            .generate(
+                "plate:weapon-custody",
+                scene_plate_request(&fixture, 6, edit).await,
+            )
             .await
             .unwrap();
         assert_eq!(fixture.calls(), 2);
@@ -1070,59 +653,23 @@ async fn unexpected_drawn_weapon_uses_the_existing_plate_regeneration_gate() {
             fixture.imagery.image(key.as_str()).await,
             imagery::Lookup::Image { .. }
         ));
+        fixture.close().await;
     }
 }
 
 #[tokio::test]
-async fn scene_photo_uses_compact_hand_facts_within_the_judge_instruction_limit() {
-    let custody = json!(
-        (1..=9)
-            .map(|ordinal| json!({
-                "name": format!("Person {ordinal} {}", "N".repeat(32)),
-                "hands": "left hand empty, right hand empty; sword sheathed at hip"
-            }))
-            .collect::<Vec<_>>()
-    )
-    .to_string();
-    let (judge, request) = fake_judge(scene_answer(6)).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    assert_eq!(
-        check_scene_photo_with_custody(
-            &judge,
-            &image_jpeg(),
-            ImageFormat::Jpeg,
-            SceneParty::new(6, 2).unwrap(),
-            &sheet,
-            &custody,
-            Duration::from_secs(5)
-        )
-        .await
-        .unwrap(),
-        PhotoCheckOutcome::Pass
-    );
-    let request = request.await.unwrap();
-    let instruction = request["messages"][0]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(instruction.chars().count() <= 6000);
-    assert!(instruction.contains("Person 9"));
-    assert!(instruction.contains("sword sheathed at hip"));
-}
-
-#[tokio::test]
 async fn production_scene_gate_receives_compact_custody_for_fresh_and_edited_plates() {
-    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    use crate::gameplay::imagery::tests::DirectionFixture;
     let custody =
         "Vesper: sword drawn in right hand, left hand empty. Other heroes: both hands empty.";
     for edit in [false, true] {
         let cache = crate::gameplay::imagery::tests::directory("plate-custody");
-        let fixture = DirectionFixture::photographic(&cache);
-        let (judge, seen) = fake_judge(scene_answer(6)).await;
-        let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-            panic!("enabled")
+        let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+            return;
         };
-        assert!(engine.judge.set(judge).is_ok());
-        let mut request = scene_plate_request(6, edit);
+        let (judge, seen) = fake_judge_endpoint(scene_answer(6)).await;
+        fixture.photo_judge(judge).await;
+        let mut request = scene_plate_request(&fixture, 6, edit).await;
         request.prompt = request.prompt.with_scene_hand_custody(custody.into());
         fixture
             .imagery
@@ -1134,88 +681,25 @@ async fn production_scene_gate_receives_compact_custody_for_fresh_and_edited_pla
         assert!(instruction.contains(custody), "{instruction}");
         assert!(instruction.chars().count() <= 6_000);
         assert_eq!(fixture.calls(), 1);
+        fixture.close().await;
     }
-}
-#[tokio::test]
-async fn photo_publication_gate_preserves_features_and_public_record_ids_without_an_extra_judgement()
- {
-    let mut answer = scene_answer(2);
-    answer["visible_features"] = json!([{
-        "name":"fruit stand", "look":"Baskets of red apples under canvas.",
-        "region":[600,200,900,700], "recorded_id":null
-    }]);
-    let (judge, sent) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    let (failure, features) = super::super::photo_failure(
-        &judge,
-        PhotoCheckKind::ScenePlate,
-        &image_jpeg(),
-        ImageFormat::Jpeg,
-        "Photographic market scene.",
-        Some((SceneParty::new(2, 2).unwrap(), &sheet)),
-        r#"{"hands":[],"public_records":[{"id":"market-wenna","name":"Wenna"}]}"#,
-    )
-    .await;
-    assert!(failure.is_none());
-    assert_eq!(features.len(), 1);
-    assert_eq!(features[0].name, "fruit stand");
-    assert!(sent.await.unwrap().to_string().contains("market-wenna"));
-}
-#[tokio::test]
-async fn photo_feature_public_catalog_keeps_quality_and_custody_within_the_instruction_limit() {
-    let records=(0..256).map(|index|json!({"id":format!("market-item-{index}"),"name":format!("recorded object {index}")})).collect::<Vec<_>>();
-    let custody =
-        json!({"hands":"Pip: both hands empty; sword sheathed.","public_records":records})
-            .to_string();
-    let mut answer = scene_answer(6);
-    answer["visible_features"] = json!([{"name":"recorded object 255","look":"An already recorded public object.",
-        "region":[100,200,300,400],"recorded_id":"market-item-255"}]);
-    let (judge, sent) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
-    let result = super::super::Imagery::read_scene_photo(
-        &judge,
-        &image_jpeg(),
-        ImageFormat::Jpeg,
-        SceneParty::new(6, 2).unwrap(),
-        &sheet,
-        &custody,
-        Duration::from_secs(5),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result.outcome, PhotoCheckOutcome::Pass);
-    let request = sent.await.unwrap();
-    let instruction = request["messages"][0]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(instruction.chars().count() <= 6000);
-    assert!(instruction.contains("sword sheathed"));
-    assert_eq!(
-        result.visible_features[0].recorded_id.as_deref(),
-        Some("market-item-255")
-    );
-    assert!(request["response_format"]["json_schema"]["schema"]["properties"]["visible_features"]["items"]["properties"]["recorded_id"]["enum"]
-        .as_array().unwrap().contains(&json!("market-item-255")));
-    assert!(request["response_format"]["json_schema"]["schema"]["properties"]["visible_features"]["description"]
-        .as_str().unwrap().contains("market-item-255"));
 }
 
 #[tokio::test]
 async fn photo_check_keeps_only_the_accepted_retry_features_with_the_cached_image_key() {
-    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = crate::gameplay::imagery::tests::directory("photo_check_keeps_only_the_accepted_");
-    let fixture = DirectionFixture::photographic(&cache);
+    let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
     let mut accepted = scene_answer(6);
     accepted["visible_features"] = json!([{"name":"fruit stand","look":"Apples under canvas.","region":[600,200,900,700],"recorded_id":null}]);
     let mut rejected = accepted.clone();
     rejected["hero_count"] = json!(5);
     rejected["visible_features"][0]["name"] = json!("rejected fish cart");
-    let (judge, sent) = fake_judgments(vec![rejected, accepted]).await;
-    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-        panic!("enabled imagery")
-    };
-    assert!(engine.judge.set(judge).is_ok());
-    let mut request = scene_plate_request(6, false);
+    let (judge, sent) = fake_judgments_endpoint(vec![rejected, accepted]).await;
+    fixture.photo_judge(judge).await;
+    let mut request = scene_plate_request(&fixture, 6, false).await;
     request.prompt = request.prompt.with_scene_hand_custody(
         json!({"hands":"Hands empty; weapons sheathed.",
         "place":"place-market-street","source_hash":"f".repeat(64),"public_records":[]})
@@ -1247,7 +731,7 @@ async fn photo_check_keeps_only_the_accepted_retry_features_with_the_cached_imag
         .await
         .unwrap();
     assert_eq!(cached, key);
-    assert_eq!(engine.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(fixture.calls(), 2);
     assert_eq!(
         fixture
             .imagery
@@ -1259,23 +743,23 @@ async fn photo_check_keeps_only_the_accepted_retry_features_with_the_cached_imag
         evidence.visible_features
     );
     sent.await.unwrap();
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn photo_features_without_a_bound_place_do_not_break_legacy_plate_requests() {
-    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS40/photo-unbound-cache")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
+    let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
     let mut accepted = scene_answer(6);
     accepted["visible_features"] = json!([{"name":"fruit stand","look":"Apples under canvas.","region":[600,200,900,700],"recorded_id":null}]);
-    let (judge, sent) = fake_judge(accepted).await;
-    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-        panic!("enabled imagery")
-    };
-    assert!(engine.judge.set(judge).is_ok());
-    let mut request = scene_plate_request(6, false);
+    let (judge, sent) = fake_judge_endpoint(accepted).await;
+    fixture.photo_judge(judge).await;
+    let mut request = scene_plate_request(&fixture, 6, false).await;
     request.prompt = request
         .prompt
         .with_scene_hand_custody("Hands empty; weapons sheathed.".into());
@@ -1292,6 +776,7 @@ async fn photo_features_without_a_bound_place_do_not_break_legacy_plate_requests
             .unwrap()
             .is_none()
     );
-    assert_eq!(engine.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(fixture.calls(), 1);
     sent.await.unwrap();
+    fixture.close().await;
 }

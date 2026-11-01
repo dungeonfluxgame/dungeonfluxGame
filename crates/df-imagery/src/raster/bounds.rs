@@ -30,6 +30,19 @@ impl LiveBudget {
         })
     }
 
+    /// Charges already-resident typed analysis data throughout every later raster stage.
+    pub(crate) fn with_retained(&self, retained_bytes: u64) -> Result<Self, RasterError> {
+        let remaining = self.max_decoded_bytes.checked_sub(retained_bytes).ok_or(
+            RasterError::LiveBudgetExceeded {
+                needed_bytes: retained_bytes,
+            },
+        )?;
+        Ok(Self {
+            max_decoded_bytes: remaining,
+            max_output_bytes: self.max_output_bytes,
+        })
+    }
+
     /// Maximum encoded output bytes; the bounded writer stops here, never
     /// after a post-hoc measurement.
     pub(crate) fn max_output_bytes(&self) -> u64 {
@@ -100,11 +113,7 @@ pub(crate) fn rgba_bytes(width_px: u32, height_px: u32) -> u64 {
 
 /// Start of content of `content_len_px` placed on a `canvas_len_px` axis.
 /// Negative when the content overhangs and must be clipped by the caller.
-pub(crate) fn anchor_start(
-    canvas_len_px: u32,
-    content_len_px: u32,
-    axis: Anchor1D,
-) -> i64 {
+pub(crate) fn anchor_start(canvas_len_px: u32, content_len_px: u32, axis: Anchor1D) -> i64 {
     match axis {
         Anchor1D::Start => 0,
         Anchor1D::Center => (i64::from(canvas_len_px) - i64::from(content_len_px)) / 2,

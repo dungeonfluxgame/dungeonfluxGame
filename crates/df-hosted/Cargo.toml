@@ -11,6 +11,8 @@ name = "df-portal-hosted"
 path = "src/main.rs"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-assets = { path = "../df-assets" }
+df-auth = { path = "../df-auth" }
 df-account-app = { path = "../df-account-app" }
 df-customer = { path = "../df-customer" }
 df-google = { path = "../df-google" }
@@ -36,6 +38,7 @@ sha2 = "=0.11.0"
 hmac = "=0.13.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-assets = { path = "../df-assets", features = ["test-fakes"] }
 df-support = { path = "../df-support", features = ["fakes"] }
 tower = { version = "=0.5.3", features = ["util"] }
 http-body-util.workspace = true

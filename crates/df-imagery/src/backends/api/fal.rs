@@ -9,22 +9,36 @@
 //! opaque edit performs one paid stage; a transparent edit performs two, and
 //! the outcome carries both receipts so no second paid call is hidden.
 
-use std::{collections::HashSet, net::SocketAddr, time::Duration};
+#[cfg(test)]
+use std::net::SocketAddr;
+use std::{collections::HashSet, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-use super::{
-    ApiError, GeneratedImage, ImageBackground, ImageEdit, ImageFormat, ImageModeration, ImageUsage,
-    OperationalBounds, check_credential,
-};
+#[cfg(test)]
 use super::codec::{jpeg_size, webp_facts};
+use super::{
+    ApiError, ApiExchange, ApiFailure, DeclineContract, ImageBackground, ImageEdit, ImageFormat,
+    ImageModeration, OperationalBounds, check_credential, check_credentialed_origin,
+    check_endpoint_url, check_model_slug,
+};
+#[cfg(test)]
+use super::{GeneratedImage, ImageUsage};
+#[cfg(test)]
+use df_providers::{EncodedMediaFacts, inspect_png_off_worker};
 use df_providers::{
-    EncodedMediaFacts, HttpMethod, HttpRequest, NativeHttp, NativeHttpLimits, NativeHttpRefusal,
-    TextSchemaLimits, inspect_png_off_worker, parse_unique_json,
+    HttpMethod, HttpRequest, NativeHttp, NativeHttpLimits, NativeHttpRefusal, TextSchemaLimits,
+    parse_unique_json,
 };
 
-const QUEUE_ORIGIN: &str = "https://queue.fal.run";
+pub(crate) const QUEUE_ORIGIN: &str = "https://queue.fal.run";
+const GENERATION_CHECKPOINT_KIND: &str = "fal-generation-v2";
+const ALPHA_CHECKPOINT_KIND: &str = "fal-alpha-v2";
+/// Maximum journal envelope, including kind and field separators.
+const MAXIMUM_CHECKPOINT_BYTES: usize = 24_576;
+/// Maximum origin or origin-relative polling locator retained in a checkpoint.
+const MAXIMUM_LOCATOR_BYTES: usize = 8192;
 pub(crate) const FLUX_ULTRA: &str = "fal-ai/flux-pro/v1.1-ultra";
 pub(crate) const FLUX_KONTEXT_MULTI: &str = "fal-ai/flux-pro/kontext/max/multi";
 pub(crate) const BACKGROUND_REMOVAL: &str = "fal-ai/birefnet/v2";
@@ -40,31 +54,87 @@ const ASPECT_RATIOS: [(&str, f64); 9] = [
     ("9:21", 9.0 / 21.0),
 ];
 
-/// Fixture socket for loopback tests; `None` selects the live queue origin.
+/// Explicit origin and model selection. Origins are the credential destination
+/// (`live`), a loopback fixture socket, or a validated operator base URL.
+/// Model slugs are distinct configurable strings for schema-compatible
+/// models; defaults preserve current behavior. URLs never appear in
+/// diagnostics.
 pub(crate) struct FalConfig {
-    fixture: Option<SocketAddr>,
+    origin: String,
+    allow_http: bool,
+    generation_model: String,
+    edit_model: String,
+    alpha_model: String,
 }
 
 impl FalConfig {
     pub(crate) fn live() -> Self {
-        Self { fixture: None }
+        Self {
+            origin: QUEUE_ORIGIN.to_owned(),
+            allow_http: false,
+            generation_model: FLUX_ULTRA.to_owned(),
+            edit_model: FLUX_KONTEXT_MULTI.to_owned(),
+            alpha_model: BACKGROUND_REMOVAL.to_owned(),
+        }
     }
 
+    #[cfg(test)]
     pub(crate) fn loopback_fixture(address: SocketAddr) -> Result<Self, ApiError> {
         if !address.ip().is_loopback() || address.port() == 0 {
             return Err(ApiError::InvalidRequest);
         }
         Ok(Self {
-            fixture: Some(address),
+            origin: format!("http://{address}"),
+            allow_http: true,
+            generation_model: FLUX_ULTRA.to_owned(),
+            edit_model: FLUX_KONTEXT_MULTI.to_owned(),
+            alpha_model: BACKGROUND_REMOVAL.to_owned(),
         })
+    }
+
+    pub(crate) fn operator(origin_url: &str) -> Result<Self, ApiError> {
+        let allow_http = check_credentialed_origin(origin_url, "queue.fal.run")?;
+        Ok(Self {
+            origin: origin_url.trim_end_matches('/').to_owned(),
+            allow_http,
+            generation_model: FLUX_ULTRA.to_owned(),
+            edit_model: FLUX_KONTEXT_MULTI.to_owned(),
+            alpha_model: BACKGROUND_REMOVAL.to_owned(),
+        })
+    }
+
+    pub(crate) fn with_models(
+        mut self,
+        generation: &str,
+        edit: &str,
+        alpha: &str,
+    ) -> Result<Self, ApiError> {
+        check_model_slug(generation)?;
+        check_model_slug(edit)?;
+        check_model_slug(alpha)?;
+        self.generation_model = generation.to_owned();
+        self.edit_model = edit.to_owned();
+        self.alpha_model = alpha.to_owned();
+        Ok(self)
     }
 }
 
-/// Retained facts for one metered fal stage: endpoint, supplier request id
-/// when known, and the HTTP status of the terminal exchange.
+impl std::fmt::Debug for FalConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FalConfig")
+            .field("generation_model", &self.generation_model)
+            .field("edit_model", &self.edit_model)
+            .field("alpha_model", &self.alpha_model)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Retained facts for one metered fal stage: endpoint slug, supplier request
+/// id when known, and the HTTP status of the terminal exchange.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FalStageReceipt {
-    pub(crate) endpoint: &'static str,
+    pub(crate) endpoint: String,
     pub(crate) request_id: Option<String>,
     pub(crate) http_status: Option<u16>,
 }
@@ -83,10 +153,166 @@ pub(crate) struct FalAlphaReceipt {
 
 /// Complete transparent-capable outcome with both metering identities.
 /// `alpha` is `Some` exactly when the request asked for transparency.
+#[cfg(test)]
 pub(crate) struct FalEditOutcome {
     pub(crate) image: GeneratedImage,
     pub(crate) generation: FalGenerationReceipt,
     pub(crate) alpha: Option<FalAlphaReceipt>,
+}
+
+/// Durable submit checkpoint for one fal generation stage. The runner persists
+/// this validated receipt before polling. `origin` binds the configured
+/// credential destination, `endpoint` binds the selected model route, and
+/// `request_id` is the bounded opaque supplier correlation; paths are
+/// origin-relative locators revalidated on resume. Locators never appear in
+/// diagnostics.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct FalGenerationCheckpoint {
+    pub(crate) origin: String,
+    pub(crate) endpoint: String,
+    pub(crate) request_id: String,
+    pub(crate) status_path: String,
+    pub(crate) result_path: String,
+}
+
+/// Durable submit checkpoint for the paid alpha-extraction stage. Separate
+/// from generation so the second paid call is never hidden inside it. The
+/// closed kind plus the bound origin and alpha route keep a generation
+/// receipt from resuming as alpha and vice versa.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct FalAlphaCheckpoint {
+    pub(crate) origin: String,
+    pub(crate) endpoint: String,
+    pub(crate) request_id: String,
+    pub(crate) status_path: String,
+    pub(crate) result_path: String,
+}
+
+impl std::fmt::Debug for FalGenerationCheckpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FalGenerationCheckpoint")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for FalAlphaCheckpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FalAlphaCheckpoint")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Versioned text encoding for the stage journal. Fields are length-checked
+/// before clone and allocation; any mismatch is `InvalidRequest` and
+/// performs no egress. The closed kind (`fal-generation-v2`,
+/// `fal-alpha-v2`) keeps stages distinct so a generation receipt never
+/// decodes as alpha.
+impl FalGenerationCheckpoint {
+    pub(crate) fn encode(&self) -> String {
+        format!(
+            "fal-generation-v2|{}|{}|{}|{}|{}",
+            self.origin, self.endpoint, self.request_id, self.status_path, self.result_path
+        )
+    }
+
+    pub(crate) fn decode(encoded: &str) -> Result<Self, ApiError> {
+        if encoded.is_empty() || encoded.len() > MAXIMUM_CHECKPOINT_BYTES {
+            return Err(ApiError::InvalidRequest);
+        }
+        let mut parts = encoded.split('|');
+        match (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) {
+            (
+                Some("fal-generation-v2"),
+                Some(origin),
+                Some(endpoint),
+                Some(request_id),
+                Some(status_path),
+                Some(result_path),
+                None,
+            ) => {
+                check_checkpoint_fields(
+                    GENERATION_CHECKPOINT_KIND,
+                    origin,
+                    endpoint,
+                    request_id,
+                    status_path,
+                    result_path,
+                )?;
+                Ok(Self {
+                    origin: origin.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    request_id: request_id.to_owned(),
+                    status_path: status_path.to_owned(),
+                    result_path: result_path.to_owned(),
+                })
+            }
+            _ => Err(ApiError::InvalidRequest),
+        }
+    }
+}
+
+impl FalAlphaCheckpoint {
+    pub(crate) fn encode(&self) -> String {
+        format!(
+            "fal-alpha-v2|{}|{}|{}|{}|{}",
+            self.origin, self.endpoint, self.request_id, self.status_path, self.result_path
+        )
+    }
+
+    pub(crate) fn decode(encoded: &str) -> Result<Self, ApiError> {
+        if encoded.is_empty() || encoded.len() > MAXIMUM_CHECKPOINT_BYTES {
+            return Err(ApiError::InvalidRequest);
+        }
+        let mut parts = encoded.split('|');
+        match (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) {
+            (
+                Some("fal-alpha-v2"),
+                Some(origin),
+                Some(endpoint),
+                Some(request_id),
+                Some(status_path),
+                Some(result_path),
+                None,
+            ) => {
+                check_checkpoint_fields(
+                    ALPHA_CHECKPOINT_KIND,
+                    origin,
+                    endpoint,
+                    request_id,
+                    status_path,
+                    result_path,
+                )?;
+                Ok(Self {
+                    origin: origin.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    request_id: request_id.to_owned(),
+                    status_path: status_path.to_owned(),
+                    result_path: result_path.to_owned(),
+                })
+            }
+            _ => Err(ApiError::InvalidRequest),
+        }
+    }
 }
 
 /// Crate-private executor; owned by the later service worker.
@@ -95,6 +321,9 @@ pub(crate) struct FalExecutor {
     credential: String,
     http: NativeHttp,
     bounds: OperationalBounds,
+    generation_model: String,
+    edit_model: String,
+    alpha_model: String,
 }
 
 impl std::fmt::Debug for FalExecutor {
@@ -124,56 +353,128 @@ impl FalExecutor {
             maximum_chunks: 65_536,
         };
         let http =
-            NativeHttp::new(limits, config.fixture.is_some()).map_err(|_| ApiError::InvalidRequest)?;
+            NativeHttp::new(limits, config.allow_http).map_err(|_| ApiError::InvalidRequest)?;
         Ok(Self {
-            origin: config.fixture.map_or_else(
-                || QUEUE_ORIGIN.to_owned(),
-                |address| format!("http://{address}"),
-            ),
+            origin: config.origin,
             credential: credential.to_owned(),
             http,
             bounds,
+            generation_model: config.generation_model,
+            edit_model: config.edit_model,
+            alpha_model: config.alpha_model,
         })
     }
 
-    /// Generation stage alone: text or multi-reference FLUX dispatch with
-    /// queue submit, status polling and in-band result read.
-    pub(crate) async fn run_generation(
+    #[cfg(test)]
+    pub(crate) async fn submit_generation(
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiError> {
-        validate_generation(edit)?;
-        let opaque_format = if edit.output == ImageFormat::Jpeg {
-            ImageFormat::Jpeg
-        } else {
-            ImageFormat::Png
-        };
-        let (endpoint, body) = if edit.references.is_empty() {
-            (FLUX_ULTRA, generation_body(edit, opaque_format))
-        } else {
-            (FLUX_KONTEXT_MULTI, kontext_body(edit, opaque_format))
-        };
-        let (bytes, format, receipt) = self.run(endpoint, &body, deadline).await?;
-        Ok((
-            bytes,
-            format,
-            FalGenerationReceipt {
-                stage: receipt,
-            },
-        ))
+    ) -> Result<FalGenerationCheckpoint, ApiError> {
+        self.submit_generation_observed(edit, deadline)
+            .await
+            .map_err(|failure| failure.error)
     }
-
-    /// Paid alpha-extraction stage alone: one BiRefNet dispatch over the
-    /// generation bytes supplied by the caller.
-    pub(crate) async fn run_alpha_removal(
+    #[cfg(test)]
+    pub(crate) async fn resume_generation(
+        &self,
+        checkpoint: &FalGenerationCheckpoint,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiError> {
+        self.resume_generation_observed(checkpoint, deadline)
+            .await
+            .map_err(|failure| failure.error)
+    }
+    #[cfg(test)]
+    pub(crate) async fn submit_alpha_removal(
         &self,
         generated: &[u8],
         format: ImageFormat,
         deadline: Duration,
+    ) -> Result<FalAlphaCheckpoint, ApiError> {
+        self.submit_alpha_removal_observed(generated, format, deadline)
+            .await
+            .map_err(|failure| failure.error)
+    }
+    #[cfg(test)]
+    pub(crate) async fn resume_alpha_removal(
+        &self,
+        checkpoint: &FalAlphaCheckpoint,
+        deadline: Duration,
     ) -> Result<(Vec<u8>, ImageFormat, FalAlphaReceipt), ApiError> {
+        self.resume_alpha_removal_observed(checkpoint, deadline)
+            .await
+            .map_err(|failure| failure.error)
+    }
+    /// Paid submit for the generation stage: validates, POSTs once and
+    /// returns the durable checkpoint. A transport failure or malformed
+    /// receipt after the POST is unknown to the service, never proven
+    /// unsent: the runner persists nothing and must not auto-resubmit.
+    pub(crate) async fn submit_generation_observed(
+        &self,
+        edit: &ImageEdit<'_>,
+        deadline: Duration,
+    ) -> Result<FalGenerationCheckpoint, ApiFailure> {
+        validate_generation(edit).map_err(ApiFailure::before_transport)?;
+        let opaque = if edit.output == ImageFormat::Jpeg {
+            ImageFormat::Jpeg
+        } else {
+            ImageFormat::Png
+        };
+        let (slug, body) = if edit.references.is_empty() {
+            (
+                self.generation_model.as_str(),
+                generation_body(edit, opaque),
+            )
+        } else {
+            (self.edit_model.as_str(), kontext_body(edit, opaque))
+        };
+        let queue = self
+            .submit_stage(GENERATION_CHECKPOINT_KIND, slug, &body, deadline)
+            .await?;
+        Ok(FalGenerationCheckpoint {
+            origin: self.origin.clone(),
+            endpoint: slug.to_owned(),
+            request_id: queue.request_id,
+            status_path: queue.status_path,
+            result_path: queue.result_path,
+        })
+    }
+
+    /// Resume a persisted generation checkpoint with a fresh executor. Never
+    /// POSTs: polls status and reads the result only. The checkpoint origin,
+    /// model route and paths are validated before any egress; egress always
+    /// targets this executor's origin, never a host from retained data.
+    pub(crate) async fn resume_generation_observed(
+        &self,
+        checkpoint: &FalGenerationCheckpoint,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiFailure> {
+        self.check_generation_checkpoint(checkpoint)
+            .map_err(|error| ApiFailure::unknown(error, ApiExchange::Poll))?;
+        let started = std::time::Instant::now();
+        let remaining = || deadline.saturating_sub(started.elapsed());
+        self.poll_result(
+            checkpoint.request_id.clone(),
+            checkpoint.endpoint.clone(),
+            checkpoint.status_path.clone(),
+            checkpoint.result_path.clone(),
+            remaining(),
+        )
+        .await
+        .map(|(bytes, format, stage)| (bytes, format, FalGenerationReceipt { stage }))
+    }
+
+    /// Paid submit for alpha extraction: validates, POSTs once and returns
+    /// the durable checkpoint. Unknown-send semantics match generation.
+    pub(crate) async fn submit_alpha_removal_observed(
+        &self,
+        generated: &[u8],
+        format: ImageFormat,
+        deadline: Duration,
+    ) -> Result<FalAlphaCheckpoint, ApiFailure> {
         if generated.is_empty() || generated.len() > self.bounds.fal_max_image_bytes {
-            return Err(ApiError::InvalidRequest);
+            return Err(ApiFailure::before_transport(ApiError::InvalidRequest));
         }
         let body = json!({
             "image_url": data_uri(format, generated),
@@ -182,12 +483,85 @@ impl FalExecutor {
             "output_format": "png",
             "sync_mode": true,
         });
-        let (bytes, format, receipt) = self.run(BACKGROUND_REMOVAL, &body, deadline).await?;
-        Ok((bytes, format, FalAlphaReceipt { stage: receipt }))
+        let queue = self
+            .submit_stage(
+                ALPHA_CHECKPOINT_KIND,
+                self.alpha_model.as_str(),
+                &body,
+                deadline,
+            )
+            .await?;
+        Ok(FalAlphaCheckpoint {
+            origin: self.origin.clone(),
+            endpoint: self.alpha_model.clone(),
+            request_id: queue.request_id,
+            status_path: queue.status_path,
+            result_path: queue.result_path,
+        })
+    }
+
+    /// Resume a persisted alpha checkpoint. Never POSTs; validates origin,
+    /// route and paths before any egress.
+    pub(crate) async fn resume_alpha_removal_observed(
+        &self,
+        checkpoint: &FalAlphaCheckpoint,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalAlphaReceipt), ApiFailure> {
+        self.check_alpha_checkpoint(checkpoint)
+            .map_err(|error| ApiFailure::unknown(error, ApiExchange::Poll))?;
+        let started = std::time::Instant::now();
+        let remaining = || deadline.saturating_sub(started.elapsed());
+        self.poll_result(
+            checkpoint.request_id.clone(),
+            checkpoint.endpoint.clone(),
+            checkpoint.status_path.clone(),
+            checkpoint.result_path.clone(),
+            remaining(),
+        )
+        .await
+        .map(|(bytes, format, stage)| (bytes, format, FalAlphaReceipt { stage }))
+    }
+
+    /// Generation stage alone: text or multi-reference FLUX dispatch with
+    /// queue submit, status polling and in-band result read.
+    #[cfg(test)]
+    pub(crate) async fn run_generation(
+        &self,
+        edit: &ImageEdit<'_>,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiError> {
+        let started = std::time::Instant::now();
+        let checkpoint = self
+            .submit_generation(edit, deadline.saturating_sub(started.elapsed()))
+            .await?;
+        self.resume_generation(&checkpoint, deadline.saturating_sub(started.elapsed()))
+            .await
+    }
+
+    /// Paid alpha-extraction stage alone: one BiRefNet dispatch over the
+    /// generation bytes supplied by the caller.
+    #[cfg(test)]
+    pub(crate) async fn run_alpha_removal(
+        &self,
+        generated: &[u8],
+        format: ImageFormat,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalAlphaReceipt), ApiError> {
+        let started = std::time::Instant::now();
+        let checkpoint = self
+            .submit_alpha_removal(
+                generated,
+                format,
+                deadline.saturating_sub(started.elapsed()),
+            )
+            .await?;
+        self.resume_alpha_removal(&checkpoint, deadline.saturating_sub(started.elapsed()))
+            .await
     }
 
     /// Full edit preserving legacy behavior: generation, then alpha removal
     /// only for transparent requests, with both receipts retained.
+    #[cfg(test)]
     pub(crate) async fn edit(
         &self,
         edit: &ImageEdit<'_>,
@@ -221,53 +595,148 @@ impl FalExecutor {
         })
     }
 
-    async fn run(
+    async fn submit_stage(
         &self,
-        endpoint: &'static str,
+        kind: &str,
+        endpoint: &str,
         body: &Value,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, ImageFormat, FalStageReceipt), ApiError> {
+    ) -> Result<QueueReply, ApiFailure> {
+        check_model_slug(endpoint).map_err(ApiFailure::before_transport)?;
         let started = std::time::Instant::now();
-        let remaining = || deadline.saturating_sub(started.elapsed());
         let submitted = self
             .exchange(
                 HttpMethod::Post,
                 &format!("/{endpoint}"),
                 body.to_string().into_bytes(),
-                remaining(),
+                deadline.saturating_sub(started.elapsed()),
+                ApiExchange::Submit,
             )
             .await?;
-        let queue = queue_reply(&submitted, self.bounds.fal_max_response_bytes)?;
-        let mut request_id: Option<String> = None;
+        queue_reply(
+            kind,
+            &self.origin,
+            endpoint,
+            &submitted,
+            self.bounds.fal_max_response_bytes,
+        )
+        .map_err(|error| {
+            ApiFailure::response(
+                error,
+                ApiExchange::Submit,
+                DeclineContract::FalQueue429V1,
+                submitted,
+            )
+        })
+    }
+    async fn poll_result(
+        &self,
+        request_id: String,
+        endpoint: String,
+        status_path: String,
+        result_path: String,
+        deadline: Duration,
+    ) -> Result<(Vec<u8>, ImageFormat, FalStageReceipt), ApiFailure> {
+        let started = std::time::Instant::now();
+        let remaining = || deadline.saturating_sub(started.elapsed());
         loop {
-            let status = self
-                .exchange(HttpMethod::Get, &queue.status_path, Vec::new(), remaining())
+            let response = self
+                .exchange(
+                    HttpMethod::Get,
+                    &status_path,
+                    Vec::new(),
+                    remaining(),
+                    ApiExchange::Poll,
+                )
                 .await?;
-            let value = json_body(&status, self.bounds.fal_max_response_bytes)?;
-            match status_of(&value)? {
-                Status::Completed => {
-                    request_id = Some(queue.request_id.clone());
-                    break;
-                }
+            let state = json_body(&response, self.bounds.fal_max_response_bytes)
+                .and_then(|value| status_of(&value))
+                .map_err(|error| {
+                    ApiFailure::response(
+                        error,
+                        ApiExchange::Poll,
+                        DeclineContract::FalQueue429V1,
+                        response,
+                    )
+                })?;
+            match state {
+                Status::Completed => break,
                 Status::Waiting => {
                     let pause = self.bounds.poll_interval.min(remaining());
                     if pause.is_zero() {
-                        return Err(ApiError::Transport(NativeHttpRefusal::Deadline));
+                        return Err(ApiFailure::accepted(
+                            ApiError::Transport(NativeHttpRefusal::Deadline),
+                            ApiExchange::Poll,
+                        ));
                     }
                     tokio::time::sleep(pause).await;
                 }
             }
         }
         let result = self
-            .exchange(HttpMethod::Get, &queue.result_path, Vec::new(), remaining())
+            .exchange(
+                HttpMethod::Get,
+                &result_path,
+                Vec::new(),
+                remaining(),
+                ApiExchange::Result,
+            )
             .await?;
         let receipt = FalStageReceipt {
             endpoint,
-            request_id,
+            request_id: Some(request_id),
             http_status: Some(result.status),
         };
-        let (bytes, format) = first_image(&json_body(&result, self.bounds.fal_max_response_bytes)?, self.bounds.fal_max_image_bytes)?;
-        Ok((bytes, format, receipt))
+        let decoded = json_body(&result, self.bounds.fal_max_response_bytes)
+            .and_then(|value| first_image(&value, self.bounds.fal_max_image_bytes))
+            .map_err(|error| {
+                ApiFailure::response(
+                    error,
+                    ApiExchange::Result,
+                    DeclineContract::FalQueue429V1,
+                    result,
+                )
+            })?;
+        Ok((decoded.0, decoded.1, receipt))
+    }
+
+    fn check_generation_checkpoint(
+        &self,
+        checkpoint: &FalGenerationCheckpoint,
+    ) -> Result<(), ApiError> {
+        if checkpoint.origin != self.origin {
+            return Err(ApiError::InvalidRequest);
+        }
+        if checkpoint.endpoint != self.generation_model && checkpoint.endpoint != self.edit_model {
+            return Err(ApiError::InvalidRequest);
+        }
+        check_checkpoint_fields(
+            GENERATION_CHECKPOINT_KIND,
+            &checkpoint.origin,
+            &checkpoint.endpoint,
+            &checkpoint.request_id,
+            &checkpoint.status_path,
+            &checkpoint.result_path,
+        )?;
+        Ok(())
+    }
+
+    fn check_alpha_checkpoint(&self, checkpoint: &FalAlphaCheckpoint) -> Result<(), ApiError> {
+        if checkpoint.origin != self.origin {
+            return Err(ApiError::InvalidRequest);
+        }
+        if checkpoint.endpoint != self.alpha_model {
+            return Err(ApiError::InvalidRequest);
+        }
+        check_checkpoint_fields(
+            ALPHA_CHECKPOINT_KIND,
+            &checkpoint.origin,
+            &checkpoint.endpoint,
+            &checkpoint.request_id,
+            &checkpoint.status_path,
+            &checkpoint.result_path,
+        )?;
+        Ok(())
     }
 
     async fn exchange(
@@ -276,19 +745,34 @@ impl FalExecutor {
         path: &str,
         body: Vec<u8>,
         remaining: Duration,
-    ) -> Result<df_providers::NativeHttpResponse, ApiError> {
-        let request =
-            HttpRequest::fal_native(method, &format!("{}{path}", self.origin), &self.credential, body);
+        exchange: ApiExchange,
+    ) -> Result<df_providers::NativeHttpResponse, ApiFailure> {
+        let request = HttpRequest::fal_native(
+            method,
+            &format!("{}{path}", self.origin),
+            &self.credential,
+            body,
+        );
         let response = self
             .http
             .execute(request, remaining, std::future::pending())
             .await
-            .map_err(|failure| ApiError::Transport(failure.reason))?;
-        match response.status {
-            200 | 202 => Ok(response),
-            401 | 403 => Err(ApiError::Unauthorized),
-            422 if is_content_refusal(&response.body) => Err(ApiError::Refused),
-            status => Err(ApiError::Provider(status)),
+            .map_err(|failure| ApiFailure::transport(failure.reason, exchange))?;
+        let error = match response.status {
+            200 | 202 => None,
+            401 | 403 => Some(ApiError::Unauthorized),
+            422 if is_content_refusal(&response.body) => Some(ApiError::Refused),
+            429 => Some(ApiError::RateLimited),
+            status => Some(ApiError::Provider(status)),
+        };
+        match error {
+            Some(error) => Err(ApiFailure::response(
+                error,
+                exchange,
+                DeclineContract::FalQueue429V1,
+                response,
+            )),
+            None => Ok(response),
         }
     }
 }
@@ -388,7 +872,10 @@ fn json_body(
     response: &df_providers::NativeHttpResponse,
     max_bytes: usize,
 ) -> Result<Value, ApiError> {
-    parse_unique_json(
+    if response.body.len() > max_bytes {
+        return Err(ApiError::Output);
+    }
+    let value = parse_unique_json(
         &response.body,
         TextSchemaLimits {
             maximum_schema_bytes: max_bytes,
@@ -396,7 +883,11 @@ fn json_body(
             maximum_nodes: 65_536,
         },
     )
-    .map_err(|_| ApiError::Output)
+    .map_err(|_| ApiError::Output)?;
+    if !value.is_object() {
+        return Err(ApiError::Output);
+    }
+    Ok(value)
 }
 
 fn is_content_refusal(body: &[u8]) -> bool {
@@ -419,24 +910,111 @@ fn valid_request_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-fn confined_path(url: &str, id: &str, suffix: Option<&str>) -> Option<&str> {
-    let path = url.strip_prefix(QUEUE_ORIGIN)?;
-    let tail = path.strip_prefix('/')?;
-    if tail.contains(['?', '#']) || tail.contains("..") {
-        return None;
+fn check_checkpoint_fields(
+    kind: &str,
+    origin: &str,
+    endpoint: &str,
+    request_id: &str,
+    status_path: &str,
+    result_path: &str,
+) -> Result<(), ApiError> {
+    if origin.len() > MAXIMUM_LOCATOR_BYTES
+        || status_path.len() > MAXIMUM_LOCATOR_BYTES
+        || result_path.len() > MAXIMUM_LOCATOR_BYTES
+    {
+        return Err(ApiError::InvalidRequest);
     }
-    let needle = format!("/requests/{id}");
-    let position = tail.rfind(&needle)?;
-    let (app, rest) = (&tail[..position], &tail[position + needle.len()..]);
-    let app_ok = app.split('/').count() >= 2 && app.split('/').all(|part| !part.is_empty());
-    let rest_ok = match suffix {
-        Some(expected) => rest == format!("/{expected}"),
-        None => rest.is_empty() || rest == "/response",
+    check_endpoint_url(origin)?;
+    check_model_slug(endpoint)?;
+    if !valid_request_id(request_id)
+        || endpoint
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == ".")
+    {
+        return Err(ApiError::InvalidRequest);
+    }
+    let encoded_bytes = kind.len()
+        + 5
+        + origin.len()
+        + endpoint.len()
+        + request_id.len()
+        + status_path.len()
+        + result_path.len();
+    if encoded_bytes > MAXIMUM_CHECKPOINT_BYTES {
+        return Err(ApiError::InvalidRequest);
+    }
+    let status_route = check_confined_shape(status_path, request_id, Some("status"))?;
+    let result_route = check_confined_shape(result_path, request_id, None)?;
+    if status_route != result_route || !queue_route_allowed(endpoint, status_route) {
+        return Err(ApiError::InvalidRequest);
+    }
+    Ok(())
+}
+
+fn queue_route_allowed(endpoint: &str, route: &str) -> bool {
+    if route == endpoint {
+        return true;
+    }
+    // fal queues variants under either the full endpoint or its owner/application base.
+    let mut segments = endpoint.split('/');
+    let Some(owner) = segments.next() else {
+        return false;
     };
-    (app_ok && rest_ok).then_some(path)
+    let Some(application) = segments.next() else {
+        return false;
+    };
+    route.len() == owner.len() + 1 + application.len()
+        && route
+            .strip_prefix(owner)
+            .and_then(|tail| tail.strip_prefix('/'))
+            == Some(application)
+}
+
+fn confined_path<'a>(origin: &str, url: &'a str) -> Option<&'a str> {
+    url.strip_prefix(origin)
+        .or_else(|| url.strip_prefix(QUEUE_ORIGIN))
+}
+
+fn check_confined_shape<'a>(
+    path: &'a str,
+    id: &str,
+    suffix: Option<&str>,
+) -> Result<&'a str, ApiError> {
+    if path.is_empty()
+        || path.len() > MAXIMUM_LOCATOR_BYTES
+        || path.contains("..")
+        || !path
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.'))
+    {
+        return Err(ApiError::InvalidRequest);
+    }
+    let tail = path.strip_prefix('/').ok_or(ApiError::InvalidRequest)?;
+    let (app, rest) = tail
+        .rsplit_once("/requests/")
+        .ok_or(ApiError::InvalidRequest)?;
+    if app.split('/').count() < 2
+        || app
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == ".")
+    {
+        return Err(ApiError::InvalidRequest);
+    }
+    let request_id = match suffix {
+        Some("status") => rest.strip_suffix("/status"),
+        None => Some(rest.strip_suffix("/response").unwrap_or(rest)),
+        Some(_) => None,
+    };
+    if request_id != Some(id) {
+        return Err(ApiError::InvalidRequest);
+    }
+    Ok(app)
 }
 
 fn queue_reply(
+    kind: &str,
+    origin: &str,
+    endpoint: &str,
     response: &df_providers::NativeHttpResponse,
     max_bytes: usize,
 ) -> Result<QueueReply, ApiError> {
@@ -444,19 +1022,21 @@ fn queue_reply(
     let id = value
         .get("request_id")
         .and_then(Value::as_str)
-        .filter(|id| valid_request_id(id))
         .ok_or(ApiError::Output)?;
-    let path = |field: &str, suffix: Option<&str>| {
+    let path = |field: &str| {
         value
             .get(field)
             .and_then(Value::as_str)
-            .and_then(|url| confined_path(url, id, suffix))
-            .map(str::to_owned)
+            .and_then(|url| confined_path(origin, url))
             .ok_or(ApiError::Output)
     };
+    let status_path = path("status_url")?;
+    let result_path = path("response_url")?;
+    check_checkpoint_fields(kind, origin, endpoint, id, status_path, result_path)
+        .map_err(|_| ApiError::Output)?;
     Ok(QueueReply {
-        status_path: path("status_url", Some("status"))?,
-        result_path: path("response_url", None)?,
+        status_path: status_path.to_owned(),
+        result_path: result_path.to_owned(),
         request_id: id.to_owned(),
     })
 }
@@ -511,14 +1091,16 @@ fn first_image(value: &Value, max_image_bytes: usize) -> Result<(Vec<u8>, ImageF
     Ok((bytes, format))
 }
 
+#[cfg(test)]
 async fn facts(
     format: ImageFormat,
     bytes: Vec<u8>,
 ) -> Result<(Vec<u8>, (u32, u32, bool)), ApiError> {
     match format {
         ImageFormat::Png => {
-            let (bytes, EncodedMediaFacts::Png { width, height }) =
-                inspect_png_off_worker(bytes).await.map_err(|_| ApiError::Output)?
+            let (bytes, EncodedMediaFacts::Png { width, height }) = inspect_png_off_worker(bytes)
+                .await
+                .map_err(|_| ApiError::Output)?
             else {
                 return Err(ApiError::Output);
             };

@@ -409,23 +409,65 @@ pub(in crate::gameplay) fn build_text_prompt(place_facts: &[String]) -> String {
     }
 }
 
-/// JPEG-encodes `bytes` at a longest side of at most [`MAXIMUM_SOURCE_PIXELS`].
-pub(in crate::gameplay) fn prepare_source_image(bytes: &[u8]) -> Result<Vec<u8>, ResourceFailure> {
-    let image = image::load_from_memory(bytes)
-        .map_err(|_| ResourceFailure::Permanent("source_image_unreadable"))?;
-    let image = if image.width() > MAXIMUM_SOURCE_PIXELS || image.height() > MAXIMUM_SOURCE_PIXELS {
-        image.thumbnail(MAXIMUM_SOURCE_PIXELS, MAXIMUM_SOURCE_PIXELS)
-    } else {
-        image
+/// The canonical room reference becomes a bounded JPEG through the unified local runtime.
+pub(in crate::gameplay) async fn prepare_source_image(
+    imagery: &super::imagery::Imagery,
+    photograph: &super::imagery::ReferenceImage,
+) -> Result<Vec<u8>, ResourceFailure> {
+    use df_imagery::{
+        AlphaHandling, Dimensions, Encoding, ImageTransform, LossyQuality, Purpose, PurposedUse,
+        RasterOutputSpec, TransformSource, TransformSpec, VariantRole,
     };
-    let mut jpeg = Vec::new();
-    image
-        .write_to(
-            &mut std::io::Cursor::new(&mut jpeg),
-            image::ImageFormat::Jpeg,
+    let unreadable = || ResourceFailure::Permanent("source_image_unreadable");
+    photograph.canonical_source().ok_or_else(unreadable)?;
+    let source = imagery
+        .pin_reference(photograph)
+        .await
+        .map_err(|_| unreadable())?;
+    let header = df_imagery::source_header(&photograph.bytes).map_err(|_| unreadable())?;
+    let width = header.dimensions.width_px();
+    let height = header.dimensions.height_px();
+    let mut steps = Vec::new();
+    let dimensions = if width > MAXIMUM_SOURCE_PIXELS || height > MAXIMUM_SOURCE_PIXELS {
+        let ratio = (f64::from(MAXIMUM_SOURCE_PIXELS) / f64::from(width))
+            .min(f64::from(MAXIMUM_SOURCE_PIXELS) / f64::from(height));
+        // The fit ratio bounds both rounded dimensions by the source limit.
+        let width = (f64::from(width) * ratio).round().max(1.0) as u32;
+        let height = (f64::from(height) * ratio).round().max(1.0) as u32;
+        steps.push(ImageTransform::EncodedThumbnail(
+            Dimensions::new(MAXIMUM_SOURCE_PIXELS, MAXIMUM_SOURCE_PIXELS)
+                .map_err(|_| unreadable())?,
+        ));
+        Dimensions::new(width, height)
+    } else {
+        Dimensions::new(width, height)
+    }
+    .map_err(|_| unreadable())?;
+    steps.push(ImageTransform::DiscardAlpha);
+    let output = RasterOutputSpec::new(
+        dimensions,
+        AlphaHandling::Opaque,
+        Encoding::Jpeg {
+            quality: LossyQuality::new(75).map_err(|_| unreadable())?,
+        },
+    )
+    .map_err(|_| unreadable())?;
+    imagery
+        .transform(
+            "splat-world-source",
+            PurposedUse {
+                purpose: Purpose::ReferencePrep,
+                role: VariantRole::Reference,
+            },
+            TransformSpec {
+                source: TransformSource::Image(source),
+                steps,
+            },
+            output,
         )
-        .map_err(|_| ResourceFailure::Permanent("source_image_unreadable"))?;
-    Ok(jpeg)
+        .await
+        .map(|reference| reference.bytes.to_vec())
+        .map_err(|_| unreadable())
 }
 
 /// The number of splats a binary PLY declares (`element vertex <n>`), if it says.
@@ -611,11 +653,10 @@ impl Default for PollTiming {
     }
 }
 
-/// Asks `imagery_bytes` for the place's canonical room photograph. The production
-/// handle reads the imagery cache's `canonical_room` image for the place; tests pass
-/// fixture bytes. `None` means there is no photograph to build a world from.
+/// Reads the place's canonical room photograph through its authorized image reference.
+/// None means there is no photograph to build a world from.
 pub(in crate::gameplay) type RoomPhotographFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Option<super::imagery::ReferenceImage>> + Send + 'a>>;
 pub(in crate::gameplay) type RoomPhotograph =
     Arc<dyn for<'a> Fn(&'a str) -> RoomPhotographFuture<'a> + Send + Sync>;
 
@@ -623,6 +664,7 @@ pub(in crate::gameplay) type RoomPhotograph =
 pub(in crate::gameplay) struct SplatWorlds {
     hub: Hub,
     maker: Option<Arc<dyn WorldMaker>>,
+    imagery: super::imagery::Imagery,
     photograph: RoomPhotograph,
     cache_dir: PathBuf,
     timing: PollTiming,
@@ -633,6 +675,7 @@ impl SplatWorlds {
     /// Serves stored worlds without admitting paid work when the maker is not configured.
     pub(in crate::gameplay) fn cached(
         hub: Hub,
+        imagery: super::imagery::Imagery,
         photograph: RoomPhotograph,
         cache_dir: PathBuf,
     ) -> Self {
@@ -640,6 +683,7 @@ impl SplatWorlds {
         Self {
             hub,
             maker: None,
+            imagery,
             photograph,
             cache_dir,
             timing: PollTiming::default(),
@@ -649,15 +693,24 @@ impl SplatWorlds {
 
     pub(in crate::gameplay) fn new(
         hub: Hub,
+        imagery: super::imagery::Imagery,
         maker: Arc<dyn WorldMaker>,
         photograph: RoomPhotograph,
         cache_dir: PathBuf,
     ) -> Self {
-        Self::with_timing(hub, maker, photograph, cache_dir, PollTiming::default())
+        Self::with_timing(
+            hub,
+            imagery,
+            maker,
+            photograph,
+            cache_dir,
+            PollTiming::default(),
+        )
     }
 
     pub(in crate::gameplay) fn with_timing(
         hub: Hub,
+        imagery: super::imagery::Imagery,
         maker: Arc<dyn WorldMaker>,
         photograph: RoomPhotograph,
         cache_dir: PathBuf,
@@ -667,6 +720,7 @@ impl SplatWorlds {
         Self {
             hub,
             maker: Some(maker),
+            imagery,
             photograph,
             cache_dir,
             timing,
@@ -725,6 +779,7 @@ impl SplatWorlds {
         ServiceHandle {
             hub: self.hub.clone(),
             maker: self.maker.clone(),
+            imagery: self.imagery.clone(),
             photograph: Arc::clone(&self.photograph),
             cache_dir: self.cache_dir.clone(),
             timing: self.timing,
@@ -748,6 +803,7 @@ impl SplatWorlds {
 struct ServiceHandle {
     hub: Hub,
     maker: Option<Arc<dyn WorldMaker>>,
+    imagery: super::imagery::Imagery,
     photograph: RoomPhotograph,
     cache_dir: PathBuf,
     timing: PollTiming,
@@ -797,7 +853,7 @@ impl ServiceHandle {
         let photograph = (self.photograph)(place_id)
             .await
             .ok_or(ResourceFailure::Permanent("no_room_photograph"))?;
-        let image_jpeg = prepare_source_image(&photograph)?;
+        let image_jpeg = prepare_source_image(&self.imagery, &photograph).await?;
         let request = WorldRequest {
             image_jpeg,
             text_prompt: build_text_prompt(spec.prompt_facts()),

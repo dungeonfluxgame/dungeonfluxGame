@@ -6,9 +6,9 @@
 
 use image::RgbaImage;
 
+use super::CancelCheck;
 use super::RasterError;
 use super::bounds::{self, LiveBudget};
-use super::CancelCheck;
 use crate::transform::{BlurAlgorithm, BlurSpec, ColorEffect, ExposureStops, SharpenSpec};
 
 /// Version tag of the color equations in this module; a change that alters
@@ -188,7 +188,13 @@ pub(crate) fn apply_blur(
     budget: &LiveBudget,
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
-    blur_rgba(&image, spec.radius_px(), spec.algorithm(), budget, check_cancel)
+    blur_rgba(
+        &image,
+        spec.radius_px(),
+        spec.algorithm(),
+        budget,
+        check_cancel,
+    )
 }
 
 /// Unsharp mask: detail above the noise threshold is pushed away from the
@@ -210,7 +216,6 @@ pub(crate) fn apply_sharpen(
         budget,
         check_cancel,
     )?;
-    use image::GenericImageView as _;
     let (width_px, height_px) = image.dimensions();
     budget.check_retained(
         bounds::rgba_bytes(width_px, height_px).saturating_mul(2),
@@ -219,9 +224,7 @@ pub(crate) fn apply_sharpen(
     let threshold = f32::from(spec.threshold_0_255()) / 255.0;
     let amount = spec.amount_factor();
     let mut sharpened = image;
-    for (index, (pixel, blur_pixel)) in
-        sharpened.pixels_mut().zip(blurred.pixels()).enumerate()
-    {
+    for (index, (pixel, blur_pixel)) in sharpened.pixels_mut().zip(blurred.pixels()).enumerate() {
         if index % 4096 == 0 {
             check_cancel()?;
         }
@@ -244,7 +247,6 @@ fn blur_rgba(
     budget: &LiveBudget,
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
-    use image::GenericImageView as _;
     let (width_px, height_px) = image.dimensions();
     let pixels = u64::from(width_px).saturating_mul(u64::from(height_px));
     // Box holds horizontal float sums (16 bytes per pixel) plus u32 window
@@ -256,9 +258,7 @@ fn blur_rgba(
     budget.check_retained(bounds::rgba_bytes(width_px, height_px), additional)?;
     check_cancel()?;
     let blurred = match algorithm {
-        BlurAlgorithm::Gaussian => {
-            gaussian_blur_linear(image, radius_px, budget, check_cancel)?
-        }
+        BlurAlgorithm::Gaussian => gaussian_blur_linear(image, radius_px, budget, check_cancel)?,
         BlurAlgorithm::Box => {
             let radius = radius_px.ceil().max(1.0) as u32;
             box_blur_linear(image, radius, check_cancel)?
@@ -276,7 +276,6 @@ fn box_blur_linear(
     radius_px: u32,
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
-    use image::GenericImageView as _;
     let (width_px, height_px) = image.dimensions();
     let width_len = width_px as usize;
     let height_len = height_px as usize;
@@ -351,7 +350,6 @@ fn gaussian_blur_linear(
     budget: &LiveBudget,
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
-    use image::GenericImageView as _;
     let (width_px, height_px) = image.dimensions();
     let width_len = width_px as usize;
     let height_len = height_px as usize;

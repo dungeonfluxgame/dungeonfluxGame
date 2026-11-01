@@ -222,9 +222,9 @@ fn parse_interest_parts(
     let state_text: String = row.get(columns.state);
     let interest = invalid(df_imagery::ImageInterestId::from_bytes(&interest_bytes))?;
     let operation = invalid(OperationId::from_bytes(&operation_bytes))?;
-    if expected_link.is_some_and(|expected| {
-        operation != expected.operation || interest != expected.interest
-    }) {
+    if expected_link
+        .is_some_and(|expected| operation != expected.operation || interest != expected.interest)
+    {
         return Err(JournalError::InvalidRecord);
     }
     Ok(ImageInterest {

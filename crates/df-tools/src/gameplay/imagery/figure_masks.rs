@@ -1,66 +1,37 @@
-//! Plate-owned SAM 3.1 masks. Identity comes from measured heads or explicit staging order,
-//! never from SAM's score order. A durable sent marker prevents a cancelled call being paid again.
+//! Plate figure geometry over actual service-owned SAM results and published focus derivatives.
+//! Gameplay retains assignment rules; the runtime owns providers, paid state, raster work and replay.
 
-use std::{path::PathBuf, sync::OnceLock, time::Duration};
-
-use df_providers::{
-    FalSegmentConfig, HeadBox, LocatedHead, MaskRows, NativeFalSegmenter, SegmentInstance,
-    SegmentModel, SegmentRequest,
+use super::{ImageFailure, ImageKey, Imagery, analysis};
+use crate::gameplay::image_references::PresentationAnnotation;
+use df_imagery::{
+    AlphaHandling, Dimensions, Encoding, ImageTransform, Purpose, PurposedUse, RasterOutputSpec,
+    SegmentationPreparation, SegmentationPrompt, TransformSource, TransformSpec, VariantRole,
 };
+use df_providers::{HeadBox, LocatedHead, MaskRows, SegmentInstance};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-use super::{ImageFailure, ImageKey, Imagery, Mode, locked, read_cache_file, vision_picture};
-use crate::gameplay::{
-    cost,
-    resources::{Generated, ResourceFailure, ResourceKind, ResourceSpec, Unit},
-};
-
-const DEADLINE: Duration = Duration::from_secs(20);
-const REVISION: u32 = 1;
-
-#[derive(Default)]
-pub(super) struct FigureMaskCache {
-    pub(super) provider: OnceLock<NativeFalSegmenter>,
-    // Coalesce one plate without making unrelated cached plates wait for its provider call.
-    gates: std::sync::Mutex<
-        std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
-    >,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct StoredMask {
+#[derive(Clone)]
+struct FocusMask {
     index: u32,
     score: f32,
     runs: Vec<[u32; 2]>,
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct StoredScan {
-    revision: u32,
-    model: String,
-    image_sha256: String,
+struct MaskScan {
     width: u32,
     height: u32,
     source_width: u32,
     source_height: u32,
-    /// `sent` includes interrupted/unknown outcomes; none of these states permits resubmission.
-    outcome: String,
-    masks: Vec<StoredMask>,
+    masks: Vec<FocusMask>,
 }
-
-impl StoredScan {
+impl MaskScan {
     fn instances(&self) -> Result<Vec<SegmentInstance>, ImageFailure> {
-        if self.revision != REVISION
-            || self.model != SegmentModel::Sam31.label()
-            || self.outcome != "complete"
-            || self.width == 0
+        if self.width == 0
             || self.height == 0
             || self.width > 8192
             || self.height > 8192
             || self.source_width == 0
             || self.source_height == 0
-            || self.masks.len() > usize::from(df_providers::MAXIMUM_MASKS)
+            || self.masks.len() > 32
         {
             return Err(ImageFailure::BadOutput);
         }
@@ -115,312 +86,84 @@ pub(in crate::gameplay) struct FigureGeometry {
     pub(in crate::gameplay) inferred: bool,
 }
 
-struct SegmentsSpec<'a>(&'a str);
-
-impl ResourceSpec for SegmentsSpec<'_> {
-    const KIND: ResourceKind = ResourceKind::PlateSegments;
-    const CONTRACT_VERSION: u32 = REVISION;
-
-    fn canonical(&self) -> String {
-        serde_json::json!({
-            "plate": self.0, "model": "sam-3.1", "concept": "person",
-            "endpoint": SegmentModel::Sam31.endpoint(), "max_masks": df_providers::MAXIMUM_MASKS,
-            "encoding": "rle", "score_floor": 0,
-        })
-        .to_string()
-    }
-
-    fn subject(&self) -> String {
-        format!("plate:{}", self.0)
-    }
-
-    fn chrome(&self) -> df_render::art_contract::Neutral {
-        df_render::art_contract::Neutral::Nothing
-    }
+#[derive(Deserialize, Serialize)]
+struct AssignedFigure {
+    geometry: FigureGeometry,
+    derivative: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+struct FigureProjection {
+    source_sha256: String,
+    figures: Vec<AssignedFigure>,
 }
 
-impl FigureMaskCache {
-    pub(super) fn configure(&self) {
-        // The launcher hands fal's credential over as FAL_KEY; DF_FAL_KEY serves direct runs.
-        let Ok(key) = std::env::var("FAL_KEY").or_else(|_| std::env::var("DF_FAL_KEY")) else {
-            return;
-        };
-        match NativeFalSegmenter::new(FalSegmentConfig::live(SegmentModel::Sam31), &key, DEADLINE) {
-            Ok(provider) => {
-                let _first = self.provider.set(provider);
-            }
-            Err(error) => diagnostic(
-                "configuration",
-                "",
-                serde_json::json!({"error": error.label()}),
-            ),
-        }
-    }
-
-    fn gate_for(&self, key: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-        let mut gates = locked(&self.gates);
-        gates.retain(|_, gate| gate.strong_count() > 0);
-        if let Some(gate) = gates.get(key).and_then(std::sync::Weak::upgrade) {
-            return gate;
-        }
-        let gate = std::sync::Arc::new(tokio::sync::Mutex::new(()));
-        gates.insert(key.to_owned(), std::sync::Arc::downgrade(&gate));
-        gate
-    }
-
-    async fn read_note(path: PathBuf) -> Result<Option<StoredScan>, ImageFailure> {
-        tokio::task::spawn_blocking(move || {
-            // An existing but corrupt note is a refusal, not permission to spend again.
-            if !path.try_exists()? {
-                return Ok(None);
-            }
-            let bytes = read_cache_file(&path)
-                .ok_or_else(|| std::io::Error::other("unreadable segmentation note"))?;
-            let scan =
-                serde_json::from_slice::<StoredScan>(&bytes).map_err(std::io::Error::other)?;
-            Ok::<_, std::io::Error>(Some(scan))
-        })
-        .await
-        .map_err(|_| ImageFailure::Interrupted)?
-        .map_err(|_| ImageFailure::BadOutput)
-    }
-
-    async fn read_or_scan(
-        &self,
-        path: PathBuf,
-        key: &str,
-        bytes: &[u8],
-        format: df_providers::ImageFormat,
-        engine: &super::Engine,
-    ) -> Result<StoredScan, ImageFailure> {
-        let gate = self.gate_for(key);
-        let (cached, _owner) = match Self::read_note(path.clone()).await? {
-            Some(scan) => (Some(scan), None),
-            None => {
-                let owner = gate.lock().await;
-                (Self::read_note(path.clone()).await?, Some(owner))
-            }
-        };
-        if let Some(scan) = cached {
-            diagnostic(
-                "cache_hit",
-                key,
-                serde_json::json!({"cache_outcome": scan.outcome}),
-            );
-            let image = bytes.to_vec();
-            return tokio::task::spawn_blocking(move || {
-                if scan.image_sha256 != format!("{:x}", Sha256::digest(&image)) {
-                    return Err(ImageFailure::BadOutput);
-                }
-                scan.instances()?;
-                Ok(scan)
-            })
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?;
-        }
-        let provider = self.provider.get().ok_or(ImageFailure::Off)?;
-        let image_sha256 = format!("{:x}", Sha256::digest(bytes));
-        let bytes = bytes.to_vec();
-        let (jpeg, width, height, source_width, source_height) =
-            tokio::task::spawn_blocking(move || {
-                let jpeg =
-                    vision_picture(&bytes, format, 1536).map_err(|_| ImageFailure::BadOutput)?;
-                let source = image::ImageReader::new(std::io::Cursor::new(&bytes))
-                    .with_guessed_format()
-                    .map_err(|_| ImageFailure::BadOutput)?
-                    .into_dimensions()
-                    .map_err(|_| ImageFailure::BadOutput)?;
-                let picture = image::ImageReader::new(std::io::Cursor::new(&jpeg))
-                    .with_guessed_format()
-                    .map_err(|_| ImageFailure::BadOutput)?
-                    .into_dimensions()
-                    .map_err(|_| ImageFailure::BadOutput)?;
-                Ok::<_, ImageFailure>((jpeg, picture.0, picture.1, source.0, source.1))
-            })
-            .await
-            .map_err(|_| ImageFailure::Interrupted)??;
-        if jpeg.len() > 3 * 1024 * 1024 {
-            return Err(ImageFailure::InvalidRequest);
-        }
-        let _permit = engine
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?;
-        let mut scan = StoredScan {
-            revision: REVISION,
-            model: provider.model().label().to_owned(),
-            image_sha256,
-            width,
-            height,
-            source_width,
-            source_height,
-            outcome: "sent".to_owned(),
-            masks: Vec::new(),
-        };
-        // create_new is also a cross-process guard: a second server cannot submit the same
-        // plate while this process has a call in flight. A crash preserves the unknown charge.
-        let marker = serde_json::to_vec(&scan).map_err(|_| ImageFailure::BadOutput)?;
-        let marker_path = path.clone();
-        tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(marker_path)?;
-            file.write_all(&marker)?;
-            file.sync_all()
-        })
-        .await
-        .map_err(|_| ImageFailure::Interrupted)?
-        .map_err(|_| ImageFailure::Provider)?;
-        // The price is the cost book's: the rate in the price file, not a number kept here.
-        let quantities = [(cost::Category::Calls, 1)];
-        let price = engine
-            .ledger
-            .costs()
-            .quote(
-                cost::Provider::Fal,
-                provider.model().endpoint(),
-                &quantities,
-            )
-            .unwrap_or(0);
-        engine.ledger.reserve(Unit::SegmentCall, 1).commit(1);
-        let billed = engine.ledger.begin_call(
-            cost::segment_call(provider.model().endpoint(), "figure_masks"),
-            &quantities,
-        );
-        // The request below is locally validated here. Charge at dispatch so cancellation does
-        // not refund an unknown provider outcome. There is no cost cap.
-        engine
-            .micro_dollars
-            .fetch_add(price, std::sync::atomic::Ordering::SeqCst);
-        diagnostic(
-            "sent",
-            key,
-            serde_json::json!({"model": scan.model, "micro_dollars": price}),
-        );
-        let result = provider
-            .segment(
-                &SegmentRequest {
-                    jpeg: &jpeg,
-                    width,
-                    height,
-                    prompt: "person",
-                    max_masks: df_providers::MAXIMUM_MASKS,
-                },
-                DEADLINE,
-            )
-            .await;
-        match &result {
-            Ok(_) => cost::settle_counted(billed, quantities.to_vec()),
-            Err(error) => {
-                cost::settle_failure(billed, cost::segment_error_may_be_billed(*error));
-            }
-        }
-        match result {
-            Ok(answer) => {
-                scan.outcome = "complete".to_owned();
-                scan.masks = answer
-                    .instances
-                    .iter()
-                    .map(|instance| StoredMask {
-                        index: instance.index,
-                        score: instance.score,
-                        runs: instance
-                            .mask
-                            .runs()
-                            .iter()
-                            .map(|run| [run.start, run.length])
-                            .collect(),
-                    })
-                    .collect();
-                diagnostic(
-                    "complete",
-                    key,
-                    serde_json::json!({
-                        "count": scan.masks.len(), "elapsed_ms": answer.elapsed.as_millis(),
-                        "request_id": answer.request_id, "micro_dollars": price,
-                    }),
-                );
-            }
-            Err(error) => {
-                scan.outcome = error.label().to_owned();
-                diagnostic(
-                    "failed",
-                    key,
-                    serde_json::json!({"error": error.label(), "micro_dollars": price}),
-                );
-            }
-        }
-        let note = serde_json::to_vec(&scan).map_err(|_| ImageFailure::BadOutput)?;
-        let staging = path.with_extension(format!("{}.tmp", std::process::id()));
-        tokio::task::spawn_blocking(move || super::write_cache_file(&staging, &path, &note))
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?
-            .map_err(|_| ImageFailure::Provider)?;
-        scan.instances()?;
-        Ok(scan)
-    }
+fn focus_output(scan: &MaskScan) -> Result<RasterOutputSpec, ImageFailure> {
+    let scale = 768.0 / f64::from(scan.source_width.max(scan.source_height).max(768));
+    // The fixed fit bounds both rounded dimensions by 768.
+    let width = (f64::from(scan.source_width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(scan.source_height) * scale).round().max(1.0) as u32;
+    RasterOutputSpec::new(
+        Dimensions::new(width, height).map_err(|_| ImageFailure::BadOutput)?,
+        AlphaHandling::PreserveAlpha,
+        Encoding::Png,
+    )
+    .map_err(|_| ImageFailure::BadOutput)
 }
 
 impl Imagery {
-    async fn plate_masks(&self, key: &ImageKey) -> Result<StoredScan, ImageFailure> {
-        let imagery = self.clone();
-        let image_key = key.clone();
-        self.hub()
-            .render(
-                &SegmentsSpec(key.as_str()),
-                Box::pin(async move {
-                    imagery
-                        .scan_plate_masks(&image_key)
-                        .await
-                        .map(|_| Generated::new(image_key.as_str()))
-                        .map_err(|failure| ResourceFailure::Permanent(failure.label()))
-                }),
-            )
-            .await
-            .map_err(|failure| match failure {
-                ResourceFailure::TimedOut => ImageFailure::DeadlineExceeded,
-                _ => ImageFailure::from_label(failure.label()).unwrap_or(ImageFailure::Interrupted),
-            })?;
-        self.scan_plate_masks(key).await
-    }
-
-    async fn scan_plate_masks(&self, key: &ImageKey) -> Result<StoredScan, ImageFailure> {
-        let Mode::On { engine, .. } = &self.inner.mode else {
-            return Err(ImageFailure::Off);
-        };
-        let format = locked(&self.inner.registry)
-            .by_key
-            .get(key.as_str())
-            .copied()
-            .ok_or(ImageFailure::InvalidRequest)?
-            .format;
-        let (bytes, stored) = engine
-            .read_cached(key.as_str(), format)
-            .await
-            .ok_or(ImageFailure::InvalidRequest)?;
-        let path = engine
-            .cache_dir
-            .join(format!("{}.sam31-person-v1.json", key.as_str()));
-        let scan = engine
-            .figure_masks
-            .read_or_scan(path, key.as_str(), &bytes, stored, engine)
-            .await;
-        if let Err(failure) = scan {
-            diagnostic(
-                "unavailable",
-                key.as_str(),
-                serde_json::json!({"failure": failure.label()}),
-            );
+    async fn plate_masks(
+        &self,
+        key: &ImageKey,
+    ) -> Result<
+        (
+            analysis::Observation<Vec<df_imagery::AnalysisMaskSet>>,
+            MaskScan,
+            String,
+        ),
+        ImageFailure,
+    > {
+        let reference = self.reference(key).await?;
+        let header =
+            df_imagery::source_header(&reference.bytes).map_err(|_| ImageFailure::BadOutput)?;
+        let observed = analysis::segments(
+            self,
+            key,
+            SegmentationPreparation::FigureMask,
+            vec![SegmentationPrompt::Person],
+            32,
+        )
+        .await?;
+        if reference.canonical_source() != Some(&observed.source) || observed.value.len() != 1 {
+            return Err(ImageFailure::BadOutput);
         }
-        scan
+        let set = observed.value.first().ok_or(ImageFailure::BadOutput)?;
+        if set.prompt != SegmentationPrompt::Person {
+            return Err(ImageFailure::BadOutput);
+        }
+        let scan = MaskScan {
+            width: set.width_px,
+            height: set.height_px,
+            source_width: header.dimensions.width_px(),
+            source_height: header.dimensions.height_px(),
+            masks: set
+                .instances
+                .iter()
+                .map(|mask| FocusMask {
+                    index: mask.index,
+                    score: mask.score.get(),
+                    runs: mask
+                        .runs
+                        .iter()
+                        .map(|run| [run.start, run.length])
+                        .collect(),
+                })
+                .collect(),
+        };
+        scan.instances()?;
+        Ok((observed, scan, reference.sha256))
     }
 
-    /// Run once after all head batches with the photo check's hero count. Only set
-    /// staging_order_known for an explicitly authored left-to-right picture order. Otherwise
-    /// inference requires one unique remaining identity. The sidecar exposes assigned boxes.
+    /// Assigns only named measured or uniquely inferable figures, then publishes their masks.
     pub(in crate::gameplay) async fn figure_geometry(
         &self,
         key: &ImageKey,
@@ -429,179 +172,141 @@ impl Imagery {
         hero_count: usize,
         staging_order_known: bool,
     ) -> Result<Vec<FigureGeometry>, ImageFailure> {
-        let scan = self.plate_masks(key).await?;
-        let mut figures = match_figures(&scan, heads, staged, hero_count, staging_order_known)?;
+        let (observed, scan, source_sha256) = self.plate_masks(key).await?;
+        let figures = match_figures(&scan, heads, staged, hero_count, staging_order_known)?;
+        let output = focus_output(&scan)?;
+        let mut assigned = Vec::with_capacity(figures.len());
+        for mut figure in figures {
+            let spec = TransformSpec {
+                source: TransformSource::SegmentationMask {
+                    analyzed: observed.source.clone(),
+                    segmentation: observed.handle.clone(),
+                    prompt: SegmentationPrompt::Person,
+                    mask_index: figure.mask_index,
+                    contract_revision: 1,
+                },
+                steps: Vec::<ImageTransform>::new(),
+            };
+            let result = match self
+                .transform(
+                    "figure-focus-mask",
+                    PurposedUse {
+                        purpose: Purpose::ReferencePrep,
+                        role: VariantRole::Mask,
+                    },
+                    spec,
+                    output,
+                )
+                .await
+            {
+                Ok(reference) => self.register_reviewed("figure-focus-mask", reference).await,
+                Err(error) => Err(error),
+            };
+            let derivative = match result {
+                Ok(derived) => {
+                    figure.mask_url = format!(
+                        "/gameplay/imagery/{}/figure/{}",
+                        key.as_str(),
+                        figure.mask_index
+                    );
+                    Some(derived.as_str().to_owned())
+                }
+                Err(error) => {
+                    focus_diagnostic(
+                        "missing",
+                        key.as_str(),
+                        &figure.id,
+                        figure.mask_index,
+                        Some(error.label()),
+                    );
+                    None
+                }
+            };
+            assigned.push(AssignedFigure {
+                geometry: figure,
+                derivative,
+            });
+        }
+        for person in staged {
+            if !assigned
+                .iter()
+                .any(|figure| figure.geometry.id == person.id)
+            {
+                focus_diagnostic("missing", key.as_str(), person.id, 0, Some("unassigned"));
+            }
+        }
+        let projection = FigureProjection {
+            source_sha256,
+            figures: assigned,
+        };
+        let bytes = serde_json::to_vec(&projection).map_err(|_| ImageFailure::BadOutput)?;
+        self.write_presentation_annotation(key, PresentationAnnotation::Figures, bytes)
+            .await?;
+        let figures = projection
+            .figures
+            .into_iter()
+            .map(|figure| figure.geometry)
+            .collect::<Vec<_>>();
         diagnostic(
             "assignments",
             key.as_str(),
-            serde_json::json!({"figures": figures, "staging_order_known": staging_order_known,
-                "hero_count": hero_count}),
+            serde_json::json!({"figures":figures,
+            "staging_order_known":staging_order_known,"hero_count":hero_count}),
         );
-        for person in staged {
-            if !figures.iter().any(|figure| figure.id == person.id) {
-                focus_diagnostic("missing", key.as_str(), person.id, 0, Some("unassigned"));
-                diagnostic(
-                    "miss",
-                    key.as_str(),
-                    serde_json::json!({"person": person.id}),
-                );
-            }
-        }
-        if let Mode::On { engine, .. } = &self.inner.mode {
-            let gate = engine.figure_masks.gate_for(key.as_str());
-            let _owner = gate.lock().await;
-            let path = engine
-                .cache_dir
-                .join(format!("{}.figures-v1.json", key.as_str()));
-            let staging = path.with_extension(format!("{}.tmp", std::process::id()));
-            let stored = figures.clone();
-            let cache_dir = engine.cache_dir.clone();
-            let plate_key = key.as_str().to_owned();
-            figures = tokio::task::spawn_blocking(move || {
-                let mut stored = stored;
-                let instances = scan.instances()?;
-                for figure in &mut stored {
-                    let result =
-                        cache_focus_mask(&cache_dir, &plate_key, &scan, &instances, figure);
-                    match result {
-                        Ok(()) => {
-                            figure.mask_url = format!(
-                                "/gameplay/imagery/{plate_key}/figure/{}",
-                                figure.mask_index
-                            );
-                        }
-                        Err(failure) => focus_diagnostic(
-                            "missing",
-                            &plate_key,
-                            &figure.id,
-                            figure.mask_index,
-                            Some(failure.label()),
-                        ),
-                    }
-                }
-                let note = serde_json::to_vec(&stored).map_err(|_| ImageFailure::BadOutput)?;
-                super::write_cache_file(&staging, &path, &note)
-                    .map_err(|_| ImageFailure::Provider)?;
-                Ok::<_, ImageFailure>(stored)
-            })
-            .await
-            .map_err(|_| ImageFailure::Interrupted)??;
-        }
         Ok(figures)
     }
 
-    /// Read only derived, assigned masks; an HTTP request never starts a SAM/provider job.
+    /// An HTTP read only reauthorizes existing assigned publications; it never starts work.
     pub(super) async fn focus_mask(&self, key: &str, index: u32) -> Option<bytes::Bytes> {
-        let missing = || {
-            focus_diagnostic("missing", key, "unassigned", index, None);
-            None
-        };
-        let Some(key) = ImageKey::parse(key) else {
-            return missing();
-        };
-        let Mode::On { engine, .. } = &self.inner.mode else {
-            return missing();
-        };
-        if !locked(&self.inner.registry)
-            .by_key
-            .contains_key(key.as_str())
-        {
-            return missing();
-        }
-        let directory = engine.cache_dir.clone();
-        let audit_key = key.clone();
-        match tokio::task::spawn_blocking(move || {
-            let figures =
-                read_cache_file(&directory.join(format!("{}.figures-v1.json", key.as_str())))
-                    .and_then(|bytes| serde_json::from_slice::<Vec<FigureGeometry>>(&bytes).ok());
-            let person = figures.as_ref().and_then(|figures| {
-                figures
-                    .iter()
-                    .find(|figure| figure.mask_index == index && !figure.mask_url.is_empty())
-            });
-            let bytes = person
-                .and_then(|_| read_cache_file(&focus_mask_path(&directory, key.as_str(), index)));
-            focus_diagnostic(
-                if bytes.is_some() { "served" } else { "missing" },
-                key.as_str(),
-                person.map_or("unassigned", |figure| figure.id.as_str()),
-                index,
-                None,
-            );
-            bytes
-        })
-        .await
-        {
+        let result = self.read_focus_mask(key, index).await;
+        match result {
             Ok(bytes) => bytes,
-            Err(_) => {
-                focus_diagnostic(
-                    "missing",
-                    audit_key.as_str(),
-                    "unavailable",
-                    index,
-                    Some("interrupted"),
-                );
+            Err(error) => {
+                focus_diagnostic("missing", key, "unavailable", index, Some(error.label()));
                 None
             }
         }
     }
-}
 
-fn focus_mask_path(directory: &std::path::Path, key: &str, index: u32) -> PathBuf {
-    directory.join(format!("{key}.figure-{index}-v1.png"))
-}
-
-fn cache_focus_mask(
-    directory: &std::path::Path,
-    key: &str,
-    scan: &StoredScan,
-    instances: &[SegmentInstance],
-    figure: &FigureGeometry,
-) -> Result<(), ImageFailure> {
-    let path = focus_mask_path(directory, key, figure.mask_index);
-    if path.try_exists().map_err(|_| ImageFailure::Provider)? {
-        return Ok(());
-    }
-    let instance = instances
-        .iter()
-        .find(|instance| instance.index == figure.mask_index)
-        .ok_or(ImageFailure::BadOutput)?;
-    let bytes = raster_focus_mask(scan, &instance.mask)?;
-    let staging = path.with_extension(format!("{}.tmp", std::process::id()));
-    super::write_cache_file(&staging, &path, &bytes).map_err(|_| ImageFailure::Provider)?;
-    focus_diagnostic("made", key, &figure.id, figure.mask_index, None);
-    Ok(())
-}
-
-fn raster_focus_mask(scan: &StoredScan, mask: &MaskRows) -> Result<Vec<u8>, ImageFailure> {
-    let longest = scan.source_width.max(scan.source_height);
-    if longest == 0 || mask.width() == 0 || mask.height() == 0 {
-        return Err(ImageFailure::BadOutput);
-    }
-    let scale = 768.0 / f64::from(longest.max(768));
-    let width = (f64::from(scan.source_width) * scale).round().max(1.0) as u32;
-    let height = (f64::from(scan.source_height) * scale).round().max(1.0) as u32;
-    let mut alpha = image::GrayImage::new(width, height);
-    let project = |pixel: u32, output: u32, input: u32| {
-        ((u64::from(pixel) * u64::from(output) + u64::from(input / 2)) / u64::from(input)) as u32
-    };
-    for (row, from, to) in mask.row_segments() {
-        for y in project(row, height, mask.height())..project(row + 1, height, mask.height()) {
-            for x in project(from, width, mask.width())..project(to, width, mask.width()) {
-                alpha.put_pixel(x, y, image::Luma([255]));
-            }
+    async fn read_focus_mask(
+        &self,
+        key: &str,
+        index: u32,
+    ) -> Result<Option<bytes::Bytes>, ImageFailure> {
+        let key = ImageKey::parse(key).ok_or(ImageFailure::InvalidRequest)?;
+        let source = self.reference(&key).await?;
+        let Some(bytes) = self
+            .read_presentation_annotation(&key, PresentationAnnotation::Figures)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let projection: FigureProjection =
+            serde_json::from_slice(&bytes).map_err(|_| ImageFailure::BadOutput)?;
+        if projection.source_sha256 != source.sha256 {
+            return Err(ImageFailure::BadOutput);
         }
+        let mut figures = projection
+            .figures
+            .iter()
+            .filter(|figure| figure.geometry.mask_index == index);
+        let Some(figure) = figures.next() else {
+            return Ok(None);
+        };
+        if figures.next().is_some() {
+            return Err(ImageFailure::BadOutput);
+        }
+        let Some(derivative) = figure.derivative.as_deref() else {
+            return Ok(None);
+        };
+        let derived = ImageKey::parse(derivative).ok_or(ImageFailure::BadOutput)?;
+        let image = self.reference(&derived).await?;
+        if image.format != df_providers::ImageFormat::Png {
+            return Err(ImageFailure::BadOutput);
+        }
+        focus_diagnostic("served", key.as_str(), &figure.geometry.id, index, None);
+        Ok(Some(image.bytes))
     }
-    // Three Gaussian sigmas cover about 1.5% of the plate height on either side of the edge.
-    let alpha = image::imageops::blur(&alpha, (height as f32 * 0.005).max(0.5));
-    let rgba = image::RgbaImage::from_fn(width, height, |x, y| {
-        image::Rgba([255, 255, 255, alpha.get_pixel(x, y).0[0]])
-    });
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(rgba)
-        .write_to(&mut png, image::ImageFormat::Png)
-        .map_err(|_| ImageFailure::BadOutput)?;
-    Ok(png.into_inner())
 }
 
 fn focus_diagnostic(stage: &str, key: &str, person: &str, index: u32, failure: Option<&str>) {
@@ -669,7 +374,7 @@ fn crown(mask: &MaskRows, head: Option<HeadBox>) -> Option<(f32, u32)> {
 }
 
 fn match_figures(
-    scan: &StoredScan,
+    scan: &MaskScan,
     heads: &[LocatedHead],
     staged: &[StagedFigure<'_>],
     hero_count: usize,
@@ -857,34 +562,8 @@ fn match_figures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    #[tokio::test]
-    async fn hs54_sam_gates_coalesce_only_the_same_plate() {
-        let cache = FigureMaskCache::default();
-        let first = cache.gate_for("first");
-        let same = cache.gate_for("first");
-        let other = cache.gate_for("other");
-        assert!(Arc::ptr_eq(&first, &same));
-        let _held = first.lock().await;
-        assert!(same.try_lock().is_err());
-        assert!(
-            other.try_lock().is_ok(),
-            "another plate never waits behind this SAM call"
-        );
-        drop(other);
-        let _next = cache.gate_for("next");
-        assert!(
-            !locked(&cache.gates).contains_key("other"),
-            "unused keyed locks are reclaimed"
-        );
-    }
-
-    fn rectangle(left: u32, top: u32, right: u32, bottom: u32) -> StoredMask {
-        StoredMask {
+    fn rectangle(left: u32, top: u32, right: u32, bottom: u32) -> FocusMask {
+        FocusMask {
             index: left,
             score: 0.95,
             runs: (top..bottom)
@@ -893,16 +572,12 @@ mod tests {
         }
     }
 
-    fn scan(masks: Vec<StoredMask>) -> StoredScan {
-        StoredScan {
-            revision: REVISION,
-            model: "sam-3.1".into(),
-            image_sha256: String::new(),
+    fn scan(masks: Vec<FocusMask>) -> MaskScan {
+        MaskScan {
             width: 40,
             height: 20,
             source_width: 400,
             source_height: 200,
-            outcome: "complete".into(),
             masks,
         }
     }
@@ -1032,81 +707,19 @@ mod tests {
         assert_eq!(matched[0].bounds[1], 0);
         assert_eq!(matched[0].head_top, [150, 50]);
     }
-
-    #[test]
-    fn figure_masks_raster_png_keeps_plate_aspect_and_feathers_alpha() {
-        let mut scan = scan(vec![rectangle(10, 5, 30, 15)]);
-        scan.source_width = 2400;
-        scan.source_height = 1200;
-        let instances = scan.instances().unwrap();
-        let png = raster_focus_mask(&scan, &instances[0].mask).unwrap();
-        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
-        assert_eq!(decoded.dimensions(), (768, 384));
-        assert_eq!(decoded.get_pixel(384, 192).0, [255, 255, 255, 255]);
-        assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
-        let edge = decoded.get_pixel(192, 192).0[3];
-        assert!(edge > 0 && edge < 255, "alpha at feathered edge: {edge}");
-        assert_eq!(decoded.get_pixel(180, 192).0[3], 0);
-        assert_eq!(decoded.get_pixel(204, 192).0[3], 255);
-        scan.source_width = 400;
-        scan.source_height = 800;
-        let portrait =
-            image::load_from_memory(&raster_focus_mask(&scan, &instances[0].mask).unwrap())
-                .unwrap();
-        assert_eq!((portrait.width(), portrait.height()), (384, 768));
-    }
-
-    fn imagery(directory: PathBuf) -> Imagery {
-        use crate::gameplay::startup_configuration::{
-            ContentRating, ImageryConfiguration, ImageryCredential,
-        };
-        Imagery::new(
-            ImageryConfiguration {
-                credential: Some(ImageryCredential::for_test("fixture-key")),
-                model: df_providers::ImageEditModel::Gpt25Flare,
-                quality: df_providers::ImageQuality::Medium,
-                profile: Default::default(),
-                interval: Duration::from_secs(20),
-                deadline: Duration::from_secs(5),
-                cache_dir: directory,
-                rating: ContentRating::Mature,
-            },
-            df_providers::NativeImageEditProvider::new(
-                df_providers::ImageEditConfig::live(),
-                "fixture-key",
-                Duration::from_secs(5),
-            )
-            .unwrap(),
-            None,
-        )
-        .unwrap()
-    }
-
-    async fn register(imagery: &Imagery) -> ImageKey {
-        let mut jpeg = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(40, 20)
-            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
-            .unwrap();
-        imagery
-            .register_reviewed(
-                "plate:mask-fixture",
-                super::super::ReferenceImage::new(
-                    df_providers::ImageFormat::Jpeg,
-                    bytes::Bytes::from(jpeg.into_inner()),
-                ),
-            )
-            .await
-            .unwrap()
-    }
-
     #[tokio::test]
-    async fn figure_masks_loopback_matches_and_cached_plate_never_submits_again() {
+    async fn actual_analysis_coalesces_publishes_assigned_masks_and_reuses_after_restart() {
+        use crate::gameplay::{cost::port::MeteringPort, image_test_support::ImageHostFixture};
         use axum::{
             Json, Router,
             routing::{get, post},
         };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let submits = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&submits);
+        let counted = submits.clone();
         let rle = |left, top, right, bottom| {
             rectangle(left, top, right, bottom)
                 .runs
@@ -1116,77 +729,62 @@ mod tests {
                 .join(" ")
         };
         let result =
-            serde_json::json!({"rle": [rle(26,3,35,19), rle(4,2,14,20)], "scores": [0.96,0.95]});
+            serde_json::json!({"rle":[rle(26,3,35,19),rle(4,2,14,20)],"scores":[0.96,0.95]});
         let app = Router::new()
-            .route("/fal-ai/sam-3-1/image-rle", post(move |Json(body): Json<serde_json::Value>| {
-                counted.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(body["prompt"], "person");
-                assert_eq!(body["max_masks"], 32);
-                async { Json(serde_json::json!({
-                    "request_id": "hs51-fixture",
-                    "status_url": "https://queue.fal.run/fal-ai/sam-3-1/requests/hs51-fixture/status",
-                    "response_url": "https://queue.fal.run/fal-ai/sam-3-1/requests/hs51-fixture",
-                })) }
+            .route("/fal-ai/sam-3-1/image-rle",post(move |Json(body):Json<serde_json::Value>| {
+                counted.fetch_add(1,Ordering::SeqCst);
+                assert_eq!(body["prompt"],"person"); assert_eq!(body["max_masks"],32);
+                async { Json(serde_json::json!({"request_id":"figure-fixture",
+                    "status_url":"https://queue.fal.run/fal-ai/sam-3-1/requests/figure-fixture/status",
+                    "response_url":"https://queue.fal.run/fal-ai/sam-3-1/requests/figure-fixture"})) }
             }))
-            .route("/fal-ai/sam-3-1/requests/hs51-fixture/status", get(|| async { Json(serde_json::json!({"status": "COMPLETED"})) }))
-            .route("/fal-ai/sam-3-1/requests/hs51-fixture", get(move || { let result = result.clone(); async move { Json(result) } }));
+            .route("/fal-ai/sam-3-1/requests/figure-fixture/status",get(||async{Json(serde_json::json!({"status":"COMPLETED"}))}))
+            .route("/fal-ai/sam-3-1/requests/figure-fixture",get(move||{let result=result.clone();async move{Json(result)}}));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
-                    let _stopped = stopped.await;
+                    let _ = stopped.await;
                 })
                 .await
                 .unwrap();
         });
-        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS62")
-            .join(format!(
-                "mask-fixture-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-        let imagery = imagery(directory.clone());
-        let Mode::On { engine, .. } = &imagery.inner.mode else {
-            panic!("enabled fixture");
+        let costs = MeteringPort::new();
+        costs.open("figure-mask-test",r#"{"schema":"dungeonflux.pricing/1","currency":"USD","prices":[{"provider":"fal","model":"fal-ai/sam-3-1/image-rle","category":"calls","usd":"0.01","per":1,"as_of":"2026-10-24","source":"https://fal.ai/models/fal-ai/sam-3-1/image-rle"}]}"#).unwrap();
+        let mut patch = df_imagery::RuntimePatch::empty();
+        patch.mode = Some(df_imagery::GlobalMode::Live);
+        patch.analysis_segmentation = Some(
+            df_imagery::SegmentationRoute {
+                provider: df_imagery::SegmentationProvider::Fal,
+                account: df_imagery::AccountHandle::new("fixture-segmentation").unwrap(),
+                model: df_imagery::ModelName::new("fal-ai/sam-3-1/image-rle").unwrap(),
+                endpoint: df_imagery::ApiEndpoint::new(&format!("http://{address}")).unwrap(),
+            }
+            .into(),
+        );
+        let Some(mut fixture) = ImageHostFixture::open(address, patch, costs.clone()).await else {
+            stop.send(()).unwrap();
+            server.await.unwrap();
+            return;
         };
-        // The segmentation price is the cost book's: one row of the price file.
-        let prices = cost::PriceTable::parse(
-            r#"{"schema": "dungeonflux.pricing/1", "currency": "USD", "prices": [
-                {"provider": "fal", "model": "fal-ai/sam-3-1/image-rle", "category": "calls",
-                 "usd": "0.01", "per": 1, "as_of": "2026-10-24",
-                 "source": "https://fal.ai/models/fal-ai/sam-3-1/image-rle"}]}"#,
-        )
-        .unwrap();
-        engine
-            .ledger
-            .costs()
-            .open("fixture", None, prices, cost::PricingStatus::NotLoaded, 1)
+        let mut picture = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(40, 20)
+            .write_to(&mut picture, image::ImageFormat::Png)
             .unwrap();
-        engine
-            .figure_masks
-            .provider
-            .set(
-                NativeFalSegmenter::new(
-                    FalSegmentConfig::loopback_fixture(
-                        SegmentModel::Sam31,
-                        address,
-                        Duration::from_millis(1),
-                    )
-                    .unwrap(),
-                    "fixture-key",
-                    Duration::from_secs(3),
-                )
-                .unwrap(),
-            )
+        let (key, _) = fixture
+            .import_bytes(df_providers::ImageFormat::Png, picture.into_inner().into())
+            .await
             .unwrap();
-        let key = register(&imagery).await;
-        let heads = [head("npc-0", 0.7, 0.15, 0.85, 0.4)];
+        let imagery = fixture.imagery().clone();
+        assert!(imagery.focus_mask(key.as_str(), 0).await.is_none());
+        assert_eq!(
+            submits.load(Ordering::SeqCst),
+            0,
+            "HTTP reads never admit analysis"
+        );
+        let heads = [head("npc-0", 0.665, 0.15, 0.87, 0.4)];
         let staged = [
             StagedFigure {
                 id: "hero-1",
@@ -1197,27 +795,32 @@ mod tests {
                 hero: false,
             },
         ];
-        let (first, second) = tokio::join!(
+        let (figures, scan) = tokio::join!(
             imagery.figure_geometry(&key, &heads, &staged, 1, true),
             imagery.plate_masks(&key)
         );
-        assert!(second.is_ok());
-        let figures = first.unwrap();
+        assert!(scan.is_ok());
+        let figures = figures.unwrap();
         assert!(
             figures
                 .iter()
                 .any(|figure| figure.id == "hero-1" && figure.inferred)
         );
-        assert!(figures.iter().any(|figure| figure.id == "npc-0"
-            && !figure.inferred
-            && figure.bounds == [26, 3, 35, 19]));
         let figure = figures.iter().find(|figure| figure.id == "npc-0").unwrap();
+        assert_eq!(figure.bounds, [26, 3, 35, 19]);
+        assert!(!figure.inferred);
         assert_eq!(
             figure.mask_url,
             format!("{}/figure/{}", key.path(), figure.mask_index)
         );
-        let cached_mask = focus_mask_path(&directory, key.as_str(), figure.mask_index);
-        let mask_modified = std::fs::metadata(&cached_mask).unwrap().modified().unwrap();
+        let first = imagery
+            .focus_mask(key.as_str(), figure.mask_index)
+            .await
+            .unwrap();
+        let png = image::load_from_memory(&first).unwrap().to_rgba8();
+        assert_eq!(png.dimensions(), (40, 20));
+        assert_eq!(png.get_pixel(30, 10).0, [255, 255, 255, 255]);
+        assert_eq!(png.get_pixel(0, 0)[3], 0);
         let expiry = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1227,7 +830,7 @@ mod tests {
             key.as_str(),
             crate::gameplay::media_grant::Audience::Imagery,
             crate::gameplay::media_grant::PrincipalAudience::Display,
-            &[1; 32],
+            &fixture.display_credential(),
             expiry,
         )
         .unwrap();
@@ -1258,104 +861,81 @@ mod tests {
             .unwrap();
         assert!((1..=60).contains(&maximum_age));
         let etag = response.headers()[axum::http::header::ETAG].clone();
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let png = image::load_from_memory(&body).unwrap();
-        assert_eq!((png.width(), png.height()), (40, 20));
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+            first
+        );
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(axum::http::header::IF_NONE_MATCH, etag);
-        let unchanged = super::super::serve_focus_mask(
+        let response = super::super::serve_focus_mask(
             axum::extract::State(imagery.clone()),
             axum::extract::Path((key.as_str().to_owned(), figure.mask_index)),
             headers,
             uri,
         )
         .await;
-        assert_eq!(unchanged.status(), axum::http::StatusCode::NOT_MODIFIED);
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_MODIFIED);
         assert!(imagery.focus_mask(key.as_str(), 999).await.is_none());
         assert!(imagery.focus_mask("../invalid", 0).await.is_none());
         assert_eq!(submits.load(Ordering::SeqCst), 1);
-        assert_eq!(engine.ledger.snapshot(Unit::SegmentCall).committed, 1);
-        assert_eq!(engine.micro_dollars.load(Ordering::SeqCst), 10_000);
-        let book = engine.ledger.costs().report(2);
-        assert_eq!(
-            book["run"]["events"], 1,
-            "one segmentation call is one event"
+        assert_eq!(costs.totals().calls, 1);
+        assert_eq!(costs.totals().micro_usd, 10_000);
+        imagery
+            .write_presentation_annotation(
+                &key,
+                PresentationAnnotation::Figures,
+                b"corrupt projection".to_vec(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            imagery
+                .focus_mask(key.as_str(), figure.mask_index)
+                .await
+                .is_none()
         );
-        assert_eq!(book["run"]["micro_usd"], 10_000);
-        assert_eq!(book["run"]["by_cause"][0]["cause"], "segmentation");
-        // A fresh process-equivalent service has no provider configured and still reads masks.
-        let restarted = self::imagery(directory.clone());
-        let restarted_key = register(&restarted).await;
-        assert_eq!(key.as_str(), restarted_key.as_str());
         assert_eq!(
-            restarted
+            submits.load(Ordering::SeqCst),
+            1,
+            "corrupt projection cannot authorize another supplier call"
+        );
+        imagery
+            .figure_geometry(&key, &heads, &staged, 1, true)
+            .await
+            .unwrap();
+        drop(imagery);
+        fixture.restart().await;
+        let imagery = fixture.imagery().clone();
+        assert_eq!(
+            imagery
+                .focus_mask(key.as_str(), figure.mask_index)
+                .await
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            imagery
                 .figure_geometry(&key, &heads, &staged, 1, true)
                 .await
                 .unwrap()
                 .len(),
             2
         );
-        assert_eq!(submits.load(Ordering::SeqCst), 1);
-        let cached_note = directory.join(format!("{}.sam31-person-v1.json", key.as_str()));
-        assert_eq!(
-            std::fs::metadata(cached_mask).unwrap().modified().unwrap(),
-            mask_modified
-        );
-        assert!(matches!(
-            engine
-                .figure_masks
-                .read_or_scan(
-                    cached_note,
-                    key.as_str(),
-                    b"different plate bytes",
-                    df_providers::ImageFormat::Jpeg,
-                    engine
-                )
-                .await,
-            Err(ImageFailure::BadOutput)
-        ));
-        let mut interrupted = scan(vec![]);
-        interrupted.image_sha256 = format!("{:x}", Sha256::digest(b""));
-        interrupted.outcome = "sent".into();
-        let marker = directory.join("interrupted.sam31-person-v1.json");
-        std::fs::write(&marker, serde_json::to_vec(&interrupted).unwrap()).unwrap();
-        assert!(matches!(
-            engine
-                .figure_masks
-                .read_or_scan(
-                    marker,
-                    "interrupted",
-                    b"",
-                    df_providers::ImageFormat::Jpeg,
-                    engine
-                )
-                .await,
-            Err(ImageFailure::BadOutput)
-        ));
-        let corrupt = directory.join("corrupt.sam31-person-v1.json");
-        std::fs::write(&corrupt, b"broken note").unwrap();
-        assert!(matches!(
-            engine
-                .figure_masks
-                .read_or_scan(
-                    corrupt,
-                    "corrupt",
-                    b"",
-                    df_providers::ImageFormat::Jpeg,
-                    engine
-                )
-                .await,
-            Err(ImageFailure::BadOutput)
-        ));
         assert_eq!(
             submits.load(Ordering::SeqCst),
             1,
-            "unknown or corrupt cached outcomes never authorize another paid call"
+            "actual restart reuses durable analysis"
         );
+        assert_eq!(
+            costs.totals().calls,
+            1,
+            "replay/derivatives never duplicate supplier accounting"
+        );
+        drop(imagery);
+        fixture.close().await;
         stop.send(()).unwrap();
         server.await.unwrap();
-        // Retain the exact fixture sidecars for coordinator inspection.
     }
 }

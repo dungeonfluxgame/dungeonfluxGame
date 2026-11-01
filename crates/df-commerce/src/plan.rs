@@ -117,6 +117,12 @@ pub enum EventKind {
     DisputeOpened,
     DisputeClosed,
     InvalidOutputSettled,
+    DraftConsentRecorded,
+    DraftQuoteCreated,
+    DraftAdmissionAdmitted,
+    DraftSettlementApplied,
+    DraftReleaseApplied,
+    DraftAttemptUnknown,
 }
 
 impl EventKind {
@@ -145,6 +151,12 @@ impl EventKind {
             Self::DisputeOpened => "dispute_opened",
             Self::DisputeClosed => "dispute_closed",
             Self::InvalidOutputSettled => "invalid_output_settled",
+            Self::DraftConsentRecorded => "draft_consent_recorded",
+            Self::DraftQuoteCreated => "draft_quote_created",
+            Self::DraftAdmissionAdmitted => "draft_admission_admitted",
+            Self::DraftSettlementApplied => "draft_settlement_applied",
+            Self::DraftReleaseApplied => "draft_release_applied",
+            Self::DraftAttemptUnknown => "draft_attempt_unknown",
         }
     }
 }
@@ -200,11 +212,20 @@ pub enum ChangeKind {
     FundingLotRefundUpdate,
     FundingLotDisputeUpdate,
     ProviderAttemptOutcomeUpdate,
+    DraftConsentInsert,
+    DraftConsentUpdate,
+    DraftQuoteInsert,
+    DraftQuoteUpdate,
+    DraftShareInsert,
+    DraftShareUpdate,
+    DraftReceiptInsert,
+    DraftReservationInsert,
+    DraftUsageInsert,
 }
 
 impl ChangeKind {
     /// Every kind, for the test that compares them with `finance.change_kind`.
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 57] = [
         Self::KeyCreate,
         Self::PayerInsert,
         Self::FundingLotInsert,
@@ -253,6 +274,15 @@ impl ChangeKind {
         Self::FundingLotRefundUpdate,
         Self::FundingLotDisputeUpdate,
         Self::ProviderAttemptOutcomeUpdate,
+        Self::DraftConsentInsert,
+        Self::DraftConsentUpdate,
+        Self::DraftQuoteInsert,
+        Self::DraftQuoteUpdate,
+        Self::DraftShareInsert,
+        Self::DraftShareUpdate,
+        Self::DraftReceiptInsert,
+        Self::DraftReservationInsert,
+        Self::DraftUsageInsert,
     ];
 
     pub fn label(self) -> &'static str {
@@ -305,6 +335,15 @@ impl ChangeKind {
             Self::FundingLotRefundUpdate => "funding_lot_refund_update",
             Self::FundingLotDisputeUpdate => "funding_lot_dispute_update",
             Self::ProviderAttemptOutcomeUpdate => "provider_attempt_outcome_update",
+            Self::DraftConsentInsert => "draft_consent_insert",
+            Self::DraftConsentUpdate => "draft_consent_update",
+            Self::DraftQuoteInsert => "draft_quote_insert",
+            Self::DraftQuoteUpdate => "draft_quote_update",
+            Self::DraftShareInsert => "draft_share_insert",
+            Self::DraftShareUpdate => "draft_share_update",
+            Self::DraftReceiptInsert => "draft_receipt_insert",
+            Self::DraftReservationInsert => "draft_reservation_insert",
+            Self::DraftUsageInsert => "draft_usage_insert",
         }
     }
 }

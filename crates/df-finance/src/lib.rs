@@ -11,6 +11,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod admit;
+pub mod draft_image;
 pub mod exports;
 pub mod fakes;
 pub mod held;
@@ -22,3 +23,14 @@ pub mod reconciliation;
 pub mod refunds;
 pub mod service;
 pub mod wire;
+
+mod image_stage;
+pub use image_stage::{
+    BindingRefusal, ImageAssetId, ImageJobId, ImageStageAdmission, ImageStageBinding,
+    ImageStageHook, ImageStageHookOutcome, ImageStageId, ImageStagePhase, ImageStagePort,
+    MAX_OWNER_SCOPE_BYTES, OwnerScope, ProviderCancellationOutcome, ProviderSendPort,
+    ProviderSettlementOutcome, ProviderSettlementPort, ProviderStageAdmission,
+    ProviderStageBinding, ProviderStageCancellationPort, ProviderStagePort,
+    ProviderStageSettlement, PublicationAttemptId, StageRefusal, image_stage_quote_digest,
+    image_stage_request_digest, provider_stage_request_digest,
+};

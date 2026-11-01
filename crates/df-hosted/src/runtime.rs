@@ -40,6 +40,7 @@ pub enum OpenError {
     Random,
     Bundle,
     Port,
+    DraftImages,
 }
 
 #[derive(Clone)]
@@ -132,8 +133,24 @@ impl Hosted {
                     .map_err(|_| OpenError::Database)?,
             ),
         );
-        let (service, tasks) =
-            start_accounts(config.hosts, config.identity, config.mail, accounts).await?;
+        let tunables = Tunables::default();
+        let sessions = tunables.sessions;
+        let (service, tasks) = start_accounts(
+            config.hosts,
+            config.identity,
+            config.mail,
+            accounts,
+            tunables,
+        )
+        .await?;
+        let drafts = crate::draft_composition::open(
+            config.drafts,
+            &config.transport,
+            sessions,
+            service.clone(),
+        )
+        .await
+        .map_err(|_| OpenError::DraftImages)?;
         let ports = Arc::new(HostedPorts {
             finance,
             campaigns,
@@ -147,7 +164,8 @@ impl Hosted {
             Arc::clone(&ports),
             config.bundle,
         )
-        .merge(payments);
+        .merge(payments)
+        .merge(drafts);
         if config.profile == Profile::Development {
             app = app.merge(
                 Router::new()
@@ -325,6 +343,7 @@ async fn start_accounts(
     identity: Identity,
     mail: Mail,
     accounts: PostgresAccountStore,
+    tunables: Tunables,
 ) -> Result<(CustomerService<PostgresAccountStore, Sender>, ServiceTasks), OpenError> {
     let google_hosts = hosts.clone();
     let google_accounts = accounts.clone();
@@ -352,7 +371,7 @@ async fn start_accounts(
         CustomerConfig {
             hosts,
             identity,
-            tunables: Tunables::default(),
+            tunables,
             hashing: HashingParameters::PRODUCTION,
             maximum_concurrent_hashes: 2,
             hash_permit_wait: Duration::from_secs(5),
@@ -452,15 +471,15 @@ fn database_error(error: crate::database::DatabaseError) -> OpenError {
     }
 }
 
-async fn private_headers(
+pub(crate) async fn private_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
+    response
+        .headers_mut()
+        .entry(axum::http::header::CACHE_CONTROL)
+        .or_insert(axum::http::HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         axum::http::header::REFERRER_POLICY,
         axum::http::HeaderValue::from_static("no-referrer"),

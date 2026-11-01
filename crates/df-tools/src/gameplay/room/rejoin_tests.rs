@@ -28,6 +28,9 @@ async fn reclaim_rpc_never_hands_seat_proofs_to_any_caller_including_the_display
     let (actor, inbox) = df_session::inbox::bounded_inbox();
     let thread = std::thread::spawn(move || inbox.run(&mut AwayOwner));
     let service = Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         look_ahead: Default::default(),
         actor: actor.clone(),
         display_credential: [11; 32],

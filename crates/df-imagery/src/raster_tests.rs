@@ -15,11 +15,10 @@ use crate::output::{AlphaHandling, Dimensions, Encoding, LossyQuality, RasterOut
 use crate::raster::{RasterError, execute_transform};
 use crate::request::{AssetDigest, RequestLimits, SourceRef};
 use crate::transform::{
-    AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, BlurSpec, BrightnessOffset, ColorEffect,
-    CompositeLayer, CoverageRef, ExposureStops, FlipAxis, ImageTransform, Interpolation,
-    MaskChannel, MaskMode,
-    MaskSource, MaskSpec, PadSpec, PixelRect, ResizeMode, ResizeSpec, RotateSpec, SharpenSpec,
-    TransformSource, TransformSpec,
+    AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, BlurSpec, BrightnessOffset, CanvasSpec,
+    ColorEffect, CompositeLayer, CoverageRef, ExposureStops, FlipAxis, ImageTransform,
+    Interpolation, MaskChannel, MaskMode, MaskSource, MaskSpec, PadSpec, PixelRect, ResizeMode,
+    ResizeSpec, RotateSpec, SharpenSpec, TransformSource, TransformSpec,
 };
 use df_assets::{AssetId, Audience};
 
@@ -102,11 +101,23 @@ fn run_transform(
     request: &RequestLimits,
     transform: &TransformLimits,
 ) -> Result<crate::raster::RasterOutput, RasterError> {
-    execute_transform(spec, output, request, transform, &resolver_for(map), &allow())
+    execute_transform(
+        spec,
+        output,
+        request,
+        transform,
+        &resolver_for(map),
+        &allow(),
+    )
 }
 
 fn png_output(width: u32, height: u32, alpha: AlphaHandling) -> RasterOutputSpec {
-    RasterOutputSpec::new(Dimensions::new(width, height).unwrap(), alpha, Encoding::Png).unwrap()
+    RasterOutputSpec::new(
+        Dimensions::new(width, height).unwrap(),
+        alpha,
+        Encoding::Png,
+    )
+    .unwrap()
 }
 
 fn recipe(
@@ -173,9 +184,7 @@ fn oversize_header_is_refused_before_allocation() {
     let output = png_output(1, 1, AlphaHandling::Opaque);
     assert_eq!(
         run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
-        RasterError::DecodedTooLarge {
-            pixels: 25_000_000
-        }
+        RasterError::DecodedTooLarge { pixels: 25_000_000 }
     );
 }
 
@@ -337,22 +346,58 @@ fn contain_step(width: u32, height: u32) -> ImageTransform {
 
 #[test]
 fn crop_then_resize_differs_from_resize_then_crop() {
+    // Nearest sampling copies source pixels, so each side is analytical:
+    // cropping the red quadrant first stays all red, while stretching the
+    // full quadrants to 3x3 first bleeds green into the cropped window.
     let bytes = png_bytes(&quadrant_fixture());
+    let red_to_square = ImageTransform::Resize(
+        ResizeSpec::new(
+            2,
+            2,
+            ResizeMode::Stretch,
+            AlignAnchor::center(),
+            Interpolation::Nearest,
+            true,
+            None,
+        )
+        .unwrap(),
+    );
     let first = vec![
-        ImageTransform::Crop(PixelRect::new(0, 0, 4, 2).unwrap()),
-        contain_step(2, 1),
+        ImageTransform::Crop(PixelRect::new(0, 0, 2, 2).unwrap()),
+        red_to_square.clone(),
     ];
+    let quadrants_to_odd = ImageTransform::Resize(
+        ResizeSpec::new(
+            3,
+            3,
+            ResizeMode::Stretch,
+            AlignAnchor::center(),
+            Interpolation::Nearest,
+            true,
+            None,
+        )
+        .unwrap(),
+    );
     let second = vec![
-        contain_step(2, 2),
-        ImageTransform::Crop(PixelRect::new(0, 0, 2, 1).unwrap()),
+        quadrants_to_odd,
+        ImageTransform::Crop(PixelRect::new(0, 0, 2, 2).unwrap()),
     ];
     let (request, transform) = limits();
-    let output = png_output(2, 1, AlphaHandling::Opaque);
+    let output = png_output(2, 2, AlphaHandling::Opaque);
     let (first_spec, first_map) = recipe(0x21, &bytes, first);
     let (second_spec, second_map) = recipe(0x21, &bytes, second);
     let first_out = run_transform(&first_spec, &output, &first_map, &request, &transform).unwrap();
     let second_out =
         run_transform(&second_spec, &output, &second_map, &request, &transform).unwrap();
+    let first_decoded = decode_output(&first_out.bytes);
+    let second_decoded = decode_output(&second_out.bytes);
+    assert!(
+        first_decoded
+            .pixels()
+            .all(|pixel| pixel.0 == [255, 0, 0, 255])
+    );
+    assert_eq!(second_decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
+    assert_eq!(second_decoded.get_pixel(1, 0).0, [0, 255, 0, 255]);
     assert_ne!(first_out.bytes, second_out.bytes);
 }
 
@@ -568,9 +613,12 @@ fn arbitrary_right_angle_matches_the_exact_quarter_turn() {
         }
     });
     let bytes = png_bytes(&row);
+    // An expanded canvas swaps dimensions through the exact right-angle
+    // path, so arbitrary 90 with expand true matches QuarterTurns(1). The
+    // fixed-canvas case keeps 2x1 and is pinned separately below.
     let arbitrary = ImageTransform::Rotate(RotateSpec::Arbitrary {
         degrees: 90.0,
-        expand_canvas: false,
+        expand_canvas: true,
         fill: Rgb {
             red: 0,
             green: 0,
@@ -624,7 +672,9 @@ fn brightness_adds_offset_and_clamps() {
         }
     });
     let bytes = png_bytes(&base);
-    let steps = vec![ImageTransform::Brighten(BrightnessOffset::new(0.5).unwrap())];
+    let steps = vec![ImageTransform::Brighten(
+        BrightnessOffset::new(0.5).unwrap(),
+    )];
     let (spec, map) = recipe(0x32, &bytes, steps);
     let (request, transform) = limits();
     let output = png_output(2, 1, AlphaHandling::Opaque);
@@ -724,7 +774,9 @@ fn contrast_pivots_dark_toward_black() {
         }
     });
     let bytes = png_bytes(&base);
-    let steps = vec![ImageTransform::Color(ColorEffect::contrast(2.0, 0.5).unwrap())];
+    let steps = vec![ImageTransform::Color(
+        ColorEffect::contrast(2.0, 0.5).unwrap(),
+    )];
     let (spec, map) = recipe(0x37, &bytes, steps);
     let (request, transform) = limits();
     let output = png_output(2, 1, AlphaHandling::Opaque);
@@ -744,7 +796,9 @@ fn gaussian_blur_spreads_a_single_bright_pixel() {
         }
     });
     let bytes = png_bytes(&base);
-    let steps = vec![ImageTransform::Blur(BlurSpec::new(1.0, BlurAlgorithm::Gaussian).unwrap())];
+    let steps = vec![ImageTransform::Blur(
+        BlurSpec::new(1.0, BlurAlgorithm::Gaussian).unwrap(),
+    )];
     let (spec, map) = recipe(0x38, &bytes, steps);
     let (request, transform) = limits();
     let output = png_output(3, 1, AlphaHandling::Opaque);
@@ -755,7 +809,10 @@ fn gaussian_blur_spreads_a_single_bright_pixel() {
     assert!(decoded.get_pixel(2, 0).0[0] > 0);
 }
 
-#[allow(clippy::too_many_arguments, reason = "test fixture packs one mask recipe")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "test fixture packs one mask recipe"
+)]
 fn mask_recipe(
     base_byte: u8,
     base: &RgbaImage,
@@ -897,18 +954,30 @@ fn mask_luminance_channel_reads_brightness() {
 
 #[test]
 fn mask_dimension_mismatch_is_refused() {
+    // A smaller mask asset is valid alignment: it centers over the base. The
+    // refusal fires when the decoded mask bytes disagree with the declared
+    // mask dimensions, so the spec claims 2x2 while the asset is 1x1.
     let base = rgba_fixture(2, 2, |_, _| [255, 0, 0, 255]);
     let mask = rgba_fixture(1, 1, |_, _| [255, 255, 255, 255]);
-    let (spec, map) = mask_recipe(
-        0x49,
-        &base,
-        0x4a,
-        &mask,
+    let base_bytes = png_bytes(&base);
+    let mask_bytes = png_bytes(&mask);
+    let mask_spec = MaskSpec::new(
+        MaskSource::Asset(pin(0x4a, &mask_bytes)),
+        Dimensions::new(2, 2).unwrap(),
+        AlignAnchor::center(),
         MaskChannel::Alpha,
         false,
         0.0,
         MaskMode::Replace,
-    );
+    )
+    .unwrap();
+    let mut map = HashMap::new();
+    map.insert([0x49; 16], base_bytes.clone());
+    map.insert([0x4a; 16], mask_bytes.clone());
+    let spec = TransformSpec {
+        source: TransformSource::Image(pin(0x49, &base_bytes)),
+        steps: vec![ImageTransform::Mask(mask_spec)],
+    };
     let (request, transform) = limits();
     let output = png_output(2, 2, AlphaHandling::PreserveAlpha);
     assert_eq!(
@@ -990,18 +1059,30 @@ fn composite_layer_order_changes_the_result() {
     let output = png_output(1, 1, AlphaHandling::Opaque);
     let (red_first, red_first_map) = composite_recipe(
         &base,
-        vec![(0x52, red.clone(), 0, 0, 1000), (0x53, blue.clone(), 0, 0, 1000)],
+        vec![
+            (0x52, red.clone(), 0, 0, 1000),
+            (0x53, blue.clone(), 0, 0, 1000),
+        ],
     );
     let (blue_first, blue_first_map) = composite_recipe(
         &base,
-        vec![(0x53, blue.clone(), 0, 0, 1000), (0x52, red.clone(), 0, 0, 1000)],
+        vec![
+            (0x53, blue.clone(), 0, 0, 1000),
+            (0x52, red.clone(), 0, 0, 1000),
+        ],
     );
     let first = run_transform(&red_first, &output, &red_first_map, &request, &transform).unwrap();
     let second =
         run_transform(&blue_first, &output, &blue_first_map, &request, &transform).unwrap();
     assert_ne!(first.bytes, second.bytes);
-    assert_eq!(decode_output(&first.bytes).get_pixel(0, 0).0, [0, 0, 255, 255]);
-    assert_eq!(decode_output(&second.bytes).get_pixel(0, 0).0, [255, 0, 0, 255]);
+    assert_eq!(
+        decode_output(&first.bytes).get_pixel(0, 0).0,
+        [0, 0, 255, 255]
+    );
+    assert_eq!(
+        decode_output(&second.bytes).get_pixel(0, 0).0,
+        [255, 0, 0, 255]
+    );
 }
 
 #[test]
@@ -1012,7 +1093,10 @@ fn composite_zero_opacity_leaves_the_canvas_unchanged() {
     let (request, transform) = limits();
     let output = png_output(1, 1, AlphaHandling::Opaque);
     let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
-    assert_eq!(decode_output(&result.bytes).get_pixel(0, 0).0, [10, 20, 30, 255]);
+    assert_eq!(
+        decode_output(&result.bytes).get_pixel(0, 0).0,
+        [10, 20, 30, 255]
+    );
 }
 
 #[test]
@@ -1023,7 +1107,12 @@ fn composite_half_opacity_blends_linearly() {
     let (request, transform) = limits();
     let output = png_output(1, 1, AlphaHandling::Opaque);
     let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
-    assert_eq!(decode_output(&result.bytes).get_pixel(0, 0).0, [128, 128, 128, 255]);
+    // Source-over in linear light: 0.5 white light encodes back to 188, not
+    // the 128 of encoded-space averaging.
+    assert_eq!(
+        decode_output(&result.bytes).get_pixel(0, 0).0,
+        [188, 188, 188, 255]
+    );
 }
 
 #[test]
@@ -1058,7 +1147,10 @@ fn matte_png_flattens_transparency_onto_the_fill() {
     let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
     assert!(!result.has_alpha);
     assert_eq!(result.mime, "image/png");
-    assert_eq!(decode_output(&result.bytes).get_pixel(0, 0).0, [0, 0, 255, 255]);
+    assert_eq!(
+        decode_output(&result.bytes).get_pixel(0, 0).0,
+        [0, 0, 255, 255]
+    );
 }
 
 #[test]
@@ -1106,24 +1198,259 @@ fn dropping_alpha_without_a_matte_is_refused() {
     );
 }
 
+fn webp_lossy_output(
+    width: u32,
+    height: u32,
+    alpha: AlphaHandling,
+    quality: u8,
+) -> RasterOutputSpec {
+    RasterOutputSpec::new(
+        Dimensions::new(width, height).unwrap(),
+        alpha,
+        Encoding::WebP {
+            quality: Some(LossyQuality::new(quality).unwrap()),
+        },
+    )
+    .unwrap()
+}
+
 #[test]
-fn lossy_webp_output_is_explicitly_unsupported() {
-    let base = rgba_fixture(2, 2, |_, _| [9, 9, 9, 255]);
+fn lossy_webp_rgb_round_trip_stays_close_to_the_source() {
+    let base = rgba_fixture(8, 8, |x, y| [(x * 32) as u8, (y * 32) as u8, 128, 255]);
     let bytes = png_bytes(&base);
-    let (spec, map) = recipe(0x64, &bytes, Vec::new());
+    let (spec, map) = recipe(0x91, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(8, 8, AlphaHandling::Opaque, 80);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert_eq!(result.mime, "image/webp");
+    assert!(!result.has_alpha);
+    assert_eq!((result.width_px, result.height_px), (8, 8));
+    let decoded = decode_output(&result.bytes);
+    for (x, y, pixel) in decoded.enumerate_pixels() {
+        let expected = base.get_pixel(x, y);
+        for channel in 0..3 {
+            let drift = (pixel[channel] as i16 - expected[channel] as i16).abs();
+            assert!(drift <= 32, "drift={drift} at {x},{y}");
+        }
+        assert_eq!(pixel[3], 255);
+    }
+}
+
+#[test]
+fn lossy_webp_rgba_keeps_alpha_exact_at_edges() {
+    let base = rgba_fixture(4, 2, |x, y| match (x, y) {
+        (0, 0) => [200, 30, 30, 0],
+        (1, 0) => [200, 30, 30, 64],
+        (2, 0) => [200, 30, 30, 128],
+        (3, 0) => [200, 30, 30, 192],
+        (0, 1) => [200, 30, 30, 255],
+        (1, 1) => [30, 200, 30, 255],
+        (2, 1) => [30, 30, 200, 255],
+        _ => [200, 200, 30, 255],
+    });
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x92, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(4, 2, AlphaHandling::PreserveAlpha, 75);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert_eq!(result.mime, "image/webp");
+    assert!(result.has_alpha);
+    let decoded = decode_output(&result.bytes);
+    for (x, y, pixel) in decoded.enumerate_pixels() {
+        assert_eq!(pixel[3], base.get_pixel(x, y)[3], "alpha drift at {x},{y}");
+    }
+}
+
+#[test]
+fn lossy_webp_uniform_rgba_color_stays_close_while_alpha_varies() {
+    // Uniform chroma separates lossy color fidelity from 4:2:0 subsampling
+    // across the sharp, alternating colors in the exact-alpha fixture.
+    let base = rgba_fixture(32, 32, |x, _| [200, 30, 30, (x * 8) as u8]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x92, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(32, 32, AlphaHandling::PreserveAlpha, 75);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    let decoded = decode_output(&result.bytes);
+    for (x, y, pixel) in decoded.enumerate_pixels() {
+        let expected = base.get_pixel(x, y);
+        assert_eq!(pixel[3], expected[3], "alpha drift at {x},{y}");
+        if expected[3] == 0 {
+            continue;
+        }
+        for channel in 0..3 {
+            let drift = (i16::from(pixel[channel]) - i16::from(expected[channel])).abs();
+            assert!(drift <= 16, "drift={drift} at {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn lossy_webp_quality_100_stays_lossy() {
+    let base = rgba_fixture(8, 8, |x, y| [(x * 29) as u8, (y * 29) as u8, 64, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x93, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let lossy = run_transform(
+        &spec,
+        &webp_lossy_output(8, 8, AlphaHandling::Opaque, 100),
+        &map,
+        &request,
+        &transform,
+    )
+    .unwrap();
+    let lossless_output = RasterOutputSpec::new(
+        Dimensions::new(8, 8).unwrap(),
+        AlphaHandling::Opaque,
+        Encoding::WebP { quality: None },
+    )
+    .unwrap();
+    let lossless = run_transform(&spec, &lossless_output, &map, &request, &transform).unwrap();
+    // VP8 lossy and VP8L lossless use different bitstreams even at q100.
+    assert_ne!(lossy.bytes, lossless.bytes);
+    let decoded = decode_output(&lossy.bytes);
+    for (x, y, pixel) in decoded.enumerate_pixels() {
+        let expected = base.get_pixel(x, y);
+        for channel in 0..3 {
+            let drift = (pixel[channel] as i16 - expected[channel] as i16).abs();
+            assert!(drift <= 32, "drift={drift} at {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn lossy_webp_quality_boundaries_are_checked() {
+    assert_eq!(
+        LossyQuality::new(0).unwrap_err(),
+        crate::output::OutputError::QualityOutOfRange { value: 0 }
+    );
+    assert_eq!(
+        LossyQuality::new(101).unwrap_err(),
+        crate::output::OutputError::QualityOutOfRange { value: 101 }
+    );
+    assert_eq!(LossyQuality::new(1).unwrap().value(), 1);
+    assert_eq!(LossyQuality::new(100).unwrap().value(), 100);
+}
+
+#[test]
+fn lossy_webp_output_limit_stops_the_writer() {
+    let base = rgba_fixture(16, 16, |x, y| [(x * 16) as u8, (y * 16) as u8, 200, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x94, &bytes, Vec::new());
+    let (request, mut transform) = limits();
+    transform.max_output_bytes = 64;
+    let output = webp_lossy_output(16, 16, AlphaHandling::Opaque, 80);
+    assert!(matches!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::OutputTooLarge { .. }
+    ));
+}
+
+#[test]
+fn lossy_webp_cancel_before_encode_is_observed() {
+    let base = rgba_fixture(8, 8, |_, _| [200, 30, 30, 128]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x95, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(8, 8, AlphaHandling::PreserveAlpha, 80);
+    let check = || -> Result<(), RasterError> { Err(RasterError::Cancelled) };
+    let outcome = execute_transform(
+        &spec,
+        &output,
+        &request,
+        &transform,
+        &resolver_for(&map),
+        &check,
+    );
+    assert_eq!(outcome.unwrap_err(), RasterError::Cancelled);
+}
+
+#[test]
+fn lossy_webp_cancel_during_encode_is_observed() {
+    let base = rgba_fixture(64, 64, |x, y| [(x * 4) as u8, (y * 4) as u8, 128, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x96, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(64, 64, AlphaHandling::PreserveAlpha, 80);
+    let calls = Cell::new(0_u32);
+    let check = || -> Result<(), RasterError> {
+        calls.set(calls.get() + 1);
+        if calls.get() > 8 {
+            return Err(RasterError::Cancelled);
+        }
+        Ok(())
+    };
+    let outcome = execute_transform(
+        &spec,
+        &output,
+        &request,
+        &transform,
+        &resolver_for(&map),
+        &check,
+    );
+    assert_eq!(outcome.unwrap_err(), RasterError::Cancelled);
+}
+
+#[test]
+fn lossy_webp_native_reservation_refuses_before_the_call() {
+    let base = rgba_fixture(8, 8, |_, _| [9, 9, 9, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x97, &bytes, Vec::new());
+    let (request, mut transform) = limits();
+    // Decoded RGBA (256 bytes) fits; the native import plus workspace
+    // bound (including fixed encoder state) does not.
+    transform.max_decoded_bytes = 8 * 8 * 4;
+    let output = webp_lossy_output(8, 8, AlphaHandling::PreserveAlpha, 80);
+    assert!(matches!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::LiveBudgetExceeded { .. }
+    ));
+}
+
+#[test]
+fn lossy_webp_dimensions_beyond_the_native_limit_are_refused() {
+    let base = RgbaImage::from_pixel(20_000, 16, image::Rgba([9, 9, 9, 255]));
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x98, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(20_000, 16, AlphaHandling::Opaque, 80);
+    assert_eq!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::EncodeFailed
+    );
+}
+
+#[test]
+fn lossy_webp_matte_flattens_before_lossy_encode() {
+    let base = rgba_fixture(4, 4, |_, _| [255, 0, 0, 128]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x99, &bytes, Vec::new());
     let (request, transform) = limits();
     let output = RasterOutputSpec::new(
-        Dimensions::new(2, 2).unwrap(),
-        AlphaHandling::PreserveAlpha,
+        Dimensions::new(4, 4).unwrap(),
+        AlphaHandling::Matte(Rgb {
+            red: 0,
+            green: 0,
+            blue: 255,
+        }),
         Encoding::WebP {
             quality: Some(LossyQuality::new(80).unwrap()),
         },
     )
     .unwrap();
-    assert_eq!(
-        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
-        RasterError::UnsupportedFormat
-    );
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert_eq!(result.mime, "image/webp");
+    assert!(!result.has_alpha);
+    let pixel = decode_output(&result.bytes).get_pixel(0, 0).0;
+    // Linear-light red at half alpha over blue flattens near (188, 0, 188).
+    assert!((148..=228).contains(&pixel[0]), "red={pixel:?}");
+    assert!(pixel[1] <= 48, "green={pixel:?}");
+    assert!((148..=228).contains(&pixel[2]), "blue={pixel:?}");
+}
+
+#[test]
+fn webp_encoder_revision_is_pinned_for_recipe_keys() {
+    assert_eq!(crate::raster::webp_lossy::WEBP_ENCODER_REVISION, 2);
 }
 
 #[test]
@@ -1189,8 +1516,8 @@ fn exif_orientation_six_parses_from_little_endian_app1() {
     let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x22];
     bytes.extend_from_slice(b"Exif\0\0");
     bytes.extend_from_slice(&[
-        0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00,
-        0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ]);
     assert_eq!(crate::raster::decode::parse_exif_orientation(&bytes), 6);
 }
@@ -1212,7 +1539,10 @@ fn orientation_eight_swaps_dimensions() {
 
 #[test]
 fn corrupt_exif_falls_back_to_identity() {
-    assert_eq!(crate::raster::decode::parse_exif_orientation(b"not a jpeg"), 1);
+    assert_eq!(
+        crate::raster::decode::parse_exif_orientation(b"not a jpeg"),
+        1
+    );
     let row = rgba_fixture(2, 1, |_, _| [9, 9, 9, 255]);
     let kept = crate::raster::decode::apply_orientation(row.clone(), 9);
     assert_eq!((kept.width(), kept.height()), (2, 1));
@@ -1455,4 +1785,341 @@ fn encoded_output_stops_at_the_output_limit() {
         run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
         RasterError::OutputTooLarge { .. }
     ));
+}
+
+#[test]
+fn canvas_source_fills_the_declared_color() {
+    let spec = TransformSpec {
+        source: TransformSource::Canvas(
+            CanvasSpec::new(
+                2,
+                1,
+                Rgb {
+                    red: 10,
+                    green: 20,
+                    blue: 30,
+                },
+            )
+            .unwrap(),
+        ),
+        steps: Vec::new(),
+    };
+    let map = HashMap::new();
+    let (request, transform) = limits();
+    let output = png_output(2, 1, AlphaHandling::Opaque);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    let decoded = decode_output(&result.bytes);
+    assert!(decoded.pixels().all(|pixel| pixel.0 == [10, 20, 30, 255]));
+}
+
+#[test]
+fn resize_pad_places_content_on_the_explicit_fill() {
+    let solid = rgba_fixture(2, 2, |_, _| [255, 0, 0, 255]);
+    let bytes = png_bytes(&solid);
+    let pad_resize = ImageTransform::Resize(
+        ResizeSpec::new(
+            4,
+            4,
+            ResizeMode::Pad,
+            AlignAnchor::center(),
+            Interpolation::Nearest,
+            false,
+            Some(Rgb {
+                red: 0,
+                green: 0,
+                blue: 255,
+            }),
+        )
+        .unwrap(),
+    );
+    let (spec, map) = recipe(0x8b, &bytes, vec![pad_resize]);
+    let (request, transform) = limits();
+    let output = png_output(4, 4, AlphaHandling::Opaque);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    let decoded = decode_output(&result.bytes);
+    assert_eq!(decoded.get_pixel(0, 0).0, [0, 0, 255, 255]);
+    assert_eq!(decoded.get_pixel(1, 1).0, [255, 0, 0, 255]);
+    assert_eq!(decoded.get_pixel(2, 2).0, [255, 0, 0, 255]);
+    assert_eq!(decoded.get_pixel(3, 3).0, [0, 0, 255, 255]);
+}
+
+fn riff_chunk_kinds(bytes: &[u8]) -> Vec<[u8; 4]> {
+    assert!(bytes.len() >= 12);
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WEBP");
+    let mut kinds = Vec::new();
+    let mut offset = 12_usize;
+    while offset + 8 <= bytes.len() {
+        let mut tag = [0_u8; 4];
+        tag.copy_from_slice(&bytes[offset..offset + 4]);
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        kinds.push(tag);
+        let padded = size.saturating_add(size & 1);
+        offset = offset.saturating_add(8).saturating_add(padded);
+    }
+    kinds
+}
+
+#[test]
+fn lossy_webp_q1_and_q100_decode_with_expected_dimensions() {
+    let base = rgba_fixture(8, 8, |x, y| [(x * 29) as u8, (y * 29) as u8, 64, 255]);
+    let bytes = png_bytes(&base);
+    let (request, transform) = limits();
+    let (low_spec, low_map) = recipe(0x9a, &bytes, Vec::new());
+    let low = run_transform(
+        &low_spec,
+        &webp_lossy_output(8, 8, AlphaHandling::Opaque, 1),
+        &low_map,
+        &request,
+        &transform,
+    )
+    .unwrap();
+    assert_eq!(low.mime, "image/webp");
+    assert_eq!((low.width_px, low.height_px), (8, 8));
+    let low_decoded = decode_output(&low.bytes);
+    for pixel in low_decoded.pixels() {
+        assert_eq!(pixel[3], 255);
+    }
+    let (high_spec, high_map) = recipe(0x9a, &bytes, Vec::new());
+    let high = run_transform(
+        &high_spec,
+        &webp_lossy_output(8, 8, AlphaHandling::Opaque, 100),
+        &high_map,
+        &request,
+        &transform,
+    )
+    .unwrap();
+    assert_eq!(high.mime, "image/webp");
+    let high_decoded = decode_output(&high.bytes);
+    for (x, y, pixel) in high_decoded.enumerate_pixels() {
+        let expected = base.get_pixel(x, y);
+        for channel in 0..3 {
+            let drift = (pixel[channel] as i16 - expected[channel] as i16).abs();
+            assert!(drift <= 32, "drift={drift} at {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn lossy_webp_q100_chunk_is_vp8_while_lossless_chunk_is_vp8l() {
+    let base = rgba_fixture(8, 8, |x, y| [(x * 29) as u8, (y * 29) as u8, 64, 255]);
+    let bytes = png_bytes(&base);
+    let (request, transform) = limits();
+    let (lossy_spec, lossy_map) = recipe(0x9b, &bytes, Vec::new());
+    let lossy = run_transform(
+        &lossy_spec,
+        &webp_lossy_output(8, 8, AlphaHandling::Opaque, 100),
+        &lossy_map,
+        &request,
+        &transform,
+    )
+    .unwrap();
+    let lossless_output = RasterOutputSpec::new(
+        Dimensions::new(8, 8).unwrap(),
+        AlphaHandling::Opaque,
+        Encoding::WebP { quality: None },
+    )
+    .unwrap();
+    let (lossless_spec, lossless_map) = recipe(0x9b, &bytes, Vec::new());
+    let lossless = run_transform(
+        &lossless_spec,
+        &lossless_output,
+        &lossless_map,
+        &request,
+        &transform,
+    )
+    .unwrap();
+    assert_ne!(lossy.bytes, lossless.bytes);
+    let lossy_chunks = riff_chunk_kinds(&lossy.bytes);
+    let lossless_chunks = riff_chunk_kinds(&lossless.bytes);
+    assert!(lossy_chunks.contains(b"VP8 "));
+    assert!(!lossy_chunks.contains(b"VP8L"));
+    assert!(lossless_chunks.contains(b"VP8L"));
+    assert!(!lossless_chunks.contains(b"VP8 "));
+}
+
+#[test]
+fn lossy_webp_opaque_container_carries_no_alpha_chunk() {
+    let base = rgba_fixture(4, 4, |_, _| [200, 40, 40, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x9c, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(4, 4, AlphaHandling::Opaque, 80);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert!(!result.has_alpha);
+    assert!(!riff_chunk_kinds(&result.bytes).contains(b"ALPH"));
+    assert!(
+        decode_output(&result.bytes)
+            .pixels()
+            .all(|pixel| pixel[3] == 255)
+    );
+}
+
+#[test]
+fn lossy_webp_preserve_alpha_reports_actual_container_alpha() {
+    for source_alpha in [255, 128] {
+        for quality in [1, 80, 100] {
+            let base = rgba_fixture(7, 5, |_, _| [80, 120, 160, source_alpha]);
+            let bytes = png_bytes(&base);
+            let (spec, map) = recipe(0x9c, &bytes, Vec::new());
+            let (request, transform) = limits();
+            let output = webp_lossy_output(7, 5, AlphaHandling::PreserveAlpha, quality);
+            let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+            let container_has_alpha = riff_chunk_kinds(&result.bytes).contains(b"ALPH");
+            let decoded = image::load_from_memory(&result.bytes).unwrap();
+            assert_eq!(result.has_alpha, container_has_alpha);
+            assert_eq!(result.has_alpha, decoded.color().has_alpha());
+            assert_eq!(result.has_alpha, source_alpha != 255);
+            assert!(
+                decoded
+                    .to_rgba8()
+                    .pixels()
+                    .all(|pixel| pixel[3] == source_alpha)
+            );
+        }
+    }
+}
+
+#[test]
+fn lossy_webp_translucent_container_carries_raw_alpha() {
+    let base = rgba_fixture(5, 2, |x, y| {
+        if y == 0 {
+            match x {
+                0 => [200, 30, 30, 0],
+                1 => [200, 30, 30, 64],
+                2 => [200, 30, 30, 128],
+                3 => [200, 30, 30, 192],
+                _ => [200, 30, 30, 255],
+            }
+        } else {
+            [200, 30, 30, 255]
+        }
+    });
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x9d, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = webp_lossy_output(5, 2, AlphaHandling::PreserveAlpha, 75);
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert!(result.has_alpha);
+    assert!(riff_chunk_kinds(&result.bytes).contains(b"ALPH"));
+    let decoded = decode_output(&result.bytes);
+    for x in 0..5 {
+        assert_eq!(
+            decoded.get_pixel(x, 0)[3],
+            base.get_pixel(x, 0)[3],
+            "alpha drift at {x}"
+        );
+    }
+}
+
+#[test]
+fn lossy_webp_odd_dimensions_with_matte_stay_opaque() {
+    let base = rgba_fixture(7, 5, |x, y| [(x * 31) as u8, (y * 41) as u8, 200, 128]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x9e, &bytes, Vec::new());
+    let (request, transform) = limits();
+    let output = RasterOutputSpec::new(
+        Dimensions::new(7, 5).unwrap(),
+        AlphaHandling::Matte(Rgb {
+            red: 16,
+            green: 32,
+            blue: 48,
+        }),
+        Encoding::WebP {
+            quality: Some(LossyQuality::new(80).unwrap()),
+        },
+    )
+    .unwrap();
+    let result = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert_eq!((result.width_px, result.height_px), (7, 5));
+    assert!(!result.has_alpha);
+    assert!(!riff_chunk_kinds(&result.bytes).contains(b"ALPH"));
+}
+
+#[test]
+fn lossy_webp_preserve_budget_between_old_and_new_peak_refuses() {
+    let base = rgba_fixture(16, 16, |_, _| [9, 9, 9, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0x9f, &bytes, Vec::new());
+    let (request, mut transform) = limits();
+    transform.max_decoded_bytes = 10_000;
+    let output = webp_lossy_output(16, 16, AlphaHandling::PreserveAlpha, 80);
+    assert!(matches!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::LiveBudgetExceeded { .. }
+    ));
+}
+
+#[test]
+fn lossy_webp_opaque_budget_between_old_and_new_peak_refuses() {
+    let base = rgba_fixture(16, 16, |_, _| [9, 9, 9, 255]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0xa0, &bytes, Vec::new());
+    let (request, mut transform) = limits();
+    transform.max_decoded_bytes = 10_000;
+    let output = webp_lossy_output(16, 16, AlphaHandling::Opaque, 80);
+    assert!(matches!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::LiveBudgetExceeded { .. }
+    ));
+}
+
+#[test]
+fn lossy_webp_matte_budget_between_old_and_new_peak_refuses() {
+    let base = rgba_fixture(16, 16, |_, _| [255, 0, 0, 128]);
+    let bytes = png_bytes(&base);
+    let (spec, map) = recipe(0xa1, &bytes, Vec::new());
+    let (request, mut transform) = limits();
+    transform.max_decoded_bytes = 12_000;
+    let output = RasterOutputSpec::new(
+        Dimensions::new(16, 16).unwrap(),
+        AlphaHandling::Matte(Rgb {
+            red: 0,
+            green: 0,
+            blue: 0,
+        }),
+        Encoding::WebP {
+            quality: Some(LossyQuality::new(80).unwrap()),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::LiveBudgetExceeded { .. }
+    ));
+}
+
+#[test]
+fn encoded_resize_and_discard_keep_hidden_rgb_through_actual_png_decode() {
+    let source = rgba_fixture(2, 1, |x, _| {
+        if x == 0 {
+            [255, 0, 0, 0]
+        } else {
+            [0, 0, 255, 0]
+        }
+    });
+    let bytes = png_bytes(&source);
+    let (spec, map) = recipe(
+        0xa4,
+        &bytes,
+        vec![
+            ImageTransform::EncodedResize {
+                dimensions: Dimensions::new(1, 1).unwrap(),
+                filter: crate::transform::EncodedFilter::Triangle,
+            },
+            ImageTransform::DiscardAlpha,
+        ],
+    );
+    let (request, transform) = limits();
+    let output = png_output(1, 1, AlphaHandling::Opaque);
+    let actual = run_transform(&spec, &output, &map, &request, &transform).unwrap();
+    assert_eq!(
+        decode_output(&actual.bytes).get_pixel(0, 0).0,
+        [128, 0, 128, 255]
+    );
 }

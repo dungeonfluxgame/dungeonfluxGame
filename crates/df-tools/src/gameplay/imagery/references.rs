@@ -19,6 +19,7 @@ pub(in crate::gameplay) struct ReferenceImage {
     pub(in crate::gameplay) format: ImageFormat,
     pub(in crate::gameplay) bytes: Bytes,
     pub(in crate::gameplay) sha256: String,
+    origin: ReferenceOrigin,
 }
 
 impl ReferenceImage {
@@ -31,7 +32,144 @@ impl ReferenceImage {
             format,
             bytes,
             sha256,
+            origin: ReferenceOrigin::Unbound,
         }
+    }
+
+    pub(in crate::gameplay) fn from_catalog(
+        format: ImageFormat,
+        bytes: Bytes,
+        source: df_imagery::SourceRef,
+    ) -> Result<Self, super::ImageFailure> {
+        if <[u8; 32]>::from(Sha256::digest(&bytes)) != *source.digest.as_bytes() {
+            return Err(super::ImageFailure::BadOutput);
+        }
+        let mut reference = Self::new(format, bytes);
+        reference.origin = ReferenceOrigin::Catalog(source);
+        Ok(reference)
+    }
+
+    pub(in crate::gameplay) fn from_trusted(
+        format: ImageFormat,
+        bytes: Bytes,
+        origin: TrustedReferenceOrigin,
+    ) -> Self {
+        let mut reference = Self::new(format, bytes);
+        reference.origin = ReferenceOrigin::Trusted(origin);
+        reference
+    }
+
+    pub(in crate::gameplay) fn trusted_source(&self) -> Option<&TrustedReferenceOrigin> {
+        match &self.origin {
+            ReferenceOrigin::Trusted(origin) => Some(origin),
+            _ => None,
+        }
+    }
+
+    pub(in crate::gameplay) fn canonical_source(&self) -> Option<&df_imagery::SourceRef> {
+        match &self.origin {
+            ReferenceOrigin::Catalog(source) => Some(source),
+            ReferenceOrigin::Unbound
+            | ReferenceOrigin::Reviewed(_)
+            | ReferenceOrigin::Trusted(_) => None,
+        }
+    }
+
+    pub(in crate::gameplay) fn reviewed_source(&self) -> Option<&ReviewedReference> {
+        match &self.origin {
+            ReferenceOrigin::Reviewed(source) => Some(source),
+            ReferenceOrigin::Unbound
+            | ReferenceOrigin::Catalog(_)
+            | ReferenceOrigin::Trusted(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ReferenceOrigin {
+    Unbound,
+    Catalog(df_imagery::SourceRef),
+    Reviewed(ReviewedReference),
+    Trusted(TrustedReferenceOrigin),
+}
+
+/// Actual host ingress proof. It is never deserialized from an image request.
+#[derive(Clone)]
+pub(in crate::gameplay) enum TrustedReferenceOrigin {
+    AuthoredPainting { root: PathBuf, painting: String },
+    ApprovedPortrait(std::sync::Arc<dyn ApprovedPortraitSource>),
+    AdventureManifest(AdventureManifest, super::ImageKey),
+    CommittedPortrait(std::sync::Arc<dyn ApprovedPortraitSource>),
+    DevelopmentSavedPhoto(std::sync::Arc<dyn DevelopmentSavedPhotoSource>),
+}
+impl std::fmt::Debug for TrustedReferenceOrigin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::AuthoredPainting { .. } => "TrustedReferenceOrigin::AuthoredPainting",
+            Self::ApprovedPortrait(_) => "TrustedReferenceOrigin::ApprovedPortrait",
+            Self::AdventureManifest(_, _) => "TrustedReferenceOrigin::AdventureManifest",
+            Self::CommittedPortrait(_) => "TrustedReferenceOrigin::CommittedPortrait",
+            Self::DevelopmentSavedPhoto(_) => "TrustedReferenceOrigin::DevelopmentSavedPhoto",
+        })
+    }
+}
+/// Implemented at the actual authenticated seat/library owner, retaining its current proof.
+pub(in crate::gameplay) trait ApprovedPortraitSource: Send + Sync {
+    fn read_current<'a>(
+        &'a self,
+        work_owner: &'a df_imagery::ImageOwner,
+    ) -> super::central::ReferenceFuture<'a, ReferenceImage>;
+}
+impl TrustedReferenceOrigin {
+    pub(in crate::gameplay) async fn read_current(
+        &self,
+        work_owner: &df_imagery::ImageOwner,
+    ) -> Result<ReferenceImage, super::ImageFailure> {
+        match self {
+            Self::DevelopmentSavedPhoto(source) => source.read_current(work_owner).await,
+            Self::ApprovedPortrait(source) | Self::CommittedPortrait(source) => {
+                source.read_current(work_owner).await
+            }
+            Self::AdventureManifest(manifest, key) => {
+                if !matches!(work_owner, df_imagery::ImageOwner::Run { .. }) {
+                    return Err(super::ImageFailure::Refused);
+                }
+                let manifest = manifest.clone();
+                let key = key.clone();
+                tokio::task::spawn_blocking(move || manifest.load(&key))
+                    .await
+                    .map_err(|_| super::ImageFailure::Interrupted)?
+            }
+            Self::AuthoredPainting { root, painting } => {
+                let path = super::super::home_theme::painting_file(root, painting)
+                    .map_err(|_| super::ImageFailure::Refused)?;
+                let bytes = tokio::task::spawn_blocking(move || read_file(&path))
+                    .await
+                    .map_err(|_| super::ImageFailure::Interrupted)?
+                    .map_err(|_| super::ImageFailure::Refused)?;
+                let format = super::super::image_references::format_of(&bytes)?;
+                Ok(ReferenceImage::new(format, bytes))
+            }
+        }
+    }
+}
+
+/// Minted only after the established photographic art contract resolves a bounded local file.
+#[derive(Clone)]
+pub(in crate::gameplay) struct ReviewedReference {
+    store: ReferenceStore,
+    stem: String,
+}
+
+impl std::fmt::Debug for ReviewedReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ReviewedReference")
+    }
+}
+
+impl ReviewedReference {
+    pub(in crate::gameplay) fn reload(&self) -> Result<ReferenceImage, ReferenceError> {
+        self.store.load(&self.stem)
     }
 }
 
@@ -88,7 +226,14 @@ impl ReferenceStore {
             .ok_or(ReferenceError::NotPhotographic)?;
         for (extension, format) in [("webp", ImageFormat::Webp), ("png", ImageFormat::Png)] {
             match read_file(&self.directory.join(format!("{photo}.{extension}"))) {
-                Ok(bytes) => return Ok(ReferenceImage::new(format, bytes)),
+                Ok(bytes) => {
+                    let mut reference = ReferenceImage::new(format, bytes);
+                    reference.origin = ReferenceOrigin::Reviewed(ReviewedReference {
+                        store: self.clone(),
+                        stem: photo.to_owned(),
+                    });
+                    return Ok(reference);
+                }
                 Err(ReferenceError::Missing) => {}
                 Err(error) => return Err(error),
             }
@@ -195,4 +340,63 @@ mod tests {
         assert_eq!(read("Figure-Hero-1"), Err(ReferenceError::Name));
         std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
     }
+}
+
+/// Only the server-selected adventure manifest can restore its previously issued local aliases.
+/// Each read rechecks bounded manifest membership and refuses symlink/non-file cache entries.
+#[derive(Clone)]
+pub(in crate::gameplay) struct AdventureManifest {
+    manifest: PathBuf,
+    cache: PathBuf,
+}
+impl std::fmt::Debug for AdventureManifest {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("AdventureManifest")
+    }
+}
+impl AdventureManifest {
+    pub(in crate::gameplay) fn new(directory: &Path, cache: PathBuf) -> Self {
+        Self {
+            manifest: directory.join(super::MANIFEST_NAME),
+            cache,
+        }
+    }
+    pub(in crate::gameplay) fn load(
+        &self,
+        key: &super::ImageKey,
+    ) -> Result<ReferenceImage, super::ImageFailure> {
+        let reader = super::manifest_tail(&self.manifest).ok_or(super::ImageFailure::Refused)?;
+        let format = super::manifest_records(reader)
+            .find_map(|(found, format)| (found == *key).then_some(format))
+            .ok_or(super::ImageFailure::Refused)?;
+        for format in super::legacy_stored_formats(format) {
+            let path = self.cache.join(super::legacy_file_name(key, *format));
+            if let Some(bytes) = super::read_cache_file(&path) {
+                return Ok(ReferenceImage::from_trusted(
+                    *format,
+                    bytes,
+                    TrustedReferenceOrigin::AdventureManifest(self.clone(), key.clone()),
+                ));
+            }
+        }
+        Err(super::ImageFailure::Refused)
+    }
+}
+
+/// Minted only from a currently registered canonical Work selected from committed checkpoint data.
+pub(in crate::gameplay) trait CommittedPortraitProof: Send + Sync {
+    fn authorize(
+        &self,
+        owner: &df_imagery::ImageOwner,
+        asset: &df_model::checkpoint::AssetReference,
+    ) -> Result<(), super::ImageFailure>;
+}
+
+/// Implemented only at the authenticated development control handler; it rechecks the actual
+/// operator credential and reads the configured bounded saved image on every import attempt.
+pub(in crate::gameplay) trait DevelopmentSavedPhotoSource: Send + Sync {
+    fn read_current<'a>(
+        &'a self,
+        owner: &'a df_imagery::ImageOwner,
+    ) -> super::central::ReferenceFuture<'a, ReferenceImage>;
 }

@@ -5,6 +5,7 @@ mod validation;
 #[cfg(not(target_arch = "wasm32"))]
 pub use validation::{
     ImageRejection, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, ValidatedImage, validate_image,
+    validate_image_with_limits,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,7 +61,8 @@ mod object_store;
 pub use object_store::{
     AssetVariant, CharacterRevision, ConditionalWrites, Deadline, InvalidEnvironment, KeyLayout,
     ListPage, ListedObject, ObjectEnvironment, ObjectKey, ObjectPrefix, ObjectStore,
-    ObjectStoreError, ObjectVersion, StorageDomain, StoredObject, VersionListing, VersioningStatus,
+    ObjectStoreError, ObjectVersion, StorageDomain, StorageOwner, StoredObject, VersionListing,
+    VersioningStatus,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-fakes")))]
@@ -113,7 +115,7 @@ pub use catalog_store::{
     Admission, AdmitOutcome, CatalogError, CatalogLookup, CatalogStore, ClaimOutcome, DeletionMark,
     DueRow, FinalizeRequest, FinalizeResult, LeaseOutcome, NotAdmitted, OrphanStaged,
     OrphanVariant, RejectGuard, RejectResult, StageOutcome, StepClaim, SupersedeResult,
-    TombstoneResult, VariantIntent, VariantWritten, Winner,
+    TombstoneResult, VariantIntent, VariantWritten, Winner, admission_owner, record_owner,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-fakes")))]
@@ -176,3 +178,25 @@ pub use operator_review::{
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod operator_review_tests;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod catalog_delivery;
+#[cfg(not(target_arch = "wasm32"))]
+pub use catalog_delivery::{
+    ALLOWED_IMAGE_MIMES, DRAFT_IMAGE_OPERATION_TIMEOUT, DeliveryBasis, DeliveryBudget,
+    DeliveryPermit, DraftDeliveryError, DraftDeliveryLimits, DraftDeliveryRequest, DraftImageBody,
+    DraftImageCandidate, DraftImageVariant, deliver_draft_image,
+};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod catalog_delivery_tests;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod image_proof;
+#[cfg(not(target_arch = "wasm32"))]
+pub use image_proof::{ImageAlpha, ImageAlphaRequirement, ImageIntent, ImageProof, ImageProofError, ImageProofLimits};
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_proof_tests;
+
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-fakes")))]
+pub use catalog_delivery::DeliveryBasisFixture;

@@ -23,7 +23,7 @@ const ACCEPT_LOCK_SEED: i64 = 2_026_102_737;
 /// Every journal statement runs at READ COMMITTED: row locks carry the guarantees and no
 /// caller may inherit a stricter default. A transaction at another level is refused before it
 /// reads or writes anything.
-async fn require_read_committed(tx: &Transaction<'_>) -> Result<(), JournalError> {
+pub(super) async fn require_read_committed(tx: &Transaction<'_>) -> Result<(), JournalError> {
     let setting: String = tx
         .query_one("SELECT current_setting('transaction_isolation', true)", &[])
         .await
@@ -118,7 +118,12 @@ pub(crate) async fn accept_in(
             job,
             absolute_deadline_ms,
         } => create_in(tx, command, &owner_scope, job, *absolute_deadline_ms).await,
-        AcceptTarget::Join { job } => join_in(tx, command, &owner_scope, job).await,
+        AcceptTarget::Join { job } => {
+            join_in(tx, command, &owner_scope, job, JoinMode::Pending).await
+        }
+        AcceptTarget::JoinReady { job } => {
+            join_in(tx, command, &owner_scope, job, JoinMode::Ready).await
+        }
     }
 }
 
@@ -137,11 +142,19 @@ async fn create_in(
     }
     let (intent_revision, intent_bytes) = snapshot_columns(&command.intent)?;
     let (config_revision, config_bytes) = snapshot_columns(&command.config)?;
+    let compatible_key = df_imagery::compatible_key(&command.intent, &command.config)
+        .ok()
+        .map(|key| key.to_vec());
+    let compatible_key_version = compatible_key
+        .as_ref()
+        .map(|_| i16::try_from(df_imagery::COMPATIBLE_KEY_VERSION))
+        .transpose()
+        .map_err(|_| JournalError::InvalidRecord)?;
     tx.execute(
         "INSERT INTO imagery.image_job (job_id, owner_scope, sharing_identity, intent_revision, \
          intent_bytes, config_revision, config_bytes, absolute_deadline_ms, state, revision, \
-         created_at_ms, updated_at_ms) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'planning', 1, $9, $9)",
+         created_at_ms, updated_at_ms,compatible_key,compatible_key_version) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'planning', 1, $9, $9,$10,$11)",
         &[
             &job.as_bytes().as_slice(),
             &owner_scope,
@@ -152,6 +165,8 @@ async fn create_in(
             &config_bytes,
             &absolute_deadline_ms,
             &command.now_ms,
+            &compatible_key,
+            &compatible_key_version,
         ],
     )
     .await
@@ -235,11 +250,17 @@ async fn read_locked(
     row.map(|row| parse_job(&row)).transpose()
 }
 
+#[derive(Clone, Copy)]
+enum JoinMode {
+    Pending,
+    Ready,
+}
 async fn join_in(
     tx: &Transaction<'_>,
     command: &AcceptCommand,
     owner_scope: &[u8],
     job_id: &ImageJobId,
+    mode: JoinMode,
 ) -> Result<AcceptOutcome, JournalError> {
     let Some(mut job) = read_locked(tx, owner_scope, job_id).await? else {
         return Err(JournalError::NotFound);
@@ -250,20 +271,40 @@ async fn join_in(
     if is_expired(job.absolute_deadline_ms, command.now_ms) {
         return Err(JournalError::JoinRefused(df_imagery::JoinRefusal::Expired));
     }
-    if job.sharing != command.sharing {
-        return Err(JournalError::JoinRefused(
-            df_imagery::JoinRefusal::SharingMismatch,
-        ));
-    }
-    if job.intent != command.intent {
-        return Err(JournalError::JoinRefused(
-            df_imagery::JoinRefusal::IntentMismatch,
-        ));
-    }
-    if job.config != command.config {
-        return Err(JournalError::JoinRefused(
-            df_imagery::JoinRefusal::ConfigMismatch,
-        ));
+    if matches!(mode, JoinMode::Ready) {
+        if !df_imagery::compatible_snapshots(
+            &job.intent,
+            &job.config,
+            &command.intent,
+            &command.config,
+        )? {
+            return Err(JournalError::JoinRefused(
+                df_imagery::JoinRefusal::IntentMismatch,
+            ));
+        }
+        let ready=tx.query_opt("SELECT 1 FROM imagery.image_job_result r JOIN media.asset a ON a.asset_id=r.asset_id AND a.attempt=r.publication_attempt WHERE r.owner_scope=$1 AND r.job_id=$2 AND NOT r.private_reconciliation AND a.state='ready'",
+            &[&owner_scope,&job_id.as_bytes().as_slice()]).await.map_err(unavailable)?.is_some();
+        if !ready {
+            return Err(JournalError::JoinRefused(
+                df_imagery::JoinRefusal::IntentMismatch,
+            ));
+        }
+    } else {
+        if job.sharing != command.sharing {
+            return Err(JournalError::JoinRefused(
+                df_imagery::JoinRefusal::SharingMismatch,
+            ));
+        }
+        if job.intent != command.intent {
+            return Err(JournalError::JoinRefused(
+                df_imagery::JoinRefusal::IntentMismatch,
+            ));
+        }
+        if job.config != command.config {
+            return Err(JournalError::JoinRefused(
+                df_imagery::JoinRefusal::ConfigMismatch,
+            ));
+        }
     }
     if interest_exists(tx, &command.interest).await? {
         return Err(JournalError::IdentityConflict);
@@ -356,8 +397,7 @@ pub(crate) async fn lookup_in(
         return Err(JournalError::InvalidRecord);
     }
     let receipt = parse_lookup_receipt(&row, owner, operation, job.job)?;
-    let interest =
-        parse_lookup_interest(&row, owner, job.job, operation, receipt.interest)?;
+    let interest = parse_lookup_interest(&row, owner, job.job, operation, receipt.interest)?;
     Ok(Some(OperationView {
         receipt,
         job,
@@ -447,6 +487,35 @@ async fn count_attached(tx: &Transaction<'_>, job: &ImageJobId) -> Result<u64, J
         .map_err(unavailable)?;
     let count: i64 = row.get(0);
     u64::try_from(count).map_err(|_| JournalError::InvalidRecord)
+}
+
+/// Withdraws every attached interest in one owner scope, in interest-id order, inside the
+/// caller's transaction. Each withdrawal takes the same job-then-interest locks as `withdraw_in`.
+pub(crate) async fn withdraw_owner_in(
+    tx: &Transaction<'_>,
+    owner: &df_imagery::ImageOwner,
+    now_ms: i64,
+) -> Result<Vec<WithdrawOutcome>, JournalError> {
+    require_read_committed(tx).await?;
+    if now_ms <= 0 {
+        return Err(JournalError::InvalidRecord);
+    }
+    let owner_scope = owner_scope_bytes(owner);
+    let rows = tx
+        .query(
+            "SELECT interest_id FROM imagery.image_interest              WHERE owner_scope = $1 AND state = 'attached' ORDER BY interest_id",
+            &[&owner_scope],
+        )
+        .await
+        .map_err(unavailable)?;
+    let mut outcomes = Vec::with_capacity(rows.len());
+    for row in rows {
+        let bytes: Vec<u8> = row.get(0);
+        let interest = df_imagery::ImageInterestId::from_bytes(&bytes)
+            .map_err(|_| JournalError::InvalidRecord)?;
+        outcomes.push(withdraw_in(tx, owner, &interest, now_ms).await?);
+    }
+    Ok(outcomes)
 }
 
 pub(crate) async fn withdraw_in(

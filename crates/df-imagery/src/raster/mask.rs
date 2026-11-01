@@ -6,7 +6,7 @@
 //! their permille opacity; only source-over ships until another mode lands
 //! with defined equations and fixtures.
 
-use image::{GenericImageView, GrayImage, Luma, RgbaImage};
+use image::{GrayImage, Luma, RgbaImage};
 
 use super::RasterError;
 use super::bounds::{self, LiveBudget};
@@ -215,8 +215,7 @@ fn composite_layer(
             for channel in 0..3 {
                 let top_c = srgb_byte_to_linear(top[channel]);
                 let bottom_c = srgb_byte_to_linear(bottom[channel]);
-                let mixed = (top_c * layer_alpha
-                    + bottom_c * bottom_alpha * (1.0 - layer_alpha))
+                let mixed = (top_c * layer_alpha + bottom_c * bottom_alpha * (1.0 - layer_alpha))
                     / out_alpha.max(f32::EPSILON);
                 out[channel] = linear_to_srgb_byte(mixed);
             }

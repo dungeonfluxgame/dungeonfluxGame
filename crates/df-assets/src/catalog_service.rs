@@ -25,8 +25,7 @@ use crate::catalog_record::{
 use crate::catalog_store::{
     Admission, AdmitOutcome, CatalogError, CatalogLookup, CatalogStore, ClaimOutcome,
     FinalizeRequest, FinalizeResult, LeaseOutcome, NotAdmitted, RejectGuard, RejectResult,
-    StageOutcome, StepClaim, VariantIntent, VariantWritten, Winner, admission_owner,
-    record_owner,
+    StageOutcome, StepClaim, VariantIntent, VariantWritten, Winner, admission_owner, record_owner,
 };
 use crate::catalog_sweep::RefetchBackoff;
 use crate::media_ids::{AssetId, AttemptId, ClaimToken, IdSource, WriteId, mint};
@@ -50,8 +49,10 @@ use std::sync::{Arc, Mutex};
 pub enum ServiceFailure {
     Catalog(CatalogError),
     Store(ObjectStoreError),
-    /// Personal (non-campaign) storage keys arrive with the upload round.
-    /// TODO(O2-05): character-owned asset keys (`KeyLayout::character_asset`) in the upload round.
+    /// A staged row the catalog cannot map to a validated owner (a legacy or mismatched
+    /// no-campaign row); campaign rows and valid account drafts are worked normally.
+    /// TODO(O2-05): character-owned asset keys (`KeyLayout::character_asset`) in the
+    /// upload round.
     UnsupportedOwner,
 }
 

@@ -220,6 +220,83 @@ fn corrupt_native(root: &std::path::Path, key: &ObjectKey) {
 }
 
 #[test]
+fn supplied_write_bound_is_validated_by_the_default_port_without_widening_its_backing() {
+    let store = FakeObjectStore::new(FakeConfig {
+        max_object_bytes: 4,
+        ..FakeConfig::default()
+    });
+    for maximum in [0, 2, u64::MAX] {
+        let key = campaign_key(70, 1, 1);
+        assert!(matches!(
+            block_on(store.put_new_with_bound(&key, b"asset", manifest(b"asset"), maximum, soon())),
+            Err(ObjectStoreError::TooLarge)
+        ));
+        assert!(block_on(store.head(&key, soon())).unwrap().is_none());
+    }
+    assert!(matches!(
+        block_on(store.put_new_with_bound(
+            &campaign_key(71, 1, 1),
+            b"asset",
+            manifest(b"asset"),
+            5,
+            soon()
+        )),
+        Err(ObjectStoreError::TooLarge)
+    ));
+}
+
+#[test]
+fn native_retained_write_bound_survives_a_lower_global_cap_without_mutating_it() {
+    let (runtime, store, _root) = native_store();
+    let store = std::sync::Arc::new(store);
+    store.set_max_object_bytes(1).unwrap();
+    runtime.block_on(async {
+        let key = campaign_key(72, 1, 1);
+        let object = store
+            .put_new_with_bound(&key, b"asset", manifest(b"asset"), 5, soon())
+            .await
+            .unwrap();
+        assert_eq!(store.get_version(&object, soon()).await.unwrap(), b"asset");
+        assert_eq!(store.max_object_bytes(), 1);
+        assert!(matches!(
+            store
+                .put_new(
+                    &campaign_key(73, 1, 1),
+                    b"asset",
+                    manifest(b"asset"),
+                    soon()
+                )
+                .await,
+            Err(ObjectStoreError::TooLarge)
+        ));
+        for maximum in [0, 1, u64::MAX] {
+            let refused = campaign_key(74, 1, 1);
+            assert!(matches!(
+                store
+                    .put_new_with_bound(&refused, b"asset", manifest(b"asset"), maximum, soon())
+                    .await,
+                Err(ObjectStoreError::TooLarge)
+            ));
+            assert!(store.head(&refused, soon()).await.unwrap().is_none());
+            assert_eq!(store.max_object_bytes(), 1);
+        }
+        let rejected = campaign_key(75, 1, 1);
+        assert!(matches!(
+            store
+                .put_new_with_bound(&rejected, b"asset", manifest(b"other"), 5, soon())
+                .await,
+            Err(ObjectStoreError::IntegrityMismatch)
+        ));
+        assert!(store.head(&rejected, soon()).await.unwrap().is_none());
+        store
+            .put_new(&campaign_key(76, 1, 1), b"a", manifest(b"a"), soon())
+            .await
+            .unwrap();
+        assert_eq!(store.max_object_bytes(), 1);
+    });
+}
+
+#[test]
 fn the_native_file_store_meets_the_object_store_contract() {
     let (runtime, store, root) = native_store();
     let _entered = runtime.enter();
@@ -529,13 +606,8 @@ fn account_draft_keys_use_private_media_with_draft_segments() {
         )
     );
     let campaign = CampaignId::from_bytes(&id(7)).unwrap();
-    let campaign_key = layout().campaign_asset(
-        &campaign,
-        asset,
-        attempt,
-        write,
-        AssetVariant::Master,
-    );
+    let campaign_key =
+        layout().campaign_asset(&campaign, asset, attempt, write, AssetVariant::Master);
     assert_eq!(
         campaign_key.path(),
         format!(
@@ -565,6 +637,36 @@ fn account_draft_keys_use_private_media_with_draft_segments() {
             "unexpected segment {segment}"
         );
     }
+}
+
+#[test]
+fn owned_keys_dispatch_on_the_validated_owner_without_changing_the_campaign_layout() {
+    use crate::object_store::StorageOwner;
+    let account = AccountId::from_bytes(&id(7)).unwrap();
+    let campaign = CampaignId::from_bytes(&id(9)).unwrap();
+    let asset = AssetId::from_bytes(&id(1)).unwrap();
+    let attempt = AttemptId::from_bytes(&id(2)).unwrap();
+    let write = WriteId::from_bytes(&id(3)).unwrap();
+    let draft = layout().owned_asset(
+        &StorageOwner::AccountDraft(account),
+        asset,
+        attempt,
+        write,
+        AssetVariant::Master,
+    );
+    assert_eq!(
+        draft,
+        layout().account_draft_asset(&account, asset, attempt, write, AssetVariant::Master)
+    );
+    let campaigned = layout().owned_asset(
+        &StorageOwner::Campaign(campaign),
+        asset,
+        attempt,
+        write,
+        AssetVariant::Master,
+    );
+    assert_eq!(campaigned, campaign_key(1, 2, 3));
+    assert_ne!(draft.path(), campaigned.path());
 }
 
 #[test]

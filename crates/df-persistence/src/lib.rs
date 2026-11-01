@@ -12,6 +12,8 @@ mod decision_adapter;
 #[cfg(not(target_arch = "wasm32"))]
 mod decision_rows;
 #[cfg(not(target_arch = "wasm32"))]
+mod imagery_admission;
+#[cfg(not(target_arch = "wasm32"))]
 mod imagery_sql;
 #[cfg(not(target_arch = "wasm32"))]
 mod imagery_store;
@@ -106,3 +108,29 @@ pub use imagery_store::{
     ImageJournalOpenError, PostgresImageJournal, accept_in, freeze_in, lookup_in, read_in,
     withdraw_in,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use imagery_admission::{
+    IMAGERY_ADMISSION_MIGRATION_SQL, IMAGERY_ADMISSION_MIGRATION_VERSION, ImageryAdmissionConfig,
+    ImageryAdmissionPort, MAXIMUM_ALLOCATION_SNAPSHOT_BYTES, PortConfigError, RunSessionAuthority,
+    RunSessionError,
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_execution;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_identity;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_publication;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_draft_admission;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_runtime;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_runtime_admission;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod imagery_migrations;

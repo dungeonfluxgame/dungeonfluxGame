@@ -1052,6 +1052,9 @@ mod free_roam_tests {
             let (updates_in, updates) = tokio::sync::watch::channel(restored.clone());
             let (sender, _inbox) = df_session::inbox::bounded_inbox();
             let service = crate::gameplay::Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 look_ahead: Default::default(),
                 actor: sender,
                 display_credential: [0; 32],

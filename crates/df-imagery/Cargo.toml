@@ -4,6 +4,30 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[dependencies]
+[features]
+test-support = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 df-types = { path = "../df-types" }
 df-assets = { path = "../df-assets" }
+df-observe = { path = "../df-observe" }
+
+sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }
+toml = { version = "=0.9.12", default-features = false, features = ["std", "parse", "serde"] }
+
+df-providers = { path = "../df-providers" }
+base64 = "=0.22.1"
+url = "=2.5.8"
+serde_json = "=1.0.151"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+libwebp-sys2 = { version = "=0.2.0", features = ["static"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "net", "process", "io-util", "sync", "fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_Shell"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "=1.53.1", default-features = false, features = ["test-util"] }

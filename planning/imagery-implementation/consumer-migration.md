@@ -134,8 +134,11 @@ manifests/lock, and runtime migration harness; exact snippets for those are in s
   policy, `creator_portrait` purpose enablement, model/quality/profile/deadline/cache/rating)
   at bootstrap; replace `ImageRoute::configured` provider construction and
   `registered_fal_media_provider` image dispatch with `ImageService::submit/status` using
-  `Purpose::{CreatorPortrait, CanonicalPerson, CanonicalRoom, ScenePlate, ...}/Primary`,
+  run-owned purposes only (`Purpose::{CanonicalPerson, CanonicalRoom, ScenePlate, ...}/Primary`),
   `Generate`, `ImageOwner::Run`, `Freshness::ReuseCompatible`, `ExecutionMode::Live`.
+  Creator portraits stay `ImageOwner::Draft { account }` per section 1.1; the bootstrap snapshot
+  only composes backend/account bindings and route policy, and each later consumer preserves its
+  own owner and submit operation (creator `Draft`, run content `Run`).
 
 ## 2. Canonical worker (`living_scenes/canonical.rs` + `mural.rs`)
 
@@ -314,50 +317,76 @@ let submission = image_service
   mapping). Default mode reports the narrow section 10 legacy rows nonfatally and fails
   on anything else; `--strict` fails on the legacy rows too. Any non-allowlisted direct
   executor always fails; no directory blankets.
-- Test scope is syntax-scoped: a whole test path (`tests/` dir, `*_tests.rs`) or an
-  offset inside a `cfg(test)` braced item counts; production after a closed `cfg(test)`
-  module does not. `df-providers` self-tests use the same rule, so the registry factory
-  stays checked. `submit_image` calls and `ImageRoute` constructions in test scope are
-  test-only wiring and exempt.
-- Fixture association is call-associated and binding-associated: a forbidden constructor
-  in test scope is exempt only when its own argument list carries `loopback_fixture(...)`,
-  or the exact variable passed to it was bound by `let name = ...loopback_fixture(...)`
-  within the 12 preceding lines without a later non-fixture reassignment. A bare
-  `loopback_fixture` identifier or an unrelated nearby fixture call bound to another
-  variable exempts nothing.
-- `ImageRoute::X(_)` with an exact wildcard, match-arm patterns before `=>`,
-  `matches!` patterns, and `let` destructuring are inspection, never execution. Only
-  construction is flagged, including multiline payloads and `_prefixed` payloads such as
-  `ImageRoute::Flux(_provider)` in expression position. `submit_image` requires its
+- Test scope is syntax-scoped with an exact `cfg(test)` token: a whole test path
+  (`tests/` dir, `*_tests.rs`) or an offset inside a `cfg(test)` braced item counts;
+  `cfg(test_mode)` and unproven compound predicates are production; production after a
+  closed `cfg(test)` module does not count. `df-providers` self-tests use the same rule,
+  so the registry factory stays checked. `submit_image` calls and `ImageRoute`
+  constructions in test scope are test-only wiring and exempt.
+- Fixture association is config-argument proof: a forbidden constructor in test scope is
+  exempt only when its whole top-level first argument is the entire
+  `ExactConfig::loopback_fixture(...)` expression with only explicit `.unwrap()`/
+  `.expect(...)` suffixes, or that argument is one immutable variable bound by
+  `let name = ExactConfig::loopback_fixture(...)` with the same entire-expression
+  initializer in the same function and still visible in the constructor lexical
+  block (both top-level counts as the same scope) with no intervening shadow or
+  reassignment before the call. Validation parses the matching close parenthesis
+  and then permits only `unwrap()`/`expect(...)` suffixes; `unwrap_or`, arbitrary
+  methods, and trailing tokens fail. A bare identifier, a block that mentions a
+  fixture but evaluates to live config, a fixture in another argument, an unrelated
+  binding, an expired inner-block binding, a `for`/closure/`let`-pattern/match-arm
+  shadow, a `mut`/typed/destructured binding, or any other initializer shape exempts
+  nothing. The grammar is deliberately conservative; general Rust name resolution is
+  unsupported and refused fail-closed.
+- `ImageRoute::X(_)` with an exact wildcard, match-arm patterns directly before their own
+  `=>` (no `,`/`;`/`}` between), the pattern argument after the first top-level comma in
+  `matches!`, and `let` patterns before the same assignment are inspection, never
+  execution. Only construction is flagged, including multiline payloads and `_prefixed`
+  payloads such as `ImageRoute::Flux(_provider)` in expression position; `matches!`
+  values and arm-body constructions after `=>` are flagged. `submit_image` requires its
   dispatch dot, so the provider definition is not a finding. Route-enum wrapping
   (`Self::Flux`, `.map(Self::OpenAi)`) cannot evade alone: every route still needs its
   provider built through a flagged `::new`.
 - `crates/df-imagery/src/backends/` is the exact intended private execution boundary and
   is skipped by the constructor scan; the rest of `df-imagery` is still checked. Export
   audit fails direct bare-`pub` backend exposure (`pub mod backends`, `pub use ... backends
-  ...`, multiline included) and same-file indirect exposure through module aliases
-  (`use crate::backends as implementation; pub use implementation::Runner`) and grouped
-  item aliases; `pub(crate)` and private declarations pass. Dependency audit parses
-  `crates/df-imagery/Cargo.toml` with stdlib `tomllib`, covering `[dependencies]`,
-  `[dev-dependencies]`, `[build-dependencies]`, `[target.*]` subtables,
-  `[dependencies.<name>]` subtables, `{ package = "<name>" }` renames, and
-  `workspace = true` inheritance resolved against root `[workspace.dependencies]` for
-  `df-tools` / `df-session`.
+  ...`, multiline included) and same-file indirect exposure resolved to a fixed point
+  through module and item alias chains (`use crate::backends as a; use a as b;
+  pub use b::Runner`) and grouped item aliases; `pub(crate)` and private declarations
+  pass. Dependency audit parses `crates/df-imagery/Cargo.toml` with stdlib `tomllib`,
+  covering `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`,
+  `[target.*]` subtables, `[dependencies.<name>]` subtables, `{ package = "<name>" }`
+  renames, and `workspace = true` inheritance resolved against root
+  `[workspace.dependencies]` for `df-tools` / `df-session`. Browser-manifest audits
+  parse `crates/df-client/Cargo.toml` and `crates/df-tools/Cargo.toml` the same way
+  for `df-imagery` edges (`planning/image-generation-architecture.md:454`): only an
+  exact native-only `cfg(not(target_arch = "wasm32"))` target edge (whitespace
+  normalized) passes in either manifest, with renames/workspace aliases resolved;
+  unconditional, WASM-target, double-negation, and other-predicate edges fail as
+  `dependency`.
 - `use X as Y` aliasing is resolved per `use` statement including grouped/nested trees
   (`use df_providers::{NativeImageEditProvider as Edit, NativeFalImageProvider as Flux}`:
   both `Edit::new` and `Flux::new` fail as `alias`). Bare renamed identifiers with no
   `use ... as` binding in the file, `type` aliases, wrapper functions, raw HTTP image
   endpoints, and image CLI/script launches are outside this guard; the map claims no
-  universal bypass deletion for them.
+  universal bypass deletion or compiler completeness for them.
 - `development/tests/test_imagery_boundary.py`: failure-focused unittest covering strip
   fidelity (comments, strings, lifetimes, escaped newlines), multiline and
   comment-separated constructors/dispatch, cfg-scope leaks (production after a closed
-  `cfg(test)` module still fails), fixture binding (unrelated and reassigned fixtures
-  still fail; inline and exact-variable fixtures pass), route payloads (`_provider`
-  construction fails; named match/`let`/`matches!` patterns pass), submit definition vs
-  call, the private-backend prefix, budget growth and owning-function staleness, all Cargo
-  subtable/workspace forms, direct and indirect export forms, grouped aliases, and
-  byte-raw literal noise.
+  `cfg(test)` module still fails; `cfg(test_mode)` still fails), fixture binding
+  (unrelated-argument, different-binding, same-line reassigned, block-decoy, `for`/
+  closure/destructured-shadow, expired-inner-block, inline/bound `unwrap_or` live
+  fallback, arbitrary-suffix, and first-slot block-decoy fixtures still fail;
+  whole-expression inline/bound `unwrap()`/`expect(...)` and visible immutable-`let`
+  fixtures pass), route payloads (`_provider` construction, `matches!` values, and
+  next-arm constructions fail; named match/`let`/pattern-argument patterns pass),
+  submit definition vs call, the private-backend prefix, budget growth and
+  exact-offset owning-function staleness (moved callsites, same-line functions,
+  same-function config swaps, credential-slot and first-slot block decoys), all Cargo
+  subtable/workspace forms for both manifest audits (including client and `df-tools`
+  native-only/unconditional/WASM/renamed/workspace cases plus double-negation),
+  direct, indirect, and chained export forms, grouped aliases, and byte-raw literal
+  noise.
 - Root runs (worker shell is disabled; root executes): the unittest file, then
   `python development/check-imagery-boundary.py --root .` (must PASS with only legacy
   rows) and `... --strict` (must FAIL until every section 10 row is migrated and its
@@ -368,12 +397,19 @@ let submission = image_service
 ## 10. Exact legacy allowance and removal table
 
 Each row is an exact (file, symbol) budget with one occurrence and an owning-function
-callsite fingerprint. Only an occurrence whose enclosing `fn` body carries the fingerprint
-counts as legacy; any other occurrence of the same pair fails as `bypass` even when the
-token appears elsewhere in the file. A present file with zero qualifying occurrences fails
-as `stale`. Absent files are skipped (fixture trees do not carry the whole workspace).
-Default mode reports these rows; strict fails on them. Removing a row means migrating its
-call site and deleting its budget entry in the same change.
+callsite fingerprint matched at the exact constructor token offset. Only an occurrence
+whose enclosing `fn` carries the fingerprint counts as legacy, with the entire actual
+config argument required to be the config-producing expression (`FalImageConfig::live()`,
+`ImageEditConfig::live()`, `BflImageConfig::live()` occupying the complete first
+argument; `IMAGE_EDIT_TIMEOUT` occupying the complete third argument) and the registry
+factory requiring its owning function name (`registered_fal_media_provider`); any other
+occurrence of the same pair fails as `bypass` even when the token appears elsewhere in
+the file, including moved callsites, same-line sibling functions, same-function config
+swaps, and nested-block/decoy first arguments. A present file
+with zero qualifying occurrences fails as `stale`. Absent files are skipped (fixture
+trees do not carry the whole workspace). Default mode reports these rows; strict fails on
+them. Removing a row means migrating its call site and deleting its budget entry in the
+same change.
 
 | File | Symbol | Count | Fingerprint | Removal |
 | --- | --- | --- | --- | --- |

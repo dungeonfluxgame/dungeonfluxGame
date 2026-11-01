@@ -6,7 +6,8 @@ use df_assets::{Audience, MemberSet};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    BackendGate, BackendId, GlobalMode, ImageConfig, PurposeGate, SchedulerBounds, TransformLimits,
+    AccountingMode, BackendGate, BackendId, GenerationQuality, GlobalMode, ImageConfig,
+    PurposeGate, SchedulerBounds, TransformLimits,
 };
 use crate::output::{AlphaHandling, Encoding, OutputProfile, RasterOutputSpec, Rgb};
 use crate::request::{
@@ -15,8 +16,9 @@ use crate::request::{
 };
 use crate::transform::{
     AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, ColorEffect, CompositeLayer, CoverageRef,
-    FlipAxis, ImageTransform, Interpolation, MaskChannel, MaskMode, MaskSource, MaskSpec,
-    ResizeMode, RotateSpec, TransformError, TransformSource, TransformSpec,
+    EncodedAlphaBlend, EncodedFilter, FlipAxis, ImageTransform, Interpolation, MaskChannel,
+    MaskMode, MaskSource, MaskSpec, ResizeMode, RotateSpec, TransformError, TransformSource,
+    TransformSpec,
 };
 
 use super::primitives::{MIN_MEMBER_BYTES, Writer, prompt_byte_bound};
@@ -31,28 +33,98 @@ pub(crate) fn encode_intent(
     max_bytes: usize,
 ) -> Result<EncodedIntent, CodecError> {
     request.validate(limits).map_err(CodecError::Request)?;
+    encode_fields(
+        IntentFields {
+            owner: &request.identity.owner,
+            purpose: request.purpose,
+            operation: &request.operation,
+            execution: request.execution,
+            freshness: &request.freshness,
+            audience: &request.audience,
+            expected_source_revision: request.expected_source_revision,
+            output: &request.output,
+        },
+        limits,
+        max_bytes,
+    )
+}
+
+/// Re-encodes actual decoded canonical intent without fabricating caller identity or ids.
+pub(crate) fn encode_decoded_intent(
+    request: &super::DecodedIntent,
+    max_bytes: usize,
+) -> Result<EncodedIntent, CodecError> {
+    encode_fields(
+        IntentFields {
+            owner: &request.owner,
+            purpose: request.purpose,
+            operation: &request.operation,
+            execution: request.execution,
+            freshness: &request.freshness,
+            audience: &request.audience,
+            expected_source_revision: request.expected_source_revision,
+            output: &request.output,
+        },
+        &crate::service::PROTOCOL_LIMITS,
+        max_bytes,
+    )
+}
+
+struct IntentFields<'a> {
+    owner: &'a ImageOwner,
+    purpose: crate::PurposedUse,
+    operation: &'a ImageOperation,
+    execution: ExecutionMode,
+    freshness: &'a Freshness,
+    audience: &'a Audience,
+    expected_source_revision: u64,
+    output: &'a OutputProfile,
+}
+fn encode_fields(
+    request: IntentFields<'_>,
+    limits: &RequestLimits,
+    max_bytes: usize,
+) -> Result<EncodedIntent, CodecError> {
     let mut out = Writer::new(max_bytes);
-    out.push(INTENT_CODEC_VERSION)?;
+    let pipeline = request.operation.pipeline();
+    let artwork = request.operation.artwork();
+    let version = if artwork.is_some() {
+        super::ARTWORK_INTENT_CODEC_VERSION
+    } else if pipeline.is_some() {
+        super::PIPELINE_INTENT_CODEC_VERSION
+    } else {
+        INTENT_CODEC_VERSION
+    };
+    out.push(version)?;
     out.push(u8::try_from(request.purpose.purpose.index()).map_err(|_| CodecError::TooLong)?)?;
     out.push(role_tag(request.purpose.role))?;
-    out.push(operation_tag(&request.operation))?;
-    encode_owner(&mut out, &request.identity.owner)?;
-    encode_operation(&mut out, &request.operation, limits)?;
+    out.push(operation_tag(request.operation))?;
+    encode_owner(&mut out, request.owner)?;
+    encode_operation(&mut out, request.operation, limits)?;
     encode_execution(&mut out, request.execution)?;
-    encode_freshness(&mut out, &request.freshness)?;
-    encode_audience(&mut out, &request.audience)?;
+    encode_freshness(&mut out, request.freshness)?;
+    encode_audience(&mut out, request.audience)?;
     out.u64_be(request.expected_source_revision)?;
-    encode_output(&mut out, &request.output)?;
+    encode_output(&mut out, request.output)?;
+    if artwork.is_some() {
+        out.boolean(pipeline.is_some())?;
+    }
+    if let Some(pipeline) = pipeline {
+        super::pipeline::encode(&mut out, pipeline)?;
+    }
+    if let Some(artwork) = artwork {
+        super::artwork::encode(&mut out, artwork)?;
+    }
     let bytes = out.finish();
     let fingerprint = Sha256::digest(&bytes).into();
     Ok(EncodedIntent {
-        version: INTENT_CODEC_VERSION,
+        version,
         bytes,
         fingerprint,
     })
 }
 
-fn role_tag(role: VariantRole) -> u8 {
+pub(crate) fn role_tag(role: VariantRole) -> u8 {
     match role {
         VariantRole::Primary => 0,
         VariantRole::Thumbnail => 1,
@@ -61,7 +133,7 @@ fn role_tag(role: VariantRole) -> u8 {
     }
 }
 
-fn operation_tag(operation: &ImageOperation) -> u8 {
+pub(super) fn operation_tag(operation: &ImageOperation) -> u8 {
     match operation {
         ImageOperation::Generate(_) => 0,
         ImageOperation::Edit(_) => 1,
@@ -69,7 +141,7 @@ fn operation_tag(operation: &ImageOperation) -> u8 {
     }
 }
 
-fn encode_owner(out: &mut Writer, owner: &ImageOwner) -> Result<(), CodecError> {
+pub(crate) fn encode_owner(out: &mut Writer, owner: &ImageOwner) -> Result<(), CodecError> {
     match owner {
         ImageOwner::Run { campaign, run } => {
             out.push(0)?;
@@ -84,7 +156,7 @@ fn encode_owner(out: &mut Writer, owner: &ImageOwner) -> Result<(), CodecError> 
     Ok(())
 }
 
-fn encode_audience(out: &mut Writer, audience: &Audience) -> Result<(), CodecError> {
+pub(crate) fn encode_audience(out: &mut Writer, audience: &Audience) -> Result<(), CodecError> {
     match audience {
         Audience::PublicStatic => out.push(1),
         Audience::CampaignShared(campaign) => {
@@ -127,13 +199,16 @@ fn encode_members(out: &mut Writer, members: &MemberSet) -> Result<(), CodecErro
     Ok(())
 }
 
-fn encode_source_ref(out: &mut Writer, source: &SourceRef) -> Result<(), CodecError> {
+pub(crate) fn encode_source_ref(out: &mut Writer, source: &SourceRef) -> Result<(), CodecError> {
     out.extend(source.asset.as_bytes())?;
     out.extend(source.digest.as_bytes())?;
     encode_audience(out, &source.audience)
 }
 
-fn encode_execution(out: &mut Writer, execution: ExecutionMode) -> Result<(), CodecError> {
+pub(crate) fn encode_execution(
+    out: &mut Writer,
+    execution: ExecutionMode,
+) -> Result<(), CodecError> {
     let tag = match execution {
         ExecutionMode::Live => 0,
         ExecutionMode::PreparedOnly => 1,
@@ -142,7 +217,7 @@ fn encode_execution(out: &mut Writer, execution: ExecutionMode) -> Result<(), Co
     out.push(tag)
 }
 
-fn encode_freshness(out: &mut Writer, freshness: &Freshness) -> Result<(), CodecError> {
+pub(crate) fn encode_freshness(out: &mut Writer, freshness: &Freshness) -> Result<(), CodecError> {
     match freshness {
         Freshness::ReuseCompatible => out.push(0),
         Freshness::Regenerate { nonce } => {
@@ -191,7 +266,7 @@ fn encode_references(
     Ok(())
 }
 
-fn encode_operation(
+pub(super) fn encode_operation(
     out: &mut Writer,
     operation: &ImageOperation,
     limits: &RequestLimits,
@@ -213,9 +288,12 @@ fn encode_operation(
     Ok(())
 }
 
-fn encode_output(out: &mut Writer, output: &OutputProfile) -> Result<(), CodecError> {
+pub(super) fn encode_output(out: &mut Writer, output: &OutputProfile) -> Result<(), CodecError> {
     match output {
-        OutputProfile::Provider { generated, delivered } => {
+        OutputProfile::Provider {
+            generated,
+            delivered,
+        } => {
             out.push(0)?;
             out.u32_be(generated.width_px())?;
             out.u32_be(generated.height_px())?;
@@ -301,6 +379,24 @@ fn encode_transform_source(out: &mut Writer, source: &TransformSource) -> Result
         TransformSource::Coverage(coverage) => {
             out.push(2)?;
             encode_coverage(out, coverage)?;
+        }
+        TransformSource::SegmentationMask {
+            analyzed,
+            segmentation,
+            prompt,
+            mask_index,
+            contract_revision,
+        } => {
+            out.push(3)?;
+            encode_source_ref(out, analyzed)?;
+            encode_owner(out, &segmentation.owner)?;
+            out.extend(segmentation.operation.as_bytes())?;
+            out.push(match prompt {
+                crate::SegmentationPrompt::Person => 0,
+                crate::SegmentationPrompt::Head => 1,
+            })?;
+            out.u32_be(*mask_index)?;
+            out.u32_be(*contract_revision)?;
         }
     }
     Ok(())
@@ -449,6 +545,35 @@ fn encode_step(
                 encode_layer(out, layer)?;
             }
         }
+        ImageTransform::EncodedResize { dimensions, filter } => {
+            out.push(12)?;
+            out.u32_be(1)?;
+            out.u32_be(dimensions.width_px())?;
+            out.u32_be(dimensions.height_px())?;
+            out.push(match filter {
+                EncodedFilter::Triangle => 0,
+                EncodedFilter::Lanczos3 => 1,
+            })?;
+        }
+        ImageTransform::EncodedThumbnail(dimensions) => {
+            out.push(13)?;
+            out.u32_be(1)?;
+            out.u32_be(dimensions.width_px())?;
+            out.u32_be(dimensions.height_px())?;
+        }
+        ImageTransform::EncodedMatte { fill, blend } => {
+            out.push(14)?;
+            out.u32_be(1)?;
+            encode_rgb(out, *fill)?;
+            out.push(match blend {
+                EncodedAlphaBlend::IntegerFloor => 0,
+                EncodedAlphaBlend::ImageSourceOver => 1,
+            })?;
+        }
+        ImageTransform::DiscardAlpha => {
+            out.push(15)?;
+            out.u32_be(1)?;
+        }
     }
     Ok(())
 }
@@ -503,8 +628,10 @@ fn encode_layer(out: &mut Writer, layer: &CompositeLayer) -> Result<(), CodecErr
 }
 
 /// Encodes the full config snapshot without exceeding `max_bytes`. Every
-/// field is encoded: mode, default backend, all purpose and backend gates,
-/// transform and scheduler bounds and request limits.
+/// field is encoded: mode, default backend, all purpose and backend gates
+/// with model/endpoint selection, transform and scheduler bounds, request
+/// limits, Codex settings, named output profiles, retry knobs, accounting
+/// settings and quality defaults.
 pub(crate) fn encode_config(
     config: &ImageConfig,
     max_bytes: usize,
@@ -527,9 +654,9 @@ pub(crate) fn encode_config(
     }
     encode_transform_limits(&mut out, &config.transforms)?;
     encode_scheduler(&mut out, &config.scheduler)?;
-    out.u64_be(u64::try_from(config.request_limits.max_prompt_chars).map_err(
-        |_| CodecError::TooLong,
-    )?)?;
+    out.u64_be(
+        u64::try_from(config.request_limits.max_prompt_chars).map_err(|_| CodecError::TooLong)?,
+    )?;
     out.u64_be(
         u64::try_from(config.request_limits.max_references).map_err(|_| CodecError::TooLong)?,
     )?;
@@ -541,6 +668,131 @@ pub(crate) fn encode_config(
         u64::try_from(config.request_limits.max_composite_layers)
             .map_err(|_| CodecError::TooLong)?,
     )?;
+    encode_codex(&mut out, &config.codex)?;
+    out.counted(config.default_output_profile.as_str().as_bytes())?;
+    // Canonical profile order is by name: the table is semantically a
+    // names mapping, so reordering alone must not change the recipe bytes.
+    let mut ordered: Vec<&crate::config::NamedOutputProfile> =
+        config.output_profiles.iter().collect();
+    ordered.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    let profile_count = u32::try_from(ordered.len()).map_err(|_| CodecError::TooLong)?;
+    out.u32_be(profile_count)?;
+    for entry in ordered {
+        out.counted(entry.name.as_str().as_bytes())?;
+        encode_output(&mut out, &entry.profile)?;
+    }
+    out.u32_be(config.retry.max_attempts)?;
+    out.u64_be(config.retry.retry_deadline_secs)?;
+    out.u64_be(config.retry.backoff_secs)?;
+    out.push(match config.accounting.mode {
+        AccountingMode::RecordOnly => 0,
+        AccountingMode::Hosted => 1,
+    })?;
+    match &config.accounting.price_file {
+        Some(reference) => {
+            out.push(1)?;
+            out.counted(reference.as_str().as_bytes())?;
+        }
+        None => out.push(0)?,
+    }
+    out.push(config.quality.jpeg_quality.value())?;
+    match config.quality.provider_quality {
+        Some(quality) => {
+            out.push(1)?;
+            match quality {
+                GenerationQuality::Low => out.push(0)?,
+                GenerationQuality::Medium => out.push(1)?,
+                GenerationQuality::High => out.push(2)?,
+                GenerationQuality::Auto => out.push(3)?,
+                GenerationQuality::LegacyNumeric(value) => {
+                    out.push(4)?;
+                    out.push(value.value())?;
+                }
+            }
+        }
+        None => out.push(0)?,
+    }
+    out.u64_be(config.codex.max_stdout_bytes)?;
+    out.u64_be(config.codex.max_stderr_bytes)?;
+    out.u64_be(config.codex.max_message_bytes)?;
+    for route in [&config.analysis.classification, &config.analysis.inspection] {
+        out.boolean(route.is_some())?;
+        if let Some(route) = route {
+            super::pipeline::route(&mut out, route)?;
+        }
+    }
+    for purpose in &config.purposes {
+        match purpose.quality_override {
+            None => out.push(0)?,
+            Some(quality) => {
+                out.push(1)?;
+                match quality {
+                    GenerationQuality::Low => out.push(0)?,
+                    GenerationQuality::Medium => out.push(1)?,
+                    GenerationQuality::High => out.push(2)?,
+                    GenerationQuality::Auto => out.push(3)?,
+                    GenerationQuality::LegacyNumeric(value) => {
+                        out.push(4)?;
+                        out.push(value.value())?;
+                    }
+                }
+            }
+        }
+        match &purpose.model_override {
+            None => out.push(0)?,
+            Some(model) => {
+                out.push(1)?;
+                out.counted(model.as_str().as_bytes())?;
+            }
+        }
+    }
+    for purpose in &config.purposes {
+        out.boolean(purpose.moderation_override.is_some())?;
+        if let Some(moderation) = purpose.moderation_override {
+            out.push(match moderation {
+                crate::ProviderModeration::Auto => 0,
+                crate::ProviderModeration::Low => 1,
+            })?;
+        }
+    }
+    out.u64_be(config.analysis.preparation.max_pixels)?;
+    out.u64_be(config.analysis.preparation.max_picture_bytes)?;
+    out.u64_be(config.analysis.preparation.max_request_bytes)?;
+    for route in [
+        &config.analysis.head_locations,
+        &config.analysis.staging_identity,
+        &config.analysis.staging_facing,
+    ] {
+        out.boolean(route.is_some())?;
+        if let Some(route) = route {
+            super::pipeline::route(&mut out, route)?;
+        }
+    }
+    out.boolean(config.analysis.segmentation.is_some())?;
+    if let Some(route) = &config.analysis.segmentation {
+        out.push(match route.provider {
+            crate::config::SegmentationProvider::Fal => 0,
+        })?;
+        out.counted(route.account.as_str().as_bytes())?;
+        out.counted(route.model.as_str().as_bytes())?;
+        out.counted(route.endpoint.as_str().as_bytes())?;
+    }
+    out.u64_be(config.analysis.segmentation_preparation.max_pixels)?;
+    out.u64_be(config.analysis.segmentation_preparation.max_picture_bytes)?;
+    out.u64_be(config.analysis.segmentation_preparation.max_request_bytes)?;
+    for purpose in &config.purposes {
+        out.boolean(purpose.account_override.is_some())?;
+        if let Some(account) = &purpose.account_override {
+            out.counted(account.as_str().as_bytes())?;
+        }
+    }
+    out.boolean(config.quota.enabled)?;
+    out.u64_be(config.quota.cooldown_ms)?;
+    out.u32_be(config.quota.maximum_accounts)?;
+    out.boolean(config.creator_bfl_account.is_some())?;
+    if let Some(account) = &config.creator_bfl_account {
+        out.counted(account.as_str().as_bytes())?;
+    }
     let bytes = out.finish();
     let fingerprint = Sha256::digest(&bytes).into();
     Ok(EncodedConfig {
@@ -568,19 +820,61 @@ fn encode_purpose_gate(out: &mut Writer, gate: &PurposeGate) -> Result<(), Codec
         }
         None => out.push(0)?,
     }
+    match &gate.output_profile {
+        Some(name) => {
+            out.push(1)?;
+            out.counted(name.as_str().as_bytes())?;
+        }
+        None => out.push(0)?,
+    }
     Ok(())
 }
 
 fn encode_backend_gate(out: &mut Writer, gate: &BackendGate) -> Result<(), CodecError> {
     out.boolean(gate.enabled)?;
     out.counted(gate.account.as_str().as_bytes())?;
-    out.u32_be(gate.max_concurrent_jobs)
+    out.u32_be(gate.max_concurrent_jobs)?;
+    match &gate.model {
+        Some(model) => {
+            out.push(1)?;
+            out.counted(model.as_str().as_bytes())?;
+        }
+        None => out.push(0)?,
+    }
+    match &gate.endpoint {
+        Some(endpoint) => {
+            out.push(1)?;
+            out.counted(endpoint.as_str().as_bytes())?;
+        }
+        None => out.push(0)?,
+    }
+    for model in [&gate.generation_model, &gate.edit_model, &gate.alpha_model] {
+        match model {
+            Some(model) => {
+                out.push(1)?;
+                out.counted(model.as_str().as_bytes())?;
+            }
+            None => out.push(0)?,
+        }
+    }
+    Ok(())
 }
 
-fn encode_transform_limits(
-    out: &mut Writer,
-    limits: &TransformLimits,
-) -> Result<(), CodecError> {
+fn encode_codex(out: &mut Writer, codex: &crate::config::CodexSettings) -> Result<(), CodecError> {
+    out.counted(codex.executable.as_str().as_bytes())?;
+    out.counted(codex.workdir.as_str().as_bytes())?;
+    out.counted(codex.cli_profile.as_str().as_bytes())?;
+    match &codex.agent_model {
+        Some(model) => {
+            out.push(1)?;
+            out.counted(model.as_str().as_bytes())?;
+        }
+        None => out.push(0)?,
+    }
+    Ok(())
+}
+
+fn encode_transform_limits(out: &mut Writer, limits: &TransformLimits) -> Result<(), CodecError> {
     out.boolean(limits.enabled)?;
     out.u32_be(limits.max_concurrency)?;
     out.u64_be(limits.max_decoded_bytes)?;

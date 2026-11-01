@@ -18,7 +18,9 @@
 //!   the line's carried remainder and rounded half up to a whole micro-dollar; what is left
 //!   over is carried to the next call of the same provider, model and category
 //!   ([`prices::price_carrying`]), so a run of sub-micro calls is off by under half a
-//!   micro-dollar in all, not per call. An event's total is the sum of its rounded lines and
+//!   micro-dollar in all, not per call. Pinned imagery revisions instead round each line in
+//!   isolation against their frozen tariff, so replay and corrections never pump that carry.
+//!   An event's total is the sum of its rounded lines and
 //!   every total is a sum of event lines, so each breakdown sums to its total exactly.
 //! * **Prices are data.** `content/pricing.json` (schema `dungeonflux.pricing/1`), or the file
 //!   `DF_GAMEPLAY_PRICING` names, holds one dated, sourced rate per provider, model, category
@@ -30,6 +32,13 @@
 //!   the run log holds each session's ids in increasing order; on replay a line whose number is
 //!   not above its session's high-water mark is a repeat and is counted once. The dedupe state
 //!   is one number per session.
+//! * **One stable id per imagery dispatch.** An imagery dispatch attempt projects onto the book
+//!   under the id derived from its durable dispatch bytes ([`PINNED_CALL_PREFIX`]): the first
+//!   usage report settles it, a newer usage revision replaces its totals as a correction under
+//!   the same id, and a proven-unsent dispatch records nothing. See [`CostBook::start_pinned`].
+//!   Projection acknowledgements are local only: the dispatch journal owns the raw usage until
+//!   the run log holds the revision, and the book never claims a durable receipt for a queued
+//!   line the writer has not stored.
 //! * **Per run.** Events are appended to `development/runs/<database>/cost.jsonl` (one JSON
 //!   object per line, [`CostEvent`]) by an owned writer thread, so the event path never blocks
 //!   on disk; the run totals are rebuilt from that file when the server starts again. A log that
@@ -55,24 +64,22 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use df_providers::{
-    GeneratedImage, ImageBackground, ImageEdit, ImageEditModel, ImageQuality, ImageUsage,
-    NativeHttpRefusal, ProviderFailureClass, SpeechAdapterReason, TextTokenUsage,
-};
+use df_providers::{NativeHttpRefusal, ProviderFailureClass, SpeechAdapterReason, TextTokenUsage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::imagery::{ImageFailure, ImageKind, ImagePriority, ImageRoute};
 use super::resources::SpendLedger;
 use crate::voice_line::{NARRATOR_ROLE, VoiceLine};
 
+pub mod imagery;
+mod pinned_storage;
 pub mod port;
 mod prices;
 mod provider_meter;
@@ -81,15 +88,14 @@ mod specs;
 use port::{MeterObserver, MeterStart, MeteredCall, RECENT_LIMIT};
 #[cfg(test)]
 use prices::PricingError;
-use prices::{Carry, price_carrying};
+use prices::{Carry, price_carrying, price_isolated};
 pub(in crate::gameplay) use prices::{PriceTable, PricingStatus, load_prices};
 pub(in crate::gameplay) use provider_meter::LedgerMeter;
 #[cfg(test)]
 pub(in crate::gameplay) use provider_meter::test_meter;
 pub(in crate::gameplay) use specs::{
-    ambience_call, embedding_call, music_error_may_be_billed, music_layer_call, segment_call,
-    segment_error_may_be_billed, settle_counted, settle_failure, stt_call, video_call, world_call,
-    world_error_may_be_billed,
+    ambience_call, embedding_call, music_error_may_be_billed, music_layer_call, settle_counted,
+    settle_failure, stt_call, video_call, world_call, world_error_may_be_billed,
 };
 
 /// Events recorded before the book is opened are held up to this many; more are counted lost.
@@ -133,10 +139,14 @@ pub(in crate::gameplay) enum Provider {
     WorldLabs,
     #[serde(rename = "typesafe")]
     TypeSafe,
+    /// Record-only local work (see `AccountingMode::RecordOnly`): never a supplier, never
+    /// priced, projected so local usage stays visible without inventing a tariff.
+    #[serde(rename = "local")]
+    Local,
 }
 
 impl Provider {
-    pub(in crate::gameplay) const ALL: [Self; 7] = [
+    pub(in crate::gameplay) const ALL: [Self; 8] = [
         Self::OpenAi,
         Self::CodexSubscription,
         Self::ElevenLabs,
@@ -144,6 +154,7 @@ impl Provider {
         Self::Bfl,
         Self::WorldLabs,
         Self::TypeSafe,
+        Self::Local,
     ];
 
     pub(in crate::gameplay) const fn label(self) -> &'static str {
@@ -155,6 +166,7 @@ impl Provider {
             Self::Bfl => "bfl",
             Self::WorldLabs => "worldlabs",
             Self::TypeSafe => "typesafe",
+            Self::Local => "local",
         }
     }
 
@@ -181,6 +193,10 @@ pub(in crate::gameplay) enum Category {
     ImageCachedInput,
     /// Image output tokens.
     ImageOutput,
+    /// Reasoning tokens a subscription receipt reports apart from its output tokens (the
+    /// Codex `tokenUsage` breakdown keeps them separate). No tariff prices them: they stay
+    /// visible as unpriced, never folded into output and counted twice.
+    TextReasoningOutput,
     Characters,
     AudioSeconds,
     VideoSeconds,
@@ -192,7 +208,7 @@ pub(in crate::gameplay) enum Category {
 }
 
 impl Category {
-    pub(in crate::gameplay) const ALL: [Self; 14] = [
+    pub(in crate::gameplay) const ALL: [Self; 15] = [
         Self::TextInput,
         Self::TextCachedInput,
         Self::TextCacheWrite,
@@ -200,6 +216,7 @@ impl Category {
         Self::ImageInput,
         Self::ImageCachedInput,
         Self::ImageOutput,
+        Self::TextReasoningOutput,
         Self::Characters,
         Self::AudioSeconds,
         Self::VideoSeconds,
@@ -218,6 +235,7 @@ impl Category {
             Self::ImageInput => "image_input",
             Self::ImageCachedInput => "image_cached_input",
             Self::ImageOutput => "image_output",
+            Self::TextReasoningOutput => "text_reasoning_output",
             Self::Characters => "characters",
             Self::AudioSeconds => "audio_seconds",
             Self::VideoSeconds => "video_seconds",
@@ -406,7 +424,7 @@ impl Usage {
 }
 
 /// What a billed call is: who bills it, the model, and what in the game caused it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(in crate::gameplay) struct CallSpec {
     pub(in crate::gameplay) provider: Provider,
     pub(in crate::gameplay) model: String,
@@ -423,7 +441,7 @@ pub(in crate::gameplay) struct CallSpec {
 }
 
 /// A call made after another one, with the units it used.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(in crate::gameplay) struct FollowOn {
     pub(in crate::gameplay) spec: CallSpec,
     pub(in crate::gameplay) quantities: Vec<(Category, u64)>,
@@ -452,14 +470,6 @@ impl CallSpec {
     pub(in crate::gameplay) fn with_maxima(mut self, maxima: Vec<(Category, u64)>) -> Self {
         self.maxima = maxima;
         self
-    }
-
-    /// The same call made again for `reason` (a corrected regeneration): the detail says so.
-    pub(in crate::gameplay) fn again(&self, reason: &str) -> Self {
-        Self {
-            detail: format!("{}/{reason}", self.detail),
-            ..self.clone()
-        }
     }
 }
 
@@ -665,210 +675,8 @@ impl Drop for BilledCall {
     }
 }
 
-/// The cause of a picture of `kind`.
-pub(in crate::gameplay) const fn image_cause(kind: ImageKind) -> Cause {
-    match kind {
-        ImageKind::CanonicalCharacter => Cause::CharacterPortrait,
-        ImageKind::CanonicalRoom => Cause::PlacePortrait,
-        ImageKind::SceneRefresh => Cause::SceneRefresh,
-        ImageKind::CastExpression => Cause::CastExpression,
-        ImageKind::ArtifactCloseUp => Cause::ItemCloseUp,
-        ImageKind::ScenePlate => Cause::ScenePlate,
-        ImageKind::ScenePlateEdit => Cause::PlateEdit,
-    }
-}
-
-const fn quality_label(quality: ImageQuality) -> &'static str {
-    match quality {
-        ImageQuality::Low => "low",
-        ImageQuality::Medium => "medium",
-        ImageQuality::High => "high",
-    }
-}
-
-/// The provider and the billed model of an image route. A FLUX edit is billed under the fal
-/// endpoint that made it: text to image without references, the multi-reference edit with them.
-pub(in crate::gameplay) fn image_route_model(
-    route: &ImageRoute,
-    model: ImageEditModel,
-    has_references: bool,
-) -> (Provider, &'static str) {
-    match route {
-        ImageRoute::OpenAi(_) => (
-            Provider::OpenAi,
-            match model {
-                ImageEditModel::Gpt25Flare => ImageEditModel::Gpt25Flare.model_id(),
-                ImageEditModel::Gpt25Sunburst => ImageEditModel::Gpt25Sunburst.model_id(),
-            },
-        ),
-        ImageRoute::Flux(_) if has_references => (Provider::Fal, df_providers::FLUX_KONTEXT_MULTI),
-        ImageRoute::Flux(_) => (Provider::Fal, df_providers::FLUX_ULTRA),
-        ImageRoute::Bfl(_) => (Provider::Bfl, df_providers::BFL_FLUX3_IMAGE),
-    }
-}
-
-/// Which pool a picture waited in: `background` is look-ahead work.
-const fn priority_label(priority: ImagePriority) -> &'static str {
-    match priority {
-        ImagePriority::Foreground => "foreground",
-        ImagePriority::Presence => "presence",
-        ImagePriority::Background => "background",
-    }
-}
-
-/// Output tokens of a gpt-image picture per 1024 by 1024 pixels at each quality: the published
-/// token table (272, 1056 and 4160 for a square), which scales with the drawn area.
-const fn image_output_tokens_per_square(quality: ImageQuality) -> u64 {
-    match quality {
-        ImageQuality::Low => 272,
-        ImageQuality::Medium => 1056,
-        ImageQuality::High => 4160,
-    }
-}
-
 /// The most input tokens one reference picture can add: the vision patch cap.
 const IMAGE_INPUT_TOKENS_PER_REFERENCE: u64 = 1_536;
-
-/// The most prompt tokens of a clip frame edit.
-const CLIP_FRAME_PROMPT_TOKENS: u64 = 1_000;
-
-/// The conservative per-category maxima of one gpt-image edit: the prompt at two bytes per token,
-/// every reference at the cap, the output by area and quality.
-fn openai_image_maxima(edit: &ImageEdit<'_>) -> Vec<(Category, u64)> {
-    let area = u64::from(edit.width) * u64::from(edit.height);
-    let output = (area * image_output_tokens_per_square(edit.quality)).div_ceil(1024 * 1024);
-    let references = u64::try_from(edit.references.len()).unwrap_or(u64::MAX);
-    vec![
-        (
-            Category::TextInput,
-            u64::try_from(edit.prompt.len().div_ceil(2)).unwrap_or(u64::MAX),
-        ),
-        (
-            Category::ImageInput,
-            references.saturating_mul(IMAGE_INPUT_TOKENS_PER_REFERENCE),
-        ),
-        (Category::ImageOutput, output),
-    ]
-}
-
-/// The spec of one picture call: the cause from its kind, and a detail naming the pool (look-ahead
-/// work is `background`), the imagery profile, the quality, the drawn size and the reference
-/// count (what drives its cost). The maxima are in the route's own priced categories, so a call
-/// of unknown outcome is booked at what it could have cost, never at zero.
-pub(in crate::gameplay) fn image_call(
-    route: &ImageRoute,
-    model: ImageEditModel,
-    kind: ImageKind,
-    priority: ImagePriority,
-    profile: &str,
-    edit: &ImageEdit<'_>,
-) -> CallSpec {
-    let (provider, billed_model) = image_route_model(route, model, !edit.references.is_empty());
-    let (maxima, follow_ons) = match route {
-        ImageRoute::OpenAi(_) => (openai_image_maxima(edit), Vec::new()),
-        // The supplier reports the credits after the call: the table's per-call ceiling stands
-        // until it does.
-        ImageRoute::Bfl(_) => (vec![(Category::Calls, 1)], Vec::new()),
-        ImageRoute::Flux(_) => (
-            vec![(Category::Images, 1)],
-            // A transparent picture is cut out by a second fal call once the first one is made.
-            if edit.background == ImageBackground::Transparent {
-                vec![FollowOn {
-                    spec: CallSpec::new(
-                        Provider::Fal,
-                        df_providers::BACKGROUND_REMOVAL,
-                        image_cause(kind),
-                        "background_removal",
-                    ),
-                    quantities: vec![(Category::Images, 1)],
-                }]
-            } else {
-                Vec::new()
-            },
-        ),
-    };
-    CallSpec {
-        follow_ons,
-        ..CallSpec::new(
-            provider,
-            billed_model,
-            image_cause(kind),
-            format!(
-                "{}/{}/{profile}/{}/{}x{}/refs{}",
-                kind.label(),
-                priority_label(priority),
-                quality_label(edit.quality),
-                edit.width,
-                edit.height,
-                edit.references.len()
-            ),
-        )
-        .with_maxima(maxima)
-    }
-}
-
-/// Settles one picture call from its provider result: the reported tokens (OpenAI), the reported
-/// credits (BFL) or one estimated image (FLUX); a rate limit, an exhausted quota or a rejected
-/// request was not billed; any other failure is of unknown outcome.
-pub(in crate::gameplay) fn settle_image_call(
-    call: BilledCall,
-    route: &ImageRoute,
-    result: &Result<(GeneratedImage, Option<String>), ImageFailure>,
-) {
-    match result {
-        Ok((generated, credits)) => call.settle(image_usage(route, generated, credits.as_deref())),
-        // A quota 429 is refused outright by the supplier, like a rate limit: nothing is booked.
-        Err(
-            ImageFailure::RateLimited | ImageFailure::InvalidRequest | ImageFailure::QuotaExhausted,
-        ) => call.not_billed(),
-        Err(_) => drop(call),
-    }
-}
-
-/// The tokens an OpenAI image call reported; a call that reported none is booked at the call's
-/// own maxima, flagged estimated (an empty estimate stands for them, see [`BilledCall::settle`]).
-pub(in crate::gameplay) fn image_token_usage(usage: ImageUsage) -> Usage {
-    if usage == ImageUsage::default() {
-        return Usage::estimated(Vec::new());
-    }
-    Usage::reported(vec![
-        (Category::TextInput, usage.text_input_tokens),
-        (Category::ImageInput, usage.image_input_tokens),
-        (Category::ImageOutput, usage.output_tokens),
-    ])
-}
-
-/// The spec of one character-clip frame edit (`fallen` or `guard`) by `model`. The frame is a
-/// square picture at medium quality from one reference.
-pub(in crate::gameplay) fn clip_frame_call(model: ImageEditModel, fallen: bool) -> CallSpec {
-    CallSpec::new(
-        Provider::OpenAi,
-        model.model_id(),
-        Cause::ClipFrame,
-        if fallen { "fallen" } else { "guard" },
-    )
-    .with_maxima(vec![
-        (Category::TextInput, CLIP_FRAME_PROMPT_TOKENS),
-        (Category::ImageInput, IMAGE_INPUT_TOKENS_PER_REFERENCE),
-        (
-            Category::ImageOutput,
-            image_output_tokens_per_square(ImageQuality::Medium),
-        ),
-    ])
-}
-
-fn image_usage(route: &ImageRoute, generated: &GeneratedImage, credits: Option<&str>) -> Usage {
-    match route {
-        ImageRoute::OpenAi(_) => image_token_usage(generated.usage),
-        ImageRoute::Bfl(_) => {
-            match credits.and_then(|credits| credits.trim().parse::<u64>().ok()) {
-                Some(credits) => Usage::reported(vec![(Category::Credits, credits)]),
-                None => Usage::estimated(Vec::new()),
-            }
-        }
-        ImageRoute::Flux(_) => Usage::estimated(vec![(Category::Images, 1)]),
-    }
-}
 
 /// The spec of one storyteller text call of `purpose`.
 pub(in crate::gameplay) fn text_call(model: &str, purpose: &str) -> CallSpec {
@@ -965,6 +773,217 @@ pub(in crate::gameplay) fn settle_speech_failure(call: BilledCall, reason: Speec
     }
 }
 
+// Pinned calls use a bounded memory cache over this book's existing cost log. Only durably
+// acknowledged terminal records may leave the cache; cold identities reload from that log.
+// The imagery adapter runs these blocking storage operations on its owned bounded worker.
+
+/// The prefix of a pinned imagery call id. The neutral contract derives these ids; the book
+/// recognises them by this prefix when it replays the run log.
+pub(in crate::gameplay) const PINNED_CALL_PREFIX: &str = "img-";
+
+/// Maximum live pinned records. Durable terminal records evict oldest first and reload
+/// from the existing log; open or unpersisted records apply transient backpressure.
+#[cfg(not(test))]
+const PINNED_LIMIT: usize = 4096;
+/// The test bound: small enough to pin the eviction and refusal mechanism directly.
+#[cfg(test)]
+const PINNED_LIMIT: usize = 8;
+
+/// A pinned call id holds a dispatch-derived id.
+fn is_pinned_call_id(call_id: &str) -> bool {
+    call_id.strip_prefix(PINNED_CALL_PREFIX).is_some_and(|hex| {
+        hex.len() == 32
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+/// Opening a pinned call: started, an exact replay, or already settled under this id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinnedStart {
+    /// The call is now open under this id.
+    Opened,
+    /// The same route is already open under this id: nothing changed.
+    ReplayedOpen,
+    /// This id already settled: no second charge identity is opened.
+    AlreadySettled,
+}
+
+/// Applying a usage report: replaced the stored revision, or an exact replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinnedCorrection {
+    /// The newer revision replaced the stored one under the same call id.
+    Applied,
+    /// The same revision with identical evidence: nothing changed.
+    Replayed,
+}
+
+/// Recording proven-unsent work: settled without a record, or an exact replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinnedUnsent {
+    /// Proven never sent: nothing was recorded and nothing can settle it later.
+    Recorded,
+    /// Already recorded unsent: nothing changed.
+    Replayed,
+}
+
+/// Why a pinned projection was refused. Redacted by construction: names are never echoed,
+/// only revision numbers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinnedError {
+    /// The route names a provider the book does not know.
+    UnknownProvider,
+    /// The route names a cause the book does not know.
+    UnknownCause,
+    /// A units entry names a category the book does not know.
+    UnknownCategory,
+    /// No call was started under this id. Start it first; recovery replays the start.
+    UnknownCall,
+    /// The same id names a different route.
+    RouteConflict,
+    /// The revision is older than the stored one; state is unchanged.
+    StaleRevision {
+        /// The revision the book holds.
+        stored: u64,
+        /// The refused revision.
+        got: u64,
+    },
+    /// The same revision carries different evidence; state is unchanged.
+    RevisionConflict {
+        /// The revision both reports claim.
+        revision: u64,
+    },
+    /// This id already settled with usage (or as unsent) and cannot take the other path.
+    AlreadySettled,
+    /// The book is not open yet. The server opens it before dispatch; this is a caller bug.
+    BookNotOpen,
+    /// The bounded retention window holds no more pinned identities: the journal keeps the raw
+    /// usage and the caller retries later. Refused rather than forgetting a terminal identity.
+    ProjectionFull,
+    /// An older log lacks the immutable tariff; correction must not invent a replacement.
+    PriceBasisUnavailable,
+    /// Recorded cost data exceeds recovery bounds or fails its stored consistency checks.
+    CorruptLog,
+}
+
+/// The latest revision of one settled pinned call, kept so a newer report can replace it
+/// instead of adding a second charge. `maxima` is the route's own maxima, immutable for the
+/// life of the id: an empty report always stands for them, never for a prior lower usage.
+/// Identity is the stored event's canonical values (source, usability, sorted quantities);
+/// no digest stands in for them.
+#[derive(Clone)]
+struct PinnedRecord {
+    revision: u64,
+    maxima: Vec<(Category, u64)>,
+    event: CostEvent,
+    price_basis: Value,
+    durable: Arc<AtomicBool>,
+}
+
+type PinnedNotification = (String, MeteredCall, Vec<Arc<dyn MeterObserver>>);
+
+/// What the book holds for one pinned call id.
+#[derive(Clone)]
+enum PinnedSlot {
+    Open(PinnedOpeningLine, Arc<AtomicBool>),
+    Settled(PinnedRecord),
+    Unsent(Option<CallSpec>, Arc<AtomicBool>),
+}
+
+/// Whether `quantities` reported with `source` and `usable` say exactly what `event` holds:
+/// the same source, the same usability and the same sorted quantities. Sorting keeps an exact
+/// replay identical whatever order the units arrived in. The book's own money is derived, so
+/// it is not identity: a digest alone never stands in for these complete values.
+fn same_report(
+    source: UsageSource,
+    usable: bool,
+    quantities: &[(Category, u64)],
+    event: &CostEvent,
+) -> bool {
+    if source != event.source || usable != event.usable || quantities.len() != event.lines.len() {
+        return false;
+    }
+    let mut reported: Vec<(Category, u64)> = quantities.to_vec();
+    reported.sort();
+    let mut stored: Vec<(Category, u64)> = event
+        .lines
+        .iter()
+        .map(|line| (line.category, line.quantity))
+        .collect();
+    stored.sort();
+    reported == stored
+}
+
+/// Frozen route, origin and tariff, synced before a logged dispatch can leave start.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinnedOpeningLine {
+    call_id: String,
+    pinned_open: bool,
+    run: String,
+    session: String,
+    spec: CallSpec,
+    price_basis: Value,
+}
+
+/// One pinned settlement as written to the run log: the revision, the route's own maxima and
+/// the priced event. Replay keeps the latest revision per call id, so the totals hold each
+/// call exactly once; the maxima let an empty report after a restart stand for the route's
+/// figures, not for whatever the latest revision used. Lines written before the maxima were
+/// stored read back with an empty list and fall back to the event's own quantities.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinnedLogLine {
+    pinned_revision: u64,
+    #[serde(default)]
+    maxima: Vec<(Category, u64)>,
+    event: CostEvent,
+    #[serde(default)]
+    price_basis: Value,
+}
+
+/// One proven-unsent pinned call as written to the run log: no money, only the terminal
+/// identity, so recovery replays the marker instead of reopening the id as billed. An old
+/// binary reads it as a malformed line and counts it, never as money.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinnedUnsentLine {
+    call_id: String,
+    pinned_unsent: bool,
+    #[serde(default)]
+    spec: Option<CallSpec>,
+}
+
+/// One pinned run-log line for replay: a revisioned settlement or a terminal unsent marker.
+enum PinnedReplayLine {
+    Open(PinnedOpeningLine),
+    Settled(PinnedLogLine),
+    Unsent(PinnedUnsentLine),
+}
+
+/// The audit line of a pinned settlement: the documented `COST` line plus its revision; a
+/// same-id correction also carries `correction=true` so it is identifiable.
+pub(in crate::gameplay) fn cost_pinned_line(
+    event: &CostEvent,
+    revision: u64,
+    correction: bool,
+    run_micro: u64,
+    session_micro: u64,
+) -> String {
+    if correction {
+        format!(
+            "{} revision={revision} correction=true",
+            cost_line(event, run_micro, session_micro)
+        )
+    } else {
+        format!(
+            "{} revision={revision}",
+            cost_line(event, run_micro, session_micro)
+        )
+    }
+}
+
 // ------------------------------------------------------------------------------------------------
 // The book: totals, the replay high-water marks, the run log.
 
@@ -999,6 +1018,40 @@ struct Totals {
 impl Totals {
     fn add(&mut self, event: &CostEvent) {
         self.events += 1;
+        self.add_amounts(event);
+        let count = |total: &mut CauseTotal| {
+            total.events += 1;
+            total.micro_usd = total.micro_usd.saturating_add(event.micro_usd);
+        };
+        count(self.by_cause.entry(event.cause).or_default());
+        count(
+            self.by_detail
+                .entry((event.cause, event.detail.clone()))
+                .or_default(),
+        );
+    }
+
+    /// Replaces the amounts of `old` with those of `new` under the same call id: the event
+    /// count stays one, while money, flags, lines and rollups move to the newer revision.
+    fn replace(&mut self, old: &CostEvent, new: &CostEvent) {
+        self.sub_amounts(old);
+        self.add_amounts(new);
+        let adjust = |total: &mut CauseTotal| {
+            total.micro_usd = total
+                .micro_usd
+                .saturating_sub(old.micro_usd)
+                .saturating_add(new.micro_usd);
+        };
+        adjust(self.by_cause.entry(new.cause).or_default());
+        adjust(
+            self.by_detail
+                .entry((new.cause, new.detail.clone()))
+                .or_default(),
+        );
+    }
+
+    /// Adds every amount of `event` without counting a new event.
+    fn add_amounts(&mut self, event: &CostEvent) {
         self.micro_usd = self.micro_usd.saturating_add(event.micro_usd);
         match event.source {
             UsageSource::Reported => {}
@@ -1024,16 +1077,43 @@ impl Totals {
                 }
             }
         }
-        let count = |total: &mut CauseTotal| {
-            total.events += 1;
-            total.micro_usd = total.micro_usd.saturating_add(event.micro_usd);
-        };
-        count(self.by_cause.entry(event.cause).or_default());
-        count(
-            self.by_detail
-                .entry((event.cause, event.detail.clone()))
-                .or_default(),
-        );
+    }
+
+    /// Removes every amount of `event` without uncounting its event.
+    fn sub_amounts(&mut self, event: &CostEvent) {
+        self.micro_usd = self.micro_usd.saturating_sub(event.micro_usd);
+        match event.source {
+            UsageSource::Reported => {}
+            UsageSource::Estimated => {
+                self.estimated_events = self.estimated_events.saturating_sub(1)
+            }
+            UsageSource::Unknown => self.unknown_events = self.unknown_events.saturating_sub(1),
+        }
+        if event.unpriced() {
+            self.unpriced_events = self.unpriced_events.saturating_sub(1);
+        }
+        if !event.usable {
+            self.unusable_events = self.unusable_events.saturating_sub(1);
+        }
+        for line in &event.lines {
+            let key = (event.provider, event.model.clone(), line.category);
+            let emptied = if let Some(total) = self.by_line.get_mut(&key) {
+                total.quantity = total.quantity.saturating_sub(line.quantity);
+                match line.micro_usd {
+                    Some(micro) => total.micro_usd = total.micro_usd.saturating_sub(micro),
+                    None => {
+                        total.unpriced_quantity =
+                            total.unpriced_quantity.saturating_sub(line.quantity)
+                    }
+                }
+                total.quantity == 0 && total.micro_usd == 0 && total.unpriced_quantity == 0
+            } else {
+                false
+            };
+            if emptied {
+                self.by_line.remove(&key);
+            }
+        }
     }
 
     fn json(&self) -> Value {
@@ -1077,6 +1157,8 @@ impl Totals {
 
 enum WriterMessage {
     Line(String),
+    Pinned(String, Arc<AtomicBool>),
+    Barrier(mpsc::SyncSender<bool>),
     /// Answers once every earlier line is written (tests).
     #[cfg(test)]
     Flush(mpsc::SyncSender<()>),
@@ -1089,6 +1171,8 @@ struct CostLog {
     sender: Option<mpsc::SyncSender<WriterMessage>>,
     worker: Option<thread::JoinHandle<()>>,
     write_failures: Arc<AtomicU64>,
+    #[cfg(test)]
+    reject_next: AtomicBool,
 }
 
 impl CostLog {
@@ -1113,6 +1197,22 @@ impl CostLog {
                                 failures.fetch_add(1, Ordering::SeqCst);
                             }
                         }
+                        WriterMessage::Pinned(line, durable) => {
+                            if file
+                                .write_all(b"\n")
+                                .and_then(|()| file.write_all(line.as_bytes()))
+                                .and_then(|()| file.sync_data())
+                                .is_ok()
+                            {
+                                durable.store(true, Ordering::Release);
+                            } else {
+                                failures.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                        WriterMessage::Barrier(done) => {
+                            let synced = file.sync_data().is_ok();
+                            let _cancelled = done.send(synced);
+                        }
                         #[cfg(test)]
                         WriterMessage::Flush(done) => {
                             if file.flush().is_err() {
@@ -1128,6 +1228,8 @@ impl CostLog {
             sender: Some(sender),
             worker: Some(worker),
             write_failures,
+            #[cfg(test)]
+            reject_next: AtomicBool::new(false),
         })
     }
 
@@ -1179,6 +1281,12 @@ struct BookState {
     observers: Vec<Arc<dyn MeterObserver>>,
     /// The last [`RECENT_LIMIT`] calls, oldest first.
     recent: VecDeque<MeteredCall>,
+    /// Pinned imagery calls by stable id: open, settled with their latest revision, or unsent.
+    pinned: BTreeMap<String, PinnedSlot>,
+    /// Live pinned ids oldest first: the bound retires from the front, never an open call.
+    pinned_order: VecDeque<String>,
+    /// Existing cost log used for bounded-cache cold lookup.
+    pinned_path: Option<PathBuf>,
 }
 
 /// The cost book a [`SpendLedger`] keeps: prices, totals and the run's log.
@@ -1232,6 +1340,9 @@ impl CostBook {
                 duplicate_calls: 0,
                 observers: Vec::new(),
                 recent: VecDeque::new(),
+                pinned: BTreeMap::new(),
+                pinned_order: VecDeque::new(),
+                pinned_path: None,
             }),
         }
     }
@@ -1252,6 +1363,7 @@ impl CostBook {
             return Err(io::Error::other("the cost book is already open"));
         }
         let mut replayed_events = Vec::new();
+        let mut pinned_lines: Vec<PinnedReplayLine> = Vec::new();
         let mut malformed = 0;
         let mut log_error = None;
         if let Some(path) = log_path {
@@ -1264,6 +1376,35 @@ impl CostBook {
                         };
                         if line.trim().is_empty() {
                             continue;
+                        }
+                        // A pinned line carries its revision beside the event; it never
+                        // parses as a plain event because the envelope names extra fields.
+                        // An unsent marker carries only the terminal identity, in between.
+                        if let Ok(opening) = serde_json::from_str::<PinnedOpeningLine>(&line)
+                            && opening.pinned_open
+                            && is_pinned_call_id(&opening.call_id)
+                        {
+                            pinned_lines.push(PinnedReplayLine::Open(opening));
+                            continue;
+                        }
+                        match serde_json::from_str::<PinnedLogLine>(&line) {
+                            Ok(pinned)
+                                if pinned.event.is_consistent()
+                                    && is_pinned_call_id(&pinned.event.call_id) =>
+                            {
+                                pinned_lines.push(PinnedReplayLine::Settled(pinned));
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        match serde_json::from_str::<PinnedUnsentLine>(&line) {
+                            Ok(marker)
+                                if marker.pinned_unsent && is_pinned_call_id(&marker.call_id) =>
+                            {
+                                pinned_lines.push(PinnedReplayLine::Unsent(marker));
+                                continue;
+                            }
+                            _ => {}
                         }
                         match serde_json::from_str::<CostEvent>(&line) {
                             Ok(event)
@@ -1300,6 +1441,7 @@ impl CostBook {
             state.carries.clear();
             state.pricing = pricing;
             state.log = log;
+            state.pinned_path = log_path.map(Path::to_owned);
             state.log_note = log_error.clone();
             state.malformed_lines = malformed;
             let mut replayed = 0;
@@ -1316,6 +1458,26 @@ impl CostBook {
                 state.run_totals.add(&event);
                 replayed += 1;
             }
+            let mut resolved = BTreeMap::new();
+            for line in pinned_lines {
+                match pinned_storage::resolve(&mut resolved, line) {
+                    pinned_storage::Resolution::Stored => {}
+                    pinned_storage::Resolution::Duplicate => state.duplicate_calls += 1,
+                    pinned_storage::Resolution::Conflict => {
+                        state.malformed_lines += 1;
+                        malformed += 1;
+                    }
+                }
+            }
+            for (id, slot) in resolved {
+                if let PinnedSlot::Settled(record) = &slot {
+                    state.run_totals.add(&record.event);
+                    replayed += 1;
+                }
+                state.pinned.insert(id.clone(), slot);
+                state.pinned_order.push_back(id);
+            }
+            Self::trim_pinned_locked(&mut state);
             // A restart within the same millisecond must not reuse this session's numbers.
             let own = state.high_water.get(&state.session).copied().unwrap_or(0);
             state.next_call = state.next_call.max(own);
@@ -1443,17 +1605,586 @@ impl CostBook {
                 }
             }
         }
-        let call = MeteredCall::of(&event);
-        if state.recent.len() == RECENT_LIMIT {
-            state.recent.pop_front();
-        }
-        state.recent.push_back(call.clone());
+        let call = MeteredCall::of(&event, false);
+        push_recent(state, call.clone());
         let line = cost_line(
             &event,
             state.run_totals.micro_usd,
             state.session_totals.micro_usd,
         );
         (line, call)
+    }
+
+    /// Opens a pinned imagery call under the stable `call_id` for one dispatch attempt.
+    /// Idempotent per id: an exact replay answers [`PinnedStart::ReplayedOpen`], and a replay
+    /// after settle answers [`PinnedStart::AlreadySettled`] instead of opening a second
+    /// charge identity. Recovery replays this before the journal's latest usage revision.
+    pub(in crate::gameplay) fn start_pinned(
+        &self,
+        call_id: &str,
+        mut spec: CallSpec,
+    ) -> Result<PinnedStart, PinnedError> {
+        if locked(&self.state).opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        self.load_pinned(call_id)?;
+        let notify = {
+            let mut state = locked(&self.state);
+            if state.opened_at_ms.is_none() {
+                return Err(PinnedError::BookNotOpen);
+            }
+            if !is_pinned_call_id(call_id) {
+                return Err(PinnedError::UnknownCall);
+            }
+            if spec.model.len() > 120
+                || spec.detail.len() > 120
+                || spec.maxima.len() > Category::ALL.len()
+                || !spec.follow_ons.is_empty()
+            {
+                return Err(PinnedError::RouteConflict);
+            }
+            spec.maxima.sort();
+            if spec.maxima.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                return Err(PinnedError::RouteConflict);
+            }
+            spec.detail = word(&spec.detail);
+            match state.pinned.get(call_id) {
+                None => {
+                    if !retire_oldest_locked(&mut state) {
+                        return Err(PinnedError::ProjectionFull);
+                    }
+                    let notify = (state.observers.clone(), MeterStart::of(&spec, &spec.maxima));
+                    let basis = pinned_storage::price_basis(&state.prices, &spec);
+                    if basis.to_string().len() > pinned_storage::MAXIMUM_PINNED_LINE_BYTES {
+                        return Err(PinnedError::ProjectionFull);
+                    }
+                    let opening = PinnedOpeningLine {
+                        call_id: call_id.to_owned(),
+                        pinned_open: true,
+                        run: state.run.clone(),
+                        session: state.session.clone(),
+                        spec,
+                        price_basis: basis,
+                    };
+                    let opening_bytes =
+                        serde_json::to_vec(&opening).map_err(|_| PinnedError::ProjectionFull)?;
+                    if opening_bytes.len().saturating_add(1)
+                        > pinned_storage::MAXIMUM_PINNED_LINE_BYTES
+                            - pinned_storage::PINNED_EVENT_HEADROOM_BYTES
+                    {
+                        return Err(PinnedError::ProjectionFull);
+                    }
+                    state.pinned.insert(
+                        call_id.to_owned(),
+                        PinnedSlot::Open(opening, Arc::new(AtomicBool::new(false))),
+                    );
+                    notify
+                }
+                Some(PinnedSlot::Open(stored, _)) => {
+                    if stored.spec != spec {
+                        return Err(PinnedError::RouteConflict);
+                    }
+                    drop(state);
+                    self.persist_opening(call_id)?;
+                    return Ok(PinnedStart::ReplayedOpen);
+                }
+                Some(slot) => {
+                    if !pinned_storage::matches_route(slot, &spec) {
+                        return Err(PinnedError::RouteConflict);
+                    }
+                    return Ok(PinnedStart::AlreadySettled);
+                }
+            }
+        };
+        self.persist_opening(call_id)?;
+        let (observers, start) = notify;
+        for observer in &observers {
+            observer.started(&start);
+        }
+        Ok(PinnedStart::Opened)
+    }
+
+    /// Applies a usage report to the pinned call `call_id`: the first report settles the open
+    /// call, a newer revision replaces the stored revision's totals, rollups and recent entry
+    /// under the same id as a correction, an exact replay is a no-op, and a stale or
+    /// conflicting revision is refused with state unchanged. An empty report stands for the
+    /// call's maxima, flagged as the usage source says.
+    pub(in crate::gameplay) fn correct_pinned(
+        &self,
+        call_id: &str,
+        revision: u64,
+        usage: Usage,
+        at_ms: u64,
+    ) -> Result<PinnedCorrection, PinnedError> {
+        if locked(&self.state).opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        self.load_pinned(call_id)?;
+        let (outcome, recorded) = {
+            let mut state = locked(&self.state);
+            if state.opened_at_ms.is_none() {
+                return Err(PinnedError::BookNotOpen);
+            }
+            if !is_pinned_call_id(call_id) {
+                return Err(PinnedError::UnknownCall);
+            }
+            Self::correct_pinned_locked(&mut state, call_id, revision, usage, at_ms)?
+        };
+        if let Some((line, call, observers)) = recorded {
+            super::actor::record_audit_line("gameplay.cost", line);
+            notify_settled(&observers, &call);
+        }
+        Ok(outcome)
+    }
+
+    fn persist_opening(&self, id: &str) -> Result<(), PinnedError> {
+        let (sender, durable) = {
+            let state = locked(&self.state);
+            let Some(PinnedSlot::Open(opening, durable)) = state.pinned.get(id) else {
+                return Ok(());
+            };
+            let Some(log) = &state.log else {
+                return Ok(());
+            };
+            if durable.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let mut json =
+                serde_json::to_string(opening).map_err(|_| PinnedError::ProjectionFull)?;
+            json.push('\n');
+            queue_pinned(log, json, durable);
+            (log.sender.clone(), Arc::clone(durable))
+        };
+        let (done, wait) = mpsc::sync_channel(1);
+        let Some(sender) = sender else {
+            return Err(PinnedError::ProjectionFull);
+        };
+        sender
+            .try_send(WriterMessage::Barrier(done))
+            .map_err(|_| PinnedError::ProjectionFull)?;
+        if wait
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or(false)
+            && durable.load(Ordering::Acquire)
+        {
+            Ok(())
+        } else {
+            Err(PinnedError::ProjectionFull)
+        }
+    }
+
+    /// Cold storage is read without the book mutex, so ordinary metering never waits on disk.
+    fn load_pinned(&self, call_id: &str) -> Result<(), PinnedError> {
+        if !is_pinned_call_id(call_id) {
+            return Err(PinnedError::UnknownCall);
+        }
+        let path = {
+            let state = locked(&self.state);
+            if state.pinned.contains_key(call_id) {
+                return Ok(());
+            }
+            state.pinned_path.clone()
+        };
+        let Some(path) = path else {
+            return Ok(());
+        };
+        let Some(slot) = pinned_storage::lookup(&path, call_id)? else {
+            return Ok(());
+        };
+        let mut state = locked(&self.state);
+        if !state.pinned.contains_key(call_id) {
+            if !retire_oldest_locked(&mut state) {
+                return Err(PinnedError::ProjectionFull);
+            }
+            state.pinned.insert(call_id.to_owned(), slot);
+            state.pinned_order.push_back(call_id.to_owned());
+        }
+        Ok(())
+    }
+
+    pub(in crate::gameplay) fn pinned_durable(
+        &self,
+        call_id: &str,
+        revision: Option<u64>,
+    ) -> Result<bool, PinnedError> {
+        self.load_pinned(call_id)?;
+        let state = locked(&self.state);
+        Ok(match state.pinned.get(call_id) {
+            Some(PinnedSlot::Settled(record)) => {
+                revision == Some(record.revision) && record.durable.load(Ordering::Acquire)
+            }
+            Some(PinnedSlot::Unsent(_, durable)) => {
+                revision.is_none() && durable.load(Ordering::Acquire)
+            }
+            _ => false,
+        })
+    }
+
+    /// One mutex-held snapshot of the exact booked revision, route and stored amount.
+    /// Cold storage stays outside the mutex and runs on the existing adapter's worker.
+    pub(in crate::gameplay) fn read_pinned_receipt(
+        &self,
+        call_id: &str,
+    ) -> Result<Option<df_imagery::cost::PinnedCostReceipt>, PinnedError> {
+        use df_imagery::cost::{
+            CostRoute, CostUnits, PinnedCostReceipt, UsageEvidence, UsageRevision,
+        };
+        if locked(&self.state).opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        self.load_pinned(call_id)?;
+        let state = locked(&self.state);
+        let Some(PinnedSlot::Settled(record)) = state.pinned.get(call_id) else {
+            return Ok(None);
+        };
+        let event = &record.event;
+        if event.call_id != call_id || !event.is_consistent() {
+            return Err(PinnedError::CorruptLog);
+        }
+        // The existing pricing format accepts only this static ASCII currency literal.
+        let currency = df_types::Currency::parse("USD").expect("USD is a valid static currency");
+        let amount = (!event.unpriced() && !event.lines.is_empty())
+            .then(|| df_types::Money::new(currency, u128::from(event.micro_usd)));
+        let evidence = match event.source {
+            UsageSource::Reported => UsageEvidence::Reported,
+            UsageSource::Estimated => UsageEvidence::Estimated,
+            UsageSource::Unknown => UsageEvidence::Unknown,
+        };
+        Ok(Some(PinnedCostReceipt {
+            call_id: event.call_id.clone(),
+            revision: UsageRevision(record.revision),
+            route: CostRoute {
+                provider: event.provider.label().to_owned(),
+                model: event.model.clone(),
+                cause: event.cause.label().to_owned(),
+                detail: event.detail.clone(),
+                maxima: record
+                    .maxima
+                    .iter()
+                    .map(|(category, quantity)| CostUnits {
+                        category: category.label().to_owned(),
+                        quantity: *quantity,
+                    })
+                    .collect(),
+            },
+            evidence,
+            units: event
+                .lines
+                .iter()
+                .map(|line| CostUnits {
+                    category: line.category.label().to_owned(),
+                    quantity: line.quantity,
+                })
+                .collect(),
+            usable: event.usable,
+            amount,
+            durable: record.durable.load(Ordering::Acquire),
+        }))
+    }
+
+    /// Records the pinned call `call_id` as proven unsent: nothing is recorded, and later
+    /// usage for the id is refused. A call that settled with usage cannot take this path. The
+    /// terminal marker is appended to the run log, so recovery replays it instead of reopening
+    /// the id as billed.
+    pub(in crate::gameplay) fn record_pinned_unsent(
+        &self,
+        call_id: &str,
+    ) -> Result<PinnedUnsent, PinnedError> {
+        if locked(&self.state).opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        self.load_pinned(call_id)?;
+        let mut state = locked(&self.state);
+        if state.opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        if !is_pinned_call_id(call_id) {
+            return Err(PinnedError::UnknownCall);
+        }
+        match state.pinned.get(call_id) {
+            None => Err(PinnedError::UnknownCall),
+            Some(PinnedSlot::Open(opening, _)) => {
+                let spec = Some(opening.spec.clone());
+                let durable = Arc::new(AtomicBool::new(false));
+                write_pinned_unsent(&mut state, call_id, &spec, &durable);
+                state
+                    .pinned
+                    .insert(call_id.to_owned(), PinnedSlot::Unsent(spec, durable));
+                state.pinned_order.push_back(call_id.to_owned());
+                Ok(PinnedUnsent::Recorded)
+            }
+            Some(PinnedSlot::Unsent(spec, durable)) => {
+                let (spec, durable) = (spec.clone(), Arc::clone(durable));
+                if !durable.load(Ordering::Acquire) {
+                    write_pinned_unsent(&mut state, call_id, &spec, &durable);
+                }
+                Ok(PinnedUnsent::Replayed)
+            }
+            Some(PinnedSlot::Settled(_)) => Err(PinnedError::AlreadySettled),
+        }
+    }
+
+    /// Atomic no-delivery seal: records no cost event and prevents a stale owner starting later.
+    pub(in crate::gameplay) fn seal_pinned_unsent(
+        &self,
+        call_id: &str,
+    ) -> Result<df_imagery::cost::PinnedUnsentSeal, PinnedError> {
+        use df_imagery::cost::{PinnedUnsentSeal, UnsentDurability};
+        if locked(&self.state).opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        self.load_pinned(call_id)?;
+        let mut state = locked(&self.state);
+        if state.opened_at_ms.is_none() {
+            return Err(PinnedError::BookNotOpen);
+        }
+        let (spec, durable, new_terminal) = match state.pinned.get(call_id) {
+            Some(PinnedSlot::Settled(_)) => return Err(PinnedError::AlreadySettled),
+            Some(PinnedSlot::Unsent(spec, durable)) => (spec.clone(), Arc::clone(durable), false),
+            Some(PinnedSlot::Open(opening, _)) => (
+                Some(opening.spec.clone()),
+                Arc::new(AtomicBool::new(false)),
+                true,
+            ),
+            None => {
+                if !retire_oldest_locked(&mut state) {
+                    return Err(PinnedError::ProjectionFull);
+                }
+                (None, Arc::new(AtomicBool::new(false)), true)
+            }
+        };
+        if !durable.load(Ordering::Acquire) {
+            write_pinned_unsent(&mut state, call_id, &spec, &durable);
+        }
+        if new_terminal {
+            state.pinned.insert(
+                call_id.to_owned(),
+                PinnedSlot::Unsent(spec, Arc::clone(&durable)),
+            );
+            state.pinned_order.push_back(call_id.to_owned());
+        }
+        Ok(PinnedUnsentSeal {
+            call_id: call_id.to_owned(),
+            durability: if durable.load(Ordering::Acquire) {
+                UnsentDurability::Durable
+            } else {
+                UnsentDurability::Pending
+            },
+        })
+    }
+
+    /// The locked half of [`CostBook::correct_pinned`]: decides fresh settle, replace, replay
+    /// or refusal, and returns the audit line, port view and observers only when the book
+    /// recorded something.
+    fn correct_pinned_locked(
+        state: &mut BookState,
+        call_id: &str,
+        revision: u64,
+        mut usage: Usage,
+        at_ms: u64,
+    ) -> Result<(PinnedCorrection, Option<PinnedNotification>), PinnedError> {
+        if usage.quantities.len() > Category::ALL.len() {
+            return Err(PinnedError::UnknownCategory);
+        }
+        usage.quantities.sort();
+        if usage
+            .quantities
+            .windows(2)
+            .any(|pair| pair[0].0 == pair[1].0)
+        {
+            return Err(PinnedError::UnknownCategory);
+        }
+        enum Decision {
+            Fresh(PinnedOpeningLine),
+            Known(PinnedRecord),
+        }
+        let decision = match state.pinned.get(call_id) {
+            None => return Err(PinnedError::UnknownCall),
+            Some(PinnedSlot::Unsent(..)) => return Err(PinnedError::AlreadySettled),
+            Some(PinnedSlot::Open(opening, _)) => Decision::Fresh(opening.clone()),
+            Some(PinnedSlot::Settled(record)) => Decision::Known(record.clone()),
+        };
+        match decision {
+            Decision::Fresh(opening) => {
+                if usage.source == UsageSource::Unknown || usage.quantities.is_empty() {
+                    usage.quantities = opening.spec.maxima.clone();
+                }
+                let notification =
+                    Self::record_pinned_locked(state, call_id, opening, usage, at_ms, revision)?;
+                Ok((PinnedCorrection::Applied, Some(notification)))
+            }
+            Decision::Known(record) => {
+                let stored = record.revision;
+                if revision < stored {
+                    return Err(PinnedError::StaleRevision {
+                        stored,
+                        got: revision,
+                    });
+                }
+                if usage.source == UsageSource::Unknown || usage.quantities.is_empty() {
+                    usage.quantities = record.maxima.clone();
+                }
+                if revision == stored {
+                    if same_report(usage.source, usage.usable, &usage.quantities, &record.event) {
+                        if !record.durable.load(Ordering::Acquire) {
+                            write_pinned_line(
+                                state,
+                                revision,
+                                &record.maxima,
+                                &record.event,
+                                &record.price_basis,
+                                &record.durable,
+                            );
+                        }
+                        return Ok((PinnedCorrection::Replayed, None));
+                    }
+                    return Err(PinnedError::RevisionConflict { revision });
+                }
+                let (line, call, observers) =
+                    Self::replace_pinned_locked(state, call_id, &record, usage, at_ms, revision)?;
+                Ok((PinnedCorrection::Applied, Some((line, call, observers))))
+            }
+        }
+    }
+
+    /// Settles the first report of an open pinned call: prices it in isolation (see
+    /// [`price_isolated`]), counts it once, writes the revisioned log line and stores its
+    /// record for later corrections.
+    fn record_pinned_locked(
+        state: &mut BookState,
+        call_id: &str,
+        opening: PinnedOpeningLine,
+        usage: Usage,
+        at_ms: u64,
+        revision: u64,
+    ) -> Result<PinnedNotification, PinnedError> {
+        let spec = opening.spec;
+        let price_basis = opening.price_basis;
+        let origin_session = opening.session;
+        let origin_run = opening.run;
+        let maxima = spec.maxima.clone();
+        let (lines, micro_usd) = price_isolated(
+            &pinned_storage::prices(&price_basis)?,
+            spec.provider,
+            &spec.model,
+            &usage.quantities,
+        );
+        let event = CostEvent {
+            call_id: call_id.to_owned(),
+            at_ms,
+            run: origin_run,
+            session: origin_session,
+            provider: spec.provider,
+            model: spec.model,
+            cause: spec.cause,
+            detail: word(&spec.detail),
+            source: usage.source,
+            lines,
+            micro_usd,
+            usable: usage.usable,
+        };
+        state.run_totals.add(&event);
+        if event.session == state.session {
+            state.session_totals.add(&event);
+        }
+        let durable = Arc::new(AtomicBool::new(false));
+        write_pinned_line(state, revision, &maxima, &event, &price_basis, &durable);
+        let call = MeteredCall::of(&event, false);
+        push_recent(state, call.clone());
+        let line = cost_pinned_line(
+            &event,
+            revision,
+            false,
+            state.run_totals.micro_usd,
+            state.session_totals.micro_usd,
+        );
+        state.pinned.insert(
+            call_id.to_owned(),
+            PinnedSlot::Settled(PinnedRecord {
+                revision,
+                maxima,
+                event,
+                price_basis,
+                durable,
+            }),
+        );
+        state.pinned_order.push_back(call_id.to_owned());
+        Self::trim_pinned_locked(state);
+        Ok((line, call, state.observers.clone()))
+    }
+
+    /// Replaces the stored revision of a settled pinned call with a newer report: the totals,
+    /// rollups and recent entry move to the new revision under the same id, and the log keeps
+    /// both lines so replay can pick the latest. The replacement prices in isolation (see
+    /// [`price_isolated`]), keeps the route's own maxima and the origin session, and moves the
+    /// session rollups only when the origin is this session: a correction from a previous
+    /// session must not subtract its old cost from unrelated new session totals.
+    fn replace_pinned_locked(
+        state: &mut BookState,
+        call_id: &str,
+        record: &PinnedRecord,
+        usage: Usage,
+        at_ms: u64,
+        revision: u64,
+    ) -> Result<PinnedNotification, PinnedError> {
+        let stored = &record.event;
+        let maxima = &record.maxima;
+        let price_basis = &record.price_basis;
+        let (lines, micro_usd) = price_isolated(
+            &pinned_storage::prices(price_basis)?,
+            stored.provider,
+            &stored.model,
+            &usage.quantities,
+        );
+        let event = CostEvent {
+            call_id: call_id.to_owned(),
+            at_ms,
+            run: stored.run.clone(),
+            session: stored.session.clone(),
+            provider: stored.provider,
+            model: stored.model.clone(),
+            cause: stored.cause,
+            detail: stored.detail.clone(),
+            source: usage.source,
+            lines,
+            micro_usd,
+            usable: usage.usable,
+        };
+        state.run_totals.replace(stored, &event);
+        if stored.session == state.session {
+            state.session_totals.replace(stored, &event);
+        }
+        let durable = Arc::new(AtomicBool::new(false));
+        write_pinned_line(state, revision, maxima, &event, price_basis, &durable);
+        let call = MeteredCall::of(&event, true);
+        replace_recent(state, call.clone());
+        let line = cost_pinned_line(
+            &event,
+            revision,
+            true,
+            state.run_totals.micro_usd,
+            state.session_totals.micro_usd,
+        );
+        state.pinned.insert(
+            call_id.to_owned(),
+            PinnedSlot::Settled(PinnedRecord {
+                revision,
+                maxima: maxima.to_vec(),
+                event,
+                price_basis: price_basis.clone(),
+                durable,
+            }),
+        );
+        Ok((line, call, state.observers.clone()))
+    }
+
+    /// Keeps the bounded hot cache; all evicted records remain in the same cost log.
+    fn trim_pinned_locked(state: &mut BookState) {
+        while state.pinned.len() > PINNED_LIMIT {
+            if !retire_oldest_locked(state) {
+                break;
+            }
+        }
     }
 
     /// Writes every queued line, stops the writer and keeps counting in memory: the server's
@@ -1566,20 +2297,6 @@ impl CostBook {
             .quote(provider, model, quantities)
     }
 
-    /// The price of one OpenAI picture call's reported tokens at the book's rates; `None` when
-    /// the call reported none or the file does not price them.
-    pub(in crate::gameplay) fn quote_image_usage(
-        &self,
-        model: &str,
-        usage: ImageUsage,
-    ) -> Option<u64> {
-        let Usage { quantities, .. } = image_token_usage(usage);
-        if quantities.is_empty() {
-            return None;
-        }
-        self.quote(Provider::OpenAi, model, &quantities)
-    }
-
     /// Compares the run's spend with a provider bill (see [`parse_bill`]).
     pub(in crate::gameplay) fn compare_bill(&self, csv: &str) -> Result<Value, String> {
         let bill = parse_bill(csv)?;
@@ -1619,6 +2336,118 @@ impl CostBook {
 fn notify_settled(observers: &[Arc<dyn MeterObserver>], call: &MeteredCall) {
     for observer in observers {
         observer.settled(call);
+    }
+}
+
+/// Keeps the last calls, oldest first, within the bound.
+fn push_recent(state: &mut BookState, call: MeteredCall) {
+    if state.recent.len() == RECENT_LIMIT {
+        state.recent.pop_front();
+    }
+    state.recent.push_back(call);
+}
+
+/// Refreshes the recent window in place for a corrected call id, or appends it when the
+/// window already dropped the original.
+fn replace_recent(state: &mut BookState, call: MeteredCall) {
+    if let Some(slot) = state
+        .recent
+        .iter_mut()
+        .find(|held| held.call_id == call.call_id)
+    {
+        *slot = call;
+    } else {
+        push_recent(state, call);
+    }
+}
+
+/// Frees one cache slot only after its terminal record has reached durable storage.
+fn retire_oldest_locked(state: &mut BookState) -> bool {
+    if state.pinned.len() < PINNED_LIMIT {
+        return true;
+    }
+    let position = state
+        .pinned_order
+        .iter()
+        .position(|id| match state.pinned.get(id) {
+            Some(PinnedSlot::Settled(record)) => record.durable.load(Ordering::Acquire),
+            Some(PinnedSlot::Unsent(_, durable)) => durable.load(Ordering::Acquire),
+            _ => false,
+        });
+    let Some(id) = position.and_then(|position| state.pinned_order.remove(position)) else {
+        return false;
+    };
+    state.pinned.remove(&id);
+    true
+}
+
+fn queue_pinned(log: &CostLog, json: String, durable: &Arc<AtomicBool>) {
+    if json.len() > pinned_storage::MAXIMUM_PINNED_LINE_BYTES {
+        log.write_failures.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    #[cfg(test)]
+    if log.reject_next.swap(false, Ordering::SeqCst) {
+        log.write_failures.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    if !log.sender.as_ref().is_some_and(|sender| {
+        sender
+            .try_send(WriterMessage::Pinned(json, Arc::clone(durable)))
+            .is_ok()
+    }) {
+        log.write_failures.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Appends one revisioned pinned line to the run log.
+fn write_pinned_line(
+    state: &mut BookState,
+    revision: u64,
+    maxima: &[(Category, u64)],
+    event: &CostEvent,
+    price_basis: &Value,
+    durable: &Arc<AtomicBool>,
+) {
+    if let Some(log) = &state.log {
+        match serde_json::to_string(&PinnedLogLine {
+            pinned_revision: revision,
+            maxima: maxima.to_vec(),
+            event: event.clone(),
+            price_basis: price_basis.clone(),
+        }) {
+            Ok(mut json) => {
+                json.push('\n');
+                queue_pinned(log, json, durable);
+            }
+            Err(_) => {
+                log.write_failures.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+/// Appends one proven-unsent marker to the run log: the terminal identity without money.
+fn write_pinned_unsent(
+    state: &mut BookState,
+    call_id: &str,
+    spec: &Option<CallSpec>,
+    durable: &Arc<AtomicBool>,
+) {
+    if let Some(log) = &state.log {
+        match serde_json::to_string(&PinnedUnsentLine {
+            call_id: call_id.to_owned(),
+            pinned_unsent: true,
+            spec: spec.clone(),
+        }) {
+            Ok(mut json) => {
+                json.push('\n');
+                queue_pinned(log, json, durable);
+            }
+            Err(_) => {
+                log.write_failures.fetch_add(1, Ordering::SeqCst);
+            }
+        }
     }
 }
 

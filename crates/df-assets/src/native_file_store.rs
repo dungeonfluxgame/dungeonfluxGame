@@ -7,13 +7,14 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAXIMUM_PROMOTION_SLOTS: u32 = 1024;
 
 /// Native file-backed byte port. The caller configures a durable root outside caches.
 pub struct NativeFileStore {
     root: PathBuf,
-    max_object_bytes: u64,
+    max_object_bytes: AtomicU64,
 }
 
 /// Private staging handle. Its existence does not imply metadata publication.
@@ -25,6 +26,7 @@ pub struct StagedUpload {
 
 impl NativeFileStore {
     pub fn new(root: impl AsRef<Path>, max_object_bytes: u64) -> Result<Self, StoreError> {
+        check_object_bound(max_object_bytes)?;
         fs::create_dir_all(root.as_ref())?;
         let root = root.as_ref().canonicalize()?;
         fs::create_dir_all(root.join("staging"))?;
@@ -35,7 +37,7 @@ impl NativeFileStore {
         crate::native_object_store::reap_stale_temporaries(&root);
         Ok(Self {
             root,
-            max_object_bytes,
+            max_object_bytes: AtomicU64::new(max_object_bytes),
         })
     }
 
@@ -43,8 +45,16 @@ impl NativeFileStore {
         &self.root
     }
 
+    /// Changes future write bounds without reopening the store or touching retained objects.
+    /// Each operation keeps its entry snapshot; legacy AssetReadStore reads honor that snapshot.
+    pub fn set_max_object_bytes(&self, maximum: u64) -> Result<(), StoreError> {
+        check_object_bound(maximum)?;
+        self.max_object_bytes.store(maximum, Ordering::Release);
+        Ok(())
+    }
+
     pub(crate) fn max_object_bytes(&self) -> u64 {
-        self.max_object_bytes
+        self.max_object_bytes.load(Ordering::Acquire)
     }
 
     fn object_path(&self, digest: &[u8; 32]) -> PathBuf {
@@ -87,7 +97,7 @@ impl AssetStore for NativeFileStore {
     type Staged = StagedUpload;
 
     fn check_expected(&self, expected: AssetManifest) -> Result<(), StoreError> {
-        if expected.byte_len > self.max_object_bytes {
+        if expected.byte_len > self.max_object_bytes() {
             return Err(StoreError::Capacity);
         }
         Ok(())
@@ -98,6 +108,7 @@ impl AssetStore for NativeFileStore {
         operation: OperationId,
         reader: &mut dyn Read,
     ) -> Result<StagedUpload, StoreError> {
+        let maximum = self.max_object_bytes();
         let path = self.root.join("staging").join(hex(operation.as_bytes()));
         let mut file = OpenOptions::new()
             .write(true)
@@ -121,7 +132,7 @@ impl AssetStore for NativeFileStore {
                 length = length
                     .checked_add(u64::try_from(read).map_err(|_| StoreError::Capacity)?)
                     .ok_or(StoreError::Capacity)?;
-                if length > self.max_object_bytes {
+                if length > maximum {
                     return Err(StoreError::Capacity);
                 }
                 file.write_all(&buffer[..read])?;
@@ -158,7 +169,9 @@ impl AssetStore for NativeFileStore {
         published: &PublishedBinding<M>,
     ) -> Result<bool, StoreError> {
         self.check_staged(staged)?;
-        let mut published_file = self.open_verified(published.object, published.bytes)?;
+        let maximum = self.max_object_bytes();
+        let mut published_file =
+            self.open_verified_with_limit(published.object, published.bytes, maximum)?;
         let mut staged_file = File::open(&staged.path)?;
         same_contents(&mut staged_file, &mut published_file, published.bytes)
     }
@@ -168,8 +181,9 @@ impl AssetStore for NativeFileStore {
         staged: &StagedUpload,
         expected: AssetManifest,
     ) -> Result<DurableObject, PublicationError> {
+        let maximum = self.max_object_bytes();
         self.check_staged(staged).map_err(PublicationError::Store)?;
-        if expected.byte_len > self.max_object_bytes {
+        if expected.byte_len > maximum {
             return Err(PublicationError::Store(StoreError::Capacity));
         }
         let mut temporary = None;
@@ -206,7 +220,7 @@ impl AssetStore for NativeFileStore {
                 length = length
                     .checked_add(u64::try_from(read).map_err(|_| PublicationError::Incomplete)?)
                     .ok_or(PublicationError::Incomplete)?;
-                if length > self.max_object_bytes {
+                if length > maximum {
                     return Err(PublicationError::Store(StoreError::Capacity));
                 }
                 if length > expected.byte_len {
@@ -240,7 +254,11 @@ impl AssetStore for NativeFileStore {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let mut destination_file = self
-                        .open_verified(DurableObject::from_manifest(expected), expected)
+                        .open_verified_with_limit(
+                            DurableObject::from_manifest(expected),
+                            expected,
+                            maximum,
+                        )
                         .map_err(PublicationError::Store)?;
                     let mut promoted_file = File::open(path).map_err(StoreError::from)?;
                     if !same_contents(&mut promoted_file, &mut destination_file, expected)
@@ -411,6 +429,13 @@ fn hex(bytes: &[u8]) -> String {
     text
 }
 
+fn check_object_bound(maximum: u64) -> Result<(), StoreError> {
+    if maximum == 0 || isize::try_from(maximum).is_err() {
+        return Err(StoreError::Capacity);
+    }
+    Ok(())
+}
+
 impl AssetReadStore for NativeFileStore {
     type Reader = File;
 
@@ -419,7 +444,20 @@ impl AssetReadStore for NativeFileStore {
         object: DurableObject,
         manifest: AssetManifest,
     ) -> Result<File, StoreError> {
-        self.check_expected(manifest)?;
+        self.open_verified_with_limit(object, manifest, self.max_object_bytes())
+    }
+}
+
+impl NativeFileStore {
+    fn open_verified_with_limit(
+        &self,
+        object: DurableObject,
+        manifest: AssetManifest,
+        maximum: u64,
+    ) -> Result<File, StoreError> {
+        if manifest.byte_len > maximum {
+            return Err(StoreError::Capacity);
+        }
         if object.byte_len() != manifest.byte_len || object.digest() != &manifest.sha256 {
             return Err(StoreError::BackingIntegrity);
         }
@@ -455,7 +493,7 @@ impl AssetReadStore for NativeFileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
+    use std::io::{self, Cursor};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -503,6 +541,161 @@ mod tests {
         assert!(store.root.join("staging").is_dir());
         assert!(store.root.join("objects").is_dir());
         assert!(store.root.join("promotion").is_dir());
+    }
+
+    fn store_with_limit(maximum: u64) -> NativeFileStore {
+        let temporary =
+            PathBuf::from(std::env::var_os("TMPDIR").expect("owned TMPDIR is required"));
+        let number = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        NativeFileStore::new(
+            temporary.join(format!("df-assets-limit-{}-{number}", std::process::id())),
+            maximum,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn live_bound_changes_preserve_root_and_legacy_read_policy() {
+        let store = store_with_limit(3);
+        let bytes = b"asset";
+        let expected = manifest(bytes);
+        let marker = store.root.join("retained-marker");
+        fs::write(&marker, b"keep").unwrap();
+        assert!(matches!(
+            store.stage(
+                OperationId::from_bytes(&[1; 16]).unwrap(),
+                &mut bytes.as_slice()
+            ),
+            Err(StoreError::Capacity)
+        ));
+        store.set_max_object_bytes(5).unwrap();
+        let staged = store
+            .stage(
+                OperationId::from_bytes(&[2; 16]).unwrap(),
+                &mut bytes.as_slice(),
+            )
+            .unwrap();
+        let object = store.verify_and_promote(&staged, expected).unwrap();
+        assert!(store.open_verified(object, expected).is_ok());
+        for invalid in [0, u64::MAX] {
+            assert!(matches!(
+                store.set_max_object_bytes(invalid),
+                Err(StoreError::Capacity)
+            ));
+            assert_eq!(store.max_object_bytes(), 5);
+        }
+        store.set_max_object_bytes(3).unwrap();
+        assert!(matches!(
+            store.stage(
+                OperationId::from_bytes(&[3; 16]).unwrap(),
+                &mut bytes.as_slice()
+            ),
+            Err(StoreError::Capacity)
+        ));
+        assert!(matches!(
+            store.open_verified(object, expected),
+            Err(StoreError::Capacity)
+        ));
+        store.confirm(object).unwrap();
+        assert_eq!(fs::read(marker).unwrap(), b"keep");
+        assert_eq!(
+            fs::read(store.object_path(&expected.sha256)).unwrap(),
+            bytes
+        );
+        store.set_max_object_bytes(5).unwrap();
+        assert!(store.open_verified(object, expected).is_ok());
+    }
+
+    #[test]
+    fn stage_keeps_one_bound_when_control_changes_between_reads() {
+        struct LoweringReader<'a> {
+            store: &'a NativeFileStore,
+            content: Cursor<Vec<u8>>,
+            changed: bool,
+        }
+        impl Read for LoweringReader<'_> {
+            fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+                let count = self.content.read(output)?;
+                if !self.changed {
+                    self.store.set_max_object_bytes(1).unwrap();
+                    self.changed = true;
+                }
+                Ok(count)
+            }
+        }
+        let store = store_with_limit(131072);
+        let mut reader = LoweringReader {
+            store: &store,
+            content: Cursor::new(vec![7; 65537]),
+            changed: false,
+        };
+        let staged = store
+            .stage(OperationId::from_bytes(&[4; 16]).unwrap(), &mut reader)
+            .unwrap();
+        assert_eq!(store.staged_len(&staged).unwrap(), 65537);
+        assert_eq!(store.max_object_bytes(), 1);
+        assert!(matches!(
+            store.stage(
+                OperationId::from_bytes(&[5; 16]).unwrap(),
+                &mut b"next".as_slice()
+            ),
+            Err(StoreError::Capacity)
+        ));
+    }
+
+    #[test]
+    fn keyed_retained_reads_survive_lowered_future_write_bound() {
+        use crate::{
+            AssetId, AssetVariant, AttemptId, Deadline, KeyLayout, ObjectEnvironment, ObjectStore,
+            ObjectStoreError, WriteId,
+        };
+        let store = store_with_limit(3);
+        let key = KeyLayout::new(ObjectEnvironment::new("bound-test").unwrap()).campaign_asset(
+            &df_types::CampaignId::from_bytes(&[6; 16]).unwrap(),
+            AssetId::from_bytes(&[7; 16]).unwrap(),
+            AttemptId::from_bytes(&[8; 16]).unwrap(),
+            WriteId::from_bytes(&[9; 16]).unwrap(),
+            AssetVariant::Master,
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let deadline = || Deadline::after(std::time::Duration::from_secs(5));
+            assert!(matches!(
+                store
+                    .put_new(&key, b"asset", manifest(b"asset"), deadline())
+                    .await,
+                Err(ObjectStoreError::TooLarge)
+            ));
+            store.set_max_object_bytes(5).unwrap();
+            let object = store
+                .put_new(&key, b"asset", manifest(b"asset"), deadline())
+                .await
+                .unwrap();
+            store.set_max_object_bytes(1).unwrap();
+            assert_eq!(store.head(&key, deadline()).await.unwrap().unwrap(), object);
+            assert_eq!(
+                store.get_version(&object, deadline()).await.unwrap(),
+                b"asset"
+            );
+            assert!(matches!(
+                store
+                    .put_if_match(
+                        &key,
+                        &object.version,
+                        b"other",
+                        manifest(b"other"),
+                        deadline()
+                    )
+                    .await,
+                Err(ObjectStoreError::TooLarge)
+            ));
+            assert_eq!(
+                store.get_version(&object, deadline()).await.unwrap(),
+                b"asset"
+            );
+        });
     }
 
     fn verified_files(left: &[u8], right: &[u8]) -> (File, File, PathBuf, PathBuf) {

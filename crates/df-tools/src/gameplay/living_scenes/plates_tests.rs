@@ -30,113 +30,121 @@ async fn hs71_committed_room_canon_invalidates_the_plate_even_when_layout_and_ca
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS71/room-canon")
         .join(std::process::id().to_string());
-    let fixture = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache);
-    let inner = Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner).unwrap();
-    inner.imagery = fixture.imagery.clone();
-    inner.references = crate::gameplay::imagery::ReferenceStore::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-    );
-    let lore = Arc::new(LocalLore::in_memory());
-    locked(&shared.inner.state).canonical = super::super::canonical::References::new(lore.clone());
-    locked(&shared.inner.state)
-        .canonical
-        .fixture_hero(1, "Hero 1", key('a'));
-    let mut current = scene(SceneKey::Opening, "Hearth and Loom", None);
-    current.asset = art_contract::HARBOR_PHOTO.into();
-    current.cast.clear();
-    current.setting.as_mut().unwrap().model = Some(
-        serde_json::from_slice(include_bytes!(
-            "../../../../../content/merchant-shop/scene-model.json"
-        ))
-        .unwrap(),
-    );
-    current
-        .setting
-        .as_mut()
-        .unwrap()
-        .model
-        .as_mut()
-        .unwrap()
-        .people
-        .clear();
-    let plate = PlateScene::of(&current).unwrap();
-    let admit = || {
-        shared.inner.admit_canonical_room(
-            &plate.place_id,
-            plate.authored_room.as_ref().unwrap(),
-            &plate.cast,
-            plate.authored_place_photo(),
-            plate.room_revision.as_deref(),
+    let Some(fixture) =
+        crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache).await
+    else {
+        return;
+    };
+    {
+        let inner = Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner).unwrap();
+        inner.imagery = fixture.imagery.clone();
+        inner.references = crate::gameplay::imagery::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        );
+        let lore = Arc::new(LocalLore::in_memory());
+        locked(&shared.inner.state).canonical =
+            super::super::canonical::References::new(lore.clone());
+        locked(&shared.inner.state)
+            .canonical
+            .fixture_hero(1, "Hero 1", key('a'));
+        let mut current = scene(SceneKey::Opening, "Hearth and Loom", None);
+        current.asset = art_contract::HARBOR_PHOTO.into();
+        current.cast.clear();
+        current.setting.as_mut().unwrap().model = Some(
+            serde_json::from_slice(include_bytes!(
+                "../../../../../content/merchant-shop/scene-model.json"
+            ))
+            .unwrap(),
+        );
+        current
+            .setting
+            .as_mut()
+            .unwrap()
+            .model
+            .as_mut()
+            .unwrap()
+            .people
+            .clear();
+        let plate = PlateScene::of(&current).unwrap();
+        let admit = || {
+            shared.inner.admit_canonical_room(
+                &plate.place_id,
+                plate.authored_room.as_ref().unwrap(),
+                &plate.cast,
+                plate.authored_place_photo(),
+                plate.room_revision.as_deref(),
+            )
+        };
+        admit();
+        let authored = shared
+            .plate_room_reference(&plate, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let before = shared.canonical_plate_id(&plate, &[1], &[], 0);
+        let fact = LocalFact {
+            kind: FactKind::History,
+            name: "Shop sign".into(),
+            content: "The shop sign reads Hearth and Loom.".into(),
+            established_by: "Kestrel".into(),
+        };
+        lore.commit_fact_decision(
+            FactDecision {
+                scene: "Opening".into(),
+                place: plate.place_id.clone(),
+                npc_id: "scene-person:keeper".into(),
+                speaker: "Kestrel".into(),
+                question_hash: "1".repeat(64),
+                decision: Decision::Backfill,
+                reason: Reason::HarmlessMissingDetail,
+                fact: Some(fact.clone()),
+                answer: None,
+            },
+            Some(fact),
         )
-    };
-    admit();
-    let authored = shared
-        .plate_room_reference(&plate, false)
-        .await
-        .unwrap()
         .unwrap();
-    let before = shared.canonical_plate_id(&plate, &[1], &[], 0);
-    let fact = LocalFact {
-        kind: FactKind::History,
-        name: "Shop sign".into(),
-        content: "The shop sign reads Hearth and Loom.".into(),
-        established_by: "Kestrel".into(),
-    };
-    lore.commit_fact_decision(
-        FactDecision {
-            scene: "Opening".into(),
-            place: plate.place_id.clone(),
-            npc_id: "scene-person:keeper".into(),
-            speaker: "Kestrel".into(),
-            question_hash: "1".repeat(64),
-            decision: Decision::Backfill,
-            reason: Reason::HarmlessMissingDetail,
-            fact: Some(fact.clone()),
-            answer: None,
-        },
-        Some(fact),
-    )
-    .unwrap();
-    admit();
-    let after = shared.canonical_plate_id(&plate, &[1], &[], 0);
-    assert_ne!(before, after);
-    assert!(after.contains("|room="));
-    assert_eq!(
-        after,
-        shared.canonical_plate_id(&plate, &[1], &[], 0),
-        "canon is stable on repeated admission"
-    );
-    loop {
-        let jobs = locked(&shared.inner.state).canonical.take_jobs();
-        if jobs.is_empty() {
-            break;
-        }
-        for job in jobs {
-            if let super::super::Job::Canonical(work) = job {
-                let result = shared.inner.render_canonical(&work).await;
-                shared.inner.finish_canonical(work, result);
+        admit();
+        let after = shared.canonical_plate_id(&plate, &[1], &[], 0);
+        assert_ne!(before, after);
+        assert!(after.contains("|room="));
+        assert_eq!(
+            after,
+            shared.canonical_plate_id(&plate, &[1], &[], 0),
+            "canon is stable on repeated admission"
+        );
+        loop {
+            let jobs = locked(&shared.inner.state).canonical.take_jobs();
+            if jobs.is_empty() {
+                break;
+            }
+            for job in jobs {
+                if let super::super::Job::Canonical(work) = job {
+                    let result = shared.inner.render_canonical(&work).await;
+                    shared.inner.finish_canonical(work, result);
+                }
             }
         }
+        let facts = locked(&shared.inner.state)
+            .canonical
+            .committed_canon(Some(&plate.place_id), None);
+        assert!(!facts.is_empty());
+        let updated = shared
+            .plate_room_reference(&plate, !facts.is_empty())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            authored.sha256, updated.sha256,
+            "both fresh and edited plates must bypass the stale authored photo"
+        );
+        assert!(fixture.prompt().contains("Hearth and Loom"));
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "one updated canonical room through the fake provider"
+        );
     }
-    let facts = locked(&shared.inner.state)
-        .canonical
-        .committed_canon(Some(&plate.place_id), None);
-    assert!(!facts.is_empty());
-    let updated = shared
-        .plate_room_reference(&plate, !facts.is_empty())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(
-        authored.sha256, updated.sha256,
-        "both fresh and edited plates must bypass the stale authored photo"
-    );
-    assert!(fixture.prompt().contains("Hearth and Loom"));
-    assert_eq!(
-        fixture.calls(),
-        1,
-        "one updated canonical room through the fake provider"
-    );
+    fixture.close().await;
 }
 
 #[test]
@@ -392,92 +400,97 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
         "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/speaker-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
-    let mut authored = scene(SceneKey::DialogueSeal, "Canonical room", Some("Kestrel"));
-    authored.setting.as_mut().unwrap().model = Some(SceneModel {
-        services: Vec::new(),
-        witnessed_thefts: Vec::new(),
-        inventory_version: 1,
-        time_of_day: "morning".to_owned(),
-        weather: "clear".to_owned(),
-        people: vec![ScenePerson {
-            persona: None,
-            passive_perception: 10,
-            id: "keeper".to_owned(),
-            name: "Kestrel".to_owned(),
-            role: "shopkeeper".to_owned(),
-            description: "A middle-aged shopkeeper with gray hair and a plain wool tunic"
-                .to_owned(),
-            relation_to_speaker: String::new(),
-            position: "behind the counter".to_owned(),
-            aliases: Vec::new(),
-            is_background: false,
-            present_in: Vec::new(),
-            attitude: StartingAttitude::Indifferent,
-            attitudes: Default::default(),
-            knowledge: Vec::new(),
-            wants: String::new(),
-            coin_cp: 0,
-        }],
-        things: Vec::new(),
-        ways_out: Vec::new(),
-        offers: Vec::new(),
-    });
-    locked(&inner.state).canonical.observe_room(&authored);
-    let (jobs, _queue) = mpsc::channel(8);
-    let shared = Shared {
-        inner: inner.clone(),
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let plate = PlateScene::of(&authored).unwrap();
-    let queued = locked(&inner.state).canonical.take_jobs();
-    let mut tasks = JoinSet::new();
-    for job in queued {
-        inner.spawn(&mut tasks, job);
-    }
-    while let Some(done) = tasks.join_next().await {
-        inner.finish(done.unwrap());
-    }
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+        let mut authored = scene(SceneKey::DialogueSeal, "Canonical room", Some("Kestrel"));
+        authored.setting.as_mut().unwrap().model = Some(SceneModel {
+            services: Vec::new(),
+            witnessed_thefts: Vec::new(),
+            inventory_version: 1,
+            time_of_day: "morning".to_owned(),
+            weather: "clear".to_owned(),
+            people: vec![ScenePerson {
+                persona: None,
+                passive_perception: 10,
+                id: "keeper".to_owned(),
+                name: "Kestrel".to_owned(),
+                role: "shopkeeper".to_owned(),
+                description: "A middle-aged shopkeeper with gray hair and a plain wool tunic"
+                    .to_owned(),
+                relation_to_speaker: String::new(),
+                position: "behind the counter".to_owned(),
+                aliases: Vec::new(),
+                is_background: false,
+                present_in: Vec::new(),
+                attitude: StartingAttitude::Indifferent,
+                attitudes: Default::default(),
+                knowledge: Vec::new(),
+                wants: String::new(),
+                coin_cp: 0,
+            }],
+            things: Vec::new(),
+            ways_out: Vec::new(),
+            offers: Vec::new(),
+        });
+        locked(&inner.state).canonical.observe_room(&authored);
+        let (jobs, _queue) = mpsc::channel(8);
+        let shared = Shared {
+            inner: inner.clone(),
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let plate = PlateScene::of(&authored).unwrap();
+        let queued = locked(&inner.state).canonical.take_jobs();
+        let mut tasks = JoinSet::new();
+        for job in queued {
+            inner.spawn(&mut tasks, job);
+        }
+        while let Some(done) = tasks.join_next().await {
+            inner.finish(done.unwrap());
+        }
 
-    let canonical = inner.canonical_npc_reference("keeper").await.unwrap();
-    let (speaker, face) = shared
-        .npc_art(
-            &plate,
-            "keeper",
-            "sprite-shop-adventurer-documentary-photo",
-            "portrait-shop-adventurer-documentary-photo",
-        )
-        .await
-        .unwrap();
-    assert_eq!(speaker.unwrap().sha256, canonical.sha256);
-    assert!(face.is_none());
-    assert_eq!(
-        shared.locator_references(&plate, &[]).await.unwrap()["keeper"].sha256,
-        canonical.sha256
-    );
-    assert_ne!(
-        canonical.sha256,
-        inner
-            .references
-            .load("sprite-shop-adventurer-documentary-photo")
-            .unwrap()
-            .sha256
-    );
+        let canonical = inner.canonical_npc_reference("keeper").await.unwrap();
+        let (speaker, face) = shared
+            .npc_art(
+                &plate,
+                "keeper",
+                "sprite-shop-adventurer-documentary-photo",
+                "portrait-shop-adventurer-documentary-photo",
+            )
+            .await
+            .unwrap();
+        assert_eq!(speaker.unwrap().sha256, canonical.sha256);
+        assert!(face.is_none());
+        assert_eq!(
+            shared.locator_references(&plate, &[]).await.unwrap()["keeper"].sha256,
+            canonical.sha256
+        );
+        assert_ne!(
+            canonical.sha256,
+            inner
+                .references
+                .load("sprite-shop-adventurer-documentary-photo")
+                .unwrap()
+                .sha256
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -487,104 +500,109 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         imagery::tests::DirectionFixture,
     };
     let cache = crate::gameplay::imagery::tests::directory("canonical-plate-refs");
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
-    cache_personal_heroes(&inner, &cache, &[1]).await;
-    let mut authored = scene(
-        SceneKey::DialogueSeal,
-        "Canonical workshop",
-        Some("Kestrel"),
-    );
-    authored.setting.as_mut().unwrap().model = Some(SceneModel {
-        services: Vec::new(),
-        witnessed_thefts: Vec::new(),
-        inventory_version: 1,
-        time_of_day: "morning".to_owned(),
-        weather: "clear".to_owned(),
-        people: vec![ScenePerson {
-            persona: None,
-            passive_perception: 10,
-            id: "keeper".to_owned(),
-            name: "Kestrel".to_owned(),
-            role: "shopkeeper".to_owned(),
-            description: "An adult with gray hair and a plain wool tunic".to_owned(),
-            relation_to_speaker: String::new(),
-            position: "behind the counter".to_owned(),
-            aliases: Vec::new(),
-            is_background: false,
-            present_in: Vec::new(),
-            attitude: StartingAttitude::Indifferent,
-            attitudes: Default::default(),
-            knowledge: vec![SceneKnowledge {
-                fact_id: "private".to_owned(),
-                statement: "PRIVATE_DO_NOT_SHARE".to_owned(),
-            }],
-            wants: "PRIVATE_DO_NOT_SHARE".to_owned(),
-            coin_cp: 0,
-        }],
-        things: Vec::new(),
-        ways_out: Vec::new(),
-        offers: Vec::new(),
-    });
-    locked(&inner.state).canonical.observe_room(&authored);
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Shared {
-        inner: inner.clone(),
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let plate = PlateScene::of(&authored).unwrap();
-    shared.ensure(&mut locked(&shared.book), &plate, &[1], &[], 1, false);
-    assert!(
-        queue.try_recv().is_err(),
-        "a pending identity must never admit a static substitute plate"
-    );
-    let queued = locked(&inner.state).canonical.take_jobs();
-    let mut tasks = JoinSet::new();
-    for job in queued {
-        inner.spawn(&mut tasks, job);
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+        cache_personal_heroes(&inner, &cache, &[1]).await;
+        let mut authored = scene(
+            SceneKey::DialogueSeal,
+            "Canonical workshop",
+            Some("Kestrel"),
+        );
+        authored.setting.as_mut().unwrap().model = Some(SceneModel {
+            services: Vec::new(),
+            witnessed_thefts: Vec::new(),
+            inventory_version: 1,
+            time_of_day: "morning".to_owned(),
+            weather: "clear".to_owned(),
+            people: vec![ScenePerson {
+                persona: None,
+                passive_perception: 10,
+                id: "keeper".to_owned(),
+                name: "Kestrel".to_owned(),
+                role: "shopkeeper".to_owned(),
+                description: "An adult with gray hair and a plain wool tunic".to_owned(),
+                relation_to_speaker: String::new(),
+                position: "behind the counter".to_owned(),
+                aliases: Vec::new(),
+                is_background: false,
+                present_in: Vec::new(),
+                attitude: StartingAttitude::Indifferent,
+                attitudes: Default::default(),
+                knowledge: vec![SceneKnowledge {
+                    fact_id: "private".to_owned(),
+                    statement: "PRIVATE_DO_NOT_SHARE".to_owned(),
+                }],
+                wants: "PRIVATE_DO_NOT_SHARE".to_owned(),
+                coin_cp: 0,
+            }],
+            things: Vec::new(),
+            ways_out: Vec::new(),
+            offers: Vec::new(),
+        });
+        locked(&inner.state).canonical.observe_room(&authored);
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Shared {
+            inner: inner.clone(),
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let plate = PlateScene::of(&authored).unwrap();
+        shared.ensure(&mut locked(&shared.book), &plate, &[1], &[], 1, false);
+        assert!(
+            queue.try_recv().is_err(),
+            "a pending identity must never admit a static substitute plate"
+        );
+        let queued = locked(&inner.state).canonical.take_jobs();
+        let mut tasks = JoinSet::new();
+        for job in queued {
+            inner.spawn(&mut tasks, job);
+        }
+        while let Some(done) = tasks.join_next().await {
+            inner.finish(done.unwrap());
+        }
+        let room = inner
+            .canonical_room_reference(&plate.place_id)
+            .await
+            .unwrap();
+        let performer = inner.canonical_npc_reference("keeper").await.unwrap();
+        let PlateIdentities { sheet, .. } = shared.identity_sheet(&plate, &[1]).await.unwrap();
+        let spec = plate.stage(&[1]).unwrap();
+        let (request, _) = shared
+            .photographic_request(&plate, &spec, &[1], &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(request.references[0].sha256, room.sha256);
+        assert_eq!(request.references[1].sha256, sheet.sha256);
+        assert_eq!(request.references[2].sha256, performer.sha256);
+        assert!(!request.prompt.as_str().contains("PRIVATE_DO_NOT_SHARE"));
+        fixture
+            .imagery
+            .generate("plate:test", request)
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture.calls(),
+            3,
+            "room, performer and composed scene use the real image boundary"
+        );
     }
-    while let Some(done) = tasks.join_next().await {
-        inner.finish(done.unwrap());
-    }
-    let room = inner
-        .canonical_room_reference(&plate.place_id)
-        .await
-        .unwrap();
-    let performer = inner.canonical_npc_reference("keeper").await.unwrap();
-    let PlateIdentities { sheet, .. } = shared.identity_sheet(&plate, &[1]).await.unwrap();
-    let spec = plate.stage(&[1]).unwrap();
-    let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1], &[], None, None)
-        .await
-        .unwrap();
-    assert_eq!(request.references[0].sha256, room.sha256);
-    assert_eq!(request.references[1].sha256, sheet.sha256);
-    assert_eq!(request.references[2].sha256, performer.sha256);
-    assert!(!request.prompt.as_str().contains("PRIVATE_DO_NOT_SHARE"));
-    fixture
-        .imagery
-        .generate("plate:test", request)
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture.calls(),
-        3,
-        "room, performer and composed scene use the real image boundary"
-    );
+    fixture.close().await;
 }
 
 fn member(id: &str, name: &str, sprite: &str, role: pack::CastRole) -> pack::SceneCastMember {
@@ -916,336 +934,341 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     ));
     // The photographic path builds a contact sheet from canonical cutouts, so this fake must
     // return decodable image bytes rather than the opaque image payload used by `new`.
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Arc::new(Shared {
-        inner: Arc::new(Inner {
-            imagery: fixture.imagery.clone(),
-            references: super::super::ReferenceStore::new(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-            ),
-            social: SocialLedger::none(),
-            rating: ContentRating::Mature,
-            timing,
-            state: Mutex::new(State::new(timing)),
-            wake: tokio::sync::watch::channel(0).0,
-            origin: Instant::now(),
-        }),
-        book: Mutex::new(Book::new()),
-        jobs,
-    });
-    let mut current = scene(SceneKey::Opening, "The cloth shop", Some("Marek"));
-    let mut model = crate::gameplay::narrative_focus::tests::shop();
-    model.people[0].id = "merchant".into();
-    for offer in &mut model.offers {
-        offer.seller_id = "merchant".into();
-    }
-    current.cast = model
-        .people
-        .iter()
-        .enumerate()
-        .map(|(index, person)| {
-            member(
-                &person.id,
-                &person.name,
-                match index {
-                    0 => "sprite-patron-merchant",
-                    1 => "sprite-shop-adventurer",
-                    _ => "sprite-shop-soldier",
-                },
-                if index == 0 {
-                    pack::CastRole::Patron
-                } else {
-                    pack::CastRole::Bystander
-                },
-            )
-        })
-        .collect();
-    current.cast[0].id = "merchant".into();
-    current.cast[0].name = "Marek".into();
-    current.setting.as_mut().unwrap().place_id = "cloth-shop".into();
-    current.setting.as_mut().unwrap().model = Some(model);
-    let before = current.setting.as_ref().unwrap().model.clone().unwrap();
-    shared
-        .inner
-        .observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
-    locked(&shared.inner.state).canonical.observe_room(&current);
-    loop {
-        let canonical_jobs = locked(&shared.inner.state).canonical.take_jobs();
-        if canonical_jobs.is_empty() {
-            break;
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Arc::new(Shared {
+            inner: Arc::new(Inner {
+                imagery: fixture.imagery.clone(),
+                references: super::super::ReferenceStore::new(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+                ),
+                social: SocialLedger::none(),
+                rating: ContentRating::Mature,
+                timing,
+                state: Mutex::new(State::new(timing)),
+                wake: tokio::sync::watch::channel(0).0,
+                origin: Instant::now(),
+            }),
+            book: Mutex::new(Book::new()),
+            jobs,
+        });
+        let mut current = scene(SceneKey::Opening, "The cloth shop", Some("Marek"));
+        let mut model = crate::gameplay::narrative_focus::tests::shop();
+        model.people[0].id = "merchant".into();
+        for offer in &mut model.offers {
+            offer.seller_id = "merchant".into();
         }
-        for job in canonical_jobs {
+        current.cast = model
+            .people
+            .iter()
+            .enumerate()
+            .map(|(index, person)| {
+                member(
+                    &person.id,
+                    &person.name,
+                    match index {
+                        0 => "sprite-patron-merchant",
+                        1 => "sprite-shop-adventurer",
+                        _ => "sprite-shop-soldier",
+                    },
+                    if index == 0 {
+                        pack::CastRole::Patron
+                    } else {
+                        pack::CastRole::Bystander
+                    },
+                )
+            })
+            .collect();
+        current.cast[0].id = "merchant".into();
+        current.cast[0].name = "Marek".into();
+        current.setting.as_mut().unwrap().place_id = "cloth-shop".into();
+        current.setting.as_mut().unwrap().model = Some(model);
+        let before = current.setting.as_ref().unwrap().model.clone().unwrap();
+        shared
+            .inner
+            .observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
+        locked(&shared.inner.state).canonical.observe_room(&current);
+        loop {
+            let canonical_jobs = locked(&shared.inner.state).canonical.take_jobs();
+            if canonical_jobs.is_empty() {
+                break;
+            }
+            for job in canonical_jobs {
+                let super::super::Job::Canonical(work) = job else {
+                    panic!("canonical reference job")
+                };
+                let result = shared.inner.render_canonical(&work).await;
+                shared
+                    .inner
+                    .finish(super::super::Done::Canonical { work, result });
+            }
+        }
+        let current_room_revision =
+            super::super::canonical::room_revision(&before).expect("authored room revision");
+        let mut alternate = current.clone();
+        let mut alternate_model = before.clone();
+        alternate_model.weather = "overcast".into();
+        let alternate_room_revision = super::super::canonical::room_revision(&alternate_model)
+            .expect("alternate room revision");
+        assert_ne!(current_room_revision, alternate_room_revision);
+        alternate.setting.as_mut().unwrap().model = Some(alternate_model);
+        locked(&shared.inner.state)
+            .canonical
+            .observe_room(&alternate);
+        // `finish` reacquires the canonical state mutex, so take the jobs into a local first.
+        let failed_alternate_jobs = locked(&shared.inner.state).canonical.take_jobs();
+        assert_eq!(
+            failed_alternate_jobs.len(),
+            1,
+            "the changed authored room revision admits one canonical room job"
+        );
+        for job in failed_alternate_jobs {
             let super::super::Job::Canonical(work) = job else {
                 panic!("canonical reference job")
             };
-            let result = shared.inner.render_canonical(&work).await;
+            shared.inner.finish(super::super::Done::Canonical {
+                work,
+                result: Err(ImageFailure::Provider),
+            });
+        }
+        assert_eq!(
             shared
                 .inner
-                .finish(super::super::Done::Canonical { work, result });
-        }
-    }
-    let current_room_revision =
-        super::super::canonical::room_revision(&before).expect("authored room revision");
-    let mut alternate = current.clone();
-    let mut alternate_model = before.clone();
-    alternate_model.weather = "overcast".into();
-    let alternate_room_revision =
-        super::super::canonical::room_revision(&alternate_model).expect("alternate room revision");
-    assert_ne!(current_room_revision, alternate_room_revision);
-    alternate.setting.as_mut().unwrap().model = Some(alternate_model);
-    locked(&shared.inner.state)
-        .canonical
-        .observe_room(&alternate);
-    // `finish` reacquires the canonical state mutex, so take the jobs into a local first.
-    let failed_alternate_jobs = locked(&shared.inner.state).canonical.take_jobs();
-    assert_eq!(
-        failed_alternate_jobs.len(),
-        1,
-        "the changed authored room revision admits one canonical room job"
-    );
-    for job in failed_alternate_jobs {
-        let super::super::Job::Canonical(work) = job else {
-            panic!("canonical reference job")
+                .canonical_room_status_at("cloth-shop", &current_room_revision),
+            super::super::canonical::ReferenceStatus::Ready
+        );
+        assert_eq!(
+            shared
+                .inner
+                .canonical_room_status_at("cloth-shop", &alternate_room_revision),
+            super::super::canonical::ReferenceStatus::Failed(ImageFailure::Provider)
+        );
+        let initial = view(&current, &[1], false);
+        shared.observe_with(&initial, Some(current.clone()), Vec::new());
+        let Job::Fresh {
+            id,
+            scene,
+            spec,
+            heroes,
+            ..
+        } = drain(&mut queue).remove(0)
+        else {
+            panic!("initial plate")
         };
-        shared.inner.finish(super::super::Done::Canonical {
-            work,
-            result: Err(ImageFailure::Provider),
-        });
-    }
-    assert_eq!(
-        shared
-            .inner
-            .canonical_room_status_at("cloth-shop", &current_room_revision),
-        super::super::canonical::ReferenceStatus::Ready
-    );
-    assert_eq!(
-        shared
-            .inner
-            .canonical_room_status_at("cloth-shop", &alternate_room_revision),
-        super::super::canonical::ReferenceStatus::Failed(ImageFailure::Provider)
-    );
-    let initial = view(&current, &[1], false);
-    shared.observe_with(&initial, Some(current.clone()), Vec::new());
-    let Job::Fresh {
-        id,
-        scene,
-        spec,
-        heroes,
-        ..
-    } = drain(&mut queue).remove(0)
-    else {
-        panic!("initial plate")
-    };
-    let (base, placement, _) = shared
-        .render_fresh(&scene, &spec, &heroes, &id, 1, false)
-        .await
-        .unwrap();
-    locked(&shared.book).insert(
-        id,
-        Entry::Ready {
-            key: base.clone(),
-            placement,
-        },
-    );
-
-    let mut journey = rpc::JourneyView::default();
-    journey.table_log.push(public_npc_line(
-        42,
-        &current.cast[0],
-        "The fine clothes are fifteen hundred copper.",
-    ));
-    let mut focused = view(&current, &[1], false);
-    focused.graph_revision = 2;
-    focused.story = committed_story(&journey);
-    locked(&shared.book).state_images.subject_selection = Some(subject::Selection {
-        scene: focused.scene_key.clone(),
-        hero: "Hero 1".into(),
-        target: "clothes-fine".into(),
-    });
-    shared.observe_with(&focused, Some(current.clone()), Vec::new());
-    let eligible_at = {
-        let book = locked(&shared.book);
-        book.state_images
-            .next_eligible_at(shared.inner.timing.interval, book.face_refresh.last_started)
-            .expect("focus edit is pending")
-    };
-    shared.poll_state_images_at(shared.inner.now().max(eligible_at));
-    let Job::State(job) = drain(&mut queue).remove(0) else {
-        panic!("narrative reveal through production observer")
-    };
-    let state_images::Job::Bake {
-        pending,
-        base: shown,
-        identities,
-        ..
-    } = &job
-    else {
-        panic!("focus bake")
-    };
-    assert_eq!(shown, &base);
-    assert_eq!(pending.focus.as_ref().unwrap().subject.id(), "clothes-fine");
-    let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
-        panic!("base image")
-    };
-    let base_reference = ReferenceImage::new(format, bytes);
-    let request = shared
-        .state_image_request(pending, base_reference.clone(), identities.as_deref())
-        .await
-        .unwrap();
-    assert!(!request.prompt.staging_order().is_empty());
-    assert!(
-        request
-            .prompt
-            .as_str()
-            .contains("Spatial staging, left to right")
-    );
-    assert_eq!(request.references.len(), 4);
-    assert_eq!(request.references[0].sha256, base_reference.sha256);
-    assert_eq!(
-        request.references[1].sha256,
-        shared
-            .inner
-            .canonical_room_reference_at("cloth-shop", &current_room_revision)
+        let (base, placement, _) = shared
+            .render_fresh(&scene, &spec, &heroes, &id, 1, false)
             .await
-            .unwrap()
-            .sha256
-    );
-    assert!(
-        request
-            .prompt
-            .as_str()
-            .contains("Image 3 is the canonical photographic identity contact sheet")
-    );
-    assert!(request.prompt.as_str().contains("npc:merchant"));
-    assert!(request.prompt.as_str().contains("hero:"));
-    for actor in &current.cast {
+            .unwrap();
+        locked(&shared.book).insert(
+            id,
+            Entry::Ready {
+                key: base.clone(),
+                placement,
+            },
+        );
+
+        let mut journey = rpc::JourneyView::default();
+        journey.table_log.push(public_npc_line(
+            42,
+            &current.cast[0],
+            "The fine clothes are fifteen hundred copper.",
+        ));
+        let mut focused = view(&current, &[1], false);
+        focused.graph_revision = 2;
+        focused.story = committed_story(&journey);
+        locked(&shared.book).state_images.subject_selection = Some(subject::Selection {
+            scene: focused.scene_key.clone(),
+            hero: "Hero 1".into(),
+            target: "clothes-fine".into(),
+        });
+        shared.observe_with(&focused, Some(current.clone()), Vec::new());
+        let eligible_at = {
+            let book = locked(&shared.book);
+            book.state_images
+                .next_eligible_at(shared.inner.timing.interval, book.face_refresh.last_started)
+                .expect("focus edit is pending")
+        };
+        shared.poll_state_images_at(shared.inner.now().max(eligible_at));
+        let Job::State(job) = drain(&mut queue).remove(0) else {
+            panic!("narrative reveal through production observer")
+        };
+        let state_images::Job::Bake {
+            pending,
+            base: shown,
+            identities,
+            ..
+        } = &job
+        else {
+            panic!("focus bake")
+        };
+        assert_eq!(shown, &base);
+        assert_eq!(pending.focus.as_ref().unwrap().subject.id(), "clothes-fine");
+        let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
+            panic!("base image")
+        };
+        let base_reference = ReferenceImage::new(format, bytes);
+        let request = shared
+            .state_image_request(pending, base_reference.clone(), identities.as_deref())
+            .await
+            .unwrap();
+        assert!(!request.prompt.staging_order().is_empty());
         assert!(
             request
                 .prompt
                 .as_str()
-                .contains(&format!("npc:{}", actor.id))
+                .contains("Spatial staging, left to right")
         );
-    }
-    let canonical_speaker = shared
-        .inner
-        .canonical_npc_reference("merchant")
-        .await
-        .unwrap();
-    assert_eq!(request.references[3].sha256, canonical_speaker.sha256);
-    assert_ne!(
-        request.references[3].sha256,
-        shared
+        assert_eq!(request.references.len(), 4);
+        assert_eq!(request.references[0].sha256, base_reference.sha256);
+        assert_eq!(
+            request.references[1].sha256,
+            shared
+                .inner
+                .canonical_room_reference_at("cloth-shop", &current_room_revision)
+                .await
+                .unwrap()
+                .sha256
+        );
+        assert!(
+            request
+                .prompt
+                .as_str()
+                .contains("Image 3 is the canonical photographic identity contact sheet")
+        );
+        assert!(request.prompt.as_str().contains("npc:merchant"));
+        assert!(request.prompt.as_str().contains("hero:"));
+        for actor in &current.cast {
+            assert!(
+                request
+                    .prompt
+                    .as_str()
+                    .contains(&format!("npc:{}", actor.id))
+            );
+        }
+        let canonical_speaker = shared
             .inner
-            .references
-            .load("sprite-patron-merchant")
-            .unwrap()
-            .sha256
-    );
-    let mut ordinary_story = (*pending).clone();
-    ordinary_story.focus = None;
-    let ordinary_story_request = shared
-        .state_image_request(
-            &ordinary_story,
-            base_reference.clone(),
-            identities.as_deref(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ordinary_story_request.references.len(), 4);
-    assert_eq!(
-        ordinary_story_request.references[1].sha256,
-        request.references[1].sha256
-    );
-    assert_eq!(
-        ordinary_story_request.references[2].sha256,
-        request.references[2].sha256
-    );
-    assert_eq!(
-        ordinary_story_request.references[3].sha256,
-        canonical_speaker.sha256
-    );
-    assert!(
-        ordinary_story_request
-            .prompt
-            .as_str()
-            .contains("Image 2 is the canonical photograph")
-    );
-    assert!(
-        ordinary_story_request
-            .prompt
-            .as_str()
-            .contains("Image 4 is the canonical photographic identity reference")
-    );
+            .canonical_npc_reference("merchant")
+            .await
+            .unwrap();
+        assert_eq!(request.references[3].sha256, canonical_speaker.sha256);
+        assert_ne!(
+            request.references[3].sha256,
+            shared
+                .inner
+                .references
+                .load("sprite-patron-merchant")
+                .unwrap()
+                .sha256
+        );
+        let mut ordinary_story = (*pending).clone();
+        ordinary_story.focus = None;
+        let ordinary_story_request = shared
+            .state_image_request(
+                &ordinary_story,
+                base_reference.clone(),
+                identities.as_deref(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ordinary_story_request.references.len(), 4);
+        assert_eq!(
+            ordinary_story_request.references[1].sha256,
+            request.references[1].sha256
+        );
+        assert_eq!(
+            ordinary_story_request.references[2].sha256,
+            request.references[2].sha256
+        );
+        assert_eq!(
+            ordinary_story_request.references[3].sha256,
+            canonical_speaker.sha256
+        );
+        assert!(
+            ordinary_story_request
+                .prompt
+                .as_str()
+                .contains("Image 2 is the canonical photograph")
+        );
+        assert!(
+            ordinary_story_request
+                .prompt
+                .as_str()
+                .contains("Image 4 is the canonical photographic identity reference")
+        );
 
-    ordinary_story.story = None;
-    let ordinary_state_request = shared
-        .state_image_request(
-            &ordinary_story,
-            base_reference.clone(),
-            identities.as_deref(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ordinary_state_request.references.len(), 4);
-    assert_eq!(
-        ordinary_state_request.references[1].sha256,
-        request.references[1].sha256
-    );
-    assert_eq!(
-        ordinary_state_request.references[2].sha256,
-        request.references[2].sha256
-    );
-    assert_eq!(
-        ordinary_state_request.references[3].sha256,
-        canonical_speaker.sha256
-    );
-    assert!(
-        ordinary_state_request
-            .prompt
-            .as_str()
-            .contains("Image 2 is the canonical photograph")
-    );
-    assert!(
-        ordinary_state_request
-            .prompt
-            .as_str()
-            .contains("Image 4 is the canonical photographic identity reference")
-    );
-    assert!(request.prompt.as_str().contains("clothes-fine"));
-    assert!(request.prompt.as_str().contains("1500"));
-    assert!(request.prompt.as_str().contains("no ownership transfer"));
-    let rendered = shared.render_state_image(job).await;
-    assert!(matches!(
-        &rendered,
-        state_images::Done::Bake { result: Ok(_), .. }
-    ));
-    shared.finish_state_image_at(rendered, Duration::from_secs(5));
-    let projection_message = display_message(&current);
-    let mut projection = shown_scene(&projection_message).clone();
-    shared.project_scene_contents(&mut projection, None);
-    let contents: serde_json::Value =
-        serde_json::from_str(&projection.scene_contents_json).unwrap();
-    assert_eq!(
-        contents["narrative_focus"]["focus"]["subject"]["id"],
-        "clothes-fine"
-    );
-    assert_eq!(
-        contents["narrative_focus"]["focus"]["dialogue_sequence"],
-        42
-    );
-    assert_eq!(contents["narrative_focus"]["stage"], "published");
-    assert_eq!(contents["narrative_focus"]["published_revision"], 2);
-    assert_eq!(
-        current.setting.as_ref().unwrap().model.as_ref().unwrap(),
-        &before
-    );
-    shared.observe_with(&focused, Some(current.clone()), Vec::new());
-    shared.poll_state_images_at(Duration::from_secs(40));
-    assert!(drain(&mut queue).iter().all(|job| matches!(
+        ordinary_story.story = None;
+        let ordinary_state_request = shared
+            .state_image_request(
+                &ordinary_story,
+                base_reference.clone(),
+                identities.as_deref(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ordinary_state_request.references.len(), 4);
+        assert_eq!(
+            ordinary_state_request.references[1].sha256,
+            request.references[1].sha256
+        );
+        assert_eq!(
+            ordinary_state_request.references[2].sha256,
+            request.references[2].sha256
+        );
+        assert_eq!(
+            ordinary_state_request.references[3].sha256,
+            canonical_speaker.sha256
+        );
+        assert!(
+            ordinary_state_request
+                .prompt
+                .as_str()
+                .contains("Image 2 is the canonical photograph")
+        );
+        assert!(
+            ordinary_state_request
+                .prompt
+                .as_str()
+                .contains("Image 4 is the canonical photographic identity reference")
+        );
+        assert!(request.prompt.as_str().contains("clothes-fine"));
+        assert!(request.prompt.as_str().contains("1500"));
+        assert!(request.prompt.as_str().contains("no ownership transfer"));
+        let rendered = shared.render_state_image(job).await;
+        assert!(matches!(
+            &rendered,
+            state_images::Done::Bake { result: Ok(_), .. }
+        ));
+        shared.finish_state_image_at(rendered, Duration::from_secs(5));
+        let projection_message = display_message(&current);
+        let mut projection = shown_scene(&projection_message).clone();
+        shared.project_scene_contents(&mut projection, None);
+        let contents: serde_json::Value =
+            serde_json::from_str(&projection.scene_contents_json).unwrap();
+        assert_eq!(
+            contents["narrative_focus"]["focus"]["subject"]["id"],
+            "clothes-fine"
+        );
+        assert_eq!(
+            contents["narrative_focus"]["focus"]["dialogue_sequence"],
+            42
+        );
+        assert_eq!(contents["narrative_focus"]["stage"], "published");
+        assert_eq!(contents["narrative_focus"]["published_revision"], 2);
+        assert_eq!(
+            current.setting.as_ref().unwrap().model.as_ref().unwrap(),
+            &before
+        );
+        shared.observe_with(&focused, Some(current.clone()), Vec::new());
+        shared.poll_state_images_at(Duration::from_secs(40));
+        assert!(drain(&mut queue).iter().all(|job| matches!(
         job, Job::State(state_images::Job::Bake { pending, .. }) if pending.cadence_due.is_some()
     )), "unchanged subject may request only the REF-068 cadence");
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -1604,193 +1627,200 @@ fn public_npc_line(sequence: u64, actor: &pack::SceneCastMember, text: &str) -> 
 async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_edited_key() {
     use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = lane_cache("public-camera");
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Arc::new(Shared {
-        inner: Arc::new(Inner {
-            imagery: fixture.imagery.clone(),
-            references: super::super::ReferenceStore::new(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-            ),
-            social: SocialLedger::none(),
-            rating: ContentRating::Restrained,
-            timing,
-            state: Mutex::new(State::new(timing)),
-            wake: tokio::sync::watch::channel(0).0,
-            origin: Instant::now(),
-        }),
-        book: Mutex::new(Book::new()),
-        jobs,
-    });
-    let plates = Plates {
-        shared: shared.clone(),
-        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let loaded =
-        pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"))
-            .unwrap();
-    let current = loaded
-        .pack
-        .scenes
-        .iter()
-        .find(|scene| scene.key == SceneKey::DialogueSeal)
-        .unwrap();
-    let first_actor = &current.cast[0];
-    let other_actor = &current.cast[1];
-    admit_canonical_references(&shared.inner, current);
-    render_canonical_references(&shared.inner).await;
-    cache_personal_heroes(&shared.inner, &cache, &[1]).await;
-    let story_message = |lines| {
-        let mut message = public_story_message(current, lines);
-        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
-            panic!("display fixture");
-        };
-        display.journey.as_mut().unwrap().party = vec![rpc::PartyMemberView {
-            name: "Accepted hero 1".to_owned(),
-            character_ready: true,
-            ..Default::default()
-        }];
-        message
-    };
-    pack::with_test_pack(loaded.clone(), || {
-        plates.observe(&story_message(Vec::new()), 1);
-    });
-    let id = fresh_ids(&drain(&mut queue)).remove(0);
-    let scene = PlateScene::of(current).unwrap();
-    let (request, _) = shared
-        .fresh_request(&scene, &scene.stage(&[1]).unwrap(), &[1], &[], None)
-        .await
-        .unwrap();
-    let base = fixture
-        .imagery
-        .generate("plate:test", request)
-        .await
-        .unwrap();
-    locked(&shared.book).insert(
-        id,
-        Entry::Ready {
-            key: base.clone(),
-            placement: None,
-        },
-    );
-    let mut lines = Vec::new();
-    for (sequence, actor, text, camera, phrase) in [
-        (
-            2,
-            first_actor,
-            "Keep your voice low.",
-            shot::PublicDialogue::FirstReply,
-            "medium dialogue",
-        ),
-        (
-            3,
-            first_actor,
-            "I am still listening.",
-            shot::PublicDialogue::SameSpeakerFollowup,
-            "close conversational",
-        ),
-        (
-            4,
-            other_actor,
-            "I heard that.",
-            shot::PublicDialogue::SpeakerChange,
-            "over-the-shoulder dialogue",
-        ),
-    ] {
-        lines.push(public_npc_line(sequence, actor, text));
-        pack::with_test_pack(loaded.clone(), || {
-            plates.observe(&story_message(lines.clone()), sequence);
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Arc::new(Shared {
+            inner: Arc::new(Inner {
+                imagery: fixture.imagery.clone(),
+                references: super::super::ReferenceStore::new(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+                ),
+                social: SocialLedger::none(),
+                rating: ContentRating::Restrained,
+                timing,
+                state: Mutex::new(State::new(timing)),
+                wake: tokio::sync::watch::channel(0).0,
+                origin: Instant::now(),
+            }),
+            book: Mutex::new(Book::new()),
+            jobs,
         });
-        let mut now = shared.inner.now() + Duration::from_secs(4 + (sequence - 2) * 62);
-        shared.poll_state_images_at(now);
-        // Execute every fresh prerequisite, as the real worker does. Taking only the first
-        // queued job silently discarded a different speaker's base or the edit-chain refresh.
-        let mut story_jobs = Vec::new();
-        for job in drain(&mut queue) {
-            match job {
-                Job::Fresh {
-                    id,
-                    graph_revision,
-                    scene,
-                    spec,
-                    heroes,
-                    faces: _,
-                    ahead,
-                } => {
-                    let (fresh, placement, _) = shared
-                        .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
-                        .await
-                        .unwrap();
-                    shared.finish(Done::Fresh {
-                        id,
-                        graph_revision,
-                        ahead,
-                        elapsed: Duration::from_secs(1),
-                        result: Ok((fresh, placement)),
-                    });
-                }
-                job => story_jobs.push(job),
-            }
-        }
-        if story_jobs.is_empty() {
-            now += Duration::from_secs(31);
-            shared.poll_state_images_at(now);
-            story_jobs = drain(&mut queue);
-        }
-        assert_eq!(
-            story_jobs.len(),
-            1,
-            "one settled camera edit after its bases"
-        );
-        let Job::State(job) = story_jobs.remove(0) else {
-            panic!("automatic story edit")
+        let plates = Plates {
+            shared: shared.clone(),
+            _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
         };
-        let state_images::Job::Bake {
-            pending,
-            base,
-            identities,
-            ..
-        } = &job
-        else {
-            panic!("story bake")
+        let loaded = pack::load(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"),
+        )
+        .unwrap();
+        let current = loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::DialogueSeal)
+            .unwrap();
+        let first_actor = &current.cast[0];
+        let other_actor = &current.cast[1];
+        admit_canonical_references(&shared.inner, current);
+        render_canonical_references(&shared.inner).await;
+        cache_personal_heroes(&shared.inner, &cache, &[1]).await;
+        let story_message = |lines| {
+            let mut message = public_story_message(current, lines);
+            let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut()
+            else {
+                panic!("display fixture");
+            };
+            display.journey.as_mut().unwrap().party = vec![rpc::PartyMemberView {
+                name: "Accepted hero 1".to_owned(),
+                character_ready: true,
+                ..Default::default()
+            }];
+            message
         };
-        assert_eq!(pending.story.as_ref().unwrap().dialogue, camera);
-        let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
-            panic!("shown base bytes")
-        };
-        let request = shared
-            .state_image_request(
-                pending,
-                ReferenceImage::new(format, bytes),
-                identities.as_deref(),
-            )
+        pack::with_test_pack(loaded.clone(), || {
+            plates.observe(&story_message(Vec::new()), 1);
+        });
+        let id = fresh_ids(&drain(&mut queue)).remove(0);
+        let scene = PlateScene::of(current).unwrap();
+        let (request, _) = shared
+            .fresh_request(&scene, &scene.stage(&[1]).unwrap(), &[1], &[], None)
             .await
             .unwrap();
-        assert!(request.prompt.as_str().contains(phrase));
-        assert!(
-            !request
-                .prompt
-                .as_str()
-                .contains("Keep the exact aspect ratio and framing")
+        let base = fixture
+            .imagery
+            .generate("plate:test", request)
+            .await
+            .unwrap();
+        locked(&shared.book).insert(
+            id,
+            Entry::Ready {
+                key: base.clone(),
+                placement: None,
+            },
         );
-        assert!(!request.prompt.as_str().contains("Keep its camera position"));
-        let expected = fixture.imagery.key_for(&request);
-        assert_ne!(&expected, base);
-        let done = shared.render_state_image(job).await;
-        assert!(
-            matches!(&done, state_images::Done::Bake { result: Ok(key), .. } if key == &expected)
-        );
-        assert!(
-            locked(&shared.book)
-                .image_layouts
-                .contains_key(expected.as_str()),
-            "the actual edit renderer measured this exact new image, using the fixture fallback"
-        );
-        shared.finish_state_image_at(done, now + Duration::from_secs(1));
-        assert_eq!(locked(&shared.book).shown().unwrap().0, expected);
-        assert!(fixture.prompt().contains(phrase));
+        let mut lines = Vec::new();
+        for (sequence, actor, text, camera, phrase) in [
+            (
+                2,
+                first_actor,
+                "Keep your voice low.",
+                shot::PublicDialogue::FirstReply,
+                "medium dialogue",
+            ),
+            (
+                3,
+                first_actor,
+                "I am still listening.",
+                shot::PublicDialogue::SameSpeakerFollowup,
+                "close conversational",
+            ),
+            (
+                4,
+                other_actor,
+                "I heard that.",
+                shot::PublicDialogue::SpeakerChange,
+                "over-the-shoulder dialogue",
+            ),
+        ] {
+            lines.push(public_npc_line(sequence, actor, text));
+            pack::with_test_pack(loaded.clone(), || {
+                plates.observe(&story_message(lines.clone()), sequence);
+            });
+            let mut now = shared.inner.now() + Duration::from_secs(4 + (sequence - 2) * 62);
+            shared.poll_state_images_at(now);
+            // Execute every fresh prerequisite, as the real worker does. Taking only the first
+            // queued job silently discarded a different speaker's base or the edit-chain refresh.
+            let mut story_jobs = Vec::new();
+            for job in drain(&mut queue) {
+                match job {
+                    Job::Fresh {
+                        id,
+                        graph_revision,
+                        scene,
+                        spec,
+                        heroes,
+                        faces: _,
+                        ahead,
+                    } => {
+                        let (fresh, placement, _) = shared
+                            .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
+                            .await
+                            .unwrap();
+                        shared.finish(Done::Fresh {
+                            id,
+                            graph_revision,
+                            ahead,
+                            elapsed: Duration::from_secs(1),
+                            result: Ok((fresh, placement)),
+                        });
+                    }
+                    job => story_jobs.push(job),
+                }
+            }
+            if story_jobs.is_empty() {
+                now += Duration::from_secs(31);
+                shared.poll_state_images_at(now);
+                story_jobs = drain(&mut queue);
+            }
+            assert_eq!(
+                story_jobs.len(),
+                1,
+                "one settled camera edit after its bases"
+            );
+            let Job::State(job) = story_jobs.remove(0) else {
+                panic!("automatic story edit")
+            };
+            let state_images::Job::Bake {
+                pending,
+                base,
+                identities,
+                ..
+            } = &job
+            else {
+                panic!("story bake")
+            };
+            assert_eq!(pending.story.as_ref().unwrap().dialogue, camera);
+            let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
+                panic!("shown base bytes")
+            };
+            let request = shared
+                .state_image_request(
+                    pending,
+                    ReferenceImage::new(format, bytes),
+                    identities.as_deref(),
+                )
+                .await
+                .unwrap();
+            assert!(request.prompt.as_str().contains(phrase));
+            assert!(
+                !request
+                    .prompt
+                    .as_str()
+                    .contains("Keep the exact aspect ratio and framing")
+            );
+            assert!(!request.prompt.as_str().contains("Keep its camera position"));
+            let expected = fixture.imagery.key_for(&request);
+            assert_ne!(&expected, base);
+            let done = shared.render_state_image(job).await;
+            assert!(
+                matches!(&done, state_images::Done::Bake { result: Ok(key), .. } if key == &expected)
+            );
+            assert!(
+                locked(&shared.book)
+                    .image_layouts
+                    .contains_key(expected.as_str()),
+                "the actual edit renderer measured this exact new image, using the fixture fallback"
+            );
+            shared.finish_state_image_at(done, now + Duration::from_secs(1));
+            assert_eq!(locked(&shared.book).shown().unwrap().0, expected);
+            assert!(fixture.prompt().contains(phrase));
+        }
     }
+    fixture.close().await;
 }
 
 // A scheduler-only worker: fresh speaker plates and anti-drift refreshes are prerequisites,
@@ -2144,204 +2174,209 @@ pub(super) fn finish_canonical_references(inner: &Inner) {
 async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_base_cached() {
     use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = crate::gameplay::imagery::tests::directory("directed-plate");
-    let fixture = DirectionFixture::new(&cache);
-    let mut timing = Timing::from_interval(Duration::from_secs(30));
-    timing.roll_quiet = Duration::ZERO;
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Arc::new(Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
-    });
-    cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
-    let plates = Plates {
-        shared: shared.clone(),
-        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
     };
-    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
-    observe(&shared, &current, &[], &[1]);
-    let id = fresh_ids(&drain(&mut queue)).remove(0);
-    // RP-58 uses the projected public roster/activity, so compare the same owner snapshot
-    // that the directed renderer receives rather than a pack-only scene with no hero names.
-    let scene = locked(&shared.book)
-        .current
-        .as_ref()
-        .unwrap()
-        .scene
-        .clone()
-        .unwrap();
-    let spec = scene.stage(&[1]).unwrap();
-    let (request, _) = shared
-        .fresh_request(&scene, &spec, &[1], &[], None)
-        .await
-        .unwrap();
-    let baseline_prompt = request.prompt.as_str().to_owned();
-    let reference_hashes: Vec<_> = request
-        .references
-        .iter()
-        .map(|reference| reference.sha256.clone())
-        .collect();
-    let base = fixture
-        .imagery
-        .generate("plate:test", request)
-        .await
-        .unwrap();
-    locked(&shared.book).insert(
-        id,
-        Entry::Ready {
-            key: base.clone(),
-            placement: None,
-        },
-    );
-    let wake = shared.inner.wake.subscribe();
-    let wake_start = *wake.borrow();
-    let receive = plates
-        .direct("Brakka unsheathes his sword".to_owned(), true)
-        .unwrap();
-    // REF-060 item 4: starting a directed plate wakes the display at once, with
-    // plate_update_pending set, while the render is still queued.
-    assert!(
-        *wake.borrow() > wake_start,
-        "starting a directed plate wakes the display"
-    );
-    let mut starting = display_message(&current);
-    apply_at(&shared, &mut starting, Duration::from_secs(0));
-    assert!(
-        shown_scene(&starting).plate_update_pending,
-        "the display sees the directed render as pending from its start"
-    );
-    let Job::Directed(work) = queue.recv().await.unwrap() else {
-        panic!("directed work")
-    };
-    let (directed, _) = shared
-        .fresh_request(
-            &work.scene,
-            &work.spec,
-            &work.heroes,
-            &work.faces,
-            Some(&work.text),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        reference_hashes,
-        directed
+    {
+        let mut timing = Timing::from_interval(Duration::from_secs(30));
+        timing.roll_quiet = Duration::ZERO;
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Arc::new(Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        });
+        cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
+        let plates = Plates {
+            shared: shared.clone(),
+            _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+        };
+        let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+        observe(&shared, &current, &[], &[1]);
+        let id = fresh_ids(&drain(&mut queue)).remove(0);
+        // RP-58 uses the projected public roster/activity, so compare the same owner snapshot
+        // that the directed renderer receives rather than a pack-only scene with no hero names.
+        let scene = locked(&shared.book)
+            .current
+            .as_ref()
+            .unwrap()
+            .scene
+            .clone()
+            .unwrap();
+        let spec = scene.stage(&[1]).unwrap();
+        let (request, _) = shared
+            .fresh_request(&scene, &spec, &[1], &[], None)
+            .await
+            .unwrap();
+        let baseline_prompt = request.prompt.as_str().to_owned();
+        let reference_hashes: Vec<_> = request
             .references
             .iter()
             .map(|reference| reference.sha256.clone())
-            .collect::<Vec<_>>()
-    );
-    let done = shared.render_directed(*work).await;
-    let response = receive.await.unwrap().unwrap();
-    assert_eq!(response["state"], "pending");
-    shared.finish(done);
-    let mut landed = display_message(&current);
-    apply_at(&shared, &mut landed, Duration::from_secs(25));
-    assert!(
-        !shown_scene(&landed).plate_update_pending,
-        "a landed directed plate clears the pending badge"
-    );
-    assert_eq!(
-        plates
-            .direct_status(response["key"].as_str().unwrap())
-            .unwrap()["state"],
-        "ready"
-    );
-    assert_ne!(response["key"], base.as_str());
-    assert!(
-        fixture.prompt().starts_with(&baseline_prompt),
-        "directed prompt: {:?}; baseline prompt: {:?}",
-        fixture.prompt(),
-        baseline_prompt
-    );
-    assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
-    for mut message in [display_message(&current), player_message(&current)] {
-        apply_at(&shared, &mut message, Duration::from_secs(25));
-        assert_eq!(
-            shown_scene(&message).live_plate,
-            format!("/gameplay/imagery/{}", response["key"].as_str().unwrap())
-        );
-    }
-    // A living-scene face refresh uses the directed base and keeps the same action direction.
-    let angry = Face {
-        expression: Expression::Angry,
-        tier: HealthTier::Healthy,
-    };
-    locked(&shared.inner.state)
-        .plate_wants
-        .insert("keeper".to_owned(), angry);
-    for job in drain(&mut queue) {
-        assert!(matches!(job, Job::Measure { .. }));
-    }
-    shared.poll_face_at(Duration::from_secs(30));
-    let Job::Edit {
-        base: edit_base, ..
-    } = queue.recv().await.unwrap()
-    else {
-        panic!("face refresh")
-    };
-    assert_eq!(edit_base.as_str(), response["key"].as_str().unwrap());
-    shared
-        .render_edit(&scene, &edit_base, angry, &[1])
-        .await
-        .unwrap();
-    assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
-    // A directed render that fails also clears the pending badge.
-    let _failing_receive = plates
-        .direct("A directed plate that will fail".to_owned(), false)
-        .unwrap();
-    let mut failing_view = display_message(&current);
-    apply_at(&shared, &mut failing_view, Duration::from_secs(40));
-    assert!(shown_scene(&failing_view).plate_update_pending);
-    let Job::Directed(failing) = queue.recv().await.unwrap() else {
-        panic!("failing directed work")
-    };
-    let (generation, scene_key) = (failing.generation, failing.scene_key.clone());
-    drop(failing);
-    shared.finish(Done::Directed {
-        generation,
-        scene_key,
-        key: None,
-        result: Err(ImageFailure::Provider),
-    });
-    assert!(!locked(&shared.book).direct.pending);
-    let mut failed_view = display_message(&current);
-    apply_at(&shared, &mut failed_view, Duration::from_secs(40));
-    assert!(
-        !shown_scene(&failed_view).plate_update_pending,
-        "a failed directed plate clears the pending badge"
-    );
-    plates.clear_direction();
-    assert!(locked(&shared.book).direct.keep.is_none());
-    let mut message = display_message(&current);
-    apply_at(&shared, &mut message, Duration::from_secs(60));
-    assert_eq!(shown_scene(&message).live_plate, base.path());
-    let calls = fixture.calls();
-    let (request, _) = shared
-        .fresh_request(&scene, &spec, &[1], &[], None)
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture
+            .collect();
+        let base = fixture
             .imagery
             .generate("plate:test", request)
             .await
-            .unwrap(),
-        base
-    );
-    assert_eq!(fixture.calls(), calls, "undirected cache is retained");
+            .unwrap();
+        locked(&shared.book).insert(
+            id,
+            Entry::Ready {
+                key: base.clone(),
+                placement: None,
+            },
+        );
+        let wake = shared.inner.wake.subscribe();
+        let wake_start = *wake.borrow();
+        let receive = plates
+            .direct("Brakka unsheathes his sword".to_owned(), true)
+            .unwrap();
+        // REF-060 item 4: starting a directed plate wakes the display at once, with
+        // plate_update_pending set, while the render is still queued.
+        assert!(
+            *wake.borrow() > wake_start,
+            "starting a directed plate wakes the display"
+        );
+        let mut starting = display_message(&current);
+        apply_at(&shared, &mut starting, Duration::from_secs(0));
+        assert!(
+            shown_scene(&starting).plate_update_pending,
+            "the display sees the directed render as pending from its start"
+        );
+        let Job::Directed(work) = queue.recv().await.unwrap() else {
+            panic!("directed work")
+        };
+        let (directed, _) = shared
+            .fresh_request(
+                &work.scene,
+                &work.spec,
+                &work.heroes,
+                &work.faces,
+                Some(&work.text),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reference_hashes,
+            directed
+                .references
+                .iter()
+                .map(|reference| reference.sha256.clone())
+                .collect::<Vec<_>>()
+        );
+        let done = shared.render_directed(*work).await;
+        let response = receive.await.unwrap().unwrap();
+        assert_eq!(response["state"], "pending");
+        shared.finish(done);
+        let mut landed = display_message(&current);
+        apply_at(&shared, &mut landed, Duration::from_secs(25));
+        assert!(
+            !shown_scene(&landed).plate_update_pending,
+            "a landed directed plate clears the pending badge"
+        );
+        assert_eq!(
+            plates
+                .direct_status(response["key"].as_str().unwrap())
+                .unwrap()["state"],
+            "ready"
+        );
+        assert_ne!(response["key"], base.as_str());
+        assert!(
+            fixture.prompt().starts_with(&baseline_prompt),
+            "directed prompt: {:?}; baseline prompt: {:?}",
+            fixture.prompt(),
+            baseline_prompt
+        );
+        assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
+        for mut message in [display_message(&current), player_message(&current)] {
+            apply_at(&shared, &mut message, Duration::from_secs(25));
+            assert_eq!(
+                shown_scene(&message).live_plate,
+                format!("/gameplay/imagery/{}", response["key"].as_str().unwrap())
+            );
+        }
+        // A living-scene face refresh uses the directed base and keeps the same action direction.
+        let angry = Face {
+            expression: Expression::Angry,
+            tier: HealthTier::Healthy,
+        };
+        locked(&shared.inner.state)
+            .plate_wants
+            .insert("keeper".to_owned(), angry);
+        for job in drain(&mut queue) {
+            assert!(matches!(job, Job::Measure { .. }));
+        }
+        shared.poll_face_at(Duration::from_secs(30));
+        let Job::Edit {
+            base: edit_base, ..
+        } = queue.recv().await.unwrap()
+        else {
+            panic!("face refresh")
+        };
+        assert_eq!(edit_base.as_str(), response["key"].as_str().unwrap());
+        shared
+            .render_edit(&scene, &edit_base, angry, &[1])
+            .await
+            .unwrap();
+        assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
+        // A directed render that fails also clears the pending badge.
+        let _failing_receive = plates
+            .direct("A directed plate that will fail".to_owned(), false)
+            .unwrap();
+        let mut failing_view = display_message(&current);
+        apply_at(&shared, &mut failing_view, Duration::from_secs(40));
+        assert!(shown_scene(&failing_view).plate_update_pending);
+        let Job::Directed(failing) = queue.recv().await.unwrap() else {
+            panic!("failing directed work")
+        };
+        let (generation, scene_key) = (failing.generation, failing.scene_key.clone());
+        drop(failing);
+        shared.finish(Done::Directed {
+            generation,
+            scene_key,
+            key: None,
+            result: Err(ImageFailure::Provider),
+        });
+        assert!(!locked(&shared.book).direct.pending);
+        let mut failed_view = display_message(&current);
+        apply_at(&shared, &mut failed_view, Duration::from_secs(40));
+        assert!(
+            !shown_scene(&failed_view).plate_update_pending,
+            "a failed directed plate clears the pending badge"
+        );
+        plates.clear_direction();
+        assert!(locked(&shared.book).direct.keep.is_none());
+        let mut message = display_message(&current);
+        apply_at(&shared, &mut message, Duration::from_secs(60));
+        assert_eq!(shown_scene(&message).live_plate, base.path());
+        let calls = fixture.calls();
+        let (request, _) = shared
+            .fresh_request(&scene, &spec, &[1], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture
+                .imagery
+                .generate("plate:test", request)
+                .await
+                .unwrap(),
+            base
+        );
+        assert_eq!(fixture.calls(), calls, "undirected cache is retained");
+    }
+    fixture.close().await;
 }
 
 fn lane_cache(name: &str) -> PathBuf {
@@ -2374,7 +2409,7 @@ pub(super) fn admit_canonical_references(inner: &Inner, current: &pack::Scene) {
     }
 }
 
-async fn render_canonical_references(inner: &Inner) {
+async fn render_canonical_references(inner: &Arc<Inner>) {
     loop {
         let jobs = locked(&inner.state).canonical.take_jobs();
         if jobs.is_empty() {
@@ -3236,122 +3271,127 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
 async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() {
     use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = lane_cache("state-batch");
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Mature,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Arc::new(Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
-    });
-    let generated = crate::gameplay::npc_dossier_tests::adventure(42);
-    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
-    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
-    admit_canonical_references(&shared.inner, &current);
-    render_canonical_references(&shared.inner).await;
-    let reference_calls = fixture.calls();
-    assert!(
-        reference_calls > 0,
-        "canonical references used the local provider"
-    );
-    observe(&shared, &current, &[], &[1]);
-    let Job::Fresh {
-        id,
-        scene,
-        spec,
-        heroes,
-        ..
-    } = drain(&mut queue).remove(0)
-    else {
-        panic!("fresh plate");
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let (base, placement, _) = shared
-        .render_fresh(&scene, &spec, &heroes, &id, 1, false)
-        .await
-        .unwrap();
-    locked(&shared.book).insert(
-        id,
-        Entry::Ready {
-            key: base.clone(),
-            placement,
-        },
-    );
-    let mut changed = scene.clone();
-    let mut changed_view = view(&current, &[1], false);
-    changed_view.graph_revision = 2;
-    changed.snapshot.as_mut().unwrap().model.things[0].open = true;
-    changed
-        .snapshot
-        .as_mut()
-        .unwrap()
-        .changes
-        .push("Brakka opens the door".into());
-    state_images::observe(
-        &mut locked(&shared.book),
-        &changed_view,
-        &changed,
-        Duration::from_secs(1),
-    );
-    changed.snapshot.as_mut().unwrap().model.things[0].lit = true;
-    changed
-        .snapshot
-        .as_mut()
-        .unwrap()
-        .changes
-        .push("Sigrun lights the candle".into());
-    state_images::observe(
-        &mut locked(&shared.book),
-        &changed_view,
-        &changed,
-        Duration::from_secs(2),
-    );
-    shared.poll_state_images_at(Duration::from_secs(5));
-    let Job::State(job) = drain(&mut queue).remove(0) else {
-        panic!("state edit");
-    };
-    let done = shared.render_state_image(job).await;
-    shared.finish_state_image(done);
-    assert_eq!(
-        fixture.calls() - reference_calls,
-        2,
-        "one initial still and one edit for the entire batch"
-    );
-    assert_ne!(locked(&shared.book).shown().unwrap().0, base);
-    assert!(
-        fixture
-            .prompt()
-            .contains("Brakka opens the door; Sigrun lights the candle")
-    );
-    changed.snapshot.as_mut().unwrap().model.things[0]
-        .searched_by
-        .push("Brakka".into());
-    state_images::observe(
-        &mut locked(&shared.book),
-        &changed_view,
-        &changed,
-        Duration::from_secs(6),
-    );
-    shared.poll_state_images_at(Duration::from_secs(20));
-    let jobs = drain(&mut queue);
-    assert!(
-        jobs.iter().all(|job| matches!(job,
-            Job::State(state_images::Job::Bake { pending, .. }) if pending.cadence_due.is_some()
-        )),
-        "only the continuously prepared REF-068 frame may be queued"
-    );
-    assert_eq!(fixture.calls() - reference_calls, 2);
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Mature,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Arc::new(Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        });
+        let generated = crate::gameplay::npc_dossier_tests::adventure(42);
+        let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+        current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+        admit_canonical_references(&shared.inner, &current);
+        render_canonical_references(&shared.inner).await;
+        let reference_calls = fixture.calls();
+        assert!(
+            reference_calls > 0,
+            "canonical references used the local provider"
+        );
+        observe(&shared, &current, &[], &[1]);
+        let Job::Fresh {
+            id,
+            scene,
+            spec,
+            heroes,
+            ..
+        } = drain(&mut queue).remove(0)
+        else {
+            panic!("fresh plate");
+        };
+        let (base, placement, _) = shared
+            .render_fresh(&scene, &spec, &heroes, &id, 1, false)
+            .await
+            .unwrap();
+        locked(&shared.book).insert(
+            id,
+            Entry::Ready {
+                key: base.clone(),
+                placement,
+            },
+        );
+        let mut changed = scene.clone();
+        let mut changed_view = view(&current, &[1], false);
+        changed_view.graph_revision = 2;
+        changed.snapshot.as_mut().unwrap().model.things[0].open = true;
+        changed
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .changes
+            .push("Brakka opens the door".into());
+        state_images::observe(
+            &mut locked(&shared.book),
+            &changed_view,
+            &changed,
+            Duration::from_secs(1),
+        );
+        changed.snapshot.as_mut().unwrap().model.things[0].lit = true;
+        changed
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .changes
+            .push("Sigrun lights the candle".into());
+        state_images::observe(
+            &mut locked(&shared.book),
+            &changed_view,
+            &changed,
+            Duration::from_secs(2),
+        );
+        shared.poll_state_images_at(Duration::from_secs(5));
+        let Job::State(job) = drain(&mut queue).remove(0) else {
+            panic!("state edit");
+        };
+        let done = shared.render_state_image(job).await;
+        shared.finish_state_image(done);
+        assert_eq!(
+            fixture.calls() - reference_calls,
+            2,
+            "one initial still and one edit for the entire batch"
+        );
+        assert_ne!(locked(&shared.book).shown().unwrap().0, base);
+        assert!(
+            fixture
+                .prompt()
+                .contains("Brakka opens the door; Sigrun lights the candle")
+        );
+        changed.snapshot.as_mut().unwrap().model.things[0]
+            .searched_by
+            .push("Brakka".into());
+        state_images::observe(
+            &mut locked(&shared.book),
+            &changed_view,
+            &changed,
+            Duration::from_secs(6),
+        );
+        shared.poll_state_images_at(Duration::from_secs(20));
+        let jobs = drain(&mut queue);
+        assert!(
+            jobs.iter().all(|job| matches!(job,
+                Job::State(state_images::Job::Bake { pending, .. }) if pending.cadence_due.is_some()
+            )),
+            "only the continuously prepared REF-068 frame may be queued"
+        );
+        assert_eq!(fixture.calls() - reference_calls, 2);
+    }
+    fixture.close().await;
 }
 
 fn apply_at(shared: &Shared, message: &mut rpc::ViewMessage, now: Duration) {
@@ -3873,69 +3913,74 @@ async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party()
         "../../artifacts/tmp/lanes/HS37/fixture-cache/campaign/luna2/R10/plate-cache-{}",
         std::process::id(),
     ));
-    let fixture = DirectionFixture::new(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
     };
-    cache_personal_heroes(&shared.inner, &cache, &[1, 2, 3]).await;
-    let lobby = scene(SceneKey::Room, "The Gathering", None);
-    let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
-    for heroes in [&[][..], &[1][..], &[1, 2][..]] {
-        shared.observe_with(&view(&lobby, heroes, false), None, vec![opening.clone()]);
-        assert!(drain(&mut queue).is_empty(), "the lobby requests no plates");
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        cache_personal_heroes(&shared.inner, &cache, &[1, 2, 3]).await;
+        let lobby = scene(SceneKey::Room, "The Gathering", None);
+        let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+        for heroes in [&[][..], &[1][..], &[1, 2][..]] {
+            shared.observe_with(&view(&lobby, heroes, false), None, vec![opening.clone()]);
+            assert!(drain(&mut queue).is_empty(), "the lobby requests no plates");
+        }
+        shared.observe_with(
+            &view(&opening, &[1, 2, 3], false),
+            Some(opening),
+            Vec::new(),
+        );
+        let jobs = drain(&mut queue);
+        assert!(
+            matches!(&jobs[..], [Job::Fresh { heroes, .. }] if heroes == &[1, 2, 3]),
+            "the opening scene requests one plate for the confirmed party"
+        );
+        let [
+            Job::Fresh {
+                scene,
+                heroes,
+                faces,
+                ..
+            },
+        ] = jobs.as_slice()
+        else {
+            panic!("one fresh opening plate");
+        };
+        let spec = scene.stage(heroes).unwrap();
+        let (request, _) = shared
+            .fresh_request(scene, &spec, heroes, faces, None)
+            .await
+            .unwrap();
+        fixture
+            .imagery
+            .generate("plate:test", request)
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "one provider call for the opening plate",
+        );
     }
-    shared.observe_with(
-        &view(&opening, &[1, 2, 3], false),
-        Some(opening),
-        Vec::new(),
-    );
-    let jobs = drain(&mut queue);
-    assert!(
-        matches!(&jobs[..], [Job::Fresh { heroes, .. }] if heroes == &[1, 2, 3]),
-        "the opening scene requests one plate for the confirmed party"
-    );
-    let [
-        Job::Fresh {
-            scene,
-            heroes,
-            faces,
-            ..
-        },
-    ] = jobs.as_slice()
-    else {
-        panic!("one fresh opening plate");
-    };
-    let spec = scene.stage(heroes).unwrap();
-    let (request, _) = shared
-        .fresh_request(scene, &spec, heroes, faces, None)
-        .await
-        .unwrap();
-    fixture
-        .imagery
-        .generate("plate:test", request)
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture.calls(),
-        1,
-        "one provider call for the opening plate",
-    );
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -3945,292 +3990,304 @@ async fn a_scene_plate_with_six_heroes_and_two_cast_members_stays_within_referen
         "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS13/reference-limit-{}",
         std::process::id(),
     ));
-    let fixture = DirectionFixture::new(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let (jobs, _queue) = mpsc::channel(16);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
     };
-    cache_personal_heroes(&shared.inner, &cache, &[1, 2, 3, 4, 5, 6]).await;
-    let mut current = scene(SceneKey::DialogueSeal, "Six on the Stage", Some("Kestrel"));
-    current.cast.push(member(
-        "antagonist",
-        "The Antagonist",
-        "sprite-shop-soldier-documentary-photo",
-        pack::CastRole::Antagonist,
-    ));
-    let Some(scene) = PlateScene::of(&current) else {
-        panic!("scene should be plannable");
-    };
-    let spec = scene
-        .stage(&[1, 2, 3, 4, 5, 6])
-        .expect("scene should stage");
-    let (request, _) = shared
-        .fresh_request(&scene, &spec, &[1, 2, 3, 4, 5, 6], &[], None)
-        .await
-        .expect("reference shaping should succeed");
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let (jobs, _queue) = mpsc::channel(16);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        cache_personal_heroes(&shared.inner, &cache, &[1, 2, 3, 4, 5, 6]).await;
+        let mut current = scene(SceneKey::DialogueSeal, "Six on the Stage", Some("Kestrel"));
+        current.cast.push(member(
+            "antagonist",
+            "The Antagonist",
+            "sprite-shop-soldier-documentary-photo",
+            pack::CastRole::Antagonist,
+        ));
+        let Some(scene) = PlateScene::of(&current) else {
+            panic!("scene should be plannable");
+        };
+        let spec = scene
+            .stage(&[1, 2, 3, 4, 5, 6])
+            .expect("scene should stage");
+        let (request, _) = shared
+            .fresh_request(&scene, &spec, &[1, 2, 3, 4, 5, 6], &[], None)
+            .await
+            .expect("reference shaping should succeed");
 
-    assert_eq!(spec.heroes.len(), 6);
-    for hero in 1..=6 {
+        assert_eq!(spec.heroes.len(), 6);
+        for hero in 1..=6 {
+            assert!(
+                request
+                    .prompt
+                    .as_str()
+                    .contains(&format!("Hero {hero} = photograph {hero}"))
+            );
+        }
         assert!(
             request
                 .prompt
                 .as_str()
-                .contains(&format!("Hero {hero} = photograph {hero}"))
+                .contains("two loose groups facing each other")
         );
-    }
-    assert!(
-        request
-            .prompt
-            .as_str()
-            .contains("two loose groups facing each other")
-    );
 
-    let sheet = image::load_from_memory(&request.references[1].bytes)
-        .unwrap()
-        .to_rgb8();
-    for seat in 1..=6_u32 {
-        let cell = seat - 1;
-        let pixel = sheet
-            .get_pixel(cell % 4 * 512 + 256, cell / 4 * 768 + 384)
-            .0;
-        let expected = [seat as u8 * 40, 120, 180];
+        let sheet = image::load_from_memory(&request.references[1].bytes)
+            .unwrap()
+            .to_rgb8();
+        for seat in 1..=6_u32 {
+            let cell = seat - 1;
+            let pixel = sheet
+                .get_pixel(cell % 4 * 512 + 256, cell / 4 * 768 + 384)
+                .0;
+            let expected = [seat as u8 * 40, 120, 180];
+            assert!(
+                pixel
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| actual.abs_diff(expected) < 12),
+                "hero {seat}: {pixel:?}"
+            );
+        }
+
+        // The identities travel as one sheet, so the request stays within the provider's limit.
         assert!(
-            pixel
-                .iter()
-                .zip(expected)
-                .all(|(actual, expected)| actual.abs_diff(expected) < 12),
-            "hero {seat}: {pixel:?}"
+            request.references.len() <= 4,
+            "{}",
+            request.references.len()
         );
+        fixture
+            .imagery
+            .generate("plate:test", request)
+            .await
+            .expect("provider-free fixture should accept the shaped request");
     }
-
-    // The identities travel as one sheet, so the request stays within the provider's limit.
-    assert!(
-        request.references.len() <= 4,
-        "{}",
-        request.references.len()
-    );
-    fixture
-        .imagery
-        .generate("plate:test", request)
-        .await
-        .expect("provider-free fixture should accept the shaped request");
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references() {
     let cache = lane_cache("reviewed-harbor");
-    let fixture = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let references = super::super::ReferenceStore::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-    );
-    let courier = references.load("sprite-courier").unwrap();
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references,
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
-    };
-    let document: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../../../content/harbor-journey/pack.json"
-    ))
-    .unwrap();
-    let current: pack::Scene = document["scenes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| serde_json::from_value::<pack::Scene>(value.clone()).unwrap())
-        .find(|scene| scene.key == SceneKey::DialogueSeal)
-        .unwrap();
-    // The authored documentary asset is authoritative, including for the harbor.
-    let base = shared.inner.references.load(&current.asset).unwrap();
-    shared
-        .inner
-        .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
-    for member in &current.cast {
-        let reference = shared.inner.references.load(&member.sprite).unwrap();
-        let canonical = canonical_member(member);
-        locked(&shared.inner.state).canonical.admit_cast(&canonical);
-        let request = ImageRequest {
-            kind: ImageKind::CanonicalCharacter,
-            references: vec![reference.clone()],
-            prompt: crate::gameplay::imagery::canonical_cast_member(
-                shared.inner.rating,
-                &member.id,
-                &member.name,
-                canonical.role,
-                canonical.life_stage,
-                (canonical.gender, canonical.age, [].as_slice()).into(),
-                &reference.sha256,
-            )
-            .unwrap(),
-            output: OutputSpec::CUTOUT,
-        };
-        let key = shared.inner.imagery.key_for(&request);
-        let extension = match reference.format {
-            df_providers::ImageFormat::Webp => "webp",
-            df_providers::ImageFormat::Png => "png",
-            df_providers::ImageFormat::Jpeg => panic!("reviewed cutout format"),
-        };
-        std::fs::create_dir_all(&cache).unwrap();
-        std::fs::write(
-            cache.join(format!("{}.{}", key.as_str(), extension)),
-            &reference.bytes,
-        )
-        .unwrap();
-        assert_eq!(
-            shared
-                .inner
-                .imagery
-                .generate(&member.id, request)
-                .await
-                .unwrap(),
-            key
-        );
-        let jobs = locked(&shared.inner.state).canonical.take_jobs();
-        assert_eq!(jobs.len(), 1);
-        for job in jobs {
-            let super::super::Job::Canonical(work) = job else {
-                panic!("reviewed canonical cast job");
-            };
-            shared.inner.finish_canonical(work, Ok(key.clone()));
-        }
-    }
-    cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
-    assert_eq!(fixture.calls(), 0, "reviewed references are already cached");
-    let mut scene = PlateScene::of(&current).unwrap();
-    let spec = scene.stage(&[1, 2]).unwrap();
-    let (request, _) = shared
-        .fresh_request(&scene, &spec, &[1, 2], &[], None)
-        .await
-        .unwrap();
-    assert_eq!(request.references.len(), 3);
-    assert_eq!(request.references[0].sha256, base.sha256);
-    assert_eq!(request.references[2].sha256, courier.sha256);
-    for seat in [1_u8, 2] {
-        let entity = df_model::checkpoint::EntityId::from_bytes(&[seat; 16]).unwrap();
-        use sha2::{Digest, Sha256};
-        assert!(request.prompt.as_str().contains(&format!(
-            "hero:{seat}:{:x}",
-            Sha256::digest(entity.as_bytes())
-        )));
-    }
-    for identity in &scene.identity_cast {
-        assert!(request.prompt.as_str().contains(&identity.id));
-    }
-    // The authored automatic-story path keeps the same canonical reference contract.
-    let mut story_view = view(&current, &[1, 2], false);
-    shared.observe_with(&story_view, Some(current.clone()), Vec::new());
-    let id = fresh_ids(&drain(&mut queue)).remove(0);
-    ready(&shared, &id, 'a');
-    story_view.story = Some(StoryBeat {
-        actor_id: String::new(),
-        sequence: 7,
-        speaker: current.speaker.clone(),
-        text: "The enforcer listens.".into(),
-        sha256: "test-story-hash".into(),
-        tempo: crate::gameplay::shot::PublicBeat::Build,
-        dialogue: crate::gameplay::shot::PublicDialogue::FirstReply,
-    });
-    story_view.graph_revision = 2;
-    shared.observe_with(&story_view, Some(current.clone()), Vec::new());
-    shared.poll_state_images_at(shared.inner.now() + Duration::from_secs(4));
-    let Job::State(state_images::Job::Bake {
-        mut pending,
-        identities,
-        ..
-    }) = drain(&mut queue).remove(0)
+    let Some(fixture) =
+        crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache).await
     else {
-        panic!("automatic story edit")
+        return;
     };
-    let edit = shared
-        .state_image_request(&pending, base.clone(), identities.as_deref())
-        .await
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let references = super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        );
+        let courier = references.load("sprite-courier").unwrap();
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references,
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let (jobs, mut queue) = mpsc::channel(16);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let document: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../../content/harbor-journey/pack.json"
+        ))
         .unwrap();
-    assert_eq!(edit.references.len(), 3);
-    assert_eq!(edit.references[0].sha256, base.sha256);
-    assert_eq!(edit.references[1].sha256, request.references[1].sha256);
-    assert_eq!(edit.references[2].sha256, courier.sha256);
-    assert!(edit.prompt.as_str().contains("The enforcer listens."));
-    assert!(edit.prompt.as_str().contains("clearly readable change"));
-    assert!(
-        edit.prompt
-            .as_str()
-            .contains("An eyebrow-only expression tweak is insufficient")
-    );
-    assert!(
-        edit.prompt
-            .as_str()
-            .contains("bounded public-beat camera direction")
-    );
-    assert!(edit.prompt.as_str().contains("actor_id"));
-    assert!(
-        edit.prompt
-            .as_str()
-            .contains("Do not infer or enact mechanical outcomes")
-    );
-    let edit_key = shared.inner.imagery.key_for(&edit);
-    pending.story.as_mut().unwrap().text = "Keep your voice low.".into();
-    pending.story.as_mut().unwrap().tempo = crate::gameplay::shot::PublicBeat::Peak;
-    pending.story.as_mut().unwrap().sequence = 8;
-    let changed = shared
-        .state_image_request(&pending, base.clone(), identities.as_deref())
-        .await
-        .unwrap();
-    assert_ne!(edit_key, shared.inner.imagery.key_for(&changed));
-    assert!(changed.prompt.as_str().contains("Dutch-angle"));
-    let (rebuilt, _) = shared
-        .fresh_request(&scene, &spec, &[2, 1], &[], None)
-        .await
-        .unwrap();
-    assert_eq!(request.references[1].sha256, rebuilt.references[1].sha256);
-    assert!(
-        request
-            .prompt
-            .as_str()
-            .starts_with("Edit image 1 as the actual photograph")
-    );
-    assert!(!request.prompt.as_str().contains("best-lit person"));
-    assert!(!request.prompt.as_str().contains("deep blue light outside"));
+        let current: pack::Scene = document["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| serde_json::from_value::<pack::Scene>(value.clone()).unwrap())
+            .find(|scene| scene.key == SceneKey::DialogueSeal)
+            .unwrap();
+        // The authored documentary asset is authoritative, including for the harbor.
+        let base = shared.inner.references.load(&current.asset).unwrap();
+        shared
+            .inner
+            .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+        for member in &current.cast {
+            let reference = shared.inner.references.load(&member.sprite).unwrap();
+            let canonical = canonical_member(member);
+            locked(&shared.inner.state).canonical.admit_cast(&canonical);
+            let request = ImageRequest {
+                kind: ImageKind::CanonicalCharacter,
+                references: vec![reference.clone()],
+                prompt: crate::gameplay::imagery::canonical_cast_member(
+                    shared.inner.rating,
+                    &member.id,
+                    &member.name,
+                    canonical.role,
+                    canonical.life_stage,
+                    (canonical.gender, canonical.age, [].as_slice()).into(),
+                    &reference.sha256,
+                )
+                .unwrap(),
+                output: OutputSpec::CUTOUT,
+            };
+            let key = shared.inner.imagery.key_for(&request);
+            let extension = match reference.format {
+                df_providers::ImageFormat::Webp => "webp",
+                df_providers::ImageFormat::Png => "png",
+                df_providers::ImageFormat::Jpeg => panic!("reviewed cutout format"),
+            };
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(
+                cache.join(format!("{}.{}", key.as_str(), extension)),
+                &reference.bytes,
+            )
+            .unwrap();
+            assert_eq!(
+                shared
+                    .inner
+                    .imagery
+                    .generate(&member.id, request)
+                    .await
+                    .unwrap(),
+                key
+            );
+            let jobs = locked(&shared.inner.state).canonical.take_jobs();
+            assert_eq!(jobs.len(), 1);
+            for job in jobs {
+                let super::super::Job::Canonical(work) = job else {
+                    panic!("reviewed canonical cast job");
+                };
+                shared.inner.finish_canonical(work, Ok(key.clone()));
+            }
+        }
+        cache_personal_heroes(&shared.inner, &cache, &[1, 2]).await;
+        assert_eq!(fixture.calls(), 0, "reviewed references are already cached");
+        let mut scene = PlateScene::of(&current).unwrap();
+        let spec = scene.stage(&[1, 2]).unwrap();
+        let (request, _) = shared
+            .fresh_request(&scene, &spec, &[1, 2], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(request.references.len(), 3);
+        assert_eq!(request.references[0].sha256, base.sha256);
+        assert_eq!(request.references[2].sha256, courier.sha256);
+        for seat in [1_u8, 2] {
+            let entity = df_model::checkpoint::EntityId::from_bytes(&[seat; 16]).unwrap();
+            use sha2::{Digest, Sha256};
+            assert!(request.prompt.as_str().contains(&format!(
+                "hero:{seat}:{:x}",
+                Sha256::digest(entity.as_bytes())
+            )));
+        }
+        for identity in &scene.identity_cast {
+            assert!(request.prompt.as_str().contains(&identity.id));
+        }
+        // The authored automatic-story path keeps the same canonical reference contract.
+        let mut story_view = view(&current, &[1, 2], false);
+        shared.observe_with(&story_view, Some(current.clone()), Vec::new());
+        let id = fresh_ids(&drain(&mut queue)).remove(0);
+        ready(&shared, &id, 'a');
+        story_view.story = Some(StoryBeat {
+            actor_id: String::new(),
+            sequence: 7,
+            speaker: current.speaker.clone(),
+            text: "The enforcer listens.".into(),
+            sha256: "test-story-hash".into(),
+            tempo: crate::gameplay::shot::PublicBeat::Build,
+            dialogue: crate::gameplay::shot::PublicDialogue::FirstReply,
+        });
+        story_view.graph_revision = 2;
+        shared.observe_with(&story_view, Some(current.clone()), Vec::new());
+        shared.poll_state_images_at(shared.inner.now() + Duration::from_secs(4));
+        let Job::State(state_images::Job::Bake {
+            mut pending,
+            identities,
+            ..
+        }) = drain(&mut queue).remove(0)
+        else {
+            panic!("automatic story edit")
+        };
+        let edit = shared
+            .state_image_request(&pending, base.clone(), identities.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(edit.references.len(), 3);
+        assert_eq!(edit.references[0].sha256, base.sha256);
+        assert_eq!(edit.references[1].sha256, request.references[1].sha256);
+        assert_eq!(edit.references[2].sha256, courier.sha256);
+        assert!(edit.prompt.as_str().contains("The enforcer listens."));
+        assert!(edit.prompt.as_str().contains("clearly readable change"));
+        assert!(
+            edit.prompt
+                .as_str()
+                .contains("An eyebrow-only expression tweak is insufficient")
+        );
+        assert!(
+            edit.prompt
+                .as_str()
+                .contains("bounded public-beat camera direction")
+        );
+        assert!(edit.prompt.as_str().contains("actor_id"));
+        assert!(
+            edit.prompt
+                .as_str()
+                .contains("Do not infer or enact mechanical outcomes")
+        );
+        let edit_key = shared.inner.imagery.key_for(&edit);
+        pending.story.as_mut().unwrap().text = "Keep your voice low.".into();
+        pending.story.as_mut().unwrap().tempo = crate::gameplay::shot::PublicBeat::Peak;
+        pending.story.as_mut().unwrap().sequence = 8;
+        let changed = shared
+            .state_image_request(&pending, base.clone(), identities.as_deref())
+            .await
+            .unwrap();
+        assert_ne!(edit_key, shared.inner.imagery.key_for(&changed));
+        assert!(changed.prompt.as_str().contains("Dutch-angle"));
+        let (rebuilt, _) = shared
+            .fresh_request(&scene, &spec, &[2, 1], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(request.references[1].sha256, rebuilt.references[1].sha256);
+        assert!(
+            request
+                .prompt
+                .as_str()
+                .starts_with("Edit image 1 as the actual photograph")
+        );
+        assert!(!request.prompt.as_str().contains("best-lit person"));
+        assert!(!request.prompt.as_str().contains("deep blue light outside"));
 
-    scene.place_id = "another-quay".to_owned();
-    let (other, _) = shared
-        .fresh_request(&scene, &spec, &[1, 2], &[], None)
-        .await
-        .unwrap();
-    // The pack's authored photo stays authoritative even under a different place identifier.
-    assert_eq!(other.references[0].sha256, base.sha256);
-    assert!(
-        !other
-            .prompt
-            .as_str()
-            .starts_with("Edit image 1 as the actual photograph")
-    );
+        scene.place_id = "another-quay".to_owned();
+        let (other, _) = shared
+            .fresh_request(&scene, &spec, &[1, 2], &[], None)
+            .await
+            .unwrap();
+        // The pack's authored photo stays authoritative even under a different place identifier.
+        assert_eq!(other.references[0].sha256, base.sha256);
+        assert!(
+            !other
+                .prompt
+                .as_str()
+                .starts_with("Edit image 1 as the actual photograph")
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -4587,15 +4644,41 @@ fn edited_image_never_borrows_actor_heads_from_a_different_image_key() {
 #[tokio::test]
 async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
     use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
-    use df_providers::{HeadLocateConfig, HeadLocateError, LocateTarget, NativeHeadLocator};
     let endpoint = FakeEndpoint::start(vec![Reply::Status(503, serde_json::json!({}))]);
-    let locator = NativeHeadLocator::new(
-        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
-        "fixture",
-        Duration::from_secs(2),
-        crate::gameplay::cost::test_meter(),
+    let mut patch = df_imagery::RuntimePatch::empty();
+    patch.retry_max_attempts = Some(1);
+    patch.scheduler_stage_deadline_secs = Some(2);
+    patch.scheduler_job_deadline_secs = Some(5);
+    patch.analysis_head_locations = Some(
+        df_imagery::AnalysisRoute {
+            account: df_imagery::AccountHandle::new("fixture-heads").unwrap(),
+            model: df_imagery::ModelName::new("gpt-5.5").unwrap(),
+            endpoint: df_imagery::ApiEndpoint::new(&format!(
+                "http://{}/v1/chat/completions",
+                endpoint.address
+            ))
+            .unwrap(),
+            maximum_output_tokens: 3000,
+        }
+        .into(),
+    );
+    let Some(host) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        crate::gameplay::cost::port::MeteringPort::new(),
     )
-    .unwrap();
+    .await
+    else {
+        return;
+    };
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(96, 64)
+        .write_to(&mut bytes, image::ImageFormat::Jpeg)
+        .unwrap();
+    let (image, _) = host
+        .import_bytes(df_providers::ImageFormat::Jpeg, bytes.into_inner().into())
+        .await
+        .unwrap();
     let mut scene = scene(SceneKey::Opening, "The Wharf", Some("Kestrel"));
     scene.cast.push(member(
         "bandit",
@@ -4613,13 +4696,11 @@ async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
     );
     let borrowed = targets
         .iter()
-        .map(|(id, description)| LocateTarget { id, description })
+        .map(|(id, description)| (id.as_str(), description.as_str()))
         .collect::<Vec<_>>();
     assert_eq!(
-        locator
-            .locate(b"jpeg-fixture", None, &borrowed, Duration::from_secs(2))
-            .await,
-        Err(HeadLocateError::Provider(503))
+        host.imagery().locate_heads(&image, None, &borrowed).await,
+        Err(ImageFailure::Provider)
     );
     assert_eq!(
         endpoint.connections(),
@@ -4631,6 +4712,7 @@ async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
     for (id, _) in targets {
         assert_eq!(instruction.matches(&format!("{id}: ")).count(), 1);
     }
+    host.close().await;
 }
 
 #[tokio::test]
@@ -4995,134 +5077,139 @@ async fn custom_seat_plates_bind_canonical_images_locators_and_identity_revision
         "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS5/custom-plate-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    let committed = hero_identity_fixture::checkpoint(true);
-    inner.observe_checkpoint(&committed);
-    // The canonical pipeline is exercised separately; complete both slots with real fixture bytes.
-    let canonical_jobs = locked(&inner.state).canonical.take_jobs();
-    for (index, job) in canonical_jobs.into_iter().enumerate() {
-        let super::super::Job::Canonical(work) = job else {
-            panic!("hero work")
-        };
-        // Generate actual registered bytes with distinct request bindings, without portrait I/O.
-        let request = crate::gameplay::imagery::ImageRequest {
-            kind: crate::gameplay::imagery::ImageKind::CanonicalCharacter,
-            references: Vec::new(),
-            prompt: crate::gameplay::imagery::cast_expression(
-                ContentRating::Restrained,
-                crate::gameplay::imagery::CharacterFacts {
-                    role: crate::gameplay::imagery::CharacterRole::Hero,
-                    life_stage: crate::gameplay::imagery::LifeStage::Adult,
-                },
-                Expression::Neutral,
-                HealthTier::Healthy,
-                false,
-            )
-            .unwrap()
-            .with_canonical_binding(&format!("custom-seat-{index}")),
-            output: crate::gameplay::imagery::OutputSpec::CUTOUT,
-        };
-        let image = fixture
-            .imagery
-            .generate(&format!("character:seat-{index}"), request)
-            .await
-            .unwrap();
-        inner.finish_canonical(work, Ok(image));
-    }
-    let (jobs, _) = mpsc::channel(8);
-    let shared = Shared {
-        inner: inner.clone(),
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let authored = scene(
-        SceneKey::DialogueSeal,
-        "Custom heroes at the bell chamber",
-        Some("Kestrel"),
-    );
-    let mut plate = PlateScene::of(&authored).unwrap();
-    plate.identity_cast.clear();
-    plate.hero_names = vec!["Brakka".to_owned(), "Sigrun".to_owned()];
-    let spec = plate.stage(&[1, 2]).unwrap();
-    let PlateIdentities { sheet, people, .. } =
-        shared.identity_sheet(&plate, &[1, 2]).await.unwrap();
-    assert!(!sheet.bytes.is_empty());
-    for (name, look) in ["Brakka", "Sigrun"]
-        .into_iter()
-        .zip(hero_identity_fixture::LOOKS)
     {
-        let person = people.iter().find(|person| person.name == name).unwrap();
-        assert_eq!(
-            person.appearance.as_deref(),
-            Some(format!("{name}, {look}").as_str())
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        let committed = hero_identity_fixture::checkpoint(true);
+        inner.observe_checkpoint(&committed);
+        // The canonical pipeline is exercised separately; complete both slots with real fixture bytes.
+        let canonical_jobs = locked(&inner.state).canonical.take_jobs();
+        for (index, job) in canonical_jobs.into_iter().enumerate() {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("hero work")
+            };
+            // Generate actual registered bytes with distinct request bindings, without portrait I/O.
+            let request = crate::gameplay::imagery::ImageRequest {
+                kind: crate::gameplay::imagery::ImageKind::CanonicalCharacter,
+                references: Vec::new(),
+                prompt: crate::gameplay::imagery::cast_expression(
+                    ContentRating::Restrained,
+                    crate::gameplay::imagery::CharacterFacts {
+                        role: crate::gameplay::imagery::CharacterRole::Hero,
+                        life_stage: crate::gameplay::imagery::LifeStage::Adult,
+                    },
+                    Expression::Neutral,
+                    HealthTier::Healthy,
+                    false,
+                )
+                .unwrap()
+                .with_canonical_binding(&format!("custom-seat-{index}")),
+                output: crate::gameplay::imagery::OutputSpec::CUTOUT,
+            };
+            let image = fixture
+                .imagery
+                .generate(&format!("character:seat-{index}"), request)
+                .await
+                .unwrap();
+            inner.finish_canonical(work, Ok(image));
+        }
+        let (jobs, _) = mpsc::channel(8);
+        let shared = Shared {
+            inner: inner.clone(),
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let authored = scene(
+            SceneKey::DialogueSeal,
+            "Custom heroes at the bell chamber",
+            Some("Kestrel"),
+        );
+        let mut plate = PlateScene::of(&authored).unwrap();
+        plate.identity_cast.clear();
+        plate.hero_names = vec!["Brakka".to_owned(), "Sigrun".to_owned()];
+        let spec = plate.stage(&[1, 2]).unwrap();
+        let PlateIdentities { sheet, people, .. } =
+            shared.identity_sheet(&plate, &[1, 2]).await.unwrap();
+        assert!(!sheet.bytes.is_empty());
+        for (name, look) in ["Brakka", "Sigrun"]
+            .into_iter()
+            .zip(hero_identity_fixture::LOOKS)
+        {
+            let person = people.iter().find(|person| person.name == name).unwrap();
+            assert_eq!(
+                person.appearance.as_deref(),
+                Some(format!("{name}, {look}").as_str())
+            );
+        }
+        let (_, targets) =
+            shared.hero_locator_targets(&spec, spec.speaker.as_ref().unwrap(), &[], None);
+        let references = shared.locator_references(&plate, &[1, 2]).await.unwrap();
+        for seat in [1, 2] {
+            let (_, canonical) = inner.canonical_hero_reference(seat).await.unwrap();
+            assert_eq!(references[&format!("hero-{seat}")].sha256, canonical.sha256);
+            let locator = &targets
+                .iter()
+                .find(|(id, _)| id == &format!("hero-{seat}"))
+                .unwrap()
+                .1;
+            assert_eq!(locator, &inner.canonical_hero_locator(seat).unwrap());
+            assert!(locator.chars().count() <= 300);
+        }
+        let first_id = shared.canonical_plate_id(&plate, &[1, 2], &[], 0);
+        let first_key = inner.canonical_hero_reference(1).await.unwrap().1;
+        let mut revised = committed.state().clone();
+        let identity_choice = revised.characters[0]
+            .choices
+            .iter_mut()
+            .find(|choice| choice.offer.as_str() == "identity-appearance:build")
+            .unwrap();
+        identity_choice.selected = model::label("broad").unwrap();
+        let revised = hero_identity_fixture::recheckpoint(committed.basis(), revised);
+        inner.observe_checkpoint(&revised);
+        assert_ne!(first_id, shared.canonical_plate_id(&plate, &[1, 2], &[], 0));
+        assert!(inner.canonical_hero_reference(1).await.is_none());
+        assert!(inner.canonical_hero_reference(2).await.is_some());
+        let facts = crate::gameplay::imagery::CharacterFacts {
+            role: crate::gameplay::imagery::CharacterRole::Hero,
+            life_stage: crate::gameplay::imagery::LifeStage::Adult,
+        };
+        let old = super::super::Character {
+            id: "old".to_owned(),
+            art: format!("/gameplay/imagery/{}", "a".repeat(64)),
+            facts,
+        };
+        let new = super::super::Character {
+            id: "new".to_owned(),
+            art: format!("/gameplay/imagery/{}", "b".repeat(64)),
+            facts,
+        };
+        let first_health = inner
+            .hero_health_request(&old, first_key.clone(), HealthTier::Hurt)
+            .unwrap();
+        let next_health = inner
+            .hero_health_request(&new, first_key, HealthTier::Hurt)
+            .unwrap();
+        assert_ne!(
+            fixture.imagery.key_for(&first_health),
+            fixture.imagery.key_for(&next_health),
+            "equal pixels in a new canonical revision still own distinct health variants"
         );
     }
-    let (_, targets) =
-        shared.hero_locator_targets(&spec, spec.speaker.as_ref().unwrap(), &[], None);
-    let references = shared.locator_references(&plate, &[1, 2]).await.unwrap();
-    for seat in [1, 2] {
-        let (_, canonical) = inner.canonical_hero_reference(seat).await.unwrap();
-        assert_eq!(references[&format!("hero-{seat}")].sha256, canonical.sha256);
-        let locator = &targets
-            .iter()
-            .find(|(id, _)| id == &format!("hero-{seat}"))
-            .unwrap()
-            .1;
-        assert_eq!(locator, &inner.canonical_hero_locator(seat).unwrap());
-        assert!(locator.chars().count() <= 300);
-    }
-    let first_id = shared.canonical_plate_id(&plate, &[1, 2], &[], 0);
-    let first_key = inner.canonical_hero_reference(1).await.unwrap().1;
-    let mut revised = committed.state().clone();
-    let identity_choice = revised.characters[0]
-        .choices
-        .iter_mut()
-        .find(|choice| choice.offer.as_str() == "identity-appearance:build")
-        .unwrap();
-    identity_choice.selected = model::label("broad").unwrap();
-    let revised = hero_identity_fixture::recheckpoint(committed.basis(), revised);
-    inner.observe_checkpoint(&revised);
-    assert_ne!(first_id, shared.canonical_plate_id(&plate, &[1, 2], &[], 0));
-    assert!(inner.canonical_hero_reference(1).await.is_none());
-    assert!(inner.canonical_hero_reference(2).await.is_some());
-    let facts = crate::gameplay::imagery::CharacterFacts {
-        role: crate::gameplay::imagery::CharacterRole::Hero,
-        life_stage: crate::gameplay::imagery::LifeStage::Adult,
-    };
-    let old = super::super::Character {
-        id: "old".to_owned(),
-        art: format!("/gameplay/imagery/{}", "a".repeat(64)),
-        facts,
-    };
-    let new = super::super::Character {
-        id: "new".to_owned(),
-        art: format!("/gameplay/imagery/{}", "b".repeat(64)),
-        facts,
-    };
-    let first_health = inner
-        .hero_health_request(&old, first_key.clone(), HealthTier::Hurt)
-        .unwrap();
-    let next_health = inner
-        .hero_health_request(&new, first_key, HealthTier::Hurt)
-        .unwrap();
-    assert_ne!(
-        fixture.imagery.key_for(&first_health),
-        fixture.imagery.key_for(&next_health),
-        "equal pixels in a new canonical revision still own distinct health variants"
-    );
+    fixture.close().await;
 }
 
 #[test]
@@ -5154,66 +5241,71 @@ async fn authored_documentary_place_is_used_exactly_without_a_generated_room_dep
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/authored-place")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    cache_personal_heroes(&inner, &cache, &[1]).await;
-    let (jobs, _) = mpsc::channel(8);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let mut current = scene(SceneKey::Opening, "Documentary quay", None);
-    current.cast.clear();
-    current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
-    let mut model: SceneModel = serde_json::from_slice(include_bytes!(
-        "../../../../../content/merchant-shop/scene-model.json"
-    ))
-    .unwrap();
-    model.people.clear();
-    current.setting.as_mut().unwrap().model = Some(model);
-    let mut plate = PlateScene::of(&current).unwrap();
-    plate.hero_names = vec!["Accepted hero 1".into()];
-    assert!(plate.room_revision.is_some());
-    assert_eq!(plate.authored_place_photo(), Some(current.asset.as_str()));
-    assert_eq!(plate.generated_room_revision(), None);
-    let expected = shared.inner.load(current.asset.clone()).await.unwrap();
-    let spec = plate.stage(&[1]).unwrap();
-    let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1], &[], None, None)
-        .await
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        cache_personal_heroes(&inner, &cache, &[1]).await;
+        let (jobs, _) = mpsc::channel(8);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let mut current = scene(SceneKey::Opening, "Documentary quay", None);
+        current.cast.clear();
+        current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+        let mut model: SceneModel = serde_json::from_slice(include_bytes!(
+            "../../../../../content/merchant-shop/scene-model.json"
+        ))
         .unwrap();
-    assert_eq!(request.references[0].sha256, expected.sha256);
-    assert!(
-        request
-            .prompt
-            .as_str()
-            .contains("Accepted hero 1: both hands empty")
-    );
-    assert_eq!(
-        fixture.calls(),
-        0,
-        "building the request needs no room generation"
-    );
-    assert!(locked(&shared.inner.state).canonical.take_jobs().is_empty());
-    plate.asset = art_contract::ROOM_PHOTO.into();
-    assert_eq!(plate.authored_place_photo(), None);
-    assert_eq!(
-        plate.generated_room_revision(),
-        plate.room_revision.as_deref()
-    );
+        model.people.clear();
+        current.setting.as_mut().unwrap().model = Some(model);
+        let mut plate = PlateScene::of(&current).unwrap();
+        plate.hero_names = vec!["Accepted hero 1".into()];
+        assert!(plate.room_revision.is_some());
+        assert_eq!(plate.authored_place_photo(), Some(current.asset.as_str()));
+        assert_eq!(plate.generated_room_revision(), None);
+        let expected = shared.inner.load(current.asset.clone()).await.unwrap();
+        let spec = plate.stage(&[1]).unwrap();
+        let (request, _) = shared
+            .photographic_request(&plate, &spec, &[1], &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(request.references[0].sha256, expected.sha256);
+        assert!(
+            request
+                .prompt
+                .as_str()
+                .contains("Accepted hero 1: both hands empty")
+        );
+        assert_eq!(
+            fixture.calls(),
+            0,
+            "building the request needs no room generation"
+        );
+        assert!(locked(&shared.inner.state).canonical.take_jobs().is_empty());
+        plate.asset = art_contract::ROOM_PHOTO.into();
+        assert_eq!(plate.authored_place_photo(), None);
+        assert_eq!(
+            plate.generated_room_revision(),
+            plate.room_revision.as_deref()
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -5222,264 +5314,270 @@ async fn explicit_spatial_staging_reaches_whole_cast_masks_but_reviewed_photos_s
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/spatial")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    cache_personal_heroes(&inner, &cache, &[1, 2]).await;
-    let (jobs, _) = mpsc::channel(8);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let mut current = scene(SceneKey::Opening, "Working quay", Some("Kestrel"));
-    current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
-    let mut second_actor = current.cast[0].clone();
-    second_actor.id = "aaa".into();
-    second_actor.name = "Mara".into();
-    current.cast.push(second_actor);
-    let mut plate = PlateScene::of(&current).unwrap();
-    plate.hero_names = vec!["Accepted hero 1".into(), "Accepted hero 2".into()];
-    let spec = plate.stage(&[1, 2]).unwrap();
-    let (request, _) = shared
-        .photographic_request(&plate, &spec, &[1, 2], &[], None, None)
-        .await
-        .unwrap();
-    let (reordered, _) = shared
-        .photographic_request(&plate, &spec, &[2, 1], &[], None, None)
-        .await
-        .unwrap();
-    assert_eq!(
-        reordered
-            .prompt
-            .staging_order()
+    {
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        cache_personal_heroes(&inner, &cache, &[1, 2]).await;
+        let (jobs, _) = mpsc::channel(8);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let mut current = scene(SceneKey::Opening, "Working quay", Some("Kestrel"));
+        current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+        let mut second_actor = current.cast[0].clone();
+        second_actor.id = "aaa".into();
+        second_actor.name = "Mara".into();
+        current.cast.push(second_actor);
+        let mut plate = PlateScene::of(&current).unwrap();
+        plate.hero_names = vec!["Accepted hero 1".into(), "Accepted hero 2".into()];
+        let spec = plate.stage(&[1, 2]).unwrap();
+        let (request, _) = shared
+            .photographic_request(&plate, &spec, &[1, 2], &[], None, None)
+            .await
+            .unwrap();
+        let (reordered, _) = shared
+            .photographic_request(&plate, &spec, &[2, 1], &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            reordered
+                .prompt
+                .staging_order()
+                .iter()
+                .map(|person| (person.locator_id.as_str(), person.name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("hero-2", "Accepted hero 2"),
+                ("npc-0", "Kestrel"),
+                ("hero-1", "Accepted hero 1"),
+                ("npc-1", "Mara")
+            ]
+        );
+        assert!(
+            reordered
+                .prompt
+                .as_str()
+                .contains("Hero 1 = photograph 1; Hero 2 = photograph 2")
+        );
+        let staging = request.prompt.staging_order().to_vec();
+        assert_eq!(
+            staging
+                .iter()
+                .map(|person| person.locator_id.as_str())
+                .collect::<Vec<_>>(),
+            ["hero-1", "npc-0", "hero-2", "npc-1"]
+        );
+        assert_eq!(
+            staging
+                .iter()
+                .filter(|person| !person.hero)
+                .map(|person| (person.locator_id.as_str(), person.reference_id.as_str()))
+                .collect::<Vec<_>>(),
+            [("npc-0", "npc:keeper"), ("npc-1", "npc:aaa")]
+        );
+        // The runtime hero holder ID is its accepted name, while an NPC can share that name.
+        // Canonical sheet sorting puts npc:aaa before npc:keeper; neither names nor slots may
+        // transfer the hero's cup to that NPC, or the NPC's lantern to the hero.
+        let mut duplicate = plate.clone();
+        duplicate.identity_cast[1].name = "Accepted hero 1".into();
+        let mut model: crate::gameplay::adventure::scene_model::SceneModel =
+            serde_json::from_slice(include_bytes!(
+                "../../../../../content/merchant-shop/scene-model.json"
+            ))
+            .unwrap();
+        let template = model.people[0].clone();
+        let item = model.things[0].clone();
+        model.people.clear();
+        model.things.clear();
+        for (id, role) in [("Accepted hero 1", "hero"), ("aaa", "merchant")] {
+            let mut person = template.clone();
+            person.id = id.into();
+            person.name = "Accepted hero 1".into();
+            person.role = role.into();
+            model.people.push(person);
+        }
+        for (id, holder, name) in [
+            ("hero-cup", "Accepted hero 1", "cup"),
+            ("npc-lantern", "aaa", "lantern"),
+        ] {
+            let mut held = item.clone();
+            held.id = id.into();
+            held.name = name.into();
+            held.holder_id = Some(holder.into());
+            held.owner_id = Some("keeper".into());
+            held.position = "left hand".into();
+            held.in_scene = true;
+            held.publicly_visible = true;
+            model.things.push(held);
+        }
+        duplicate.snapshot = Some(crate::gameplay::adventure::scene_model::SceneNow {
+            model,
+            changes: Vec::new(),
+        });
+        let identities = shared.identity_sheet(&duplicate, &[2, 1]).await.unwrap();
+        assert_eq!(
+            identities.holder_ids,
+            ["Accepted hero 1", "Accepted hero 2", "aaa", "keeper"]
+        );
+        let (same_name_request, _) = shared
+            .photographic_request(&duplicate, &spec, &[2, 1], &[], None, None)
+            .await
+            .unwrap();
+        let custody: serde_json::Value =
+            serde_json::from_str(same_name_request.prompt.scene_hand_custody()).unwrap();
+        let rows: Vec<String> = serde_json::from_str(custody["hands"].as_str().unwrap()).unwrap();
+        let hero = rows
             .iter()
-            .map(|person| (person.locator_id.as_str(), person.name.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            ("hero-2", "Accepted hero 2"),
-            ("npc-0", "Kestrel"),
-            ("hero-1", "Accepted hero 1"),
-            ("npc-1", "Mara")
-        ]
-    );
-    assert!(
-        reordered
+            .find(|row| row.contains("[holder_id=Accepted hero 1]"))
+            .unwrap();
+        let npc = rows
+            .iter()
+            .find(|row| row.contains("[holder_id=aaa]"))
+            .unwrap();
+        assert!(hero.contains("cup (left hand)"));
+        assert!(!hero.contains("lantern"));
+        assert!(npc.contains("lantern (left hand)"));
+        assert!(!npc.contains("cup"));
+        let mut ambiguous = duplicate.clone();
+        let mut other_hero = ambiguous.snapshot.as_ref().unwrap().model.people[0].clone();
+        other_hero.id = "another-hero".into();
+        ambiguous
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .model
+            .people
+            .push(other_hero);
+        assert!(
+            matches!(
+                shared.identity_sheet(&ambiguous, &[1]).await,
+                Err(ImageFailure::InvalidRequest)
+            ),
+            "two same-name heroes cannot be guessed from a seat or the first matching row"
+        );
+        let spatial_text = request
             .prompt
             .as_str()
-            .contains("Hero 1 = photograph 1; Hero 2 = photograph 2")
-    );
-    let staging = request.prompt.staging_order().to_vec();
-    assert_eq!(
-        staging
-            .iter()
-            .map(|person| person.locator_id.as_str())
-            .collect::<Vec<_>>(),
-        ["hero-1", "npc-0", "hero-2", "npc-1"]
-    );
-    assert_eq!(
-        staging
-            .iter()
-            .filter(|person| !person.hero)
-            .map(|person| (person.locator_id.as_str(), person.reference_id.as_str()))
-            .collect::<Vec<_>>(),
-        [("npc-0", "npc:keeper"), ("npc-1", "npc:aaa")]
-    );
-    // The runtime hero holder ID is its accepted name, while an NPC can share that name.
-    // Canonical sheet sorting puts npc:aaa before npc:keeper; neither names nor slots may
-    // transfer the hero's cup to that NPC, or the NPC's lantern to the hero.
-    let mut duplicate = plate.clone();
-    duplicate.identity_cast[1].name = "Accepted hero 1".into();
-    let mut model: crate::gameplay::adventure::scene_model::SceneModel = serde_json::from_slice(
-        include_bytes!("../../../../../content/merchant-shop/scene-model.json"),
-    )
-    .unwrap();
-    let template = model.people[0].clone();
-    let item = model.things[0].clone();
-    model.people.clear();
-    model.things.clear();
-    for (id, role) in [("Accepted hero 1", "hero"), ("aaa", "merchant")] {
-        let mut person = template.clone();
-        person.id = id.into();
-        person.name = "Accepted hero 1".into();
-        person.role = role.into();
-        model.people.push(person);
-    }
-    for (id, holder, name) in [
-        ("hero-cup", "Accepted hero 1", "cup"),
-        ("npc-lantern", "aaa", "lantern"),
-    ] {
-        let mut held = item.clone();
-        held.id = id.into();
-        held.name = name.into();
-        held.holder_id = Some(holder.into());
-        held.owner_id = Some("keeper".into());
-        held.position = "left hand".into();
-        held.in_scene = true;
-        held.publicly_visible = true;
-        model.things.push(held);
-    }
-    duplicate.snapshot = Some(crate::gameplay::adventure::scene_model::SceneNow {
-        model,
-        changes: Vec::new(),
-    });
-    let identities = shared.identity_sheet(&duplicate, &[2, 1]).await.unwrap();
-    assert_eq!(
-        identities.holder_ids,
-        ["Accepted hero 1", "Accepted hero 2", "aaa", "keeper"]
-    );
-    let (same_name_request, _) = shared
-        .photographic_request(&duplicate, &spec, &[2, 1], &[], None, None)
-        .await
-        .unwrap();
-    let custody: serde_json::Value =
-        serde_json::from_str(same_name_request.prompt.scene_hand_custody()).unwrap();
-    let rows: Vec<String> = serde_json::from_str(custody["hands"].as_str().unwrap()).unwrap();
-    let hero = rows
-        .iter()
-        .find(|row| row.contains("[holder_id=Accepted hero 1]"))
-        .unwrap();
-    let npc = rows
-        .iter()
-        .find(|row| row.contains("[holder_id=aaa]"))
-        .unwrap();
-    assert!(hero.contains("cup (left hand)"));
-    assert!(!hero.contains("lantern"));
-    assert!(npc.contains("lantern (left hand)"));
-    assert!(!npc.contains("cup"));
-    let mut ambiguous = duplicate.clone();
-    let mut other_hero = ambiguous.snapshot.as_ref().unwrap().model.people[0].clone();
-    other_hero.id = "another-hero".into();
-    ambiguous
-        .snapshot
-        .as_mut()
-        .unwrap()
-        .model
-        .people
-        .push(other_hero);
-    assert!(
-        matches!(
-            shared.identity_sheet(&ambiguous, &[1]).await,
-            Err(ImageFailure::InvalidRequest)
-        ),
-        "two same-name heroes cannot be guessed from a seat or the first matching row"
-    );
-    let spatial_text = request
-        .prompt
-        .as_str()
-        .split("Spatial staging, left to right")
-        .nth(1)
-        .unwrap();
-    for person in &staging {
-        assert_eq!(spatial_text.matches(&person.name).count(), 1);
-    }
-    assert!(spatial_text.contains("preserving recorded positions"));
-    let generated = shared
-        .inner
-        .imagery
-        .generate("plate:HS37-spatial", request)
-        .await
-        .unwrap();
-    assert_eq!(
-        shared.inner.imagery.plate_staging(&generated).await,
-        staging
-    );
-    let Lookup::Image { bytes, format } = shared.inner.imagery.image(generated.as_str()).await
-    else {
-        panic!("generated fixture bytes")
-    };
-    let write_masks = |key: &ImageKey| {
-        let masks = [5, 30, 55, 80]
-            .into_iter()
-            .enumerate()
-            .map(|(index, left)| {
-                serde_json::json!({"index":index,"score":0.99,
+            .split("Spatial staging, left to right")
+            .nth(1)
+            .unwrap();
+        for person in &staging {
+            assert_eq!(spatial_text.matches(&person.name).count(), 1);
+        }
+        assert!(spatial_text.contains("preserving recorded positions"));
+        let generated = shared
+            .inner
+            .imagery
+            .generate("plate:HS37-spatial", request)
+            .await
+            .unwrap();
+        assert_eq!(
+            shared.inner.imagery.plate_staging(&generated).await,
+            staging
+        );
+        let Lookup::Image { bytes, format } = shared.inner.imagery.image(generated.as_str()).await
+        else {
+            panic!("generated fixture bytes")
+        };
+        let write_masks = |key: &ImageKey| {
+            let masks = [5, 30, 55, 80]
+                .into_iter()
+                .enumerate()
+                .map(|(index, left)| {
+                    serde_json::json!({"index":index,"score":0.99,
                 "runs":(10..90).map(|y| [y * 100 + left, 15]).collect::<Vec<_>>()})
-            })
-            .collect::<Vec<_>>();
-        let scan = serde_json::json!({"revision":1,"model":"sam-3.1",
+                })
+                .collect::<Vec<_>>();
+            let scan = serde_json::json!({"revision":1,"model":"sam-3.1",
             "image_sha256":format!("{:x}", sha2::Sha256::digest(&bytes)),
             "width":100,"height":100,"source_width":100,"source_height":100,
             "outcome":"complete","masks":masks});
-        std::fs::write(
-            cache.join(format!("{}.sam31-person-v1.json", key.as_str())),
-            serde_json::to_vec(&scan).unwrap(),
-        )
-        .unwrap();
-    };
-    write_masks(&generated);
-    let placement = shared
-        .measured_or_predicted(
-            &generated,
-            &spec,
-            spec.speaker.as_ref().unwrap(),
-            &BTreeMap::new(),
-            &plate.locator_actors(),
-            Some("keeper"),
-        )
-        .await;
-    assert_eq!(
-        placement.figure_masks.len(),
-        4,
-        "explicit screen order fills all missing heads"
-    );
-    for (id, mask) in [
-        ("hero-1", 0),
-        ("npc:keeper", 1),
-        ("hero-2", 2),
-        ("npc:aaa", 3),
-    ] {
-        let person = placement
-            .figure_masks
-            .iter()
-            .find(|figure| figure.id == id)
+            std::fs::write(
+                cache.join(format!("{}.sam31-person-v1.json", key.as_str())),
+                serde_json::to_vec(&scan).unwrap(),
+            )
             .unwrap();
-        assert!(person.inferred);
-        assert_eq!(person.mask_index, mask);
-    }
-    let reviewed = shared
-        .inner
-        .imagery
-        .register_reviewed(
-            "plate:HS37-reviewed",
-            ReferenceImage::new(format, bytes.clone()),
-        )
-        .await
-        .unwrap();
-    write_masks(&reviewed);
-    assert!(
-        shared
+        };
+        write_masks(&generated);
+        let placement = shared
+            .measured_or_predicted(
+                &generated,
+                &spec,
+                spec.speaker.as_ref().unwrap(),
+                &BTreeMap::new(),
+                &plate.locator_actors(),
+                Some("keeper"),
+            )
+            .await;
+        assert_eq!(
+            placement.figure_masks.len(),
+            4,
+            "explicit screen order fills all missing heads"
+        );
+        for (id, mask) in [
+            ("hero-1", 0),
+            ("npc:keeper", 1),
+            ("hero-2", 2),
+            ("npc:aaa", 3),
+        ] {
+            let person = placement
+                .figure_masks
+                .iter()
+                .find(|figure| figure.id == id)
+                .unwrap();
+            assert!(person.inferred);
+            assert_eq!(person.mask_index, mask);
+        }
+        let reviewed = shared
             .inner
             .imagery
-            .plate_staging(&reviewed)
+            .register_reviewed(
+                "plate:HS37-reviewed",
+                ReferenceImage::new(format, bytes.clone()),
+            )
             .await
-            .is_empty()
-    );
-    let placement = shared
-        .measured_or_predicted(
-            &reviewed,
-            &spec,
-            spec.speaker.as_ref().unwrap(),
-            &BTreeMap::new(),
-            &plate.locator_actors(),
-            Some("keeper"),
-        )
-        .await;
-    assert!(
-        placement.figure_masks.is_empty(),
-        "multiple unknown people stay anonymous without an instruction"
-    );
+            .unwrap();
+        write_masks(&reviewed);
+        assert!(
+            shared
+                .inner
+                .imagery
+                .plate_staging(&reviewed)
+                .await
+                .is_empty()
+        );
+        let placement = shared
+            .measured_or_predicted(
+                &reviewed,
+                &spec,
+                spec.speaker.as_ref().unwrap(),
+                &BTreeMap::new(),
+                &plate.locator_actors(),
+                Some("keeper"),
+            )
+            .await;
+        assert!(
+            placement.figure_masks.is_empty(),
+            "multiple unknown people stay anonymous without an instruction"
+        );
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -5577,222 +5675,228 @@ async fn scene_plate_stages_six_heroes_by_latest_activity_and_keeps_custody_with
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/activity")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    cache_personal_heroes(&inner, &cache, &[1, 2, 3, 4, 5, 6]).await;
-    let (jobs, _) = mpsc::channel(8);
-    let shared = Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    let mut current = scene(SceneKey::Opening, "Market activities", None);
-    current.cast.clear();
-    current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
-    let mut model: SceneModel = serde_json::from_slice(include_bytes!(
-        "../../../../../content/merchant-shop/scene-model.json"
-    ))
-    .unwrap();
-    model.people.clear();
-    current.setting.as_mut().unwrap().model = Some(model);
-    let names = ["Vesper", "Kazrak", "Sylvara", "Orla", "Brakka", "Sigrun"];
     {
-        let mut state = locked(&shared.inner.state);
-        for (index, name) in names.iter().enumerate() {
-            let seat = u8::try_from(index + 1).unwrap();
-            let (entity, _) = state.canonical.hero_at_seat(seat).unwrap();
-            let key = state.canonical.hero(entity).unwrap();
-            state.canonical.fixture_hero(seat, name, key);
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        cache_personal_heroes(&inner, &cache, &[1, 2, 3, 4, 5, 6]).await;
+        let (jobs, _) = mpsc::channel(8);
+        let shared = Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        };
+        let mut current = scene(SceneKey::Opening, "Market activities", None);
+        current.cast.clear();
+        current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+        let mut model: SceneModel = serde_json::from_slice(include_bytes!(
+            "../../../../../content/merchant-shop/scene-model.json"
+        ))
+        .unwrap();
+        model.people.clear();
+        current.setting.as_mut().unwrap().model = Some(model);
+        let names = ["Vesper", "Kazrak", "Sylvara", "Orla", "Brakka", "Sigrun"];
+        {
+            let mut state = locked(&shared.inner.state);
+            for (index, name) in names.iter().enumerate() {
+                let seat = u8::try_from(index + 1).unwrap();
+                let (entity, _) = state.canonical.hero_at_seat(seat).unwrap();
+                let key = state.canonical.hero(entity).unwrap();
+                state.canonical.fixture_hero(seat, name, key);
+            }
         }
-    }
-    let rows = [
-        "flirting with Tobin beside his stall",
-        "demanding the cart wheel be fixed beside the cart",
-        "studying the scale at the stall",
-        "counting coins onto Mara's counter",
-    ];
-    let mut message = public_story_message(
-        &current,
-        rows.iter()
-            .enumerate()
-            .map(|(index, text)| rpc::TableLine {
-                audio_url: String::new(),
-                audio_part_urls: Vec::new(),
-                sequence: index as u64 + 1,
-                hero_index: index as u32,
-                role: rpc::TableRole::Hero as i32,
-                kind: rpc::TableKind::Speech as i32,
-                text: (*text).into(),
+        let rows = [
+            "flirting with Tobin beside his stall",
+            "demanding the cart wheel be fixed beside the cart",
+            "studying the scale at the stall",
+            "counting coins onto Mara's counter",
+        ];
+        let mut message = public_story_message(
+            &current,
+            rows.iter()
+                .enumerate()
+                .map(|(index, text)| rpc::TableLine {
+                    audio_url: String::new(),
+                    audio_part_urls: Vec::new(),
+                    sequence: index as u64 + 1,
+                    hero_index: index as u32,
+                    role: rpc::TableRole::Hero as i32,
+                    kind: rpc::TableKind::Speech as i32,
+                    text: (*text).into(),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+            panic!("display")
+        };
+        display.journey.as_mut().unwrap().party = names
+            .iter()
+            .map(|name| rpc::PartyMemberView {
+                name: (*name).into(),
+                character_ready: true,
                 ..Default::default()
             })
-            .collect(),
-    );
-    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
-        panic!("display")
-    };
-    display.journey.as_mut().unwrap().party = names
-        .iter()
-        .map(|name| rpc::PartyMemberView {
-            name: (*name).into(),
-            character_ready: true,
-            ..Default::default()
-        })
-        .collect();
-    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
-        panic!("display")
-    };
-    display
-        .journey
-        .as_mut()
-        .unwrap()
-        .table_log
-        .push(rpc::TableLine {
-            audio_url: String::new(),
-            audio_part_urls: Vec::new(),
-            sequence: 5,
-            role: rpc::TableRole::Narrator as i32,
-            kind: rpc::TableKind::Action as i32,
-            text: "Orla finishes counting coins onto Mara's counter.".into(),
-            ..Default::default()
-        });
-    let projected = view_of(&message, 1).unwrap();
-    let mut before = projected.clone();
-    before.latest_sequence = 0;
-    before.hero_activity.clear();
-    before.scene_outcomes.clear();
-    shared.observe_with(&before, Some(current.clone()), Vec::new());
-    shared.observe_with(&projected, Some(current.clone()), Vec::new());
-    {
-        let book = locked(&shared.book);
-        assert!(
-            book.state_images.pending.is_some(),
-            "activity alone schedules a settled edit"
-        );
-        assert_eq!(
-            book.current
-                .as_ref()
-                .unwrap()
-                .scene
-                .as_ref()
-                .unwrap()
-                .hero_activity
-                .len(),
-            4
-        );
-    }
-    let plate = PlateScene::for_view(&projected, &current).unwrap();
-    assert_eq!(plate.hero_activity.len(), 4);
-    let spec = plate.stage(&projected.heroes).unwrap();
-    let (request, _) = shared
-        .photographic_request(&plate, &spec, &projected.heroes, &[], None, None)
-        .await
-        .unwrap();
-    let prompt = request.prompt.as_str();
-    for name in names {
-        assert!(prompt.contains(name), "{name}: {prompt}");
-    }
-    for action in rows {
-        assert!(prompt.contains(action), "{action}: {prompt}");
-    }
-    assert!(prompt.contains("browsing or talking with another hero"));
-    assert!(prompt.contains("Per-hero staging takes precedence"));
-    assert!(prompt.contains("Orla finishes counting coins onto Mara's counter."));
-    assert!(prompt.contains("not in a row"));
-    assert!(prompt.contains("Vesper: both hands empty"));
-    assert!(prompt.contains("Weapons stay sheathed"));
-    assert!(request.prompt.character_count() <= 32_000);
-    let staging = request.prompt.staging_order().to_vec();
-    assert_eq!(
-        staging
-            .iter()
-            .map(|person| person.name.as_str())
-            .collect::<Vec<_>>(),
-        names
-    );
-    assert_eq!(
-        staging
-            .iter()
-            .map(|person| person.locator_id.as_str())
-            .collect::<Vec<_>>(),
-        ["hero-1", "hero-2", "hero-3", "hero-4", "hero-5", "hero-6"]
-    );
-    assert!(prompt.contains("Spatial staging, left to right by each person's body centre"));
-    assert_eq!(
-        fixture.calls(),
-        0,
-        "request construction makes no provider calls"
-    );
-    std::fs::write(cache.join("six-hero-activity-prompt.txt"), prompt).unwrap();
-    let generated = shared
-        .inner
-        .imagery
-        .generate("plate:HS37-spatial-fresh", request)
-        .await
-        .unwrap();
-    assert_eq!(
-        shared.inner.imagery.plate_staging(&generated).await,
-        staging
-    );
-    let edited = shared
-        .render_edit(&plate, &generated, Face::AUTHORED, &projected.heroes)
-        .await
-        .unwrap();
-    assert_ne!(generated, edited);
-    assert_eq!(
-        shared.inner.imagery.plate_staging(&edited).await,
-        staging,
-        "a face edit preserves the exact base photograph's requested order"
-    );
-    assert!(
-        shared
-            .inner
-            .imagery
-            .plate_staging(&key('f'))
-            .await
-            .is_empty(),
-        "an image without a generation instruction never gains spatial metadata"
-    );
-    let mut lengths = Vec::new();
-    for count in [1, 4, 6] {
-        let mut selected = plate.clone();
-        selected.hero_names.truncate(count);
-        selected
-            .hero_activity
-            .retain(|(name, _)| selected.hero_names.contains(name));
-        let heroes = &projected.heroes[..count];
-        let spec = selected.stage(heroes).unwrap();
+            .collect();
+        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+            panic!("display")
+        };
+        display
+            .journey
+            .as_mut()
+            .unwrap()
+            .table_log
+            .push(rpc::TableLine {
+                audio_url: String::new(),
+                audio_part_urls: Vec::new(),
+                sequence: 5,
+                role: rpc::TableRole::Narrator as i32,
+                kind: rpc::TableKind::Action as i32,
+                text: "Orla finishes counting coins onto Mara's counter.".into(),
+                ..Default::default()
+            });
+        let projected = view_of(&message, 1).unwrap();
+        let mut before = projected.clone();
+        before.latest_sequence = 0;
+        before.hero_activity.clear();
+        before.scene_outcomes.clear();
+        shared.observe_with(&before, Some(current.clone()), Vec::new());
+        shared.observe_with(&projected, Some(current.clone()), Vec::new());
+        {
+            let book = locked(&shared.book);
+            assert!(
+                book.state_images.pending.is_some(),
+                "activity alone schedules a settled edit"
+            );
+            assert_eq!(
+                book.current
+                    .as_ref()
+                    .unwrap()
+                    .scene
+                    .as_ref()
+                    .unwrap()
+                    .hero_activity
+                    .len(),
+                4
+            );
+        }
+        let plate = PlateScene::for_view(&projected, &current).unwrap();
+        assert_eq!(plate.hero_activity.len(), 4);
+        let spec = plate.stage(&projected.heroes).unwrap();
         let (request, _) = shared
-            .photographic_request(&selected, &spec, heroes, &[], None, None)
+            .photographic_request(&plate, &spec, &projected.heroes, &[], None, None)
             .await
             .unwrap();
-        let characters = request.prompt.character_count();
-        assert!(characters <= df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS);
-        println!("HS37 activity heroes={count} complete_prompt_characters={characters}");
-        lengths
-            .push(serde_json::json!({"heroes": count, "complete_prompt_characters": characters}));
+        let prompt = request.prompt.as_str();
+        for name in names {
+            assert!(prompt.contains(name), "{name}: {prompt}");
+        }
+        for action in rows {
+            assert!(prompt.contains(action), "{action}: {prompt}");
+        }
+        assert!(prompt.contains("browsing or talking with another hero"));
+        assert!(prompt.contains("Per-hero staging takes precedence"));
+        assert!(prompt.contains("Orla finishes counting coins onto Mara's counter."));
+        assert!(prompt.contains("not in a row"));
+        assert!(prompt.contains("Vesper: both hands empty"));
+        assert!(prompt.contains("Weapons stay sheathed"));
+        assert!(request.prompt.character_count() <= 32_000);
+        let staging = request.prompt.staging_order().to_vec();
+        assert_eq!(
+            staging
+                .iter()
+                .map(|person| person.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert_eq!(
+            staging
+                .iter()
+                .map(|person| person.locator_id.as_str())
+                .collect::<Vec<_>>(),
+            ["hero-1", "hero-2", "hero-3", "hero-4", "hero-5", "hero-6"]
+        );
+        assert!(prompt.contains("Spatial staging, left to right by each person's body centre"));
+        assert_eq!(
+            fixture.calls(),
+            0,
+            "request construction makes no provider calls"
+        );
+        std::fs::write(cache.join("six-hero-activity-prompt.txt"), prompt).unwrap();
+        let generated = shared
+            .inner
+            .imagery
+            .generate("plate:HS37-spatial-fresh", request)
+            .await
+            .unwrap();
+        assert_eq!(
+            shared.inner.imagery.plate_staging(&generated).await,
+            staging
+        );
+        let edited = shared
+            .render_edit(&plate, &generated, Face::AUTHORED, &projected.heroes)
+            .await
+            .unwrap();
+        assert_ne!(generated, edited);
+        assert_eq!(
+            shared.inner.imagery.plate_staging(&edited).await,
+            staging,
+            "a face edit preserves the exact base photograph's requested order"
+        );
+        assert!(
+            shared
+                .inner
+                .imagery
+                .plate_staging(&key('f'))
+                .await
+                .is_empty(),
+            "an image without a generation instruction never gains spatial metadata"
+        );
+        let mut lengths = Vec::new();
+        for count in [1, 4, 6] {
+            let mut selected = plate.clone();
+            selected.hero_names.truncate(count);
+            selected
+                .hero_activity
+                .retain(|(name, _)| selected.hero_names.contains(name));
+            let heroes = &projected.heroes[..count];
+            let spec = selected.stage(heroes).unwrap();
+            let (request, _) = shared
+                .photographic_request(&selected, &spec, heroes, &[], None, None)
+                .await
+                .unwrap();
+            let characters = request.prompt.character_count();
+            assert!(characters <= df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS);
+            println!("HS37 activity heroes={count} complete_prompt_characters={characters}");
+            lengths.push(
+                serde_json::json!({"heroes": count, "complete_prompt_characters": characters}),
+            );
+            std::fs::write(
+                cache.join(format!("activity-{count}-hero-prompt.txt")),
+                request.prompt.as_str(),
+            )
+            .unwrap();
+        }
         std::fs::write(
-            cache.join(format!("activity-{count}-hero-prompt.txt")),
-            request.prompt.as_str(),
+            cache.join("activity-prompt-lengths.json"),
+            serde_json::to_vec_pretty(&lengths).unwrap(),
         )
         .unwrap();
     }
-    std::fs::write(
-        cache.join("activity-prompt-lengths.json"),
-        serde_json::to_vec_pretty(&lengths).unwrap(),
-    )
-    .unwrap();
+    fixture.close().await;
 }
 
 fn hs41_plate_clock_fixture() -> (Arc<Shared>, mpsc::Receiver<Job>, pack::Scene, View) {
@@ -6063,141 +6167,135 @@ async fn photo_check_provider_failure_still_measures_and_projects_narrator_arriv
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS65/unjudged-arrival")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let timing = Timing::from_interval(Duration::from_secs(30));
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-        ),
-        social: SocialLedger::none(),
-        rating: ContentRating::Restrained,
-        timing,
-        state: Mutex::new(State::new(timing)),
-        wake: tokio::sync::watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    cache_personal_heroes(&inner, &cache, &[1]).await;
-    let endpoint = crate::gameplay::storyteller::tests::FakeEndpoint::start(vec![
-        crate::gameplay::storyteller::tests::Reply::Status(
-            500,
-            serde_json::json!({"error":"injected photo check failure"}),
-        ),
-    ]);
-    fixture.photo_judge(
-        df_providers::NativePlateJudge::new(
-            df_providers::PlateJudgeConfig::loopback_fixture(endpoint.address).unwrap(),
-            "fake-private",
-            Duration::from_secs(2),
-            crate::gameplay::cost::test_meter(),
-        )
-        .unwrap(),
-    );
-    let (jobs, mut queue) = mpsc::channel(8);
-    let shared = Arc::new(Shared {
-        inner,
-        book: Mutex::new(Book::new()),
-        jobs,
-    });
-    let mut current = scene(SceneKey::Opening, "HS65 arrival", Some("Kestrel"));
-    current.speaker.clear();
-    current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
-    observe(&shared, &current, &[], &[1]);
-    let Job::Fresh {
-        id,
-        graph_revision,
-        scene,
-        spec,
-        heroes,
-        faces: _,
-        ahead,
-    } = drain(&mut queue).remove(0)
-    else {
-        panic!("arrival render")
+    let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    assert!(spec.speaker.is_none());
-    let (key, placement, locate) = shared
-        .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
-        .await
-        .unwrap();
-    let work = locate.expect("a narrator-led arrival still measures every person");
-    assert_eq!(
-        endpoint.bodies().len(),
-        1,
-        "the photo check reached the failing fake"
-    );
-    assert!(work.speaker.is_none());
-    let Lookup::Image { bytes, .. } = shared.inner.imagery.image(key.as_str()).await else {
-        panic!("arrival bytes")
-    };
-    let masks = [10, 60]
-        .into_iter()
-        .enumerate()
-        .map(|(index, left)| {
-            serde_json::json!({"index":index,"score":0.99,
+    {
+        let endpoint = crate::gameplay::storyteller::tests::FakeEndpoint::start(vec![
+            crate::gameplay::storyteller::tests::Reply::Status(
+                500,
+                serde_json::json!({"error":"injected photo check failure"}),
+            ),
+        ]);
+        fixture.photo_judge(endpoint.address).await;
+        let timing = Timing::from_interval(Duration::from_secs(30));
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        cache_personal_heroes(&inner, &cache, &[1]).await;
+        let (jobs, mut queue) = mpsc::channel(8);
+        let shared = Arc::new(Shared {
+            inner,
+            book: Mutex::new(Book::new()),
+            jobs,
+        });
+        let mut current = scene(SceneKey::Opening, "HS65 arrival", Some("Kestrel"));
+        current.speaker.clear();
+        current.asset = format!("/assets/ui/generated/{}.webp", art_contract::HARBOR_PHOTO);
+        observe(&shared, &current, &[], &[1]);
+        let Job::Fresh {
+            id,
+            graph_revision,
+            scene,
+            spec,
+            heroes,
+            faces: _,
+            ahead,
+        } = drain(&mut queue).remove(0)
+        else {
+            panic!("arrival render")
+        };
+        assert!(spec.speaker.is_none());
+        let (key, placement, locate) = shared
+            .render_fresh(&scene, &spec, &heroes, &id, graph_revision, ahead)
+            .await
+            .unwrap();
+        let work = locate.expect("a narrator-led arrival still measures every person");
+        assert_eq!(
+            endpoint.bodies().len(),
+            1,
+            "the photo check reached the failing fake"
+        );
+        assert!(work.speaker.is_none());
+        let Lookup::Image { bytes, .. } = shared.inner.imagery.image(key.as_str()).await else {
+            panic!("arrival bytes")
+        };
+        let masks = [10, 60]
+            .into_iter()
+            .enumerate()
+            .map(|(index, left)| {
+                serde_json::json!({"index":index,"score":0.99,
             "runs":(10..90).map(|y| [y * 100 + left, 20]).collect::<Vec<_>>()})
-        })
-        .collect::<Vec<_>>();
-    let scan = serde_json::json!({"revision":1,"model":"sam-3.1",
+            })
+            .collect::<Vec<_>>();
+        let scan = serde_json::json!({"revision":1,"model":"sam-3.1",
         "image_sha256":format!("{:x}", sha2::Sha256::digest(&bytes)),
         "width":100,"height":100,"source_width":100,"source_height":100,
         "outcome":"complete","masks":masks});
-    std::fs::write(
-        cache.join(format!("{}.sam31-person-v1.json", key.as_str())),
-        serde_json::to_vec(&scan).unwrap(),
-    )
-    .unwrap();
-    shared.finish(Done::Fresh {
-        id,
-        graph_revision,
-        ahead,
-        elapsed: Duration::ZERO,
-        result: Ok((key.clone(), placement)),
-    });
-    let scene_key = view(&current, &[1], false).scene_key;
-    let mut output = rpc::GameplayScene::default();
-    // A saturated queue must leave the ready picture visible and retry measurement later.
-    for _ in 0..8 {
-        shared
-            .jobs
-            .try_send(Job::Measure {
-                key: key.clone(),
-                scene: Box::new(scene.clone()),
-                heroes: heroes.clone(),
-            })
-            .unwrap_or_else(|_| panic!("fill the bounded fixture queue"));
-    }
-    shared.apply_at(&scene_key, &mut output, Duration::from_secs(1));
-    assert_eq!(output.live_plate, key.path());
-    assert!(locked(&shared.book).measuring_images.is_empty());
-    assert_eq!(drain(&mut queue).len(), 8);
-    shared.apply_at(&scene_key, &mut output, Duration::from_secs(2));
-    let mut tasks = JoinSet::new();
-    let repair = queue
-        .try_recv()
-        .expect("the presented plate repairs an unqueued locator");
-    assert!(matches!(repair, Job::Measure { .. }));
-    shared.spawn(&mut tasks, repair);
-    shared.finish(tasks.join_next().await.unwrap().unwrap());
-    shared.apply_at(&scene_key, &mut output, Duration::from_secs(3));
-    let layout = output.plate_layout.unwrap();
-    assert_eq!(output.live_plate, key.path());
-    assert_eq!(layout.figure_masks.len(), 2);
-    assert!(
-        layout
-            .figure_masks
-            .iter()
-            .any(|mask| mask.person
+        std::fs::write(
+            cache.join(format!("{}.sam31-person-v1.json", key.as_str())),
+            serde_json::to_vec(&scan).unwrap(),
+        )
+        .unwrap();
+        shared.finish(Done::Fresh {
+            id,
+            graph_revision,
+            ahead,
+            elapsed: Duration::ZERO,
+            result: Ok((key.clone(), placement)),
+        });
+        let scene_key = view(&current, &[1], false).scene_key;
+        let mut output = rpc::GameplayScene::default();
+        // A saturated queue must leave the ready picture visible and retry measurement later.
+        for _ in 0..8 {
+            shared
+                .jobs
+                .try_send(Job::Measure {
+                    key: key.clone(),
+                    scene: Box::new(scene.clone()),
+                    heroes: heroes.clone(),
+                })
+                .unwrap_or_else(|_| panic!("fill the bounded fixture queue"));
+        }
+        shared.apply_at(&scene_key, &mut output, Duration::from_secs(1));
+        assert_eq!(output.live_plate, key.path());
+        assert!(locked(&shared.book).measuring_images.is_empty());
+        assert_eq!(drain(&mut queue).len(), 8);
+        shared.apply_at(&scene_key, &mut output, Duration::from_secs(2));
+        let mut tasks = JoinSet::new();
+        let repair = queue
+            .try_recv()
+            .expect("the presented plate repairs an unqueued locator");
+        assert!(matches!(repair, Job::Measure { .. }));
+        shared.spawn(&mut tasks, repair);
+        shared.finish(tasks.join_next().await.unwrap().unwrap());
+        shared.apply_at(&scene_key, &mut output, Duration::from_secs(3));
+        let layout = output.plate_layout.unwrap();
+        assert_eq!(output.live_plate, key.path());
+        assert_eq!(layout.figure_masks.len(), 2);
+        assert!(
+            layout.figure_masks.iter().any(|mask| mask.person
                 == Some(rpc::plate_figure_mask::Person::ActorId("keeper".into())))
-    );
-    assert_eq!(
-        locked(&shared.book).presented.as_ref().unwrap().since,
-        Duration::from_secs(1)
-    );
-    assert!(
-        queue.try_recv().is_err(),
-        "measured views never repeat the provider work"
-    );
+        );
+        assert_eq!(
+            locked(&shared.book).presented.as_ref().unwrap().since,
+            Duration::from_secs(1)
+        );
+        assert!(
+            queue.try_recv().is_err(),
+            "measured views never repeat the provider work"
+        );
+    }
+    fixture.close().await;
 }
 
 #[test]

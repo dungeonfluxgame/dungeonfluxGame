@@ -42,11 +42,15 @@ impl Ratio {
 
     /// Rule 4.3: a supplier cost rounds half up, once.
     pub fn round_half_up(self) -> Result<u64, RoundingError> {
-        let doubled = self
-            .numerator
-            .checked_mul(2)
+        if self.denominator == 0 {
+            return Err(RoundingError::ZeroDenominator);
+        }
+        let quotient = self.numerator / self.denominator;
+        let remainder = self.numerator % self.denominator;
+        let half = self.denominator / 2 + self.denominator % 2;
+        let rounded = quotient
+            .checked_add(u128::from(remainder >= half))
             .ok_or(RoundingError::Overflow)?;
-        let rounded = (doubled + self.denominator) / (self.denominator * 2);
         u64::try_from(rounded).map_err(|_| RoundingError::Overflow)
     }
 
@@ -207,5 +211,46 @@ mod tests {
         assert_eq!(cents_half_up(5_000), 1);
         assert_eq!(cents_half_up(4_999), 0);
         assert_eq!(cents_half_up(-5_000), -1);
+    }
+    #[test]
+    fn half_up_rounds_large_valid_ratios_without_doubling_either_operand() {
+        for (numerator, denominator, expected) in [
+            (u128::MAX, u128::MAX, 1),
+            (u128::MAX - 1, u128::MAX, 1),
+            (0, u128::MAX, 0),
+            (u128::MAX / 2, u128::MAX, 0),
+            (u128::MAX / 2 + 1, u128::MAX, 1),
+            ((u128::MAX - 1) / 2, u128::MAX - 1, 1),
+            ((1_u128 << 127) + (1_u128 << 126), 1_u128 << 127, 2),
+        ] {
+            assert_eq!(
+                Ratio {
+                    numerator,
+                    denominator
+                }
+                .round_half_up(),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn half_up_refuses_an_invalid_denominator_or_a_result_above_u64() {
+        assert_eq!(
+            Ratio {
+                numerator: 1,
+                denominator: 0
+            }
+            .round_half_up(),
+            Err(RoundingError::ZeroDenominator)
+        );
+        assert_eq!(
+            Ratio {
+                numerator: u128::MAX,
+                denominator: 1
+            }
+            .round_half_up(),
+            Err(RoundingError::Overflow)
+        );
     }
 }

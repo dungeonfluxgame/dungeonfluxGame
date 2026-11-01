@@ -1,7 +1,5 @@
 //! The resource generation hub: the one place the program asks for a generated resource (a
-//! picture of a person, creature or place, a scene plate, a plate edit, an item close-up, a
-//! splat-world place, and later a music set, a voice line or a video clip) and the one place that
-//! remembers what was
+//! splat-world place, music set, voice line or video clip) and the one place that remembers what was
 //! asked for, what is in flight, what is ready, what failed and what it cost.
 //!
 //! # The contract
@@ -15,8 +13,8 @@
 //!   key) or [`Hub::render`] (run a generation now under the same bookkeeping). They read
 //!   [`Hub::status`] and [`Hub::list`]; the dev tools call [`Hub::invalidate`] and
 //!   [`Hub::regenerate`]. Nobody else keeps a cache index, an in-flight map, a failure memory, a
-//!   retry loop, a spend record or a fallback; the bytes themselves stay in the owner's store (the
-//!   imagery cache for pictures), which an entry's [`Generated::handle`] points at.
+//!   retry loop, a spend record or a fallback; the bytes themselves stay in the owner's store,
+//!   which an entry's [`Generated::handle`] points at.
 //! * **The hub owns** the registry by key, the one-generation-in-flight-per-key rule, the bounded
 //!   timeout and attempt limit per kind ([`Limits`]), the failure memory (a permanent failure
 //!   stays failed until `invalidate` or `regenerate`; a transient one is retried up to the attempt
@@ -35,7 +33,7 @@
 //! # Adding a resource kind (the exact API)
 //!
 //! 1. Implement [`ResourceSpec`] for the spec type: `KIND`, `CONTRACT_VERSION`, `canonical()`,
-//!    `subject()`, `chrome()`. (Image kinds use the `image_spec!` types below.)
+//!    `subject()`, `chrome()`.
 //! 2. Optionally tune the kind once at startup: [`Hub::set_limits`] (timeout at least the
 //!    provider's own deadline, attempts), [`Hub::set_validator`] (is a ready entry's output still
 //!    there?).
@@ -44,7 +42,7 @@
 //!    [`Reservation::commit`]s or drops/refunds it, and returns `Result<Generated, ResourceFailure>` with a permanent or transient failure.
 //! 4. Call `hub.get_or_request(&spec, maker)` where a view first needs it, and a worker calls
 //!    `hub.take_jobs(n)` / `job.execute().await` / `hub.complete(done)`. A kind whose request is
-//!    built inline from live state (a scene plate) calls `hub.render(&spec, future)` instead.
+//!    built inline from live state calls `hub.render(&spec, future)` instead.
 //!
 //! `MusicSet`, `VoiceLine` and `VideoClip` are reserved kinds with their [`Unit`]s: add the spec and
 //! the maker, never a second cache or spend record.
@@ -79,25 +77,6 @@ use sha2::{Digest, Sha256};
 /// What a resource is. Each kind has its own contract version and limits.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::gameplay) enum ResourceKind {
-    /// A person, creature, place, ground or prop picture (the art contract's depictions).
-    Depiction,
-    CreatorPortrait,
-    ScenePlate,
-    PlateEdit,
-    ItemCloseUp,
-    /// The SAM 3.1 instances (masks, scores) of a scene plate for one noun phrase set: a hosted
-    /// provider call, kept as a note beside the cached plate.
-    PlateSegments,
-    /// Who and where everyone is in a scene plate (identity, facing, layout): derived from the
-    /// plate's segments and the vision judge, kept as a note beside the cached plate.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Planned Scene plates service caller (planning/asset-engine.md)."
-        )
-    )]
-    PlateStaging,
     /// A generated 3D splat world for a place.
     SplatWorld,
     /// Home-angle fighter guard frames and idle, attack and last-hit clips.
@@ -115,13 +94,6 @@ pub(in crate::gameplay) enum ResourceKind {
 impl ResourceKind {
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
-            Self::Depiction => "depiction",
-            Self::CreatorPortrait => "creator_portrait",
-            Self::ScenePlate => "scene_plate",
-            Self::PlateEdit => "plate_edit",
-            Self::ItemCloseUp => "item_close_up",
-            Self::PlateSegments => "plate_segments",
-            Self::PlateStaging => "plate_staging",
             Self::SplatWorld => "splat_world",
             Self::CharacterClip => "character_clip",
             Self::MusicSet => "music_set",
@@ -136,30 +108,16 @@ impl ResourceKind {
     /// existing output in its own store before spending, is safe: an evicted key is made again by
     /// its next ask, and nothing is paid twice.
     ///
-    /// Listed: `MusicSet` (`place_music` re-asks on every plan), the image kinds `Depiction`,
-    /// `ScenePlate`, `PlateEdit` and `ItemCloseUp` (`imagery` renders on every use and the engine
-    /// checks the cache first), and `VoiceLine`, `PlateSegments` and `PlateStaging` (`Kit::produce`
-    /// re-asks on a miss and each maker reads its store first).
+    /// `MusicSet` re-asks on every plan; `VoiceLine` re-asks through its store-backed maker.
     ///
     /// Not listed, and why:
     /// * `AmbientLayer`: a layer is requested only inside the soundscape decision
     ///   (`place_music/ambience.rs`), while `audio_plan` only polls `ambient_status`. An evicted
     ///   layer would read as not requested and never come back until the next decision.
-    /// * `CreatorPortrait`: its consumers only poll `status`, and its classifier call is paid once.
     /// * `CharacterClip`, `VideoClip`: a re-ask after eviction would re-buy a paid generation.
     /// * `SplatWorld`: its consumer keeps its own places map and never re-asks.
     pub(in crate::gameplay) const fn evicts_when_idle(self) -> bool {
-        matches!(
-            self,
-            Self::MusicSet
-                | Self::Depiction
-                | Self::ScenePlate
-                | Self::PlateEdit
-                | Self::ItemCloseUp
-                | Self::VoiceLine
-                | Self::PlateSegments
-                | Self::PlateStaging
-        )
+        matches!(self, Self::MusicSet | Self::VoiceLine)
     }
 }
 
@@ -239,8 +197,8 @@ impl ResourceFailure {
     }
 }
 
-/// What a finished generation hands back: an opaque handle the consumer understands (for an
-/// image, the imagery cache key) and a short human note for the dev tools.
+/// What a finished generation hands back: an opaque handle the consumer understands and a
+/// short human note for the dev tools.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) struct Generated {
     pub(in crate::gameplay) handle: String,
@@ -264,7 +222,7 @@ pub(in crate::gameplay) type Generation =
 /// holds only what the generation needs and must not keep the owner of the hub alive.
 pub(in crate::gameplay) type Maker = Arc<dyn Fn() -> Generation + Send + Sync>;
 
-/// Whether a ready entry's output still exists (for an image, the cache file).
+/// Whether a ready entry's stored output still exists.
 pub(in crate::gameplay) type Validator = Arc<dyn Fn(&Generated) -> bool + Send + Sync>;
 
 /// The bounds one kind runs under.
@@ -279,17 +237,9 @@ pub(in crate::gameplay) struct Limits {
 }
 
 impl Limits {
-    /// The defaults per kind; production start-up tunes the image kinds to the provider deadline.
+    /// The defaults per kind; production start-up tunes each kind to its provider deadline.
     pub(in crate::gameplay) const fn for_kind(kind: ResourceKind) -> Self {
         let seconds = match kind {
-            ResourceKind::Depiction
-            | ResourceKind::CreatorPortrait
-            | ResourceKind::ScenePlate
-            | ResourceKind::PlateEdit
-            | ResourceKind::ItemCloseUp => 180,
-            // The fal call has its own deadline; the staging runs two vision calls after it.
-            ResourceKind::PlateSegments => 120,
-            ResourceKind::PlateStaging => 240,
             // Submit, a 15-minute poll, export and two provider-bounded downloads.
             ResourceKind::SplatWorld => 1_620,
             ResourceKind::CharacterClip => 2_400,
@@ -321,8 +271,6 @@ pub(in crate::gameplay) enum ResourceStatus {
 /// What a spend is counted in. One ledger holds one account per unit.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::gameplay) enum Unit {
-    /// One provider image call.
-    ImageCall,
     VideoClip,
     VoiceCharacter,
     SttSecond,
@@ -330,8 +278,6 @@ pub(in crate::gameplay) enum Unit {
     MusicCall,
     /// One input token of a text-embedding call (the story memory).
     EmbeddingToken,
-    /// One hosted segmentation call (SAM on fal); its price is the model's, in the audit line.
-    SegmentCall,
     /// One World Labs Marble credit; a marble-1.1 world records 1,580.
     SplatCredit,
 }
@@ -339,14 +285,12 @@ pub(in crate::gameplay) enum Unit {
 impl Unit {
     pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
-            Self::ImageCall => "image_call",
             Self::VideoClip => "video_clip",
             Self::VoiceCharacter => "voice_character",
             Self::SttSecond => "stt_second",
             Self::TextToken => "text_token",
             Self::MusicCall => "music_call",
             Self::EmbeddingToken => "embedding_token",
-            Self::SegmentCall => "segment_call",
             Self::SplatCredit => "splat_credit",
         }
     }
@@ -639,79 +583,6 @@ pub(in crate::gameplay) enum Invalidate<'a> {
     Subject(&'a str),
 }
 
-/// Declares an image-backed spec type: the subject it is about, the imagery key of its request
-/// (so a changed request is a new resource) and the chrome that stands meanwhile.
-macro_rules! image_spec {
-    ($(#[$meta:meta])* $name:ident, $kind:expr, $version:expr) => {
-        $(#[$meta])*
-        #[derive(Clone, Debug)]
-        pub(in crate::gameplay) struct $name {
-            subject: String,
-            request_key: String,
-            chrome: Chrome,
-        }
-
-        impl $name {
-            pub(in crate::gameplay) fn new(subject: &str, request_key: &str, chrome: Chrome) -> Self {
-                Self {
-                    subject: subject.to_owned(),
-                    request_key: request_key.to_owned(),
-                    chrome,
-                }
-            }
-        }
-
-        impl ResourceSpec for $name {
-            const KIND: ResourceKind = $kind;
-            const CONTRACT_VERSION: u32 = $version;
-
-            fn canonical(&self) -> String {
-                serde_json::json!({"subject": self.subject, "request": self.request_key})
-                    .to_string()
-            }
-
-            fn subject(&self) -> String {
-                self.subject.clone()
-            }
-
-            fn chrome(&self) -> Chrome {
-                self.chrome
-            }
-        }
-    };
-}
-
-image_spec!(
-    /// Explicit creator portrait, isolated from automatic scene image policy.
-    CreatorPortraitSpec,
-    ResourceKind::CreatorPortrait,
-    1
-);
-image_spec!(
-    /// A person, creature or place picture, including its expression, health and refresh variants.
-    DepictionSpec,
-    ResourceKind::Depiction,
-    1
-);
-image_spec!(
-    /// One composed scene plate.
-    PlateSpec,
-    ResourceKind::ScenePlate,
-    1
-);
-image_spec!(
-    /// An edit of a scene plate.
-    PlateEditSpec,
-    ResourceKind::PlateEdit,
-    1
-);
-image_spec!(
-    /// A close-up photograph of one object.
-    ItemCloseUpSpec,
-    ResourceKind::ItemCloseUp,
-    1
-);
-
 /// The supported generated splat-world encodings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum SplatWorldFormat {
@@ -868,8 +739,7 @@ impl Hub {
         Self::default()
     }
 
-    /// The one spend ledger. Providers reserve from it; the image budget is its `ImageCall`
-    /// account.
+    /// The one spend ledger. Resource providers reserve their own declared units from it.
     pub(in crate::gameplay) fn ledger(&self) -> &Arc<SpendLedger> {
         &self.ledger
     }
@@ -1322,7 +1192,7 @@ mod tests {
     }
 
     impl ResourceSpec for TestSpec {
-        const KIND: ResourceKind = ResourceKind::Depiction;
+        const KIND: ResourceKind = ResourceKind::VoiceLine;
         const CONTRACT_VERSION: u32 = 1;
         fn canonical(&self) -> String {
             format!("{{\"text\":\"{}\"}}", self.text)
@@ -1353,7 +1223,7 @@ mod tests {
 
     struct VersionTwo(TestSpec);
     impl ResourceSpec for VersionTwo {
-        const KIND: ResourceKind = ResourceKind::Depiction;
+        const KIND: ResourceKind = ResourceKind::VoiceLine;
         const CONTRACT_VERSION: u32 = 2;
         fn canonical(&self) -> String {
             self.0.canonical()
@@ -1512,7 +1382,7 @@ mod tests {
             ResourceStatus::Failed(ResourceFailure::Transient("provider"), Neutral::Silhouette)
         );
         assert!(hub.take_jobs(8).is_empty());
-        let rows = hub.list(Some(ResourceKind::Depiction));
+        let rows = hub.list(Some(ResourceKind::VoiceLine));
         assert_eq!(
             (rows[0].state, rows[0].last_error.as_str()),
             ("failed", "provider")
@@ -1586,7 +1456,7 @@ mod tests {
         let present = Arc::new(AtomicBool::new(true));
         let flag = Arc::clone(&present);
         hub.set_validator(
-            ResourceKind::Depiction,
+            ResourceKind::VoiceLine,
             Arc::new(move |_| flag.load(Ordering::SeqCst)),
         );
         let first = hub
@@ -1612,7 +1482,7 @@ mod tests {
     async fn a_generation_past_its_timeout_fails_as_timed_out() {
         let hub = Hub::new();
         hub.set_limits(
-            ResourceKind::Depiction,
+            ResourceKind::VoiceLine,
             Limits {
                 timeout: Duration::from_millis(10),
                 attempts: 1,
@@ -1633,15 +1503,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_timeout_of_every_kind_is_at_least_the_provider_deadline_floor() {
-        for kind in [
-            ResourceKind::Depiction,
-            ResourceKind::ScenePlate,
-            ResourceKind::PlateEdit,
-            ResourceKind::ItemCloseUp,
-        ] {
-            assert!(Limits::for_kind(kind).timeout >= Duration::from_secs(120));
-        }
+    fn video_timeout_exceeds_the_voice_provider_deadline() {
         assert!(
             Limits::for_kind(ResourceKind::VideoClip).timeout
                 > Limits::for_kind(ResourceKind::VoiceLine).timeout
@@ -1652,28 +1514,28 @@ mod tests {
     fn the_ledger_records_reserve_commit_refund_and_reconcile_and_never_refuses() {
         let ledger = Arc::new(SpendLedger::default());
         // No budget exists to run out of: any amount of any unit is reserved.
-        let first = ledger.reserve(Unit::ImageCall, 2);
-        let huge = ledger.reserve(Unit::ImageCall, u64::MAX / 2);
-        assert_eq!(ledger.snapshot(Unit::ImageCall).reserved, 2 + u64::MAX / 2);
+        let first = ledger.reserve(Unit::MusicCall, 2);
+        let huge = ledger.reserve(Unit::MusicCall, u64::MAX / 2);
+        assert_eq!(ledger.snapshot(Unit::MusicCall).reserved, 2 + u64::MAX / 2);
         first.commit(2);
-        let spend = ledger.snapshot(Unit::ImageCall);
+        let spend = ledger.snapshot(Unit::MusicCall);
         assert_eq!((spend.reserved, spend.committed), (u64::MAX / 2, 2));
         // Refund when not sent, and an unsettled reservation is refunded on drop.
         huge.refund();
-        ledger.reserve(Unit::ImageCall, 1).refund();
-        drop(ledger.reserve(Unit::ImageCall, 1));
+        ledger.reserve(Unit::MusicCall, 1).refund();
+        drop(ledger.reserve(Unit::MusicCall, 1));
         assert_eq!(
-            ledger.snapshot(Unit::ImageCall),
+            ledger.snapshot(Unit::MusicCall),
             Spend {
                 reserved: 0,
                 committed: 2
             }
         );
         // Later evidence corrects the committed total, both ways.
-        ledger.reconcile(Unit::ImageCall, 1);
-        assert_eq!(ledger.snapshot(Unit::ImageCall).committed, 3);
-        ledger.reconcile(Unit::ImageCall, -2);
-        assert_eq!(ledger.snapshot(Unit::ImageCall).committed, 1);
+        ledger.reconcile(Unit::MusicCall, 1);
+        assert_eq!(ledger.snapshot(Unit::MusicCall).committed, 3);
+        ledger.reconcile(Unit::MusicCall, -2);
+        assert_eq!(ledger.snapshot(Unit::MusicCall).committed, 1);
         // Units keep separate accounts and the dev tools can read them all.
         ledger.reserve(Unit::MusicCall, 1_000_000).commit(1_000_000);
         assert_eq!(ledger.snapshot(Unit::VideoClip), Spend::default());
@@ -1801,12 +1663,12 @@ mod tests {
         );
     }
 
-    /// A kind whose consumers only poll `status` (its classifier call is paid once) keeps every
+    /// A kind whose consumers only poll `status` (its clip call is paid once) keeps every
     /// Ready entry, however many there are.
     struct Polled(usize);
 
     impl ResourceSpec for Polled {
-        const KIND: ResourceKind = ResourceKind::CreatorPortrait;
+        const KIND: ResourceKind = ResourceKind::CharacterClip;
         const CONTRACT_VERSION: u32 = 1;
         fn canonical(&self) -> String {
             format!("{{\"p\":{}}}", self.0)
@@ -1832,7 +1694,7 @@ mod tests {
             "the oldest poll-only entry survives"
         );
         let ready = hub
-            .list(Some(ResourceKind::CreatorPortrait))
+            .list(Some(ResourceKind::CharacterClip))
             .iter()
             .filter(|row| row.state == "ready")
             .count();
@@ -2016,13 +1878,7 @@ mod tests {
         };
     }
 
-    kinded_spec!(DepictionN, Depiction);
-    kinded_spec!(ScenePlateN, ScenePlate);
-    kinded_spec!(PlateEditN, PlateEdit);
-    kinded_spec!(ItemCloseUpN, ItemCloseUp);
     kinded_spec!(VoiceLineN, VoiceLine);
-    kinded_spec!(PlateSegmentsN, PlateSegments);
-    kinded_spec!(PlateStagingN, PlateStaging);
     kinded_spec!(AmbientLayerN, AmbientLayer);
     kinded_spec!(CharacterClipN, CharacterClip);
     kinded_spec!(VideoClipN, VideoClip);
@@ -2080,38 +1936,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn depiction_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(DepictionN).await;
-    }
-
-    #[tokio::test]
-    async fn scene_plate_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(ScenePlateN).await;
-    }
-
-    #[tokio::test]
-    async fn plate_edit_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(PlateEditN).await;
-    }
-
-    #[tokio::test]
-    async fn item_close_up_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(ItemCloseUpN).await;
-    }
-
-    #[tokio::test]
     async fn voice_line_entries_are_evicted_past_the_bound() {
         assert_evicts_past_the_bound(VoiceLineN).await;
-    }
-
-    #[tokio::test]
-    async fn plate_segment_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(PlateSegmentsN).await;
-    }
-
-    #[tokio::test]
-    async fn plate_staging_entries_are_evicted_past_the_bound() {
-        assert_evicts_past_the_bound(PlateStagingN).await;
     }
 
     #[tokio::test]

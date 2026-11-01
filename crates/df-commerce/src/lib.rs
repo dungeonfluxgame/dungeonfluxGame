@@ -16,6 +16,7 @@ mod subscription;
 // The money core (planning/finance-ledger-research.md, F round 1): pure, no I/O, no clock.
 pub mod admission;
 pub mod digest;
+pub mod draft_image;
 pub mod dispute;
 pub mod entry_rules;
 pub mod finance_ids;

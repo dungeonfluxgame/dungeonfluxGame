@@ -6,8 +6,8 @@
 //! Who is where in a scene plate, from hosted SAM 3.1 segmentation (PLAY-V09).
 //!
 //! The display plate is the photographic scene still on the TV. It is segmented once with the
-//! noun phrases `person` and `head` (`df_providers::NativeFalSegmenter`, endpoint
-//! `fal-ai/sam-3-1/image-rle`), and the instances become the facts the rest of the program stages
+//! noun phrases `person` and `head` through the canonical image service. The returned
+//! instances become the facts the rest of the program stages
 //! from:
 //!
 //! 1. [`geometry`]: each SAM person gets a tight body box, the tight box of its own head, and the
@@ -24,14 +24,13 @@
 //! 5. [`staging`]: neutral facts for the storyteller and the NPC replies (screen region, depth
 //!    order, facing, who they face, who is nearest), so narration agrees with the picture.
 //!
-//! Everything here is pure except [`service`], the hub adapter that makes the `PlateSegments` and
-//! `PlateStaging` resources (the provider calls, the notes, the spend and the `PLATE-STAGING`
-//! audit line). The plate director, the wire layout and the dev CLI sit above it.
+//! Everything here is pure except [`service`], the canonical analysis adapter. The image
+//! service owns preparation, provider calls, durable results and usage; gameplay projects
+//! those facts into staging and the `PLATE-STAGING` audit line.
 //!
-//! The closed-label prompts ([`JudgeRequest`]) are built here and sent through
-//! `df_providers::NativePlateJudge`, whose strict JSON schema is the same enum the parser checks.
+//! The closed-label policy ([`JudgeRequest`]) is retained here for pure staging rules;
+//! its executable counterpart lives in the private analysis backend.
 
-pub(in crate::gameplay) mod crops;
 pub(in crate::gameplay) mod facing;
 pub(in crate::gameplay) mod geometry;
 pub(in crate::gameplay) mod identity;

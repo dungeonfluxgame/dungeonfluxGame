@@ -24,6 +24,9 @@ use tokio::{sync::watch, task::JoinSet, time::Instant};
 
 use crate::health_tier::{Vitals, tier_of};
 
+/// Owned domain tasks awaited by one scene worker, including non-image hub resources.
+pub(super) const MAXIMUM_OWNED_SCENE_TASKS: usize = 3;
+
 // PLAY-V09: scene plates (the whole scene as one composed picture), made just in time.
 mod canonical;
 mod plates;
@@ -1918,18 +1921,18 @@ impl Inner {
             }
             for job in self.take_kill_stills(
                 Instant::now(),
-                super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()),
+                MAXIMUM_OWNED_SCENE_TASKS.saturating_sub(tasks.len()),
             ) {
                 self.spawn(&mut tasks, job);
             }
             let canonical_jobs = locked(&self.state)
                 .canonical
-                .take_jobs_up_to(super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()));
+                .take_jobs_up_to(MAXIMUM_OWNED_SCENE_TASKS.saturating_sub(tasks.len()));
             for job in canonical_jobs {
                 self.spawn(&mut tasks, job);
             }
             pending_renders.extend(self.evaluate());
-            while tasks.len() < super::imagery::MAXIMUM_IN_FLIGHT {
+            while tasks.len() < MAXIMUM_OWNED_SCENE_TASKS {
                 let Some(job) = pending_renders.pop_front() else {
                     break;
                 };
@@ -1938,7 +1941,7 @@ impl Inner {
             for job in self
                 .imagery
                 .hub()
-                .take_jobs(super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()))
+                .take_jobs(MAXIMUM_OWNED_SCENE_TASKS.saturating_sub(tasks.len()))
             {
                 tasks.spawn(async move { Done::Resource(Box::new(job.execute().await)) });
             }
@@ -2142,14 +2145,7 @@ impl Inner {
     ) -> Result<(Vec<u8>, String), ImageFailure> {
         let mut references = Vec::with_capacity(3);
         for key in keys {
-            match self.imagery.image(key.as_str()).await {
-                Lookup::Image { bytes, format } => {
-                    references.push(ReferenceImage::new(format, bytes))
-                }
-                Lookup::NotReady | Lookup::Unregistered => {
-                    return Err(ImageFailure::InvalidRequest);
-                }
-            }
+            references.push(self.imagery.reference(key).await?);
         }
         let image_request = kill_still_request(request, self.rating, references);
         let key = self.imagery.generate(&request.id, image_request).await?;
@@ -2185,10 +2181,7 @@ impl Inner {
             .strip_prefix("/gameplay/imagery/")
             .and_then(ImageKey::parse)
         {
-            return match self.imagery.image(key.as_str()).await {
-                Lookup::Image { bytes, format } => Ok(ReferenceImage::new(format, bytes)),
-                Lookup::Unregistered | Lookup::NotReady => Err(ImageFailure::InvalidRequest),
-            };
+            return self.imagery.reference(&key).await;
         }
         self.load_figure(&character.art).await
     }

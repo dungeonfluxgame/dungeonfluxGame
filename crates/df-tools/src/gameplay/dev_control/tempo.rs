@@ -128,7 +128,11 @@ mod tests {
         let layout = super::super::layout::LayoutState::new();
         let (shutdown, _) = watch::channel(false);
         let state = Arc::new(Shared {
+            image_diagnostics: None,
             service: Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 look_ahead: Default::default(),
                 portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
                 actor: sender,

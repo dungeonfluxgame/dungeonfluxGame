@@ -56,6 +56,7 @@ use sha2::{Digest, Sha256};
 
 use super::cost;
 use super::home_theme;
+use super::imagery::{ImageKey, Imagery, ReferenceImage, TrustedReferenceOrigin};
 use super::living_scenes::LivingScenes;
 use super::resource_adapters::{Flights, Kit, KitSlot, Produced, write_atomic};
 use super::resources::{
@@ -64,6 +65,10 @@ use super::resources::{
 };
 use super::rpc;
 use crate::BUILD_ID;
+use df_imagery::{
+    AlphaHandling, Dimensions, EncodedFilter, Encoding, ImageTransform, LossyQuality, Purpose,
+    PurposedUse, RasterOutputSpec, TransformSource, TransformSpec, VariantRole,
+};
 
 /// The endpoint the server requests. Only endpoints the adapter has a body and checks for are
 /// accepted as the setting.
@@ -408,7 +413,7 @@ enum StillBytes {
     /// Decoded and re-encoded to the provider's frame.
     Prepared(Vec<u8>),
     /// A scene plate as the imagery service made it; prepared only if the clip must be made.
-    Plate(Vec<u8>),
+    Plate { key: String, bytes: Vec<u8> },
 }
 
 /// Everything the one generation of a clip needs, owned so the task can outlive its caller.
@@ -447,6 +452,7 @@ pub(crate) enum Endpoints {
 }
 
 pub(crate) struct Engine {
+    imagery: Imagery,
     root: PathBuf,
     cache_dir: PathBuf,
     credential: Option<String>,
@@ -511,6 +517,7 @@ pub(crate) fn install(
     settings: HomeVideoSettings,
     asset_root: &Path,
     living: LivingScenes,
+    imagery: Imagery,
 ) -> Result<String, io::Error> {
     let line = startup_line(&settings);
     let home_enabled = settings.home.is_ok();
@@ -550,6 +557,7 @@ pub(crate) fn install(
         return Ok(effective_line);
     }
     let engine = Engine::new(EngineSetup {
+        imagery,
         root: asset_root.to_path_buf(),
         cache_dir: settings.cache_dir,
         credential,
@@ -734,6 +742,7 @@ pub(crate) fn router() -> Router {
 
 /// What an engine is made of, apart from its runtime state.
 struct EngineSetup {
+    imagery: Imagery,
     root: PathBuf,
     cache_dir: PathBuf,
     credential: Option<String>,
@@ -817,6 +826,7 @@ impl LoopFinish {
 impl Engine {
     fn new(setup: EngineSetup) -> Self {
         let engine = Self {
+            imagery: setup.imagery,
             root: setup.root,
             cache_dir: setup.cache_dir,
             credential: setup.credential,
@@ -957,7 +967,10 @@ impl Engine {
             file: lane.file.clone(),
             input,
             unavailable,
-            still: StillBytes::Plate(still),
+            still: StillBytes::Plate {
+                key: plate_key.to_owned(),
+                bytes: still,
+            },
             reason: reason.to_owned(),
             kill_names: None,
         };
@@ -1001,7 +1014,7 @@ impl Engine {
         let slot = KillSlot {
             request: request.clone(),
             lane: lane.clone(),
-            still_path,
+            still_path: still_path.clone(),
             started: Instant::now(),
         };
         locked(&self.kill_shots).insert(request.id.clone(), slot);
@@ -1029,7 +1042,13 @@ impl Engine {
             file: lane.file.clone(),
             input,
             unavailable: None,
-            still: StillBytes::Plate(still),
+            still: StillBytes::Plate {
+                key: still_path
+                    .strip_prefix("/gameplay/imagery/")
+                    .unwrap_or(&still_path)
+                    .to_owned(),
+                bytes: still,
+            },
             reason: "killing-blow".to_owned(),
             kill_names: Some((request.killer.clone(), request.victim.clone())),
         };
@@ -1100,19 +1119,20 @@ impl Engine {
     /// The task of a painting: prepare its still, key the clip by it, run the clip, then wake the
     /// displays.
     async fn fly_home(self: Arc<Self>, painting: String) {
-        let (input, unavailable, still) = match prepare_still(&self.root, &painting).await {
-            Ok(still) => (ClipInput::ready(&still, &home_video_prompt()), None, still),
-            Err(Failure::Still(reason)) => (
-                ClipInput::refused(None, reason),
-                Some(Failure::Still(reason)),
-                Vec::new(),
-            ),
-            Err(other) => (
-                ClipInput::refused(None, "still unavailable"),
-                Some(other),
-                Vec::new(),
-            ),
-        };
+        let (input, unavailable, still) =
+            match prepare_still(&self.imagery, &self.root, &painting).await {
+                Ok(still) => (ClipInput::ready(&still, &home_video_prompt()), None, still),
+                Err(Failure::Still(reason)) => (
+                    ClipInput::refused(None, reason),
+                    Some(Failure::Still(reason)),
+                    Vec::new(),
+                ),
+                Err(other) => (
+                    ClipInput::refused(None, "still unavailable"),
+                    Some(other),
+                    Vec::new(),
+                ),
+            };
         let spec = HomeLoopSpec::new(&painting, input.clone(), clip_recipe(Variant::Home));
         let lane = Lane {
             key: ResourceKey::of(&spec),
@@ -1218,7 +1238,18 @@ impl Engine {
         }
         let still = match &job.still {
             StillBytes::Prepared(bytes) => bytes.clone(),
-            StillBytes::Plate(plate) => prepare_scene_still(plate.clone()).await?,
+            StillBytes::Plate { key, bytes } => {
+                let key = ImageKey::parse(key).ok_or(Failure::Still("scene plate key invalid"))?;
+                let reference = self
+                    .imagery
+                    .reference(&key)
+                    .await
+                    .map_err(|_| Failure::Still("scene plate unavailable"))?;
+                if reference.bytes.as_ref() != bytes.as_slice() {
+                    return Err(Failure::Still("scene plate changed"));
+                }
+                prepare_scene_still(&self.imagery, &reference).await?
+            }
         };
         let provider = self.provider()?;
         let ledger = Arc::clone(self.kit.get().hub().ledger());
@@ -1588,52 +1619,75 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// The painting as the model sees it: 1920 by 1080, JPEG at quality 95, decoded and encoded once.
-async fn prepare_still(root: &Path, painting: &str) -> Result<Vec<u8>, Failure> {
+/// Normalizes an authored painting with the existing encoded-space Triangle recipe.
+async fn prepare_still(imagery: &Imagery, root: &Path, painting: &str) -> Result<Vec<u8>, Failure> {
     let path = home_theme::painting_file(root, painting)
         .map_err(|_| Failure::Still("painting file unavailable"))?;
-    tokio::task::spawn_blocking(move || {
-        let image = image::ImageReader::open(&path)
-            .and_then(|reader| reader.with_guessed_format())
-            .map_err(|_| Failure::Still("painting unreadable"))?
-            .decode()
-            .map_err(|_| Failure::Still("painting does not decode"))?;
-        let rgb = image
-            .resize_exact(WIDTH, HEIGHT, image::imageops::FilterType::Triangle)
-            .to_rgb8();
-        let mut bytes = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, STILL_QUALITY)
-            .encode(rgb.as_raw(), WIDTH, HEIGHT, image::ExtendedColorType::Rgb8)
-            .map_err(|_| Failure::Still("still does not encode"))?;
-        Ok(bytes)
-    })
-    .await
-    .map_err(|_| Failure::Still("still task interrupted"))?
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| Failure::Still("painting unreadable"))?;
+    let format = super::image_references::format_of(&bytes)
+        .map_err(|_| Failure::Still("painting does not decode"))?;
+    let reference = ReferenceImage::from_trusted(
+        format,
+        bytes.into(),
+        TrustedReferenceOrigin::AuthoredPainting {
+            root: root.to_path_buf(),
+            painting: painting.to_owned(),
+        },
+    );
+    prepare_scene_still(imagery, &reference).await
 }
 
-async fn prepare_scene_still(still: Vec<u8>) -> Result<Vec<u8>, Failure> {
-    tokio::task::spawn_blocking(move || {
-        let image = image::load_from_memory(&still)
-            .map_err(|_| Failure::Still("scene plate does not decode"))?;
-        let rgb = image
-            .resize_exact(WIDTH, HEIGHT, image::imageops::FilterType::Triangle)
-            .to_rgb8();
-        let mut bytes = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, STILL_QUALITY)
-            .encode(rgb.as_raw(), WIDTH, HEIGHT, image::ExtendedColorType::Rgb8)
-            .map_err(|_| Failure::Still("scene plate does not encode"))?;
-        Ok(bytes)
-    })
-    .await
-    .map_err(|_| Failure::Still("scene plate task interrupted"))?
+async fn prepare_scene_still(
+    imagery: &Imagery,
+    still: &ReferenceImage,
+) -> Result<Vec<u8>, Failure> {
+    let dimensions =
+        Dimensions::new(WIDTH, HEIGHT).map_err(|_| Failure::Still("still dimensions invalid"))?;
+    let quality =
+        LossyQuality::new(STILL_QUALITY).map_err(|_| Failure::Still("still quality invalid"))?;
+    let source = imagery
+        .pin_reference(still)
+        .await
+        .map_err(|_| Failure::Still("still unavailable"))?;
+    let output = RasterOutputSpec::new(
+        dimensions,
+        AlphaHandling::Opaque,
+        Encoding::Jpeg { quality },
+    )
+    .map_err(|_| Failure::Still("still output invalid"))?;
+    imagery
+        .transform(
+            "video-reference-still",
+            PurposedUse {
+                purpose: Purpose::ReferencePrep,
+                role: VariantRole::Reference,
+            },
+            TransformSpec {
+                source: TransformSource::Image(source),
+                steps: vec![
+                    ImageTransform::EncodedResize {
+                        dimensions,
+                        filter: EncodedFilter::Triangle,
+                    },
+                    ImageTransform::DiscardAlpha,
+                ],
+            },
+            output,
+        )
+        .await
+        .map(|image| image.bytes.to_vec())
+        .map_err(|_| Failure::Still("still does not encode"))
 }
 
 #[cfg(test)]
 pub(crate) async fn prepare_still_for_test(
+    imagery: &Imagery,
     root: &Path,
     painting: &str,
 ) -> Result<Vec<u8>, Failure> {
-    prepare_still(root, painting).await
+    prepare_still(imagery, root, painting).await
 }
 
 /// The home loop's file key for a prepared still: the whole digest of its spec.
@@ -2399,12 +2453,14 @@ fn record_video_resource(
 /// Test helper: an engine for the home loop, over a fixture or live endpoints.
 #[cfg(test)]
 pub(crate) fn test_engine(
+    imagery: Imagery,
     root: PathBuf,
     cache_dir: PathBuf,
     endpoints: Endpoints,
     deadline: Duration,
 ) -> Arc<Engine> {
     Arc::new(Engine::new(EngineSetup {
+        imagery,
         root,
         cache_dir,
         credential: Some("fixture-private-key".to_owned()),
@@ -2431,6 +2487,7 @@ pub(crate) fn install_for_test(engine: Arc<Engine>) -> Result<(), Arc<Engine>> {
 /// Test helper for the live check: the same engine with the live endpoints and a given credential.
 #[cfg(test)]
 pub(crate) fn live_test_engine(
+    imagery: Imagery,
     root: PathBuf,
     cache_dir: PathBuf,
     credential: String,
@@ -2438,6 +2495,7 @@ pub(crate) fn live_test_engine(
     deadline: Duration,
 ) -> Arc<Engine> {
     Arc::new(Engine::new(EngineSetup {
+        imagery,
         root,
         cache_dir,
         credential: Some(credential),
@@ -2452,12 +2510,14 @@ pub(crate) fn live_test_engine(
 /// Test helper: an engine for scene loops.
 #[cfg(test)]
 pub(crate) fn scene_test_engine(
+    imagery: Imagery,
     cache_dir: PathBuf,
     endpoints: Endpoints,
     deadline: Duration,
     credential: Option<String>,
 ) -> Arc<Engine> {
     Arc::new(Engine::new(EngineSetup {
+        imagery,
         root: PathBuf::new(),
         cache_dir,
         credential,
@@ -2534,8 +2594,11 @@ impl Engine {
 }
 
 #[cfg(test)]
-pub(crate) async fn prepare_scene_still_for_test(still: Vec<u8>) -> Result<Vec<u8>, Failure> {
-    prepare_scene_still(still).await
+pub(crate) async fn prepare_scene_still_for_test(
+    imagery: &Imagery,
+    still: &ReferenceImage,
+) -> Result<Vec<u8>, Failure> {
+    prepare_scene_still(imagery, still).await
 }
 
 #[cfg(test)]

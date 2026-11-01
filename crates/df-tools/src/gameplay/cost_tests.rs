@@ -1,20 +1,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use df_protocol::common as rpc;
-use df_providers::{
-    GeneratedImage, ImageBackground, ImageEdit, ImageEditConfig, ImageEditModel, ImageFormat,
-    ImageModeration, ImageQuality, ImageUsage, NativeHttpRefusal, NativeImageEditProvider,
-    ProviderFailureClass, SpeechAdapterReason, TextTokenUsage,
-};
+use df_providers::{NativeHttpRefusal, ProviderFailureClass, SpeechAdapterReason, TextTokenUsage};
 use serde_json::json;
 
 use super::*;
-use crate::gameplay::imagery::{ImageFailure, ImageKind, ImagePriority, ImageRoute};
 use crate::gameplay::resources::SpendLedger;
 use crate::voice_line::{VoiceLine, display_lines, fight_voice_line};
 use df_commerce::tariff;
@@ -123,38 +118,393 @@ fn opened_ledger(log: Option<&std::path::Path>) -> Arc<SpendLedger> {
     ledger
 }
 
-fn image_route() -> ImageRoute {
-    let config = ImageEditConfig::loopback_fixture("127.0.0.1:9".parse().expect("address"))
-        .expect("loopback fixture");
-    ImageRoute::OpenAi(
-        NativeImageEditProvider::new(config, "test-credential", Duration::from_secs(1))
-            .expect("provider"),
+#[derive(Clone, Copy)]
+enum CostImageReply {
+    Reported { text: u64, input: u64, output: u64 },
+    Silent,
+    Refused(u16),
+    AmbiguousRateLimit,
+    Quota,
+    Unknown,
+}
+
+struct CostImageEndpoint {
+    address: std::net::SocketAddr,
+    reply: Arc<Mutex<CostImageReply>>,
+    requests: Arc<Mutex<Vec<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl CostImageEndpoint {
+    fn new(width: u32, height: u32, reply: CostImageReply) -> Self {
+        use image::ImageEncoder;
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let reply = Arc::new(Mutex::new(reply));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (replies, captured, stopped) = (reply.clone(), requests.clone(), stop.clone());
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(
+                &vec![100; (width * height * 3) as usize],
+                width,
+                height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &vec![100; (width * height * 4) as usize],
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let (jpeg_encoded, png_encoded) = (cost_base64(&jpeg), cost_base64(&png));
+        let worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !stopped.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => panic!("cost fixture accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    assert!(bytes.len() <= 4 * 1024 * 1024);
+                    if let Some(split) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..split]);
+                        let length = header
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|value| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= split + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8_lossy(&bytes).into_owned();
+                let line = request.lines().next().unwrap().to_owned();
+                {
+                    let mut seen = captured.lock().unwrap();
+                    assert!(seen.len() < 256, "cost fixture request bound exceeded");
+                    seen.push(line.clone());
+                }
+                let mode = *replies.lock().unwrap();
+                if line.starts_with("POST ") {
+                    if matches!(mode, CostImageReply::Unknown) {
+                        continue;
+                    }
+                    if let CostImageReply::Refused(_)
+                    | CostImageReply::AmbiguousRateLimit
+                    | CostImageReply::Quota = mode
+                    {
+                        let status = if let CostImageReply::Refused(status) = mode {
+                            status
+                        } else {
+                            429
+                        };
+                        let body = if matches!(mode, CostImageReply::Quota) {
+                            r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#
+                        } else if matches!(mode, CostImageReply::AmbiguousRateLimit) {
+                            r#"{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"},"request_id":"accepted-job"}"#
+                        } else if status == 429 {
+                            r#"{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}"#
+                        } else if status >= 500 {
+                            r#"{"error":{"type":"server_error","code":"server_error"}}"#
+                        } else {
+                            r#"{"error":{"type":"invalid_request_error"}}"#
+                        };
+                        let retry_after = if matches!(mode, CostImageReply::Refused(429)) {
+                            "Retry-After: 0\r\n"
+                        } else {
+                            ""
+                        };
+                        write!(stream,"HTTP/1.1 {status} Refused\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                        continue;
+                    }
+                }
+                let path = line.split(' ').nth(1).unwrap();
+                if path == "/image.jpg" {
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",jpeg.len()).unwrap();
+                    stream.write_all(&jpeg).unwrap();
+                    continue;
+                }
+                let body = if path.starts_with("/v1/images/") {
+                    let mut body = json!({"data":[{"b64_json":jpeg_encoded}]});
+                    if let CostImageReply::Reported {
+                        text,
+                        input,
+                        output,
+                    } = mode
+                    {
+                        body["usage"] = json!({"input_tokens_details":{"text_tokens":text,"image_tokens":input},"output_tokens":output});
+                    }
+                    body.to_string()
+                } else if path == "/v1/flux-3-image" {
+                    json!({"polling_url":format!("http://{address}/v1/get_result?id=cost-bfl"),"cost":3}).to_string()
+                } else if path.starts_with("/v1/get_result?") {
+                    json!({"status":"Ready","result":{"sample":format!("http://{address}/image.jpg")}}).to_string()
+                } else if path.starts_with("/fal-ai/") && line.starts_with("POST ") {
+                    json!({"request_id":"cost-fal","status_url":format!("https://queue.fal.run{path}/requests/cost-fal/status"),"response_url":format!("https://queue.fal.run{path}/requests/cost-fal/response")}).to_string()
+                } else if path.starts_with("/fal-ai/") && path.ends_with("/status") {
+                    r#"{"status":"COMPLETED"}"#.to_owned()
+                } else if path.starts_with("/fal-ai/") && path.ends_with("/response") {
+                    let uri = if path.contains("birefnet") {
+                        format!("data:image/png;base64,{png_encoded}")
+                    } else {
+                        format!("data:image/jpeg;base64,{jpeg_encoded}")
+                    };
+                    json!({"images":[{"url":uri}]}).to_string()
+                } else {
+                    panic!("unexpected cost fixture request: {line}")
+                };
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            }
+        });
+        Self {
+            address,
+            reply,
+            requests,
+            stop,
+            worker: Some(worker),
+        }
+    }
+    fn set(&self, reply: CostImageReply) {
+        *self.reply.lock().unwrap() = reply;
+    }
+    fn posts(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.starts_with("POST "))
+            .cloned()
+            .collect()
+    }
+}
+impl Drop for CostImageEndpoint {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let result = worker.join();
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
+        }
+    }
+}
+fn cost_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in bytes.chunks(3) {
+        let value = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        result.push(ALPHABET[((value >> 18) & 63) as usize] as char);
+        result.push(ALPHABET[((value >> 12) & 63) as usize] as char);
+        result.push(if chunk.len() > 1 {
+            ALPHABET[((value >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        result.push(if chunk.len() > 2 {
+            ALPHABET[(value & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    result
+}
+
+fn cost_image_patch(
+    address: std::net::SocketAddr,
+    backend: df_imagery::BackendId,
+    width: u32,
+    height: u32,
+    quality: df_imagery::GenerationQuality,
+    alpha: bool,
+) -> df_imagery::RuntimePatch {
+    use df_imagery::*;
+    let mut patch = RuntimePatch::empty();
+    patch.mode = Some(GlobalMode::Live);
+    patch.default_backend = Some(backend);
+    patch.accounting_mode = Some(AccountingMode::RecordOnly);
+    patch.backend_enabled = [Some(false); BackendId::COUNT];
+    patch.backend_enabled[backend.index()] = Some(true);
+    patch.backend_endpoint[backend.index()] = Some(Some(
+        ApiEndpoint::new(&format!("http://{address}")).unwrap(),
+    ));
+    patch.quality_provider_quality = Some(Some(quality));
+    patch.retry_max_attempts = Some(1);
+    for purpose in [
+        Purpose::ScenePlate,
+        Purpose::ItemCloseUp,
+        Purpose::Expression,
+        Purpose::AnimationFrame,
+    ] {
+        patch.purpose_model_override[purpose.index()] = Some(None);
+    }
+    let dimensions = Dimensions::new(width, height).unwrap();
+    let delivered = RasterOutputSpec::new(
+        dimensions,
+        if alpha {
+            AlphaHandling::PreserveAlpha
+        } else {
+            AlphaHandling::Opaque
+        },
+        if alpha {
+            Encoding::Png
+        } else {
+            Encoding::Jpeg {
+                quality: LossyQuality::new(90).unwrap(),
+            }
+        },
     )
+    .unwrap();
+    let name = OutputProfileName::new("cost-test").unwrap();
+    patch.default_output_profile = Some(name.clone());
+    patch.output_profiles = Some(vec![NamedOutputProfile::new(
+        name,
+        OutputProfile::provider(dimensions, delivered),
+    )]);
+    patch
 }
 
-fn plate_edit() -> ImageEdit<'static> {
-    ImageEdit {
-        model: ImageEditModel::Gpt25Flare,
-        prompt: "a plate",
-        references: &[],
-        width: 1024,
-        height: 640,
-        quality: ImageQuality::Low,
-        background: ImageBackground::Opaque,
-        output: ImageFormat::Jpeg,
-        moderation: ImageModeration::Auto,
-    }
+fn assert_cost_replay(outcome: df_imagery::RequestOutcome, expected: &df_imagery::ImageDemandView) {
+    let replay = match outcome {
+        df_imagery::RequestOutcome::Replayed(view) => view,
+        df_imagery::RequestOutcome::Reused(view)
+            if expected.execution == df_imagery::ImageExecutionState::Ready =>
+        {
+            view
+        }
+        other => panic!("same immutable image operation was not retained: {other:?}"),
+    };
+    assert_eq!(replay.handle, expected.handle);
+    assert_eq!(replay.job, expected.job);
+    assert_eq!(replay.interest, expected.interest);
 }
 
-fn image(usage: ImageUsage) -> GeneratedImage {
-    GeneratedImage {
-        bytes: vec![1, 2, 3],
-        format: ImageFormat::Jpeg,
-        width: 1024,
-        height: 640,
-        has_alpha_channel: false,
-        usage,
+fn cost_image_request(
+    context: &crate::gameplay::imagery::central::ConsumerContext,
+    operation: u8,
+    purpose: df_imagery::Purpose,
+    references: Vec<df_imagery::SourceRef>,
+) -> df_imagery::ImageRequest {
+    use df_imagery::*;
+    let operation = df_types::OperationId::from_bytes(&[operation; 16]).unwrap();
+    let audience = match &context.owner {
+        ImageOwner::Run { campaign, .. } => Audience::CampaignShared(*campaign),
+        ImageOwner::Draft { account } => Audience::OwnerPrivate(*account),
+    };
+    let mut request = ImageRequest {
+        identity: OperationIdentity {
+            owner: context.owner.clone(),
+            operation,
+            fingerprint: [0; 32],
+        },
+        purpose: PurposedUse {
+            purpose,
+            role: VariantRole::Primary,
+        },
+        operation: ImageOperation::Generate(GenerateSpec {
+            prompt: TextPrompt::new("a plate", 1).unwrap(),
+            references,
+        }),
+        execution: ExecutionMode::Live,
+        freshness: Freshness::Regenerate { nonce: operation },
+        urgency: Urgency::Visible,
+        audience,
+        expected_source_revision: context.expected_source_revision,
+        output: context.config.output_profile_for(purpose).unwrap(),
+    };
+    request.identity.fingerprint = context.service.canonical_fingerprint(&request).unwrap();
+    request
+}
+
+async fn unified_cost_image(
+    fixture: &crate::gameplay::image_test_support::ImageHostFixture,
+    endpoint: &CostImageEndpoint,
+    operation: u8,
+    purpose: df_imagery::Purpose,
+    references: Vec<df_imagery::SourceRef>,
+    expected_calls: u64,
+) -> (df_imagery::ImageDemandView, df_imagery::ImageRequest) {
+    use df_imagery::*;
+    let context = fixture.imagery().consumer_context().await.unwrap();
+    let request = cost_image_request(&context, operation, purpose, references);
+    let mut view = match context
+        .service
+        .request(&context.principal, &request)
+        .await
+        .unwrap()
+    {
+        RequestOutcome::Recorded(view) => view,
+        other => panic!("actual unified request refused: {other:?}"),
+    };
+    let expected = *endpoint.reply.lock().unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let terminal = match expected {
+            CostImageReply::Unknown
+            | CostImageReply::Refused(_)
+            | CostImageReply::AmbiguousRateLimit
+            | CostImageReply::Quota => matches!(
+                view.execution,
+                ImageExecutionState::Unknown | ImageExecutionState::Uncertain
+            ),
+            CostImageReply::Reported { .. } | CostImageReply::Silent => {
+                view.execution == ImageExecutionState::Ready
+            }
+        };
+        if terminal && fixture.metering_port().totals().calls == expected_calls {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "actual unified cost request did not finish: {view:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        view = context
+            .service
+            .read(&context.principal, &view.handle)
+            .await
+            .unwrap();
     }
+    assert_cost_replay(
+        context
+            .service
+            .request(&context.principal, &request)
+            .await
+            .unwrap(),
+        &view,
+    );
+    assert_eq!(
+        fixture.metering_port().totals().calls,
+        expected_calls,
+        "request replay cannot create another charge identity"
+    );
+    (view, request)
 }
 
 fn state_of(book: &CostBook) -> MutexGuard<'_, BookState> {
@@ -336,7 +686,15 @@ fn the_checked_in_price_file_loads_and_prices_every_priced_route() {
 
 #[test]
 fn every_provider_client_has_a_billed_route() {
-    const NOT_CLIENTS: [&str; 2] = ["NativeHttpLimits", "NativeSpeechObservation"];
+    // The generic HTTP transport and its response metadata do not select a billed route.
+    const NOT_CLIENTS: [&str; 6] = [
+        "NativeHttp",
+        "NativeHttpFailure",
+        "NativeHttpLimits",
+        "NativeHttpMetadata",
+        "NativeHttpResponse",
+        "NativeSpeechObservation",
+    ];
     let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../df-providers/src");
     let mut clients = BTreeSet::new();
     for entry in std::fs::read_dir(directory).expect("df-providers sources") {
@@ -380,42 +738,68 @@ fn the_client_metered_routes_have_no_pending_admission_entry() {
     );
 }
 
-#[test]
-fn an_image_call_is_priced_from_the_reported_tokens_like_the_provider_formula() {
+#[tokio::test]
+async fn an_image_call_is_priced_from_the_reported_tokens_like_the_provider_formula() {
     let ledger = opened_ledger(None);
-    let route = image_route();
-    let spec = image_call(
-        &route,
-        ImageEditModel::Gpt25Flare,
-        ImageKind::ScenePlate,
-        ImagePriority::Foreground,
-        "dev",
-        &plate_edit(),
+    let endpoint = CostImageEndpoint::new(
+        1024,
+        640,
+        CostImageReply::Reported {
+            text: 1000,
+            input: 2000,
+            output: 3000,
+        },
     );
-    assert_eq!(spec.cause, Cause::ScenePlate);
-    assert_eq!(spec.detail, "scene_plate/foreground/dev/low/1024x640/refs0");
-    let usage = ImageUsage {
-        text_input_tokens: 1_000,
-        image_input_tokens: 2_000,
-        output_tokens: 3_000,
+    let patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::OpenAi,
+        1024,
+        640,
+        df_imagery::GenerationQuality::Low,
+        false,
+    );
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        port::MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
     };
-    let call = ledger.begin_call(spec.clone(), &[(Category::Calls, 1)]);
-    settle_image_call(call, &route, &Ok((image(usage), None)));
-    let state = state_of(ledger.costs());
-    // 1,000 text tokens at 5, 2,000 image tokens at 8 and 3,000 output tokens at 30 micro-dollars.
-    assert_eq!(
-        state.session_totals.micro_usd,
-        1_000 * 5 + 2_000 * 8 + 3_000 * 30
-    );
-    assert_eq!(state.session_totals.estimated_events, 0);
-    assert_eq!(
-        state.by_line_micro(
-            Provider::OpenAi,
-            "gpt-image-2.5-flare",
-            Category::ImageInput
-        ),
-        16_000
-    );
+    let (view, _) = unified_cost_image(
+        &fixture,
+        &endpoint,
+        31,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        1,
+    )
+    .await;
+    assert_eq!(view.execution, df_imagery::ImageExecutionState::Ready);
+    {
+        let state = state_of(ledger.costs());
+        assert_eq!(
+            state.session_totals.micro_usd,
+            1000 * 5 + 2000 * 8 + 3000 * 30
+        );
+        assert_eq!(state.session_totals.estimated_events, 0);
+        assert_eq!(
+            state.by_line_micro(
+                Provider::OpenAi,
+                "gpt-image-2.5-flare",
+                Category::ImageInput
+            ),
+            16_000
+        );
+    }
+    let calls = fixture.metering_port().recent();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].call_id.starts_with("img-"));
+    assert_eq!(calls[0].cause, "scene_plate");
+    assert_eq!(calls[0].detail, "scene_plate/generation");
+    assert_eq!(endpoint.posts().len(), 1);
+    fixture.close().await;
 }
 
 impl BookState {
@@ -427,47 +811,235 @@ impl BookState {
     }
 }
 
-#[test]
-fn a_rate_limited_image_call_is_not_billed_and_a_failed_one_is_of_unknown_outcome() {
-    let ledger = opened_ledger(None);
-    let route = image_route();
-    let spec = image_call(
-        &route,
-        ImageEditModel::Gpt25Flare,
-        ImageKind::ArtifactCloseUp,
-        ImagePriority::Background,
-        "production",
-        &plate_edit(),
-    );
-    for failure in [
-        ImageFailure::RateLimited,
-        ImageFailure::InvalidRequest,
-        ImageFailure::QuotaExhausted,
+#[tokio::test]
+async fn image_errors_without_billing_proof_retain_the_unknown_charge_without_resending() {
+    use df_imagery::execution::FailureCause;
+    for (operation, reply, expected_cause) in [
+        (41, CostImageReply::Refused(400), None),
+        (
+            42,
+            CostImageReply::Quota,
+            Some(FailureCause::QuotaExhausted),
+        ),
+        (
+            43,
+            CostImageReply::Refused(503),
+            Some(FailureCause::Provider),
+        ),
+        (
+            44,
+            CostImageReply::AmbiguousRateLimit,
+            Some(FailureCause::RateLimited),
+        ),
+        (
+            45,
+            CostImageReply::Unknown,
+            Some(FailureCause::TransportLost),
+        ),
     ] {
-        let call = ledger.begin_call(spec.clone(), &[(Category::Calls, 1)]);
-        settle_image_call(call, &route, &Err(failure));
+        let ledger = opened_ledger(None);
+        let endpoint = CostImageEndpoint::new(1024, 640, reply);
+        let mut patch = cost_image_patch(
+            endpoint.address,
+            df_imagery::BackendId::OpenAi,
+            1024,
+            640,
+            df_imagery::GenerationQuality::Low,
+            false,
+        );
+        patch.retry_max_attempts = Some(2);
+        let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+            endpoint.address,
+            patch,
+            port::MeteringPort::from_ledger(ledger.clone()),
+        )
+        .await
+        else {
+            return;
+        };
+        let (view, _) = unified_cost_image(
+            &fixture,
+            &endpoint,
+            operation,
+            df_imagery::Purpose::ItemCloseUp,
+            vec![],
+            1,
+        )
+        .await;
+        assert_eq!(view.failure, expected_cause);
+        {
+            let state = state_of(ledger.costs());
+            assert_eq!(state.session_totals.events, 1);
+            assert_eq!(state.session_totals.unknown_events, 1);
+            assert_eq!(state.session_totals.unpriced_events, 0);
+            assert_eq!(state.session_totals.micro_usd, 4 * 5 + 170 * 30);
+            assert_eq!(state.session_totals.by_cause[&Cause::ItemCloseUp].events, 1);
+        }
+        let calls = fixture.metering_port().recent();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].source, port::MeteredSource::Unknown);
+        assert!(!calls[0].usable);
+        let (database, connection) = fixture
+            .database()
+            .connect(tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        let driver = tokio::spawn(connection);
+        let rows = database
+            .query(
+                "SELECT d.book_call_id,d.dispatch_state,d.settlement,u.evidence, \
+                 u.units=u.maxima AS full_hold,octet_length(u.raw_output)>0 AS retained_error \
+                 FROM imagery.image_dispatch_attempt d JOIN imagery.image_dispatch_usage u \
+                 USING(dispatch_id) ORDER BY d.dispatch_seq,u.revision",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, String>("book_call_id"), calls[0].call_id);
+        assert_eq!(rows[0].get::<_, String>("dispatch_state"), "unknown");
+        assert_eq!(
+            rows[0].get::<_, String>("settlement"),
+            "unknown_outstanding"
+        );
+        assert_eq!(rows[0].get::<_, String>("evidence"), "unknown");
+        assert!(rows[0].get::<_, bool>("full_hold"));
+        assert!(rows[0].get::<_, bool>("retained_error"));
+        drop(database);
+        driver.await.unwrap().unwrap();
+        assert_eq!(
+            endpoint.posts().len(),
+            1,
+            "ambiguous, quota, invalid and provider failures cannot authorize a fresh send"
+        );
+        fixture.close().await;
     }
-    assert_eq!(state_of(ledger.costs()).session_totals.events, 0);
-    let call = ledger.begin_call(spec, &[(Category::Calls, 1)]);
-    settle_image_call(call, &route, &Err(ImageFailure::DeadlineExceeded));
-    let state = state_of(ledger.costs());
-    assert_eq!(state.session_totals.events, 1);
-    assert_eq!(state.session_totals.unknown_events, 1);
-    assert_eq!(
-        state.session_totals.unpriced_events, 0,
-        "the dropped call is booked in the route's own priced categories"
+}
+
+#[tokio::test]
+async fn strict_image_submit_declines_retry_fresh_dispatches_only_to_the_frozen_limit() {
+    let ledger = opened_ledger(None);
+    let endpoint = CostImageEndpoint::new(1024, 640, CostImageReply::Refused(429));
+    let mut patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::OpenAi,
+        1024,
+        640,
+        df_imagery::GenerationQuality::Low,
+        false,
     );
-    // The prompt "a plate" at two bytes per token, no references, and a low 1024 by 640 picture:
-    // 4 text tokens at 5, 170 output tokens at 30 micro-dollars.
-    assert_eq!(state.session_totals.micro_usd, 4 * 5 + 170 * 30);
+    patch.retry_max_attempts = Some(2);
+    patch.retry_backoff_secs = Some(0);
+    patch.retry_deadline_secs = Some(20);
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        port::MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    let (view, request) = unified_cost_image(
+        &fixture,
+        &endpoint,
+        46,
+        df_imagery::Purpose::ItemCloseUp,
+        vec![],
+        2,
+    )
+    .await;
     assert_eq!(
-        state
-            .session_totals
-            .by_cause
-            .get(&Cause::ItemCloseUp)
-            .map(|total| total.events),
-        Some(1)
+        view.failure,
+        Some(df_imagery::execution::FailureCause::RateLimited)
     );
+    {
+        let state = state_of(ledger.costs());
+        assert_eq!(state.session_totals.events, 2);
+        assert_eq!(state.session_totals.unknown_events, 2);
+        assert_eq!(state.session_totals.unpriced_events, 0);
+        assert_eq!(state.session_totals.micro_usd, 2 * (4 * 5 + 170 * 30));
+    }
+    let calls = fixture.metering_port().recent();
+    assert_eq!(calls.len(), 2);
+    assert_ne!(calls[0].call_id, calls[1].call_id);
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.source == port::MeteredSource::Unknown && !call.usable)
+    );
+    let (database, connection) = fixture
+        .database()
+        .connect(tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let driver = tokio::spawn(connection);
+    let rows = database.query(
+        "SELECT d.dispatch_id,d.lineage_parent,d.book_call_id,d.dispatch_state,d.dispatch_seq, \
+         d.settlement,d.failure_cause,u.evidence,u.units=u.maxima AS full_hold, \
+         o.max_attempts,o.usage_revision=u.revision AND c.usage_revision=u.revision AS same_receipt, \
+         convert_from(u.raw_output,'UTF8')::jsonb->>'schema_revision' AS raw_schema \
+         FROM imagery.image_dispatch_attempt d JOIN imagery.image_dispatch_usage u USING(dispatch_id) \
+         JOIN imagery.image_decline_observation o ON o.dispatch_id=d.dispatch_id \
+         JOIN imagery.image_decline_checkpoint c ON c.dispatch_id=d.dispatch_id \
+         ORDER BY d.dispatch_seq,u.revision",
+        &[],
+    ).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let first: Vec<u8> = rows[0].get("dispatch_id");
+    assert!(
+        rows[0]
+            .get::<_, Option<Vec<u8>>>("lineage_parent")
+            .is_none()
+    );
+    assert_eq!(
+        rows[1].get::<_, Option<Vec<u8>>>("lineage_parent"),
+        Some(first)
+    );
+    assert_eq!(
+        rows[1].get::<_, i32>("dispatch_seq"),
+        rows[0].get::<_, i32>("dispatch_seq") + 1
+    );
+    let mut actual_ids = BTreeSet::new();
+    for row in rows {
+        let dispatch: [u8; 16] = row.get::<_, Vec<u8>>("dispatch_id").try_into().unwrap();
+        let id: String = row.get("book_call_id");
+        assert_eq!(id, df_imagery::cost::pinned_call_id(&dispatch));
+        actual_ids.insert(id);
+        assert_eq!(row.get::<_, String>("dispatch_state"), "declined");
+        assert_eq!(row.get::<_, String>("settlement"), "unknown_outstanding");
+        assert_eq!(row.get::<_, String>("failure_cause"), "rate_limited");
+        assert_eq!(row.get::<_, String>("evidence"), "unknown");
+        assert_eq!(row.get::<_, i64>("max_attempts"), 2);
+        assert_eq!(row.get::<_, String>("raw_schema"), "2");
+        assert!(row.get::<_, bool>("full_hold"));
+        assert!(row.get::<_, bool>("same_receipt"));
+    }
+    assert_eq!(
+        actual_ids,
+        calls.iter().map(|call| call.call_id.clone()).collect()
+    );
+    drop(database);
+    driver.await.unwrap().unwrap();
+    let context = fixture.imagery().consumer_context().await.unwrap();
+    for _ in 0..8 {
+        assert_cost_replay(
+            context
+                .service
+                .request(&context.principal, &request)
+                .await
+                .unwrap(),
+            &view,
+        );
+    }
+    drop(context);
+    assert_eq!(
+        endpoint.posts().len(),
+        2,
+        "the frozen attempt budget permits no third send"
+    );
+    assert_eq!(fixture.metering_port().totals().calls, 2);
+    fixture.close().await;
 }
 
 #[test]
@@ -1203,40 +1775,87 @@ fn a_speech_request_refused_before_billable_work_is_not_billed() {
     );
 }
 
-#[test]
-fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_stands_for_its_maxima() {
-    let spec = clip_frame_call(ImageEditModel::Gpt25Sunburst, true);
-    assert_eq!(
-        (
-            spec.provider,
-            spec.model.as_str(),
-            spec.cause,
-            spec.detail.as_str()
-        ),
-        (
-            Provider::OpenAi,
-            "gpt-image-2.5-sunburst",
-            Cause::ClipFrame,
-            "fallen"
-        )
+#[tokio::test]
+async fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_stands_for_its_maxima() {
+    let ledger = metering::shipped_ledger();
+    let endpoint = CostImageEndpoint::new(1024, 1024, CostImageReply::Silent);
+    let mut patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::OpenAi,
+        1024,
+        1024,
+        df_imagery::GenerationQuality::Medium,
+        false,
     );
+    patch.purpose_model_override[df_imagery::Purpose::AnimationFrame.index()] = Some(Some(
+        df_imagery::ModelName::new("gpt-image-2.5-sunburst").unwrap(),
+    ));
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        port::MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        51,
+        df_imagery::Purpose::AnimationFrame,
+        vec![],
+        1,
+    )
+    .await;
+    let silent = fixture.metering_port().recent().pop().unwrap();
+    assert_eq!(silent.model, "gpt-image-2.5-sunburst");
+    assert_eq!(silent.cause, "clip_frame");
+    assert_eq!(silent.detail, "animation_frame/generation");
+    assert_eq!(silent.source, port::MeteredSource::Estimated);
     assert_eq!(
-        image_token_usage(ImageUsage::default()),
-        Usage::estimated(Vec::new()),
-        "a silent usage is empty: the call's own maxima stand for it"
+        silent.units,
+        vec![
+            port::MeteredUnits {
+                category: "text_input".to_owned(),
+                quantity: 4
+            },
+            port::MeteredUnits {
+                category: "image_input".to_owned(),
+                quantity: 0
+            },
+            port::MeteredUnits {
+                category: "image_output".to_owned(),
+                quantity: 1056
+            }
+        ]
     );
+    endpoint.set(CostImageReply::Reported {
+        text: 1,
+        input: 2,
+        output: 3,
+    });
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        52,
+        df_imagery::Purpose::AnimationFrame,
+        vec![],
+        2,
+    )
+    .await;
+    let reported = fixture.metering_port().recent().pop().unwrap();
+    assert_eq!(reported.source, port::MeteredSource::Reported);
     assert_eq!(
-        image_token_usage(ImageUsage {
-            text_input_tokens: 1,
-            image_input_tokens: 2,
-            output_tokens: 3,
-        }),
-        Usage::reported(vec![
-            (Category::TextInput, 1),
-            (Category::ImageInput, 2),
-            (Category::ImageOutput, 3),
-        ])
+        reported
+            .units
+            .iter()
+            .map(|unit| unit.quantity)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
     );
+    assert_ne!(silent.call_id, reported.call_id);
+    fixture.close().await;
 }
 
 // The charge-site guard, its fixtures and the pinned list of unmetered charges.
@@ -1244,6 +1863,9 @@ fn a_clip_frame_is_priced_from_its_tokens_and_a_silent_usage_stands_for_its_maxi
 mod charge_guard;
 
 // Tiers, carried remainders, maxima, the provider meter and the metering port.
+#[path = "cost_unsent_cleanup_tests.rs"]
+mod unsent_cleanup;
+
 #[path = "cost_metering_tests.rs"]
 mod metering;
 
@@ -1370,4 +1992,1935 @@ fn every_cited_backlog_id_is_a_row_of_the_cost_engine_backlog() {
         Vec::<(&str, &str)>::new(),
         "cited but not a row of the Cost engine backlog in planning/issue-triage.md"
     );
+}
+
+// Pinned imagery cost projection: one stable id per dispatch, same-id correction.
+
+/// A pinned call id for `n`: dispatch-derived in shape, deterministic for tests.
+fn pinned_id(n: u64) -> String {
+    format!("{PINNED_CALL_PREFIX}{n:032x}")
+}
+
+fn pinned_unit(category: &str, quantity: u64) -> port::MeteredUnits {
+    port::MeteredUnits {
+        category: category.to_owned(),
+        quantity,
+    }
+}
+
+/// The imagery route the pinned tests project: the checked-in test rates price it.
+fn pinned_route() -> port::PortRoute {
+    port::PortRoute {
+        provider: "openai".to_owned(),
+        model: "gpt-image-2.5-flare".to_owned(),
+        cause: "scene_plate".to_owned(),
+        detail: "pinned-test".to_owned(),
+        maxima: vec![
+            pinned_unit("text_input", 2_000_000),
+            pinned_unit("image_output", 1_000_000),
+        ],
+    }
+}
+
+fn pinned_port(run: &str) -> port::MeteringPort {
+    let port = port::MeteringPort::new();
+    port.open(run, TABLE).expect("opens");
+    port
+}
+
+fn pinned_spec() -> CallSpec {
+    CallSpec::new(
+        Provider::OpenAi,
+        "gpt-image-2.5-flare",
+        Cause::ScenePlate,
+        "pinned-test",
+    )
+    .with_maxima(vec![
+        (Category::TextInput, 2_000_000),
+        (Category::ImageOutput, 1_000_000),
+    ])
+}
+
+struct PinnedRecorder {
+    started: Mutex<u64>,
+    settled: Mutex<Vec<port::MeteredCall>>,
+}
+
+/// An unknown-outcome report with no quantities: the book stands it for the call's maxima.
+fn unknown_usage() -> Usage {
+    Usage {
+        source: UsageSource::Unknown,
+        quantities: Vec::new(),
+        usable: true,
+    }
+}
+
+impl port::MeterObserver for PinnedRecorder {
+    fn started(&self, _start: &port::MeterStart) {
+        *self.started.lock().expect("started") += 1;
+    }
+
+    fn settled(&self, call: &port::MeteredCall) {
+        self.settled.lock().expect("settled").push(call.clone());
+    }
+}
+
+#[test]
+fn a_pinned_unknown_then_reported_correction_is_one_call_with_the_latest_evidence() {
+    let port = pinned_port("run");
+    let id = pinned_id(1);
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Ok(PinnedStart::Opened)
+    );
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Unknown, &[], true, 1_000),
+        Ok(PinnedCorrection::Applied)
+    );
+    // Unknown stands for the maxima: 2M text tokens at 5 plus 1M output tokens at 30.
+    assert_eq!(
+        port.totals(),
+        port::MeterTotals {
+            calls: 1,
+            micro_usd: 40000000,
+            unpriced_calls: 0,
+        }
+    );
+    let recent = port.recent();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].call_id, id);
+    assert!(!recent[0].correction);
+    assert_eq!(recent[0].source, port::MeteredSource::Unknown);
+    assert_eq!(recent[0].at_ms, 1_000);
+    assert_eq!(
+        port.correct_pinned_at(
+            &id,
+            1,
+            port::MeteredSource::Reported,
+            &[pinned_unit("image_output", 2_000_000)],
+            true,
+            2_000,
+        ),
+        Ok(PinnedCorrection::Applied)
+    );
+    assert_eq!(
+        port.totals(),
+        port::MeterTotals {
+            calls: 1,
+            micro_usd: 60000000,
+            unpriced_calls: 0,
+        },
+        "the correction replaces the totals under the same id"
+    );
+    let recent = port.recent();
+    assert_eq!(
+        recent.len(),
+        1,
+        "the correction replaces the recent entry under the same id"
+    );
+    assert_eq!(recent[0].call_id, id);
+    assert!(recent[0].correction);
+    assert_eq!(recent[0].source, port::MeteredSource::Reported);
+    assert_eq!(
+        recent[0].units,
+        vec![pinned_unit("image_output", 2_000_000)]
+    );
+}
+
+#[test]
+fn an_exact_replay_of_a_pinned_start_or_correction_changes_nothing() {
+    let port = pinned_port("run");
+    let recorder = Arc::new(PinnedRecorder {
+        started: Mutex::new(0),
+        settled: Mutex::new(Vec::new()),
+    });
+    port.observe(recorder.clone());
+    let id = pinned_id(2);
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Ok(PinnedStart::Opened)
+    );
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Ok(PinnedStart::ReplayedOpen)
+    );
+    let units = vec![pinned_unit("image_output", 1_000_000)];
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &units, true, 1_000),
+        Ok(PinnedCorrection::Applied)
+    );
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &units, true, 1_000),
+        Ok(PinnedCorrection::Replayed)
+    );
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(port.totals().calls, 1);
+    assert_eq!(port.totals().micro_usd, 30000000);
+    assert_eq!(*recorder.started.lock().expect("started"), 1);
+    let settled = recorder.settled.lock().expect("settled");
+    assert_eq!(settled.len(), 1, "a replay notifies nothing");
+    assert_eq!(settled[0].call_id, id);
+}
+
+#[test]
+fn a_newer_pinned_revision_replaces_totals_rollups_and_recent_under_the_same_id() {
+    let port = pinned_port("run");
+    let id = pinned_id(3);
+    port.start_pinned(&id, &pinned_route()).expect("opens");
+    port.correct_pinned_at(
+        &id,
+        0,
+        port::MeteredSource::Reported,
+        &[pinned_unit("image_output", 1_000_000)],
+        true,
+        1_000,
+    )
+    .expect("settles");
+    assert_eq!(port.totals().micro_usd, 30000000);
+    port.correct_pinned_at(
+        &id,
+        1,
+        port::MeteredSource::Estimated,
+        &[pinned_unit("text_input", 1_000_000)],
+        true,
+        2_000,
+    )
+    .expect("corrects");
+    assert_eq!(
+        port.totals(),
+        port::MeterTotals {
+            calls: 1,
+            micro_usd: 5000000,
+            unpriced_calls: 0,
+        }
+    );
+    let recent = port.recent();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].source, port::MeteredSource::Estimated);
+    assert_eq!(recent[0].units, vec![pinned_unit("text_input", 1_000_000)]);
+}
+
+#[test]
+fn an_out_of_order_or_conflicting_pinned_revision_is_refused_and_keeps_state() {
+    let port = pinned_port("run");
+    let id = pinned_id(4);
+    port.start_pinned(&id, &pinned_route()).expect("opens");
+    let rev2 = vec![pinned_unit("image_output", 1_000_000)];
+    port.correct_pinned_at(&id, 2, port::MeteredSource::Reported, &rev2, true, 1_000)
+        .expect("settles");
+    assert_eq!(
+        port.correct_pinned_at(&id, 1, port::MeteredSource::Reported, &rev2, true, 2_000),
+        Err(PinnedError::StaleRevision { stored: 2, got: 1 })
+    );
+    assert_eq!(
+        port.correct_pinned_at(
+            &id,
+            2,
+            port::MeteredSource::Reported,
+            &[pinned_unit("image_output", 2_000_000)],
+            true,
+            2_000
+        ),
+        Err(PinnedError::RevisionConflict { revision: 2 })
+    );
+    assert_eq!(port.totals().calls, 1);
+    assert_eq!(port.totals().micro_usd, 30000000);
+    assert_eq!(port.recent()[0].units, rev2);
+}
+
+#[test]
+fn a_pinned_call_with_unpriced_lines_keeps_them_visible_and_prices_the_rest() {
+    let port = pinned_port("run");
+    let id = pinned_id(5);
+    let mut route = pinned_route();
+    route.maxima = vec![
+        pinned_unit("text_input", 1_000_000),
+        pinned_unit("credits", 7),
+    ];
+    port.start_pinned(&id, &route).expect("opens");
+    assert_eq!(
+        port.correct_pinned_at(
+            &id,
+            0,
+            port::MeteredSource::Reported,
+            &[
+                pinned_unit("text_input", 1_000_000),
+                pinned_unit("credits", 7)
+            ],
+            true,
+            1_000,
+        ),
+        Ok(PinnedCorrection::Applied)
+    );
+    // The priced line pays its exact price; the unpriced line counts zero but stays visible.
+    assert_eq!(
+        port.totals(),
+        port::MeterTotals {
+            calls: 1,
+            micro_usd: 5000000,
+            unpriced_calls: 1,
+        }
+    );
+    let recent = port.recent();
+    assert_eq!(recent.len(), 1);
+    assert!(recent[0].unpriced);
+    assert_eq!(recent[0].units.len(), 2);
+}
+
+#[test]
+fn a_billed_but_unusable_pinned_call_stays_attributed_as_a_company_loss() {
+    let ledger = opened_ledger(None);
+    let id = pinned_id(6);
+    ledger
+        .costs()
+        .start_pinned(&id, pinned_spec())
+        .expect("opens");
+    ledger
+        .costs()
+        .correct_pinned(
+            &id,
+            0,
+            Usage::reported(vec![(Category::ImageOutput, 1_000_000)]).unusable(),
+            1_000,
+        )
+        .expect("settles");
+    let report = ledger.costs().report(2_000);
+    assert_eq!(report["run"]["events"], 1);
+    assert_eq!(report["run"]["micro_usd"], 30_000_000);
+    assert_eq!(
+        report["run"]["unusable_events"], 1,
+        "the loss is attributed, never charged on"
+    );
+    assert_eq!(report["run"]["unpriced_events"], 0);
+}
+
+#[test]
+fn a_proven_unsent_pinned_call_records_nothing_and_cannot_be_rebilled() {
+    let port = pinned_port("run");
+    let id = pinned_id(7);
+    assert_eq!(
+        port.record_pinned_unsent(&id),
+        Err(PinnedError::UnknownCall),
+        "unsent needs its start first, like a correction does"
+    );
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &[], true, 1_000),
+        Err(PinnedError::UnknownCall)
+    );
+    assert_eq!(
+        port.start_pinned("", &pinned_route()),
+        Err(PinnedError::UnknownCall),
+        "an empty id never opens a call"
+    );
+    port.start_pinned(&id, &pinned_route()).expect("opens");
+    assert_eq!(port.record_pinned_unsent(&id), Ok(PinnedUnsent::Recorded));
+    assert_eq!(port.totals().calls, 0);
+    assert!(port.recent().is_empty());
+    assert_eq!(port.record_pinned_unsent(&id), Ok(PinnedUnsent::Replayed));
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &[], true, 2_000),
+        Err(PinnedError::AlreadySettled),
+        "a sent-proof call cannot settle what was proven unsent"
+    );
+}
+
+#[test]
+fn a_pinned_start_conflicts_on_a_different_route() {
+    let port = pinned_port("run");
+    let id = pinned_id(8);
+    port.start_pinned(&id, &pinned_route()).expect("opens");
+    let mut other = pinned_route();
+    other.detail = "another-dispatch".to_owned();
+    assert_eq!(
+        port.start_pinned(&id, &other),
+        Err(PinnedError::RouteConflict)
+    );
+    port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &[], true, 1_000)
+        .expect("the first route still settles");
+    assert_eq!(port.totals().calls, 1);
+}
+
+#[test]
+fn a_pinned_correction_reaches_observers_reports_and_rollups_exactly_once() {
+    let ledger = opened_ledger(None);
+    let recorder = Arc::new(PinnedRecorder {
+        started: Mutex::new(0),
+        settled: Mutex::new(Vec::new()),
+    });
+    ledger.costs().observe(recorder.clone());
+    let id = pinned_id(9);
+    ledger
+        .costs()
+        .start_pinned(&id, pinned_spec())
+        .expect("opens");
+    ledger
+        .costs()
+        .correct_pinned(&id, 0, unknown_usage(), 1_000)
+        .expect("settles unknown");
+    let report = ledger.costs().report(1_500);
+    assert_eq!(report["run"]["events"], 1);
+    assert_eq!(report["run"]["unknown_events"], 1);
+    ledger
+        .costs()
+        .correct_pinned(
+            &id,
+            1,
+            Usage::estimated(vec![(Category::TextInput, 1_000_000)]),
+            2_000,
+        )
+        .expect("corrects");
+    assert_eq!(*recorder.started.lock().expect("started"), 1);
+    let settled = recorder.settled.lock().expect("settled");
+    assert_eq!(settled.len(), 2);
+    assert_eq!(settled[0].call_id, id);
+    assert!(!settled[0].correction);
+    assert_eq!(settled[1].call_id, id);
+    assert!(settled[1].correction, "the correction is identifiable");
+    drop(settled);
+    let report = ledger.costs().report(3_000);
+    assert_eq!(report["run"]["events"], 1, "one call, never two");
+    assert_eq!(report["run"]["micro_usd"], 5_000_000);
+    assert_eq!(report["run"]["estimated_events"], 1);
+    assert_eq!(report["run"]["unknown_events"], 0);
+    let causes = report["run"]["by_cause"]
+        .as_array()
+        .expect("by_cause rollup");
+    assert_eq!(causes.len(), 1);
+    assert_eq!(causes[0]["cause"], "scene_plate");
+    assert_eq!(causes[0]["events"], 1);
+    assert_eq!(causes[0]["micro_usd"], 5_000_000);
+}
+
+#[test]
+fn a_reopened_book_replays_the_latest_pinned_revision_without_double_counting() {
+    let directory = scratch("pinned-reopen");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(40);
+    {
+        let first = CostBook::with_session("s1");
+        first
+            .open(
+                "df_gameplay_demo_test",
+                Some(&log),
+                table(),
+                PricingStatus::NotLoaded,
+                1_000,
+            )
+            .expect("opens");
+        first.start_pinned(&id, pinned_spec()).expect("opens");
+        first
+            .correct_pinned(&id, 0, unknown_usage(), 1_000)
+            .expect("settles unknown");
+        first
+            .correct_pinned(
+                &id,
+                1,
+                Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+                2_000,
+            )
+            .expect("corrects");
+        assert_eq!(state_of(&first).run_totals.events, 1);
+        first.close();
+    }
+    let second = CostBook::with_session("s2");
+    let opened = second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            3_000,
+        )
+        .expect("reopens");
+    assert_eq!(opened.malformed, 0);
+    assert_eq!(opened.replayed, 1, "only the latest revision replays");
+    assert_eq!(state_of(&second).run_totals.events, 1);
+    assert_eq!(state_of(&second).run_totals.micro_usd, 60000000);
+    assert_eq!(
+        second.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::AlreadySettled),
+        "the replayed call keeps its identity"
+    );
+    assert_eq!(
+        second.correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+            4_000,
+        ),
+        Ok(PinnedCorrection::Replayed)
+    );
+    assert_eq!(
+        second.correct_pinned(&id, 0, unknown_usage(), 4_000),
+        Err(PinnedError::StaleRevision { stored: 1, got: 0 })
+    );
+    second
+        .correct_pinned(
+            &id,
+            2,
+            Usage::reported(vec![(Category::TextInput, 1_000_000)]),
+            4_000,
+        )
+        .expect("corrects");
+    assert_eq!(state_of(&second).run_totals.events, 1);
+    assert_eq!(state_of(&second).run_totals.micro_usd, 5000000);
+}
+
+#[test]
+fn unpersisted_pinned_calls_stay_correctable_and_backpressure_new_identities() {
+    let book = opened_book("unpersisted", None);
+    for n in 0..8 {
+        book.start_pinned(&pinned_id(n), pinned_spec()).unwrap();
+        book.correct_pinned(&pinned_id(n), 0, unknown_usage(), 1_000)
+            .unwrap();
+    }
+    assert_eq!(
+        book.start_pinned(&pinned_id(9), pinned_spec()),
+        Err(PinnedError::ProjectionFull)
+    );
+    book.correct_pinned(
+        &pinned_id(0),
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 0)]),
+        2_000,
+    )
+    .unwrap();
+    assert_eq!(book.totals().calls, 8);
+    assert_eq!(book.totals().micro_usd, 7 * 40_000_000);
+}
+
+#[test]
+fn a_repeated_pinned_revision_with_the_same_usage_keeps_identical_money() {
+    let book = opened_book("s1", None);
+    let output = |tokens: u64| Usage::reported(vec![(Category::TextOutput, tokens)]);
+    // One ordinary token at half a micro-dollar rounds to one, carrying minus a half.
+    book.meter(text_call("gpt-6-luna", "a"), output(1), 2_000);
+    assert_eq!(state_of(&book).session_totals.micro_usd, 1);
+    // A pinned call prices in isolation: one token is one, and the ordinary carry is
+    // untouched by the interleave.
+    let id = pinned_id(300);
+    let spec = CallSpec::new(
+        Provider::OpenAi,
+        "gpt-6-luna",
+        Cause::Storyteller,
+        "pinned-test",
+    )
+    .with_maxima(vec![(Category::TextOutput, 10)]);
+    book.start_pinned(&id, spec).expect("opens");
+    book.correct_pinned(&id, 0, output(1), 2_001)
+        .expect("settles");
+    assert_eq!(state_of(&book).session_totals.micro_usd, 2);
+    // The ordinary carry still holds its minus half: the next ordinary token costs nothing.
+    book.meter(text_call("gpt-6-luna", "a"), output(1), 2_002);
+    assert_eq!(state_of(&book).session_totals.micro_usd, 2);
+    // New revisions with the same usage keep identical money instead of pumping rounding.
+    for revision in 1..4 {
+        book.correct_pinned(&id, revision, output(1), 2_003 + revision)
+            .expect("corrects");
+        assert_eq!(state_of(&book).session_totals.micro_usd, 2);
+    }
+    // Corrections up and down move the totals exactly: three tokens are two micro-dollars.
+    book.correct_pinned(&id, 4, output(3), 3_000)
+        .expect("corrects up");
+    assert_eq!(state_of(&book).session_totals.micro_usd, 3);
+    book.correct_pinned(&id, 5, output(1), 3_001)
+        .expect("corrects down");
+    assert_eq!(state_of(&book).session_totals.micro_usd, 2);
+    let state = state_of(&book);
+    assert_eq!(state.session_totals.events, 3);
+    let lines: u64 = state
+        .session_totals
+        .by_line
+        .values()
+        .map(|total| total.micro_usd)
+        .sum();
+    assert_eq!(lines, state.session_totals.micro_usd);
+}
+
+#[test]
+fn a_rate_change_never_reprices_replayed_history_or_corrections() {
+    let directory = scratch("pinned-rates");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(310);
+    let first = CostBook::with_session("s1");
+    first
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            1_000,
+        )
+        .expect("opens");
+    first.start_pinned(&id, pinned_spec()).expect("opens");
+    first
+        .correct_pinned(
+            &id,
+            0,
+            Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+            1_000,
+        )
+        .expect("settles");
+    assert_eq!(state_of(&first).run_totals.micro_usd, 30000000);
+    assert!(first.flush());
+    drop(first);
+    let dearer = PriceTable::parse(&TABLE.replace("\"usd\": \"30\"", "\"usd\": \"60\""))
+        .expect("a dearer table");
+    let second = CostBook::with_session("s2");
+    let opened = second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            dearer,
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .expect("reopens");
+    assert_eq!(opened.replayed, 1);
+    assert_eq!(
+        state_of(&second).run_totals.micro_usd,
+        30000000,
+        "replay never reprices stored lines"
+    );
+    second
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+            3_000,
+        )
+        .expect("corrects");
+    assert_eq!(
+        state_of(&second).run_totals.micro_usd,
+        30_000_000,
+        "the correction retains the original frozen tariff"
+    );
+}
+
+#[test]
+fn an_unknown_report_after_a_lower_report_uses_the_route_maxima_not_the_lower_usage() {
+    let directory = scratch("pinned-maxima");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(320);
+    let first = opened_book("s1", Some(&log));
+    first.start_pinned(&id, pinned_spec()).expect("opens");
+    // Unknown stands for the route maxima: two million text tokens at five plus one
+    // million output tokens at thirty micro-dollars per million.
+    first
+        .correct_pinned(&id, 0, unknown_usage(), 1_000)
+        .expect("settles unknown");
+    assert_eq!(state_of(&first).run_totals.micro_usd, 40000000);
+    // A lower report replaces the totals but never the route maxima.
+    first
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 100)]),
+            2_000,
+        )
+        .expect("corrects down");
+    assert_eq!(state_of(&first).run_totals.micro_usd, 3_000);
+    first
+        .correct_pinned(&id, 2, unknown_usage(), 3_000)
+        .expect("unknown again");
+    assert_eq!(
+        state_of(&first).run_totals.micro_usd,
+        40000000,
+        "unknown uses the original maxima, not the prior lower usage"
+    );
+    assert!(first.flush());
+    drop(first);
+    // The maxima survive a restart too: the log carries them beside the event.
+    let second = CostBook::with_session("s2");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            4_000,
+        )
+        .expect("reopens");
+    second
+        .correct_pinned(&id, 3, unknown_usage(), 5_000)
+        .expect("unknown after reopen");
+    assert_eq!(state_of(&second).run_totals.micro_usd, 40000000);
+}
+
+#[test]
+fn a_correction_from_a_later_session_keeps_the_origin_session_and_leaves_the_new_session() {
+    let directory = scratch("pinned-session");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(330);
+    {
+        let first = CostBook::with_session("s1");
+        first
+            .open(
+                "df_gameplay_demo_test",
+                Some(&log),
+                table(),
+                PricingStatus::NotLoaded,
+                1_000,
+            )
+            .expect("opens");
+        first.start_pinned(&id, pinned_spec()).expect("opens");
+        first
+            .correct_pinned(
+                &id,
+                0,
+                Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+                1_000,
+            )
+            .expect("settles");
+        assert_eq!(state_of(&first).run_totals.micro_usd, 60000000);
+        assert!(first.flush());
+    }
+    let second = CostBook::with_session("s2");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .expect("reopens");
+    assert_eq!(state_of(&second).session_totals.events, 0);
+    second
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::TextInput, 1_000_000)]),
+            3_000,
+        )
+        .expect("corrects");
+    let state = state_of(&second);
+    assert_eq!(state.run_totals.events, 1, "one call, never two");
+    assert_eq!(state.run_totals.micro_usd, 5000000);
+    assert_eq!(
+        state.session_totals.events, 0,
+        "the foreign correction adds no event to the new session"
+    );
+    assert_eq!(
+        state.session_totals.micro_usd, 0,
+        "the old cost is never subtracted from the unrelated new session"
+    );
+    let held = state.pinned.get(&id).expect("a live record");
+    match held {
+        PinnedSlot::Settled(record) => {
+            assert_eq!(
+                record.event.session, "s1",
+                "origin attribution is preserved"
+            )
+        }
+        _ => panic!("the corrected call stays settled"),
+    }
+    let live_run = state.run_totals.clone();
+    drop(state);
+    second.close();
+    drop(second);
+    // A fresh replay of the same log agrees with the live book fully.
+    let third = CostBook::with_session("s3");
+    third
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            4_000,
+        )
+        .expect("reopens");
+    assert_eq!(state_of(&third).run_totals, live_run);
+}
+
+#[test]
+fn a_conflicting_log_revision_keeps_the_first_line_and_counts_malformed() {
+    let directory = scratch("pinned-conflict");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(340);
+    {
+        let first = opened_book("s1", Some(&log));
+        first.start_pinned(&id, pinned_spec()).expect("opens");
+        first
+            .correct_pinned(
+                &id,
+                0,
+                Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+                1_000,
+            )
+            .expect("settles");
+        assert!(first.flush());
+    }
+    // A same-revision different payload appended behind the book's back.
+    let text = std::fs::read_to_string(&log).expect("log");
+    let mut conflict: serde_json::Value = serde_json::from_str(
+        text.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap(),
+    )
+    .expect("one revisioned line");
+    conflict["event"]["lines"] =
+        serde_json::json!([{"category": "text_input", "quantity": 1_000_000, "micro_usd": 5}]);
+    conflict["event"]["micro_usd"] = serde_json::json!(5);
+    std::fs::write(&log, format!("{text}{conflict}\n")).expect("conflict");
+    let second = CostBook::with_session("s2");
+    let opened = second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .expect("reopens");
+    assert_eq!(
+        opened.malformed, 1,
+        "the same-revision different payload conflicts"
+    );
+    assert_eq!(state_of(&second).run_totals.events, 1);
+    assert_eq!(
+        state_of(&second).run_totals.micro_usd,
+        30000000,
+        "the first line stands; file order never silently wins"
+    );
+    assert_eq!(
+        second.correct_pinned(
+            &id,
+            0,
+            Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+            3_000,
+        ),
+        Ok(PinnedCorrection::Replayed)
+    );
+    // A settled line and an unsent marker for one id conflict the same way.
+    let marker = serde_json::json!({"call_id": id, "pinned_unsent": true});
+    std::fs::write(&log, format!("{text}{conflict}\n{marker}\n")).expect("marker");
+    let third = CostBook::with_session("s3");
+    let reopened = third
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            4_000,
+        )
+        .expect("reopens");
+    assert_eq!(reopened.malformed, 2);
+    assert_eq!(state_of(&third).run_totals.micro_usd, 30000000);
+}
+
+#[test]
+fn a_revision_lost_before_the_log_still_corrects_under_the_same_id_after_restart() {
+    let directory = scratch("pinned-lost");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(350);
+    let live = CostBook::with_session("s1");
+    live.open(
+        "df_gameplay_demo_test",
+        Some(&log),
+        table(),
+        PricingStatus::NotLoaded,
+        1_000,
+    )
+    .expect("opens");
+    live.start_pinned(&id, pinned_spec()).expect("opens");
+    live.correct_pinned(&id, 0, unknown_usage(), 1_000)
+        .expect("settles unknown");
+    assert!(live.flush());
+    live.close();
+    assert_eq!(live.report(2_000)["log"]["status"], json!("closed"));
+    // The log is closed, so this is a local acknowledgement only: nothing durable.
+    live.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+        2_000,
+    )
+    .expect("applies locally");
+    let live_run = state_of(&live).run_totals.clone();
+    assert_eq!(live_run.micro_usd, 60000000);
+    drop(live);
+    // Recovery replays the latest durable revision, and the journal's retry of the same id
+    // corrects instead of double-counting.
+    let second = CostBook::with_session("s2");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            3_000,
+        )
+        .expect("reopens");
+    assert_eq!(state_of(&second).run_totals.micro_usd, 40000000);
+    second
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+            4_000,
+        )
+        .expect("the retry lands");
+    assert_eq!(state_of(&second).run_totals, live_run);
+    assert_eq!(
+        second.correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+            4_000,
+        ),
+        Ok(PinnedCorrection::Replayed)
+    );
+}
+
+#[test]
+fn a_truncated_log_replays_the_latest_durable_revision_and_the_retry_lands_once() {
+    let directory = scratch("pinned-truncate");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(360);
+    let live = CostBook::with_session("s1");
+    live.open(
+        "df_gameplay_demo_test",
+        Some(&log),
+        table(),
+        PricingStatus::NotLoaded,
+        1_000,
+    )
+    .expect("opens");
+    live.start_pinned(&id, pinned_spec()).expect("opens");
+    live.correct_pinned(&id, 0, unknown_usage(), 1_000)
+        .expect("settles unknown");
+    live.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+        2_000,
+    )
+    .expect("corrects");
+    assert!(live.flush());
+    let live_run = state_of(&live).run_totals.clone();
+    drop(live);
+    // The newest append never reached the disk: durable state is the older revision.
+    let text = std::fs::read_to_string(&log).expect("log");
+    let kept = text
+        .trim_end()
+        .rsplit_once('\n')
+        .map_or("", |(rest, _)| rest);
+    std::fs::write(&log, format!("{kept}\n")).expect("truncate");
+    let second = CostBook::with_session("s2");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            3_000,
+        )
+        .expect("reopens");
+    assert_eq!(state_of(&second).run_totals.micro_usd, 40000000);
+    second
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 2_000_000)]),
+            4_000,
+        )
+        .expect("the retry lands");
+    assert_eq!(state_of(&second).run_totals, live_run);
+}
+
+#[test]
+fn a_durable_cold_pinned_call_still_corrects_after_many_cache_windows() {
+    let directory = scratch("cold-correction");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("cold", Some(&log));
+    for n in 0..40 {
+        book.start_pinned(&pinned_id(n), pinned_spec()).unwrap();
+        book.correct_pinned(&pinned_id(n), 0, unknown_usage(), 1_000)
+            .unwrap();
+        assert!(book.flush());
+    }
+    assert!(state_of(&book).pinned.len() <= PINNED_LIMIT);
+    assert_eq!(
+        book.start_pinned(&pinned_id(0), pinned_spec()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    book.correct_pinned(
+        &pinned_id(0),
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 1)]),
+        2_000,
+    )
+    .unwrap();
+    assert_eq!(book.totals().calls, 40);
+    assert_eq!(book.totals().micro_usd, 39 * 40_000_000 + 30);
+    assert!(book.flush());
+    book.close();
+    let reopened = opened_book("restart", Some(&log));
+    assert_eq!(reopened.totals(), book.totals());
+    reopened
+        .correct_pinned(&pinned_id(0), 2, unknown_usage(), 3_000)
+        .unwrap();
+    assert_eq!(reopened.totals().micro_usd, 40 * 40_000_000);
+}
+
+#[test]
+fn pinned_starts_past_a_full_window_of_open_calls_are_refused() {
+    let port = pinned_port("run");
+    for n in 0..8 {
+        port.start_pinned(&pinned_id(600 + n), &pinned_route())
+            .expect("opens");
+    }
+    assert_eq!(
+        port.start_pinned(&pinned_id(700), &pinned_route()),
+        Err(PinnedError::ProjectionFull),
+        "open calls never retire to make room"
+    );
+    // Unpersisted terminal records stay retained; only a durable log can release a slot.
+    port.correct_pinned_at(
+        &pinned_id(600),
+        0,
+        port::MeteredSource::Reported,
+        &[pinned_unit("image_output", 1_000_000)],
+        true,
+        1_000,
+    )
+    .expect("settles in place");
+    assert_eq!(
+        port.start_pinned(&pinned_id(700), &pinned_route()),
+        Err(PinnedError::ProjectionFull)
+    );
+}
+
+#[test]
+fn a_retired_unsent_call_stays_terminal() {
+    let directory = scratch("cold-unsent");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("unsent", Some(&log));
+    let id = pinned_id(900);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.record_pinned_unsent(&id).unwrap();
+    assert!(book.flush());
+    for n in 0..24 {
+        book.start_pinned(&pinned_id(1_000 + n), pinned_spec())
+            .unwrap();
+        book.correct_pinned(&pinned_id(1_000 + n), 0, unknown_usage(), 1_000)
+            .unwrap();
+        assert!(book.flush());
+    }
+    assert_eq!(
+        book.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(book.record_pinned_unsent(&id), Ok(PinnedUnsent::Replayed));
+    assert_eq!(
+        book.correct_pinned(&id, 0, unknown_usage(), 2_000),
+        Err(PinnedError::AlreadySettled)
+    );
+    assert_eq!(book.totals().calls, 24);
+}
+
+#[test]
+fn a_proven_unsent_call_stays_terminal_through_recovery() {
+    let directory = scratch("pinned-unsent");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(910);
+    {
+        let first = opened_book("s1", Some(&log));
+        first.start_pinned(&id, pinned_spec()).expect("opens");
+        assert_eq!(first.record_pinned_unsent(&id), Ok(PinnedUnsent::Recorded));
+        assert!(first.flush());
+    }
+    let text = std::fs::read_to_string(&log).expect("log");
+    assert!(
+        text.contains("\"pinned_unsent\":true"),
+        "the terminal marker is durable: {text}"
+    );
+    let second = CostBook::with_session("s2");
+    let opened = second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .expect("reopens");
+    assert_eq!(opened.replayed, 0, "the marker carries no money");
+    assert_eq!(
+        second.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(second.record_pinned_unsent(&id), Ok(PinnedUnsent::Replayed));
+    assert_eq!(
+        second.correct_pinned(&id, 0, unknown_usage(), 3_000),
+        Err(PinnedError::AlreadySettled),
+        "replay cannot reopen unsent as billed"
+    );
+    assert_eq!(state_of(&second).run_totals.events, 0);
+}
+
+#[test]
+fn an_unusable_pinned_call_keeps_its_loss_through_recovery() {
+    let directory = scratch("pinned-unusable");
+    let log = directory.join("cost.jsonl");
+    let id = pinned_id(920);
+    {
+        let first = opened_book("s1", Some(&log));
+        first.start_pinned(&id, pinned_spec()).expect("opens");
+        first
+            .correct_pinned(
+                &id,
+                0,
+                Usage::reported(vec![(Category::ImageOutput, 1_000_000)]).unusable(),
+                1_000,
+            )
+            .expect("settles");
+        assert!(first.flush());
+    }
+    let second = CostBook::with_session("s2");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            table(),
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .expect("reopens");
+    let report = second.report(3_000);
+    assert_eq!(report["run"]["events"], 1);
+    assert_eq!(report["run"]["micro_usd"], 30_000_000);
+    assert_eq!(report["run"]["unusable_events"], 1);
+}
+
+#[test]
+fn a_subscription_report_keeps_its_token_units_visible_without_a_tariff() {
+    let book = opened_book("s1", None);
+    let spec = CallSpec::new(
+        Provider::CodexSubscription,
+        "codex-cli",
+        Cause::Storyteller,
+        "npc_reply",
+    )
+    .with_maxima(vec![
+        (Category::Calls, 1),
+        (Category::TextInput, 1_000),
+        (Category::TextOutput, 200),
+    ]);
+    let usage = Usage::reported(vec![
+        (Category::Calls, 1),
+        (Category::TextInput, 1_000),
+        (Category::TextOutput, 200),
+    ]);
+    assert_eq!(
+        usage.quantities,
+        vec![
+            (Category::Calls, 1),
+            (Category::TextInput, 1_000),
+            (Category::TextOutput, 200),
+        ]
+    );
+    book.meter(spec, usage, 2_000);
+    let state = state_of(&book);
+    assert_eq!(state.session_totals.events, 1);
+    assert_eq!(
+        state.session_totals.micro_usd, 0,
+        "no tariff is invented for subscription units"
+    );
+    assert_eq!(state.session_totals.unpriced_events, 1);
+    let stored = |category| {
+        state.session_totals.by_line[&(
+            Provider::CodexSubscription,
+            "codex-cli".to_owned(),
+            category,
+        )]
+            .quantity
+    };
+    assert_eq!(stored(Category::Calls), 1);
+    assert_eq!(stored(Category::TextInput), 1_000);
+    assert_eq!(stored(Category::TextOutput), 200);
+}
+
+#[test]
+fn a_local_record_only_report_projects_unpriced_and_priced_lines_keep_their_amount() {
+    let book = opened_book("s1", None);
+    let local = CallSpec::new(
+        Provider::Local,
+        "local-transform",
+        Cause::PlateEdit,
+        "soften",
+    )
+    .with_maxima(vec![(Category::Calls, 1)]);
+    book.meter(local, Usage::reported(vec![(Category::Calls, 1)]), 2_000);
+    let mixed = CallSpec::new(
+        Provider::OpenAi,
+        "gpt-image-2.5-flare",
+        Cause::ScenePlate,
+        "pinned-mix",
+    )
+    .with_maxima(vec![
+        (Category::TextInput, 1_000_000),
+        (Category::Credits, 7),
+    ]);
+    book.meter(
+        mixed,
+        Usage::reported(vec![
+            (Category::TextInput, 1_000_000),
+            (Category::Credits, 7),
+        ]),
+        2_001,
+    );
+    let state = state_of(&book);
+    assert_eq!(
+        state.session_totals.micro_usd, 5000000,
+        "the priced line keeps its amount beside unpriced ones"
+    );
+    assert_eq!(state.session_totals.unpriced_events, 2);
+    assert_eq!(
+        state.session_totals.by_line[&(
+            Provider::OpenAi,
+            "gpt-image-2.5-flare".to_owned(),
+            Category::Credits,
+        )]
+            .unpriced_quantity,
+        7,
+        "the unpriced units stay visible"
+    );
+    // An invalid route is refused; an unknown price is projected, never zeroed.
+    let port = pinned_port("run");
+    let mut bad = pinned_route();
+    bad.provider = "acme".to_owned();
+    assert_eq!(
+        port.start_pinned(&pinned_id(950), &bad),
+        Err(PinnedError::UnknownProvider)
+    );
+    let mut bad = pinned_route();
+    bad.maxima[0].category = "tokens".to_owned();
+    assert_eq!(
+        port.start_pinned(&pinned_id(951), &bad),
+        Err(PinnedError::UnknownCategory)
+    );
+    let mut reasoning = pinned_route();
+    reasoning
+        .maxima
+        .push(pinned_unit("text_reasoning_output", 40));
+    port.start_pinned(&pinned_id(952), &reasoning)
+        .expect("a real receipt category projects");
+    port.correct_pinned_at(
+        &pinned_id(952),
+        0,
+        port::MeteredSource::Reported,
+        &[
+            pinned_unit("text_input", 2_000_000),
+            pinned_unit("text_reasoning_output", 40),
+        ],
+        true,
+        1_000,
+    )
+    .expect("settles");
+    assert_eq!(port.totals().micro_usd, 10_000_000);
+    assert_eq!(port.totals().unpriced_calls, 1);
+    assert_eq!(port.recent()[0].units.len(), 2);
+}
+
+#[test]
+fn a_pinned_call_needs_an_open_book() {
+    let port = port::MeteringPort::new();
+    let id = pinned_id(50);
+    assert_eq!(
+        port.start_pinned(&id, &pinned_route()),
+        Err(PinnedError::BookNotOpen)
+    );
+    assert_eq!(
+        port.correct_pinned_at(&id, 0, port::MeteredSource::Reported, &[], true, 1_000),
+        Err(PinnedError::BookNotOpen)
+    );
+    assert_eq!(
+        port.record_pinned_unsent(&id),
+        Err(PinnedError::BookNotOpen)
+    );
+}
+
+#[test]
+fn an_identical_revision_repairs_a_rejected_append_before_durable_acknowledgement() {
+    let directory = scratch("rejected-append");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("first", Some(&log));
+    let id = pinned_id(800);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    state_of(&book)
+        .log
+        .as_ref()
+        .unwrap()
+        .reject_next
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        book.correct_pinned(&id, 1, unknown_usage(), 2_000),
+        Ok(PinnedCorrection::Applied)
+    );
+    assert!(!book.pinned_durable(&id, Some(1)).unwrap());
+    assert_eq!(
+        book.correct_pinned(&id, 1, unknown_usage(), 2_001),
+        Ok(PinnedCorrection::Replayed)
+    );
+    assert!(book.flush());
+    assert!(book.pinned_durable(&id, Some(1)).unwrap());
+    book.close();
+    let recovered = opened_book("second", Some(&log));
+    assert_eq!(recovered.totals(), book.totals());
+    assert_eq!(
+        recovered.correct_pinned(&id, 1, unknown_usage(), 3_000),
+        Ok(PinnedCorrection::Replayed)
+    );
+}
+
+#[test]
+fn an_identical_unsent_marker_repairs_a_rejected_append() {
+    let directory = scratch("rejected-unsent");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("first", Some(&log));
+    let id = pinned_id(801);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    state_of(&book)
+        .log
+        .as_ref()
+        .unwrap()
+        .reject_next
+        .store(true, Ordering::SeqCst);
+    assert_eq!(book.record_pinned_unsent(&id), Ok(PinnedUnsent::Recorded));
+    assert!(!book.pinned_durable(&id, None).unwrap());
+    assert_eq!(book.record_pinned_unsent(&id), Ok(PinnedUnsent::Replayed));
+    assert!(book.flush());
+    assert!(book.pinned_durable(&id, None).unwrap());
+    book.close();
+    let recovered = opened_book("second", Some(&log));
+    assert_eq!(
+        recovered.record_pinned_unsent(&id),
+        Ok(PinnedUnsent::Replayed)
+    );
+    assert_eq!(
+        recovered.correct_pinned(&id, 1, unknown_usage(), 2_000),
+        Err(PinnedError::AlreadySettled)
+    );
+    assert_eq!(recovered.totals().calls, 0);
+}
+
+#[test]
+fn malformed_ids_and_mutated_settled_or_unsent_routes_are_refused() {
+    let book = opened_book("identity", None);
+    for id in ["oops", "img-1", "img-0000000000000000000000000000000A"] {
+        assert_eq!(
+            book.start_pinned(id, pinned_spec()),
+            Err(PinnedError::UnknownCall)
+        );
+    }
+    for (n, unsent) in [(802, false), (803, true)] {
+        let id = pinned_id(n);
+        book.start_pinned(&id, pinned_spec()).unwrap();
+        if unsent {
+            book.record_pinned_unsent(&id).unwrap();
+        } else {
+            book.correct_pinned(&id, 1, unknown_usage(), 1_000).unwrap();
+        }
+        for field in 0..5 {
+            let mut changed = pinned_spec();
+            match field {
+                0 => changed.provider = Provider::Bfl,
+                1 => changed.model = "other".to_owned(),
+                2 => changed.cause = Cause::Storyteller,
+                3 => changed.detail = "other".to_owned(),
+                _ => changed.maxima[0].1 += 1,
+            }
+            assert_eq!(
+                book.start_pinned(&id, changed),
+                Err(PinnedError::RouteConflict)
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_with_nonempty_or_zero_units_always_uses_frozen_maxima_after_recovery() {
+    let directory = scratch("unknown-nonempty");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("first", Some(&log));
+    let id = pinned_id(804);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    let unknown = |quantity| Usage {
+        source: UsageSource::Unknown,
+        quantities: vec![(Category::ImageOutput, quantity)],
+        usable: true,
+    };
+    book.correct_pinned(&id, 1, unknown(1), 1_000).unwrap();
+    assert_eq!(book.totals().micro_usd, 40_000_000);
+    assert!(book.flush());
+    book.close();
+    let recovered = opened_book("second", Some(&log));
+    recovered.correct_pinned(&id, 2, unknown(0), 2_000).unwrap();
+    assert_eq!(recovered.totals().micro_usd, 40_000_000);
+    recovered
+        .correct_pinned(
+            &id,
+            3,
+            Usage::reported(vec![(Category::ImageOutput, 0)]),
+            3_000,
+        )
+        .unwrap();
+    assert_eq!(recovered.totals().micro_usd, 0);
+}
+
+#[test]
+fn replay_rejects_same_and_newer_revision_mutations_of_every_frozen_field() {
+    let directory = scratch("frozen-replay");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("first", Some(&log));
+    let id = pinned_id(805);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(&id, 1, unknown_usage(), 1_000).unwrap();
+    assert!(book.flush());
+    book.close();
+    let text = fs::read_to_string(&log).unwrap();
+    let original: Value = serde_json::from_str(
+        text.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut mutations = Vec::new();
+    for revision in [1, 2] {
+        for field in [
+            "run",
+            "session",
+            "provider",
+            "model",
+            "cause",
+            "detail",
+            "maxima",
+            "price_basis",
+        ] {
+            let mut changed = original.clone();
+            changed["pinned_revision"] = json!(revision);
+            match field {
+                "provider" => changed["event"][field] = json!("bfl"),
+                "cause" => changed["event"][field] = json!("storyteller"),
+                "maxima" => changed[field][0][1] = json!(1),
+                "price_basis" => changed[field]["prices"][0]["usd"] = json!("999"),
+                _ => changed["event"][field] = json!("changed"),
+            }
+            mutations.push(changed.to_string());
+        }
+    }
+    fs::write(&log, format!("{text}{}\n", mutations.join("\n"))).unwrap();
+    let recovered = opened_book("second", Some(&log));
+    assert_eq!(recovered.totals(), book.totals());
+    assert_eq!(state_of(&recovered).malformed_lines, 16);
+    recovered
+        .correct_pinned(
+            &id,
+            2,
+            Usage::reported(vec![(Category::ImageOutput, 1)]),
+            2_000,
+        )
+        .unwrap();
+    assert_eq!(recovered.totals().micro_usd, 30);
+}
+
+#[test]
+fn a_frozen_opening_keeps_its_tariff_and_origin_after_restart_before_first_usage() {
+    let directory = scratch("opening-tariff");
+    let log = directory.join("cost.jsonl");
+    let first = opened_book("origin", Some(&log));
+    let id = pinned_id(806);
+    first.start_pinned(&id, pinned_spec()).unwrap();
+    first.close();
+    let second = CostBook::with_session("restart");
+    let dearer = PriceTable::parse(&TABLE.replace("\"usd\": \"30\"", "\"usd\": \"60\"")).unwrap();
+    second
+        .open(
+            "reopened-display-label",
+            Some(&log),
+            dearer,
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .unwrap();
+    assert_eq!(
+        second.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::ReplayedOpen)
+    );
+    second
+        .correct_pinned(
+            &id,
+            1,
+            Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+            3_000,
+        )
+        .unwrap();
+    assert_eq!(second.totals().micro_usd, 30_000_000);
+    assert_eq!(second.recent()[0].micro_usd, 30_000_000);
+    assert_eq!(state_of(&second).session_totals.events, 0);
+    assert!(second.flush());
+    second.close();
+    let third = opened_book("third", Some(&log));
+    assert_eq!(
+        third.totals(),
+        second.totals(),
+        "the new log preserves the original frozen run too"
+    );
+}
+
+#[test]
+fn an_oversized_unterminated_cold_log_line_returns_corruption_without_changing_totals() {
+    let directory = scratch("oversized-cold-line");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("bounded-cold", Some(&log));
+    for n in 0..10 {
+        book.start_pinned(&pinned_id(2_000 + n), pinned_spec())
+            .unwrap();
+        book.correct_pinned(&pinned_id(2_000 + n), 0, unknown_usage(), 1_000)
+            .unwrap();
+        assert!(book.flush());
+    }
+    let before = book.totals();
+    assert!(!state_of(&book).pinned.contains_key(&pinned_id(2_000)));
+    let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+    file.write_all(&vec![b'x'; pinned_storage::MAXIMUM_PINNED_LINE_BYTES + 1])
+        .unwrap();
+    file.sync_all().unwrap();
+    assert_eq!(
+        book.correct_pinned(&pinned_id(2_000), 1, unknown_usage(), 2_000),
+        Err(PinnedError::CorruptLog)
+    );
+    assert_eq!(
+        book.start_pinned(&pinned_id(3_000), pinned_spec()),
+        Err(PinnedError::CorruptLog)
+    );
+    assert_eq!(
+        book.pinned_durable(&pinned_id(2_000), Some(0)),
+        Err(PinnedError::CorruptLog)
+    );
+    assert_eq!(book.totals(), before);
+}
+
+#[test]
+fn a_start_that_cannot_fit_future_settlements_refuses_without_consuming_a_cache_slot() {
+    let book = CostBook::with_session("bounded-opening");
+    let run = "x".repeat(pinned_storage::MAXIMUM_PINNED_LINE_BYTES);
+    book.open(&run, None, table(), PricingStatus::NotLoaded, 1_000)
+        .unwrap();
+    assert_eq!(
+        book.start_pinned(&pinned_id(4_000), pinned_spec()),
+        Err(PinnedError::ProjectionFull)
+    );
+    assert!(state_of(&book).pinned.is_empty());
+    assert_eq!(book.totals().calls, 0);
+}
+
+#[test]
+fn a_coherent_receipt_reads_the_exact_stored_revision_route_units_and_billed_unusable_amount() {
+    let book = opened_book("receipt", None);
+    let id = pinned_id(8_000);
+    assert_eq!(book.read_pinned_receipt(&id).unwrap(), None);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    assert_eq!(book.read_pinned_receipt(&id).unwrap(), None);
+    book.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+        1_000,
+    )
+    .unwrap();
+    book.correct_pinned(
+        &id,
+        2,
+        Usage::reported(vec![(Category::ImageOutput, 2_000_000)]).unusable(),
+        2_000,
+    )
+    .unwrap();
+    let receipt = book.read_pinned_receipt(&id).unwrap().unwrap();
+    assert_eq!(receipt.call_id, id);
+    assert_eq!(receipt.revision.0, 2);
+    assert_eq!(receipt.route.provider, "openai");
+    assert_eq!(receipt.route.model, pinned_spec().model);
+    assert_eq!(receipt.route.maxima.len(), 2);
+    assert_eq!(receipt.evidence, df_imagery::cost::UsageEvidence::Reported);
+    assert_eq!(
+        receipt.units,
+        [df_imagery::cost::CostUnits {
+            category: "image_output".to_owned(),
+            quantity: 2_000_000
+        }]
+    );
+    assert!(!receipt.usable);
+    assert_eq!(receipt.amount.unwrap().micros(), 60_000_000);
+    assert_eq!(receipt.amount.unwrap().currency().as_str(), "USD");
+    assert!(
+        !receipt.durable,
+        "memory-only is not a durable Book receipt"
+    );
+    assert_eq!(book.read_pinned_receipt(&pinned_id(8_001)).unwrap(), None);
+}
+
+#[test]
+fn a_receipt_never_turns_missing_unpriced_or_proven_unsent_work_into_a_known_zero() {
+    let book = opened_book("receipt-unknown", None);
+    let id = pinned_id(8_010);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.record_pinned_unsent(&id).unwrap();
+    assert_eq!(book.read_pinned_receipt(&id).unwrap(), None);
+    let id = pinned_id(8_011);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![
+            (Category::TextInput, 1_000_000),
+            (Category::Credits, 7),
+        ]),
+        1_000,
+    )
+    .unwrap();
+    let receipt = book.read_pinned_receipt(&id).unwrap().unwrap();
+    assert_eq!(
+        receipt.amount, None,
+        "a priced subtotal is not a known total"
+    );
+    assert_eq!(receipt.units.len(), 2);
+    let id = pinned_id(8_012);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 0)]),
+        1_000,
+    )
+    .unwrap();
+    let receipt = book.read_pinned_receipt(&id).unwrap().unwrap();
+    assert_eq!(
+        receipt.amount.unwrap().micros(),
+        0,
+        "explicit booked zero remains distinct"
+    );
+    assert_eq!(receipt.units[0].quantity, 0);
+}
+
+#[test]
+fn a_cold_receipt_reads_original_money_across_retention_and_a_new_price_file() {
+    let directory = scratch("coherent-receipt");
+    let log = directory.join("cost.jsonl");
+    let first = opened_book("receipt-first", Some(&log));
+    for n in 0..12 {
+        let id = pinned_id(8_100 + n);
+        first.start_pinned(&id, pinned_spec()).unwrap();
+        first
+            .correct_pinned(
+                &id,
+                1,
+                Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+                1_000,
+            )
+            .unwrap();
+        assert!(first.flush());
+    }
+    assert!(!state_of(&first).pinned.contains_key(&pinned_id(8_100)));
+    let receipt = first
+        .read_pinned_receipt(&pinned_id(8_100))
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.amount.unwrap().micros(), 30_000_000);
+    assert!(receipt.durable);
+    first.close();
+    let dearer = PriceTable::parse(&TABLE.replace("\"usd\": \"30\"", "\"usd\": \"60\"")).unwrap();
+    let second = CostBook::with_session("receipt-second");
+    second
+        .open(
+            "df_gameplay_demo_test",
+            Some(&log),
+            dearer,
+            PricingStatus::NotLoaded,
+            2_000,
+        )
+        .unwrap();
+    let before = second.totals();
+    let receipt = second
+        .read_pinned_receipt(&pinned_id(8_100))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        receipt.amount.unwrap().micros(),
+        30_000_000,
+        "read never reprices history"
+    );
+    assert_eq!(receipt.revision.0, 1);
+    assert_eq!(
+        second.totals(),
+        before,
+        "a receipt read records no additional money"
+    );
+}
+
+#[test]
+fn concurrent_corrections_never_mix_receipt_revision_quantities_and_money() {
+    let book = Arc::new(opened_book("receipt-concurrent", None));
+    let id = pinned_id(8_200);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![(Category::ImageOutput, 1_000_000)]),
+        1_000,
+    )
+    .unwrap();
+    let start = Arc::new(std::sync::Barrier::new(2));
+    std::thread::scope(|threads| {
+        let writer_book = Arc::clone(&book);
+        let writer_start = Arc::clone(&start);
+        let writer_id = id.clone();
+        let writer = threads.spawn(move || {
+            writer_start.wait();
+            for revision in 2..16 {
+                writer_book
+                    .correct_pinned(
+                        &writer_id,
+                        revision,
+                        Usage::reported(vec![(Category::ImageOutput, revision * 1_000_000)]),
+                        revision,
+                    )
+                    .unwrap();
+            }
+        });
+        start.wait();
+        for _ in 0..64 {
+            let receipt = book.read_pinned_receipt(&id).unwrap().unwrap();
+            assert_eq!(receipt.units[0].quantity, receipt.revision.0 * 1_000_000);
+            assert_eq!(
+                receipt.amount.unwrap().micros(),
+                u128::from(receipt.revision.0) * 30_000_000
+            );
+        }
+        writer.join().unwrap();
+    });
+}
+
+#[test]
+fn an_inconsistent_booked_sum_cannot_be_returned_as_a_verified_receipt_amount() {
+    let book = opened_book("receipt-overflow", None);
+    let id = pinned_id(8_300);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(
+        &id,
+        1,
+        Usage::reported(vec![
+            (Category::TextInput, u64::MAX),
+            (Category::ImageOutput, u64::MAX),
+        ]),
+        1_000,
+    )
+    .unwrap();
+    assert_eq!(book.read_pinned_receipt(&id), Err(PinnedError::CorruptLog));
+}
+
+#[test]
+fn a_no_delivery_seal_closes_absent_and_open_calls_without_cost_or_late_start() {
+    use df_imagery::cost::UnsentDurability;
+    let book = opened_book("seal-absence", None);
+    for (number, opened) in [(9_000, false), (9_001, true)] {
+        let id = pinned_id(number);
+        if opened {
+            book.start_pinned(&id, pinned_spec()).unwrap();
+        }
+        let before = book.totals();
+        let seal = book.seal_pinned_unsent(&id).unwrap();
+        assert_eq!(seal.call_id, id);
+        assert_eq!(seal.durability, UnsentDurability::Pending);
+        assert_eq!(
+            book.start_pinned(&id, pinned_spec()),
+            Ok(PinnedStart::AlreadySettled)
+        );
+        assert_eq!(
+            book.correct_pinned(&id, 1, unknown_usage(), 1_000),
+            Err(PinnedError::AlreadySettled)
+        );
+        assert_eq!(book.read_pinned_receipt(&id).unwrap(), None);
+        assert_eq!(book.totals(), before);
+        let state = state_of(&book);
+        let Some(PinnedSlot::Unsent(spec, _)) = state.pinned.get(&id) else {
+            panic!("terminal seal missing");
+        };
+        assert_eq!(spec.is_some(), opened);
+    }
+    assert_eq!(book.totals().calls, 0);
+    assert!(book.recent().is_empty());
+}
+
+#[test]
+fn a_no_delivery_seal_refuses_closed_malformed_and_already_booked_calls() {
+    let closed = CostBook::with_session("closed-seal");
+    assert_eq!(
+        closed.seal_pinned_unsent(&pinned_id(9_010)),
+        Err(PinnedError::BookNotOpen)
+    );
+    let book = opened_book("settled-seal", None);
+    assert_eq!(
+        book.seal_pinned_unsent("img-bad"),
+        Err(PinnedError::UnknownCall)
+    );
+    let id = pinned_id(9_011);
+    book.start_pinned(&id, pinned_spec()).unwrap();
+    book.correct_pinned(&id, 1, unknown_usage(), 1_000).unwrap();
+    let before = book.totals();
+    let receipt = book.read_pinned_receipt(&id).unwrap();
+    assert_eq!(
+        book.seal_pinned_unsent(&id),
+        Err(PinnedError::AlreadySettled)
+    );
+    assert_eq!(book.totals(), before);
+    assert_eq!(book.read_pinned_receipt(&id).unwrap(), receipt);
+}
+
+#[test]
+fn a_no_delivery_seal_retries_rejected_append_and_remains_terminal_after_restart() {
+    use df_imagery::cost::UnsentDurability;
+    let directory = scratch("seal-rejected-append");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("seal-first", Some(&log));
+    let id = pinned_id(9_020);
+    state_of(&book)
+        .log
+        .as_ref()
+        .unwrap()
+        .reject_next
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        book.seal_pinned_unsent(&id).unwrap().durability,
+        UnsentDurability::Pending
+    );
+    assert!(!book.pinned_durable(&id, None).unwrap());
+    book.seal_pinned_unsent(&id).unwrap();
+    assert!(book.flush());
+    assert_eq!(
+        book.seal_pinned_unsent(&id).unwrap().durability,
+        UnsentDurability::Durable
+    );
+    assert_eq!(book.totals().calls, 0);
+    book.close();
+    let text = std::fs::read_to_string(&log).unwrap();
+    let markers = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|line| line["call_id"] == id)
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0]["pinned_unsent"], true);
+    assert!(markers[0]["spec"].is_null());
+    assert!(markers[0].get("event").is_none());
+    let recovered = opened_book("seal-second", Some(&log));
+    let seal = recovered.seal_pinned_unsent(&id).unwrap();
+    assert_eq!(seal.call_id, id);
+    assert_eq!(seal.durability, UnsentDurability::Durable);
+    assert_eq!(
+        recovered.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(recovered.totals().calls, 0);
+}
+
+#[test]
+fn sealed_absent_identities_reload_after_bounded_cache_eviction() {
+    use df_imagery::cost::UnsentDurability;
+    let directory = scratch("seal-retention");
+    let log = directory.join("cost.jsonl");
+    let book = opened_book("seal-retention", Some(&log));
+    for number in 0..12 {
+        book.seal_pinned_unsent(&pinned_id(9_100 + number)).unwrap();
+        assert!(book.flush());
+        assert!(state_of(&book).pinned.len() <= PINNED_LIMIT);
+    }
+    let id = pinned_id(9_100);
+    assert!(!state_of(&book).pinned.contains_key(&id));
+    assert_eq!(
+        book.start_pinned(&id, pinned_spec()),
+        Ok(PinnedStart::AlreadySettled)
+    );
+    assert_eq!(
+        book.seal_pinned_unsent(&id).unwrap().durability,
+        UnsentDurability::Durable
+    );
+    assert_eq!(book.totals().calls, 0);
+}
+
+#[test]
+fn memory_only_seals_remain_pending_and_respect_the_existing_retention_bound() {
+    use df_imagery::cost::UnsentDurability;
+    let book = opened_book("seal-memory-bound", None);
+    for number in 0..PINNED_LIMIT {
+        let id = pinned_id(9_200 + u64::try_from(number).unwrap());
+        assert_eq!(
+            book.seal_pinned_unsent(&id).unwrap().durability,
+            UnsentDurability::Pending
+        );
+    }
+    assert_eq!(
+        book.seal_pinned_unsent(&pinned_id(9_299)),
+        Err(PinnedError::ProjectionFull)
+    );
+    assert_eq!(state_of(&book).pinned.len(), PINNED_LIMIT);
+    assert_eq!(book.totals().calls, 0);
+}
+
+#[test]
+fn an_actual_start_racing_a_no_delivery_seal_cannot_leave_an_open_call() {
+    use df_imagery::cost::UnsentDurability;
+    let directory = scratch("seal-race");
+    for number in 0..4 {
+        let log = directory.join(format!("cost-{number}.jsonl"));
+        let book = Arc::new(opened_book("seal-race-first", Some(&log)));
+        let id = pinned_id(9_300 + number);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        std::thread::scope(|threads| {
+            let starter = Arc::clone(&book);
+            let start_id = id.clone();
+            let start_barrier = Arc::clone(&barrier);
+            let start = threads.spawn(move || {
+                start_barrier.wait();
+                starter.start_pinned(&start_id, pinned_spec())
+            });
+            let sealer = Arc::clone(&book);
+            let seal_id = id.clone();
+            let seal_barrier = Arc::clone(&barrier);
+            let seal = threads.spawn(move || {
+                seal_barrier.wait();
+                sealer.seal_pinned_unsent(&seal_id)
+            });
+            barrier.wait();
+            assert!(matches!(
+                start.join().unwrap(),
+                Ok(PinnedStart::Opened | PinnedStart::AlreadySettled)
+            ));
+            assert_eq!(seal.join().unwrap().unwrap().call_id, id);
+        });
+        assert!(book.flush());
+        assert_eq!(
+            book.seal_pinned_unsent(&id).unwrap().durability,
+            UnsentDurability::Durable
+        );
+        assert_eq!(book.totals().calls, 0);
+        book.close();
+        let recovered = opened_book("seal-race-second", Some(&log));
+        assert_eq!(
+            recovered.start_pinned(&id, pinned_spec()),
+            Ok(PinnedStart::AlreadySettled)
+        );
+        assert_eq!(recovered.totals().calls, 0);
+    }
 }

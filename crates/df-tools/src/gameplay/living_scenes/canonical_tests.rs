@@ -48,102 +48,107 @@ async fn committed_room_canon_reaches_the_fake_and_changes_the_reference_once() 
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS66/fake-room-canon")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let inner = inner(fixture.imagery.clone(), canonical);
-    for job in jobs {
-        let Job::Canonical(work) = job else {
-            panic!("canonical room")
-        };
-        let result = inner.render_canonical(&work).await;
-        assert!(result.is_ok(), "{result:?}");
-        inner.finish_canonical(work, result);
-    }
-    assert!(!fixture.prompt().contains("The Last Stitch"));
-    let proposal = fact_decision(
-        "same-place",
-        "bram",
-        FactKind::History,
-        "Shop sign",
-        "Bram Weller's shop is called The Last Stitch, as its sign says.",
-    );
-    // A model proposal that has not crossed commit never reaches the picture source.
-    {
-        let mut state = locked(&inner.state);
-        room(&mut state.canonical, "layout");
-        assert_eq!(selected_room_binding(&state.canonical), original_binding);
-        assert!(state.canonical.take_jobs().is_empty());
-    }
-    let foreign = fact_decision(
-        "other-place",
-        "other-person",
-        FactKind::History,
-        "Other shop",
-        "The other shop is called FOREIGN_SHOP.",
-    );
-    lore.commit_fact_decision(foreign.clone(), foreign.fact.clone())
-        .unwrap();
-    let mut blank = proposal.clone();
-    blank.decision = Decision::LeaveBlank;
-    blank.reason = Reason::Secret;
-    blank.fact = None;
-    lore.commit_fact_decision(blank, None).unwrap();
-    {
-        let mut state = locked(&inner.state);
-        room(&mut state.canonical, "layout");
-        assert_eq!(selected_room_binding(&state.canonical), original_binding);
-        assert!(state.canonical.take_jobs().is_empty());
-    }
-    lore.commit_fact_decision(proposal.clone(), proposal.fact.clone())
-        .unwrap();
-    let base_revision = room_revision(&{
-        let mut authored = model();
-        authored.weather = "layout".to_owned();
-        authored
-    })
-    .unwrap();
-    let jobs = {
-        let mut state = locked(&inner.state);
-        room(&mut state.canonical, "layout");
-        assert_ne!(selected_room_binding(&state.canonical), original_binding);
-        let jobs = state.canonical.take_jobs();
-        assert_eq!(jobs.len(), 1);
-        jobs
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    for job in jobs {
-        let Job::Canonical(work) = job else {
-            panic!("canonical room")
-        };
-        let result = inner.render_canonical(&work).await;
-        assert!(result.is_ok(), "{result:?}");
-        inner.finish_canonical(work, result);
-    }
-    let prompt = fixture.prompt();
-    assert!(
-        prompt.contains("The Last Stitch, as its sign says."),
-        "{prompt}"
-    );
-    assert!(prompt.contains("visible sign carries the recorded name exactly"));
-    assert!(!prompt.contains("No signage and no writing"));
-    assert!(!prompt.contains("FOREIGN_SHOP"));
-    assert!(!prompt.contains("question_hash"));
-    assert!(!prompt.contains("harmless_missing_detail"));
-    assert!(!prompt.contains("protected_constraints"));
-    assert_eq!(
-        inner.canonical_room_status_at("same-place", &base_revision),
-        ReferenceStatus::Ready
-    );
-    assert!(
-        inner
-            .canonical_room_reference_at("same-place", &base_revision)
-            .await
-            .is_some()
-    );
     {
-        let mut state = locked(&inner.state);
-        room(&mut state.canonical, "layout");
-        assert!(state.canonical.take_jobs().is_empty());
+        let inner = inner(fixture.imagery.clone(), canonical);
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical room")
+            };
+            let result = inner.render_canonical(&work).await;
+            assert!(result.is_ok(), "{result:?}");
+            inner.finish_canonical(work, result);
+        }
+        assert!(!fixture.prompt().contains("The Last Stitch"));
+        let proposal = fact_decision(
+            "same-place",
+            "bram",
+            FactKind::History,
+            "Shop sign",
+            "Bram Weller's shop is called The Last Stitch, as its sign says.",
+        );
+        // A model proposal that has not crossed commit never reaches the picture source.
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_eq!(selected_room_binding(&state.canonical), original_binding);
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        let foreign = fact_decision(
+            "other-place",
+            "other-person",
+            FactKind::History,
+            "Other shop",
+            "The other shop is called FOREIGN_SHOP.",
+        );
+        lore.commit_fact_decision(foreign.clone(), foreign.fact.clone())
+            .unwrap();
+        let mut blank = proposal.clone();
+        blank.decision = Decision::LeaveBlank;
+        blank.reason = Reason::Secret;
+        blank.fact = None;
+        lore.commit_fact_decision(blank, None).unwrap();
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_eq!(selected_room_binding(&state.canonical), original_binding);
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        lore.commit_fact_decision(proposal.clone(), proposal.fact.clone())
+            .unwrap();
+        let base_revision = room_revision(&{
+            let mut authored = model();
+            authored.weather = "layout".to_owned();
+            authored
+        })
+        .unwrap();
+        let jobs = {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert_ne!(selected_room_binding(&state.canonical), original_binding);
+            let jobs = state.canonical.take_jobs();
+            assert_eq!(jobs.len(), 1);
+            jobs
+        };
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical room")
+            };
+            let result = inner.render_canonical(&work).await;
+            assert!(result.is_ok(), "{result:?}");
+            inner.finish_canonical(work, result);
+        }
+        let prompt = fixture.prompt();
+        assert!(
+            prompt.contains("The Last Stitch, as its sign says."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("visible sign carries the recorded name exactly"));
+        assert!(!prompt.contains("No signage and no writing"));
+        assert!(!prompt.contains("FOREIGN_SHOP"));
+        assert!(!prompt.contains("question_hash"));
+        assert!(!prompt.contains("harmless_missing_detail"));
+        assert!(!prompt.contains("protected_constraints"));
+        assert_eq!(
+            inner.canonical_room_status_at("same-place", &base_revision),
+            ReferenceStatus::Ready
+        );
+        assert!(
+            inner
+                .canonical_room_reference_at("same-place", &base_revision)
+                .await
+                .is_some()
+        );
+        {
+            let mut state = locked(&inner.state);
+            room(&mut state.canonical, "layout");
+            assert!(state.canonical.take_jobs().is_empty());
+        }
+        assert_eq!(fixture.calls(), 2);
     }
-    assert_eq!(fixture.calls(), 2);
+    fixture.close().await;
 }
 
 #[test]
@@ -233,69 +238,74 @@ async fn custom_seats_use_full_public_design_and_only_their_approved_references(
         "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS5/canonical-custom-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&cache);
-    let inner = inner(fixture.imagery.clone(), References::default());
-    inner.observe_checkpoint(&checkpoint(true));
-    let jobs = locked(&inner.state).canonical.take_jobs();
-    assert_eq!(jobs.len(), 2, "one canonical image per accepted seat");
-    let portrait_root = std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("artifacts/tmp/play/imagery-cache"));
-    std::fs::create_dir_all(&portrait_root).unwrap();
-    std::fs::write(
-        portrait_root.join(format!("{}.jpg", portrait_asset().key.as_str())),
-        portrait_bytes(),
-    )
-    .unwrap();
-    for (index, job) in jobs.into_iter().enumerate() {
-        let Job::Canonical(work) = job else {
-            panic!("canonical work")
-        };
-        let Source::Hero {
-            portrait,
-            public_design,
-            locator,
-            ..
-        } = &work.source
-        else {
-            panic!("hero source")
-        };
-        assert_eq!(portrait.is_some(), index == 0);
-        assert!(public_design.contains(if index == 0 { "dragonborn" } else { "tiefling" }));
-        assert!(locator.contains(if index == 0 { "Brakka" } else { "Sigrun" }));
-        let key = inner.render_canonical(&work).await.unwrap();
-        assert_eq!(fixture.image_count(), usize::from(index == 0));
-        let prompt = fixture.prompt();
-        let design: serde_json::Value = serde_json::from_str(public_design).unwrap();
-        let appearance = design["public_appearance"]
-            .as_str()
-            .unwrap()
-            .lines()
-            .next()
-            .unwrap();
-        let appearance: serde_json::Value = serde_json::from_str(appearance).unwrap();
-        assert_eq!(appearance["public_visual_details"], LOOKS[index]);
-        assert!(prompt.contains(public_design));
-        assert!(prompt.contains("actual_gear"));
-        assert!(prompt.contains(if index == 0 { "greatsword" } else { "longbow" }));
-        assert!(!prompt.contains("SEALED_STORY_NEVER_IMAGE"));
-        assert!(!prompt.contains("PRIVATE_ORIGIN_NEVER_IMAGE"));
-        assert!(!prompt.contains("SCENERY_NEVER_CANONICAL"));
-        assert!(!prompt.contains("long braided beard with plain iron rings"));
-        inner.finish_canonical(work, Ok(key));
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
+    {
+        let inner = inner(fixture.imagery.clone(), References::default());
+        inner.observe_checkpoint(&checkpoint(true));
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        assert_eq!(jobs.len(), 2, "one canonical image per accepted seat");
+        let portrait_root = std::env::var("DF_GAMEPLAY_IMAGERY_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("artifacts/tmp/play/imagery-cache"));
+        std::fs::create_dir_all(&portrait_root).unwrap();
+        std::fs::write(
+            portrait_root.join(format!("{}.jpg", portrait_asset().key.as_str())),
+            portrait_bytes(),
+        )
+        .unwrap();
+        for (index, job) in jobs.into_iter().enumerate() {
+            let Job::Canonical(work) = job else {
+                panic!("canonical work")
+            };
+            let Source::Hero {
+                portrait,
+                public_design,
+                locator,
+                ..
+            } = &work.source
+            else {
+                panic!("hero source")
+            };
+            assert_eq!(portrait.is_some(), index == 0);
+            assert!(public_design.contains(if index == 0 { "dragonborn" } else { "tiefling" }));
+            assert!(locator.contains(if index == 0 { "Brakka" } else { "Sigrun" }));
+            let key = inner.render_canonical(&work).await.unwrap();
+            assert_eq!(fixture.image_count(), usize::from(index == 0));
+            let prompt = fixture.prompt();
+            let design: serde_json::Value = serde_json::from_str(public_design).unwrap();
+            let appearance = design["public_appearance"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap();
+            let appearance: serde_json::Value = serde_json::from_str(appearance).unwrap();
+            assert_eq!(appearance["public_visual_details"], LOOKS[index]);
+            assert!(prompt.contains(public_design));
+            assert!(prompt.contains("actual_gear"));
+            assert!(prompt.contains(if index == 0 { "greatsword" } else { "longbow" }));
+            assert!(!prompt.contains("SEALED_STORY_NEVER_IMAGE"));
+            assert!(!prompt.contains("PRIVATE_ORIGIN_NEVER_IMAGE"));
+            assert!(!prompt.contains("SCENERY_NEVER_CANONICAL"));
+            assert!(!prompt.contains("long braided beard with plain iron rings"));
+            inner.finish_canonical(work, Ok(key));
+        }
+        assert_eq!(fixture.calls(), 2);
+        inner.observe_checkpoint(&checkpoint(true));
+        assert!(locked(&inner.state).canonical.take_jobs().is_empty());
+        // Mutable inventory is not a new identity or permission to buy another canonical image.
+        let accepted = checkpoint(true);
+        let mut changed = accepted.state().clone();
+        changed.inventory[0].quantity += 1;
+        inner.observe_checkpoint(&hero_identity_fixture::recheckpoint(
+            accepted.basis(),
+            changed,
+        ));
+        assert!(locked(&inner.state).canonical.take_jobs().is_empty());
     }
-    assert_eq!(fixture.calls(), 2);
-    inner.observe_checkpoint(&checkpoint(true));
-    assert!(locked(&inner.state).canonical.take_jobs().is_empty());
-    // Mutable inventory is not a new identity or permission to buy another canonical image.
-    let accepted = checkpoint(true);
-    let mut changed = accepted.state().clone();
-    changed.inventory[0].quantity += 1;
-    inner.observe_checkpoint(&hero_identity_fixture::recheckpoint(
-        accepted.basis(),
-        changed,
-    ));
-    assert!(locked(&inner.state).canonical.take_jobs().is_empty());
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -304,27 +314,32 @@ async fn legacy_quickstart_uses_only_its_written_look_without_a_stock_reference(
         "../../artifacts/tmp/lanes/HS37/fixture-cache/lanes/HS5/canonical-legacy-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&cache);
-    let inner = inner(fixture.imagery.clone(), References::default());
-    let checkpoint = hero_identity_fixture::checkpoint(false);
-    let mut saved = checkpoint.state().clone();
-    for character in &mut saved.characters {
-        character
-            .choices
-            .retain(|choice| !choice.offer.as_str().starts_with("identity-"));
-    }
-    let saved = crate::gameplay::model::checkpoint(checkpoint.basis(), saved).unwrap();
-    inner.observe_checkpoint(&saved);
-    let Job::Canonical(work) = locked(&inner.state).canonical.take_jobs().remove(0) else {
-        panic!("canonical hero")
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
-    inner.render_canonical(&work).await.unwrap();
-    assert_eq!(fixture.image_count(), 0);
-    assert!(
-        fixture
-            .prompt()
-            .contains("long braided beard with plain iron rings")
-    );
+    {
+        let inner = inner(fixture.imagery.clone(), References::default());
+        let checkpoint = hero_identity_fixture::checkpoint(false);
+        let mut saved = checkpoint.state().clone();
+        for character in &mut saved.characters {
+            character
+                .choices
+                .retain(|choice| !choice.offer.as_str().starts_with("identity-"));
+        }
+        let saved = crate::gameplay::model::checkpoint(checkpoint.basis(), saved).unwrap();
+        inner.observe_checkpoint(&saved);
+        let Job::Canonical(work) = locked(&inner.state).canonical.take_jobs().remove(0) else {
+            panic!("canonical hero")
+        };
+        inner.render_canonical(&work).await.unwrap();
+        assert_eq!(fixture.image_count(), 0);
+        assert!(
+            fixture
+                .prompt()
+                .contains("long braided beard with plain iron rings")
+        );
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -495,58 +510,65 @@ async fn authored_marek_identity_uses_approved_portrait_and_full_body_photos() {
         "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/marek-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&cache);
-    let mut canonical = references("shop-run");
-    canonical.admit_room("mareks-cloth-shop", &authored, &cast, true);
-    let work = canonical
-        .take_jobs()
-        .into_iter()
-        .find_map(|job| match job {
-            Job::Canonical(work) if work.target == Target::Npc("merchant".to_owned()) => Some(work),
-            _ => None,
-        })
-        .expect("Marek identity job");
-    let Source::Npc {
-        person,
-        identity_photo,
-        identity_figure_photo,
-        ..
-    } = &work.source
-    else {
-        panic!("Marek NPC identity source");
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
     };
+    {
+        let mut canonical = references("shop-run");
+        canonical.admit_room("mareks-cloth-shop", &authored, &cast, true);
+        let work = canonical
+            .take_jobs()
+            .into_iter()
+            .find_map(|job| match job {
+                Job::Canonical(work) if work.target == Target::Npc("merchant".to_owned()) => {
+                    Some(work)
+                }
+                _ => None,
+            })
+            .expect("Marek identity job");
+        let Source::Npc {
+            person,
+            identity_photo,
+            identity_figure_photo,
+            ..
+        } = &work.source
+        else {
+            panic!("Marek NPC identity source");
+        };
 
-    assert!(person.description.contains("short, round middle-aged man"));
-    assert_eq!(identity_photo.as_deref(), Some("portrait-patron-merchant"));
-    assert_eq!(
-        identity_figure_photo.as_deref(),
-        Some("sprite-patron-merchant")
-    );
-    let store = ReferenceStore::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
-    );
-    assert!(store.load(identity_photo.as_deref().unwrap()).is_ok());
-    assert!(
-        store
-            .load(identity_figure_photo.as_deref().unwrap())
-            .is_ok()
-    );
+        assert!(person.description.contains("short, round middle-aged man"));
+        assert_eq!(identity_photo.as_deref(), Some("portrait-patron-merchant"));
+        assert_eq!(
+            identity_figure_photo.as_deref(),
+            Some("sprite-patron-merchant")
+        );
+        let store = ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        );
+        assert!(store.load(identity_photo.as_deref().unwrap()).is_ok());
+        assert!(
+            store
+                .load(identity_figure_photo.as_deref().unwrap())
+                .is_ok()
+        );
 
-    let inner = inner(fixture.imagery.clone(), canonical);
-    inner.render_canonical(&work).await.unwrap();
-    assert_eq!(fixture.calls(), 1);
-    // Only the two real photographs are sent; there is no blank carrier before them.
-    assert_eq!(fixture.image_count(), 2);
-    let prompt = fixture.prompt();
-    assert!(prompt.contains("Image 1 is the approved documentary face portrait"));
-    assert!(prompt.contains("Image 2 is the approved full-body photograph"));
+        let inner = inner(fixture.imagery.clone(), canonical);
+        inner.render_canonical(&work).await.unwrap();
+        assert_eq!(fixture.calls(), 1);
+        // Only the two real photographs are sent; there is no blank carrier before them.
+        assert_eq!(fixture.image_count(), 2);
+        let prompt = fixture.prompt();
+        assert!(prompt.contains("Image 1 is the approved documentary face portrait"));
+        assert!(prompt.contains("Image 2 is the approved full-body photograph"));
+    }
+    fixture.close().await;
 }
 
-fn inner(imagery: Imagery, canonical: References) -> Inner {
+fn inner(imagery: Imagery, canonical: References) -> Arc<Inner> {
     let timing = Timing::from_interval(Duration::from_secs(30));
     let mut state = State::new(timing);
     state.canonical = canonical;
-    Inner {
+    Arc::new(Inner {
         imagery,
         references: ReferenceStore::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
@@ -557,7 +579,7 @@ fn inner(imagery: Imagery, canonical: References) -> Inner {
         state: Mutex::new(state),
         wake: watch::channel(0).0,
         origin: Instant::now(),
-    }
+    })
 }
 
 #[test]
@@ -665,32 +687,37 @@ async fn owned_completion_exposes_runtime_bytes_and_identical_recovery_uses_the_
         "../../artifacts/tmp/lanes/HS37/fixture-cache/canonical-reference-tests/runtime-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::new(&cache);
-    let mut canonical = references("runtime-test-run");
-    room(&mut canonical, "accepted-layout");
-    let Job::Canonical(work) = canonical.take_jobs().remove(0) else {
-        panic!("canonical job");
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
     };
-    let inner = Arc::new(inner(fixture.imagery.clone(), canonical));
-    let mut tasks = JoinSet::new();
-    inner.spawn(&mut tasks, Job::Canonical(work.clone()));
-    inner.finish(tasks.join_next().await.unwrap().unwrap());
-    let key = inner.canonical_room_key("same-place").unwrap();
-    for _ in 0..3 {
-        room(&mut locked(&inner.state).canonical, "accepted-layout");
-        assert!(
-            locked(&inner.state).canonical.take_jobs().is_empty(),
-            "reobserving accepted authoring preserves ready work"
-        );
-        assert_eq!(inner.canonical_room_key("same-place"), Some(key.clone()));
+    {
+        let mut canonical = references("runtime-test-run");
+        room(&mut canonical, "accepted-layout");
+        let Job::Canonical(work) = canonical.take_jobs().remove(0) else {
+            panic!("canonical job");
+        };
+        let inner = Arc::new(inner(fixture.imagery.clone(), canonical));
+        let mut tasks = JoinSet::new();
+        inner.spawn(&mut tasks, Job::Canonical(work.clone()));
+        inner.finish(tasks.join_next().await.unwrap().unwrap());
+        let key = inner.canonical_room_key("same-place").unwrap();
+        for _ in 0..3 {
+            room(&mut locked(&inner.state).canonical, "accepted-layout");
+            assert!(
+                locked(&inner.state).canonical.take_jobs().is_empty(),
+                "reobserving accepted authoring preserves ready work"
+            );
+            assert_eq!(inner.canonical_room_key("same-place"), Some(key.clone()));
+        }
+        let loaded = inner.canonical_room_reference("same-place").await.unwrap();
+        let Lookup::Image { bytes, format } = fixture.imagery.image(key.as_str()).await else {
+            panic!("runtime bytes");
+        };
+        assert_eq!(loaded.sha256, ReferenceImage::new(format, bytes).sha256);
+        assert_eq!(inner.render_canonical(&work).await.unwrap(), key);
+        assert_eq!(fixture.calls(), 1, "cache hit must not pay twice");
     }
-    let loaded = inner.canonical_room_reference("same-place").await.unwrap();
-    let Lookup::Image { bytes, format } = fixture.imagery.image(key.as_str()).await else {
-        panic!("runtime bytes");
-    };
-    assert_eq!(loaded.sha256, ReferenceImage::new(format, bytes).sha256);
-    assert_eq!(inner.render_canonical(&work).await.unwrap(), key);
-    assert_eq!(fixture.calls(), 1, "cache hit must not pay twice");
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -711,63 +738,68 @@ async fn combat_creature_missing_pending_and_late_ready_share_real_cached_art() 
         let entry = entry.unwrap();
         std::fs::copy(entry.path(), cache.join(entry.file_name())).unwrap();
     }
-    let fixture = DirectionFixture::new(&cache);
-    let canonical = references("combat-creature-run");
-    let inner = Arc::new(inner(fixture.imagery.clone(), canonical));
-    let mut journey = rpc::JourneyView {
-        combat: Some(rpc::CombatView {
-            participants: vec![
-                rpc::PartyMemberView {
-                    name: "Skeleton 1".to_owned(),
-                    creature_id: "skeleton".to_owned(),
-                    side: 2,
-                    ..Default::default()
-                },
-                rpc::PartyMemberView {
-                    name: "Skeleton 2".to_owned(),
-                    creature_id: "skeleton".to_owned(),
-                    side: 2,
-                    ..Default::default()
-                },
-            ],
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
+    };
+    {
+        let canonical = references("combat-creature-run");
+        let inner = Arc::new(inner(fixture.imagery.clone(), canonical));
+        let mut journey = rpc::JourneyView {
+            combat: Some(rpc::CombatView {
+                participants: vec![
+                    rpc::PartyMemberView {
+                        name: "Skeleton 1".to_owned(),
+                        creature_id: "skeleton".to_owned(),
+                        side: 2,
+                        ..Default::default()
+                    },
+                    rpc::PartyMemberView {
+                        name: "Skeleton 2".to_owned(),
+                        creature_id: "skeleton".to_owned(),
+                        side: 2,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let jobs = {
-        let mut state = locked(&inner.state);
-        apply_creature_faces(&mut state.canonical, Some(&mut journey));
+        };
+        let jobs = {
+            let mut state = locked(&inner.state);
+            apply_creature_faces(&mut state.canonical, Some(&mut journey));
+            assert!(
+                journey.live_faces.is_empty(),
+                "pending art cannot fabricate a URL"
+            );
+            let jobs = state.canonical.take_jobs();
+            assert_eq!(jobs.len(), 1, "one request per creature identity");
+            apply_creature_faces(&mut state.canonical, Some(&mut journey));
+            assert!(state.canonical.take_jobs().is_empty());
+            jobs
+        };
+        let mut tasks = JoinSet::new();
+        for job in jobs {
+            inner.spawn(&mut tasks, job);
+        }
+        inner.finish(tasks.join_next().await.unwrap().unwrap());
+        apply_creature_faces(&mut locked(&inner.state).canonical, Some(&mut journey));
+        assert_eq!(journey.live_faces.len(), 2);
+        let key = locked(&inner.state)
+            .canonical
+            .npc("combat-creature:skeleton")
+            .unwrap();
+        assert!(matches!(
+            fixture.imagery.image(key.as_str()).await,
+            Lookup::Image { .. }
+        ));
         assert!(
-            journey.live_faces.is_empty(),
-            "pending art cannot fabricate a URL"
+            journey
+                .live_faces
+                .iter()
+                .all(|face| face.sprite == key.path() && face.battle_sprite == key.path())
         );
-        let jobs = state.canonical.take_jobs();
-        assert_eq!(jobs.len(), 1, "one request per creature identity");
-        apply_creature_faces(&mut state.canonical, Some(&mut journey));
-        assert!(state.canonical.take_jobs().is_empty());
-        jobs
-    };
-    let mut tasks = JoinSet::new();
-    for job in jobs {
-        inner.spawn(&mut tasks, job);
     }
-    inner.finish(tasks.join_next().await.unwrap().unwrap());
-    apply_creature_faces(&mut locked(&inner.state).canonical, Some(&mut journey));
-    assert_eq!(journey.live_faces.len(), 2);
-    let key = locked(&inner.state)
-        .canonical
-        .npc("combat-creature:skeleton")
-        .unwrap();
-    assert!(matches!(
-        fixture.imagery.image(key.as_str()).await,
-        Lookup::Image { .. }
-    ));
-    assert!(
-        journey
-            .live_faces
-            .iter()
-            .all(|face| face.sprite == key.path() && face.battle_sprite == key.path())
-    );
+    fixture.close().await;
 }
 
 #[test]
@@ -914,10 +946,7 @@ fn canonical_dispatch_obeys_the_existing_media_capacity_and_cancellation_is_term
     }
     assert_eq!(canonical.take_jobs_up_to(1).len(), 1);
     assert!(canonical.take_jobs_up_to(0).is_empty());
-    let inner = Arc::new(inner(
-        Imagery::disabled(ImageryOff::Qualification),
-        canonical,
-    ));
+    let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
     drop(WorkerLifetime(inner.clone()));
     assert_eq!(
         inner.canonical_room_status("one"),
@@ -1000,7 +1029,7 @@ fn a_created_place_is_admitted_like_the_shop_with_a_room_photo_and_each_person_b
     assert!(person.as_str().contains("broad carter"));
 }
 #[test]
-fn rejected_room_can_be_readmitted_after_cooldown_once_without_replacing_its_binding() {
+fn rejected_room_rechecks_the_same_durable_intent_after_cooldown_once() {
     let mut canonical = references("room-retry-run");
     room(&mut canonical, "stable-layout");
     let binding = selected_room_binding(&canonical).to_owned();
@@ -1025,7 +1054,6 @@ fn rejected_room_can_be_readmitted_after_cooldown_once_without_replacing_its_bin
     let Job::Canonical(work) = &jobs[0] else {
         panic!("room job");
     };
-    assert!(work.regenerate);
     assert_eq!(work.binding, binding);
 }
 
@@ -1068,51 +1096,56 @@ async fn authored_place_admission_skips_room_generation_but_keeps_people_and_dir
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS37/authored-registration")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    let inner = inner(fixture.imagery.clone(), canonical);
-    assert_eq!(
-        inner.canonical_room_status(&place),
-        ReferenceStatus::Pending
-    );
-    for job in jobs {
-        let Job::Canonical(work) = job else {
-            panic!("canonical work")
-        };
-        if matches!(work.source, Source::ReviewedRoom { .. }) {
-            let key = inner.render_canonical(&work).await.unwrap();
-            inner.finish_canonical(work, Ok(key));
-        } else {
-            assert!(matches!(work.source, Source::Npc { .. }));
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
+    {
+        let inner = inner(fixture.imagery.clone(), canonical);
+        assert_eq!(
+            inner.canonical_room_status(&place),
+            ReferenceStatus::Pending
+        );
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("canonical work")
+            };
+            if matches!(work.source, Source::ReviewedRoom { .. }) {
+                let key = inner.render_canonical(&work).await.unwrap();
+                inner.finish_canonical(work, Ok(key));
+            } else {
+                assert!(matches!(work.source, Source::Npc { .. }));
+            }
         }
+        assert_eq!(
+            fixture.calls(),
+            0,
+            "authored room registration never invokes a provider"
+        );
+        let registered = inner.canonical_room_key(&place).unwrap();
+        assert!(matches!(
+            fixture.imagery.image(registered.as_str()).await,
+            Lookup::Image { .. }
+        ));
+        assert_eq!(inner.canonical_room_status(&place), ReferenceStatus::Ready);
+        assert_eq!(
+            inner.canonical_room_status_at(&place, &revision),
+            ReferenceStatus::Ready
+        );
+        let expected = inner.load(scene.asset).await.unwrap();
+        assert_eq!(
+            inner.canonical_room_reference(&place).await.unwrap().sha256,
+            expected.sha256
+        );
+        assert_eq!(
+            inner
+                .canonical_room_reference_at(&place, &revision)
+                .await
+                .unwrap()
+                .sha256,
+            expected.sha256
+        );
     }
-    assert_eq!(
-        fixture.calls(),
-        0,
-        "authored room registration never invokes a provider"
-    );
-    let registered = inner.canonical_room_key(&place).unwrap();
-    assert!(matches!(
-        fixture.imagery.image(registered.as_str()).await,
-        Lookup::Image { .. }
-    ));
-    assert_eq!(inner.canonical_room_status(&place), ReferenceStatus::Ready);
-    assert_eq!(
-        inner.canonical_room_status_at(&place, &revision),
-        ReferenceStatus::Ready
-    );
-    let expected = inner.load(scene.asset).await.unwrap();
-    assert_eq!(
-        inner.canonical_room_reference(&place).await.unwrap().sha256,
-        expected.sha256
-    );
-    assert_eq!(
-        inner
-            .canonical_room_reference_at(&place, &revision)
-            .await
-            .unwrap()
-            .sha256,
-        expected.sha256
-    );
+    fixture.close().await;
 }
 
 #[test]

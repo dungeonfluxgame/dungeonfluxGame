@@ -33,7 +33,26 @@ pub fn validate_image(
     declared_mime: &str,
     extension: &str,
 ) -> Result<ValidatedImage, ImageRejection> {
-    if bytes.len() > MAX_UPLOAD_BYTES {
+    validate_image_with_limits(
+        bytes,
+        declared_mime,
+        extension,
+        MAX_UPLOAD_BYTES as u64,
+        MAX_IMAGE_PIXELS,
+    )
+}
+
+/// The same decoder and metadata stripping with explicit trusted import limits.
+/// This does not authorize source bytes or alter the public upload limits.
+pub fn validate_image_with_limits(
+    bytes: &[u8],
+    declared_mime: &str,
+    extension: &str,
+    maximum_bytes: u64,
+    max_pixels: u64,
+) -> Result<ValidatedImage, ImageRejection> {
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| ImageRejection::TooLarge)?;
+    if maximum_bytes == 0 || byte_len > maximum_bytes {
         return Err(ImageRejection::TooLarge);
     }
     let format = image::guess_format(bytes).map_err(|_| ImageRejection::UnsupportedFormat)?;
@@ -62,7 +81,7 @@ pub fn validate_image(
     let pixels = u64::from(width_px)
         .checked_mul(u64::from(height_px))
         .ok_or(ImageRejection::TooManyPixels)?;
-    if pixels == 0 || pixels > MAX_IMAGE_PIXELS {
+    if pixels == 0 || pixels > max_pixels {
         return Err(ImageRejection::TooManyPixels);
     }
     let decoded = image::load_from_memory_with_format(bytes, format)
@@ -87,7 +106,7 @@ fn encode_without_metadata(
     Ok(output.into_inner())
 }
 
-fn is_animated(bytes: &[u8], format: ImageFormat) -> Result<bool, ImageRejection> {
+pub(crate) fn is_animated(bytes: &[u8], format: ImageFormat) -> Result<bool, ImageRejection> {
     match format {
         ImageFormat::Png => png_has_animation_control(bytes),
         ImageFormat::WebP => webp_has_animation_flag(bytes),
@@ -186,6 +205,74 @@ mod tests {
             .write_to(&mut output, ImageFormat::Png)
             .expect("encode fixture");
         output.into_inner()
+    }
+
+    #[test]
+    fn trusted_limits_allow_reviewed_source_without_widening_upload_or_decoder_contracts() {
+        let mut bytes = png_bytes(2, 3);
+        let mut metadata = b"Comment\0".to_vec();
+        metadata.resize(MAX_UPLOAD_BYTES, b'x');
+        let chunk = png_chunk(b"tEXt", &metadata);
+        let idat = bytes.windows(4).position(|part| part == b"IDAT").unwrap() - 4;
+        bytes.splice(idat..idat, chunk);
+        assert!(bytes.len() > MAX_UPLOAD_BYTES);
+        assert_eq!(
+            validate_image(&bytes, "image/png", "png"),
+            Err(ImageRejection::TooLarge)
+        );
+        let accepted = validate_image_with_limits(
+            &bytes,
+            "image/png",
+            "png",
+            16 * 1024 * 1024,
+            MAX_IMAGE_PIXELS,
+        )
+        .unwrap();
+        assert_eq!((accepted.width_px, accepted.height_px), (2, 3));
+        assert!(accepted.bytes.len() < MAX_UPLOAD_BYTES);
+        assert!(!accepted.bytes.windows(4).any(|part| part == b"tEXt"));
+        assert_eq!(
+            validate_image_with_limits(
+                &bytes,
+                "image/jpeg",
+                "jpg",
+                16 * 1024 * 1024,
+                MAX_IMAGE_PIXELS
+            ),
+            Err(ImageRejection::MimeMismatch)
+        );
+        bytes.extend_from_slice(b"trailing payload");
+        assert_eq!(
+            validate_image_with_limits(
+                &bytes,
+                "image/png",
+                "png",
+                16 * 1024 * 1024,
+                MAX_IMAGE_PIXELS
+            ),
+            Err(ImageRejection::InvalidHeader)
+        );
+    }
+
+    #[test]
+    fn explicit_limits_preserve_byte_and_pixel_boundaries() {
+        let bytes = png_bytes(2, 3);
+        let length = bytes.len() as u64;
+        assert_eq!(
+            validate_image_with_limits(&bytes, "image/png", "png", length - 1, 6),
+            Err(ImageRejection::TooLarge)
+        );
+        assert!(validate_image_with_limits(&bytes, "image/png", "png", length, 6).is_ok());
+        assert_eq!(
+            validate_image_with_limits(&bytes, "image/png", "png", 0, 6),
+            Err(ImageRejection::TooLarge)
+        );
+        for pixels in [0, 5] {
+            assert_eq!(
+                validate_image_with_limits(&bytes, "image/png", "png", length, pixels),
+                Err(ImageRejection::TooManyPixels)
+            );
+        }
     }
 
     #[test]

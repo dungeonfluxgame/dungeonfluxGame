@@ -124,6 +124,24 @@ pub(crate) async fn apply(
          CREATE TABLE IF NOT EXISTS hosted.migration (number integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT clock_timestamp())",
     ).await.map_err(DatabaseError::Query)?;
     for (number, sql) in migrations {
+        if (10..=14).contains(number) {
+            df_persistence::media_catalog::migrate_in(&transaction)
+                .await
+                .map_err(|cause| DatabaseError::Migration {
+                    number: *number,
+                    cause,
+                })?;
+            continue;
+        }
+        if (38..=53).contains(number) || *number == 55 {
+            df_persistence::imagery_migrations::migrate_in(&transaction)
+                .await
+                .map_err(|cause| DatabaseError::Migration {
+                    number: *number,
+                    cause,
+                })?;
+            continue;
+        }
         if transaction
             .query_opt(
                 "SELECT number FROM hosted.migration WHERE number = $1",
@@ -231,6 +249,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!("../../df-persistence/migrations/0024_finance_boundary.sql"),
     ),
     (
+        25,
+        include_str!("../../df-persistence/migrations/0025_finance_refunds_disputes_boundary.sql"),
+    ),
+    (
         31,
         include_str!("../../df-persistence/migrations/0031_host_funding.sql"),
     ),
@@ -243,6 +265,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!(
             "../../df-persistence/migrations/0037_campaign_preferences_owner_boundary.sql"
         ),
+    ),
+    (
+        38,
+        include_str!("../../df-persistence/migrations/0038_imagery_operations.sql"),
     ),
     (100, include_str!("../migrations/0100_stripe_checkout.sql")),
     (101, include_str!("../migrations/0101_paypal_checkout.sql")),

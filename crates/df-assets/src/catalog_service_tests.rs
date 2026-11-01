@@ -278,6 +278,31 @@ fn request(attempt: u8) -> GenerationRequest {
     }
 }
 
+fn draft_account() -> df_types::AccountId {
+    df_types::AccountId::from_bytes(&[3; 16]).unwrap()
+}
+
+fn draft_request(attempt: u8) -> GenerationRequest {
+    let account = draft_account();
+    GenerationRequest {
+        attempt: contract::attempt_id(attempt),
+        kind: AssetKind::Image,
+        charge_scope: crate::QuotaScope::Account(account),
+        origin_account: Some(account),
+        campaign: None,
+        audience: Audience::OwnerPrivate(account),
+        dedupe_scope: DedupeScope::account(&account),
+        request_key: contract::request_key(attempt),
+        retention: RetentionClass::Personal,
+    }
+}
+
+fn paths_are_draft_paths(paths: &[String]) -> bool {
+    paths
+        .iter()
+        .all(|path| path.starts_with("test/users/") && path.contains("draft-assets"))
+}
+
 impl World {
     fn admit(&self, attempt: u8) -> AssetId {
         match block_on(self.service.admit_generation(&request(attempt))).unwrap() {
@@ -938,6 +963,10 @@ fn one_row_that_cannot_be_worked_is_deferred_and_the_pass_carries_on() {
     let world = world();
     let mut stuck: Admission = contract::admission(50);
     stuck.campaign = None;
+    // A genuinely unsupported but admittable legacy row: no-campaign, non-generated rows
+    // keep the pre-draft admittable path (owner `None`) yet can never be published, so the
+    // sweep defers them. A no-campaign generated image is refused at admission instead.
+    stuck.provenance = crate::Provenance::Uploaded;
     block_on(world.catalog.admit(&stuck, world.clock.now_ms())).unwrap();
     block_on(world.catalog.record_staged(
         stuck.asset,
@@ -1112,5 +1141,225 @@ fn a_crash_between_f_cancelling_and_the_catalog_rejecting_is_repaired_by_the_nex
         block_on(world.catalog.pending_outbox(10)).unwrap().len(),
         1,
         "exactly one report"
+    );
+}
+
+#[test]
+fn an_account_draft_flows_to_ready_under_a_draft_key() {
+    let world = world();
+    let asset = match block_on(world.service.admit_generation(&draft_request(1))).unwrap() {
+        GenerationAdmission::Admitted { asset } => asset,
+        other => panic!("expected draft admission, got {other:?}"),
+    };
+    let account_scope = crate::QuotaScope::Account(draft_account());
+    assert_eq!(
+        block_on(world.catalog.quota_usage(account_scope))
+            .unwrap()
+            .reserved_bytes,
+        world.config.maximum_bytes.image
+    );
+    assert!(matches!(
+        world.stage(asset, 1, 1_000),
+        StagingOutcome::Staged { bytes: 1_000 }
+    ));
+    assert_eq!(world.advance(asset), Advance::Ready);
+    let row = world.row(asset);
+    assert_eq!(row.state, AssetState::Ready);
+    assert_eq!(row.campaign, None);
+    assert_eq!(row.origin_account, Some(draft_account()));
+    assert_eq!(row.audience, Audience::OwnerPrivate(draft_account()));
+    assert_eq!(row.charge_scope, account_scope);
+    assert_eq!(row.retention, RetentionClass::Personal);
+    let variants = block_on(world.catalog.variants(asset)).unwrap();
+    assert_eq!(variants.len(), 2);
+    let paths: Vec<String> = variants
+        .iter()
+        .map(|variant| variant.key.path().to_owned())
+        .collect();
+    assert!(paths_are_draft_paths(&paths));
+    assert!(
+        variants
+            .iter()
+            .all(|variant| variant.key.domain() == StorageDomain::PrivateMedia)
+    );
+    let usage = block_on(world.catalog.quota_usage(account_scope)).unwrap();
+    assert_eq!(usage.reserved_bytes, 0);
+    assert_eq!(usage.committed_bytes, row.published.unwrap().byte_len);
+    assert_eq!(
+        block_on(world.catalog.quota_usage(scope()))
+            .unwrap()
+            .committed_bytes,
+        0
+    );
+    let reloaded = world.row(asset);
+    assert_eq!(reloaded.campaign, None);
+    assert_eq!(reloaded.origin_account, Some(draft_account()));
+}
+
+#[test]
+fn a_draft_over_a_campaign_row_with_identical_raw_ids_is_refused_without_a_leak() {
+    let world = world();
+    let campaign_asset = world.admit(1);
+    let raw = *contract::campaign().as_bytes();
+    let account = df_types::AccountId::from_bytes(&raw).unwrap();
+    let mut draft = draft_request(2);
+    draft.charge_scope = crate::QuotaScope::Account(account);
+    draft.origin_account = Some(account);
+    draft.audience = Audience::OwnerPrivate(account);
+    draft.dedupe_scope = DedupeScope::from_bytes(raw);
+    draft.request_key = contract::request_key(1);
+    assert_eq!(
+        block_on(world.service.admit_generation(&draft)).unwrap(),
+        GenerationAdmission::NotAdmitted(NotAdmitted::OwnerUnsupported)
+    );
+    assert_eq!(world.catalog.row_count(), 1);
+    assert_eq!(world.row(campaign_asset).state, AssetState::Uploading);
+}
+
+#[test]
+fn a_draft_resumes_through_sweep_and_keeps_its_owner_and_path() {
+    let world = world();
+    let asset = match block_on(world.service.admit_generation(&draft_request(1))).unwrap() {
+        GenerationAdmission::Admitted { asset } => asset,
+        other => panic!("expected draft admission, got {other:?}"),
+    };
+    assert!(matches!(
+        world.stage(asset, 1, 500),
+        StagingOutcome::Staged { bytes: 500 }
+    ));
+    let report = world.sweep();
+    assert_eq!(report.advanced, 1);
+    assert_eq!(world.row(asset).state, AssetState::Ready);
+    let variants = block_on(world.catalog.variants(asset)).unwrap();
+    let paths: Vec<String> = variants
+        .iter()
+        .map(|variant| variant.key.path().to_owned())
+        .collect();
+    assert!(paths_are_draft_paths(&paths));
+    assert_eq!(world.row(asset).origin_account, Some(draft_account()));
+}
+
+#[test]
+fn a_draft_worker_that_loses_its_lease_mid_publish_is_resumed_with_its_owner() {
+    let world = world();
+    let asset = match block_on(world.service.admit_generation(&draft_request(1))).unwrap() {
+        GenerationAdmission::Admitted { asset } => asset,
+        other => panic!("expected draft admission, got {other:?}"),
+    };
+    assert!(matches!(
+        world.stage(asset, 1, 500),
+        StagingOutcome::Staged { bytes: 500 }
+    ));
+    let fired = Arc::new(AtomicBool::new(false));
+    let (catalog, clock, lease_ms) = (
+        Arc::clone(&world.catalog),
+        Arc::clone(&world.clock),
+        world.config.step_lease_ms,
+    );
+    world.hooked.hook(Arc::new(move |key: &ObjectKey| {
+        let is_first_variant =
+            key.domain() == StorageDomain::PrivateMedia && !fired.swap(true, Ordering::SeqCst);
+        let (catalog, clock) = (Arc::clone(&catalog), Arc::clone(&clock));
+        Box::pin(async move {
+            if !is_first_variant {
+                return;
+            }
+            clock.advance(lease_ms + 1);
+            let takeover = StepClaim {
+                asset,
+                attempt: contract::attempt_id(1),
+                step: Step::Publish,
+                expected_state: AssetState::Validated,
+                owner: contract::claim_token(99),
+                lease_until_ms: clock.now_ms() + lease_ms,
+            };
+            let now_ms = clock.now_ms();
+            assert_eq!(
+                catalog.claim_step(takeover, now_ms).await.unwrap(),
+                ClaimOutcome::Claimed
+            );
+        })
+    }));
+    assert_eq!(world.advance(asset), Advance::LeaseLost);
+    assert_eq!(world.row(asset).origin_account, Some(draft_account()));
+    world.clock.advance(world.config.step_lease_ms + 1);
+    let resumed = world.sweep();
+    assert_eq!(resumed.advanced, 1);
+    assert_eq!(world.row(asset).state, AssetState::Ready);
+    let variants = block_on(world.catalog.variants(asset)).unwrap();
+    assert_eq!(variants.len(), 2);
+    let paths: Vec<String> = variants
+        .iter()
+        .map(|variant| variant.key.path().to_owned())
+        .collect();
+    assert!(paths_are_draft_paths(&paths));
+    assert_eq!(world.row(asset).origin_account, Some(draft_account()));
+}
+
+#[test]
+fn a_claimed_library_portrait_flows_to_ready_with_private_account_keys_and_quota() {
+    let world = world();
+    let request = draft_request(1);
+    let asset = contract::asset_id(1);
+    let admission = crate::Admission {
+        asset,
+        attempt: request.attempt,
+        kind: request.kind,
+        provenance: crate::Provenance::ClaimedLibrary,
+        charge_scope: request.charge_scope,
+        origin_account: request.origin_account,
+        campaign: None,
+        audience: request.audience.clone(),
+        dedupe_scope: request.dedupe_scope,
+        request_key: Some(request.request_key),
+        retention: request.retention,
+        reserve_bytes: world.config.maximum_bytes.image,
+        byte_limit: world.config.quota.byte_limit(request.charge_scope),
+        in_flight_upload_limit: None,
+    };
+    assert_eq!(
+        block_on(world.catalog.admit(&admission, world.clock.now_ms())).unwrap(),
+        crate::AdmitOutcome::Admitted
+    );
+    assert_eq!(
+        block_on(world.catalog.quota_usage(request.charge_scope))
+            .unwrap()
+            .reserved_bytes,
+        world.config.maximum_bytes.image
+    );
+    assert!(matches!(
+        world.stage(asset, 1, 1000),
+        StagingOutcome::Staged { bytes: 1000 }
+    ));
+    assert_eq!(world.advance(asset), Advance::Ready);
+    let record = world.row(asset);
+    assert_eq!(record.state, AssetState::Ready);
+    assert_eq!(record.provenance, crate::Provenance::ClaimedLibrary);
+    assert_eq!(
+        crate::record_owner(&record),
+        Some(crate::StorageOwner::AccountDraft(draft_account()))
+    );
+    assert_eq!(record.audience, Audience::OwnerPrivate(draft_account()));
+    assert_eq!(record.campaign, None);
+    assert_eq!(record.origin_account, Some(draft_account()));
+    let variants = block_on(world.catalog.variants(asset)).unwrap();
+    assert_eq!(variants.len(), 2);
+    let paths = variants
+        .iter()
+        .map(|v| v.key.path().to_owned())
+        .collect::<Vec<_>>();
+    assert!(paths_are_draft_paths(&paths));
+    assert!(
+        variants
+            .iter()
+            .all(|v| v.key.domain() == StorageDomain::PrivateMedia)
+    );
+    let usage = block_on(world.catalog.quota_usage(request.charge_scope)).unwrap();
+    assert_eq!(usage.reserved_bytes, 0);
+    assert_eq!(usage.in_flight_uploads, 0);
+    assert_eq!(usage.committed_bytes, record.published.unwrap().byte_len);
+    assert_eq!(
+        block_on(world.catalog.quota_usage(scope())).unwrap(),
+        crate::QuotaUsage::default()
     );
 }

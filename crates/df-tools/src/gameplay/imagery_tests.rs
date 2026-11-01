@@ -7,17 +7,14 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    time::Instant,
 };
 
 use axum::http::{Method, Request, StatusCode, header};
 use df_providers::{
-    ImageBackground, ImageEdit, ImageEditConfig, ImageEditModel, ImageFormat, ImageModeration,
-    ImageQuality, ReferenceImage as EditReferenceImage,
+    ImageBackground, ImageEdit, ImageEditModel, ImageFormat, ImageModeration, ImageQuality,
+    ReferenceImage as EditReferenceImage,
 };
 use tonic::codegen::Service;
-
-use super::quota_breaker::{QuotaAnswer, QuotaState};
 
 use super::{
     super::{
@@ -26,26 +23,14 @@ use super::{
         pack,
         scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
         shot::scene_graph::{CameraFraming, SceneGraph, SceneSet},
-        startup_configuration::{ImageryCredential, ImageryOff},
+        startup_configuration::ImageryOff,
     },
     artifact::artifact_close_up,
     prompt::{Part, closed_vocabulary},
     *,
 };
 
-#[test]
-fn blocked_image_request_is_a_local_refusal() {
-    assert!(matches!(
-        failure_of(ImageEditError::Transport(
-            NativeHttpRefusal::ProviderDisabled
-        )),
-        ImageFailure::InvalidRequest
-    ));
-}
-
 const SIZE: (u32, u32) = (1024, 640);
-/// What a successful fake call reports: 100 text, 900 image and 300 output tokens.
-const FAKE_MICRO_DOLLARS: u64 = 100 * 5 + 900 * 8 + 300 * 30;
 
 fn hero_identity(choices: &[(&str, &str)], backstory: &str) -> ValidatedIdentity {
     let mut identity = Identity::from_menus(choices)
@@ -505,34 +490,6 @@ fn hero_image_prompts_refuse_species_outside_the_admitted_build_catalog() {
     );
 }
 
-#[tokio::test]
-async fn item_image_cache_precedes_the_provider_call() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (imagery, _) = imagery(&fake, "K03-item-cache-budget");
-    let generated = adventure(40);
-    let thing = &generated.settings.meeting.model.as_ref().unwrap().things[0];
-    let request = || ImageRequest {
-        kind: ImageKind::ArtifactCloseUp,
-        references: vec![backdrop_reference()],
-        prompt: item_picture(ContentRating::Mature, thing, None).unwrap(),
-        output: spec(false),
-    };
-    let first = imagery.render(request()).await.unwrap();
-    assert_eq!(imagery.render(request()).await.unwrap(), first);
-    assert_eq!(fake.calls(), 1);
-    let mut changed = thing.clone();
-    changed.broken = !changed.broken;
-    let changed = ImageRequest {
-        kind: ImageKind::ArtifactCloseUp,
-        references: vec![backdrop_reference()],
-        prompt: item_picture(ContentRating::Mature, &changed, None).unwrap(),
-        output: spec(false),
-    };
-    // A changed item is a new request and is made; nothing caps the number of requests.
-    assert_ne!(imagery.render(changed).await.unwrap(), first);
-    assert_eq!(fake.calls(), 2);
-}
-
 // ---------------------------------------------------------------------------------------------
 // A loopback stand-in for the OpenAI image-edit endpoint.
 
@@ -542,7 +499,8 @@ enum Reply {
     DecodableImage,
     Moderation,
     NoImage,
-    Failure,
+    BlockedFailure,
+    LostAfterSend,
     Garbage,
     WrongSize,
     OpaqueForTransparent,
@@ -550,8 +508,7 @@ enum Reply {
     RateLimitedOnce,
     BlockedBackground,
     QuotaExhausted,
-    /// A quota answer, then a plain rate limit, then an image: the probe-retry sequence.
-    QuotaThenRateLimit,
+    ImageThenQuota,
 }
 
 type Fields = BTreeMap<String, String>;
@@ -559,14 +516,17 @@ type Fields = BTreeMap<String, String>;
 struct FakeOpenAi {
     address: SocketAddr,
     requests: Arc<AtomicUsize>,
+    analyses: Arc<AtomicUsize>,
     peak: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<(Fields, usize)>>>,
     stop: Arc<AtomicBool>,
     release_background: Arc<AtomicBool>,
+    server: Option<thread::JoinHandle<()>>,
 }
 
 struct FakeState {
     requests: Arc<AtomicUsize>,
+    analyses: Arc<AtomicUsize>,
     active: Arc<AtomicUsize>,
     peak: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<(Fields, usize)>>>,
@@ -583,6 +543,7 @@ impl FakeOpenAi {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
+        let analyses = Arc::new(AtomicUsize::new(0));
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -590,26 +551,33 @@ impl FakeOpenAi {
         let release_background = Arc::new(AtomicBool::new(false));
         let state = Arc::new(FakeState {
             requests: requests.clone(),
+            analyses: analyses.clone(),
             active,
             peak: peak.clone(),
             seen: seen.clone(),
             release_background: release_background.clone(),
         });
         let stopped = stop.clone();
-        thread::spawn(move || {
+        let server = thread::spawn(move || {
+            let mut workers = Vec::new();
             while !stopped.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((socket, _)) => {
                         let state = state.clone();
-                        thread::spawn(move || answer(socket, delay, reply, &state));
+                        workers.push(thread::spawn(move || answer(socket, delay, reply, &state)));
                     }
                     Err(_) => thread::sleep(Duration::from_millis(2)),
                 }
             }
+            for worker in workers {
+                worker.join().unwrap();
+            }
         });
         Self {
+            server: Some(server),
             address,
             requests,
+            analyses,
             peak,
             seen,
             stop,
@@ -634,6 +602,10 @@ impl Drop for FakeOpenAi {
     fn drop(&mut self) {
         self.release_background.store(true, Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
+        let result = self.server.take().unwrap().join();
+        if !thread::panicking() {
+            result.unwrap();
+        }
     }
 }
 
@@ -683,8 +655,9 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
     }
     let head = String::from_utf8(head).unwrap();
     let generation = head.starts_with("POST /v1/images/generations ");
+    let analysis = head.starts_with("POST /v1/chat/completions ");
     assert!(
-        generation || head.starts_with("POST /v1/images/edits "),
+        generation || analysis || head.starts_with("POST /v1/images/edits "),
         "{head}"
     );
     assert!(
@@ -702,6 +675,22 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
         .unwrap();
     let mut body = vec![0; length];
     socket.read_exact(&mut body).unwrap();
+    if analysis {
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(request["model"], "gpt-5.5");
+        state.analyses.fetch_add(1, Ordering::SeqCst);
+        let content=serde_json::json!({"heads":[{"id":"speaker","left":0.1,"top":0.1,"right":0.2,"bottom":0.3}]}).to_string();
+        let payload=serde_json::json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}).to_string();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        );
+        socket
+            .write_all(header.as_bytes())
+            .and_then(|()| socket.write_all(payload.as_bytes()))
+            .unwrap();
+        return;
+    }
     // A request with no reference is a JSON text-only generation; an edit is multipart.
     let (fields, images) = if generation {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -725,19 +714,24 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
     state.peak.fetch_max(active, Ordering::SeqCst);
     state.seen.lock().unwrap().push((fields.clone(), images));
     thread::sleep(delay);
-    if reply == Reply::BlockedBackground && fields["prompt"].contains("hs58-blocked-background") {
+    if reply == Reply::BlockedFailure
+        || (reply == Reply::BlockedBackground
+            && fields["prompt"].contains("hs58-blocked-background"))
+    {
         while !state.release_background.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(2));
         }
     }
     state.active.fetch_sub(1, Ordering::SeqCst);
+    if reply == Reply::LostAfterSend {
+        return;
+    }
     let (status, payload) = match (reply, attempt) {
-        (Reply::RateLimitedOnce, 0) | (Reply::QuotaThenRateLimit, 1) => (
+        (Reply::ImageThenQuota, 0) => payload_for(Reply::Image, &fields),
+        (Reply::RateLimitedOnce, 0) => (
             "429 Too Many Requests",
             r#"{"error":{"message":"rate limited"}}"#.to_owned(),
         ),
-        (Reply::QuotaThenRateLimit, 0) => payload_for(Reply::QuotaExhausted, &fields),
-        (Reply::QuotaThenRateLimit, _) => payload_for(Reply::Image, &fields),
         _ => payload_for(reply, &fields),
     };
     let head = format!(
@@ -773,14 +767,14 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
             else { image::DynamicImage::ImageRgb8(picture.to_rgb8()).write_to(&mut bytes, format).unwrap(); }
             ("200 OK", image(bytes.into_inner()))
         }
-        Reply::QuotaExhausted => (
+        Reply::QuotaExhausted | Reply::ImageThenQuota => (
             "429 Too Many Requests",
             r#"{"error":{"code":"insufficient_quota","message":"You exceeded your current quota."}}"#
                 .to_owned(),
         ),
         Reply::Image if png => ("200 OK", image(fake_png(width, height, transparent))),
         Reply::Image if webp => ("200 OK", image(fake_webp(width, height, transparent))),
-        Reply::Image | Reply::RateLimitedOnce | Reply::BlockedBackground | Reply::QuotaThenRateLimit => ("200 OK", image(fake_jpeg(width, height, 0))),
+        Reply::Image | Reply::RateLimitedOnce | Reply::BlockedBackground => ("200 OK", image(fake_jpeg(width, height, 0))),
         Reply::WrongSize if png => ("200 OK", image(fake_png(width + 16, height, transparent))),
         Reply::WrongSize if webp => (
             "200 OK",
@@ -797,7 +791,8 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
             r#"{"error":{"code":"moderation_blocked","message":"blocked","type":"image_generation_user_error"}}"#
                 .to_owned(),
         ),
-        Reply::Failure => (
+        Reply::LostAfterSend => unreachable!("transport fault returns before payload encoding"),
+        Reply::BlockedFailure => (
             "500 Internal Server Error",
             r#"{"error":{"message":"server error"}}"#.to_owned(),
         ),
@@ -826,79 +821,35 @@ fn base64(bytes: &[u8]) -> String {
     text
 }
 
-fn crc32(data: &[u8]) -> u32 {
-    let mut value = !0u32;
-    for byte in data {
-        value ^= u32::from(*byte);
-        for _ in 0..8 {
-            value = (value >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(value & 1));
-        }
-    }
-    !value
+fn fixture_picture(width: u32, height: u32, alpha: bool, format: image::ImageFormat) -> Vec<u8> {
+    let picture = image::RgbaImage::from_pixel(
+        width,
+        height,
+        image::Rgba([54, 82, 96, if alpha { 200 } else { 255 }]),
+    );
+    let picture = image::DynamicImage::ImageRgba8(picture);
+    let picture = if format == image::ImageFormat::Jpeg {
+        image::DynamicImage::ImageRgb8(picture.to_rgb8())
+    } else {
+        picture
+    };
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    picture.write_to(&mut bytes, format).unwrap();
+    bytes.into_inner()
 }
 
-fn chunk(kind: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut data = (payload.len() as u32).to_be_bytes().to_vec();
-    data.extend(kind);
-    data.extend(payload);
-    data.extend(crc32(&data[4..]).to_be_bytes());
-    data
-}
-
-/// A complete lossless WebP header and filler of the given size, with or without alpha: all the
-/// provider adapter reads of a WebP is its container, dimensions and alpha flag.
 fn fake_webp(width: u32, height: u32, alpha: bool) -> Vec<u8> {
-    let packed = (width - 1) | ((height - 1) << 14) | (u32::from(alpha) << 28);
-    let mut chunk_data = vec![0x2f];
-    chunk_data.extend(packed.to_le_bytes());
-    chunk_data.extend([0u8; 11]);
-    let mut data = b"RIFF".to_vec();
-    data.extend((4 + 8 + chunk_data.len() as u32).to_le_bytes());
-    data.extend(b"WEBP");
-    data.extend(b"VP8L");
-    data.extend((chunk_data.len() as u32).to_le_bytes());
-    data.extend(chunk_data);
-    data
+    fixture_picture(width, height, alpha, image::ImageFormat::WebP)
 }
 
-/// A complete grey (or grey-plus-alpha) PNG of one flat tone, stored without compression.
 fn fake_png(width: u32, height: u32, alpha: bool) -> Vec<u8> {
-    let bytes_per_pixel = if alpha { 2 } else { 1 };
-    let mut header = width.to_be_bytes().to_vec();
-    header.extend(height.to_be_bytes());
-    header.extend([8, if alpha { 4 } else { 0 }, 0, 0, 0]);
-    let row = 1 + width as usize * bytes_per_pixel;
-    let raw = vec![0x40u8; row * height as usize];
-    let mut compressed = vec![0x78, 0x01];
-    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
-    for (index, block) in blocks.iter().enumerate() {
-        compressed.push(u8::from(index + 1 == blocks.len()));
-        compressed.extend((block.len() as u16).to_le_bytes());
-        compressed.extend((!(block.len() as u16)).to_le_bytes());
-        compressed.extend(*block);
-    }
-    let (mut a, mut b) = (1u32, 0u32);
-    for byte in &raw {
-        a = (a + u32::from(*byte)) % 65_521;
-        b = (b + a) % 65_521;
-    }
-    compressed.extend(((b << 16) | a).to_be_bytes());
-    let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
-    data.extend(chunk(b"IHDR", &header));
-    data.extend(chunk(b"IDAT", &compressed));
-    data.extend(chunk(b"IEND", &[]));
-    data
+    fixture_picture(width, height, alpha, image::ImageFormat::Png)
 }
 
-/// A JPEG with a start-of-image, one frame header, `padding` filler bytes and an end-of-image.
 fn fake_jpeg(width: u32, height: u32, padding: usize) -> Vec<u8> {
-    let mut data = vec![0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08];
-    data.extend((height as u16).to_be_bytes());
-    data.extend((width as u16).to_be_bytes());
-    data.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
-    data.extend(vec![0u8; padding]);
-    data.extend([0xff, 0xd9]);
-    data
+    let mut bytes = fixture_picture(width, height, false, image::ImageFormat::Jpeg);
+    bytes.resize(bytes.len() + padding, 0);
+    bytes
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -914,117 +865,190 @@ pub(in crate::gameplay) fn directory(name: &str) -> PathBuf {
     path
 }
 
-fn imagery_in(
-    fake: &FakeOpenAi,
-    cache: &Path,
-    manifest: Option<&Path>,
-    deadline: Duration,
-    rating: ContentRating,
-) -> Imagery {
-    let provider = df_providers::NativeImageEditProvider::new(
-        ImageEditConfig::loopback_fixture(fake.address).unwrap(),
-        "test-credential",
-        deadline,
-    )
-    .unwrap();
-    Imagery::new(
-        ImageryConfiguration {
-            credential: Some(ImageryCredential::for_test("test-credential")),
-            model: ImageEditModel::Gpt25Flare,
-            quality: ImageQuality::Medium,
-            profile: Default::default(),
-            interval: Duration::from_secs(30),
-            deadline,
-            cache_dir: cache.to_path_buf(),
-            rating,
-        },
-        provider,
-        manifest,
-    )
-    .unwrap()
+fn fixture_patch(compact: bool) -> df_imagery::RuntimePatch {
+    use df_imagery::{
+        AlphaHandling, Dimensions, Encoding, NamedOutputProfile, OutputProfile, OutputProfileName,
+        Purpose, RasterOutputSpec,
+    };
+    let mut patch = df_imagery::RuntimePatch::empty();
+    patch.backend_enabled = [Some(false); df_imagery::BackendId::COUNT];
+    patch.backend_enabled[df_imagery::BackendId::OpenAi.index()] = Some(true);
+    patch.quality_provider_quality = Some(Some(df_imagery::GenerationQuality::Medium));
+    patch.retry_max_attempts = Some(1);
+    patch.scheduler_stage_deadline_secs = Some(5);
+    patch.scheduler_job_deadline_secs = Some(10);
+    if compact {
+        let mut profiles = super::super::image_configuration::legacy_profile_defaults(
+            &ImagerySettings::Off(ImageryOff::Disabled),
+            false,
+        )
+        .unwrap()
+        .output_profiles;
+        for purpose in [
+            Purpose::CanonicalPerson,
+            Purpose::CanonicalRoom,
+            Purpose::ScenePlate,
+            Purpose::SceneEdit,
+            Purpose::Expression,
+            Purpose::ItemCloseUp,
+        ] {
+            let transparent = matches!(purpose, Purpose::CanonicalPerson | Purpose::Expression);
+            let dimensions = if purpose == Purpose::ItemCloseUp {
+                Dimensions::new(OutputSpec::CLOSE_UP.width, OutputSpec::CLOSE_UP.height).unwrap()
+            } else {
+                Dimensions::new(SIZE.0, SIZE.1).unwrap()
+            };
+            let encoding = if transparent {
+                Encoding::WebP { quality: None }
+            } else {
+                Encoding::Jpeg {
+                    quality: df_imagery::LossyQuality::new(90).unwrap(),
+                }
+            };
+            let alpha = if transparent {
+                AlphaHandling::PreserveAlpha
+            } else {
+                AlphaHandling::Opaque
+            };
+            let name =
+                OutputProfileName::new(&format!("fixture-{}", purpose.label().replace('_', "-")))
+                    .unwrap();
+            let output = RasterOutputSpec::new(dimensions, alpha, encoding).unwrap();
+            profiles.push(NamedOutputProfile::new(
+                name.clone(),
+                OutputProfile::provider(dimensions, output),
+            ));
+            patch.purpose_output_profile[purpose.index()] = Some(Some(name));
+            patch.purpose_quality_override[purpose.index()] =
+                Some(Some(df_imagery::GenerationQuality::Medium));
+        }
+        patch.output_profiles = Some(profiles);
+    }
+    patch
 }
 
-fn imagery(fake: &FakeOpenAi, name: &str) -> (Imagery, PathBuf) {
-    let dir = directory(name);
-    (
-        imagery_in(
-            fake,
-            &dir.join("cache"),
-            Some(&dir),
-            Duration::from_secs(5),
-            ContentRating::Mature,
-        ),
-        dir,
+async fn imagery(fake: &FakeOpenAi) -> Option<super::super::image_test_support::ImageHostFixture> {
+    let costs = super::super::cost::port::MeteringPort::new();
+    costs
+        .open(
+            "imagery-consumer-test",
+            include_str!("../../../../content/pricing.json"),
+        )
+        .unwrap();
+    super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        fixture_patch(true),
+        costs,
     )
+    .await
 }
 
 pub(in crate::gameplay) struct DirectionFixture {
     pub(in crate::gameplay) imagery: Imagery,
+    host: super::super::image_test_support::ImageHostFixture,
     fake: FakeOpenAi,
 }
-
 impl DirectionFixture {
-    pub(in crate::gameplay) fn photographic(cache: &Path) -> Self {
-        let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
-        let imagery = imagery_in(
-            &fake,
-            cache,
-            None,
-            Duration::from_secs(5),
-            ContentRating::Restrained,
-        );
-        Self { imagery, fake }
+    pub(in crate::gameplay) async fn photographic(cache: &Path) -> Option<Self> {
+        Self::new(cache).await
     }
-    pub(in crate::gameplay) fn new(cache: &Path) -> Self {
-        let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-        let imagery = imagery_in(
-            &fake,
-            cache,
-            None,
-            Duration::from_secs(5),
-            ContentRating::Restrained,
-        );
-        Self { imagery, fake }
+    pub(in crate::gameplay) async fn new(cache: &Path) -> Option<Self> {
+        Self::with_reply(cache, Reply::DecodableImage).await
     }
-
+    /// The real transport closes only after recording one complete supplier request.
+    pub(in crate::gameplay) async fn unknown(cache: &Path) -> Option<Self> {
+        Self::with_reply(cache, Reply::LostAfterSend).await
+    }
+    async fn with_reply(_cache: &Path, reply: Reply) -> Option<Self> {
+        let fake = FakeOpenAi::start(Duration::ZERO, reply);
+        let costs = super::super::cost::port::MeteringPort::new();
+        costs
+            .open(
+                "image-direction-test",
+                include_str!("../../../../content/pricing.json"),
+            )
+            .unwrap();
+        let host = super::super::image_test_support::ImageHostFixture::open(
+            fake.address,
+            fixture_patch(false),
+            costs,
+        )
+        .await?;
+        Some(Self {
+            imagery: host.imagery().clone(),
+            host,
+            fake,
+        })
+    }
+    /// Reads bounded actual owner-authorized observations through the mounted service.
+    pub(in crate::gameplay) async fn views_for_purpose(
+        &self,
+        purpose: df_imagery::Purpose,
+    ) -> Vec<df_imagery::ImageDemandView> {
+        self.host.views_for_purpose(purpose).await
+    }
     pub(in crate::gameplay) fn calls(&self) -> usize {
         self.fake.calls()
     }
-
-    pub(in crate::gameplay) fn photo_judge(&self, judge: df_providers::NativePlateJudge) {
-        let Mode::On { engine, .. } = &self.imagery.inner.mode else {
-            panic!("enabled fixture")
-        };
-        assert!(engine.judge.set(judge).is_ok());
-    }
-
     pub(in crate::gameplay) fn image_count(&self) -> usize {
         self.fake.last_fields().1
     }
-
     pub(in crate::gameplay) fn prompt(&self) -> String {
         self.fake.last_fields().0["prompt"].clone()
     }
-}
-
-#[tokio::test]
-async fn development_direction_changes_the_key_and_preserves_the_undirected_cache() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (imagery, _) = imagery(&fake, "dev-direct-key");
-    let baseline = refresh(Mood::Calm);
-    let original_prompt = baseline.prompt.as_str().to_owned();
-    let original = imagery.render(baseline).await.unwrap();
-    let mut directed = refresh(Mood::Calm);
-    directed.prompt = directed
-        .prompt
-        .with_development_direction("Brakka unsheathes his sword");
-    let key = imagery.render(directed).await.unwrap();
-    assert_ne!(key, original);
-    let sent = fake.last_fields().0;
-    assert!(sent["prompt"].starts_with(&original_prompt));
-    assert!(sent["prompt"].ends_with("Brakka unsheathes his sword"));
-    assert_eq!(imagery.render(refresh(Mood::Calm)).await.unwrap(), original);
-    assert_eq!(fake.calls(), 2);
+    pub(in crate::gameplay) async fn photo_judge(&mut self, address: SocketAddr) {
+        let route = df_imagery::AnalysisRoute {
+            account: df_imagery::AccountHandle::new("fixture-inspection").unwrap(),
+            model: df_imagery::ModelName::new("gpt-5.5").unwrap(),
+            endpoint: df_imagery::ApiEndpoint::new(&format!(
+                "http://{address}/v1/chat/completions"
+            ))
+            .unwrap(),
+            maximum_output_tokens: 3000,
+        };
+        let mut patch = df_imagery::RuntimePatch::empty();
+        patch.analysis_inspection = Some(route.into());
+        {
+            let mut control = self.host.control().lock().unwrap();
+            let revision = control.revision();
+            control.apply(patch, revision).unwrap();
+        }
+        self.host.restart_with_analysis_fixture(address).await;
+        self.imagery = self.host.imagery().clone();
+    }
+    pub(in crate::gameplay) fn display_credential(&self) -> [u8; 32] {
+        self.host.display_credential()
+    }
+    pub(in crate::gameplay) fn reviewed_root(&self) -> PathBuf {
+        self.host.reviewed_root()
+    }
+    pub(in crate::gameplay) async fn import_reference(
+        &self,
+        stem: &str,
+    ) -> (ImageKey, ReferenceImage) {
+        self.host.import_reference(stem).await.unwrap()
+    }
+    pub(in crate::gameplay) async fn import_bytes(
+        &self,
+        format: ImageFormat,
+        bytes: Bytes,
+    ) -> (ImageKey, ReferenceImage) {
+        self.host.import_bytes(format, bytes).await.unwrap()
+    }
+    pub(in crate::gameplay) async fn restart(&mut self) {
+        self.host.restart().await;
+        self.imagery = self.host.imagery().clone();
+    }
+    pub(in crate::gameplay) async fn close(self) {
+        let Self {
+            imagery,
+            host,
+            fake,
+        } = self;
+        drop(imagery);
+        host.close().await;
+        drop(fake);
+    }
 }
 
 /// Owns a bounded local fake for the operator's full server/CLI smoke transcript. No live calls.
@@ -1054,8 +1078,23 @@ fn place() -> PlaceFacts {
     PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh").unwrap()
 }
 
+fn reviewed_reference(stem: &str) -> ReferenceImage {
+    static DIRECTORY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let directory = DIRECTORY.get_or_init(|| {
+        let root = directory("reviewed-image-inputs");
+        for (stem, alpha) in [
+            ("scene-salt-quay-arrival-documentary-photo", false),
+            ("sprite-courier-documentary-photo", true),
+        ] {
+            std::fs::write(root.join(format!("{stem}.webp")), fake_webp(96, 64, alpha)).unwrap();
+        }
+        root
+    });
+    ReferenceStore::new(directory.clone()).load(stem).unwrap()
+}
+
 fn backdrop_reference() -> ReferenceImage {
-    ReferenceImage::new(ImageFormat::Webp, Bytes::from_static(b"RIFFbackdrop"))
+    reviewed_reference("scene-salt-quay-arrival-documentary-photo")
 }
 
 fn spec(transparent: bool) -> OutputSpec {
@@ -1078,10 +1117,7 @@ fn refresh(mood: Mood) -> ImageRequest {
 fn expression(face: Expression) -> ImageRequest {
     ImageRequest {
         kind: ImageKind::CastExpression,
-        references: vec![ReferenceImage::new(
-            ImageFormat::Webp,
-            Bytes::from_static(b"RIFFsprite"),
-        )],
+        references: vec![reviewed_reference("sprite-courier-documentary-photo")],
         prompt: cast_expression(
             ContentRating::Mature,
             CharacterFacts {
@@ -1097,13 +1133,18 @@ fn expression(face: Expression) -> ImageRequest {
     }
 }
 
-async fn get(router: &mut Router, key: &str, etag: Option<&str>) -> (StatusCode, HeaderMap) {
+async fn get(
+    router: &mut Router,
+    key: &str,
+    etag: Option<&str>,
+    credential: &[u8; 32],
+) -> (StatusCode, HeaderMap) {
     let mut url = format!("/gameplay/imagery/{key}");
     super::super::media_grant::sign_gameplay_url(
         &mut url,
         "/gameplay/imagery/",
         super::super::media_grant::PrincipalAudience::Display,
-        &[7; 32],
+        credential,
     );
     let mut request = Request::builder().method(Method::GET).uri(url);
     if let Some(etag) = etag {
@@ -1117,761 +1158,6 @@ async fn get(router: &mut Router, key: &str, etag: Option<&str>) -> (StatusCode,
 
 // ---------------------------------------------------------------------------------------------
 // The service.
-
-#[tokio::test]
-async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "cache");
-    let key = service.render(refresh(Mood::Menacing)).await.unwrap();
-    assert_eq!(fake.calls(), 1);
-    assert_eq!(service.stats().calls, 1);
-    assert_eq!(service.stats().micro_dollars, FAKE_MICRO_DOLLARS);
-
-    let again = service.render(refresh(Mood::Menacing)).await.unwrap();
-    assert_eq!(again, key);
-    assert_eq!(
-        fake.calls(),
-        1,
-        "the same request never calls the provider twice"
-    );
-    assert_eq!(service.stats().calls, 1);
-    assert_eq!(service.stats().cache_hits, 1);
-
-    // A restarted server finds the cached image: the key is served before any request, and the
-    // same request costs nothing.
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    assert!(matches!(
-        restarted.image(key.as_str()).await,
-        Lookup::Image {
-            format: ImageFormat::Jpeg,
-            ..
-        }
-    ));
-    assert_eq!(
-        restarted.render(refresh(Mood::Menacing)).await.unwrap(),
-        key
-    );
-    assert_eq!(fake.calls(), 1);
-    assert_eq!(restarted.stats().calls, 0);
-}
-
-#[tokio::test]
-async fn an_oversized_cached_image_is_replaced_before_its_key_is_served() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "oversized-cache");
-    let request = refresh(Mood::Calm);
-    let key = service.key_for(&request);
-    let path = dir.join("cache").join(format!("{}.jpg", key.as_str()));
-    std::fs::write(&path, vec![0; (MAXIMUM_IMAGE_BYTES + 1) as usize]).unwrap();
-
-    let rendered = service.render(request).await.unwrap();
-    let mut router = super::router(service);
-
-    assert_eq!(rendered, key);
-    assert_eq!(fake.calls(), 1, "an unusable cache file is regenerated");
-    assert_eq!(get(&mut router, key.as_str(), None).await.0, StatusCode::OK);
-}
-
-/// A scene refresh that differs from the others only by a development direction, so each index
-/// is a different picture with its own key.
-fn directed_refresh(index: usize) -> ImageRequest {
-    let mut request = refresh(Mood::Calm);
-    request.prompt = request
-        .prompt
-        .with_development_direction(&format!("direction {index}"));
-    request
-}
-
-#[tokio::test]
-async fn a_hub_cache_hit_after_eviction_serves_the_image_again() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "hub-hit-after-eviction");
-    let first = service
-        .generate("place:salt-quay", directed_refresh(0))
-        .await
-        .unwrap();
-    for index in 1..=MAXIMUM_REGISTERED {
-        service
-            .generate("place:salt-quay", directed_refresh(index))
-            .await
-            .unwrap();
-    }
-    assert!(
-        !locked(&service.inner.registry)
-            .by_key
-            .contains_key(first.as_str()),
-        "the bounded registry has forgotten the first key"
-    );
-    let calls = fake.calls();
-    assert_eq!(
-        service
-            .generate("place:salt-quay", directed_refresh(0))
-            .await
-            .unwrap(),
-        first
-    );
-    assert_eq!(
-        fake.calls(),
-        calls,
-        "the hub answers from its cache without a provider call"
-    );
-    let mut router = super::router(service.clone());
-    assert_eq!(
-        get(&mut router, first.as_str(), None).await.0,
-        StatusCode::OK,
-        "a validated cached image is served again after a hub cache hit"
-    );
-    assert!(locked(&service.inner.registry).by_key.len() <= MAXIMUM_REGISTERED);
-}
-
-#[tokio::test]
-async fn the_public_imagery_route_does_not_serve_a_draft_from_the_shared_cache() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (author, dir) = imagery(&fake, "draft-privacy");
-    let draft = author
-        .generate("place:salt-quay", refresh(Mood::Grim))
-        .await
-        .unwrap();
-    // Another instance shares the cache directory but never registered the draft.
-    let public = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let mut router = super::router(public);
-    assert_eq!(
-        get(&mut router, draft.as_str(), None).await.0,
-        StatusCode::NOT_FOUND
-    );
-}
-
-#[tokio::test]
-async fn a_plate_generated_through_the_hub_yields_its_heads_to_locate_heads() {
-    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply as HeadReply};
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
-    let (service, _dir) = imagery(&fake, "locate-through-hub");
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("enabled fixture")
-    };
-    let endpoint = FakeEndpoint::start(vec![HeadReply::Status(
-        200,
-        serde_json::json!({
-            "choices": [{"message": {"content": "{\"heads\":[{\"id\":\"speaker\",\"left\":0.1,\"top\":0.1,\"right\":0.2,\"bottom\":0.3}]}"}}]
-        }),
-    )]);
-    let locator = NativeHeadLocator::new(
-        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
-        "fake-private",
-        HEAD_LOCATE_DEADLINE,
-        crate::gameplay::cost::test_meter(),
-    )
-    .unwrap();
-    assert!(engine.locator.set(locator).is_ok());
-    let key = service
-        .generate("place:salt-quay", directed_refresh(0))
-        .await
-        .unwrap();
-    let heads = service
-        .locate_heads(&key, None, &[("speaker", "the adult speaker")])
-        .await
-        .unwrap();
-    assert_eq!(heads.len(), 1);
-}
-
-#[tokio::test]
-async fn a_held_key_is_served_after_more_than_512_newer_registrations() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "held-after-512");
-    let held = service
-        .generate("place:salt-quay", directed_refresh(0))
-        .await
-        .unwrap();
-    for index in 1..=MAXIMUM_REGISTERED {
-        service
-            .generate("place:salt-quay", directed_refresh(index))
-            .await
-            .unwrap();
-    }
-    assert!(
-        !locked(&service.inner.registry)
-            .by_key
-            .contains_key(held.as_str()),
-        "the bounded registry has forgotten the held key"
-    );
-    let mut router = super::router(service.clone());
-    assert_eq!(
-        get(&mut router, held.as_str(), None).await.0,
-        StatusCode::OK,
-        "a picture this instance issued stays servable while it is held"
-    );
-}
-
-#[tokio::test]
-async fn a_held_key_from_an_earlier_run_is_served_from_the_manifest_index() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "held-from-earlier-run");
-    let held = service
-        .generate("place:salt-quay", directed_refresh(0))
-        .await
-        .unwrap();
-    for index in 1..=MAXIMUM_REGISTERED {
-        service
-            .generate("place:salt-quay", directed_refresh(index))
-            .await
-            .unwrap();
-    }
-
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    assert!(
-        !locked(&restarted.inner.registry)
-            .by_key
-            .contains_key(held.as_str()),
-        "the newest 512 records do not include the held key"
-    );
-    let mut router = super::router(restarted);
-    assert_eq!(
-        get(&mut router, held.as_str(), None).await.0,
-        StatusCode::OK,
-        "the manifest's issued keys include the held key after a restart"
-    );
-}
-
-#[tokio::test]
-async fn an_instances_draft_stays_404_when_it_has_its_own_manifest() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (author, dir) = imagery(&fake, "draft-author");
-    let draft = author
-        .generate("place:salt-quay", refresh(Mood::Grim))
-        .await
-        .unwrap();
-    let own = directory("draft-public-own-manifest");
-    let public = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&own),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    public
-        .generate("place:salt-quay", directed_refresh(7))
-        .await
-        .unwrap();
-    let mut router = super::router(public);
-    assert_eq!(
-        get(&mut router, draft.as_str(), None).await.0,
-        StatusCode::NOT_FOUND,
-        "a draft another instance cached is not issued by this instance"
-    );
-}
-
-#[test]
-fn the_issued_keys_lookup_never_reads_the_cache_for_a_key_it_does_not_hold() {
-    let dir = directory("issued-lookup");
-    let cache = dir.join("cache");
-    std::fs::create_dir_all(&cache).unwrap();
-    let held = ImageKey::parse(&format!("{:064x}", 1)).unwrap();
-    let draft = ImageKey::parse(&format!("{:064x}", 2)).unwrap();
-    std::fs::write(
-        cache.join(format!("{}.jpg", draft.as_str())),
-        fake_jpeg(16, 16, 0),
-    )
-    .unwrap();
-    let mut issued = IssuedKeys::default();
-    issued.remember(&held, ImageFormat::Jpeg);
-    assert_eq!(
-        issued.format_of(&draft),
-        None,
-        "a file in the shared cache is not an issued key"
-    );
-    assert_eq!(issued.format_of(&held), Some(ImageFormat::Jpeg));
-}
-
-#[test]
-fn the_issued_keys_index_forgets_the_oldest_key_beyond_its_bound() {
-    let mut issued = IssuedKeys::default();
-    let keys: Vec<ImageKey> = (0..=MAXIMUM_ISSUED_KEYS)
-        .map(|index| ImageKey::parse(&format!("{index:064x}")).unwrap())
-        .collect();
-    for key in &keys {
-        issued.remember(key, ImageFormat::Jpeg);
-    }
-    assert_eq!(issued.formats.len(), MAXIMUM_ISSUED_KEYS);
-    assert_eq!(issued.format_of(&keys[0]), None);
-    assert_eq!(
-        issued.format_of(keys.last().unwrap()),
-        Some(ImageFormat::Jpeg)
-    );
-}
-
-#[tokio::test]
-async fn a_peeked_key_stays_servable_after_512_newer_registrations() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (author, dir) = imagery(&fake, "peeked-author");
-    let peeked = author
-        .generate("place:salt-quay", directed_refresh(0))
-        .await
-        .unwrap();
-    // A second instance over the same cache peeks the picture; it never rendered it.
-    let peeker = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    assert_eq!(
-        peeker.peek(&directed_refresh(0)).await,
-        Some(peeked.clone())
-    );
-    for index in 1..=MAXIMUM_REGISTERED {
-        peeker
-            .generate("place:salt-quay", directed_refresh(index))
-            .await
-            .unwrap();
-    }
-    assert!(
-        !locked(&peeker.inner.registry)
-            .by_key
-            .contains_key(peeked.as_str()),
-        "the bounded registry has forgotten the peeked key"
-    );
-    let mut router = super::router(peeker);
-    assert_eq!(
-        get(&mut router, peeked.as_str(), None).await.0,
-        StatusCode::OK,
-        "a peeked picture is served while it is held"
-    );
-}
-
-#[tokio::test]
-async fn another_instances_draft_stays_unreachable_after_peeks_of_other_requests() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (author, dir) = imagery(&fake, "draft-unreachable");
-    let draft = author
-        .generate("place:salt-quay", refresh(Mood::Grim))
-        .await
-        .unwrap();
-    let own = directory("draft-unreachable-public");
-    let public = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&own),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    assert_eq!(
-        public.peek(&directed_refresh(0)).await,
-        None,
-        "a request this instance never rendered finds nothing in the cache"
-    );
-    for index in 1..=MAXIMUM_REGISTERED {
-        public
-            .generate("place:salt-quay", directed_refresh(index))
-            .await
-            .unwrap();
-    }
-    let mut router = super::router(public);
-    assert_eq!(
-        get(&mut router, draft.as_str(), None).await.0,
-        StatusCode::NOT_FOUND,
-        "another instance's draft stays unreachable"
-    );
-}
-
-#[tokio::test]
-async fn a_manifest_larger_than_the_tail_recovers_only_the_newest_records() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "manifest-tail");
-    let oldest = service.render(refresh(Mood::Menacing)).await.unwrap();
-    let newest = service.render(refresh(Mood::Calm)).await.unwrap();
-    let manifest = dir.join("imagery.jsonl");
-    let text = std::fs::read_to_string(&manifest).unwrap();
-    let records: Vec<&str> = text.lines().collect();
-    assert_eq!(records.len(), 2);
-    // Nine mebibytes of lines that are not records sit between the oldest and the newest record.
-    let filler = format!("{}\n", "a".repeat(1023)).repeat(9 * 1024);
-    std::fs::write(
-        &manifest,
-        format!("{}\n{filler}{}\n", records[0], records[1]),
-    )
-    .unwrap();
-
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let registry = locked(&restarted.inner.registry);
-    assert!(registry.by_key.contains_key(newest.as_str()));
-    assert!(
-        !registry.by_key.contains_key(oldest.as_str()),
-        "a record before the tail the restart reads is not read"
-    );
-}
-
-#[tokio::test]
-async fn only_the_newest_512_manifest_records_register_after_a_restart() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "manifest-newest-512");
-    let mut keys = Vec::new();
-    for index in 0..=MAXIMUM_REGISTERED {
-        keys.push(service.render(directed_refresh(index)).await.unwrap());
-    }
-
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let registry = locked(&restarted.inner.registry);
-    assert_eq!(registry.by_key.len(), MAXIMUM_REGISTERED);
-    assert!(!registry.by_key.contains_key(keys[0].as_str()));
-    assert!(registry.by_key.contains_key(keys[1].as_str()));
-    assert!(
-        registry
-            .by_key
-            .contains_key(keys[MAXIMUM_REGISTERED].as_str())
-    );
-}
-
-#[tokio::test]
-async fn a_record_appended_after_a_torn_line_survives_a_restart() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "torn-manifest");
-    let first = service.render(refresh(Mood::Menacing)).await.unwrap();
-    // A crash mid-write leaves a fragment with no newline at the end of the manifest.
-    let mut manifest = std::fs::OpenOptions::new()
-        .append(true)
-        .open(dir.join("imagery.jsonl"))
-        .unwrap();
-    manifest.write_all(b"{\"key\":\"abc").unwrap();
-    let second = service.render(refresh(Mood::Grim)).await.unwrap();
-
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let registry = locked(&restarted.inner.registry);
-    assert!(registry.by_key.contains_key(first.as_str()));
-    assert!(registry.by_key.contains_key(second.as_str()));
-}
-
-#[tokio::test]
-async fn a_manifest_past_four_mebibytes_still_registers_its_records_after_a_restart() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "oversized-manifest");
-    let first_key = service.render(refresh(Mood::Menacing)).await.unwrap();
-    let second_key = service.render(refresh(Mood::Calm)).await.unwrap();
-    let manifest = dir.join("imagery.jsonl");
-    let text = std::fs::read_to_string(&manifest).unwrap();
-    let records: Vec<&str> = text.lines().collect();
-    assert_eq!(records.len(), 2);
-    // Five mebibytes of lines that are not records, then one line longer than any record, then
-    // the newest record: recovery reads past both bad lines.
-    let filler = format!("{}\n", "a".repeat(1023)).repeat(5 * 1024);
-    let overlong = format!("{}\n", "b".repeat(1024 * 1024));
-    std::fs::write(
-        &manifest,
-        format!("{}\n{filler}{overlong}{}\n", records[0], records[1]),
-    )
-    .unwrap();
-
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        Some(&dir),
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let registry = locked(&restarted.inner.registry);
-    assert!(registry.by_key.contains_key(first_key.as_str()));
-    assert!(registry.by_key.contains_key(second_key.as_str()));
-}
-
-#[tokio::test]
-async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "peek");
-    assert_eq!(service.peek(&expression(Expression::Angry)).await, None);
-    assert_eq!(fake.calls(), 0);
-    let key = service.render(expression(Expression::Angry)).await.unwrap();
-    assert_eq!(
-        service.peek(&expression(Expression::Angry)).await,
-        Some(key.clone())
-    );
-    assert_eq!(
-        service.peek(&expression(Expression::Smiling)).await,
-        None,
-        "another request is not cached"
-    );
-    assert_eq!(fake.calls(), 1);
-    // A cut-out cached by an earlier build as a PNG is still found by its WebP request.
-    let png = dir.join("cache").join(format!("{}.webp", key.as_str()));
-    let legacy = png.with_extension("png");
-    std::fs::rename(&png, &legacy).unwrap();
-    assert!(service.peek(&expression(Expression::Angry)).await.is_some());
-}
-
-#[tokio::test]
-async fn the_provider_receives_the_references_the_prompt_and_the_content_rating() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "fields");
-    service.render(expression(Expression::Angry)).await.unwrap();
-    let (fields, images) = fake.last_fields();
-    assert_eq!(images, 1);
-    assert_eq!(fields["model"], "gpt-image-2.5-flare");
-    assert_eq!(fields["size"], "1024x640");
-    assert_eq!(fields["quality"], "medium");
-    assert_eq!(fields["background"], "transparent");
-    assert_eq!(fields["output_format"], "webp");
-    assert_eq!(
-        fields["moderation"], "low",
-        "mature asks for the less restrictive filter"
-    );
-    assert!(fields["prompt"].contains("furious anger"));
-
-    let dir = directory("restrained");
-    let restrained = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_secs(5),
-        ContentRating::Restrained,
-    );
-    restrained.render(refresh(Mood::Calm)).await.unwrap();
-    let (fields, _) = fake.last_fields();
-    assert_eq!(fields["moderation"], "auto");
-    assert_eq!(fields["background"], "opaque");
-    assert_eq!(fields["output_format"], "jpeg");
-}
-
-#[tokio::test]
-async fn a_call_is_recorded_in_the_ledger_before_the_provider_answers_and_never_refunded() {
-    let fake = FakeOpenAi::start(Duration::from_millis(400), Reply::Failure);
-    let (service, _dir) = imagery(&fake, "ledger");
-    let running = {
-        let service = service.clone();
-        tokio::spawn(async move { service.render(refresh(Mood::Warm)).await })
-    };
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(
-        service.stats().calls,
-        1,
-        "recorded while the provider is still working"
-    );
-    assert_eq!(running.await.unwrap(), Err(ImageFailure::Provider));
-    let spent = |service: &Imagery| {
-        service
-            .hub()
-            .ledger()
-            .snapshot(crate::gameplay::resources::Unit::ImageCall)
-            .committed
-    };
-    assert_eq!(spent(&service), 1, "a failed call is not refunded");
-    assert_eq!(
-        service.render(refresh(Mood::Tense)).await,
-        Err(ImageFailure::Provider)
-    );
-    assert_eq!(spent(&service), 2);
-}
-
-#[tokio::test]
-async fn no_number_of_calls_is_refused_there_is_no_spend_cap() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "uncapped");
-    for mood in [
-        Mood::Warm,
-        Mood::Grim,
-        Mood::Tense,
-        Mood::Calm,
-        Mood::Menacing,
-        Mood::Brutal,
-    ] {
-        service.render(refresh(mood)).await.unwrap();
-    }
-    assert_eq!(fake.calls(), 6);
-    assert_eq!(service.stats().calls, 6);
-}
-
-#[tokio::test]
-async fn identical_requests_in_flight_share_one_call() {
-    let fake = FakeOpenAi::start(Duration::from_millis(300), Reply::Image);
-    let (service, _dir) = imagery(&fake, "flight");
-    let (first, second, third) = tokio::join!(
-        service.render(refresh(Mood::Seductive)),
-        service.render(refresh(Mood::Seductive)),
-        service.render(refresh(Mood::Seductive)),
-    );
-    assert_eq!(first.as_ref().unwrap(), second.as_ref().unwrap());
-    assert_eq!(first.unwrap(), third.unwrap());
-    assert_eq!(fake.calls(), 1);
-    assert_eq!(service.stats().calls, 1);
-}
-
-#[tokio::test]
-async fn foreground_calls_respect_the_reserved_three_slot_pool() {
-    let fake = FakeOpenAi::start(Duration::from_millis(250), Reply::Image);
-    let (service, _dir) = imagery(&fake, "limit");
-    let moods = [
-        Mood::Calm,
-        Mood::Warm,
-        Mood::Tense,
-        Mood::Menacing,
-        Mood::Grim,
-    ];
-    let results = futures::future::join_all(moods.map(|mood| service.render(refresh(mood)))).await;
-    assert!(results.iter().all(Result::is_ok));
-    assert_eq!(fake.calls(), 5);
-    assert_eq!(fake.peak_in_flight(), FOREGROUND_IN_FLIGHT);
-}
-
-#[tokio::test]
-async fn a_slow_provider_is_a_deadline_failure() {
-    let fake = FakeOpenAi::start(Duration::from_millis(1500), Reply::Image);
-    let dir = directory("deadline");
-    let service = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_millis(300),
-        ContentRating::Mature,
-    );
-    assert_eq!(
-        service.render(refresh(Mood::Calm)).await,
-        Err(ImageFailure::DeadlineExceeded)
-    );
-    assert_eq!(service.stats().calls, 1);
-}
-
-#[tokio::test]
-async fn a_provider_refusal_is_a_failure_never_retried_or_reworded() {
-    for reply in [Reply::Moderation, Reply::NoImage] {
-        let fake = FakeOpenAi::start(Duration::ZERO, reply);
-        let (service, _dir) = imagery(&fake, "refusal");
-        let request = || refresh(Mood::Brutal);
-        assert_eq!(
-            service.generate("place:refused", request()).await,
-            Err(ImageFailure::Refused),
-            "{reply:?}"
-        );
-        assert_eq!(fake.calls(), 1);
-        // Asking again repeats the refusal without another call or another wording: the hub
-        // remembers the permanent failure with its reason.
-        assert_eq!(
-            service.generate("place:refused", request()).await,
-            Err(ImageFailure::Refused)
-        );
-        assert_eq!(fake.calls(), 1);
-        assert_eq!(service.stats().calls, 1);
-        // Invalidation is the one way to forget it: the next ask is a new, paid request.
-        service
-            .hub()
-            .invalidate(crate::gameplay::resources::Invalidate::Subject(
-                "place:refused",
-            ));
-        assert_eq!(
-            service.generate("place:refused", request()).await,
-            Err(ImageFailure::Refused)
-        );
-        assert_eq!(fake.calls(), 2);
-    }
-}
-
-#[tokio::test]
-async fn invalid_oversize_wrong_sized_and_opaque_output_is_refused() {
-    for (reply, transparent) in [
-        (Reply::Garbage, false),
-        (Reply::Garbage, true),
-        (Reply::WrongSize, false),
-        (Reply::WrongSize, true),
-        (Reply::Oversize, false),
-        (Reply::OpaqueForTransparent, true),
-    ] {
-        let fake = FakeOpenAi::start(Duration::ZERO, reply);
-        let (service, dir) = imagery(&fake, "output");
-        let request = if transparent {
-            expression(Expression::Afraid)
-        } else {
-            refresh(Mood::Fearful)
-        };
-        assert_eq!(
-            service.render(request).await,
-            Err(ImageFailure::BadOutput),
-            "{reply:?} transparent={transparent}"
-        );
-        let cached = std::fs::read_dir(dir.join("cache")).unwrap().count();
-        assert_eq!(cached, 0, "bad output is never cached");
-    }
-}
-
-#[tokio::test]
-async fn an_off_service_registers_and_renders_nothing() {
-    let service = Imagery::disabled(ImageryOff::NoCredential);
-    assert_eq!(
-        service.startup_line(),
-        "IMAGERY off (OPENAI_API_KEY not set)"
-    );
-    assert_eq!(
-        service.render(refresh(Mood::Calm)).await,
-        Err(ImageFailure::Off)
-    );
-    assert_eq!(service.image(&"0".repeat(64)).await, Lookup::Unregistered);
-}
-
-#[tokio::test]
-async fn the_startup_line_names_the_model_and_interval_and_no_credential() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "line");
-    let line = service.startup_line();
-    assert!(
-        line.starts_with("IMAGERY on model=gpt-image-2.5-flare interval=30s"),
-        "{line}"
-    );
-    assert!(!line.contains("test-credential"));
-}
-
-#[tokio::test]
-async fn the_manifest_records_provenance_beside_the_run_and_never_under_assets() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "manifest");
-    let request = expression(Expression::Contemptuous);
-    let reference = request.references[0].sha256.clone();
-    let prompt = request.prompt.as_str().to_owned();
-    let key = service.render(request).await.unwrap();
-    let manifest = std::fs::read_to_string(dir.join("imagery.jsonl")).unwrap();
-    let line: serde_json::Value = serde_json::from_str(manifest.lines().next().unwrap()).unwrap();
-    assert_eq!(line["key"], key.as_str());
-    assert_eq!(line["kind"], "cast_expression");
-    assert_eq!(line["model"], "gpt-image-2.5-flare");
-    assert_eq!(line["prompt"], prompt.as_str());
-    assert_eq!(line["references"][0], reference.as_str());
-    assert_eq!(line["transparent"], true);
-    assert_eq!(line["micro_dollars"], FAKE_MICRO_DOLLARS);
-    assert!(line["created_unix"].as_u64().unwrap() > 0);
-    assert!(line["bytes"].as_u64().unwrap() > 0);
-    assert!(!dir.starts_with("assets"));
-}
 
 #[test]
 fn the_key_depends_on_the_kind_references_prompt_model_and_parameters() {
@@ -1986,125 +1272,8 @@ fn request_diagnostics_count_prompt_and_reference_sizes_without_content() {
 // ---------------------------------------------------------------------------------------------
 // The route.
 
-#[tokio::test]
-async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_with_an_etag() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "route");
-    let mut router = router(service.clone());
-    assert_eq!(
-        get(&mut router, &"a".repeat(64), None).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&mut router, "not-a-key", None).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&mut router, "..%2f..%2fetc", None).await.0,
-        StatusCode::NOT_FOUND
-    );
-
-    // Registered by a request whose call failed: known to the server, no image yet.
-    let failing = FakeOpenAi::start(Duration::ZERO, Reply::Failure);
-    let (pending, _dir) = imagery(&failing, "route-pending");
-    let request = refresh(Mood::Warm);
-    let pending_key = pending.key_for(&request);
-    assert_eq!(pending.render(request).await, Err(ImageFailure::Provider));
-    let mut pending_router = super::router(pending);
-    assert_eq!(
-        get(&mut pending_router, pending_key.as_str(), None).await.0,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-
-    let key = service.render(refresh(Mood::Warm)).await.unwrap();
-    for url in [
-        format!("/gameplay/imagery/{}", key.as_str()),
-        format!("/gameplay/imagery/{}?g=invalid", key.as_str()),
-    ] {
-        let request = Request::builder()
-            .uri(url)
-            .body(axum::body::Body::empty())
-            .unwrap();
-        let response = Service::call(&mut router, request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
-    }
-    let (status, headers) = get(&mut router, key.as_str(), None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
-    assert_eq!(headers[header::ETAG], format!("\"{}\"", key.as_str()));
-    let cache_control = headers[header::CACHE_CONTROL].to_str().unwrap();
-    let lifetime = cache_control
-        .strip_prefix("private, max-age=")
-        .unwrap()
-        .parse::<u64>()
-        .unwrap();
-    assert!((1..=900).contains(&lifetime), "{cache_control}");
-    assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
-
-    let etag = format!("\"{}\"", key.as_str());
-    assert_eq!(
-        get(&mut router, key.as_str(), Some(&etag)).await.0,
-        StatusCode::NOT_MODIFIED
-    );
-    assert_eq!(
-        get(&mut router, key.as_str(), Some("\"other\"")).await.0,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
-async fn a_transparent_result_is_served_as_a_webp_with_alpha() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "webp");
-    let key = service
-        .render(expression(Expression::Smiling))
-        .await
-        .unwrap();
-    let Lookup::Image { bytes, format } = service.image(key.as_str()).await else {
-        panic!("the image is cached");
-    };
-    assert_eq!(format, ImageFormat::Webp);
-    assert_eq!(&bytes[..4], b"RIFF");
-    assert_eq!(&bytes[8..12], b"WEBP");
-    assert_eq!(bytes[20], 0x2f);
-}
-
 // ---------------------------------------------------------------------------------------------
 // The artifact close-up (nothing calls it yet; the follow-up task will).
-
-#[tokio::test]
-async fn an_artifact_close_up_is_requested_from_the_backdrop_and_a_vetted_subject() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let dir = directory("artifact");
-    let service = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_secs(5),
-        ContentRating::Mature,
-    );
-    let subject = ArtifactSubject::vet("rusty iron key", &place()).unwrap();
-    let request = close_up_request(
-        ContentRating::Mature,
-        &place(),
-        &subject,
-        backdrop_reference(),
-    );
-    assert_eq!(request.kind, ImageKind::ArtifactCloseUp);
-    assert_eq!(request.output, OutputSpec::CLOSE_UP);
-    assert!(request.prompt.as_str().contains("rusty iron key"));
-    assert!(request.prompt.as_str().contains("The Heron Shrine"));
-    // The provider is called once, with the backdrop as the one reference, at 4:3.
-    service.render(request).await.unwrap();
-    let (fields, images) = fake.last_fields();
-    assert_eq!(images, 1);
-    assert_eq!(fields["size"], "1024x768");
-    assert_eq!(
-        OutputSpec::CLOSE_UP.width * 3,
-        OutputSpec::CLOSE_UP.height * 4
-    );
-}
 
 #[test]
 fn subjects_come_from_scene_facts_or_pass_a_strict_filter_and_everything_else_is_refused() {
@@ -2577,7 +1746,7 @@ mod settings {
     }
 
     fn settings(inputs: ImageryInputs) -> Result<ImagerySettings, std::io::Error> {
-        imagery_settings(inputs, Path::new("/run"), ContentRating::Mature)
+        imagery_settings(inputs, Path::new("/run"))
     }
 
     #[test]
@@ -2585,15 +1754,12 @@ mod settings {
         let mut request = inputs();
         request.credential = Err(NotPresent);
         request.independent_provider = true;
-        let ImagerySettings::On(configuration) = settings(request).unwrap() else {
-            panic!("configured independent FLUX should remain available");
-        };
-        assert!(configuration.credential.is_none());
+        assert!(matches!(settings(request).unwrap(), ImagerySettings::On(_)));
         let mut request = inputs();
         request.credential = Err(NotPresent);
         assert!(matches!(
             settings(request).unwrap(),
-            ImagerySettings::Off(_)
+            ImagerySettings::Off(ImageryOff::NoCredential)
         ));
     }
 
@@ -2601,20 +1767,14 @@ mod settings {
     fn guarded_flux_starts_from_the_actual_environment() {
         if let Ok(mode) = std::env::var("DF_TEST_GUARDED_FLUX") {
             let current = std::env::current_dir().unwrap();
-            let parsed = imagery_settings(
-                ImageryInputs::from_environment(),
-                &current,
-                ContentRating::Mature,
-            )
-            .unwrap();
+            let parsed = imagery_settings(ImageryInputs::from_environment(), &current).unwrap();
             if mode == "on" {
-                let imagery = Imagery::start(parsed, None).unwrap();
-                let Mode::On { engine, .. } = &imagery.inner.mode else {
-                    panic!("FLUX was not started")
-                };
-                assert!(matches!(engine.provider, ImageRoute::Flux(_)));
-                assert!(engine.locator.get().is_none());
-                assert!(engine.judge.get().is_none());
+                let control =
+                    super::super::super::image_configuration::control(&parsed, false).unwrap();
+                let defaults = control.lock().unwrap().read_effective().config;
+                assert_eq!(defaults.default_backend, df_imagery::BackendId::Fal);
+                assert!(defaults.analysis.head_locations.is_none());
+                assert!(defaults.analysis.inspection.is_none());
                 use super::super::super::startup_configuration::{
                     StorytellerInputs, StorytellerMode, storyteller_mode,
                 };
@@ -2659,7 +1819,6 @@ mod settings {
             configuration.cache_dir,
             PathBuf::from("/run/artifacts/tmp/play/imagery-cache")
         );
-        assert_eq!(configuration.rating, ContentRating::Mature);
         assert!(!format!("{configuration:?}").contains("sk-test-credential"));
     }
 
@@ -2739,574 +1898,940 @@ mod settings {
 }
 
 #[tokio::test]
-async fn hs54_panicking_image_flight_retires_its_key_and_next_request_can_render() {
+async fn item_image_cache_precedes_the_provider_call() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "hs54-panic");
-    let request = refresh(Mood::Calm);
-    let key = service.key_for(&request);
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("fake enabled")
+    let Some(host) = imagery(&fake).await else {
+        return;
     };
-    let (_, receiver) = watch::channel(None);
-    locked(&engine.in_flight).insert(key.as_str().to_owned(), receiver);
-    let outcome = engine
-        .retire_flight(&key, async { panic!("injected adapter panic") })
-        .await;
-    assert_eq!(outcome, Err(ImageFailure::Interrupted));
-    assert!(!locked(&engine.in_flight).contains_key(key.as_str()));
-    assert!(service.render(request).await.is_ok());
+    let model = adventure(39).settings.meeting.model.unwrap();
+    let thing = &model.things[0];
+    let request = ImageRequest {
+        kind: ImageKind::ArtifactCloseUp,
+        references: vec![backdrop_reference()],
+        prompt: item_picture(ContentRating::Mature, thing, None).unwrap(),
+        output: OutputSpec::CLOSE_UP,
+    };
+    let first = host.imagery().render(request.clone()).await.unwrap();
+    assert_eq!(host.imagery().render(request.clone()).await.unwrap(), first);
     assert_eq!(fake.calls(), 1);
+    let mut changed = thing.clone();
+    changed.broken = !changed.broken;
+    let changed = ImageRequest {
+        prompt: item_picture(ContentRating::Mature, &changed, None).unwrap(),
+        ..request
+    };
+    assert_ne!(host.imagery().render(changed).await.unwrap(), first);
+    assert_eq!(fake.calls(), 2);
+    host.close().await;
 }
 
 #[tokio::test]
-async fn hs54_image_provider_permit_is_released_while_photo_judge_waits() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
-    let (service, _dir) = imagery(&fake, "hs54-permit");
-    let judge_endpoint = crate::gameplay::storyteller::tests::FakeEndpoint::start(vec![
-        crate::gameplay::storyteller::tests::Reply::Hang,
-    ]);
-    let judge = df_providers::NativePlateJudge::new(
-        df_providers::PlateJudgeConfig::loopback_fixture(judge_endpoint.address).unwrap(),
-        "fake-private",
-        Duration::from_secs(2),
-        crate::gameplay::cost::test_meter(),
-    )
-    .unwrap();
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("fake enabled")
+async fn development_direction_changes_the_key_and_preserves_the_undirected_cache() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
     };
-    assert!(engine.judge.set(judge).is_ok());
-    let mut request = refresh(Mood::Calm);
-    request.kind = ImageKind::CanonicalRoom;
-    let rendering = service.clone();
-    let render = tokio::spawn(async move { rendering.render(request).await });
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while judge_endpoint.bodies().is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    let baseline = refresh(Mood::Calm);
+    let original_prompt = baseline.prompt.as_str().to_owned();
+    let original = host.imagery().render(baseline).await.unwrap();
+    let mut directed = refresh(Mood::Calm);
+    directed.prompt = directed
+        .prompt
+        .with_development_direction("Brakka unsheathes his sword");
+    let key = host.imagery().render(directed).await.unwrap();
+    assert_ne!(key, original);
+    let sent = fake.last_fields().0;
+    assert!(sent["prompt"].contains(&original_prompt));
+    assert!(sent["prompt"].ends_with("Brakka unsheathes his sword"));
     assert_eq!(
-        engine.presence_permits.available_permits(),
-        MAXIMUM_IN_FLIGHT,
-        "judgement does not occupy an image provider slot"
+        host.imagery().render(refresh(Mood::Calm)).await.unwrap(),
+        original
     );
-    drop(judge_endpoint);
-    let _outcome = tokio::time::timeout(Duration::from_secs(5), render)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(fake.calls(), 2);
+    host.close().await;
 }
 
-async fn hs58_saturate_background(
-    service: &Imagery,
-    fake: &FakeOpenAi,
-) -> Vec<tokio::task::JoinHandle<Result<ImageKey, ImageFailure>>> {
-    let initial_calls = fake.calls();
-    let mut jobs = Vec::new();
-    for index in 0..BACKGROUND_IN_FLIGHT {
-        let service = service.clone();
-        let mut request = refresh(Mood::Calm);
-        request.kind = ImageKind::ArtifactCloseUp;
-        request.prompt = request
-            .prompt
-            .with_canonical_binding(&format!("hs58-blocked-background-{index}"));
-        jobs.push(tokio::spawn(async move {
-            service.generate("item:saturation", request).await
-        }));
-    }
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while fake.calls() < initial_calls + BACKGROUND_IN_FLIGHT {
+#[tokio::test]
+async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(mut host) = imagery(&fake).await else {
+        return;
+    };
+    let key = host
+        .imagery()
+        .render(refresh(Mood::Menacing))
+        .await
+        .unwrap();
+    let before = host.metering_port().totals();
+    assert_eq!(before.calls, 1);
+    assert_eq!(
+        host.imagery()
+            .render(refresh(Mood::Menacing))
+            .await
+            .unwrap(),
+        key
+    );
+    assert_eq!(host.metering_port().totals(), before);
+    host.restart().await;
+    let Lookup::Image { bytes, format } = host.imagery().image(key.as_str()).await else {
+        panic!("durable result after restart")
+    };
+    assert_eq!(format, ImageFormat::Jpeg);
+    assert_eq!(image::load_from_memory(&bytes).unwrap().width(), SIZE.0);
+    assert_eq!(
+        host.imagery()
+            .render(refresh(Mood::Menacing))
+            .await
+            .unwrap(),
+        key
+    );
+    assert_eq!(fake.calls(), 1);
+    assert_eq!(host.metering_port().totals(), before);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    assert!(
+        host.imagery()
+            .peek(&expression(Expression::Angry))
+            .await
+            .is_none()
+    );
+    assert_eq!(fake.calls(), 0);
+    let key = host
+        .imagery()
+        .render(expression(Expression::Angry))
+        .await
+        .unwrap();
+    let before = host.metering_port().totals();
+    assert_eq!(
+        host.imagery().peek(&expression(Expression::Angry)).await,
+        Some(key)
+    );
+    assert!(
+        host.imagery()
+            .peek(&expression(Expression::Smiling))
+            .await
+            .is_none()
+    );
+    assert_eq!(fake.calls(), 1);
+    assert_eq!(host.metering_port().totals(), before);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn the_provider_receives_the_references_prompt_and_configured_moderation() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let mut patch = fixture_patch(true);
+    patch.purpose_moderation_override[df_imagery::Purpose::Expression.index()] =
+        Some(Some(df_imagery::ProviderModeration::Low));
+    let costs = super::super::cost::port::MeteringPort::new();
+    let Some(host) =
+        super::super::image_test_support::ImageHostFixture::open(fake.address, patch, costs).await
+    else {
+        return;
+    };
+    host.imagery()
+        .render(expression(Expression::Angry))
+        .await
+        .unwrap();
+    let (fields, images) = fake.last_fields();
+    assert_eq!(images, 1);
+    assert_eq!(fields["model"], "gpt-image-2.5-flare");
+    assert_eq!(fields["size"], "1024x640");
+    assert_eq!(fields["quality"], "medium");
+    assert_eq!(fields["background"], "transparent");
+    assert_eq!(fields["output_format"], "webp");
+    assert_eq!(fields["moderation"], "low");
+    assert!(fields["prompt"].contains("furious anger"));
+    host.imagery().render(refresh(Mood::Calm)).await.unwrap();
+    let (fields, _) = fake.last_fields();
+    assert_eq!(fields["moderation"], "auto");
+    assert_eq!(fields["background"], "opaque");
+    assert_eq!(fields["output_format"], "jpeg");
+    host.close().await;
+}
+
+#[tokio::test]
+async fn a_sent_failed_call_remains_in_the_actual_book_without_a_refund() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedFailure);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let service = host.imagery().clone();
+    let running = tokio::spawn(async move { service.render(refresh(Mood::Warm)).await });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fake.calls() == 0 {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("enabled fixture")
-    };
-    assert_eq!(engine.background_permits.available_permits(), 0);
-    jobs
-}
-
-#[tokio::test]
-async fn hs58_foreground_starts_while_six_background_providers_are_blocked() {
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
-    let (service, _dir) = imagery(&fake, "hs58-foreground");
-    let jobs = hs58_saturate_background(&service, &fake).await;
-    for kind in [
-        ImageKind::ScenePlate,
-        ImageKind::ScenePlateEdit,
-        ImageKind::CanonicalRoom,
-    ] {
-        let mut request = refresh(Mood::Warm);
-        request.kind = kind;
-        let started = std::time::Instant::now();
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            service.generate("plate:current", request),
-        )
-        .await;
-        eprintln!(
-            "HS58 {kind:?} under six blocked background calls: {} ms",
-            started.elapsed().as_millis()
-        );
-        assert!(result.unwrap().is_ok());
-        assert!(jobs.iter().all(|job| !job.is_finished()));
-    }
-    fake.release_background.store(true, Ordering::SeqCst);
-    for job in jobs {
-        job.await.unwrap().unwrap();
-    }
-}
-
-#[tokio::test]
-async fn hs58_head_location_completes_under_background_saturation() {
-    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply as HeadReply};
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
-    let (service, _dir) = imagery(&fake, "hs58-heads");
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("enabled fixture")
-    };
-    let key = service.key_for(&refresh(Mood::Grim));
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::new_rgb8(128, 128)
-        .write_to(&mut bytes, image::ImageFormat::Jpeg)
-        .unwrap();
-    engine
-        .store(&key, ImageFormat::Jpeg, Bytes::from(bytes.into_inner()))
-        .await
-        .unwrap();
-    locked(&service.inner.registry).register(
-        &key,
-        Registered {
-            format: ImageFormat::Jpeg,
-        },
+    assert_eq!(fake.calls(), 1);
+    assert!(!running.is_finished(), "the supplier is still waiting");
+    assert_eq!(
+        host.metering_port().totals().calls,
+        1,
+        "the real Book records the call before the supplier answers"
     );
-    let endpoint = FakeEndpoint::start(vec![HeadReply::Status(
-        200,
-        serde_json::json!({
-            "choices": [{"message": {"content": "{\"heads\":[{\"id\":\"speaker\",\"left\":0.1,\"top\":0.1,\"right\":0.2,\"bottom\":0.3}]}"}}]
-        }),
-    )]);
-    let locator = NativeHeadLocator::new(
-        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
-        "fake-private",
-        HEAD_LOCATE_DEADLINE,
-        crate::gameplay::cost::test_meter(),
-    )
-    .unwrap();
-    assert!(engine.locator.set(locator).is_ok());
-    let jobs = hs58_saturate_background(&service, &fake).await;
-    let started = std::time::Instant::now();
-    let heads = tokio::time::timeout(
-        Duration::from_secs(2),
-        service.locate_heads(&key, None, &[("speaker", "the adult speaker")]),
+    fake.release_background.store(true, Ordering::SeqCst);
+    assert_eq!(running.await.unwrap(), Err(ImageFailure::Provider));
+    assert_eq!(host.metering_port().totals().calls, 1);
+    let calls = host.metering_port().recent();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].usable);
+    assert_eq!(
+        host.imagery().render(refresh(Mood::Tense)).await,
+        Err(ImageFailure::Provider)
+    );
+    assert_eq!(host.metering_port().totals().calls, 2);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn no_number_of_calls_is_refused_there_is_no_spend_cap() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    for mood in [
+        Mood::Warm,
+        Mood::Grim,
+        Mood::Tense,
+        Mood::Calm,
+        Mood::Menacing,
+        Mood::Brutal,
+    ] {
+        host.imagery().render(refresh(mood)).await.unwrap();
+    }
+    assert_eq!(fake.calls(), 6);
+    assert_eq!(host.metering_port().totals().calls, 6);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn identical_requests_in_flight_share_one_call() {
+    let fake = FakeOpenAi::start(Duration::from_millis(300), Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let (first, second, third) = tokio::join!(
+        host.imagery().render(refresh(Mood::Seductive)),
+        host.imagery().render(refresh(Mood::Seductive)),
+        host.imagery().render(refresh(Mood::Seductive))
+    );
+    assert_eq!(first.as_ref().unwrap(), second.as_ref().unwrap());
+    assert_eq!(first.unwrap(), third.unwrap());
+    assert_eq!(fake.calls(), 1);
+    assert_eq!(host.metering_port().totals().calls, 1);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn foreground_calls_respect_the_reserved_three_slot_pool() {
+    let fake = FakeOpenAi::start(Duration::from_millis(250), Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let moods = [
+        Mood::Calm,
+        Mood::Warm,
+        Mood::Tense,
+        Mood::Menacing,
+        Mood::Grim,
+    ];
+    let results =
+        futures::future::join_all(moods.map(|mood| host.imagery().render(refresh(mood)))).await;
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+    assert_eq!(fake.calls(), 5);
+    assert_eq!(fake.peak_in_flight(), 3);
+    assert!(host.imagery().render(refresh(Mood::Brutal)).await.is_ok());
+    assert_eq!(fake.calls(), 6, "finished work returns capacity");
+    host.close().await;
+}
+
+#[tokio::test]
+async fn a_slow_provider_cannot_be_resent_after_its_deadline() {
+    let fake = FakeOpenAi::start(Duration::from_secs(2), Reply::Image);
+    let mut patch = fixture_patch(true);
+    patch.scheduler_stage_deadline_secs = Some(1);
+    patch.scheduler_job_deadline_secs = Some(2);
+    let Some(host) = super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        patch,
+        super::super::cost::port::MeteringPort::new(),
     )
     .await
-    .unwrap()
-    .unwrap();
-    eprintln!(
-        "HS58 head location under six blocked background calls: {} ms (deadline {} ms)",
-        started.elapsed().as_millis(),
-        HEAD_LOCATE_DEADLINE.as_millis()
-    );
-    assert_eq!(heads.len(), 1);
-    assert!(jobs.iter().all(|job| !job.is_finished()));
-    fake.release_background.store(true, Ordering::SeqCst);
-    for job in jobs {
-        job.await.unwrap().unwrap();
+    else {
+        return;
+    };
+    let result = host.imagery().render(refresh(Mood::Calm)).await;
+    assert_eq!(result, Err(ImageFailure::DeadlineExceeded));
+    assert_eq!(fake.calls(), 1);
+    assert_eq!(host.imagery().render(refresh(Mood::Calm)).await, result);
+    assert_eq!(fake.calls(), 1);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn a_provider_refusal_is_a_failure_never_retried_or_reworded() {
+    for reply in [Reply::Moderation, Reply::NoImage] {
+        let fake = FakeOpenAi::start(Duration::ZERO, reply);
+        let Some(host) = imagery(&fake).await else {
+            return;
+        };
+        let request = refresh(Mood::Brutal);
+        let expected_prompt = request.prompt.as_str().to_owned();
+        assert_eq!(
+            host.imagery()
+                .generate("place:refused", request.clone())
+                .await,
+            Err(ImageFailure::Refused)
+        );
+        assert_eq!(
+            host.imagery().generate("place:refused", request).await,
+            Err(ImageFailure::Refused)
+        );
+        assert_eq!(fake.calls(), 1);
+        assert!(fake.last_fields().0["prompt"].contains(&expected_prompt));
+        host.close().await;
     }
 }
 
 #[tokio::test]
-async fn hs58_identical_hero_items_share_one_flight_and_cache_across_runs() {
-    let fake = FakeOpenAi::start(Duration::from_millis(100), Reply::Image);
-    let (service, dir) = imagery(&fake, "hs58-items");
-    let generated = adventure(40);
-    let mut first = generated.settings.meeting.model.unwrap().things.remove(0);
-    first.id = "equipment-hero-one".into();
-    first.provenance.source_id = "chain-mail".into();
-    first.owner_id = Some("hero-one".into());
-    first.position = "worn".into();
-    first.picture_description = "chain mail, worn by hero-one; not in hand".into();
-    let mut second = first.clone();
-    second.id = "equipment-hero-two".into();
-    second.owner_id = Some("hero-two".into());
-    second.holder_id = Some("hero-two".into());
-    second.position = "stowed".into();
-    second.picture_description = "chain mail, stowed by hero-two; not in hand".into();
-    let first_request = item_image_request(ContentRating::Mature, &first, None).unwrap();
-    let second_request = item_image_request(ContentRating::Mature, &second, None).unwrap();
-    assert!(first_request.references.is_empty());
-    let (first_key, second_key) = tokio::join!(
-        service.generate("item:hero-one", first_request.clone()),
-        service.generate("item:hero-two", second_request)
+async fn invalid_oversize_wrong_sized_and_opaque_output_is_refused() {
+    for (reply, transparent) in [
+        (Reply::Garbage, false),
+        (Reply::Garbage, true),
+        (Reply::WrongSize, false),
+        (Reply::WrongSize, true),
+        (Reply::Oversize, false),
+        (Reply::OpaqueForTransparent, true),
+    ] {
+        let fake = FakeOpenAi::start(Duration::ZERO, reply);
+        let Some(host) = imagery(&fake).await else {
+            return;
+        };
+        let request = if transparent {
+            expression(Expression::Afraid)
+        } else {
+            refresh(Mood::Fearful)
+        };
+        let key = host.imagery().key_for(&request);
+        assert_eq!(
+            host.imagery().render(request).await,
+            Err(ImageFailure::BadOutput),
+            "{reply:?}"
+        );
+        assert!(!matches!(
+            host.imagery().image(key.as_str()).await,
+            Lookup::Image { .. }
+        ));
+        assert_eq!(fake.calls(), 1);
+        host.close().await;
+    }
+}
+
+#[tokio::test]
+async fn an_off_service_registers_and_renders_nothing() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let mut patch = fixture_patch(true);
+    patch.mode = Some(df_imagery::GlobalMode::Off);
+    let Some(host) = super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        patch,
+        super::super::cost::port::MeteringPort::new(),
+    )
+    .await
+    else {
+        return;
+    };
+    assert!(!host.imagery().is_on());
+    assert_eq!(
+        host.imagery().render(refresh(Mood::Calm)).await,
+        Err(ImageFailure::Off)
     );
-    assert_eq!(first_key.unwrap(), second_key.unwrap());
-    assert_eq!(fake.calls(), 1);
-    let restarted = imagery_in(
-        &fake,
-        &dir.join("cache"),
-        None,
-        Duration::from_secs(5),
-        ContentRating::Mature,
+    assert_eq!(
+        host.imagery().image(&"0".repeat(64)).await,
+        Lookup::Unregistered
     );
-    restarted
-        .generate("item:another-run", first_request.clone())
+    assert_eq!(fake.calls(), 0);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn the_startup_line_names_the_service_and_no_credential() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    assert_eq!(host.imagery().startup_line(), "IMAGERY on service=durable");
+    assert!(!host.imagery().startup_line().contains("test-credential"));
+    host.close().await;
+}
+
+#[tokio::test]
+async fn the_route_preserves_grants_unknown_keys_ready_etags_and_owner_privacy() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let key = host.imagery().render(refresh(Mood::Warm)).await.unwrap();
+    let mut router = router(host.imagery().clone());
+    let credential = host.display_credential();
+    for unknown in ["not-a-key", "..%2f..%2fetc", &"a".repeat(64)] {
+        assert_eq!(
+            get(&mut router, unknown, None, &credential).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    for suffix in ["", "?g=invalid"] {
+        let request = Request::builder()
+            .uri(format!("/gameplay/imagery/{}{suffix}", key.as_str()))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = Service::call(&mut router, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+    }
+    let (status, headers) = get(&mut router, key.as_str(), None, &credential).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
+    let etag = format!("\"{}\"", key.as_str());
+    assert_eq!(headers[header::ETAG], etag);
+    assert_eq!(
+        get(&mut router, key.as_str(), Some(&etag), &credential)
+            .await
+            .0,
+        StatusCode::NOT_MODIFIED
+    );
+    let cache_control = headers[header::CACHE_CONTROL].to_str().unwrap();
+    let seconds = cache_control
+        .strip_prefix("private, max-age=")
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!((1..=900).contains(&seconds));
+    let creator = host.creator(host.player_credential()).await.unwrap();
+    assert_eq!(
+        creator.image(key.as_str()).await,
+        Lookup::Unregistered,
+        "a different owner in the same database and object store cannot read the run result"
+    );
+    drop(creator);
+    drop(router);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn a_transparent_result_is_served_as_a_webp_with_alpha() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let key = host
+        .imagery()
+        .render(expression(Expression::Smiling))
         .await
         .unwrap();
-    assert_eq!(fake.calls(), 1);
-    second.broken = !second.broken;
-    assert_ne!(
-        service.key_for(&first_request),
-        service.key_for(&item_image_request(ContentRating::Mature, &second, None).unwrap())
+    let Lookup::Image { bytes, format } = host.imagery().image(key.as_str()).await else {
+        panic!("published image")
+    };
+    assert_eq!(format, ImageFormat::Webp);
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), SIZE);
+    assert!(image.to_rgba8().pixels().any(|pixel| pixel[3] < 255));
+    host.close().await;
+}
+
+#[tokio::test]
+async fn an_artifact_close_up_is_requested_from_the_backdrop_and_a_vetted_subject() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let subject = ArtifactSubject::vet("rusty iron key", &place()).unwrap();
+    let request = close_up_request(
+        ContentRating::Mature,
+        &place(),
+        &subject,
+        backdrop_reference(),
     );
-    second.broken = first.broken;
-    second.provenance.source_id = "different-source".into();
-    assert_ne!(
-        service.key_for(&first_request),
-        service.key_for(&item_image_request(ContentRating::Mature, &second, None).unwrap())
+    assert_eq!(request.kind, ImageKind::ArtifactCloseUp);
+    assert_eq!(request.output, OutputSpec::CLOSE_UP);
+    assert!(request.prompt.as_str().contains("rusty iron key"));
+    assert!(request.prompt.as_str().contains("The Heron Shrine"));
+    host.imagery().render(request).await.unwrap();
+    let (fields, images) = fake.last_fields();
+    assert_eq!(images, 1);
+    assert_eq!(fields["size"], "1024x768");
+    assert_eq!(
+        OutputSpec::CLOSE_UP.width * 3,
+        OutputSpec::CLOSE_UP.height * 4
+    );
+    host.close().await;
+}
+
+// Actual host quota tests also observe the process display projection, so keep them together.
+static QUOTA_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn quota_exhaustion_is_distinct_and_replay_never_sends_again() {
+    let _serial = QUOTA_TEST_LOCK.lock().await;
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    assert_eq!(
+        host.imagery()
+            .generate("plate:quota", refresh(Mood::Calm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(
+        host.imagery()
+            .generate("plate:quota", refresh(Mood::Calm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(fake.calls(), 1);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn an_open_supplier_account_refuses_distinct_work_after_configuration_rebuild() {
+    let _serial = QUOTA_TEST_LOCK.lock().await;
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    assert_eq!(
+        host.imagery()
+            .generate("quota:first", refresh(Mood::Calm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(fake.calls(), 1);
+    {
+        let mut control = host.control().lock().unwrap();
+        let revision = control.revision();
+        let mut patch = df_imagery::RuntimePatch::empty();
+        patch.quota_maximum_accounts = Some(17);
+        control.apply(patch, revision).unwrap();
+    }
+    let another_facade = host.imagery().clone();
+    assert_eq!(
+        another_facade
+            .generate("quota:second", refresh(Mood::Warm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(
+        fake.calls(),
+        1,
+        "new work on the same actual credential cannot bypass shared cooldown after worker rebuild"
+    );
+    drop(another_facade);
+    host.close().await;
+}
+
+#[tokio::test]
+async fn reading_a_cached_success_cannot_recover_an_exhausted_supplier_account() {
+    let _serial = QUOTA_TEST_LOCK.lock().await;
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::ImageThenQuota);
+    let Some(host) = imagery(&fake).await else {
+        return;
+    };
+    let first = host
+        .imagery()
+        .generate("quota:cached", refresh(Mood::Calm))
+        .await
+        .unwrap();
+    assert_eq!(
+        host.imagery()
+            .generate("quota:exhausted", refresh(Mood::Warm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(fake.calls(), 2);
+    assert_eq!(
+        host.imagery()
+            .generate("quota:cached", refresh(Mood::Calm))
+            .await
+            .unwrap(),
+        first
+    );
+    assert_eq!(
+        fake.calls(),
+        2,
+        "the cache read itself must not call the supplier"
+    );
+    assert_eq!(
+        host.imagery()
+            .generate("quota:after-cache", refresh(Mood::Menacing))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(
+        fake.calls(),
+        2,
+        "old success does not authorize fresh supplier egress during cooldown"
+    );
+    host.close().await;
+}
+
+#[tokio::test]
+async fn quota_notice_aggregates_live_hosts_and_shutdown_removes_only_its_own_state() {
+    let _serial = QUOTA_TEST_LOCK.lock().await;
+    let first_fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
+    let Some(first) = imagery(&first_fake).await else {
+        return;
+    };
+    let second_fake = FakeOpenAi::start(Duration::ZERO, Reply::ImageThenQuota);
+    let Some(second) = imagery(&second_fake).await else {
+        first.close().await;
+        return;
+    };
+    assert_eq!(
+        first
+            .imagery()
+            .generate("notice:first", refresh(Mood::Calm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    assert_eq!(
+        operational_notice(),
+        Some("An image provider has reported exhausted quota")
+    );
+    second
+        .imagery()
+        .generate("notice:second-success", refresh(Mood::Calm))
+        .await
+        .unwrap();
+    assert!(
+        operational_notice().is_some(),
+        "another live host's success cannot clear the exhausted account"
+    );
+    assert_eq!(
+        second
+            .imagery()
+            .generate("notice:second-quota", refresh(Mood::Warm))
+            .await,
+        Err(ImageFailure::QuotaExhausted)
+    );
+    first.close().await;
+    assert!(
+        operational_notice().is_some(),
+        "closing the first host cannot clear the second host's exhausted account"
+    );
+    second.close().await;
+    assert!(
+        operational_notice().is_none(),
+        "closed hosts cannot leave a stale process notice"
     );
 }
 
 #[tokio::test]
 async fn hs58_rate_limited_image_retries_after_backoff() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::RateLimitedOnce);
-    let (service, _dir) = imagery(&fake, "hs58-rate-limit");
+    let mut patch = fixture_patch(true);
+    patch.retry_max_attempts = Some(2);
+    patch.retry_backoff_secs = Some(1);
+    let Some(host) = super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        patch,
+        super::super::cost::port::MeteringPort::new(),
+    )
+    .await
+    else {
+        return;
+    };
     let started = std::time::Instant::now();
-    service
-        .generate("plate:retry", refresh(Mood::Calm))
-        .await
-        .unwrap();
-    eprintln!(
-        "HS58 429 then success: {} ms, {} provider calls",
-        started.elapsed().as_millis(),
-        fake.calls()
+    assert!(
+        host.imagery()
+            .generate("plate:retry", refresh(Mood::Calm))
+            .await
+            .is_ok()
     );
-    assert!(started.elapsed() >= RATE_LIMIT_BACKOFF);
     assert_eq!(fake.calls(), 2);
-    assert_eq!(service.stats().calls, 2);
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    let bodies = fake.seen.lock().unwrap().clone();
+    assert_eq!(bodies[0].0["prompt"], bodies[1].0["prompt"]);
+    assert_eq!(bodies[0].0["model"], bodies[1].0["model"]);
+    host.close().await;
 }
 
-/// The quota tests read and write the shared audit ring, so they run one at a time.
-static QUOTA_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-async fn quota_lock() -> tokio::sync::MutexGuard<'static, ()> {
-    QUOTA_TESTS.lock().await
-}
-
-fn engine_of(service: &Imagery) -> Arc<Engine> {
-    let Mode::On { engine, .. } = &service.inner.mode else {
-        panic!("enabled fixture");
+#[tokio::test]
+async fn hs58_foreground_starts_while_six_background_providers_are_blocked() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
+    let mut patch = fixture_patch(true);
+    patch.analysis_head_locations = Some(
+        df_imagery::AnalysisRoute {
+            account: df_imagery::AccountHandle::new("fixture-heads").unwrap(),
+            model: df_imagery::ModelName::new("gpt-5.5").unwrap(),
+            endpoint: df_imagery::ApiEndpoint::new(&format!(
+                "http://{}/v1/chat/completions",
+                fake.address
+            ))
+            .unwrap(),
+            maximum_output_tokens: 3000,
+        }
+        .into(),
+    );
+    let Some(host) = super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        patch,
+        super::super::cost::port::MeteringPort::new(),
+    )
+    .await
+    else {
+        return;
     };
-    engine.clone()
-}
-
-fn audit_count(needle: &str) -> usize {
-    super::super::actor::audit_lines_containing(needle).len()
-}
-
-#[tokio::test]
-async fn quota_exhaustion_is_not_retried_and_fails_fast_while_the_breaker_is_open() {
-    let _quota = quota_lock().await;
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaExhausted);
-    let (service, _dir) = imagery(&fake, "quota-open");
-    let opened_before = audit_count("IMAGERY provider_quota status=open");
-    let first = service
-        .generate("plate:quota-first", refresh(Mood::Calm))
-        .await;
-    assert_eq!(first.err(), Some(ImageFailure::QuotaExhausted));
-    assert_eq!(fake.calls(), 1, "a quota answer is never retried");
-    let second = service
-        .generate("plate:quota-second", refresh(Mood::Calm))
-        .await;
-    assert_eq!(second.err(), Some(ImageFailure::QuotaExhausted));
-    assert_eq!(
-        fake.calls(),
-        1,
-        "an open breaker fails fast without reaching the provider"
-    );
-    assert_eq!(
-        service.stats().calls,
-        1,
-        "a fast-failed call is never charged"
-    );
-    assert_eq!(
-        audit_count("IMAGERY provider_quota status=open") - opened_before,
-        1,
-        "the opening is audited exactly once"
-    );
-}
-
-#[tokio::test]
-async fn a_rate_limited_probe_keeps_its_probe_and_its_retry_success_closes_the_breaker() {
-    let _quota = quota_lock().await;
-    let fake = FakeOpenAi::start(Duration::ZERO, Reply::QuotaThenRateLimit);
-    let (service, _dir) = imagery(&fake, "quota-probe-retry");
-    let engine = engine_of(&service);
-    let opened_before = audit_count("IMAGERY provider_quota status=open");
-    let closed_before = audit_count("IMAGERY provider_quota status=closed");
-    let opening = service
-        .generate("plate:probe-open", refresh(Mood::Calm))
-        .await;
-    assert_eq!(opening.err(), Some(ImageFailure::QuotaExhausted));
-    engine.quota.expire_for_test();
-    service
-        .generate("plate:probe-retry", refresh(Mood::Calm))
+    let (source, _) = host
+        .import_bytes(ImageFormat::Jpeg, fake_jpeg(96, 64, 0).into())
         .await
         .unwrap();
-    assert_eq!(
-        fake.calls(),
-        3,
-        "the opening, the probe's rate limit, and the same call's retry"
+    let mut jobs = Vec::new();
+    for index in 0..6 {
+        let service = host.imagery().clone();
+        let mut request = refresh(Mood::Calm);
+        request.kind = ImageKind::ArtifactCloseUp;
+        request.prompt = request
+            .prompt
+            .with_development_direction(&format!("hs58-blocked-background {index}"));
+        jobs.push(tokio::spawn(async move {
+            service.generate("item:saturation", request).await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fake.calls() < 6 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let visible = tokio::time::timeout(
+        Duration::from_secs(2),
+        host.imagery()
+            .generate("plate:current", refresh(Mood::Warm)),
+    )
+    .await
+    .unwrap();
+    assert!(visible.is_ok(), "{visible:?}");
+    assert!(jobs.iter().all(|job| !job.is_finished()));
+    let heads = tokio::time::timeout(
+        Duration::from_secs(2),
+        host.imagery()
+            .locate_heads(&source, None, &[("speaker", "the adult speaker")]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].id, "speaker");
+    assert_eq!(fake.analyses.load(Ordering::SeqCst), 1);
+    assert!(
+        jobs.iter().all(|job| !job.is_finished()),
+        "head location has independent capacity"
     );
-    assert_eq!(engine.quota.state(), QuotaState::Closed);
-    assert_eq!(
-        audit_count("IMAGERY provider_quota status=open") - opened_before,
-        1
+    fake.release_background.store(true, Ordering::SeqCst);
+    for job in jobs {
+        job.await.unwrap().unwrap();
+    }
+    host.close().await;
+}
+
+fn legacy_record(key: &ImageKey, transparent: bool) -> String {
+    serde_json::json!({"key":key.as_str(),"kind":"scene_refresh","model":"legacy-model",
+        "prompt":"legacy fixture","references":[],"created_unix":1,"bytes":1,
+        "width":96,"height":64,"transparent":transparent,"micro_dollars":null})
+    .to_string()
+}
+
+#[test]
+fn a_record_after_a_torn_or_oversized_manifest_line_remains_importable() {
+    let root = directory("legacy-manifest-recovery");
+    let cache = root.join("cache");
+    std::fs::create_dir(&cache).unwrap();
+    let first = ImageKey::parse(&"a".repeat(64)).unwrap();
+    let last = ImageKey::parse(&"b".repeat(64)).unwrap();
+    let bytes = fake_jpeg(96, 64, 0);
+    for key in [&first, &last] {
+        std::fs::write(cache.join(format!("{}.jpg", key.as_str())), &bytes).unwrap();
+    }
+    let invalid = "x".repeat(1024 * 1024);
+    std::fs::write(
+        root.join("imagery.jsonl"),
+        format!(
+            "{}\n{{torn\n{invalid}\n{}\n",
+            legacy_record(&first, false),
+            legacy_record(&last, false)
+        ),
+    )
+    .unwrap();
+    let manifest = AdventureManifest::new(&root, cache);
+    assert_eq!(manifest.load(&first).unwrap().bytes.as_ref(), bytes);
+    assert_eq!(manifest.load(&last).unwrap().bytes.as_ref(), bytes);
+    let missing = ImageKey::parse(&"c".repeat(64)).unwrap();
+    assert!(manifest.load(&missing).is_err());
+}
+
+#[test]
+fn a_manifest_larger_than_the_tail_imports_only_retained_members() {
+    let root = directory("legacy-manifest-tail");
+    let cache = root.join("cache");
+    std::fs::create_dir(&cache).unwrap();
+    let first = ImageKey::parse(&"a".repeat(64)).unwrap();
+    let last = ImageKey::parse(&"b".repeat(64)).unwrap();
+    let bytes = fake_jpeg(96, 64, 0);
+    for key in [&first, &last] {
+        std::fs::write(cache.join(format!("{}.jpg", key.as_str())), &bytes).unwrap();
+    }
+    let filler = "x\n".repeat(5 * 1024 * 1024);
+    std::fs::write(
+        root.join("imagery.jsonl"),
+        format!(
+            "{}\n{filler}{}\n",
+            legacy_record(&first, false),
+            legacy_record(&last, false)
+        ),
+    )
+    .unwrap();
+    let manifest = AdventureManifest::new(&root, cache);
+    assert!(manifest.load(&first).is_err());
+    assert_eq!(manifest.load(&last).unwrap().bytes.as_ref(), bytes);
+}
+
+#[test]
+fn legacy_png_cutouts_remain_importable_and_cache_bytes_do_not_grant_membership() {
+    let root = directory("legacy-png-membership");
+    let cache = root.join("cache");
+    std::fs::create_dir(&cache).unwrap();
+    let issued = ImageKey::parse(&"a".repeat(64)).unwrap();
+    let unknown = ImageKey::parse(&"b".repeat(64)).unwrap();
+    let bytes = fake_png(96, 64, true);
+    for key in [&issued, &unknown] {
+        std::fs::write(cache.join(format!("{}.png", key.as_str())), &bytes).unwrap();
+    }
+    std::fs::write(
+        root.join("imagery.jsonl"),
+        format!("{}\n", legacy_record(&issued, true)),
+    )
+    .unwrap();
+    let manifest = AdventureManifest::new(&root, cache);
+    let reference = manifest.load(&issued).unwrap();
+    assert_eq!(reference.format, ImageFormat::Png);
+    assert!(
+        image::load_from_memory(&reference.bytes)
+            .unwrap()
+            .to_rgba8()
+            .pixels()
+            .any(|pixel| pixel[3] < 255)
     );
-    assert_eq!(
-        audit_count("IMAGERY provider_quota status=closed") - closed_before,
-        1,
-        "the recovery is audited exactly once"
-    );
+    assert!(manifest.load(&unknown).is_err());
 }
 
 #[tokio::test]
-async fn record_quota_answer_opens_on_quota_closes_on_success_and_ignores_other_failures() {
-    let _quota = quota_lock().await;
+async fn held_and_peeked_results_survive_512_later_publications_and_host_restart() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "record-quota");
-    let engine = engine_of(&service);
-    engine.record_quota_answer::<()>(None, &Err(ImageFailure::RateLimited));
-    assert_eq!(engine.quota.state(), QuotaState::Closed);
-    engine.record_quota_answer::<()>(None, &Err(ImageFailure::QuotaExhausted));
-    assert!(matches!(engine.quota.state(), QuotaState::Open { .. }));
-    engine.quota.expire_for_test();
-    engine.record_quota_answer::<()>(None, &Ok(()));
-    assert_eq!(engine.quota.state(), QuotaState::Closed);
-}
-
-#[test]
-fn quota_breaker_opens_once_and_refuses_until_its_cooldown() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    assert_eq!(breaker.admit(start), Admission::Closed);
-    assert_eq!(
-        breaker.observe(QuotaAnswer::Exhausted, start),
-        Some(Transition::Opened)
-    );
-    assert_eq!(
-        breaker.observe(QuotaAnswer::Exhausted, start + Duration::from_secs(1)),
-        None,
-        "an already open breaker is not opened again"
-    );
-    assert_eq!(
-        breaker.admit(start + Duration::from_secs(30)),
-        Admission::Refused
-    );
-    assert_eq!(
-        breaker.admit(start + Duration::from_secs(61)),
-        Admission::MayProbe
-    );
-}
-
-#[test]
-fn the_probe_closes_the_breaker_on_success() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    breaker.observe(QuotaAnswer::Exhausted, start);
-    let later = start + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
-        panic!("the cooldown has passed");
-    };
-    assert_eq!(
-        probe.settle(QuotaAnswer::Succeeded, later),
-        Some(Transition::Recovered)
-    );
-    assert_eq!(breaker.state(), QuotaState::Closed);
-    assert_eq!(breaker.admit(later), Admission::Closed);
-}
-
-#[test]
-fn a_probe_answered_by_quota_reopens_for_a_new_cooldown_without_a_new_opening() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    breaker.observe(QuotaAnswer::Exhausted, start);
-    let later = start + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
-        panic!("the cooldown has passed");
-    };
-    assert_eq!(
-        probe.settle(QuotaAnswer::Exhausted, later),
-        None,
-        "a probe that fails again is not a new opening"
-    );
-    assert_eq!(
-        breaker.state(),
-        QuotaState::Open {
-            until: later + Duration::from_secs(60)
+    let mut patch = fixture_patch(true);
+    for profile in patch.output_profiles.as_mut().unwrap() {
+        if profile.name.as_str() == "fixture-scene_plate" {
+            let dimensions = df_imagery::Dimensions::new(96, 64).unwrap();
+            profile.profile = df_imagery::OutputProfile::provider(
+                dimensions,
+                df_imagery::RasterOutputSpec::new(
+                    dimensions,
+                    df_imagery::AlphaHandling::Opaque,
+                    df_imagery::Encoding::Jpeg {
+                        quality: df_imagery::LossyQuality::new(90).unwrap(),
+                    },
+                )
+                .unwrap(),
+            );
         }
-    );
-    assert_eq!(
-        breaker.admit(later + Duration::from_secs(30)),
-        Admission::Refused
-    );
-}
-
-#[test]
-fn a_probe_with_an_unrelated_provider_error_is_rearmed_after_the_cooldown() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    breaker.observe(QuotaAnswer::Exhausted, start);
-    let later = start + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
-        panic!("the cooldown has passed");
-    };
-    let provider_error = quota_answer_of::<()>(&Err(ImageFailure::Provider));
-    assert_eq!(probe.settle(provider_error, later), None);
-    assert_eq!(
-        breaker.state(),
-        QuotaState::Open {
-            until: later + Duration::from_secs(60)
-        }
-    );
-    assert_eq!(breaker.admit(later), Admission::Refused);
-    assert_eq!(
-        breaker.admit(later + Duration::from_secs(60)),
-        Admission::MayProbe
-    );
-}
-
-#[test]
-fn a_probe_dropped_without_an_answer_is_rearmed() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    breaker.observe(QuotaAnswer::Exhausted, start);
-    let later = start + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, later) else {
-        panic!("the cooldown has passed");
-    };
-    assert_eq!(
-        breaker.admit(later),
-        Admission::Refused,
-        "the probe is held"
-    );
-    drop(probe);
-    assert_eq!(
-        breaker.admit(Instant::now()),
-        Admission::Refused,
-        "an inconclusive probe waits through the full cooldown"
-    );
-    assert_eq!(
-        breaker.admit(Instant::now() + Duration::from_secs(60)),
-        Admission::MayProbe,
-        "a cancelled probe leaves the next call free to probe"
-    );
-}
-
-#[test]
-fn a_second_call_cannot_claim_the_probe_while_it_is_held() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    breaker.observe(QuotaAnswer::Exhausted, start);
-    let later = start + Duration::from_secs(61);
-    let Claim::Claimed(_probe) = breaker.claim_admission(Admission::MayProbe, later) else {
-        panic!("the cooldown has passed");
-    };
-    assert!(matches!(
-        breaker.claim_admission(Admission::MayProbe, later),
-        Claim::Busy
-    ));
-    assert_eq!(breaker.admit(later), Admission::Refused);
-}
-
-#[test]
-fn a_call_whose_breaker_closed_while_it_waited_claims_no_probe() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    assert!(matches!(
-        breaker.claim_admission(Admission::Closed, Instant::now()),
-        Claim::NotNeeded
-    ));
-}
-
-#[test]
-fn a_closed_admission_is_refused_if_quota_opens_while_waiting_for_a_permit() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    let admission = breaker.admit(start);
-    assert_eq!(admission, Admission::Closed);
-    breaker.observe(QuotaAnswer::Exhausted, start + Duration::from_secs(1));
-    assert!(matches!(
-        breaker.claim_admission(admission, start + Duration::from_secs(2)),
-        Claim::Busy
-    ));
-    assert!(matches!(breaker.state(), QuotaState::Open { .. }));
-}
-
-#[test]
-fn a_non_quota_failure_never_opens_the_breaker() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let now = Instant::now();
-    for failure in [
-        ImageFailure::RateLimited,
-        ImageFailure::Provider,
-        ImageFailure::BadOutput,
-        ImageFailure::DeadlineExceeded,
-    ] {
-        assert_eq!(
-            breaker.observe(quota_answer_of::<()>(&Err(failure)), now),
-            None
-        );
     }
-    assert_eq!(breaker.state(), QuotaState::Closed);
+    let Some(mut host) = super::super::image_test_support::ImageHostFixture::open(
+        fake.address,
+        patch,
+        super::super::cost::port::MeteringPort::new(),
+    )
+    .await
+    else {
+        return;
+    };
+    let request = |index| {
+        let mut request = refresh(Mood::Calm);
+        request.prompt = request
+            .prompt
+            .with_development_direction(&format!("held-picture-fixture {index}"));
+        request
+    };
+    let held = host.imagery().render(request(0)).await.unwrap();
+    let Lookup::Image {
+        bytes: original, ..
+    } = host.imagery().image(held.as_str()).await
+    else {
+        panic!("held result")
+    };
+    assert_eq!(host.imagery().peek(&request(0)).await, Some(held.clone()));
+    for index in 1..=512 {
+        host.imagery().render(request(index)).await.unwrap();
+    }
+    assert_eq!(fake.calls(), 513);
+    assert_eq!(host.imagery().peek(&request(0)).await, Some(held.clone()));
+    host.restart().await;
+    let Lookup::Image { bytes, .. } = host.imagery().image(held.as_str()).await else {
+        panic!("retained result after restart")
+    };
+    assert_eq!(bytes, original);
+    assert_eq!(host.imagery().render(request(0)).await.unwrap(), held);
+    assert_eq!(
+        fake.calls(),
+        513,
+        "retained result never calls the supplier again"
+    );
+    host.close().await;
 }
 
-#[test]
-fn each_episode_produces_exactly_one_opening_and_one_recovery() {
-    let breaker = QuotaBreaker::new(Duration::from_secs(60));
-    let start = Instant::now();
-    let mut transitions = Vec::new();
-    transitions.extend(breaker.observe(QuotaAnswer::Exhausted, start));
-    transitions.extend(breaker.observe(QuotaAnswer::Exhausted, start));
-    transitions.extend(breaker.observe(QuotaAnswer::Inconclusive, start));
-    let first_probe = start + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, first_probe) else {
-        panic!("the cooldown has passed");
+#[tokio::test]
+async fn a_pending_operation_is_503_before_its_actual_publication() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::BlockedBackground);
+    let Some(host) = imagery(&fake).await else {
+        return;
     };
-    transitions.extend(probe.settle(QuotaAnswer::Exhausted, first_probe));
-    let second_probe = first_probe + Duration::from_secs(61);
-    let Claim::Claimed(probe) = breaker.claim_admission(Admission::MayProbe, second_probe) else {
-        panic!("the cooldown has passed");
-    };
-    transitions.extend(probe.settle(QuotaAnswer::Succeeded, second_probe));
-    transitions.extend(breaker.observe(
-        QuotaAnswer::Exhausted,
-        second_probe + Duration::from_secs(200),
-    ));
+    let mut request = refresh(Mood::Calm);
+    request.kind = ImageKind::ArtifactCloseUp;
+    request.prompt = request
+        .prompt
+        .with_development_direction("hs58-blocked-background pending-route");
+    let key = host.imagery().key_for(&request);
+    let service = host.imagery().clone();
+    let running = tokio::spawn(async move { service.render(request).await });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fake.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut router = router(host.imagery().clone());
+    let credential = host.display_credential();
     assert_eq!(
-        transitions,
-        vec![
-            Transition::Opened,
-            Transition::Recovered,
-            Transition::Opened
-        ]
+        get(&mut router, key.as_str(), None, &credential).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
     );
-}
-
-#[test]
-fn quota_breaker_notice_appears_once_open_and_clears_on_recovery() {
-    set_quota_notice(Transition::Recovered);
-    assert_eq!(operational_notice(), None);
-
-    set_quota_notice(Transition::Opened);
+    fake.release_background.store(true, Ordering::SeqCst);
+    assert_eq!(running.await.unwrap().unwrap(), key);
     assert_eq!(
-        operational_notice(),
-        Some("Narration provider unavailable; no new charge")
+        get(&mut router, key.as_str(), None, &credential).await.0,
+        StatusCode::OK
     );
-
-    set_quota_notice(Transition::Recovered);
-    assert_eq!(operational_notice(), None);
+    drop(router);
+    host.close().await;
 }

@@ -7,8 +7,11 @@ license = "MIT"
 publish = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }
 df-types = { path = "../df-types" }
 df-imagery = { path = "../df-imagery" }
+df-finance = { path = "../df-finance" }
+df-commerce = { path = "../df-commerce" }
 df-model = { path = "../df-model" }
 df-session = { path = "../df-session" }
 df-auth = { path = "../df-auth" }
@@ -25,6 +28,7 @@ tokio-rustls = { version = "=0.26.6", default-features = false }
 tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-imagery = { path = "../df-imagery", features = ["test-support"] }
 df-rules = { path = "../df-rules" }
 df-customer = { path = "../df-customer", features = ["test-fakes"] }
 df-assets = { path = "../df-assets", features = ["test-fakes"] }

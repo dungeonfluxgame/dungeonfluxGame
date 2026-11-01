@@ -373,6 +373,9 @@ fn service() -> super::super::Service {
     let (_, updates) = tokio::sync::watch::channel(super::super::model::initial().unwrap());
     let (actor, _inbox) = df_session::inbox::bounded_inbox();
     super::super::Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         look_ahead: Default::default(),
         actor,
         display_credential: [11; 32],

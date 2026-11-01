@@ -223,11 +223,9 @@ fn matches_schema(schema: &Value, value: &Value) -> bool {
     }
 }
 
-/// Parses bounded duplicate-free JSON within caller-selected limits.
-pub fn parse_unique_json(
-    bytes: &[u8],
-    limits: TextSchemaLimits,
-) -> Result<Value, TextSchemaError> {
+/// Parses bounded duplicate-free JSON within node and depth limits.
+/// The caller enforces `maximum_schema_bytes` before calling.
+pub fn parse_unique_json(bytes: &[u8], limits: TextSchemaLimits) -> Result<Value, TextSchemaError> {
     let mut remaining = limits.maximum_nodes;
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = JsonSeed {

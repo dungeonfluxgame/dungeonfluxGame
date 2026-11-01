@@ -34,6 +34,8 @@ tonic.workspace = true
 tokio.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-imagery = { path = "../df-imagery" }
+df-telemetry = { path = "../df-telemetry" }
 getrandom = "=0.2.17"
 df-intent = { path = "../df-intent" }
 axum = { version = "0.8", features = ["ws"] }
@@ -95,6 +97,8 @@ df-types = { path = "../df-types" }
 prost-types = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+base64 = "=0.22.1"
+df-imagery = { path = "../df-imagery", features = ["test-support"] }
 df-campaign = { path = "../df-campaign", features = ["test-fakes", "routes"] }
 tokio-tungstenite = "0.29"
 # The charge-site guard in gameplay/cost_tests.rs reads the sources as Rust, not as text.

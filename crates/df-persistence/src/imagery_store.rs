@@ -18,10 +18,20 @@ use crate::imagery_sql as sql;
 use crate::media_pool::Pool;
 use crate::postgres_tls::PostgresTransport;
 
-const MIGRATIONS: [(i32, &str); 1] = [(
-    38,
-    include_str!("../migrations/0038_imagery_operations.sql"),
-)];
+const MIGRATIONS: [(i32, &str); 3] = [
+    (
+        38,
+        include_str!("../migrations/0038_imagery_operations.sql"),
+    ),
+    (
+        45,
+        include_str!("../migrations/0045_imagery_compatible.sql"),
+    ),
+    (
+        49,
+        include_str!("../migrations/0049_imagery_compatible_key_version.sql"),
+    ),
+];
 
 /// Opening the journal failed; nothing was served.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,6 +187,15 @@ macro_rules! in_transaction {
 }
 
 impl ImageJournal for PostgresImageJournal {
+    async fn compatible_candidates(
+        &self,
+        owner: &df_imagery::ImageOwner,
+        intent: &df_imagery::VersionedSnapshot,
+        config: &df_imagery::VersionedSnapshot,
+        after: Option<df_imagery::CompatibleCursor>,
+    ) -> Result<Vec<OperationView>, JournalError> {
+        in_transaction!(self,tx=>sql::compatible_candidates_in(&tx,owner,intent,config,after).await?)
+    }
     async fn accept(&self, command: &AcceptCommand) -> Result<AcceptOutcome, JournalError> {
         in_transaction!(self, tx => accept_in(&tx, command).await?)
     }
@@ -208,6 +227,14 @@ impl ImageJournal for PostgresImageJournal {
         now_ms: i64,
     ) -> Result<WithdrawOutcome, JournalError> {
         in_transaction!(self, tx => withdraw_in(&tx, owner, interest, now_ms).await?)
+    }
+
+    async fn withdraw_owner_interests(
+        &self,
+        owner: &df_imagery::ImageOwner,
+        now_ms: i64,
+    ) -> Result<Vec<WithdrawOutcome>, JournalError> {
+        in_transaction!(self, tx => crate::imagery_sql::withdraw_owner_in(&tx, owner, now_ms).await?)
     }
 }
 

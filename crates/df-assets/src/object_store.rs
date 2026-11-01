@@ -422,6 +422,21 @@ impl ObjectStoreError {
     }
 }
 
+pub(crate) fn check_write_bound(
+    maximum_bytes: u64,
+    body_bytes: usize,
+    expected: AssetManifest,
+) -> Result<(), ObjectStoreError> {
+    if maximum_bytes == 0
+        || isize::try_from(maximum_bytes).is_err()
+        || body_bytes as u64 > maximum_bytes
+        || expected.byte_len > maximum_bytes
+    {
+        return Err(ObjectStoreError::TooLarge);
+    }
+    Ok(())
+}
+
 /// A version listing the backing cannot answer, or a failed one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VersionListing {
@@ -442,6 +457,22 @@ pub trait ObjectStore: Send + Sync {
         expected: AssetManifest,
         deadline: Deadline,
     ) -> impl Future<Output = Result<StoredObject, ObjectStoreError>> + Send;
+
+    /// Writes with an immutable admitted-work bound. The default also retains the backing's
+    /// ordinary cap; a native override may honor an older validated job after a control change.
+    fn put_new_with_bound(
+        &self,
+        key: &ObjectKey,
+        body: &[u8],
+        expected: AssetManifest,
+        maximum_bytes: u64,
+        deadline: Deadline,
+    ) -> impl Future<Output = Result<StoredObject, ObjectStoreError>> + Send {
+        async move {
+            check_write_bound(maximum_bytes, body.len(), expected)?;
+            self.put_new(key, body, expected, deadline).await
+        }
+    }
 
     /// Replaces the current version only if it is still `current` (the journal head).
     fn put_if_match(

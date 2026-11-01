@@ -94,7 +94,7 @@ pub(super) async fn charge_scope_of(
 }
 
 /// Quota row first, then the asset row `FOR UPDATE`; `None` when the asset does not exist.
-pub(super) async fn lock_quota_then_asset(
+pub(crate) async fn lock_quota_then_asset(
     tx: &Transaction<'_>,
     asset: AssetId,
 ) -> Result<Option<(QuotaUsage, AssetRecord)>, CatalogError> {

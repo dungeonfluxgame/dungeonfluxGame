@@ -10,10 +10,18 @@
 //! and rebuilds values through the validated constructors so a restart
 //! replays checked work.
 
-mod decode;
-mod encode;
-mod primitives;
+mod artifact_semantics;
+mod artwork;
+#[cfg(test)]
+mod artwork_tests;
+pub(crate) mod decode;
+pub(crate) mod encode;
+pub(crate) mod pipeline;
+#[cfg(test)]
+mod pipeline_tests;
+pub(crate) mod primitives;
 
+pub(crate) use artifact_semantics::encode as encode_artifact_semantics;
 pub(crate) use decode::{decode_config, decode_intent};
 pub(crate) use encode::{encode_config, encode_intent};
 
@@ -26,10 +34,31 @@ use crate::request::{
     ExecutionMode, Freshness, ImageOperation, ImageOwner, PurposedUse, RequestError,
 };
 
-/// Intent encoding version. A field change ships a new version.
+/// Legacy intent encoding stays byte-exact for requests without pipeline metadata.
 pub(crate) const INTENT_CODEC_VERSION: u8 = 1;
-/// Config snapshot encoding version. A field change ships a new version.
-pub(crate) const CONFIG_CODEC_VERSION: u8 = 1;
+pub(super) const LEGACY_PIPELINE_INTENT_CODEC_VERSION: u8 = 2;
+pub(super) const INSPECTION_REQUIREMENT_CODEC_VERSION: u8 = 3;
+pub(super) const MODERATION_INTENT_CODEC_VERSION: u8 = 4;
+pub(super) const PIPELINE_INTENT_CODEC_VERSION: u8 = 5;
+pub(super) const ARTWORK_INTENT_CODEC_VERSION: u8 = 6;
+
+pub(crate) fn intent_version(bytes: &[u8]) -> Result<u8, CodecError> {
+    match bytes.first().copied() {
+        Some(
+            version @ (INTENT_CODEC_VERSION
+            | LEGACY_PIPELINE_INTENT_CODEC_VERSION
+            | INSPECTION_REQUIREMENT_CODEC_VERSION
+            | MODERATION_INTENT_CODEC_VERSION
+            | PIPELINE_INTENT_CODEC_VERSION
+            | ARTWORK_INTENT_CODEC_VERSION),
+        ) => Ok(version),
+        Some(actual) => Err(CodecError::BadVersion { actual }),
+        None => Err(CodecError::Truncated),
+    }
+}
+/// Version 12 appends the explicit creator BFL account after the frozen v11 quota policy.
+/// Every earlier version retains its original field defaults and exact layout.
+pub(crate) const CONFIG_CODEC_VERSION: u8 = 12;
 
 /// Why an intent or config snapshot was refused before any work starts. The
 /// variants carry lengths and tags only; prompt text never appears here.
@@ -79,6 +108,7 @@ pub(crate) struct EncodedIntent {
 }
 
 impl EncodedIntent {
+    #[cfg(test)]
     pub(crate) fn version(&self) -> u8 {
         self.version
     }
@@ -118,6 +148,7 @@ impl EncodedConfig {
         &self.bytes
     }
 
+    #[cfg(test)]
     pub(crate) fn fingerprint(&self) -> &[u8; 32] {
         &self.fingerprint
     }
@@ -187,4 +218,20 @@ fn hex(bytes: &[u8]) -> String {
         text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     text
+}
+
+impl crate::config::ImageConfig {
+    /// Digest of the same bounded canonical configuration snapshot retained by ImageService.
+    /// It is an identity input, never an authorization or proof of operator propagation.
+    pub fn canonical_fingerprint(&self) -> Result<[u8; 32], ConfigError> {
+        encode_config(self, crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES)
+            .map(|encoded| encoded.fingerprint)
+            .map_err(|error| match error {
+                CodecError::Config(error) => error,
+                _ => ConfigError::InvalidField {
+                    field: "config_snapshot",
+                    reason: "configuration exceeds canonical protocol bounds",
+                },
+            })
+    }
 }

@@ -5,15 +5,19 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
-    io::Cursor,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak},
     time::{Duration, Instant},
 };
 
+use super::imagery::{ImageKey, Imagery, OutputSpec, ReferenceImage};
+use df_imagery::{
+    AlphaHandling, Dimensions, EncodedAlphaBlend, EncodedFilter, Encoding, Freshness,
+    ImageTransform, Purpose, PurposedUse, RasterOutputSpec, Rgb, TransformSource, TransformSpec,
+    VariantRole,
+};
 use df_model::checkpoint::{EntityId, GameState};
-use df_providers::{GeneratedImage, ImageFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -31,8 +35,6 @@ const FRAMING: &str = "Portrait 2:3 frame. Keep the complete body and entire wea
 const DEADLINE: Duration = Duration::from_secs(900);
 /// The length of every clip, in seconds.
 const CLIP_SECONDS: u32 = 5;
-/// An image edit's whole request; the shared native HTTP client refuses anything over 180 s.
-const IMAGE_EDIT_TIMEOUT: Duration = Duration::from_secs(180);
 const MAXIMUM_CLIP_BYTES: usize = 16 * 1024 * 1024;
 const SAMPLE_PIXELS: usize = 64 * 96;
 
@@ -174,8 +176,7 @@ impl ResourceSpec for FrameSpec {
 }
 
 pub(super) struct Depiction {
-    pub(super) bytes: Vec<u8>,
-    pub(super) format: ImageFormat,
+    pub(super) image: ReferenceImage,
     /// The selected canonical depiction key, in addition to the hash of its actual bytes.
     pub(super) revision: String,
 }
@@ -184,12 +185,19 @@ pub(super) type SourceFuture<'a> = Pin<Box<dyn Future<Output = Option<Depiction>
 pub(super) type Source = Arc<dyn for<'a> Fn(&'a Fighter) -> SourceFuture<'a> + Send + Sync>;
 type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ResourceFailure>> + Send + 'a>>;
 
+pub(super) struct Frame {
+    image: ReferenceImage,
+    micro_dollars: Option<u64>,
+}
+
 pub(super) trait FrameProvider: Send + Sync {
     fn frame<'a>(
         &'a self,
         source: &'a Depiction,
         prompt: &'a str,
-    ) -> ProviderFuture<'a, GeneratedImage>;
+        subject: &'a str,
+        freshness: Freshness,
+    ) -> ProviderFuture<'a, Frame>;
 }
 
 pub(super) struct Video {
@@ -298,26 +306,63 @@ fn motion_prompt(spec: &CharacterClipSpec) -> String {
     )
 }
 
-fn green_frame(bytes: &[u8]) -> Result<Vec<u8>, ResourceFailure> {
-    let image = image::load_from_memory(bytes).map_err(|_| failure("clip_frame_undecodable"))?;
-    if image.width() != 1024 || image.height() != 1536 || !image.color().has_alpha() {
+async fn green_frame(
+    imagery: &Imagery,
+    image: &ReferenceImage,
+) -> Result<Vec<u8>, ResourceFailure> {
+    let container = super::image_references::format_of(&image.bytes)
+        .map_err(|_| failure("clip_frame_undecodable"))?;
+    if container != df_providers::ImageFormat::Png {
         return Err(failure("clip_frame_dimensions_or_alpha"));
     }
-    let mut plate = image::RgbaImage::from_pixel(1024, 1536, image::Rgba([0, 177, 64, 255]));
-    image::imageops::overlay(&mut plate, &image.to_rgba8(), 0, 0);
-    // Research used a smaller 2:3 input; retain full-size alpha and a bounded green input.
-    let plate = image::DynamicImage::ImageRgba8(plate)
-        .resize_exact(768, 1152, image::imageops::FilterType::Lanczos3)
-        .to_rgb8();
-    let mut output = Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgb8(plate)
-        .write_to(&mut output, image::ImageFormat::Png)
+    use image::ImageDecoder;
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&image.bytes))
+        .map_err(|_| failure("clip_frame_undecodable"))?;
+    if decoder.dimensions() != (1024, 1536) || !decoder.color_type().has_alpha() {
+        return Err(failure("clip_frame_dimensions_or_alpha"));
+    }
+    let dimensions = Dimensions::new(768, 1152).map_err(|_| failure("clip_frame_encode_failed"))?;
+    let source = imagery
+        .pin_reference(image)
+        .await
+        .map_err(|_| failure("clip_frame_unavailable"))?;
+    let output = RasterOutputSpec::new(dimensions, AlphaHandling::Opaque, Encoding::Png)
         .map_err(|_| failure("clip_frame_encode_failed"))?;
-    Ok(output.into_inner())
+    imagery
+        .transform(
+            "character-green-frame",
+            PurposedUse {
+                purpose: Purpose::AnimationFrame,
+                role: VariantRole::Reference,
+            },
+            TransformSpec {
+                source: TransformSource::Image(source),
+                steps: vec![
+                    ImageTransform::EncodedMatte {
+                        fill: Rgb {
+                            red: 0,
+                            green: 177,
+                            blue: 64,
+                        },
+                        blend: EncodedAlphaBlend::ImageSourceOver,
+                    },
+                    ImageTransform::EncodedResize {
+                        dimensions,
+                        filter: EncodedFilter::Lanczos3,
+                    },
+                    ImageTransform::DiscardAlpha,
+                ],
+            },
+            output,
+        )
+        .await
+        .map(|image| image.bytes.to_vec())
+        .map_err(|_| failure("clip_frame_encode_failed"))
 }
 
 #[derive(Clone)]
 struct Generation {
+    imagery: Imagery,
     hub: Hub,
     frames: Option<Arc<dyn FrameProvider>>,
     videos: Option<Arc<dyn VideoProvider>>,
@@ -362,14 +407,14 @@ impl Generation {
             .render(
                 &frame_spec,
                 Box::pin(async move {
-                    if stored_frame(&directory) {
+                    if stored_frame(&directory) && directory.join("catalog-key.json").is_file() {
                         return Ok(Generated::new(work_key.as_str()));
                     }
                     let provider = service
                         .frames
                         .as_ref()
                         .ok_or_else(|| failure("clip_image_provider_unavailable"))?;
-                    if source.bytes.is_empty() || source.bytes.len() > 4 * 1024 * 1024 {
+                    if source.image.bytes.is_empty() || source.image.bytes.len() > 4 * 1024 * 1024 {
                         return Err(failure("clip_source_size_invalid"));
                     }
                     std::fs::create_dir_all(&directory)
@@ -391,43 +436,54 @@ impl Generation {
                         cost.image_micro_dollars
                     };
                     cost.image_calls = cost.image_calls.saturating_add(1);
+                    cost.image_micro_dollars = None;
                     store_json(&directory.join("cost.json"), &cost)?;
-                    service.hub.ledger().reserve(Unit::ImageCall, 1).commit(1);
-                    // The frame provider reports every failure alike, so a failed frame is
-                    // recorded as of unknown outcome with its one-call estimate.
-                    let billed = service
-                        .hub
-                        .ledger()
-                        .begin_call(super::cost::clip_frame_call(CLIP_FRAME_MODEL, fallen), &[]);
-                    let image = provider
-                        .frame(&source, &frame_prompt(&fighter, fallen))
+                    let freshness = if explicit_retry {
+                        let mut nonce = Sha256::new();
+                        nonce.update(b"character-frame-explicit-retry-v1");
+                        nonce.update(work_key.as_str().as_bytes());
+                        nonce.update(cost.image_calls.to_be_bytes());
+                        let digest = nonce.finalize();
+                        let mut bytes = [0; 16];
+                        bytes.copy_from_slice(&digest[..16]);
+                        Freshness::Regenerate {
+                            nonce: df_types::OperationId::from_bytes(&bytes)
+                                .map_err(|_| failure("clip_retry_identity_invalid"))?,
+                        }
+                    } else {
+                        Freshness::ReuseCompatible
+                    };
+                    let frame = provider
+                        .frame(
+                            &source,
+                            &frame_prompt(&fighter, fallen),
+                            work_key.as_str(),
+                            freshness,
+                        )
                         .await?;
-                    billed.settle(super::cost::image_token_usage(image.usage));
-                    // The cost file prices the reported tokens at the price file's rates, once.
-                    cost.image_micro_dollars =
-                        if image.usage == df_providers::ImageUsage::default() {
-                            None
-                        } else {
-                            known_previous
-                                .zip(
-                                    service.hub.ledger().costs().quote_image_usage(
-                                        CLIP_FRAME_MODEL.model_id(),
-                                        image.usage,
-                                    ),
-                                )
-                                .map(|(previous, price)| previous.saturating_add(price))
-                        };
+                    cost.image_micro_dollars = known_previous
+                        .zip(frame.micro_dollars)
+                        .and_then(|(previous, price)| previous.checked_add(price));
                     store_json(&directory.join("cost.json"), &cost)?;
-                    let alpha = image.bytes;
-                    let green = tokio::task::spawn_blocking(move || {
-                        let green = green_frame(&alpha)?;
-                        Ok::<_, ResourceFailure>((alpha, green))
-                    })
-                    .await
-                    .map_err(|_| failure("clip_frame_worker_failed"))??;
-                    std::fs::write(directory.join("alpha.png"), green.0)
+                    let key = service
+                        .imagery
+                        .register_reviewed("character-frame", frame.image)
+                        .await
+                        .map_err(|_| failure("clip_frame_unavailable"))?;
+                    let image = service
+                        .imagery
+                        .reference(&key)
+                        .await
+                        .map_err(|_| failure("clip_frame_unavailable"))?;
+                    let green = green_frame(&service.imagery, &image).await?;
+                    std::fs::write(directory.join("alpha.png"), &image.bytes)
                         .map_err(|_| failure("clip_store_failed"))?;
-                    std::fs::write(directory.join("frame.png"), green.1)
+                    std::fs::write(directory.join("frame.png"), green)
+                        .map_err(|_| failure("clip_store_failed"))?;
+                    let catalog_key = serde_json::to_vec(key.as_str())
+                        .map_err(|_| failure("clip_store_failed"))?;
+                    tokio::fs::write(directory.join("catalog-key.json"), catalog_key)
+                        .await
                         .map_err(|_| failure("clip_store_failed"))?;
                     Ok(Generated {
                         handle: work_key.to_string(),
@@ -468,14 +524,31 @@ impl Generation {
             .frame(&spec, Arc::clone(&source), false, explicit_retry)
             .await?;
         let fallen = if spec.kind == ClipKind::LastHit {
-            let alpha = std::fs::read(self.directory.join(guard.as_str()).join("alpha.png"))
+            let path = self.directory.join(guard.as_str());
+            let key: String = serde_json::from_slice(
+                &tokio::fs::read(path.join("catalog-key.json"))
+                    .await
+                    .map_err(|_| failure("clip_guard_unavailable"))?,
+            )
+            .map_err(|_| failure("clip_guard_unavailable"))?;
+            let key = ImageKey::parse(&key).ok_or_else(|| failure("clip_guard_unavailable"))?;
+            let image = self
+                .imagery
+                .reference(&key)
+                .await
                 .map_err(|_| failure("clip_guard_unavailable"))?;
+            if tokio::fs::read(path.join("alpha.png"))
+                .await
+                .map_err(|_| failure("clip_guard_unavailable"))?
+                != image.bytes.as_ref()
+            {
+                return Err(failure("clip_guard_changed"));
+            }
             Some(
                 self.frame(
                     &spec,
                     Arc::new(Depiction {
-                        bytes: alpha,
-                        format: ImageFormat::Png,
+                        image,
                         revision: guard.to_string(),
                     }),
                     true,
@@ -776,6 +849,7 @@ pub(super) struct CharacterClips {
 
 impl CharacterClips {
     fn new(
+        imagery: Imagery,
         hub: Hub,
         frames: Option<Arc<dyn FrameProvider>>,
         videos: Option<Arc<dyn VideoProvider>>,
@@ -801,6 +875,7 @@ impl CharacterClips {
         );
         Self {
             generation: Generation {
+                imagery,
                 hub,
                 frames,
                 videos,
@@ -969,7 +1044,7 @@ impl CharacterClips {
                 }
                 continue;
             };
-            let revision = format!("{}:{}", source.revision, digest(&source.bytes));
+            let revision = format!("{}:{}", source.revision, digest(&source.image.bytes));
             let source = Arc::new(source);
             locked(&self.source_cache).insert(
                 fighter.identity.clone(),
@@ -1059,14 +1134,17 @@ impl Drop for Worker {
 
 /// The source callback must return only the selected canonical full-body depiction.
 pub(super) fn start(
-    hub: Hub,
+    imagery: Imagery,
     source: Source,
     directory: PathBuf,
     live: bool,
     mut source_wake: Option<tokio::sync::watch::Receiver<u64>>,
 ) -> Result<Worker, std::io::Error> {
-    let (frames, videos) = native_providers(live)?;
-    let service = Arc::new(CharacterClips::new(hub, frames, videos, source, directory));
+    let hub = imagery.hub().clone();
+    let (frames, videos) = native_providers(&imagery, live)?;
+    let service = Arc::new(CharacterClips::new(
+        imagery, hub, frames, videos, source, directory,
+    ));
     *locked(INSTALLED.get_or_init(Default::default)) = Some(Arc::clone(&service));
     let owner = Arc::downgrade(&service);
     let task = tokio::spawn(async move {
@@ -1229,46 +1307,77 @@ fn weapon_by_id(id: &str) -> Option<df_rules::tactical::Weapon> {
     .find(|weapon| weapon.id() == id)
 }
 
-/// The model the clip frames are edited with; the cost engine prices the frames by it.
-const CLIP_FRAME_MODEL: df_providers::ImageEditModel = df_providers::ImageEditModel::Gpt25Sunburst;
+struct NativeFrames {
+    imagery: Imagery,
+}
 
-impl FrameProvider for df_providers::NativeImageEditProvider {
+impl FrameProvider for NativeFrames {
     fn frame<'a>(
         &'a self,
         source: &'a Depiction,
         prompt: &'a str,
-    ) -> ProviderFuture<'a, GeneratedImage> {
+        subject: &'a str,
+        freshness: Freshness,
+    ) -> ProviderFuture<'a, Frame> {
         Box::pin(async move {
-            let references = [df_providers::ReferenceImage {
-                format: source.format,
-                bytes: &source.bytes,
-            }];
-            let edit = df_providers::ImageEdit {
-                model: CLIP_FRAME_MODEL,
-                prompt,
-                references: &references,
-                width: 1024,
-                height: 1536,
-                // Dev play-tests draw clip frames at medium; production keeps high.
-                quality: match super::startup_configuration::ImageryProfile::from_environment() {
-                    Ok(super::startup_configuration::ImageryProfile::Dev) => {
-                        df_providers::ImageQuality::Medium
-                    }
-                    _ => df_providers::ImageQuality::High,
-                },
-                background: df_providers::ImageBackground::Transparent,
-                output: ImageFormat::Png,
-                moderation: df_providers::ImageModeration::Low,
+            let image = self
+                .imagery
+                .frame(
+                    subject,
+                    prompt,
+                    std::slice::from_ref(&source.image),
+                    OutputSpec {
+                        width: 1024,
+                        height: 1536,
+                        transparent: true,
+                    },
+                    freshness,
+                )
+                .await
+                .map_err(|_| failure("clip_image_failed"))?;
+            let micro_dollars = match self.imagery.usage_for_reference(&image).await {
+                Ok(Some(summary)) => frame_micro_dollars(&summary),
+                Ok(None) => None,
+                Err(error) => {
+                    super::actor::record_audit_line(
+                        "gameplay.character_clips",
+                        format!(
+                            "CHARACTER_CLIP cost_unknown reason={} fallback=unknown",
+                            error.label()
+                        ),
+                    );
+                    None
+                }
             };
-            self.edit(&edit, IMAGE_EDIT_TIMEOUT).await.map_err(|error| {
-                super::actor::record_audit_line(
-                    "gameplay.character_clips",
-                    format!("CHARACTER_CLIP image_failed reason={error:?} fallback=cutout"),
-                );
-                failure("clip_image_failed")
+            Ok(Frame {
+                image,
+                micro_dollars,
             })
         })
     }
+}
+
+fn frame_micro_dollars(summary: &df_imagery::runtime::ImageUsageSummary) -> Option<u64> {
+    use df_imagery::runtime::{ImageUsageAmount, StageUsageObservation};
+    let mut stages = summary
+        .stages
+        .iter()
+        .filter(|stage| stage.amount != ImageUsageAmount::NotApplicable)
+        .peekable();
+    stages.peek()?;
+    let total = stages.try_fold(0_u128, |total, stage| {
+        if !matches!(stage.observation, StageUsageObservation::Recorded(_)) {
+            return None;
+        }
+        match stage.amount {
+            ImageUsageAmount::Known(amount) if amount.currency().as_str() == "USD" => {
+                total.checked_add(amount.micros())
+            }
+            _ => None,
+        }
+    })?;
+    // The legacy clip cost view cannot represent larger authoritative amounts.
+    u64::try_from(total).ok()
 }
 
 struct NativeVideo {
@@ -1459,16 +1568,13 @@ type NativeProviders = (
     Option<Arc<dyn VideoProvider>>,
 );
 
-fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
+fn native_providers(imagery: &Imagery, live: bool) -> Result<NativeProviders, std::io::Error> {
     if !live
         || !super::media_policy::gates().allows(super::media_policy::Capability::CharacterVideo)
     {
         // Cached clips remain readable, but no clip-only image frames or video are generated.
         return Ok((None, None));
     }
-    let image_key = std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|key| !key.is_empty());
     let fal_key = std::env::var("FAL_KEY")
         .or_else(|_| std::env::var("DF_FAL_KEY"))
         .ok()
@@ -1476,17 +1582,9 @@ fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
     if fal_key.is_none() {
         return Ok((None, None));
     }
-    let frames = image_key
-        .map(|key| {
-            df_providers::NativeImageEditProvider::new(
-                df_providers::ImageEditConfig::live(),
-                &key,
-                IMAGE_EDIT_TIMEOUT,
-            )
-            .map(|provider| Arc::new(provider) as Arc<dyn FrameProvider>)
-            .map_err(|_| std::io::Error::other("character clip image configuration invalid"))
-        })
-        .transpose()?;
+    let frames = Some(Arc::new(NativeFrames {
+        imagery: imagery.clone(),
+    }) as Arc<dyn FrameProvider>);
     let videos = if let Some(key) = fal_key {
         // One pin per fal media host with all its addresses, as the home video does; a pin per
         // address exceeds the media fetcher's limit of 16 and refuses the provider.

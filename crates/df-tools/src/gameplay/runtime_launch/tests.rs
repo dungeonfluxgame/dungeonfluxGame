@@ -407,6 +407,235 @@ async fn watch_over_tunnel(
         .unwrap()
 }
 
+use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
+
+pub(super) struct SessionScopedBinder {
+    outcomes: StdMutex<HashMap<[u8; 16], BinderError>>,
+    commands: StdMutex<Vec<HostBindingCommand>>,
+}
+
+impl SessionScopedBinder {
+    pub(super) fn shared() -> Arc<Self> {
+        // Test recordings are shared by session; each router retains its own binder Arc.
+        static SHARED: StdMutex<Option<Arc<SessionScopedBinder>>> = StdMutex::new(None);
+        SHARED
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| {
+                Arc::new(Self {
+                    outcomes: StdMutex::new(HashMap::new()),
+                    commands: StdMutex::new(Vec::new()),
+                })
+            })
+            .clone()
+    }
+
+    fn fail_session(&self, session: [u8; 16], error: BinderError) {
+        self.outcomes.lock().unwrap().insert(session, error);
+    }
+
+    fn allow_session(&self, session: [u8; 16]) {
+        self.outcomes.lock().unwrap().remove(&session);
+    }
+
+    fn commands_for(&self, session: [u8; 16]) -> Vec<HostBindingCommand> {
+        self.commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|command| command.allocation.session == session)
+            .cloned()
+            .collect()
+    }
+}
+
+impl super::AllocationBinder for SessionScopedBinder {
+    fn bind_host_allocation<'a>(
+        &'a self,
+        command: &'a HostBindingCommand,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), BinderError>> + Send + 'a>> {
+        let outcome = self
+            .outcomes
+            .lock()
+            .unwrap()
+            .get(&command.allocation.session)
+            .copied();
+        Box::pin(async move {
+            match outcome {
+                Some(error) => Err(error),
+                None => {
+                    self.commands.lock().unwrap().push(command.clone());
+                    Ok(())
+                }
+            }
+        })
+    }
+}
+
+fn seated_placement(session: [u8; 16]) -> Placement {
+    Placement {
+        session: SessionId::from_bytes(&session).unwrap(),
+        campaign: CampaignId::from_bytes(&[2; 16]).unwrap(),
+        roster: vec![
+            SeatedMember {
+                account: AccountId::from_bytes(&[3; 16]).unwrap(),
+                member: MemberId::from_bytes(&[4; 16]).unwrap(),
+            },
+            SeatedMember {
+                account: AccountId::from_bytes(&[5; 16]).unwrap(),
+                member: MemberId::from_bytes(&[6; 16]).unwrap(),
+            },
+        ],
+    }
+}
+
+async fn allocate_with_directory(
+    harness: &mut super::harness::Harness,
+    placement: &Placement,
+) -> Result<Room, RuntimeError> {
+    let runtime_address = harness.listen(routes(harness.state.clone())).await;
+    let runtime = HttpRuntime::new(
+        runtime_address,
+        harness.state.secret.clone(),
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap();
+    harness.start_rpc();
+    let directory = df_campaign::fakes::FakeSessions::new();
+    directory.set(placement.session, placement.campaign, SessionPhase::Lobby);
+    let launcher = SessionLauncher::new(
+        directory.clone(),
+        runtime.clone(),
+        std::time::Duration::from_secs(5),
+    );
+    launcher
+        .start_session(placement.session, placement.campaign, &placement.roster)
+        .await
+        .unwrap();
+    runtime.allocate(placement).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successful_allocation_submits_the_durable_binding_once() {
+    let binder = SessionScopedBinder::shared();
+    let mut harness = super::harness::Harness::new().await;
+    let placement = seated_placement([0xe1; 16]);
+    let room = allocate_with_directory(&mut harness, &placement)
+        .await
+        .expect("allocation binds durably");
+    let commands = binder.commands_for([0xe1; 16]);
+    assert_eq!(commands.len(), 1, "one durable binding per allocation");
+    assert_eq!(commands[0].allocation.session, [0xe1; 16]);
+    assert_eq!(commands[0].allocation.campaign, [2; 16]);
+    assert_eq!(commands[0].allocation.roster.len(), 2);
+    assert_eq!(commands[0].seats.len(), 2);
+    for mapping in &commands[0].seats {
+        assert_ne!(mapping.member, mapping.gameplay_member);
+        assert_ne!(mapping.gameplay_credential, [0; 32]);
+        assert!(
+            commands[0]
+                .allocation
+                .roster
+                .iter()
+                .any(|seat| seat.account == mapping.account && seat.member == mapping.member)
+        );
+    }
+    let basis = harness.service.updates.borrow().basis();
+    assert_eq!(commands[0].gameplay_session, *basis.session.as_bytes());
+    assert_eq!(commands[0].gameplay_run, *basis.run.as_bytes());
+    assert_eq!(commands[0].generation, harness.state.generation.to_string());
+    let _ = room;
+    // The shared fake stays installed: unknown sessions bind Ok, so the
+    // sibling tests are unaffected.
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn binder_conflict_refuses_occupied_and_retry_reconciles() {
+    let binder = SessionScopedBinder::shared();
+    binder.fail_session([0xe2; 16], BinderError::Occupied);
+    let mut harness = super::harness::Harness::new().await;
+    let placement = seated_placement([0xe2; 16]);
+    let runtime_address = harness.listen(routes(harness.state.clone())).await;
+    let runtime = HttpRuntime::new(
+        runtime_address,
+        harness.state.secret.clone(),
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap();
+    harness.start_rpc();
+    let directory = df_campaign::fakes::FakeSessions::new();
+    directory.set(placement.session, placement.campaign, SessionPhase::Lobby);
+    let launcher = SessionLauncher::new(
+        directory.clone(),
+        runtime.clone(),
+        std::time::Duration::from_secs(5),
+    );
+    launcher
+        .start_session(placement.session, placement.campaign, &placement.roster)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.allocate(&placement).await,
+        Err(RuntimeError::Occupied)
+    );
+    assert!(
+        harness.state.slot.lock().await.is_some(),
+        "the slot is retained so an exact replay reconciles"
+    );
+    assert!(binder.commands_for([0xe2; 16]).is_empty());
+    binder.allow_session([0xe2; 16]);
+    runtime
+        .allocate(&placement)
+        .await
+        .expect("retry reconciles the retained slot");
+    assert_eq!(binder.commands_for([0xe2; 16]).len(), 1);
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn binder_outage_refuses_unavailable_and_retains_the_slot_for_replay() {
+    let binder = SessionScopedBinder::shared();
+    binder.fail_session([0xe3; 16], BinderError::Unavailable);
+    let mut harness = super::harness::Harness::new().await;
+    let placement = seated_placement([0xe3; 16]);
+    let runtime_address = harness.listen(routes(harness.state.clone())).await;
+    let runtime = HttpRuntime::new(
+        runtime_address,
+        harness.state.secret.clone(),
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap();
+    harness.start_rpc();
+    let directory = df_campaign::fakes::FakeSessions::new();
+    directory.set(placement.session, placement.campaign, SessionPhase::Lobby);
+    let launcher = SessionLauncher::new(
+        directory.clone(),
+        runtime.clone(),
+        std::time::Duration::from_secs(5),
+    );
+    launcher
+        .start_session(placement.session, placement.campaign, &placement.roster)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.allocate(&placement).await,
+        Err(RuntimeError::Unavailable)
+    );
+    assert!(
+        harness.state.slot.lock().await.is_some(),
+        "the slot is retained so the replay binds exactly once"
+    );
+    binder.allow_session([0xe3; 16]);
+    runtime
+        .allocate(&placement)
+        .await
+        .expect("replay after the outage binds");
+    assert_eq!(binder.commands_for([0xe3; 16]).len(), 1);
+    harness.shutdown().await;
+}
+
 async fn entry_refusals(state: &LaunchState, placement: &Placement, room: &Room) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -453,4 +682,16 @@ async fn entry_refusals(state: &LaunchState, placement: &Placement, room: &Room)
             "claim mutation {mutation}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_local_allocation_does_not_require_a_hosted_binder() {
+    let mut harness = super::harness::Harness::new().await;
+    harness.state.authority = PlacementAuthority::Local;
+    let placement = seated_placement([0xe9; 16]);
+    let room = allocate_with_directory(&mut harness, &placement)
+        .await
+        .expect("local allocation succeeds without canonical hosted authority");
+    assert!(!room.code.is_empty());
+    harness.shutdown().await;
 }

@@ -921,6 +921,9 @@ mod tests {
             let (updates_in, updates) = watch::channel(opening.clone());
             let (sender, inbox): (_, ActorLoop<actor::Call>) = bounded_inbox();
             let service = Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 portraits: Portraits::disabled(),
                 display_credential: [0; 32],
                 layout: LayoutState::new(),
@@ -1022,6 +1025,9 @@ mod tests {
             let (sender, inbox): (_, ActorLoop<actor::Call>) = bounded_inbox();
             let persona_judge = fixtures::accepting_persona_judge(32);
             let service = Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 portraits: Portraits::disabled(),
                 display_credential: [0; 32],
                 layout: LayoutState::new(),

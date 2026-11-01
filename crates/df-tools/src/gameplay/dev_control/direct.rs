@@ -28,29 +28,6 @@ pub(in crate::gameplay) fn image_fixture(
     }
 }
 
-pub(in crate::gameplay) fn start_imagery(
-    settings: super::super::startup_configuration::ImagerySettings,
-    manifest: Option<&std::path::Path>,
-    fixture: Option<std::net::SocketAddr>,
-    hub: super::super::resources::Hub,
-) -> Result<super::super::imagery::Imagery, std::io::Error> {
-    use super::super::{imagery::Imagery, startup_configuration::ImagerySettings};
-    match (settings, fixture) {
-        (ImagerySettings::On(configuration), Some(address)) => {
-            let config = df_providers::ImageEditConfig::loopback_fixture(address)
-                .map_err(|_| std::io::Error::other("development image fixture refused"))?;
-            let provider = df_providers::NativeImageEditProvider::new(
-                config,
-                "test-credential",
-                configuration.deadline,
-            )
-            .map_err(|_| std::io::Error::other("development image fixture refused"))?;
-            Imagery::new_in_hub(configuration, provider.into(), manifest, hub, false)
-        }
-        (settings, _) => Imagery::start_in_hub(settings, manifest, hub),
-    }
-}
-
 pub(in crate::gameplay) struct Order {
     pub living: super::super::living_scenes::LivingScenes,
     pub text: Option<String>,

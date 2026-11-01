@@ -345,6 +345,10 @@ pub enum AcceptTarget {
     Join {
         job: ImageJobId,
     },
+    /// An actual current Ready result is reused without reserving execution or changing lifetime.
+    JoinReady {
+        job: ImageJobId,
+    },
 }
 
 /// One atomic receipt lookup-or-create plus interest. All ids, snapshots and times are injected;
@@ -461,11 +465,29 @@ pub fn is_expired(absolute_deadline_ms: i64, now_ms: i64) -> bool {
 /// one atomic transaction; queries are parameterized. Later catalog and finance composition may
 /// call the transaction-taking statements directly to share one transaction.
 pub trait ImageJournal: Send + Sync {
+    fn compatible_candidates(
+        &self,
+        _owner: &ImageOwner,
+        _intent: &VersionedSnapshot,
+        _config: &VersionedSnapshot,
+        _after: Option<crate::service::cache::CompatibleCursor>,
+    ) -> impl Future<Output = Result<Vec<OperationView>, JournalError>> + Send {
+        async { Ok(Vec::new()) }
+    }
     /// Atomic receipt lookup-or-create plus interest: replay, create or explicit join.
     fn accept(
         &self,
         command: &AcceptCommand,
     ) -> impl Future<Output = Result<AcceptOutcome, JournalError>> + Send;
+
+    /// Scheduling is retained separately from canonical content and never changes an existing receipt.
+    fn accept_scheduled(
+        &self,
+        command: &AcceptCommand,
+        _urgency: crate::Urgency,
+    ) -> impl Future<Output = Result<AcceptOutcome, JournalError>> + Send {
+        self.accept(command)
+    }
 
     /// The receipt with its current job and interest as one coherent snapshot, or `None`
     /// under a wrong owner or unknown operation. A wrong owner learns nothing.
@@ -497,6 +519,15 @@ pub trait ImageJournal: Send + Sync {
         interest: ImageInterestId,
         now_ms: i64,
     ) -> impl Future<Output = Result<WithdrawOutcome, JournalError>> + Send;
+    /// Withdraws every attached interest in one owner scope in one transaction, retiring jobs
+    /// that lose their last interest. Journals without this capability refuse with nothing changed.
+    fn withdraw_owner_interests(
+        &self,
+        _owner: &ImageOwner,
+        _now_ms: i64,
+    ) -> impl Future<Output = Result<Vec<WithdrawOutcome>, JournalError>> + Send {
+        async { Err(JournalError::Unavailable) }
+    }
 }
 
 #[cfg(test)]

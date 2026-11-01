@@ -1,6 +1,9 @@
 //! Settled visible changes share one edit; object cards share one request per object state.
 
 use super::*;
+
+/// Passive hand-card intents retained by the plate director before later projection retries.
+pub(super) const MAXIMUM_PENDING_HAND_ITEMS: usize = 6;
 use crate::gameplay::{
     adventure::scene_model::{SceneItemProvenance, SceneNow, SceneThing},
     imagery::{ImagePriority, item_image_request, state_edit},
@@ -1560,14 +1563,11 @@ impl Shared {
                         self.story_fresh_request(&pending, identities.as_deref())
                             .await?
                     } else {
-                        let Lookup::Image { bytes, format } =
-                            self.inner.imagery.image(base.as_str()).await
-                        else {
-                            return Err(ImageFailure::InvalidRequest);
-                        };
+                        let base = self.inner.imagery.reference(&base).await
+                            .map_err(|_| ImageFailure::InvalidRequest)?;
                         self.state_image_request(
                             &pending,
-                            ReferenceImage::new(format, bytes),
+                            base,
                             identities.as_deref(),
                         )
                         .await?
@@ -1672,6 +1672,20 @@ impl Shared {
             } => {
                 let result = async {
                     let request = item_image_request(self.inner.rating, &thing, detail.as_deref())?;
+                    // An observed trace is listener-safe, not necessarily campaign-public.
+                    // Only the unmodified public canonical object enters shared artwork reuse.
+                    let owner = if thing.publicly_visible && detail.is_none() {
+                        Some(self.inner.imagery.consumer_context().await?.owner)
+                    } else {
+                        None
+                    };
+                    let request = item_artwork_request(
+                        request,
+                        &thing,
+                        detail.as_deref(),
+                        &id,
+                        owner.as_ref(),
+                    )?;
                     let canonical = self
                         .inner
                         .imagery
@@ -1681,18 +1695,18 @@ impl Shared {
                         return Ok(canonical);
                     };
                     let base = base.ok_or(ImageFailure::Interrupted)?;
-                    let Lookup::Image { bytes, format } =
-                        self.inner.imagery.image(base.as_str()).await
-                    else {
-                        return Err(ImageFailure::Interrupted);
-                    };
-                    let base = ReferenceImage::new(format, bytes);
-                    let Lookup::Image { bytes, format } =
-                        self.inner.imagery.image(canonical.as_str()).await
-                    else {
-                        return Err(ImageFailure::Interrupted);
-                    };
-                    let canonical = ReferenceImage::new(format, bytes);
+                    let base = self
+                        .inner
+                        .imagery
+                        .reference(&base)
+                        .await
+                        .map_err(|_| ImageFailure::Interrupted)?;
+                    let canonical = self
+                        .inner
+                        .imagery
+                        .reference(&canonical)
+                        .await
+                        .map_err(|_| ImageFailure::Interrupted)?;
                     let mut focus_thing = thing;
                     if matches!(focus_pose, ItemFocusPose::InspectionHands) {
                         focus_thing.holder_id = Some(hero.clone());
@@ -1955,6 +1969,52 @@ fn record_pipeline(stage: &str, composition: &Composition, now: Duration, in_fli
     );
 }
 
+/// Adds public identity only to the initial canonical item request. Item focus requests
+/// are constructed separately and retain their original non-artifact contract.
+fn item_artwork_request(
+    mut request: ImageRequest,
+    thing: &SceneThing,
+    observed_detail: Option<&str>,
+    job_id: &str,
+    owner: Option<&df_imagery::ImageOwner>,
+) -> Result<ImageRequest, ImageFailure> {
+    if !thing.publicly_visible || observed_detail.is_some() {
+        return Ok(request);
+    }
+    let Some(df_imagery::ImageOwner::Run { campaign, run }) = owner else {
+        return Ok(request);
+    };
+    let public_revision = crate::gameplay::imagery::central::public_artwork_revision(&request);
+    // Provenance is stable within the authored location pack. Full public content remains
+    // in the revision, so a reused key with a different design cannot select the same artwork.
+    let key = df_imagery::ArtworkSubjectKey::new(&thing.provenance.source_id)
+        .or_else(|_| {
+            df_imagery::ArtworkSubjectKey::new(&crate::gameplay::journey::hex(&public_revision))
+        })
+        .map_err(|_| ImageFailure::InvalidRequest)?;
+    let spec = df_imagery::CampaignArtworkSpec {
+        campaign: *campaign,
+        subject: df_imagery::ArtworkSubject::Item(key),
+        public_revision,
+    };
+    use sha2::{Digest, Sha256};
+    let mut selection = Sha256::new();
+    selection.update(b"df-gameplay/item-selection/2");
+    selection.update((job_id.len() as u64).to_be_bytes());
+    selection.update(job_id.as_bytes());
+    request.prompt = request
+        .prompt
+        .with_canonical_binding(&crate::gameplay::journey::hex(&spec.binding_digest()))
+        .with_artwork(df_imagery::ArtworkBinding {
+            spec,
+            selection: df_imagery::RunSelectionFence {
+                run: *run,
+                binding: selection.finalize().into(),
+            },
+        });
+    Ok(request)
+}
+
 fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(
@@ -2127,15 +2187,14 @@ impl Plates {
             }
             return Ok(());
         }
-        // Do not fill the plate director's bounded job set with inventory cards waiting for
-        // background permits. Later projections retry cards that have not been admitted yet.
+        // Keep passive inventory intents bounded; later projections retry unadmitted cards.
         if book
             .state_images
             .items
             .values()
             .filter(|item| item.key.is_none() && !item.failed)
             .count()
-            >= crate::gameplay::imagery::BACKGROUND_IN_FLIGHT
+            >= MAXIMUM_PENDING_HAND_ITEMS
         {
             return Ok(());
         }
@@ -2393,3 +2452,6 @@ fn nonempty(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "cadence_tests.rs"]
 mod cadence_tests;
+
+#[cfg(test)]
+mod artwork_tests;

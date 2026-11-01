@@ -3172,9 +3172,12 @@ impl Shared {
         // Generated campaigns can carry a registered immutable identity directly instead of
         // a checked-in archetype stem. Pin those exact bytes in the same sheet contract.
         if let Some(key) = sprite.strip_prefix("/gameplay/imagery/") {
-            return match self.inner.imagery.image(key).await {
-                Lookup::Image { bytes, format } => (Some(ReferenceImage::new(format, bytes)), None),
-                Lookup::Unregistered | Lookup::NotReady => (None, None),
+            let Some(key) = ImageKey::parse(key) else {
+                return (None, None);
+            };
+            return match self.inner.imagery.reference(&key).await {
+                Ok(reference) => (Some(reference), None),
+                Err(_) => (None, None),
             };
         }
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
@@ -3356,9 +3359,8 @@ impl Shared {
             .map(|(_, person, holder)| (person, holder))
             .unzip();
         let sources: Vec<serde_json::Value> = cast.iter().map(|identity| serde_json::json!({"cast_id": identity.id, "source_sha256": identity.figure.sha256})).collect();
-        let result = tokio::task::spawn_blocking(move || cast_sheet(cast))
+        let result = cast_sheet(&self.inner.imagery, cast)
             .await
-            .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)?;
         crate::gameplay::actor::record_audit_diagnostic(
             "gameplay.living_scene.plate_identity_ready",
@@ -4266,10 +4268,13 @@ impl Shared {
                 .map_err(|_| ImageFailure::InvalidRequest)?;
             return self.fresh_plate(scene, &spec, heroes, Some(face)).await;
         }
-        let Lookup::Image { bytes, format } = self.inner.imagery.image(base.as_str()).await else {
-            return Err(ImageFailure::InvalidRequest);
-        };
-        let mut references = vec![ReferenceImage::new(format, bytes)];
+        let base_image = self
+            .inner
+            .imagery
+            .reference(base)
+            .await
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        let mut references = vec![base_image];
         let (figure, _) = match &scene.speaker {
             Some(speaker) => self.speaker_identity_art(scene, speaker).await?,
             None => (None, None),

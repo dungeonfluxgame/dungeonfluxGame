@@ -1,5 +1,9 @@
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use df_providers::ImageFormat;
+use std::{
+    io::Cursor,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 // Offline ffmpeg fixtures: 640x960, 24 fps, five seconds. The guard is gray64,
 // the contact flash white at 1.0s, follow-through gray128, then guard at 1.5s.
@@ -55,6 +59,9 @@ fn alpha(fallen: bool) -> Vec<u8> {
 }
 
 struct FakeFrames {
+    guard: ReferenceImage,
+    fallen: ReferenceImage,
+    hub: Hub,
     calls: AtomicUsize,
     refuse: bool,
     prompts: Mutex<Vec<String>>,
@@ -67,10 +74,34 @@ impl FrameProvider for FakeFrames {
         &'a self,
         source: &'a Depiction,
         prompt: &'a str,
-    ) -> ProviderFuture<'a, GeneratedImage> {
+        _subject: &'a str,
+        _freshness: Freshness,
+    ) -> ProviderFuture<'a, Frame> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            assert!(!source.bytes.is_empty());
+            assert!(!source.image.bytes.is_empty());
+            // This provider seam simulates an already metered frame. Production frames read
+            // their actual central receipt; these fixture units belong only to this fake port.
+            use super::super::cost::{CallSpec, Category, Cause, Provider, Usage};
+            let model = df_providers::ImageEditModel::Gpt25Sunburst.model_id();
+            let billed = self.hub.ledger().begin_call(
+                CallSpec::new(
+                    Provider::OpenAi,
+                    model,
+                    Cause::ClipFrame,
+                    if prompt.contains("lies fallen") {
+                        "fallen"
+                    } else {
+                        "guard"
+                    },
+                )
+                .with_maxima(vec![
+                    (Category::TextInput, 1_000),
+                    (Category::ImageInput, 1_536),
+                    (Category::ImageOutput, 1_056),
+                ]),
+                &[],
+            );
             locked(&self.prompts).push(prompt.to_owned());
             if let Some(rendezvous) = &self.rendezvous {
                 rendezvous.wait().await;
@@ -79,17 +110,23 @@ impl FrameProvider for FakeFrames {
                 return Err(failure("fixture_image_refused"));
             }
             let fallen = prompt.contains("lies fallen");
-            Ok(GeneratedImage {
-                bytes: alpha(fallen),
-                format: ImageFormat::Png,
-                width: 1024,
-                height: 1536,
-                has_alpha_channel: true,
-                usage: df_providers::ImageUsage {
-                    text_input_tokens: 10,
-                    image_input_tokens: 20,
-                    output_tokens: 30,
+            let quantities = vec![
+                (Category::TextInput, 10),
+                (Category::ImageInput, 20),
+                (Category::ImageOutput, 30),
+            ];
+            billed.settle(Usage::reported(quantities.clone()));
+            Ok(Frame {
+                image: if fallen {
+                    self.fallen.clone()
+                } else {
+                    self.guard.clone()
                 },
+                micro_dollars: self.hub.ledger().costs().quote(
+                    Provider::OpenAi,
+                    model,
+                    &quantities,
+                ),
             })
         })
     }
@@ -163,19 +200,32 @@ fn priced_hub() -> Hub {
     hub
 }
 
-fn setup(
+async fn setup(
+    fixture: &super::super::imagery::test_support::TransformFixture,
     image_refuse: bool,
     video_refuse: bool,
 ) -> (Arc<CharacterClips>, Arc<FakeFrames>, Arc<FakeVideos>) {
-    setup_with_rendezvous(image_refuse, video_refuse, None)
+    setup_with_rendezvous(fixture, image_refuse, video_refuse, None).await
 }
 
-fn setup_with_rendezvous(
+async fn setup_with_rendezvous(
+    fixture: &super::super::imagery::test_support::TransformFixture,
     image_refuse: bool,
     video_refuse: bool,
     rendezvous: Option<Arc<tokio::sync::Barrier>>,
 ) -> (Arc<CharacterClips>, Arc<FakeFrames>, Arc<FakeVideos>) {
+    let hub = priced_hub();
+    let guard = fixture
+        .reference(ImageFormat::Png, alpha(false).into())
+        .await;
+    let fallen = fixture
+        .reference(ImageFormat::Png, alpha(true).into())
+        .await;
+    let source_image = guard.clone();
     let frames = Arc::new(FakeFrames {
+        guard,
+        fallen,
+        hub: hub.clone(),
         calls: AtomicUsize::new(0),
         refuse: image_refuse,
         prompts: Mutex::new(Vec::new()),
@@ -186,17 +236,18 @@ fn setup_with_rendezvous(
         refuse: video_refuse,
         prompts: Mutex::new(Vec::new()),
     });
-    let source: Source = Arc::new(|_| {
-        Box::pin(async {
+    let source: Source = Arc::new(move |_| {
+        let image = source_image.clone();
+        Box::pin(async move {
             Some(Depiction {
-                bytes: vec![1, 2, 3],
-                format: ImageFormat::Png,
+                image,
                 revision: "canonical-v1".to_owned(),
             })
         })
     });
     let service = CharacterClips::new(
-        priced_hub(),
+        fixture.imagery().clone(),
+        hub,
         Some(frames.clone()),
         Some(videos.clone()),
         source,
@@ -288,60 +339,66 @@ fn character_clips_keys_pin_all_pixel_dependencies_and_share_the_guard() {
 
 #[tokio::test]
 async fn character_clips_request_the_three_clips_once_and_reuse_one_guard() {
-    let (service, frames, videos) = setup(false, false);
-    for _ in 0..3 {
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (service, frames, videos) = setup(&fixture, false, false).await;
+        for _ in 0..3 {
+            service.request(fighter(), None, false);
+        }
+        service.resolve_sources().await;
+        assert_eq!(
+            service
+                .generation
+                .hub
+                .list(Some(ResourceKind::CharacterClip))
+                .len(),
+            3
+        );
+        finish_queued(&service).await;
         service.request(fighter(), None, false);
-    }
-    service.resolve_sources().await;
-    assert_eq!(
-        service
-            .generation
-            .hub
-            .list(Some(ResourceKind::CharacterClip))
-            .len(),
-        3
-    );
-    finish_queued(&service).await;
-    service.request(fighter(), None, false);
-    service.resolve_sources().await;
-    assert!(service.generation.hub.take_jobs(16).is_empty());
-    assert_eq!(
-        frames.calls.load(Ordering::SeqCst),
-        2,
-        "one guard and one fallen frame"
-    );
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 3);
-    assert_eq!(
-        service
-            .generation
-            .hub
-            .ledger()
-            .snapshot(Unit::ImageCall)
-            .committed,
-        2
-    );
-    assert_eq!(
-        service
-            .generation
-            .hub
-            .ledger()
-            .snapshot(Unit::VideoClip)
-            .committed,
-        3
-    );
-    let document = service.list(&fighter());
-    assert_eq!(document["resources"].as_array().unwrap().len(), 5);
-    assert!(
-        document["resources"]
+        service.resolve_sources().await;
+        assert!(service.generation.hub.take_jobs(16).is_empty());
+        assert_eq!(
+            frames.calls.load(Ordering::SeqCst),
+            2,
+            "one guard and one fallen frame"
+        );
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 3);
+        let book = service.generation.hub.ledger().costs().report(2);
+        let frame_events = book["run"]["by_cause"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|row| row["state"] == "ready")
-    );
-    let prompts = locked(&frames.prompts);
-    assert!(prompts.iter().all(|prompt| prompt.contains("15 degrees")
-        && prompt.contains("38 degree")
-        && prompt.contains("greatsword")));
+            .find(|row| row["cause"] == "clip_frame")
+            .unwrap();
+        assert_eq!(
+            frame_events["events"], 2,
+            "both fake-port frame receipts are metered once"
+        );
+        assert_eq!(
+            service
+                .generation
+                .hub
+                .ledger()
+                .snapshot(Unit::VideoClip)
+                .committed,
+            3
+        );
+        let document = service.list(&fighter());
+        assert_eq!(document["resources"].as_array().unwrap().len(), 5);
+        assert!(
+            document["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["state"] == "ready")
+        );
+        let prompts = locked(&frames.prompts);
+        assert!(prompts.iter().all(|prompt| prompt.contains("15 degrees")
+            && prompt.contains("38 degree")
+            && prompt.contains("greatsword")));
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -372,288 +429,329 @@ fn character_clips_measure_count_clock_size_contact_guard_return_and_fall_settle
 
 #[tokio::test]
 async fn guard_frames_of_different_fighters_are_drawn_at_the_same_time() {
-    // The barrier opens only when both guards are inside the provider together. A gate shared by
-    // every frame would hold the second fighter behind the first and time out here.
-    let (service, frames, _) =
-        setup_with_rendezvous(false, false, Some(Arc::new(tokio::sync::Barrier::new(2))));
-    let second = Fighter {
-        identity: "entity:second-fighter".to_owned(),
-        name: "Osric".to_owned(),
-        ..fighter()
-    };
-    let source = Arc::new(Depiction {
-        bytes: vec![1, 2, 3],
-        format: ImageFormat::Png,
-        revision: "canonical-v1".to_owned(),
-    });
-    let first_spec = CharacterClipSpec::new(fighter(), "canonical-v1".to_owned(), ClipKind::Idle);
-    let second_spec = CharacterClipSpec::new(second, "canonical-v1".to_owned(), ClipKind::Idle);
-    let (first, other) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(
-            service
-                .generation
-                .frame(&first_spec, Arc::clone(&source), false, false),
-            service
-                .generation
-                .frame(&second_spec, Arc::clone(&source), false, false),
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        // The barrier opens only when both guards are inside the provider together. A gate shared by
+        // every frame would hold the second fighter behind the first and time out here.
+        let (service, frames, _) = setup_with_rendezvous(
+            &fixture,
+            false,
+            false,
+            Some(Arc::new(tokio::sync::Barrier::new(2))),
         )
-    })
-    .await
-    .expect("guard frames of two fighters are drawn concurrently");
-    assert!(first.is_ok() && other.is_ok());
-    assert_eq!(frames.calls.load(Ordering::SeqCst), 2);
+        .await;
+        let second = Fighter {
+            identity: "entity:second-fighter".to_owned(),
+            name: "Osric".to_owned(),
+            ..fighter()
+        };
+        let source = Arc::new(Depiction {
+            image: fixture
+                .reference(ImageFormat::Png, alpha(false).into())
+                .await,
+            revision: "canonical-v1".to_owned(),
+        });
+        let first_spec =
+            CharacterClipSpec::new(fighter(), "canonical-v1".to_owned(), ClipKind::Idle);
+        let second_spec = CharacterClipSpec::new(second, "canonical-v1".to_owned(), ClipKind::Idle);
+        let (first, other) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(
+                service
+                    .generation
+                    .frame(&first_spec, Arc::clone(&source), false, false),
+                service
+                    .generation
+                    .frame(&second_spec, Arc::clone(&source), false, false),
+            )
+        })
+        .await
+        .expect("guard frames of two fighters are drawn concurrently");
+        assert!(first.is_ok() && other.is_ok());
+        assert_eq!(frames.calls.load(Ordering::SeqCst), 2);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_image_failure_is_shared_and_leaves_cutout_fallback() {
-    let (service, frames, videos) = setup(true, false);
-    service.request(fighter(), None, false);
-    service.resolve_sources().await;
-    finish_queued(&service).await;
-    service.request(fighter(), None, false);
-    service.resolve_sources().await;
-    assert!(service.generation.hub.take_jobs(16).is_empty());
-    assert_eq!(frames.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
-    let rows = service
-        .generation
-        .hub
-        .list(Some(ResourceKind::CharacterClip));
-    assert_eq!(rows.len(), 4);
-    assert!(
-        rows.iter()
-            .all(|row| row.state == "failed" && row.handle.is_empty())
-    );
-    assert!(rows.iter().all(|row| matches!(
-        service.generation.hub.status(&row.key),
-        super::super::resources::ResourceStatus::Failed(_, Chrome::Nothing)
-    )));
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (service, frames, videos) = setup(&fixture, true, false).await;
+        service.request(fighter(), None, false);
+        service.resolve_sources().await;
+        finish_queued(&service).await;
+        service.request(fighter(), None, false);
+        service.resolve_sources().await;
+        assert!(service.generation.hub.take_jobs(16).is_empty());
+        assert_eq!(frames.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
+        let rows = service
+            .generation
+            .hub
+            .list(Some(ResourceKind::CharacterClip));
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows.iter()
+                .all(|row| row.state == "failed" && row.handle.is_empty())
+        );
+        assert!(rows.iter().all(|row| matches!(
+            service.generation.hub.status(&row.key),
+            super::super::resources::ResourceStatus::Failed(_, Chrome::Nothing)
+        )));
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_video_failure_retains_spend_and_never_admits_broken_media() {
-    let (service, _, videos) = setup(false, true);
-    service.request(fighter(), Some(ClipKind::Attack), false);
-    service.resolve_sources().await;
-    finish_queued(&service).await;
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 1);
-    let document = service.list(&fighter());
-    let failed = document["resources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["state"] == "failed")
-        .unwrap();
-    assert_eq!(failed["cost"]["video_calls"], 1);
-    assert!(failed["timings"].is_null());
-    assert!(!Path::new(failed["clip"].as_str().unwrap()).exists());
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (service, _, videos) = setup(&fixture, false, true).await;
+        service.request(fighter(), Some(ClipKind::Attack), false);
+        service.resolve_sources().await;
+        finish_queued(&service).await;
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 1);
+        let document = service.list(&fighter());
+        let failed = document["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["state"] == "failed")
+            .unwrap();
+        assert_eq!(failed["cost"]["video_calls"], 1);
+        assert!(failed["timings"].is_null());
+        assert!(!Path::new(failed["clip"].as_str().unwrap()).exists());
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_absent_source_waits_without_spend_or_invented_spec() {
-    let (mut service, frames, videos) = setup(false, false);
-    Arc::get_mut(&mut service).unwrap().source = Arc::new(|_| Box::pin(async { None }));
-    service.request(fighter(), None, false);
-    service.resolve_sources().await;
-    assert!(
-        service.list(&fighter())["waiting_for_depiction"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        service
-            .generation
-            .hub
-            .list(Some(ResourceKind::CharacterClip))
-            .is_empty()
-    );
-    assert_eq!(frames.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (mut service, frames, videos) = setup(&fixture, false, false).await;
+        Arc::get_mut(&mut service).unwrap().source = Arc::new(|_| Box::pin(async { None }));
+        service.request(fighter(), None, false);
+        service.resolve_sources().await;
+        assert!(
+            service.list(&fighter())["waiting_for_depiction"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            service
+                .generation
+                .hub
+                .list(Some(ResourceKind::CharacterClip))
+                .is_empty()
+        );
+        assert_eq!(frames.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_missing_source_is_called_once_until_revision_wake_or_force() {
-    let (mut service, _, _) = setup(false, false);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let available = Arc::new(Mutex::new(None::<(Vec<u8>, String)>));
-    let (counted_calls, counted_available) = (Arc::clone(&calls), Arc::clone(&available));
-    Arc::get_mut(&mut service).unwrap().source = Arc::new(move |_| {
-        let calls = Arc::clone(&counted_calls);
-        let available = Arc::clone(&counted_available);
-        Box::pin(async move {
-            calls.fetch_add(1, Ordering::SeqCst);
-            locked(&available)
-                .clone()
-                .map(|(bytes, revision)| Depiction {
-                    bytes,
-                    format: ImageFormat::Png,
-                    revision,
-                })
-        })
-    });
-    for _ in 0..5 {
-        service.request(fighter(), None, false);
-        service.resolve_sources().await;
-    }
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "many ticks, one miss call");
-    assert!(
-        service.list(&fighter())["waiting_for_depiction"]
-            .as_bool()
-            .unwrap()
-    );
-    let mut changed = fighter();
-    changed.identity_revision = "identity-v2".to_owned();
-    for _ in 0..3 {
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (mut service, _, _) = setup(&fixture, false, false).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let available = Arc::new(Mutex::new(None::<(ReferenceImage, String)>));
+        let (counted_calls, counted_available) = (Arc::clone(&calls), Arc::clone(&available));
+        Arc::get_mut(&mut service).unwrap().source = Arc::new(move |_| {
+            let calls = Arc::clone(&counted_calls);
+            let available = Arc::clone(&counted_available);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                locked(&available)
+                    .clone()
+                    .map(|(image, revision)| Depiction { image, revision })
+            })
+        });
+        for _ in 0..5 {
+            service.request(fighter(), None, false);
+            service.resolve_sources().await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "many ticks, one miss call");
+        assert!(
+            service.list(&fighter())["waiting_for_depiction"]
+                .as_bool()
+                .unwrap()
+        );
+        let mut changed = fighter();
+        changed.identity_revision = "identity-v2".to_owned();
+        for _ in 0..3 {
+            service.request(changed.clone(), None, false);
+            service.resolve_sources().await;
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "changed revision, one new call"
+        );
+        *locked(&available) = Some((
+            fixture
+                .reference(ImageFormat::Png, alpha(false).into())
+                .await,
+            "canonical-v2".to_owned(),
+        ));
+        service.note_source_changed();
         service.request(changed.clone(), None, false);
         service.resolve_sources().await;
-    }
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "changed revision, one new call"
-    );
-    *locked(&available) = Some((vec![1, 2, 3], "canonical-v2".to_owned()));
-    service.note_source_changed();
-    service.request(changed.clone(), None, false);
-    service.resolve_sources().await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        3,
-        "wake re-admits the miss once"
-    );
-    assert_eq!(
-        service
-            .generation
-            .hub
-            .list(Some(ResourceKind::CharacterClip))
-            .len(),
-        3
-    );
-    for _ in 0..3 {
-        service.request(changed.clone(), None, false);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "wake re-admits the miss once"
+        );
+        assert_eq!(
+            service
+                .generation
+                .hub
+                .list(Some(ResourceKind::CharacterClip))
+                .len(),
+            3
+        );
+        for _ in 0..3 {
+            service.request(changed.clone(), None, false);
+            service.resolve_sources().await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "resolved source is cached");
+        service.request(changed.clone(), Some(ClipKind::Idle), true);
         service.resolve_sources().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "force retries exactly once"
+        );
+        service.request(changed.clone(), Some(ClipKind::Idle), false);
+        service.resolve_sources().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 3, "resolved source is cached");
-    service.request(changed.clone(), Some(ClipKind::Idle), true);
-    service.resolve_sources().await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        4,
-        "force retries exactly once"
-    );
-    service.request(changed.clone(), Some(ClipKind::Idle), false);
-    service.resolve_sources().await;
-    assert_eq!(calls.load(Ordering::SeqCst), 4);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_explicit_request_regenerates_only_selected_clip_and_retains_cost() {
-    let (service, frames, videos) = setup(false, false);
-    service.request(fighter(), Some(ClipKind::Attack), false);
-    service.resolve_sources().await;
-    finish_queued(&service).await;
-    service.request(fighter(), Some(ClipKind::Attack), true);
-    service.resolve_sources().await;
-    finish_queued(&service).await;
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(frames.calls.load(Ordering::SeqCst), 1);
-    let document = service.list(&fighter());
-    let rows = document["resources"].as_array().unwrap();
-    assert_eq!(rows.len(), 2, "one attack and its shared guard");
-    let clip = rows.iter().find(|row| row["kind"] == "attack").unwrap();
-    assert_eq!(clip["state"], "ready");
-    assert_eq!(clip["cost"]["video_calls"], 2);
-    assert_eq!(clip["cost"]["video_micro_dollars"], 1_120_000);
-    assert_eq!(clip["cost"]["video_cost_basis"], "price_file");
-    // The cost book metered the same calls: two clips of five seconds at 0.112 a second and the
-    // one shared frame, at the tokens the frame reported (10 + 20 + 30 tokens).
-    let book = service.generation.hub.ledger().costs().report(2);
-    let by_cause = |cause: &str| {
-        book["run"]["by_cause"]
-            .as_array()
-            .and_then(|causes| causes.iter().find(|row| row["cause"] == cause))
-            .map(|row| (row["events"].clone(), row["micro_usd"].clone()))
-    };
-    assert_eq!(
-        by_cause("character_clip"),
-        Some((serde_json::json!(2), serde_json::json!(1_120_000)))
-    );
-    assert_eq!(
-        by_cause("clip_frame"),
-        Some((
-            serde_json::json!(1),
-            serde_json::json!(10 * 5 + 20 * 8 + 30 * 30)
-        ))
-    );
-    assert!(clip["timings"]["contact_ms"].as_u64().is_some());
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (service, frames, videos) = setup(&fixture, false, false).await;
+        service.request(fighter(), Some(ClipKind::Attack), false);
+        service.resolve_sources().await;
+        finish_queued(&service).await;
+        service.request(fighter(), Some(ClipKind::Attack), true);
+        service.resolve_sources().await;
+        finish_queued(&service).await;
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(frames.calls.load(Ordering::SeqCst), 1);
+        let document = service.list(&fighter());
+        let rows = document["resources"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "one attack and its shared guard");
+        let clip = rows.iter().find(|row| row["kind"] == "attack").unwrap();
+        assert_eq!(clip["state"], "ready");
+        assert_eq!(clip["cost"]["video_calls"], 2);
+        assert_eq!(clip["cost"]["video_micro_dollars"], 1_120_000);
+        assert_eq!(clip["cost"]["video_cost_basis"], "price_file");
+        // The cost book metered the same calls: two clips of five seconds at 0.112 a second and the
+        // one shared frame, at the tokens the frame reported (10 + 20 + 30 tokens).
+        let book = service.generation.hub.ledger().costs().report(2);
+        let by_cause = |cause: &str| {
+            book["run"]["by_cause"]
+                .as_array()
+                .and_then(|causes| causes.iter().find(|row| row["cause"] == cause))
+                .map(|row| (row["events"].clone(), row["micro_usd"].clone()))
+        };
+        assert_eq!(
+            by_cause("character_clip"),
+            Some((serde_json::json!(2), serde_json::json!(1_120_000)))
+        );
+        assert_eq!(
+            by_cause("clip_frame"),
+            Some((
+                serde_json::json!(1),
+                serde_json::json!(10 * 5 + 20 * 8 + 30 * 30)
+            ))
+        );
+        assert!(clip["timings"]["contact_ms"].as_u64().is_some());
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_queued_makers_do_not_retain_the_service_or_its_credentials() {
-    let (service, frames, videos) = setup(false, false);
-    service.request(fighter(), None, false);
-    service.resolve_sources().await;
-    let weak = Arc::downgrade(&service);
-    let hub = service.generation.hub.clone();
-    drop(service);
-    assert!(weak.upgrade().is_none());
-    for job in hub.take_jobs(3) {
-        hub.complete(job.execute().await);
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (service, frames, videos) = setup(&fixture, false, false).await;
+        service.request(fighter(), None, false);
+        service.resolve_sources().await;
+        let weak = Arc::downgrade(&service);
+        let hub = service.generation.hub.clone();
+        drop(service);
+        assert!(weak.upgrade().is_none());
+        for job in hub.take_jobs(3) {
+            hub.complete(job.execute().await);
+        }
+        assert!(
+            hub.list(Some(ResourceKind::CharacterClip))
+                .iter()
+                .all(|row| row.last_error == "interrupted")
+        );
+        assert_eq!(frames.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
     }
-    assert!(
-        hub.list(Some(ResourceKind::CharacterClip))
-            .iter()
-            .all(|row| row.last_error == "interrupted")
-    );
-    assert_eq!(frames.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
+    fixture.close().await;
 }
 
 #[tokio::test]
 async fn character_clips_recovered_failed_dispatch_requires_an_explicit_request() {
-    let (previous, _, _) = setup(false, true);
-    previous.request(fighter(), Some(ClipKind::Attack), false);
-    previous.resolve_sources().await;
-    finish_queued(&previous).await;
-    let (fresh, frames, videos) = setup(false, false);
-    let recovered = Arc::new(CharacterClips::new(
-        Hub::new(),
-        Some(frames.clone()),
-        Some(videos.clone()),
-        Arc::clone(&fresh.source),
-        previous.generation.directory.clone(),
-    ));
-    recovered.request(fighter(), Some(ClipKind::Attack), false);
-    recovered.resolve_sources().await;
-    finish_queued(&recovered).await;
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
-    assert!(
-        recovered
-            .generation
-            .hub
-            .list(Some(ResourceKind::CharacterClip))
-            .iter()
-            .any(|row| row.last_error == "clip_prior_attempt_requires_explicit_retry")
-    );
-    recovered.request(fighter(), Some(ClipKind::Attack), true);
-    recovered.resolve_sources().await;
-    finish_queued(&recovered).await;
-    assert_eq!(videos.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        frames.calls.load(Ordering::SeqCst),
-        0,
-        "the previous guard is reused"
-    );
-    let document = recovered.list(&fighter());
-    assert!(
-        document["resources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["kind"] == "attack"
-                && row["state"] == "ready"
-                && row["cost"]["video_calls"] == 2)
-    );
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    {
+        let (previous, _, _) = setup(&fixture, false, true).await;
+        previous.request(fighter(), Some(ClipKind::Attack), false);
+        previous.resolve_sources().await;
+        finish_queued(&previous).await;
+        let (fresh, frames, videos) = setup(&fixture, false, false).await;
+        let recovered = Arc::new(CharacterClips::new(
+            fixture.imagery().clone(),
+            Hub::new(),
+            Some(frames.clone()),
+            Some(videos.clone()),
+            Arc::clone(&fresh.source),
+            previous.generation.directory.clone(),
+        ));
+        recovered.request(fighter(), Some(ClipKind::Attack), false);
+        recovered.resolve_sources().await;
+        finish_queued(&recovered).await;
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            recovered
+                .generation
+                .hub
+                .list(Some(ResourceKind::CharacterClip))
+                .iter()
+                .any(|row| row.last_error == "clip_prior_attempt_requires_explicit_retry")
+        );
+        recovered.request(fighter(), Some(ClipKind::Attack), true);
+        recovered.resolve_sources().await;
+        finish_queued(&recovered).await;
+        assert_eq!(videos.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            frames.calls.load(Ordering::SeqCst),
+            0,
+            "the previous guard is reused"
+        );
+        let document = recovered.list(&fighter());
+        assert!(
+            document["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["kind"] == "attack"
+                    && row["state"] == "ready"
+                    && row["cost"]["video_calls"] == 2)
+        );
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -692,4 +790,103 @@ fn character_clips_native_binding_preserves_distinct_bookends_and_weapon_action(
         Some("sprite-patron-merchant-documentary-photo".to_owned())
     );
     assert!(reviewed_figure("portrait-patron-merchant").is_none());
+}
+
+#[tokio::test]
+async fn green_frame_matches_the_preserved_legacy_output_bytes() {
+    let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+    let pixels = image::RgbaImage::from_fn(1024, 1536, |x, y| {
+        image::Rgba([
+            u8::try_from((x * 19 + y * 7) % 256).unwrap(),
+            u8::try_from((x * 3 + y * 37) % 256).unwrap(),
+            u8::try_from((x * 53 + y * 11) % 256).unwrap(),
+            [0, 64, 128, 192, 255][usize::try_from((x + y) % 5).unwrap()],
+        ])
+    });
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(pixels)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let source = fixture
+        .reference(ImageFormat::Png, bytes.into_inner().into())
+        .await;
+    let actual = green_frame(fixture.imagery(), &source).await.unwrap();
+    // Frozen pre-migration green_frame, mixed hidden RGB and five alpha fractions.
+    assert_eq!(
+        digest(&actual),
+        "2627e2923ced79e3cf0070682e397bc632c8028e69992ec33d55cacd96faac15"
+    );
+    fixture.close().await;
+}
+
+#[test]
+fn frame_costs_keep_pending_unknown_currency_and_overflow_distinct_from_zero() {
+    use df_imagery::cost::{CostUnits, UsageEvidence, UsageRevision};
+    use df_imagery::execution::{DispatchId, ExecutionStageId, StageKind};
+    use df_imagery::runtime::usage_projection::RecordedStageUsage;
+    use df_imagery::runtime::{
+        ImageStageUsage, ImageUsageAmount, ImageUsageSummary, StageUsageObservation,
+    };
+    let usd = |micros| {
+        ImageUsageAmount::Known(df_types::Money::new(
+            df_types::Currency::parse("USD").unwrap(),
+            micros,
+        ))
+    };
+    let observation = StageUsageObservation::Recorded(RecordedStageUsage {
+        revision: UsageRevision(1),
+        provider: "fixture".into(),
+        model: "fixture".into(),
+        units: vec![CostUnits {
+            category: "image_output".into(),
+            quantity: 1,
+        }],
+        evidence: UsageEvidence::Reported,
+        usable: true,
+    });
+    let stage = ImageStageUsage {
+        stage: ExecutionStageId::from_bytes(&[1; 16]).unwrap(),
+        dispatch: DispatchId::from_bytes(&[2; 16]).unwrap(),
+        kind: StageKind::Generation,
+        observation: observation.clone(),
+        amount: usd(0),
+    };
+    let mut summary = ImageUsageSummary {
+        job: df_imagery::ImageJobId::from_bytes(&[3; 16]).unwrap(),
+        stages: vec![],
+    };
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages.push(stage);
+    assert_eq!(frame_micro_dollars(&summary), Some(0));
+    summary.stages[0].amount = usd(110);
+    assert_eq!(frame_micro_dollars(&summary), Some(110));
+    summary.stages[0].amount = ImageUsageAmount::Pending;
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].amount = ImageUsageAmount::Unknown;
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].amount = usd(110);
+    summary.stages[0].observation = StageUsageObservation::Pending;
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].observation = observation;
+    summary.stages[0].amount = ImageUsageAmount::Known(df_types::Money::new(
+        df_types::Currency::parse("EUR").unwrap(),
+        110,
+    ));
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].amount = usd(u128::MAX);
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].kind = StageKind::LocalTransform;
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[0].amount = usd(110);
+    summary.stages[0].kind = StageKind::Generation;
+    let mut local = summary.stages[0].clone();
+    local.kind = StageKind::LocalTransform;
+    local.observation = StageUsageObservation::Pending;
+    local.amount = ImageUsageAmount::Unknown;
+    summary.stages.push(local);
+    assert_eq!(frame_micro_dollars(&summary), None);
+    summary.stages[1].amount = ImageUsageAmount::NotApplicable;
+    assert_eq!(frame_micro_dollars(&summary), Some(110));
+    summary.stages.remove(0);
+    assert_eq!(frame_micro_dollars(&summary), None);
 }

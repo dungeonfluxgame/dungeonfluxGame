@@ -4,8 +4,13 @@
 //! explicit `READ COMMITTED` builder; row locks carry the guarantees. No statement sleeps or
 //! retries on its own.
 
+mod compatible;
 mod rows;
 mod statements;
 
 pub(crate) use rows::record_failure;
-pub(crate) use statements::{accept_in, freeze_in, lookup_in, read_in, withdraw_in};
+pub(crate) use statements::{
+    accept_in, freeze_in, lookup_in, read_in, withdraw_in, withdraw_owner_in,
+};
+
+pub(crate) use compatible::compatible_candidates_in;

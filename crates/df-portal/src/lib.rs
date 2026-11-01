@@ -13,6 +13,9 @@ mod account_routes;
 pub mod app_api;
 mod auth_routes;
 mod client_ip;
+pub mod draft_images;
+#[cfg(test)]
+mod draft_images_tests;
 #[cfg(feature = "dev-routes")]
 mod dev_routes;
 pub mod html;

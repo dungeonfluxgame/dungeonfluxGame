@@ -14,10 +14,13 @@ mod bounds;
 pub(crate) mod color;
 pub(crate) mod decode;
 mod encode;
+mod encoded;
 mod geometry;
 mod mask;
+mod segmentation;
+pub(crate) mod webp_lossy;
 
-use image::{GenericImageView, RgbaImage};
+use image::RgbaImage;
 
 use crate::config::TransformLimits;
 use crate::output::RasterOutputSpec;
@@ -61,8 +64,7 @@ pub(crate) enum RasterError {
     TransformsDisabled,
     InvalidRecipe(crate::transform::TransformError),
     InvalidOutput(crate::output::OutputError),
-    /// Input bytes are not PNG, JPEG, or WebP, or the output asks for lossy
-    /// WebP, which the pinned encoder cannot produce.
+    /// Input bytes are not PNG, JPEG, or WebP.
     UnsupportedFormat,
     /// Embedded ICC profile is present but no converter is pinned; the
     /// executor refuses instead of silently discarding the profile.
@@ -71,10 +73,18 @@ pub(crate) enum RasterError {
     EncodeFailed,
     DigestMismatch,
     ResolveFailed,
-    InputTooLarge { len_bytes: u64 },
-    DecodedTooLarge { pixels: u64 },
-    LiveBudgetExceeded { needed_bytes: u64 },
-    OutputTooLarge { len_bytes: u64 },
+    InputTooLarge {
+        len_bytes: u64,
+    },
+    DecodedTooLarge {
+        pixels: u64,
+    },
+    LiveBudgetExceeded {
+        needed_bytes: u64,
+    },
+    OutputTooLarge {
+        len_bytes: u64,
+    },
     CropOutOfBounds,
     DimensionMismatch {
         actual_width_px: u32,
@@ -100,10 +110,41 @@ pub(crate) fn execute_transform(
         .map_err(RasterError::InvalidRecipe)?;
     output.validate().map_err(RasterError::InvalidOutput)?;
     check_cancel()?;
-    let mut image = load_source(&spec.source, resolve, &budget)?;
+    let image = load_source(&spec.source, resolve, &budget)?;
+    finish(image, spec, output, resolve, &budget, check_cancel)
+}
+
+/// Executes only after the runtime resolves and authorizes the actual completed analysis handle.
+pub(crate) fn execute_segmentation_mask(
+    spec: &TransformSpec,
+    output: &RasterOutputSpec,
+    request_limits: &RequestLimits,
+    transform_limits: &TransformLimits,
+    analysis: &crate::ImageAnalysisResult,
+    resolve: ResolveBytes<'_>,
+    check_cancel: CancelCheck<'_>,
+) -> Result<RasterOutput, RasterError> {
+    spec.validate(request_limits)
+        .map_err(RasterError::InvalidRecipe)?;
+    output.validate().map_err(RasterError::InvalidOutput)?;
+    let retained_bytes = segmentation::retained_bytes(analysis)?;
+    let budget = bounds::LiveBudget::new(transform_limits)?.with_retained(retained_bytes)?;
+    check_cancel()?;
+    let image = segmentation::load(&spec.source, analysis, resolve, &budget, check_cancel)?;
+    finish(image, spec, output, resolve, &budget, check_cancel)
+}
+
+fn finish(
+    mut image: RgbaImage,
+    spec: &TransformSpec,
+    output: &RasterOutputSpec,
+    resolve: ResolveBytes<'_>,
+    budget: &bounds::LiveBudget,
+    check_cancel: CancelCheck<'_>,
+) -> Result<RasterOutput, RasterError> {
     for step in &spec.steps {
         check_cancel()?;
-        image = apply_step(image, step, resolve, &budget, check_cancel)?;
+        image = apply_step(image, step, resolve, budget, check_cancel)?;
     }
     let (actual_width_px, actual_height_px) = image.dimensions();
     let expected = output.dimensions();
@@ -115,7 +156,7 @@ pub(crate) fn execute_transform(
             expected_height_px: expected.height_px(),
         });
     }
-    let encoded = encode::encode_output(&image, output, &budget, check_cancel)?;
+    let encoded = encode::encode_output(&image, output, budget, check_cancel)?;
     Ok(RasterOutput {
         width_px: actual_width_px,
         height_px: actual_height_px,
@@ -131,6 +172,7 @@ fn load_source(
     budget: &bounds::LiveBudget,
 ) -> Result<RgbaImage, RasterError> {
     match source {
+        TransformSource::SegmentationMask { .. } => Err(RasterError::ResolveFailed),
         TransformSource::Image(pin) => {
             let bytes = decode::resolve_verified(resolve, pin, budget)?;
             decode::decode_bounded(&bytes, budget)
@@ -159,9 +201,17 @@ fn apply_step(
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
     match step {
-        ImageTransform::Resize(spec) => {
-            geometry::apply_resize(image, spec, budget, check_cancel)
+        ImageTransform::EncodedResize { dimensions, filter } => {
+            encoded::resize(image, *dimensions, *filter, budget, check_cancel)
         }
+        ImageTransform::EncodedThumbnail(dimensions) => {
+            encoded::thumbnail(image, *dimensions, budget, check_cancel)
+        }
+        ImageTransform::EncodedMatte { fill, blend } => {
+            encoded::matte(image, *fill, *blend, check_cancel)
+        }
+        ImageTransform::DiscardAlpha => encoded::discard_alpha(image, check_cancel),
+        ImageTransform::Resize(spec) => geometry::apply_resize(image, spec, budget, check_cancel),
         ImageTransform::Crop(rect) => geometry::apply_crop(image, rect, budget, check_cancel),
         ImageTransform::Pad(spec) => geometry::apply_pad(image, spec, budget, check_cancel),
         ImageTransform::Rotate(spec) => geometry::apply_rotate(image, spec, budget, check_cancel),
@@ -170,9 +220,7 @@ fn apply_step(
         ImageTransform::Expose(stops) => color::apply_exposure(image, *stops, check_cancel),
         ImageTransform::Color(effect) => color::apply_color_effect(image, *effect, check_cancel),
         ImageTransform::Blur(spec) => color::apply_blur(image, spec, budget, check_cancel),
-        ImageTransform::Sharpen(spec) => {
-            color::apply_sharpen(image, spec, budget, check_cancel)
-        }
+        ImageTransform::Sharpen(spec) => color::apply_sharpen(image, spec, budget, check_cancel),
         ImageTransform::Mask(spec) => mask::apply_mask(image, spec, resolve, budget, check_cancel),
         ImageTransform::Composite(layers) => {
             mask::apply_composite(image, layers, resolve, budget, check_cancel)

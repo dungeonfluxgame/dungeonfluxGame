@@ -8,29 +8,50 @@ data are not false positives. Matching runs on the whole stripped token stream
 comments are still found; each match maps back to its source line. Cargo
 dependency and lib.rs export audits run on the same invocation.
 
-Test scope is syntax-scoped, never prefix-scoped: a whole test path or an
-offset inside a `cfg(test)` braced item counts; production after a closed
-`cfg(test)` module does not. Fixture reasoning is call-associated and
-binding-associated: a forbidden constructor in test scope is exempt only when
-its own argument list carries a `loopback_fixture(...)` call, or the exact
-variable passed to it was bound by `let name = ...loopback_fixture(...)`
-within the 12 preceding lines without a later non-fixture reassignment. A bare
-`loopback_fixture` identifier or an unrelated nearby fixture call exempts
-nothing. `ImageRoute::X(_)` with an exact wildcard, match-arm patterns before
-`=>`, `matches!` patterns, and `let` destructuring are inspection, not
-execution; `ImageRoute::X(named)` construction and `ImageRoute::X(_named)`
-payloads are flagged. `submit_image` needs its dispatch dot
-(`.submit_image(`), so the provider definition itself is not a finding.
-`crates/df-imagery/src/backends/` is the exact intended private execution
-boundary and is not scanned for constructor findings; the rest of `df-imagery`
-(including `service.rs`) still is.
+Test scope is syntax-scoped with an exact `cfg(test)` token: a whole test
+path or an offset inside a `cfg(test)` braced item counts; `cfg(test_mode)`
+and other predicates are production, as are compound predicates the scanner
+does not prove require test. Production after a closed `cfg(test)` module
+does not count. Fixture reasoning is config-argument proof: a forbidden
+constructor in test scope is exempt only when its whole top-level first
+argument is an `ExactConfig::loopback_fixture(...)` expression with only
+explicit `.unwrap()`/`.expect(...)` suffixes, or that argument is one
+immutable variable bound by `let name = ExactConfig::loopback_fixture(...)`
+in the same function and still visible in the constructor lexical block
+(both top-level counts as the same scope) with no intervening shadow or
+reassignment before the call. A bare identifier, a block mentioning a
+fixture but evaluating to live config, a fixture in another argument, an
+unrelated binding, an expired inner-block binding, a `for`/closure/`let`
+pattern shadow, a `mut`/typed/destructured binding, or any other
+initializer shape exempts nothing.
+`ImageRoute::X(_)` with an exact wildcard, match-arm patterns directly
+before their own `=>` (no `,`/`;`/`}` between), the pattern argument after
+the first top-level comma in `matches!`, and `let` patterns before the same
+assignment are inspection, not execution; `matches!` values, arm-body
+constructions after `=>`, `let` expressions after `=`,
+`ImageRoute::X(named)` construction and `ImageRoute::X(_named)` payloads are
+flagged. `submit_image` needs its dispatch dot (`.submit_image(`), so the
+provider definition itself is not a finding. `crates/df-imagery/src/backends/`
+is the exact intended private execution boundary and is not scanned for
+constructor findings; the rest of `df-imagery` (including `service.rs`)
+still is. Supported syntax is deliberately narrow; raw HTTP, scripts, type
+aliases, and wrapper constructors remain outside this guard.
 
 Legacy transitional sites are budgeted per exact (file, symbol) with an
-occurrence count and an owning-function callsite fingerprint. Only an
-occurrence whose enclosing `fn` body carries the fingerprint counts as legacy;
-any other occurrence fails as bypass even when the token appears elsewhere in
-the file, and a present file with zero qualifying occurrences fails as stale.
-Default mode reports legacy rows nonfatally; --strict fails on them too.
+occurrence count and an owning-function callsite fingerprint matched at the
+exact token offset. Only an occurrence whose enclosing `fn` carries the
+fingerprint counts, with constructor config tokens also required in the
+actual config argument slot (`*Config::live` in the first argument,
+`IMAGE_EDIT_TIMEOUT` in the third; registry factory requires its owning
+function name); a fingerprint elsewhere (credentials, nested block) never
+qualifies. Any other occurrence fails as bypass and a present file with
+zero qualifying occurrences fails as stale. Default mode reports legacy
+rows nonfatally; --strict fails on them too. Export aliases resolve
+through same-file `use` trees to a fixed point, tracking module and item
+aliases. Browser-manifest audits forbid unconditional, WASM-target,
+double-negation, or other-predicate `df-client/df-tools -> df-imagery`
+edges (renames/workspace included); only an exact native-only
+`cfg(not(target_arch = "wasm32"))` edge passes in either manifest.
 
 Exit codes: 0 pass, 1 boundary violation, 2 usage/config error.
 Only stdlib; no network, no provider calls.
@@ -54,7 +75,9 @@ CONSTRUCTOR_BASES: tuple[str, ...] = (
     "NativeImageEditProvider",
     "NativeFalImageProvider",
     "NativeBflImageProvider",
-    "NativeFalMediaProvider",
+    "NativeHeadLocator",
+    "NativePlateJudge",
+    "NativeFalSegmenter",
 )
 CONSTRUCTOR_RES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (f"{base}::new", re.compile(r"\b" + base + r"\s*::\s*new\b")) for base in CONSTRUCTOR_BASES
@@ -62,7 +85,7 @@ CONSTRUCTOR_RES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 IMAGEROUTE_RE: re.Pattern[str] = re.compile(r"\bImageRoute\s*::\s*(OpenAi|Flux|Bfl)\b")
 SUBMIT_IMAGE_RE: re.Pattern[str] = re.compile(r"\.\s*submit_image\s*\(")
 LOOPBACK_CALL_RE: re.Pattern[str] = re.compile(r"\bloopback_fixture\s*\(")
-CFG_TEST_RE: re.Pattern[str] = re.compile(r"cfg\s*\(\s*test")
+CFG_TEST_RE: re.Pattern[str] = re.compile(r"cfg\s*\(\s*test\s*\)")
 PUB_MOD_BACKENDS_RE: re.Pattern[str] = re.compile(r"\bpub\s+mod\s+backends\b")
 PUB_USE_BACKENDS_RE: re.Pattern[str] = re.compile(r"\bpub\s+use\s+[^;]*\bbackends\b")
 USE_STMT_RE: re.Pattern[str] = re.compile(r"\buse\s+([^;]*?);")
@@ -86,99 +109,7 @@ class LegacyRow:
 # Default mode reports these as legacy; --strict fails. Growth fails as
 # bypass; a present file with zero occurrences (or a missing fingerprint)
 # fails as stale.
-LEGACY_ROWS: tuple[LegacyRow, ...] = (
-    LegacyRow(
-        "crates/df-tools/src/gameplay/imagery.rs",
-        "NativeFalImageProvider::new",
-        1,
-        "FalImageConfig::live",
-        "phase 3 consumer migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/imagery.rs",
-        "NativeImageEditProvider::new",
-        1,
-        "ImageEditConfig::live",
-        "phase 3 consumer migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-providers/src/registry.rs",
-        "NativeFalMediaProvider::new",
-        1,
-        "registered_fal_media_provider",
-        "phase 3 migration of the generic Schnell path, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "NativeImageEditProvider::new",
-        1,
-        "ImageEditConfig::live",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "NativeFalImageProvider::new",
-        1,
-        "FalImageConfig::live",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "NativeBflImageProvider::new",
-        1,
-        "BflImageConfig::live",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "ImageRoute::OpenAi",
-        1,
-        "ImageProvider::OpenAi",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "ImageRoute::Flux",
-        1,
-        "ImageProvider::Flux",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/creator_portrait_startup.rs",
-        "ImageRoute::Bfl",
-        1,
-        "alt_settings",
-        "phase 3 creator chain migration, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/character_clips.rs",
-        "NativeImageEditProvider::new",
-        1,
-        "IMAGE_EDIT_TIMEOUT",
-        "phase 3 frame migration with the prior-attempt fence, then phase 5 deletion",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/dev_control/direct.rs",
-        "NativeImageEditProvider::new",
-        1,
-        "loopback_fixture",
-        "phase 3 dev-fixture migration to the central fake-backend seam",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/imagery/figure_masks.rs",
-        "NativeImageEditProvider::new",
-        1,
-        "for_test",
-        "phase 3 test-helper migration to the central fake-backend seam",
-    ),
-    LegacyRow(
-        "crates/df-tools/src/gameplay/imagery_live_tests.rs",
-        "NativeFalImageProvider::new",
-        1,
-        "FluxPerson",
-        "opt-in live acceptance (#[ignore]); migrate to service-level live acceptance",
-    ),
-)
+LEGACY_ROWS: tuple[LegacyRow, ...] = ()
 LEGACY_BUDGET: dict[tuple[str, str], LegacyRow] = {(r.path, r.symbol): r for r in LEGACY_ROWS}
 
 # Test-loopback exemption is call-associated, not path-blanket and never
@@ -197,6 +128,78 @@ FORBIDDEN_DEPENDENTS = ("df-tools", "df-session")
 DEPENDENCY_TABLE_NAMES = ("dependencies", "dev-dependencies", "build-dependencies")
 IMAGERY_CARGO = "crates/df-imagery/Cargo.toml"
 IMAGERY_LIB = "crates/df-imagery/src/lib.rs"
+CLIENT_CARGO = "crates/df-client/Cargo.toml"
+CLIENT_FORBIDDEN = "df-imagery"
+TOOLS_CARGO = "crates/df-tools/Cargo.toml"
+_FIXTURE_HEAD_RE: re.Pattern[str] = re.compile(
+    r"^(?:[A-Za-z_]\w*::)*\w+Config::loopback_fixture\s*\(",
+)
+_LIVE_HEAD_RE: re.Pattern[str] = re.compile(
+    r"^((?:[A-Za-z_]\w*::)*\w+Config::live)\s*\(",
+)
+_TIMEOUT_ONLY_RE: re.Pattern[str] = re.compile(
+    r"^(?:[A-Za-z_]\w*::)*IMAGE_EDIT_TIMEOUT$",
+)
+_NATIVE_CFG_NORMALIZED = 'cfg(not(target_arch="wasm32"))'
+
+
+def _normalize_cfg_segment(segment: str) -> str:
+    return re.sub(r"\s+", "", segment)
+
+
+def _is_whole_fixture_expr(expr: str) -> bool:
+    text = expr.strip()
+    head = _FIXTURE_HEAD_RE.match(text)
+    if head is None:
+        return False
+    close_idx = _matching_paren(text, head.end() - 1)
+    if close_idx == -1:
+        return False
+    pos = close_idx + 1
+    total = len(text)
+    while True:
+        while pos < total and text[pos] in " \t\r\n":
+            pos += 1
+        if pos >= total:
+            return True
+        if text[pos] != ".":
+            return False
+        pos += 1
+        while pos < total and text[pos] in " \t\r\n":
+            pos += 1
+        name_start = pos
+        while pos < total and (text[pos].isalnum() or text[pos] == "_"):
+            pos += 1
+        name = text[name_start:pos]
+        if name not in ("unwrap", "expect"):
+            return False
+        while pos < total and text[pos] in " \t\r\n":
+            pos += 1
+        if pos >= total or text[pos] != "(":
+            return False
+        close = _matching_paren(text, pos)
+        if close == -1:
+            return False
+        if name == "unwrap" and text[pos + 1 : close].strip() != "":
+            return False
+        pos = close + 1
+
+
+def _is_whole_live_config_expr(arg: str, fingerprint: str) -> bool:
+    text = arg.strip()
+    head = _LIVE_HEAD_RE.match(text)
+    if head is None:
+        return False
+    if fingerprint not in head.group(1):
+        return False
+    close_idx = _matching_paren(text, head.end() - 1)
+    if close_idx == -1:
+        return False
+    return text[close_idx + 1 :].strip() == ""
+
+
+def _is_whole_timeout_expr(arg: str) -> bool:
+    return _TIMEOUT_ONLY_RE.match(arg.strip()) is not None
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 FIXTURE_WINDOW_LINES = 12
@@ -208,6 +211,7 @@ class Finding:
     line: int
     symbol: str
     kind: str  # "bypass" | "legacy" | "stale" | "dependency" | "export" | "alias"
+    offset: int = 0
 
 
 def strip_rust(source: str) -> str:
@@ -457,48 +461,126 @@ def _constructor_arg_list(stripped: str, match_end: int) -> str | None:
     return stripped[j : close + 1]
 
 
+def _split_top_level_args(inner: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _constructor_first_arg(stripped: str, match_end: int) -> str | None:
+    args = _constructor_arg_list(stripped, match_end)
+    if args is None or len(args) < 2:
+        return None
+    inner = args[1:-1]
+    split = _split_top_level_args(inner)
+    if not split:
+        return None
+    return split[0].strip()
+
+
+_SINGLE_IDENT_RE: re.Pattern[str] = re.compile(r"^[A-Za-z_]\w*$")
+_ASSIGN_RE: re.Pattern[str] = re.compile(r"(?<![=!<>-])=(?![=>])")
+_LET_BIND_RE: re.Pattern[str] = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\b")
+
+
+def _brace_depth(text: str, offset: int) -> int:
+    return text.count("{", 0, offset) - text.count("}", 0, offset)
+
+
+def _block_still_open(text: str, bind_end: int, use_offset: int, bind_depth: int) -> bool:
+    depth = bind_depth
+    for ch in text[bind_end:use_offset]:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < bind_depth:
+                return False
+    return True
+
+
 def _constructor_has_fixture_proof(
     stripped: str, stripped_lines: list[str], line: int, match_end: int
 ) -> bool:
-    args = _constructor_arg_list(stripped, match_end)
-    if args is not None and LOOPBACK_CALL_RE.search(args):
+    # Config-argument proof only: the whole top-level first argument is an
+    # `ExactConfig::loopback_fixture(...)` expression (explicit unwrap/expect
+    # suffixes only), or is one immutable variable bound by
+    # `let name = ExactConfig::loopback_fixture(...)` in the same function
+    # and still visible in the constructor lexical block, with no
+    # intervening shadow or reassignment before the call. A block that only
+    # mentions the fixture but evaluates to live config proves nothing;
+    # unsupported binders conservatively invalidate. Unknown syntax refuses.
+    first = _constructor_first_arg(stripped, match_end)
+    if first is None:
+        return False
+    if _is_whole_fixture_expr(first):
         return True
-    # Variable-bound proof: the exact binding passed to this constructor was
-    # itself built by a loopback_fixture(...) call within the window. An
-    # unrelated nearby fixture call bound to another variable proves nothing,
-    # and a reassigned binding proves nothing.
-    if args is None:
+    if _SINGLE_IDENT_RE.match(first) is None:
         return False
-    bound: set[str] = set()
-    low = max(0, line - 1 - FIXTURE_WINDOW_LINES)
-    window = "\n".join(stripped_lines[low : line - 1])
+    name = first
+    use_offset = match_end
+    fn_here = _enclosing_fn(stripped, use_offset)
+    best_bind_start = -1
+    best_bind_end = -1
     for binding in re.finditer(
-        r"\blet\s+(?:mut\s+)?(\w+)\s*=[^;]*?loopback_fixture\s*\(", window
+        r"\blet\s+" + re.escape(name) + r"\b\s*=\s*", stripped[:use_offset]
     ):
-        bound.add(binding.group(1))
-    if not bound:
+        init = stripped[binding.end() : use_offset]
+        semi = init.find(";")
+        if semi != -1:
+            init = init[:semi]
+        if not _is_whole_fixture_expr(init):
+            continue
+        binding_fn = _enclosing_fn(stripped, binding.start())
+        if (fn_here is None) != (binding_fn is None):
+            continue
+        if fn_here is not None:
+            if binding_fn is None or binding_fn[0] != fn_here[0]:
+                continue
+        best_bind_start = binding.start()
+        best_bind_end = binding.end()
+    if best_bind_end == -1:
         return False
-    for name in bound:
-        if re.search(r"\b" + re.escape(name) + r"\b", args) is None:
-            continue
-        lines = window.splitlines()
-        binding_line = -1
-        for idx, text_line in enumerate(lines):
-            if re.search(r"\blet\s+(?:mut\s+)?" + re.escape(name) + r"\b", text_line):
-                binding_line = idx
-                break
-        if binding_line == -1:
-            continue
-        tainted = False
-        for later in lines[binding_line + 1 :]:
-            if re.search(r"\b" + re.escape(name) + r"\s*=(?![=>])", later) and (
-                "loopback_fixture" not in later
-            ):
-                tainted = True
-                break
-        if not tainted:
-            return True
-    return False
+    bind_depth = _brace_depth(stripped, best_bind_start)
+    use_depth = _brace_depth(stripped, use_offset)
+    if bind_depth > use_depth:
+        return False
+    if not _block_still_open(stripped, best_bind_end, use_offset, bind_depth):
+        return False
+    between = stripped[best_bind_end:use_offset]
+    # Any later `let` pattern mentioning the name invalidates, including
+    # destructuring (`let (name, ..) =`) that the plain `let name` check
+    # would miss. The original binding itself ends before `between`.
+    if re.search(r"\blet\b[^;=]*\b" + re.escape(name) + r"\b[^;=]*=", between) is not None:
+        return False
+    # `for name in ...` rebinds the identifier for the loop body.
+    if re.search(r"\bfor\b[^;{}]*\b" + re.escape(name) + r"\b", between) is not None:
+        return False
+    # Closure parameters (`|name|`, `|a, name|`) shadow the outer binding.
+    if re.search(r"\|[^\n|;{}]*\b" + re.escape(name) + r"\b[^\n|;{}]*\|", between) is not None:
+        return False
+    # A nested `fn` binder or a match arm (`Some(name) =>`) rebinds it.
+    if re.search(r"\bfn\b[^;{]*\b" + re.escape(name) + r"\b", between) is not None:
+        return False
+    if re.search(r"\b" + re.escape(name) + r"\b[^\n;{}]*=>", between) is not None:
+        return False
+    if re.search(r"\b" + re.escape(name) + r"\s*=(?![=>])", between):
+        return False
+    return True
 
 
 def _statement_start(stripped: str, offset: int) -> int:
@@ -510,7 +592,8 @@ def _statement_start(stripped: str, offset: int) -> int:
     return last + 1 if last != -1 else 0
 
 
-def _inside_matches_macro(stripped: str, offset: int) -> bool:
+def _enclosing_matches_range(stripped: str, offset: int) -> tuple[int, int] | None:
+    best: tuple[int, int] | None = None
     for macro in MATCHES_MACRO_RE.finditer(stripped):
         j = macro.end()
         while j < len(stripped) and stripped[j] in " \t\r\n":
@@ -519,8 +602,32 @@ def _inside_matches_macro(stripped: str, offset: int) -> bool:
             continue
         close = _matching_paren(stripped, j)
         if close != -1 and j < offset < close:
-            return True
-    return False
+            if best is None or j > best[0]:
+                best = (j, close)
+    return best
+
+
+def _first_top_level_comma(stripped: str, open_idx: int, close_idx: int) -> int:
+    depth = 0
+    for i in range(open_idx + 1, close_idx):
+        ch = stripped[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            return i
+    return -1
+
+
+def _is_matches_pattern_arg(stripped: str, offset: int) -> bool:
+    span = _enclosing_matches_range(stripped, offset)
+    if span is None:
+        return False
+    comma = _first_top_level_comma(stripped, span[0], span[1])
+    if comma == -1:
+        return False
+    return offset > comma
 
 
 def _imageroute_is_pattern(stripped: str, match_start: int, match_end: int, variant: str) -> bool:
@@ -535,30 +642,42 @@ def _imageroute_is_pattern(stripped: str, match_start: int, match_end: int, vari
     inner = stripped[j + 1 : close].strip()
     if inner == "_":
         return True
-    if _inside_matches_macro(stripped, match_start):
-        return True
-    # Match-arm construction sits before its fat arrow: `Pattern =>`.
+    if _enclosing_matches_range(stripped, match_start) is not None:
+        return _is_matches_pattern_arg(stripped, match_start)
+    # A route after the current arm arrow is an expression, never a pattern.
+    # Only a route directly before its own `=>` (no `,`/`;`/`}` between)
+    # is a match-arm pattern.
     after = stripped[close + 1 : close + 201]
-    semi = after.find(";")
     arrow = after.find("=>")
-    if arrow != -1 and (semi == -1 or arrow < semi):
-        brace = after.find("{")
-        if brace == -1 or arrow < brace:
-            return True
-    # Destructuring assignment keeps the pattern before its single `=`.
+    if arrow != -1:
+        terminator = -1
+        for marker in (";", ",", "}"):
+            pos = after.find(marker)
+            if pos != -1 and (terminator == -1 or pos < terminator):
+                terminator = pos
+        if terminator == -1 or arrow < terminator:
+            brace = after.find("{")
+            if brace == -1 or arrow < brace:
+                return True
+    # Destructuring keeps the pattern before the same `let` assignment.
     start = _statement_start(stripped, match_start)
     prefix = stripped[start:match_start]
+    if LET_RE.search(prefix) is None:
+        return False
+    if re.search(r"(?<![=!<>-])=(?![=>])", prefix):
+        return False
     suffix = stripped[close + 1 : close + 201]
     suffix_semi = suffix.find(";")
     suffix_window = suffix if suffix_semi == -1 else suffix[:suffix_semi]
-    if LET_RE.search(prefix) and re.search(r"(?<![=>])=(?![=>])", suffix_window):
+    if re.search(r"(?<![=!<>-])=(?![=>])", suffix_window):
         return True
     return False
 
 
-def _enclosing_fn_range(stripped: str, offset: int) -> tuple[int, int] | None:
-    best: tuple[int, int] | None = None
+def _enclosing_fn(stripped: str, offset: int) -> tuple[int, int, str] | None:
+    best: tuple[int, int, str] | None = None
     for fn_match in FN_RE.finditer(stripped[:offset]):
+        name = fn_match.group(1)
         open_idx = stripped.find("{", fn_match.end())
         if open_idx == -1 or open_idx > offset:
             continue
@@ -570,23 +689,53 @@ def _enclosing_fn_range(stripped: str, offset: int) -> tuple[int, int] | None:
         close_idx = _matching_brace(stripped, open_idx)
         if close_idx != -1 and open_idx < offset < close_idx:
             if best is None or open_idx > best[0]:
-                best = (fn_match.start(), close_idx)
+                best = (open_idx, close_idx, name)
     return best
 
 
+def _enclosing_fn_range(stripped: str, offset: int) -> tuple[int, int] | None:
+    found = _enclosing_fn(stripped, offset)
+    if found is None:
+        return None
+    return (found[0], found[1])
+
+
+def _constructor_args_at(stripped: str, offset: int) -> str | None:
+    tail = stripped[offset : offset + 200]
+    marker = re.search(r"::\s*new\b", tail)
+    if marker is None:
+        return None
+    end = offset + marker.end()
+    return _constructor_arg_list(stripped, end)
+
+
 def _legacy_qualifies(
-    stripped: str, line: int, stripped_lines: list[str], offset: int, fingerprint: str
+    stripped: str,
+    line: int,
+    stripped_lines: list[str],
+    offset: int,
+    fingerprint: str,
+    symbol: str = "",
 ) -> bool:
-    fn_range = _enclosing_fn_range(stripped, offset)
-    if fn_range is not None:
-        return fingerprint in stripped[fn_range[0] : fn_range[1]]
-    args_end = offset + 2000
-    window = stripped[max(0, offset - 2000) : args_end]
-    if fingerprint in window:
-        low = max(0, line - 1 - FIXTURE_WINDOW_LINES)
-        nearby = "\n".join(stripped_lines[low : line + FIXTURE_WINDOW_LINES])
-        return fingerprint in nearby
-    return False
+    # Exact token offsets only; no nearby fallback. A site outside any
+    # function body never qualifies.
+    fn = _enclosing_fn(stripped, offset)
+    if fn is None:
+        return False
+    body = stripped[fn[0] : fn[1]]
+    if fingerprint not in body:
+        return False
+    if symbol.endswith("::new"):
+        if fingerprint in ("loopback_fixture", "for_test", "FluxPerson"):
+            return True
+        args = _constructor_args_at(stripped, offset)
+        if args is None:
+            return False
+        split = _split_top_level_args(args[1:-1])
+        if fingerprint == "IMAGE_EDIT_TIMEOUT":
+            return len(split) >= 3 and _is_whole_timeout_expr(split[2])
+        return len(split) >= 1 and _is_whole_live_config_expr(split[0], fingerprint)
+    return True
 
 
 def scan_file(path: Path, rel: str) -> tuple[list[Finding], str]:
@@ -620,7 +769,7 @@ def scan_file(path: Path, rel: str) -> tuple[list[Finding], str]:
                 _constructor_has_fixture_proof(stripped, stripped_lines, line, match.end())
             ):
                 continue
-            findings.append(Finding(rel, line, label, "bypass"))
+            findings.append(Finding(rel, line, label, "bypass", match.start()))
 
     for match in IMAGEROUTE_RE.finditer(stripped):
         variant = match.group(1)
@@ -631,7 +780,7 @@ def scan_file(path: Path, rel: str) -> tuple[list[Finding], str]:
             rel, stripped, match.start(), cfg_ranges
         ):
             continue
-        findings.append(Finding(rel, line, f"ImageRoute::{variant}", "bypass"))
+        findings.append(Finding(rel, line, f"ImageRoute::{variant}", "bypass", match.start()))
 
     for match in SUBMIT_IMAGE_RE.finditer(stripped):
         line = _offset_to_line(starts, match.start())
@@ -639,12 +788,12 @@ def scan_file(path: Path, rel: str) -> tuple[list[Finding], str]:
             rel, stripped, match.start(), cfg_ranges
         ):
             continue
-        findings.append(Finding(rel, line, "submit_image dispatch", "bypass"))
+        findings.append(Finding(rel, line, "submit_image dispatch", "bypass", match.start()))
 
     for label, rx in alias_res:
         for match in rx.finditer(stripped):
             line = _offset_to_line(starts, match.start())
-            findings.append(Finding(rel, line, label, "alias"))
+            findings.append(Finding(rel, line, label, "alias", match.start()))
 
     return findings, stripped
 
@@ -743,6 +892,107 @@ def audit_dependencies(root: Path) -> list[Finding]:
     return findings
 
 
+def _trail_is_native_only(trail: list[str]) -> bool:
+    for part in trail:
+        if _normalize_cfg_segment(part) == _NATIVE_CFG_NORMALIZED:
+            return True
+    return False
+
+
+def _audit_browser_manifest(
+    root: Path, cargo_rel: str, workspace_deps: dict[str, object]
+) -> list[Finding]:
+    cargo = root / cargo_rel
+    if not cargo.is_file():
+        return []
+    try:
+        text = cargo.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"cannot read {cargo_rel}: {error}") from error
+    try:
+        data = tomllib.loads(text)
+    except Exception as error:
+        raise RuntimeError(f"cannot parse {cargo_rel}: {error}") from error
+    findings: list[Finding] = []
+
+    def resolve_browser_workspace(dep_name: str) -> str | None:
+        target = workspace_deps.get(dep_name)
+        if isinstance(target, dict):
+            pkg = target.get("package")
+            if isinstance(pkg, str):
+                return pkg
+            return dep_name
+        if isinstance(target, str):
+            return dep_name
+        return dep_name
+
+    def walk(node: object, trail: list[str]) -> None:
+        if isinstance(node, dict):
+            head = trail[-1] if trail else ""
+            if head in DEPENDENCY_TABLE_NAMES or head.endswith("dependencies"):
+                native_only = _trail_is_native_only(trail)
+                for dep_name, spec in node.items():
+                    pkg: str | None = None
+                    label = dep_name
+                    if dep_name == CLIENT_FORBIDDEN:
+                        pkg = CLIENT_FORBIDDEN
+                    elif isinstance(spec, dict) and spec.get("package") == CLIENT_FORBIDDEN:
+                        raw = spec.get("package")
+                        pkg = raw if isinstance(raw, str) else CLIENT_FORBIDDEN
+                        label = f"{pkg} (renamed as {dep_name})"
+                    elif isinstance(spec, dict) and spec.get("workspace"):
+                        resolved = resolve_browser_workspace(dep_name)
+                        if resolved == CLIENT_FORBIDDEN:
+                            pkg = CLIENT_FORBIDDEN
+                            label = (
+                                f"{pkg} (renamed as {dep_name})"
+                                if dep_name != CLIENT_FORBIDDEN
+                                else dep_name
+                            )
+                    if pkg == CLIENT_FORBIDDEN and not native_only:
+                        findings.append(
+                            Finding(
+                                cargo_rel,
+                                _find_dep_line(text, dep_name),
+                                label,
+                                "dependency",
+                            )
+                        )
+            for dep_name, spec in node.items():
+                walk(spec, trail + [dep_name])
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, trail)
+
+    walk(data, [])
+    return findings
+
+
+def audit_client_dependencies(root: Path) -> list[Finding]:
+    # planning/image-generation-architecture.md:454: no WASM client
+    # dependency on native image execution. Only an exact native-only
+    # `cfg(not(target_arch = "wasm32"))` edge on df-imagery passes in
+    # df-client and df-tools; unconditional, WASM-target, double-negation,
+    # and other predicates fail, renames/workspace included.
+    if tomllib is None:
+        raise RuntimeError("tomllib is unavailable; need Python 3.11+ to parse Cargo.toml")
+    try:
+        workspace_text = (root / "Cargo.toml").read_text(encoding="utf-8")
+        workspace_data = tomllib.loads(workspace_text)
+        workspace_deps: dict[str, object] = {}
+        workspace_node = workspace_data.get("workspace", {})
+        if isinstance(workspace_node, dict):
+            deps_node = workspace_node.get("dependencies", {})
+            if isinstance(deps_node, dict):
+                workspace_deps = deps_node
+    except (OSError, ValueError, AttributeError):
+        workspace_deps = {}
+    findings: list[Finding] = []
+    findings.extend(_audit_browser_manifest(root, CLIENT_CARGO, workspace_deps))
+    findings.extend(_audit_browser_manifest(root, TOOLS_CARGO, workspace_deps))
+    return findings
+
+
 def audit_exports(root: Path) -> list[Finding]:
     lib = root / IMAGERY_LIB
     if not lib.is_file():
@@ -766,8 +1016,8 @@ def audit_exports(root: Path) -> list[Finding]:
         )
     mod_aliases: set[str] = set()
     backend_items: set[str] = set()
-    for use_match in USE_STMT_RE.finditer(stripped):
-        body = use_match.group(1)
+    use_bodies = [m.group(1) for m in USE_STMT_RE.finditer(stripped)]
+    for body in use_bodies:
         if "backends" not in body:
             continue
         for alias in re.finditer(r"\bbackends\s+as\s+(\w+)", body):
@@ -787,6 +1037,41 @@ def audit_exports(root: Path) -> list[Finding]:
         for item in re.finditer(r"\bbackends\s*::\s*(\w+)", body):
             if re.search(r"\b" + re.escape(item.group(1)) + r"\s+as\b", body) is None:
                 backend_items.add(item.group(1))
+    for _ in range(10):
+        grown = False
+        for body in use_bodies:
+            for alias in re.finditer(r"\b(\w+)\s+as\s+(\w+)", body):
+                left, right = alias.group(1), alias.group(2)
+                if left in mod_aliases and right not in mod_aliases:
+                    mod_aliases.add(right)
+                    grown = True
+                elif left in backend_items and right not in backend_items:
+                    backend_items.add(right)
+                    grown = True
+            for chained in re.finditer(r"\b(\w+)\s*::\s*(\w+)\s+as\s+(\w+)", body):
+                if chained.group(1) in mod_aliases and chained.group(3) not in backend_items:
+                    backend_items.add(chained.group(3))
+                    grown = True
+            for direct in re.finditer(r"\b(\w+)\s*::\s*(\w+)", body):
+                if direct.group(1) in mod_aliases and direct.group(2) not in backend_items:
+                    if re.search(
+                        r"\b" + re.escape(direct.group(2)) + r"\s+as\b", body
+                    ) is None:
+                        backend_items.add(direct.group(2))
+                        grown = True
+            grouped_chain = re.search(r"\b(\w+)\s*::\s*\{([^}]*)\}", body)
+            if grouped_chain and grouped_chain.group(1) in mod_aliases:
+                for part in grouped_chain.group(2).split(","):
+                    part = part.strip()
+                    alias_pair = re.match(r"(\w+)\s+as\s+(\w+)", part)
+                    if alias_pair and alias_pair.group(2) not in backend_items:
+                        backend_items.add(alias_pair.group(2))
+                        grown = True
+                    elif re.match(r"\w+$", part) and part not in backend_items:
+                        backend_items.add(part)
+                        grown = True
+        if not grown:
+            break
     for pub_match in PUB_USE_STMT_RE.finditer(stripped):
         body = pub_match.group(1)
         if "backends" in body:
@@ -806,6 +1091,30 @@ def audit_exports(root: Path) -> list[Finding]:
                 Finding(IMAGERY_LIB, _offset_to_line(starts, pub_match.start()),
                         "public backends re-export", "export")
             )
+    return findings
+
+
+RETIRED_PROVIDER_TYPES = CONSTRUCTOR_BASES + (
+    "ImageEditConfig", "FalImageConfig", "BflImageConfig", "HeadLocateConfig",
+    "PlateJudgeConfig", "FalSegmentConfig",
+)
+
+def audit_retired_provider_exports(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted((root / "crates/df-providers/src").rglob("*.rs")):
+        stripped = strip_rust(path.read_text(encoding="utf-8"))
+        starts = _line_starts(stripped)
+        for match in re.finditer(r"\bpub\s+(?:struct|enum|type)\s+(\w+)", stripped):
+            if match.group(1) in RETIRED_PROVIDER_TYPES:
+                findings.append(Finding(path.relative_to(root).as_posix(),
+                    _offset_to_line(starts, match.start()),
+                    "retired public image executor: " + match.group(1), "export"))
+        for match in PUB_USE_STMT_RE.finditer(stripped):
+            for name in RETIRED_PROVIDER_TYPES:
+                if re.search(r"\b" + re.escape(name) + r"\b", match.group(1)):
+                    findings.append(Finding(path.relative_to(root).as_posix(),
+                        _offset_to_line(starts, match.start()),
+                        "retired public image executor re-export: " + name, "export"))
     return findings
 
 
@@ -834,9 +1143,8 @@ def run(root: Path, strict: bool) -> list[Finding]:
             continue
         stripped = stripped_by_rel.get(finding.path, "")
         lines = stripped.splitlines()
-        starts = _line_starts(stripped)
-        offset = starts[finding.line - 1] if 1 <= finding.line <= len(starts) else 0
-        if _legacy_qualifies(stripped, finding.line, lines, offset, row.fingerprint):
+        offset = finding.offset
+        if _legacy_qualifies(stripped, finding.line, lines, offset, row.fingerprint, finding.symbol):
             qualified_counts[key] = qualified_counts.get(key, 0) + 1
     counts: dict[tuple[str, str], int] = {}
     for finding in raw:
@@ -850,18 +1158,24 @@ def run(root: Path, strict: bool) -> list[Finding]:
             continue
         stripped = stripped_by_rel.get(finding.path, "")
         lines = stripped.splitlines()
-        starts = _line_starts(stripped)
-        offset = starts[finding.line - 1] if 1 <= finding.line <= len(starts) else 0
-        qualifies = _legacy_qualifies(stripped, finding.line, lines, offset, row.fingerprint)
+        qualifies = _legacy_qualifies(
+            stripped, finding.line, lines, finding.offset, row.fingerprint, finding.symbol
+        )
         used = seen.get(key, 0)
         if qualifies:
             seen[key] = used + 1
             if used < row.expected:
-                findings.append(Finding(finding.path, finding.line, finding.symbol, "legacy"))
+                findings.append(
+                    Finding(finding.path, finding.line, finding.symbol, "legacy", finding.offset)
+                )
             else:
-                findings.append(Finding(finding.path, finding.line, finding.symbol, "bypass"))
+                findings.append(
+                    Finding(finding.path, finding.line, finding.symbol, "bypass", finding.offset)
+                )
         else:
-            findings.append(Finding(finding.path, finding.line, finding.symbol, "bypass"))
+            findings.append(
+                Finding(finding.path, finding.line, finding.symbol, "bypass", finding.offset)
+            )
     for key, row in LEGACY_BUDGET.items():
         if key[0] not in present:
             continue
@@ -880,7 +1194,9 @@ def run(root: Path, strict: bool) -> list[Finding]:
                             "stale")
                 )
     findings.extend(audit_dependencies(root))
+    findings.extend(audit_client_dependencies(root))
     findings.extend(audit_exports(root))
+    findings.extend(audit_retired_provider_exports(root))
     _ = strict
     return findings
 

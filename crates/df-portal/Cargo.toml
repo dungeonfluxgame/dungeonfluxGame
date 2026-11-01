@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+df-assets = { path = "../df-assets" }
 df-customer = { path = "../df-customer" }
 df-campaign = { path = "../df-campaign", features = ["routes"], optional = true }
 df-account-app = { path = "../df-account-app" }
@@ -22,6 +23,7 @@ opentelemetry = { version = "=0.31.0", default-features = false, features = ["tr
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "net"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+df-assets = { path = "../df-assets", features = ["test-fakes"] }
 df-google = { path = "../df-google", features = ["test-fakes"] }
 df-customer = { path = "../df-customer", features = ["test-fakes"] }
 http-body-util.workspace = true

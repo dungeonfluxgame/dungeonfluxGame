@@ -23,7 +23,10 @@
 
 use std::sync::Arc;
 
-use super::{BilledCall, CallSpec, Category, Cause, CostEvent, Provider, Usage, UsageSource};
+use super::{
+    BilledCall, CallSpec, Category, Cause, CostEvent, PinnedCorrection, PinnedError, PinnedStart,
+    PinnedUnsent, Provider, Usage, UsageSource,
+};
 use crate::gameplay::resources::SpendLedger;
 
 /// The most recent calls the port keeps for [`MeteringPort::recent`].
@@ -61,8 +64,12 @@ pub struct MeterStart {
 /// A recorded call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MeteredCall {
-    /// The idempotency key: `<session>-<n>`, counted once per run.
+    /// The idempotency key, counted once per run: `<session>-<n>` for an ordinary call, the
+    /// stable dispatch-derived id for a pinned imagery call.
     pub call_id: String,
+    /// True when this call replaced an earlier revision under the same id: an observer keyed
+    /// by call id must replace its stored view, never count a second call.
+    pub correction: bool,
     pub at_ms: u64,
     pub provider: String,
     pub model: String,
@@ -119,9 +126,10 @@ impl MeterStart {
 }
 
 impl MeteredCall {
-    pub(super) fn of(event: &CostEvent) -> Self {
+    pub(super) fn of(event: &CostEvent, correction: bool) -> Self {
         Self {
             call_id: event.call_id.clone(),
+            correction,
             at_ms: event.at_ms,
             provider: event.provider.label().to_owned(),
             model: event.model.clone(),
@@ -253,6 +261,11 @@ impl Default for MeteringPort {
 }
 
 impl MeteringPort {
+    /// Reuses the composition root's actual run ledger and already opened Book.
+    pub(in crate::gameplay) fn from_ledger(ledger: Arc<SpendLedger>) -> Self {
+        Self { ledger }
+    }
+
     /// A port over a ledger of its own and an unopened book: the composition root of a test, or
     /// a service that meters calls of its own.
     pub fn new() -> Self {
@@ -314,5 +327,97 @@ impl MeteringPort {
         Ok(PortCall {
             billed: self.ledger.begin_call(spec, &[]),
         })
+    }
+
+    /// Opens the pinned imagery call for `call_id` (the stable dispatch-derived id) on
+    /// `route`. Idempotent per id: an exact replay answers [`PinnedStart::ReplayedOpen`], and
+    /// a replay after settle answers [`PinnedStart::AlreadySettled`] instead of opening a
+    /// second charge identity.
+    pub fn start_pinned(
+        &self,
+        call_id: &str,
+        route: &PortRoute,
+    ) -> Result<PinnedStart, PinnedError> {
+        let provider = Provider::parse(&route.provider).ok_or(PinnedError::UnknownProvider)?;
+        let cause = Cause::parse(&route.cause).ok_or(PinnedError::UnknownCause)?;
+        let spec = CallSpec::new(provider, route.model.clone(), cause, route.detail.clone())
+            .with_maxima(quantities_of(&route.maxima).map_err(|_| PinnedError::UnknownCategory)?);
+        self.ledger.costs().start_pinned(call_id, spec)
+    }
+
+    /// Applies a usage report to the pinned call `call_id`: the first report settles it, a
+    /// newer `revision` replaces the stored revision as a correction under the same id, an
+    /// exact replay is a no-op, and a stale or conflicting revision is refused. An empty
+    /// `units` stands for the call's maxima, flagged as `source` says. Unlike an ordinary
+    /// port call, [`MeteredSource::Unknown`] stays unknown here: the call was sent and its
+    /// outcome is unknown, booked at its maxima, never zeroed.
+    pub fn correct_pinned(
+        &self,
+        call_id: &str,
+        revision: u64,
+        source: MeteredSource,
+        units: &[MeteredUnits],
+        usable: bool,
+    ) -> Result<PinnedCorrection, PinnedError> {
+        self.correct_pinned_at(call_id, revision, source, units, usable, super::now_ms())
+    }
+
+    /// As [`Self::correct_pinned`], recorded at `at_ms`: the caller's clock.
+    pub fn correct_pinned_at(
+        &self,
+        call_id: &str,
+        revision: u64,
+        source: MeteredSource,
+        units: &[MeteredUnits],
+        usable: bool,
+        at_ms: u64,
+    ) -> Result<PinnedCorrection, PinnedError> {
+        let quantities = quantities_of(units).map_err(|_| PinnedError::UnknownCategory)?;
+        let mut usage = match source {
+            MeteredSource::Reported => Usage::reported(quantities),
+            MeteredSource::Estimated => Usage::estimated(quantities),
+            MeteredSource::Unknown => Usage {
+                source: UsageSource::Unknown,
+                quantities,
+                usable: true,
+            },
+        };
+        if !usable {
+            usage = usage.unusable();
+        }
+        self.ledger
+            .costs()
+            .correct_pinned(call_id, revision, usage, at_ms)
+    }
+
+    /// Coherent same-call Book snapshot; no history-window or separate-durability join.
+    pub fn read_pinned_receipt(
+        &self,
+        call_id: &str,
+    ) -> Result<Option<df_imagery::cost::PinnedCostReceipt>, PinnedError> {
+        self.ledger.costs().read_pinned_receipt(call_id)
+    }
+
+    /// Atomic actual Book seal for a canonical call with protected no-delivery authority.
+    pub fn seal_pinned_unsent(
+        &self,
+        call_id: &str,
+    ) -> Result<df_imagery::cost::PinnedUnsentSeal, PinnedError> {
+        self.ledger.costs().seal_pinned_unsent(call_id)
+    }
+
+    /// The existing cost log has synced this exact revision, or terminal unsent marker.
+    pub fn pinned_durable(
+        &self,
+        call_id: &str,
+        revision: Option<u64>,
+    ) -> Result<bool, PinnedError> {
+        self.ledger.costs().pinned_durable(call_id, revision)
+    }
+
+    /// Records the pinned call `call_id` as proven unsent (refused submit, cancelled before
+    /// dispatch): nothing is recorded, and later usage for the id is refused.
+    pub fn record_pinned_unsent(&self, call_id: &str) -> Result<PinnedUnsent, PinnedError> {
+        self.ledger.costs().record_pinned_unsent(call_id)
     }
 }

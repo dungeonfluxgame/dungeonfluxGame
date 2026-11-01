@@ -80,6 +80,9 @@ fn refuse(current: Checkpoint, target: &str, expected_reason: &str, submissions:
     };
     let thread = std::thread::spawn(move || inbox.run(&mut owner));
     let service = Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         look_ahead: Default::default(),
         portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
         display_credential: [0x82; 32],

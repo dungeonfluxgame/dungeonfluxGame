@@ -28,7 +28,7 @@ pub mod world;
 /// Never these ports: the game's and the other owned test servers.
 const FORBIDDEN_PORTS: [u16; 4] = [0, 55517, 55439, 63309];
 
-pub const MIGRATIONS: [(&str, &str); 6] = [
+pub const MIGRATIONS: [(&str, &str); 7] = [
     (
         "0020",
         include_str!("../../../df-persistence/migrations/0020_finance_journal.sql"),
@@ -54,6 +54,10 @@ pub const MIGRATIONS: [(&str, &str); 6] = [
         include_str!(
             "../../../df-persistence/migrations/0025_finance_refunds_disputes_boundary.sql"
         ),
+    ),
+    (
+        "0050",
+        include_str!("../../../df-persistence/migrations/0050_imagery_campaign_release_guard.sql"),
     ),
 ];
 

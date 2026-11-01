@@ -14,6 +14,7 @@
 //! fully close a replace-between-check-and-read race, so the service imports
 //! verified bytes into the owned directory and revalidates the digest.
 
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -21,7 +22,7 @@ use std::path::{Component, Path, PathBuf};
 use df_assets::{ImageRejection, validate_image};
 use sha2::{Digest, Sha256};
 
-use crate::output::{Dimensions, OutputFormat};
+use crate::output::OutputFormat;
 
 /// Length of a lowercase hex SHA-256 digest.
 pub(crate) const SHA256_HEX_CHARS: usize = 64;
@@ -33,19 +34,22 @@ pub(crate) enum ArtifactError {
     ForeignPath,
     InvalidRoot,
     Missing,
-    TooLarge { bytes: u64 },
+    /// Observed prefix length (`max_bytes + 1`): a truthful lower bound on
+    /// the file length, never the full length, because reading stays bounded.
+    TooLarge {
+        bytes: u64,
+    },
     Unreadable,
     UnknownExtension,
     Rejected(ImageRejection),
     AlphaMismatch,
-    DimensionMismatch,
     FormatMismatch,
     DigestMismatch,
 }
 
 /// Bytes the asset owner decoded and measured, with their recorded digest.
 /// Carrying the bytes lets publication import without a second trusting read.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct VerifiedArtifact {
     path: PathBuf,
     digest_sha256_hex: String,
@@ -55,6 +59,23 @@ pub(crate) struct VerifiedArtifact {
     byte_len: usize,
     bytes: Vec<u8>,
     has_alpha: bool,
+}
+
+/// Debug keeps routing facts and the digest but never the image bytes: this
+/// is the verified-data boundary, so a format here must not dump raster
+/// content into logs or diagnostics.
+impl fmt::Debug for VerifiedArtifact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerifiedArtifact")
+            .field("path", &self.path)
+            .field("digest_sha256_hex", &self.digest_sha256_hex)
+            .field("mime", &self.mime)
+            .field("width_px", &self.width_px)
+            .field("height_px", &self.height_px)
+            .field("byte_len", &self.byte_len)
+            .field("has_alpha", &self.has_alpha)
+            .finish()
+    }
 }
 
 impl VerifiedArtifact {
@@ -88,6 +109,22 @@ impl VerifiedArtifact {
 
     pub(crate) fn has_alpha(&self) -> bool {
         self.has_alpha
+    }
+
+    /// Rebinds verified bytes to their imported location: digest, decoded
+    /// facts and bytes are unchanged, only the identifying path moves from
+    /// the mutable helper claim to the owned service import.
+    pub(crate) fn imported_at(&self, path: PathBuf) -> Self {
+        Self {
+            path,
+            digest_sha256_hex: self.digest_sha256_hex.clone(),
+            mime: self.mime.clone(),
+            width_px: self.width_px,
+            height_px: self.height_px,
+            byte_len: self.byte_len,
+            bytes: self.bytes.clone(),
+            has_alpha: self.has_alpha,
+        }
     }
 }
 
@@ -150,9 +187,15 @@ fn lexical_clean_windows(raw: &str) -> Result<PathBuf, ArtifactError> {
 
 fn normalize_windows(raw: &str) -> String {
     let mut text = raw.replace('/', "\\");
-    if let Some(stripped) = text.strip_prefix("\\\\?\\UNC\\").or_else(|| text.strip_prefix("\\\\?\\unc\\")) {
+    if let Some(stripped) = text
+        .strip_prefix("\\\\?\\UNC\\")
+        .or_else(|| text.strip_prefix("\\\\?\\unc\\"))
+    {
         text = format!("\\\\{stripped}");
-    } else if let Some(stripped) = text.strip_prefix("\\\\?\\").or_else(|| text.strip_prefix("//?/")) {
+    } else if let Some(stripped) = text
+        .strip_prefix("\\\\?\\")
+        .or_else(|| text.strip_prefix("//?/"))
+    {
         text = stripped.to_owned();
     }
     text.to_ascii_lowercase()
@@ -179,8 +222,17 @@ pub(crate) fn contained_path(raw: &str, root: &Path) -> Result<PathBuf, Artifact
     let root_text = root.to_string_lossy().into_owned();
     let root_windows = is_windows_path(&root_text);
     if raw_windows || root_windows {
+        // A bare relative claim or a rooted-but-driveless claim (`\x`) is not
+        // absolute on Windows; it is refused before confinement downgrades it.
+        if !Path::new(raw).is_absolute() && !is_windows_absolute(raw) {
+            return Err(ArtifactError::NotAbsolute);
+        }
+        if !root.is_absolute() && !is_windows_absolute(&root_text) {
+            return Err(ArtifactError::InvalidRoot);
+        }
         let clean = lexical_clean_windows(raw)?;
-        let clean_root = lexical_clean_windows(&root_text).map_err(|_| ArtifactError::InvalidRoot)?;
+        let clean_root =
+            lexical_clean_windows(&root_text).map_err(|_| ArtifactError::InvalidRoot)?;
         let clean_text = clean.to_string_lossy().into_owned();
         let root_clean_text = clean_root.to_string_lossy().into_owned();
         if windows_equivalent(&clean_text, &root_clean_text)
@@ -188,12 +240,12 @@ pub(crate) fn contained_path(raw: &str, root: &Path) -> Result<PathBuf, Artifact
         {
             return Err(ArtifactError::ForeignPath);
         }
-        let canonical = std::fs::canonicalize(Path::new(raw)).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => ArtifactError::Missing,
-            _ => ArtifactError::Unreadable,
-        })?;
-        let canonical_root =
-            std::fs::canonicalize(root).map_err(|_| ArtifactError::InvalidRoot)?;
+        let canonical =
+            std::fs::canonicalize(Path::new(raw)).map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => ArtifactError::Missing,
+                _ => ArtifactError::Unreadable,
+            })?;
+        let canonical_root = std::fs::canonicalize(root).map_err(|_| ArtifactError::InvalidRoot)?;
         let canonical_text = canonical.to_string_lossy().into_owned();
         let canonical_root_text = canonical_root.to_string_lossy().into_owned();
         if windows_equivalent(&canonical_text, &canonical_root_text)
@@ -222,6 +274,8 @@ pub(crate) fn contained_path(raw: &str, root: &Path) -> Result<PathBuf, Artifact
 
 /// Reads one open regular-file handle under a max-plus-one bound with checked
 /// arithmetic: a growing file cannot allocate beyond the bound before refusal.
+/// `TooLarge` therefore reports the observed `max_bytes + 1` prefix length, a
+/// truthful lower bound on the file length, not the full length.
 pub(crate) fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ArtifactError> {
     let file = File::open(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => ArtifactError::Missing,
@@ -295,7 +349,6 @@ pub(crate) fn verify_artifact(
     raw_path: &str,
     outputs_root: &Path,
     max_bytes: u64,
-    expected: Dimensions,
     format: OutputFormat,
     require_alpha: bool,
 ) -> Result<VerifiedArtifact, ArtifactError> {
@@ -307,9 +360,6 @@ pub(crate) fn verify_artifact(
         .unwrap_or("");
     let (mime, extension) = extension_claim(file_name)?;
     let validated = validate_image(&bytes, mime, extension).map_err(ArtifactError::Rejected)?;
-    if validated.width_px != expected.width_px() || validated.height_px != expected.height_px() {
-        return Err(ArtifactError::DimensionMismatch);
-    }
     if validated.mime != format.mime() {
         return Err(ArtifactError::FormatMismatch);
     }
@@ -337,9 +387,7 @@ fn decoded_has_transparency(bytes: &[u8]) -> bool {
     match image {
         image::DynamicImage::ImageRgba8(map) => map.pixels().any(|pixel| pixel[3] < 255),
         image::DynamicImage::ImageRgba16(map) => map.pixels().any(|pixel| pixel[3] < u16::MAX),
-        image::DynamicImage::ImageRgba32F(map) => {
-            map.pixels().any(|pixel| pixel[3] < 1.0)
-        }
+        image::DynamicImage::ImageRgba32F(map) => map.pixels().any(|pixel| pixel[3] < 1.0),
         image::DynamicImage::ImageLumaA8(map) => map.pixels().any(|pixel| pixel[1] < 255),
         image::DynamicImage::ImageLumaA16(map) => map.pixels().any(|pixel| pixel[1] < u16::MAX),
         _ => false,
@@ -352,8 +400,19 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    fn fixture_base() -> PathBuf {
+        // An explicitly configured TMPDIR keeps test artifacts in the
+        // repository; the OS default is only the fallback.
+        if let Some(dir) = std::env::var_os("TMPDIR")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir);
+        }
+        std::env::temp_dir()
+    }
+
     fn scratch_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("df-codex-artifact-{name}"));
+        let root = fixture_base().join(format!("df-codex-artifact-{name}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("outputs")).unwrap();
         fs::create_dir_all(root.join("elsewhere")).unwrap();
@@ -368,7 +427,7 @@ mod tests {
         let mut encoded = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut encoded);
         image::ImageEncoder::write_image(
-            &encoder,
+            encoder,
             &pixels,
             width,
             height,
@@ -388,6 +447,12 @@ mod tests {
         );
         assert_eq!(
             contained_path("", &outputs).unwrap_err(),
+            ArtifactError::NotAbsolute
+        );
+        // A rooted-but-driveless claim carries no drive or UNC host, so it is
+        // not absolute either, on either platform.
+        assert_eq!(
+            contained_path("\\no-drive\\img.png", &outputs).unwrap_err(),
             ArtifactError::NotAbsolute
         );
         let escape = format!("{}/../elsewhere/img.png", outputs.display());
@@ -410,12 +475,10 @@ mod tests {
         let big = outputs.join("big.png");
         fs::write(&big, vec![0u8; 16]).unwrap();
         let error = read_bounded(&big, 8).unwrap_err();
-        assert_eq!(error, ArtifactError::TooLarge { bytes: 16 });
+        // The bounded reader stops at max + 1, so it reports the observed 9,
+        // a lower bound on the 16-byte file, without reading it fully.
+        assert_eq!(error, ArtifactError::TooLarge { bytes: 9 });
         let _ = fs::remove_dir_all(&root);
-    }
-
-    fn dimensions(width: u32, height: u32) -> Dimensions {
-        Dimensions::new(width, height).unwrap()
     }
 
     #[test]
@@ -428,7 +491,6 @@ mod tests {
             &path.to_string_lossy(),
             &outputs,
             1024 * 1024,
-            dimensions(4, 4),
             OutputFormat::Png,
             false,
         )
@@ -447,7 +509,6 @@ mod tests {
             &path.to_string_lossy(),
             &outputs,
             1024 * 1024,
-            dimensions(4, 2),
             OutputFormat::Png,
             false,
         )
@@ -471,7 +532,6 @@ mod tests {
             &opaque.to_string_lossy(),
             &outputs,
             1024 * 1024,
-            dimensions(2, 2),
             OutputFormat::Png,
             true,
         )
@@ -483,7 +543,6 @@ mod tests {
             &transparent.to_string_lossy(),
             &outputs,
             1024 * 1024,
-            dimensions(2, 2),
             OutputFormat::Png,
             true,
         )
@@ -498,24 +557,22 @@ mod tests {
         let outputs = root.join("outputs");
         let path = outputs.join("plate.png");
         write_png(&path, 4, 2);
+        // The image tool chooses its own size; the worker resizes to the delivered profile, so a
+        // different size is accepted here and reported by its real dimensions.
+        let verified = verify_artifact(
+            &path.to_string_lossy(),
+            &outputs,
+            1024 * 1024,
+            OutputFormat::Png,
+            false,
+        )
+        .unwrap();
+        assert_eq!((verified.width_px(), verified.height_px()), (4, 2));
         assert_eq!(
             verify_artifact(
                 &path.to_string_lossy(),
                 &outputs,
                 1024 * 1024,
-                dimensions(8, 2),
-                OutputFormat::Png,
-                false,
-            )
-            .unwrap_err(),
-            ArtifactError::DimensionMismatch
-        );
-        assert_eq!(
-            verify_artifact(
-                &path.to_string_lossy(),
-                &outputs,
-                1024 * 1024,
-                dimensions(4, 2),
                 OutputFormat::Jpeg,
                 false,
             )
@@ -529,16 +586,36 @@ mod tests {
     fn equivalent_windows_spellings_contain_while_escapes_and_symlinks_reject() {
         let root = scratch_root("windows-equiv");
         let outputs = root.join("outputs");
-        let elsewhere = root.join("elsewhere");
+        let _elsewhere = root.join("elsewhere");
         let target = outputs.join("plate.png");
         write_png(&target, 2, 2);
-        let canonical_root =
-            std::fs::canonicalize(&outputs).unwrap().to_string_lossy().into_owned();
-        let normal = format!("{canonical_root}/plate.png");
+        let canonical_root = std::fs::canonicalize(&outputs)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        // The platform-native spelling: appending `/` to a verbatim `\\?\`
+        // root would not be a valid path on Windows, so it is not asserted.
+        let normal = target.to_string_lossy().into_owned();
         assert!(contained_path(&normal, &outputs).is_ok());
-        let verbatim = format!("\\\\?\\{canonical_root}\\plate.png");
-        let _ = verbatim;
-        assert!(contained_path(&normal, &outputs).is_ok());
+        #[cfg(windows)]
+        {
+            // `canonicalize` already returns the verbatim `\\?\` spelling, so
+            // strip it before re-adding: doubling the prefix is not a path.
+            let bare = canonical_root
+                .strip_prefix("\\\\?\\")
+                .unwrap_or(&canonical_root)
+                .replace('/', "\\");
+            let verbatim = format!("\\\\?\\{bare}\\plate.png");
+            assert!(contained_path(&verbatim, &outputs).is_ok());
+            // A claim on the other drive is lexically outside, whether or not
+            // that drive exists, so confinement never depends on the machine.
+            let mut other_drive = bare.clone();
+            other_drive.replace_range(0..1, if bare.starts_with('C') { "D" } else { "C" });
+            assert_eq!(
+                contained_path(&format!("{other_drive}\\plate.png"), &outputs).unwrap_err(),
+                ArtifactError::ForeignPath
+            );
+        }
         let sibling = format!("{canonical_root}-sibling/plate.png");
         assert_eq!(
             contained_path(&sibling, &outputs).unwrap_err(),
@@ -551,7 +628,7 @@ mod tests {
         );
         let link = outputs.join("link.png");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(elsewhere.join("outside.png"), &link).unwrap_or(());
+        std::os::unix::fs::symlink(_elsewhere.join("outside.png"), &link).unwrap_or(());
         let _ = link;
         let _ = fs::remove_dir_all(&root);
     }
@@ -566,9 +643,10 @@ mod tests {
         );
         let big = outputs.join("big.png");
         fs::write(&big, vec![0u8; 16]).unwrap();
+        // As above, the bounded reader reports the observed max + 1 prefix.
         assert_eq!(
             read_bounded(&big, 8).unwrap_err(),
-            ArtifactError::TooLarge { bytes: 16 }
+            ArtifactError::TooLarge { bytes: 9 }
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -581,7 +659,7 @@ mod tests {
         let mut encoded = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut encoded);
         image::ImageEncoder::write_image(
-            &encoder,
+            encoder,
             &pixels,
             width,
             height,
@@ -606,6 +684,30 @@ mod tests {
             ArtifactError::DigestMismatch
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn verified_artifact_debug_redacts_image_bytes() {
+        let sentinel = b"PRIVATE-SENTINEL-9f2c-bytes";
+        let verified = VerifiedArtifact {
+            path: PathBuf::from("/tmp/outputs/item.png"),
+            digest_sha256_hex: sha256_hex(sentinel),
+            mime: "image/png".to_owned(),
+            width_px: 2,
+            height_px: 2,
+            byte_len: sentinel.len(),
+            bytes: sentinel.to_vec(),
+            has_alpha: false,
+        };
+        for rendered in [format!("{verified:?}"), format!("{verified:#?}")] {
+            assert!(
+                !rendered.contains("PRIVATE-SENTINEL-9f2c-bytes"),
+                "debug must never dump verified image bytes"
+            );
+            assert!(rendered.contains("VerifiedArtifact"));
+            assert!(rendered.contains("image/png"));
+            assert!(rendered.contains(&verified.digest_sha256_hex));
+        }
     }
 
     #[test]

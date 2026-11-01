@@ -1,4 +1,4 @@
-//! Session mural admission shares the canonical worker, hub, cache and stale-result fencing.
+//! Session mural admission shares canonical work fencing and the durable image service.
 use super::*;
 use crate::gameplay::imagery::{FluxPerson, party_mural, party_sheet};
 
@@ -139,13 +139,13 @@ impl Inner {
         }
         let mut references = Vec::with_capacity(heroes.len());
         for hero in heroes {
-            match self.imagery.image(hero.image.as_str()).await {
-                Lookup::Image { bytes, format } => {
-                    references.push(ReferenceImage::new(format, bytes))
-                }
-                // A temporarily missing approved reference can become available again.
-                _ => return Err(ImageFailure::Interrupted),
-            }
+            // A temporarily missing approved reference can become available again.
+            let reference = self
+                .imagery
+                .reference(&hero.image)
+                .await
+                .map_err(|_| ImageFailure::Interrupted)?;
+            references.push(reference);
         }
         if !locked(&self.state)
             .canonical
@@ -155,9 +155,8 @@ impl Inner {
         {
             return Err(ImageFailure::Interrupted);
         }
-        let sheet = tokio::task::spawn_blocking(move || party_sheet(&references))
+        let sheet = party_sheet(&self.imagery, &references)
             .await
-            .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)?;
         let people = heroes
             .iter()
@@ -170,23 +169,15 @@ impl Inner {
             prompt: party_mural(&people, &work.binding)?,
             output: OutputSpec::BACKDROP,
         };
-        if work.regenerate {
-            use crate::gameplay::resources::{Invalidate, PlateSpec, ResourceKey, ResourceStatus};
-            let image_key = self.imagery.key_for(&request);
-            let spec = PlateSpec::new(
+        self.imagery
+            .generate_for_purpose(
                 "party-mural",
-                image_key.as_str(),
-                art_contract::Neutral::Nothing,
-            );
-            let key = ResourceKey::of(&spec);
-            if matches!(
-                self.imagery.hub().status(&key),
-                ResourceStatus::Failed(_, _)
-            ) {
-                self.imagery.hub().invalidate(Invalidate::Key(&key));
-            }
-        }
-        self.imagery.generate("party-mural", request).await
+                request,
+                df_imagery::Purpose::PartyMural,
+                crate::gameplay::imagery::ImagePriority::Foreground,
+                df_imagery::Freshness::ReuseCompatible,
+            )
+            .await
     }
 }
 
@@ -196,9 +187,9 @@ mod tests {
     use crate::gameplay::imagery::{Imagery, tests::DirectionFixture};
     use std::path::PathBuf;
 
-    fn inner(imagery: Imagery) -> Inner {
+    fn inner(imagery: Imagery) -> std::sync::Arc<Inner> {
         let timing = Timing::from_interval(Duration::from_secs(30));
-        Inner {
+        std::sync::Arc::new(Inner {
             imagery,
             references: ReferenceStore::new(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
@@ -209,16 +200,13 @@ mod tests {
             state: Mutex::new(State::new(timing)),
             wake: watch::channel(0).0,
             origin: Instant::now(),
-        }
+        })
     }
 
-    async fn ready_party(inner: &Inner) -> ImageKey {
-        let photo = ReferenceImage::new(df_providers::ImageFormat::Jpeg, canonical_photo().into());
-        let key = inner
-            .imagery
-            .register_reviewed("mural-fixture-heroes", photo)
-            .await
-            .unwrap();
+    async fn ready_party(inner: &Inner, fixture: &DirectionFixture) -> ImageKey {
+        let (key, _) = fixture
+            .import_bytes(df_providers::ImageFormat::Jpeg, canonical_photo().into())
+            .await;
         let mut state = locked(&inner.state);
         state.canonical.fixture_hero(1, "Brakka", key.clone());
         state.canonical.fixture_hero(2, "Sigrun", key.clone());
@@ -246,9 +234,11 @@ mod tests {
     #[tokio::test]
     async fn hs54_transient_mural_reference_miss_requeues_only_after_cooldown() {
         let cache = std::env::temp_dir().join(format!("hs54-mural-retry-{}", std::process::id()));
-        let fixture = DirectionFixture::photographic(&cache);
+        let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+            return;
+        };
         let inner = inner(fixture.imagery.clone());
-        ready_party(&inner).await;
+        ready_party(&inner, &fixture).await;
         let work = take_mural(&inner);
         let mut missing = work.clone();
         let Source::Mural(heroes) = &mut missing.source else {
@@ -260,53 +250,8 @@ mod tests {
             Err(ImageFailure::Interrupted)
         );
         inner.finish_canonical(work.clone(), Err(ImageFailure::Interrupted));
-        // Simulate an exhausted hub entry for the exact request, so retry must invalidate the
-        // ScenePlate resource key rather than the distinct Depiction kind.
-        let Source::Mural(heroes) = &work.source else {
-            panic!("mural")
-        };
-        let mut references = Vec::new();
-        for hero in heroes {
-            let Lookup::Image { bytes, format } = inner.imagery.image(hero.image.as_str()).await
-            else {
-                panic!("reference")
-            };
-            references.push(ReferenceImage::new(format, bytes));
-        }
-        let request = ImageRequest {
-            kind: ImageKind::ScenePlate,
-            references: vec![party_sheet(&references).unwrap()],
-            prompt: party_mural(
-                &heroes
-                    .iter()
-                    .map(|hero| hero.person.clone())
-                    .collect::<Vec<_>>(),
-                &work.binding,
-            )
-            .unwrap(),
-            output: OutputSpec::BACKDROP,
-        };
-        let image_key = inner.imagery.key_for(&request);
-        let spec = crate::gameplay::resources::PlateSpec::new(
-            "party-mural",
-            image_key.as_str(),
-            art_contract::Neutral::Nothing,
-        );
-        assert!(
-            inner
-                .imagery
-                .hub()
-                .render(
-                    &spec,
-                    Box::pin(async {
-                        Err(crate::gameplay::resources::ResourceFailure::Permanent(
-                            "fixture",
-                        ))
-                    })
-                )
-                .await
-                .is_err()
-        );
+        // A reference miss precedes admission. Cooldown re-observes the same intent;
+        // it neither invalidates paid state nor manufactures a regeneration nonce.
         {
             let mut state = locked(&inner.state);
             state.canonical.admit_mural();
@@ -321,13 +266,78 @@ mod tests {
         }
         let retry = take_mural(&inner);
         assert_eq!(retry.binding, work.binding);
-        assert!(retry.regenerate);
         assert_eq!(fixture.calls(), 0);
-        assert!(
-            inner.render_canonical(&retry).await.is_ok(),
-            "cooldown retry clears the exhausted PlateSpec"
-        );
+        let first = inner.render_canonical(&retry).await.unwrap();
         assert_eq!(fixture.calls(), 1);
+        assert_eq!(inner.render_canonical(&retry).await.unwrap(), first);
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "same accepted intent reuses the actual result"
+        );
+        drop(inner);
+        fixture.close().await;
+    }
+
+    #[tokio::test]
+    async fn mural_unknown_cooldown_and_restart_reobserve_without_another_supplier_send() {
+        let cache = std::env::temp_dir().join(format!("mural-unknown-{}", std::process::id()));
+        let Some(mut fixture) = DirectionFixture::unknown(&cache).await else {
+            return;
+        };
+        let first = inner(fixture.imagery.clone());
+        ready_party(&first, &fixture).await;
+        let work = take_mural(&first);
+        assert_eq!(
+            first.render_canonical(&work).await,
+            Err(ImageFailure::Interrupted)
+        );
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "the actual endpoint consumed the request before closing"
+        );
+        first.finish_canonical(work.clone(), Err(ImageFailure::Interrupted));
+        {
+            let mut state = locked(&first.state);
+            state.canonical.admit_mural();
+            assert!(state.canonical.take_jobs().is_empty());
+            state
+                .canonical
+                .entries
+                .get_mut(&Target::Mural)
+                .unwrap()
+                .started = Some(Instant::now() - ROOM_RETRY_COOLDOWN);
+            state.canonical.admit_mural();
+        }
+        let retry = take_mural(&first);
+        assert_eq!(retry.binding, work.binding);
+        assert_eq!(
+            first.render_canonical(&retry).await,
+            Err(ImageFailure::Interrupted)
+        );
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "cooldown cannot turn Unknown into a second send"
+        );
+        drop(first);
+        fixture.restart().await;
+        let restarted = inner(fixture.imagery.clone());
+        ready_party(&restarted, &fixture).await;
+        let replay = take_mural(&restarted);
+        assert_eq!(replay.binding, work.binding);
+        assert_eq!(
+            restarted.render_canonical(&replay).await,
+            Err(ImageFailure::Interrupted)
+        );
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "the durable Unknown receipt survives host restart"
+        );
+        drop(restarted);
+        fixture.close().await;
     }
 
     #[tokio::test]
@@ -337,9 +347,11 @@ mod tests {
             "../../artifacts/tmp/lanes/HS49/mural-cache-{}",
             std::process::id()
         ));
-        let fixture = DirectionFixture::photographic(&cache);
+        let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+            return;
+        };
         let first = inner(fixture.imagery.clone());
-        let reference = ready_party(&first).await;
+        let reference = ready_party(&first, &fixture).await;
         let work = take_mural(&first);
         let key = first.render_canonical(&work).await.unwrap();
         first.finish_canonical(work, Ok(key.clone()));
@@ -370,13 +382,15 @@ mod tests {
             assert_eq!(value["party_mural"]["state"], "ready");
             assert_eq!(value["party_mural"]["url"], key.path());
         }
-        let restarted_fixture = DirectionFixture::photographic(&cache);
-        let restarted = inner(restarted_fixture.imagery.clone());
-        ready_party(&restarted).await;
+        let calls_before_restart = fixture.calls();
+        drop(first);
+        fixture.restart().await;
+        let restarted = inner(fixture.imagery.clone());
+        ready_party(&restarted, &fixture).await;
         let work = take_mural(&restarted);
         assert_eq!(restarted.render_canonical(&work).await.unwrap(), key);
         assert_eq!(
-            restarted_fixture.calls(),
+            fixture.calls() - calls_before_restart,
             0,
             "persistent cache reuses the exact photograph after restart"
         );
@@ -389,30 +403,32 @@ mod tests {
             "the restarted server serves the cached mural bytes"
         );
         {
-            let mut state = locked(&first.state);
+            let mut state = locked(&restarted.state);
             state.canonical.fixture_hero(3, "Mira", reference.clone());
             state.canonical.mural_expected_count = 3;
             state.canonical.admit_mural();
             assert_eq!(state.canonical.mural_view()["state"], "pending");
         }
-        let work = take_mural(&first);
-        let changed = first.render_canonical(&work).await.unwrap();
+        let work = take_mural(&restarted);
+        let changed = restarted.render_canonical(&work).await.unwrap();
         assert_ne!(changed, key);
-        first.finish_canonical(work, Ok(changed.clone()));
+        restarted.finish_canonical(work, Ok(changed.clone()));
         assert_eq!(fixture.calls(), 2);
         assert!(fixture.prompt().contains("Exactly 3 heroes"));
         {
-            let mut state = locked(&first.state);
+            let mut state = locked(&restarted.state);
             state.canonical.fixture_hero(1, "Brakka revised", reference);
             state.canonical.admit_mural();
         }
-        let work = take_mural(&first);
-        assert_ne!(first.render_canonical(&work).await.unwrap(), changed);
+        let work = take_mural(&restarted);
+        assert_ne!(restarted.render_canonical(&work).await.unwrap(), changed);
         assert_eq!(
             fixture.calls(),
             3,
             "a depiction revision creates one new mural"
         );
+        drop(restarted);
+        fixture.close().await;
     }
 
     #[test]

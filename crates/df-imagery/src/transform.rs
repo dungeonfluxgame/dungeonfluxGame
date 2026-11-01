@@ -27,6 +27,14 @@ pub enum TransformSource {
     Image(SourceRef),
     Canvas(CanvasSpec),
     Coverage(CoverageRef),
+    /// Fixed focus-mask recipe over one actual completed segmentation observation.
+    SegmentationMask {
+        analyzed: SourceRef,
+        segmentation: crate::OperationHandle,
+        prompt: crate::SegmentationPrompt,
+        mask_index: u32,
+        contract_revision: u32,
+    },
 }
 
 /// Explicitly sized and filled canvas; sheets need no fake file or upload.
@@ -639,6 +647,23 @@ impl PadSpec {
     }
 }
 
+/// Encoded-byte filters pinned to image 0.25.10 for existing raster consumers.
+/// These preserve straight-alpha channels, including RGB hidden by zero alpha.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncodedFilter {
+    Triangle,
+    Lanczos3,
+}
+
+/// Existing encoded-byte alpha equations; distinct from standard linear-light matte.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncodedAlphaBlend {
+    /// Per-channel integer floor `(source * alpha + fill * (255 - alpha)) / 255`.
+    IntegerFloor,
+    /// image 0.25.10 source-over onto an opaque destination, including its rounding.
+    ImageSourceOver,
+}
+
 /// One ordered step of a local recipe.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageTransform {
@@ -654,6 +679,20 @@ pub enum ImageTransform {
     Sharpen(SharpenSpec),
     Mask(MaskSpec),
     Composite(Vec<CompositeLayer>),
+    /// Exact encoded-byte resize, with explicit dimensions and pinned filter.
+    EncodedResize {
+        dimensions: Dimensions,
+        filter: EncodedFilter,
+    },
+    /// image 0.25.10 fast integer thumbnail with its aspect-ratio rounding.
+    EncodedThumbnail(Dimensions),
+    /// Flatten now, before subsequent steps, using the selected legacy alpha equation.
+    EncodedMatte {
+        fill: Rgb,
+        blend: EncodedAlphaBlend,
+    },
+    /// Drop alpha without changing any RGB channel, including hidden RGB.
+    DiscardAlpha,
 }
 
 /// Ordered local recipe: source plus ordered local steps. Delivery is owned
@@ -669,6 +708,16 @@ impl TransformSpec {
     /// already enforce their invariants at construction; only openly
     /// constructible enum payloads and injected counts are rechecked here.
     pub fn validate(&self, limits: &RequestLimits) -> Result<(), TransformError> {
+        if let TransformSource::SegmentationMask {
+            contract_revision, ..
+        } = &self.source
+        {
+            if *contract_revision != 1 {
+                return Err(TransformError::OutOfRange {
+                    field: "segmentation_mask_revision",
+                });
+            }
+        }
         if self.steps.len() > limits.max_transform_steps {
             return Err(TransformError::TooManySteps);
         }

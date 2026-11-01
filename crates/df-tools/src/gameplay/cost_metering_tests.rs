@@ -3,10 +3,7 @@
 
 use std::sync::Mutex;
 
-use df_providers::{
-    AnsweredUsage, BflImageConfig, FalImageConfig, MeteredClient, NativeBflImageProvider,
-    NativeFalImageProvider, SentCall,
-};
+use df_providers::{AnsweredUsage, MeteredClient, SentCall};
 
 use super::*;
 use crate::gameplay::resources::SpendLedger;
@@ -23,7 +20,7 @@ fn row(model: &str, category: &str, usd: &str, per: u64, extra: &str) -> String 
 }
 
 /// The checked-in price file, opened on a fresh ledger.
-fn shipped_ledger() -> Arc<SpendLedger> {
+pub(super) fn shipped_ledger() -> Arc<SpendLedger> {
     let path = PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../content/pricing.json"
@@ -240,111 +237,161 @@ fn a_quote_sums_the_exact_lines_and_rounds_once() {
     );
 }
 
-#[test]
-fn a_dropped_picture_call_is_booked_in_the_routes_priced_categories() {
+#[tokio::test]
+async fn a_dropped_picture_call_is_booked_in_the_routes_priced_categories() {
     let ledger = shipped_ledger();
-    let route = image_route();
-    let mut edit = plate_edit();
-    edit.quality = ImageQuality::High;
-    edit.width = 1024;
-    edit.height = 1024;
-    let spec = image_call(
-        &route,
-        ImageEditModel::Gpt25Flare,
-        ImageKind::ScenePlate,
-        ImagePriority::Foreground,
-        "dev",
-        &edit,
+    let endpoint = CostImageEndpoint::new(1024, 1024, CostImageReply::Unknown);
+    let patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::OpenAi,
+        1024,
+        1024,
+        df_imagery::GenerationQuality::High,
+        false,
     );
-    assert_eq!(
-        spec.maxima,
-        vec![
-            (Category::TextInput, 4),
-            (Category::ImageInput, 0),
-            (Category::ImageOutput, 4_160),
-        ],
-        "the high-quality square of the published token table"
-    );
-    // The caller's own estimate (imagery sends one call) is not what is booked.
-    drop(ledger.begin_call(spec, &[(Category::Calls, 1)]));
-    let state = state_of(ledger.costs());
-    assert_eq!(state.session_totals.unknown_events, 1);
-    assert_eq!(state.session_totals.unpriced_events, 0);
-    assert_eq!(state.session_totals.micro_usd, 4 * 5 + 4_160 * 30);
-}
-
-#[test]
-fn a_dropped_bfl_call_is_booked_at_the_files_per_call_ceiling_until_credits_are_reported() {
-    let ledger = shipped_ledger();
-    let config = BflImageConfig::loopback_fixture("127.0.0.1:9".parse().expect("address"))
-        .expect("loopback fixture");
-    let route = ImageRoute::Bfl(
-        NativeBflImageProvider::new(config, "test-credential", Duration::from_secs(1))
-            .expect("provider"),
-    );
-    let spec = |_: ()| {
-        image_call(
-            &route,
-            ImageEditModel::Gpt25Flare,
-            ImageKind::ScenePlate,
-            ImagePriority::Foreground,
-            "dev",
-            &plate_edit(),
-        )
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
     };
-    assert_eq!(spec(()).maxima, vec![(Category::Calls, 1)]);
-    settle_image_call(
-        ledger.begin_call(spec(()), &[]),
-        &route,
-        &Err(ImageFailure::DeadlineExceeded),
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        61,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        1,
+    )
+    .await;
+    let call = fixture.metering_port().recent().pop().unwrap();
+    assert_eq!(
+        call.units
+            .iter()
+            .map(|unit| (unit.category.as_str(), unit.quantity))
+            .collect::<Vec<_>>(),
+        vec![
+            ("text_input", 4),
+            ("image_input", 0),
+            ("image_output", 4160)
+        ]
     );
-    assert_eq!(state_of(ledger.costs()).session_totals.micro_usd, 80_000);
-    // Credits the call reported replace the ceiling.
-    settle_image_call(
-        ledger.begin_call(spec(()), &[]),
-        &route,
-        &Ok((image(ImageUsage::default()), Some("3".to_owned()))),
+    assert_eq!(call.source, port::MeteredSource::Unknown);
+    assert!(!call.unpriced);
+    assert_eq!(
+        state_of(ledger.costs()).session_totals.micro_usd,
+        4 * 5 + 4160 * 30
     );
-    let state = state_of(ledger.costs());
-    assert_eq!(state.session_totals.micro_usd, 80_000 + 30_000);
-    assert_eq!(state.session_totals.unpriced_events, 0);
+    assert_eq!(state_of(ledger.costs()).session_totals.unknown_events, 1);
+    fixture.close().await;
 }
 
-#[test]
-fn a_flux_edit_is_billed_under_the_endpoint_that_made_it_and_a_cutout_is_a_second_event() {
+#[tokio::test]
+async fn a_dropped_bfl_call_is_booked_at_the_files_per_call_ceiling_until_credits_are_reported() {
     let ledger = shipped_ledger();
-    let config = FalImageConfig::loopback_fixture("127.0.0.1:9".parse().expect("address"))
-        .expect("loopback fixture");
-    let route = ImageRoute::Flux(
-        NativeFalImageProvider::new(config, "test-credential", Duration::from_secs(1))
-            .expect("provider"),
+    let endpoint = CostImageEndpoint::new(1024, 1536, CostImageReply::Unknown);
+    let patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::Bfl,
+        1024,
+        1536,
+        df_imagery::GenerationQuality::Medium,
+        false,
     );
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        71,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        1,
+    )
+    .await;
+    assert_eq!(state_of(ledger.costs()).session_totals.micro_usd, 80_000);
+    let unknown = fixture.metering_port().recent().pop().unwrap();
     assert_eq!(
-        image_route_model(&route, ImageEditModel::Gpt25Flare, false),
-        (Provider::Fal, df_providers::FLUX_ULTRA)
+        unknown.units,
+        vec![port::MeteredUnits {
+            category: "calls".to_owned(),
+            quantity: 1
+        }]
     );
+    endpoint.set(CostImageReply::Silent);
+    let (view, _) = unified_cost_image(
+        &fixture,
+        &endpoint,
+        72,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        2,
+    )
+    .await;
+    assert_eq!(view.execution, df_imagery::ImageExecutionState::Ready);
+    let reported = fixture.metering_port().recent().pop().unwrap();
     assert_eq!(
-        image_route_model(&route, ImageEditModel::Gpt25Flare, true),
-        (Provider::Fal, df_providers::FLUX_KONTEXT_MULTI)
+        reported.units,
+        vec![port::MeteredUnits {
+            category: "credits".to_owned(),
+            quantity: 3
+        }]
     );
-    let mut edit = plate_edit();
-    edit.background = ImageBackground::Transparent;
-    edit.output = ImageFormat::Png;
-    let spec = image_call(
-        &route,
-        ImageEditModel::Gpt25Flare,
-        ImageKind::CastExpression,
-        ImagePriority::Foreground,
-        "dev",
-        &edit,
+    assert_eq!(reported.source, port::MeteredSource::Reported);
+    assert_eq!(
+        state_of(ledger.costs()).session_totals.micro_usd,
+        80_000 + 30_000
     );
-    assert_eq!(spec.model, df_providers::FLUX_ULTRA);
-    assert_eq!(spec.follow_ons.len(), 1);
-    let result = Ok((image(ImageUsage::default()), None));
-    settle_image_call(ledger.begin_call(spec.clone(), &[]), &route, &result);
+    assert_eq!(state_of(ledger.costs()).session_totals.unpriced_events, 0);
+    assert_ne!(unknown.call_id, reported.call_id);
+    assert_eq!(endpoint.posts().len(), 2);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn a_flux_edit_is_billed_under_the_endpoint_that_made_it_and_a_cutout_is_a_second_event() {
+    let ledger = shipped_ledger();
+    let endpoint = CostImageEndpoint::new(1024, 1024, CostImageReply::Silent);
+    let patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::Fal,
+        1024,
+        1024,
+        df_imagery::GenerationQuality::Medium,
+        true,
+    );
+    let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    let (view, request) = unified_cost_image(
+        &fixture,
+        &endpoint,
+        81,
+        df_imagery::Purpose::Expression,
+        vec![],
+        2,
+    )
+    .await;
+    assert_eq!(view.execution, df_imagery::ImageExecutionState::Ready);
     {
         let state = state_of(ledger.costs());
-        assert_eq!(state.session_totals.events, 2, "the picture and its cutout");
+        assert_eq!(state.session_totals.events, 2);
         assert_eq!(state.session_totals.unpriced_events, 0);
         assert_eq!(state.session_totals.micro_usd, 60_000 + 10_000);
         assert_eq!(
@@ -356,13 +403,37 @@ fn a_flux_edit_is_billed_under_the_endpoint_that_made_it_and_a_cutout_is_a_secon
             10_000
         );
     }
-    // A call of unknown outcome records only the picture: the cutout runs after it succeeds.
-    settle_image_call(
-        ledger.begin_call(spec, &[]),
-        &route,
-        &Err(ImageFailure::DeadlineExceeded),
+    let calls = fixture.metering_port().recent();
+    assert_ne!(calls[0].call_id, calls[1].call_id);
+    let reference = fixture
+        .imagery()
+        .published_reference(view.result.as_ref().unwrap(), request.audience)
+        .await
+        .unwrap();
+    let source = reference.canonical_source().unwrap().clone();
+    endpoint.set(CostImageReply::Unknown);
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        82,
+        df_imagery::Purpose::Expression,
+        vec![source],
+        3,
+    )
+    .await;
+    let call = fixture.metering_port().recent().pop().unwrap();
+    assert_eq!(call.model, df_providers::FLUX_KONTEXT_MULTI);
+    assert_eq!(call.source, port::MeteredSource::Unknown);
+    let posts = endpoint.posts();
+    assert_eq!(
+        posts.len(),
+        3,
+        "uncertain generation cannot trigger a cutout"
     );
+    assert!(posts[0].starts_with(&format!("POST /{} ", df_providers::FLUX_ULTRA)));
+    assert!(posts[2].starts_with(&format!("POST /{} ", df_providers::FLUX_KONTEXT_MULTI)));
     assert_eq!(state_of(ledger.costs()).session_totals.events, 3);
+    fixture.close().await;
 }
 
 #[test]
@@ -676,8 +747,6 @@ fn the_port_refuses_names_the_engine_does_not_know_and_keeps_a_bounded_record() 
 /// maximum, whoever built the call.
 #[test]
 fn every_metered_route_starts_with_a_maximum_for_every_category_it_declares() {
-    use df_providers::{ImageEdit, ReferenceImage};
-
     struct Starts(Mutex<Vec<port::MeterStart>>);
     impl port::MeterObserver for Starts {
         fn started(&self, start: &port::MeterStart) {
@@ -694,49 +763,6 @@ fn every_metered_route_starts_with_a_maximum_for_every_category_it_declares() {
         drop(ledger.begin_call(spec, estimate));
     };
 
-    // Pictures: OpenAI, BFL, FLUX with and without references.
-    let references = [ReferenceImage {
-        format: ImageFormat::Png,
-        bytes: &[1, 2, 3],
-    }];
-    let with_references = ImageEdit {
-        references: &references,
-        ..plate_edit()
-    };
-    let openai = image_route();
-    let bfl = ImageRoute::Bfl(
-        NativeBflImageProvider::new(
-            BflImageConfig::loopback_fixture("127.0.0.1:9".parse().expect("address")).expect("bfl"),
-            "test-credential",
-            Duration::from_secs(1),
-        )
-        .expect("provider"),
-    );
-    let flux = ImageRoute::Flux(
-        NativeFalImageProvider::new(
-            FalImageConfig::loopback_fixture("127.0.0.1:9".parse().expect("address")).expect("fal"),
-            "test-credential",
-            Duration::from_secs(1),
-        )
-        .expect("provider"),
-    );
-    for (route, edit) in [
-        (&openai, plate_edit()),
-        (&bfl, plate_edit()),
-        (&flux, plate_edit()),
-        (&flux, with_references),
-    ] {
-        let spec = image_call(
-            route,
-            ImageEditModel::Gpt25Flare,
-            ImageKind::ScenePlate,
-            ImagePriority::Foreground,
-            "dev",
-            &edit,
-        );
-        begin(spec, &[(Category::Calls, 1)]);
-    }
-    begin(clip_frame_call(ImageEditModel::Gpt25Sunburst, false), &[]);
     // Text and voice take their estimate from the caller.
     begin(
         text_call("gpt-6-luna", "npc_reply"),
@@ -749,7 +775,16 @@ fn every_metered_route_starts_with_a_maximum_for_every_category_it_declares() {
     // The other routes state their own.
     begin(stt_call(3), &[]);
     begin(embedding_call("text-embedding-3-small", 40), &[]);
-    begin(segment_call("fal-ai/sam-3-1/image-rle", "person"), &[]);
+    begin(
+        CallSpec::new(
+            Provider::Fal,
+            "fal-ai/sam-3-1/image-rle",
+            Cause::Segmentation,
+            "segmentation",
+        )
+        .with_maxima(vec![(Category::Calls, 1)]),
+        &[],
+    );
     begin(music_layer_call("bed", 48), &[]);
     begin(ambience_call("set", 27), &[]);
     begin(
@@ -804,17 +839,13 @@ fn every_metered_route_starts_with_a_maximum_for_every_category_it_declares() {
         }
         covered.insert((route.provider, route.model));
     }
-    // Every route starts at least once, but the cutout: it runs after a picture succeeds and is
-    // no admission of its own.
+    // Image route starts are covered through the actual unified host below.
     let routed: BTreeSet<_> = ROUTES
         .iter()
+        .filter(|route| !unified_image_route(route))
         .map(|route| (route.provider, route.model))
         .collect();
-    let cutout = (Provider::Fal, df_providers::BACKGROUND_REMOVAL);
-    assert_eq!(
-        routed.difference(&covered).copied().collect::<Vec<_>>(),
-        [cutout]
-    );
+    assert_eq!(routed, covered);
 }
 
 /// An observer that keeps what it was told a call would use.
@@ -1012,7 +1043,7 @@ fn missing_supplier_usage_estimates_choice_and_vision_at_their_required_amounts(
 /// What a failed request may have cost, by the failure the client reports.
 #[test]
 fn a_failed_request_may_have_been_billed_unless_the_supplier_refused_it() {
-    use df_providers::{ElevenMusicError, FalSegmentError, NativeHttpRefusal, WorldLabsError};
+    use df_providers::{ElevenMusicError, NativeHttpRefusal, WorldLabsError};
     for (error, billed) in [
         (ElevenMusicError::InvalidRequest, false),
         (ElevenMusicError::Unauthorized, false),
@@ -1032,21 +1063,16 @@ fn a_failed_request_may_have_been_billed_unless_the_supplier_refused_it() {
     ] {
         assert_eq!(music_error_may_be_billed(error), billed, "{error:?}");
     }
-    for (error, billed) in [
-        (FalSegmentError::InvalidRequest, false),
-        (FalSegmentError::Unauthorized, false),
-        (FalSegmentError::Provider(429), false),
-        (FalSegmentError::Provider(503), true),
-        (
-            FalSegmentError::Transport(NativeHttpRefusal::Deadline),
-            true,
-        ),
-        (FalSegmentError::Queue, true),
-        (FalSegmentError::Failed, true),
-        (FalSegmentError::Output, true),
-    ] {
-        assert_eq!(segment_error_may_be_billed(error), billed, "{error:?}");
+    for (status, billed) in [(429, false), (503, true)] {
+        assert_eq!(
+            df_providers::status_may_be_billed(status),
+            billed,
+            "{status}"
+        );
     }
+    assert!(df_providers::refusal_may_be_billed(
+        NativeHttpRefusal::Deadline
+    ));
     for (error, billed) in [
         (WorldLabsError::InvalidRequest, false),
         (WorldLabsError::Unauthorized, false),
@@ -1061,4 +1087,208 @@ fn a_failed_request_may_have_been_billed_unless_the_supplier_refused_it() {
     ] {
         assert_eq!(world_error_may_be_billed(error), billed, "{error:?}");
     }
+}
+
+fn unified_image_route(route: &BilledRoute) -> bool {
+    matches!(
+        route.client,
+        "NativeImageEditProvider" | "NativeBflImageProvider" | "NativeFalImageProvider"
+    )
+}
+
+#[tokio::test]
+async fn every_unified_image_route_starts_with_a_maximum_for_every_declared_category() {
+    use df_imagery::{BackendId, GenerationQuality, Purpose};
+    let ledger = shipped_ledger();
+    let starts = Arc::new(Starts(Mutex::new(Vec::new())));
+    ledger.costs().observe(starts.clone());
+    let mut calls = 0;
+    for (index, backend, model) in [
+        (0, BackendId::OpenAi, None),
+        (1, BackendId::OpenAi, Some("gpt-image-2.5-sunburst")),
+        (2, BackendId::Bfl, None),
+        (3, BackendId::Fal, None),
+    ] {
+        let height = if backend == BackendId::Bfl {
+            1536
+        } else {
+            1024
+        };
+        let endpoint = CostImageEndpoint::new(1024, height, CostImageReply::Silent);
+        let mut patch = cost_image_patch(
+            endpoint.address,
+            backend,
+            1024,
+            height,
+            GenerationQuality::Medium,
+            backend == BackendId::Fal,
+        );
+        patch.backend_model[backend.index()] =
+            Some(model.map(|name| df_imagery::ModelName::new(name).unwrap()));
+        let Some(fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+            endpoint.address,
+            patch,
+            MeteringPort::from_ledger(ledger.clone()),
+        )
+        .await
+        else {
+            return;
+        };
+        calls += if backend == BackendId::Fal { 2 } else { 1 };
+        let (view, request) = unified_cost_image(
+            &fixture,
+            &endpoint,
+            90 + index,
+            Purpose::ScenePlate,
+            vec![],
+            calls,
+        )
+        .await;
+        assert_eq!(view.execution, df_imagery::ImageExecutionState::Ready);
+        if backend == BackendId::Fal {
+            let reference = fixture
+                .imagery()
+                .published_reference(view.result.as_ref().unwrap(), request.audience)
+                .await
+                .unwrap();
+            let source = reference.canonical_source().unwrap().clone();
+            calls += 2;
+            unified_cost_image(
+                &fixture,
+                &endpoint,
+                99,
+                Purpose::ScenePlate,
+                vec![source],
+                calls,
+            )
+            .await;
+        }
+        fixture.close().await;
+    }
+    let seen = starts.0.lock().unwrap().clone();
+    let mut covered = BTreeSet::new();
+    for start in seen {
+        let route = ROUTES
+            .iter()
+            .find(|route| route.provider.label() == start.provider && route.model == start.model)
+            .unwrap();
+        assert!(unified_image_route(route));
+        for category in route.categories {
+            assert!(
+                start
+                    .maxima
+                    .iter()
+                    .any(|units| units.category == category.label()),
+                "actual unified start omitted {} {}",
+                start.model,
+                category.label()
+            );
+        }
+        covered.insert((route.provider, route.model));
+    }
+    let expected = ROUTES
+        .iter()
+        .filter(|route| unified_image_route(route))
+        .map(|route| (route.provider, route.model))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        covered, expected,
+        "generation, referenced edits and explicit extraction all enter the real meter"
+    );
+}
+
+#[tokio::test]
+async fn actual_unified_image_replay_cannot_pump_fractional_rounding_or_duplicate_pinned_calls() {
+    let ledger = Arc::new(SpendLedger::default());
+    ledger
+        .costs()
+        .open(
+            "df_gameplay_demo_test",
+            None,
+            PriceTable::parse(&TABLE.replace("\"usd\": \"30\"", "\"usd\": \"0.50\"")).unwrap(),
+            PricingStatus::NotLoaded,
+            1_000,
+        )
+        .unwrap();
+    let endpoint = CostImageEndpoint::new(
+        1024,
+        1024,
+        CostImageReply::Reported {
+            text: 0,
+            input: 0,
+            output: 1,
+        },
+    );
+    let patch = cost_image_patch(
+        endpoint.address,
+        df_imagery::BackendId::OpenAi,
+        1024,
+        1024,
+        df_imagery::GenerationQuality::Medium,
+        false,
+    );
+    let Some(mut fixture) = crate::gameplay::image_test_support::ImageHostFixture::open(
+        endpoint.address,
+        patch,
+        MeteringPort::from_ledger(ledger.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    let (original, request) = unified_cost_image(
+        &fixture,
+        &endpoint,
+        111,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        1,
+    )
+    .await;
+    assert_eq!(state_of(ledger.costs()).session_totals.micro_usd, 1);
+    let context = fixture.imagery().consumer_context().await.unwrap();
+    for _ in 0..8 {
+        assert_cost_replay(
+            context
+                .service
+                .request(&context.principal, &request)
+                .await
+                .unwrap(),
+            &original,
+        );
+    }
+    assert_eq!(state_of(ledger.costs()).session_totals.micro_usd, 1);
+    drop(context);
+    fixture.restart().await;
+    let restarted = fixture.imagery().consumer_context().await.unwrap();
+    assert_cost_replay(
+        restarted
+            .service
+            .request(&restarted.principal, &request)
+            .await
+            .unwrap(),
+        &original,
+    );
+    assert_eq!(fixture.metering_port().totals().calls, 1);
+    assert_eq!(state_of(ledger.costs()).session_totals.micro_usd, 1);
+    drop(restarted);
+    unified_cost_image(
+        &fixture,
+        &endpoint,
+        112,
+        df_imagery::Purpose::ScenePlate,
+        vec![],
+        2,
+    )
+    .await;
+    assert_eq!(
+        state_of(ledger.costs()).session_totals.micro_usd,
+        2,
+        "distinct pinned calls round in isolation; replay never consumes or pumps another call's remainder"
+    );
+    let calls = fixture.metering_port().recent();
+    assert_eq!(calls.len(), 2);
+    assert_ne!(calls[0].call_id, calls[1].call_id);
+    assert_eq!(endpoint.posts().len(), 2);
+    fixture.close().await;
 }

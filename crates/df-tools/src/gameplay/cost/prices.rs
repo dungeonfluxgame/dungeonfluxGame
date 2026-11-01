@@ -351,6 +351,39 @@ pub(in crate::gameplay) fn load_prices(path: &Path) -> (PriceTable, PricingStatu
     }
 }
 
+/// The lines of one pinned call at `table`'s rates, rounded per line without the book's
+/// carried remainders: each line's exact price rounds half up to whole micro-dollars on its
+/// own. A pinned correction replaces its stored revision, so feeding the replacement through
+/// the shared carry would pump rounding on every same-usage revision; isolated pricing keeps
+/// a repeated revision at identical money and never disturbs the ordinary carry. The tradeoff
+/// is explicit: pinned lines forgo the cross-call carry, so each may round up to half a
+/// micro-dollar off exact where an ordinary run of calls would carry it.
+pub(super) fn price_isolated(
+    table: &PriceTable,
+    provider: Provider,
+    model: &str,
+    quantities: &[(Category, u64)],
+) -> (Vec<CostLine>, u64) {
+    let context = context_tokens(quantities);
+    let lines: Vec<CostLine> = quantities
+        .iter()
+        .map(|(category, quantity)| {
+            let micro_usd = table
+                .exact(provider, model, *category, *quantity, context)
+                .map(|exact| exact.round_half_up().unwrap_or(u64::MAX));
+            CostLine {
+                category: *category,
+                quantity: *quantity,
+                micro_usd,
+            }
+        })
+        .collect();
+    let total = lines.iter().fold(0_u64, |sum, line| {
+        sum.saturating_add(line.micro_usd.unwrap_or(0))
+    });
+    (lines, total)
+}
+
 /// The lines of one call at `table`'s rates, rounded with the book's carried remainders: each
 /// line's exact price is added to its carry, the result is rounded half up to whole
 /// micro-dollars, and what is left over (below half a micro-dollar either way) is carried to the

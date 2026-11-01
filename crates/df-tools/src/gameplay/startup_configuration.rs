@@ -1370,13 +1370,6 @@ pub(in crate::gameplay) enum ImageryProfile {
 }
 
 impl ImageryProfile {
-    pub(in crate::gameplay) fn label(self) -> &'static str {
-        match self {
-            Self::Production => "production",
-            Self::Dev => "dev",
-        }
-    }
-
     /// The profile from the environment; an invalid value is refused without echoing it.
     pub(in crate::gameplay) fn from_environment() -> Result<Self, io::Error> {
         imagery_profile(std::env::var("DF_GAMEPLAY_IMAGERY_PROFILE"))
@@ -1401,26 +1394,6 @@ const MAXIMUM_IMAGERY_DEADLINE_SECONDS: u64 = 170;
 const DEFAULT_IMAGERY_MODEL: &str = "gpt-image-2.5-flare";
 const DEFAULT_IMAGERY_CACHE: &str = "artifacts/tmp/play/imagery-cache";
 
-/// The OpenAI credential used for image edits; it never appears in `Debug` output.
-pub(super) struct ImageryCredential(String);
-
-impl ImageryCredential {
-    pub(super) fn expose(&self) -> &str {
-        &self.0
-    }
-
-    #[cfg(test)]
-    pub(super) fn for_test(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl std::fmt::Debug for ImageryCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ImageryCredential([REDACTED])")
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ImageryOff {
     Qualification,
@@ -1440,7 +1413,6 @@ impl ImageryOff {
 
 #[derive(Debug)]
 pub(super) struct ImageryConfiguration {
-    pub(super) credential: Option<ImageryCredential>,
     pub(super) model: df_providers::ImageEditModel,
     pub(super) quality: df_providers::ImageQuality,
     /// Production draws every kind at `quality` and full size; dev trades fidelity for cost.
@@ -1450,7 +1422,6 @@ pub(super) struct ImageryConfiguration {
     /// How long one provider call may take.
     pub(super) deadline: Duration,
     pub(super) cache_dir: std::path::PathBuf,
-    pub(super) rating: ContentRating,
 }
 
 #[derive(Debug)]
@@ -1476,12 +1447,11 @@ fn bounded_seconds(
 }
 
 /// Imagery is on when a credential is present and `DF_GAMEPLAY_IMAGERY` is not `off`. Invalid
-/// values are refused without echoing them; empty values count as unset. `rating` is the
-/// server's already-installed content rating.
+/// values are refused without echoing them; empty values count as unset. Credentials are
+/// validated for this legacy gate, then resolved separately by the mounted host's custody.
 pub(super) fn imagery_settings(
     inputs: ImageryInputs,
     current: &Path,
-    rating: ContentRating,
 ) -> Result<ImagerySettings, io::Error> {
     let disabled = match optional(inputs.mode)?.as_deref() {
         None | Some("" | "on") => false,
@@ -1530,7 +1500,6 @@ pub(super) fn imagery_settings(
     }
     let cache = std::path::PathBuf::from(cache);
     Ok(ImagerySettings::On(ImageryConfiguration {
-        credential: credential.map(ImageryCredential),
         model,
         quality,
         profile,
@@ -1541,7 +1510,6 @@ pub(super) fn imagery_settings(
         } else {
             current.join(cache)
         },
-        rating,
     }))
 }
 

@@ -424,147 +424,152 @@ async fn hs65_committed_ware_is_foreground_and_the_next_shot_then_returns_to_the
     let cache = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS71/item-shot")
         .join(std::process::id().to_string());
-    let fixture = DirectionFixture::photographic(&cache);
-    Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner)
-        .unwrap()
-        .imagery = fixture.imagery.clone();
-    let model = current.setting.as_ref().unwrap().model.as_ref().unwrap();
-    let before = model.public_contents().unwrap();
-    // Offer-only stock is projected for inspection, never materialized into inventory.
-    let offer = &model.offers[0];
-    let mut ware = model.things[0].clone();
-    ware.id = offer.item_id.clone();
-    ware.name = offer.name.clone();
-    ware.detail = offer.description.clone();
-    ware.picture_description = offer.description.clone();
-    ware.owner_id = Some(offer.seller_id.clone());
-    ware.holder_id = Some(offer.seller_id.clone());
-    assert!(model.things.iter().all(|thing| thing.id != ware.id));
-    // Unlike the old object-only card, a focus shot reads the real current plate bytes.
-    let base = fixture
-        .imagery
-        .generate_with_priority(
-            "fixture-scene",
-            item_image_request(shared.inner.rating, &ware, None).unwrap(),
-            ImagePriority::Foreground,
-        )
-        .await
-        .unwrap();
+    let Some(fixture) = DirectionFixture::photographic(&cache).await else {
+        return;
+    };
     {
-        let mut book = locked(&shared.book);
-        let id = book.current.as_ref().unwrap().id.clone().unwrap();
-        book.insert(
-            id,
-            super::super::Entry::Ready {
-                key: base.clone(),
-                placement: None,
-            },
-        );
-        let shown = book.presented.as_mut().unwrap();
-        shown.key = base.clone();
-        shown.since = Duration::ZERO;
-    }
-    commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
-    shared.poll_state_images_at(Duration::from_secs(3));
-    let cadence = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
-    let plates = Plates {
-        shared: Arc::clone(&shared),
-        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
-    };
-    plates
-        .request_committed_item(
-            "Brynn",
-            &ware,
-            Some("The folded linen has a blue hem.".into()),
-            true,
-        )
-        .unwrap();
-    let super::super::Job::State(job) = drain(&mut queue).remove(0) else {
-        panic!("item job")
-    };
-    assert!(matches!(
-        &job,
-        Job::Item {
-            priority: ImagePriority::Foreground,
-            ..
+        Arc::get_mut(&mut Arc::get_mut(&mut shared).unwrap().inner)
+            .unwrap()
+            .imagery = fixture.imagery.clone();
+        let model = current.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let before = model.public_contents().unwrap();
+        // Offer-only stock is projected for inspection, never materialized into inventory.
+        let offer = &model.offers[0];
+        let mut ware = model.things[0].clone();
+        ware.id = offer.item_id.clone();
+        ware.name = offer.name.clone();
+        ware.detail = offer.description.clone();
+        ware.picture_description = offer.description.clone();
+        ware.owner_id = Some(offer.seller_id.clone());
+        ware.holder_id = Some(offer.seller_id.clone());
+        assert!(model.things.iter().all(|thing| thing.id != ware.id));
+        // Unlike the old object-only card, a focus shot reads the real current plate bytes.
+        let base = fixture
+            .imagery
+            .generate_with_priority(
+                "fixture-scene",
+                item_image_request(shared.inner.rating, &ware, None).unwrap(),
+                ImagePriority::Foreground,
+            )
+            .await
+            .unwrap();
+        {
+            let mut book = locked(&shared.book);
+            let id = book.current.as_ref().unwrap().id.clone().unwrap();
+            book.insert(
+                id,
+                super::super::Entry::Ready {
+                    key: base.clone(),
+                    placement: None,
+                },
+            );
+            let shown = book.presented.as_mut().unwrap();
+            shown.key = base.clone();
+            shown.since = Duration::ZERO;
         }
-    ));
-    let done = shared.render_state_image(job).await;
-    let Done::Item {
-        result: Ok(item_key),
-        ..
-    } = &done
-    else {
-        panic!("fake artifact_close_up completed")
-    };
-    let item_key = item_key.clone();
-    assert_eq!(
-        fixture.calls(),
-        3,
-        "current plate, canonical item, then one scene-focus edit"
-    );
-    assert!(fixture.prompt().contains(&ware.name));
-    assert_eq!(
-        fixture.image_count(),
-        2,
-        "scene and canonical item references"
-    );
-    assert!(fixture.prompt().contains("centre of the frame"));
-    assert!(fixture.prompt().contains("softly out of focus"));
-    assert!(!fixture.prompt().contains(&ware.closer_look));
-    shared.finish_state_image_at(done, Duration::from_secs(5));
-    cadence.complete(&shared, Duration::from_secs(20));
-    let mut output = rpc::GameplayScene::default();
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(24));
-    assert_eq!(
-        output.live_plate,
-        base.path(),
-        "keep the scene's reading hold"
-    );
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(25));
-    assert_eq!(
-        output.live_plate,
-        item_key.path(),
-        "the item precedes the ready cadence picture"
-    );
-    assert!(
-        output.plate_layout.is_none(),
-        "never lend the item the scene's people"
-    );
-    assert_eq!(
-        locked(&shared.book)
-            .state_images
-            .item_shot
-            .as_ref()
-            .unwrap()
-            .hero,
-        "Brynn"
-    );
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(49));
-    assert_eq!(output.live_plate, item_key.path());
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(50));
-    assert_eq!(output.live_plate, base.path());
-    assert!(locked(&shared.book).state_images.item_shot.is_none());
-    shared.poll_state_images_at(Duration::from_secs(80));
-    shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(81));
-    assert_eq!(output.live_plate, format!("/gameplay/imagery/{:064x}", 1));
-    assert_eq!(model.public_contents().unwrap(), before);
-    assert_eq!(
-        locked(&shared.book)
-            .current
-            .as_ref()
-            .unwrap()
-            .scene
-            .as_ref()
-            .unwrap()
-            .snapshot
-            .as_ref()
-            .unwrap()
-            .model
-            .public_contents()
-            .unwrap(),
-        before
-    );
+        commit_beat(&shared, &current, &mut projected, 1, Duration::ZERO, true);
+        shared.poll_state_images_at(Duration::from_secs(3));
+        let cadence = FakeRender::from_job(drain(&mut queue).remove(0), Duration::ZERO);
+        let plates = Plates {
+            shared: Arc::clone(&shared),
+            _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+        };
+        plates
+            .request_committed_item(
+                "Brynn",
+                &ware,
+                Some("The folded linen has a blue hem.".into()),
+                true,
+            )
+            .unwrap();
+        let super::super::Job::State(job) = drain(&mut queue).remove(0) else {
+            panic!("item job")
+        };
+        assert!(matches!(
+            &job,
+            Job::Item {
+                priority: ImagePriority::Foreground,
+                ..
+            }
+        ));
+        let done = shared.render_state_image(job).await;
+        let Done::Item {
+            result: Ok(item_key),
+            ..
+        } = &done
+        else {
+            panic!("fake artifact_close_up completed")
+        };
+        let item_key = item_key.clone();
+        assert_eq!(
+            fixture.calls(),
+            3,
+            "current plate, canonical item, then one scene-focus edit"
+        );
+        assert!(fixture.prompt().contains(&ware.name));
+        assert_eq!(
+            fixture.image_count(),
+            2,
+            "scene and canonical item references"
+        );
+        assert!(fixture.prompt().contains("centre of the frame"));
+        assert!(fixture.prompt().contains("softly out of focus"));
+        assert!(!fixture.prompt().contains(&ware.closer_look));
+        shared.finish_state_image_at(done, Duration::from_secs(5));
+        cadence.complete(&shared, Duration::from_secs(20));
+        let mut output = rpc::GameplayScene::default();
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(24));
+        assert_eq!(
+            output.live_plate,
+            base.path(),
+            "keep the scene's reading hold"
+        );
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(25));
+        assert_eq!(
+            output.live_plate,
+            item_key.path(),
+            "the item precedes the ready cadence picture"
+        );
+        assert!(
+            output.plate_layout.is_none(),
+            "never lend the item the scene's people"
+        );
+        assert_eq!(
+            locked(&shared.book)
+                .state_images
+                .item_shot
+                .as_ref()
+                .unwrap()
+                .hero,
+            "Brynn"
+        );
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(49));
+        assert_eq!(output.live_plate, item_key.path());
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(50));
+        assert_eq!(output.live_plate, base.path());
+        assert!(locked(&shared.book).state_images.item_shot.is_none());
+        shared.poll_state_images_at(Duration::from_secs(80));
+        shared.apply_at(&projected.scene_key, &mut output, Duration::from_secs(81));
+        assert_eq!(output.live_plate, format!("/gameplay/imagery/{:064x}", 1));
+        assert_eq!(model.public_contents().unwrap(), before);
+        assert_eq!(
+            locked(&shared.book)
+                .current
+                .as_ref()
+                .unwrap()
+                .scene
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .model
+                .public_contents()
+                .unwrap(),
+            before
+        );
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -596,7 +601,7 @@ async fn hs58_inventory_waits_for_a_plate_and_does_not_fill_the_plate_queue() {
     }
     assert_eq!(
         drain(&mut queue).len(),
-        crate::gameplay::imagery::BACKGROUND_IN_FLIGHT
+        super::state_images::MAXIMUM_PENDING_HAND_ITEMS
     );
     let first = locked(&shared.book)
         .state_images

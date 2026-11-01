@@ -610,6 +610,7 @@ impl PresentationIngress {
                 basis.revision.sequence(),
             )),
         };
+        let image_reports = std::cell::RefCell::new(Vec::new());
         let (records, replayed) = self.ledger.lock().await.record(
             TimingUpload {
                 binding,
@@ -624,6 +625,11 @@ impl PresentationIngress {
             |event, line, timing, page_producer_hash| {
                 let _audit_scope = df_observe::audit_scope(audit.clone());
                 if let Some(timing) = timing.as_ref() {
+                    if role == LocalDemoRole::Display
+                        && super::image_observability::displayed_asset_identity(timing).is_some()
+                    {
+                        image_reports.borrow_mut().push(timing.clone());
+                    }
                     let (mut fields, attributes) =
                         presentation_fields(timing, &correlation, page_producer_hash);
                     fields.insert(
@@ -640,6 +646,24 @@ impl PresentationIngress {
                 }
             },
         )?;
+        if let Some(observer) = self.service.imagery.observer()
+            && let Ok(producer) = df_observe::ProducerId::new(producer)
+        {
+            for report in image_reports.into_inner() {
+                if let Some(identity) =
+                    super::image_observability::displayed_asset_identity(&report)
+                    && let Ok(Some(publication)) =
+                        self.service.imagery.displayed_observation(identity).await
+                {
+                    super::image_observability::displayed(
+                        observer.as_ref(),
+                        &publication,
+                        &report,
+                        producer,
+                    );
+                }
+            }
+        }
         Ok(Response::new(rpc::PresentationTelemetryResponse {
             batch_sequence: request.batch_sequence,
             accepted_records: records as u32,
@@ -1104,5 +1128,49 @@ mod tests {
                 .is_err()
         );
         assert_eq!(lines.borrow().len(), 1);
+    }
+
+    #[test]
+    fn authenticated_display_batches_emit_image_shown_once_and_player_reports_are_refused() {
+        use super::super::image_observability::{PublishedObservation, displayed};
+        use df_imagery::telemetry::{ImageEvent, ImageObserver};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counter(AtomicUsize);
+        impl ImageObserver for Counter {
+            fn observe(&self, _event: ImageEvent) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let observer = Counter(AtomicUsize::new(0));
+        let publication = PublishedObservation {
+            operation: df_types::OperationId::from_bytes(&[1; 16]).unwrap(),
+            job: df_imagery::ImageJobId::from_bytes(&[2; 16]).unwrap(),
+            asset: df_imagery::AssetId::from_bytes(&[3; 16]).unwrap(),
+            config_revision: None,
+        };
+        let bytes = presentation::encode(&[
+            presentation::TimingEvent::lifecycle("plate-loaded", "ready", 7, 8, 9),
+            presentation::TimingEvent::lifecycle("plate-shown", "ready", 7, 8, 10),
+        ])
+        .unwrap();
+        let emit = |_, _, event: Option<presentation::TimingEvent>, _: &str| {
+            if let Some(event) = event {
+                displayed(
+                    &observer,
+                    &publication,
+                    &event,
+                    df_observe::ProducerId::new([2; 16]).unwrap(),
+                );
+            }
+        };
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (2, false));
+        assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (2, true));
+        assert_eq!(observer.0.load(Ordering::Relaxed), 1);
+        let mut player = upload(&bytes);
+        player.role = LocalDemoRole::Player;
+        assert!(Ledger::default().record(player, emit).is_err());
+        assert_eq!(observer.0.load(Ordering::Relaxed), 1);
     }
 }

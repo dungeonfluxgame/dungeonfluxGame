@@ -27,7 +27,8 @@ use serde_json::Value;
 
 /// Evidenced client request methods from the schema export.
 pub(crate) const INITIALIZE_METHOD: &str = "initialize";
-/// Server readiness notification that must precede any thread work.
+/// Client readiness notification the adapter sends after a valid `initialize`
+/// response. The server never sends this method; nothing waits for it.
 pub(crate) const INITIALIZED_METHOD: &str = "initialized";
 pub(crate) const THREAD_START_METHOD: &str = "thread/start";
 pub(crate) const TURN_START_METHOD: &str = "turn/start";
@@ -35,6 +36,8 @@ pub(crate) const TURN_START_METHOD: &str = "turn/start";
 pub(crate) const TURN_INTERRUPT_METHOD: &str = "turn/interrupt";
 /// Terminal turn payload carrying the `imageGeneration` items.
 pub(crate) const TURN_COMPLETED_METHOD: &str = "turn/completed";
+/// Per-item completion; a completed image item may arrive only here, not in the turn payload.
+pub(crate) const ITEM_COMPLETED_METHOD: &str = "item/completed";
 /// Progress notification that starts a correlated turn.
 pub(crate) const TURN_STARTED_METHOD: &str = "turn/started";
 /// Subscription usage notification carrying `tokenUsage.last/total`.
@@ -62,8 +65,6 @@ pub(crate) enum ProtocolError {
     MissingThreadId,
     MissingTurnId,
     UnexpectedResponse { id: String },
-    UnexpectedNotification { method: String },
-    TurnMismatch,
     TooManyMessages,
     InputMismatch,
 }
@@ -145,30 +146,47 @@ fn params_shape(params: &Value) -> &'static str {
     }
 }
 
-/// Token counts the CLI reported for the turn, if any. Cost is never derived
-/// here: absence is unknown, not zero, and present counts pass through for
-/// the finance owner to price. Cumulative `total` is kept separate from the
-/// last-turn delta so callers never sum them twice.
+/// One reported counter snapshot; every field has the same last-turn or
+/// thread-cumulative basis. Missing data never becomes a zero observation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct UsageCounts {
+    pub(crate) input_tokens: Option<u64>,
+    pub(crate) output_tokens: Option<u64>,
+    pub(crate) cached_input_tokens: Option<u64>,
+    pub(crate) reasoning_output_tokens: Option<u64>,
+    pub(crate) total_tokens: Option<u64>,
+}
+
+impl UsageCounts {
+    fn is_unknown(self) -> bool {
+        self == Self::default()
+    }
+
+    fn merge(&mut self, other: Self) {
+        if other.is_unknown() {
+            return;
+        }
+        // A lower aggregate identifies a stale cumulative snapshot. Keep one
+        // whole observation rather than fabricate componentwise maxima.
+        if let (Some(current), Some(incoming)) = (self.total_tokens, other.total_tokens)
+            && incoming < current
+        {
+            return;
+        }
+        *self = other;
+    }
+}
+
+/// Correlated turn usage and thread-cumulative diagnostics remain separate.
+/// Only turn counters are eligible for per-attempt units; cumulative-only
+/// observations keep turn usage unknown and never stand in for a delta.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ObservedUsage {
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    cached_input_tokens: Option<u64>,
-    reasoning_output_tokens: Option<u64>,
-    total_tokens: Option<u64>,
+    last: UsageCounts,
+    cumulative: UsageCounts,
 }
 
 impl ObservedUsage {
-    pub(crate) fn new(input_tokens: Option<u64>, output_tokens: Option<u64>) -> Self {
-        Self {
-            input_tokens,
-            output_tokens,
-            cached_input_tokens: None,
-            reasoning_output_tokens: None,
-            total_tokens: None,
-        }
-    }
-
     pub(crate) fn full(
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
@@ -177,69 +195,46 @@ impl ObservedUsage {
         total_tokens: Option<u64>,
     ) -> Self {
         Self {
-            input_tokens,
-            output_tokens,
-            cached_input_tokens,
-            reasoning_output_tokens,
-            total_tokens,
+            last: UsageCounts {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                reasoning_output_tokens,
+                total_tokens,
+            },
+            cumulative: UsageCounts::default(),
         }
     }
 
     pub(crate) fn unknown() -> Self {
-        Self {
-            input_tokens: None,
-            output_tokens: None,
-            cached_input_tokens: None,
-            reasoning_output_tokens: None,
-            total_tokens: None,
-        }
+        Self::default()
     }
-
     pub fn input_tokens(&self) -> Option<u64> {
-        self.input_tokens
+        self.last.input_tokens
     }
-
     pub fn output_tokens(&self) -> Option<u64> {
-        self.output_tokens
+        self.last.output_tokens
     }
-
     pub fn cached_input_tokens(&self) -> Option<u64> {
-        self.cached_input_tokens
+        self.last.cached_input_tokens
     }
-
     pub fn reasoning_output_tokens(&self) -> Option<u64> {
-        self.reasoning_output_tokens
+        self.last.reasoning_output_tokens
     }
-
     pub fn total_tokens(&self) -> Option<u64> {
-        self.total_tokens
+        self.last.total_tokens
     }
 
+    pub(crate) fn cumulative_usage(&self) -> UsageCounts {
+        self.cumulative
+    }
     pub(crate) fn is_unknown(&self) -> bool {
-        self.input_tokens.is_none()
-            && self.output_tokens.is_none()
-            && self.cached_input_tokens.is_none()
-            && self.reasoning_output_tokens.is_none()
-            && self.total_tokens.is_none()
+        self.last.is_unknown()
     }
 
     pub(crate) fn merge(&mut self, other: Self) {
-        self.input_tokens = max_opt(self.input_tokens, other.input_tokens);
-        self.output_tokens = max_opt(self.output_tokens, other.output_tokens);
-        self.cached_input_tokens = max_opt(self.cached_input_tokens, other.cached_input_tokens);
-        self.reasoning_output_tokens = max_opt(
-            self.reasoning_output_tokens,
-            other.reasoning_output_tokens,
-        );
-        self.total_tokens = max_opt(self.total_tokens, other.total_tokens);
-    }
-}
-
-fn max_opt(first: Option<u64>, second: Option<u64>) -> Option<u64> {
-    match (first, second) {
-        (Some(left), Some(right)) => Some(left.max(right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
+        self.last.merge(other.last);
+        self.cumulative.merge(other.cumulative);
     }
 }
 
@@ -302,14 +297,6 @@ fn bounded(text: &str, field: &'static str, max_chars: usize) -> Result<String, 
     Ok(text.to_owned())
 }
 
-fn optional_text(value: &Value, field: &'static str) -> Result<Option<String>, ProtocolError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::String(text) => Ok(Some(bounded(text, field, MAXIMUM_ID_CHARS)?)),
-        _ => Err(ProtocolError::WrongType { field }),
-    }
-}
-
 /// Encodes one JSON-RPC request plus a newline; the caller bounds the stream.
 pub(crate) fn encode_request(
     id: u64,
@@ -333,15 +320,41 @@ pub(crate) fn encode_request(
     Ok(bytes)
 }
 
+/// Encodes one client JSON-RPC notification plus a newline; the caller bounds
+/// the stream. The `initialized` handshake completion travels this way: it
+/// carries no request id, so the server never answers it.
+pub(crate) fn encode_notification(
+    method: &str,
+    params: Value,
+    max_message_bytes: usize,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut bytes = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": JSONRPC_VERSION,
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|_| ProtocolError::InvalidJson)?;
+    if bytes.len() >= max_message_bytes {
+        return Err(ProtocolError::MessageTooLong {
+            len_bytes: bytes.len(),
+        });
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 /// Thread params from `ThreadStartParams`: owned scratch as cwd, an ephemeral
-/// thread so private prompt text is not persisted, and no approvals because
-/// no operator answers them mid-turn.
+/// thread so private prompt text is not persisted, no approvals because no
+/// operator answers them mid-turn, and a read-only sandbox. The image tool still
+/// saves its artifact into the server's own output store, verified live on
+/// 2026-11-01, while model-issued shell commands are refused.
 pub(crate) fn thread_start_params(cwd: &str, agent_model: Option<&str>) -> Value {
     serde_json::json!({
         "cwd": cwd,
         "ephemeral": true,
         "model": agent_model,
         "approvalPolicy": "never",
+        "sandbox": "read-only",
     })
 }
 
@@ -407,10 +420,10 @@ pub(crate) fn extract_turn_started(params: &Value) -> Result<(String, String), P
         .and_then(Value::as_str)
         .ok_or(ProtocolError::MissingField { field: "threadId" })?;
     let thread_id = bounded(thread_id, "threadId", MAXIMUM_ID_CHARS)?;
-    if let Some(turn) = params.get("turn") {
-        if let Some(id) = turn.get("id").and_then(Value::as_str) {
-            return Ok((thread_id, bounded(id, "turn.id", MAXIMUM_ID_CHARS)?));
-        }
+    if let Some(turn) = params.get("turn")
+        && let Some(id) = turn.get("id").and_then(Value::as_str)
+    {
+        return Ok((thread_id, bounded(id, "turn.id", MAXIMUM_ID_CHARS)?));
     }
     if let Some(id) = params.get("turnId").and_then(Value::as_str) {
         return Ok((thread_id, bounded(id, "turn.id", MAXIMUM_ID_CHARS)?));
@@ -428,7 +441,7 @@ pub(crate) struct TokenUsageUpdate {
 
 /// Parses a `ThreadTokenUsageUpdatedNotification` body: `threadId`, `turnId`
 /// and `tokenUsage.last/total` breakdowns. `total` is cumulative and `last`
-/// is the last-turn delta; both merge without summing.
+/// is the last-turn delta. Each remains a separate snapshot and basis.
 pub(crate) fn extract_token_usage_update(
     params: &Value,
 ) -> Result<TokenUsageUpdate, ProtocolError> {
@@ -447,28 +460,32 @@ pub(crate) fn extract_token_usage_update(
         .ok_or(ProtocolError::MissingField {
             field: "tokenUsage",
         })?;
-    let mut merged = ObservedUsage::unknown();
-    if let Some(last) = token_usage.get("last") {
-        merged.merge(breakdown_usage(last));
-    }
-    if let Some(total) = token_usage.get("total") {
-        merged.merge(breakdown_usage(total));
-    }
     Ok(TokenUsageUpdate {
         thread_id,
         turn_id,
-        usage: merged,
+        usage: ObservedUsage {
+            last: token_usage
+                .get("last")
+                .map_or_else(UsageCounts::default, breakdown_usage),
+            cumulative: token_usage
+                .get("total")
+                .map_or_else(UsageCounts::default, breakdown_usage),
+        },
     })
 }
 
-fn breakdown_usage(value: &Value) -> ObservedUsage {
-    ObservedUsage::full(
-        token_count(value, "inputTokens", "input_tokens"),
-        token_count(value, "outputTokens", "output_tokens"),
-        token_count(value, "cachedInputTokens", "cached_input_tokens"),
-        token_count(value, "reasoningOutputTokens", "reasoning_output_tokens"),
-        token_count(value, "totalTokens", "total_tokens"),
-    )
+fn breakdown_usage(value: &Value) -> UsageCounts {
+    UsageCounts {
+        input_tokens: token_count(value, "inputTokens", "input_tokens"),
+        output_tokens: token_count(value, "outputTokens", "output_tokens"),
+        cached_input_tokens: token_count(value, "cachedInputTokens", "cached_input_tokens"),
+        reasoning_output_tokens: token_count(
+            value,
+            "reasoningOutputTokens",
+            "reasoning_output_tokens",
+        ),
+        total_tokens: token_count(value, "totalTokens", "total_tokens"),
+    }
 }
 
 fn token_count(value: &Value, camel: &str, snake: &str) -> Option<u64> {
@@ -552,8 +569,9 @@ pub(crate) fn parse_line(line: &[u8]) -> Result<Inbound, ProtocolError> {
 
 fn response_code(error: &Value) -> String {
     match error.get("code") {
-        Some(Value::String(code)) => bounded(code, "code", MAXIMUM_CODE_CHARS)
-            .unwrap_or_else(|_| "code_too_long".to_owned()),
+        Some(Value::String(code)) => {
+            bounded(code, "code", MAXIMUM_CODE_CHARS).unwrap_or_else(|_| "code_too_long".to_owned())
+        }
         Some(Value::Number(code)) => code.to_string(),
         _ => "unknown".to_owned(),
     }
@@ -597,7 +615,9 @@ pub(crate) fn extract_turn_completed(params: &Value) -> Result<TurnCompletedView
     let items = turn
         .get("items")
         .and_then(Value::as_array)
-        .ok_or(ProtocolError::MissingField { field: "turn.items" })?;
+        .ok_or(ProtocolError::MissingField {
+            field: "turn.items",
+        })?;
     let mut images = Vec::new();
     for item in items {
         if item.get("type").and_then(Value::as_str) == Some("imageGeneration") {
@@ -614,7 +634,7 @@ pub(crate) fn extract_turn_completed(params: &Value) -> Result<TurnCompletedView
     })
 }
 
-fn parse_image_item(item: &Value) -> Result<ImageItem, ProtocolError> {
+pub(crate) fn parse_image_item(item: &Value) -> Result<ImageItem, ProtocolError> {
     let id = item
         .get("id")
         .and_then(Value::as_str)
@@ -633,22 +653,30 @@ fn parse_image_item(item: &Value) -> Result<ImageItem, ProtocolError> {
         None | Some(Value::Null) => None,
         Some(Value::String(id)) if id.is_empty() => None,
         Some(Value::String(id)) => Some(bounded(id, "item.fileId", MAXIMUM_ID_CHARS)?),
-        Some(_) => return Err(ProtocolError::WrongType { field: "item.fileId" }),
+        Some(_) => {
+            return Err(ProtocolError::WrongType {
+                field: "item.fileId",
+            });
+        }
     };
     let (has_result, result_len) = match item.get("result") {
         Some(Value::String(text)) => (!text.is_empty(), text.len()),
         None | Some(Value::Null) => (false, 0),
-        Some(_) => return Err(ProtocolError::WrongType { field: "item.result" }),
+        Some(_) => {
+            return Err(ProtocolError::WrongType {
+                field: "item.result",
+            });
+        }
     };
     let saved_path = match item.get("savedPath") {
         None | Some(Value::Null) => None,
         Some(Value::String(path)) if path.is_empty() => None,
-        Some(Value::String(path)) => {
-            Some(bounded(path, "item.savedPath", MAXIMUM_PATH_CHARS)?)
+        Some(Value::String(path)) => Some(bounded(path, "item.savedPath", MAXIMUM_PATH_CHARS)?),
+        Some(_) => {
+            return Err(ProtocolError::WrongType {
+                field: "item.savedPath",
+            });
         }
-        Some(_) => return Err(ProtocolError::WrongType {
-            field: "item.savedPath",
-        }),
     };
     let transparent_background = match item.get("transparentBackground") {
         None | Some(Value::Null) => None,
@@ -687,7 +715,11 @@ fn parse_item_failure(item: &Value) -> Result<Option<ItemFailure>, ProtocolError
     let failure = match item.get("failure") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Object(failure)) => failure,
-        Some(_) => return Err(ProtocolError::WrongType { field: "item.failure" }),
+        Some(_) => {
+            return Err(ProtocolError::WrongType {
+                field: "item.failure",
+            });
+        }
     };
     if failure.get("type").and_then(Value::as_str) == Some("usageLimitExceeded") {
         let limit_id = failure
@@ -709,18 +741,20 @@ fn parse_item_failure(item: &Value) -> Result<Option<ItemFailure>, ProtocolError
 fn parse_observed_inputs(entries: &[Value]) -> Result<Vec<ObservedInput>, ProtocolError> {
     let mut observed = Vec::with_capacity(entries.len());
     for entry in entries {
-        let path = entry
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or(ProtocolError::MissingField {
-                field: "inputImages.path",
-            })?;
-        let sha256_hex = entry
-            .get("sha256")
-            .and_then(Value::as_str)
-            .ok_or(ProtocolError::MissingField {
-                field: "inputImages.sha256",
-            })?;
+        let path =
+            entry
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::MissingField {
+                    field: "inputImages.path",
+                })?;
+        let sha256_hex =
+            entry
+                .get("sha256")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::MissingField {
+                    field: "inputImages.sha256",
+                })?;
         observed.push(ObservedInput {
             path: bounded(path, "inputImages.path", MAXIMUM_PATH_CHARS)?,
             sha256_hex: bounded(sha256_hex, "inputImages.sha256", MAXIMUM_ID_CHARS)?,
@@ -731,24 +765,21 @@ fn parse_observed_inputs(entries: &[Value]) -> Result<Vec<ObservedInput>, Protoc
 
 /// Reads token counts opportunistically from the known spellings; absence is
 /// normal and keeps cost unknown rather than zero. Both turn `usage` and
-/// `tokenUsage` breakdown shapes feed the same accumulator without summing
-/// cumulative totals twice.
+/// `tokenUsage` breakdown shapes preserve turn and cumulative bases separately.
 pub(crate) fn observe_usage(turn: &Value) -> ObservedUsage {
     let usage = turn.get("usage").or_else(|| turn.get("tokenUsage"));
     let Some(usage) = usage else {
         return ObservedUsage::unknown();
     };
     if usage.get("last").is_some() || usage.get("total").is_some() {
-        let mut merged = ObservedUsage::unknown();
-        if let Some(last) = usage.get("last") {
-            merged.merge(breakdown_usage(last));
-        }
-        if let Some(total) = usage.get("total") {
-            merged.merge(breakdown_usage(total));
-        }
-        if !merged.is_unknown() {
-            return merged;
-        }
+        return ObservedUsage {
+            last: usage
+                .get("last")
+                .map_or_else(UsageCounts::default, breakdown_usage),
+            cumulative: usage
+                .get("total")
+                .map_or_else(UsageCounts::default, breakdown_usage),
+        };
     }
     ObservedUsage::full(
         token_count(usage, "inputTokens", "input_tokens"),
@@ -857,16 +888,12 @@ mod tests {
             r#"{"type":"imageGeneration","status":"completed"}"#,
         ))
         .unwrap_err();
-        assert_eq!(
-            error,
-            ProtocolError::MissingField { field: "item.id" }
-        );
+        assert_eq!(error, ProtocolError::MissingField { field: "item.id" });
     }
 
     #[test]
     fn thread_id_extracts_from_the_evidenced_shape() {
-        let result: Value =
-            serde_json::from_str(r#"{"thread":{"id":"thread-9"}}"#).unwrap();
+        let result: Value = serde_json::from_str(r#"{"thread":{"id":"thread-9"}}"#).unwrap();
         assert_eq!(extract_thread_id(&result).unwrap(), "thread-9");
         let missing: Value = serde_json::from_str(r#"{"thread":{}}"#).unwrap();
         assert_eq!(
@@ -892,11 +919,12 @@ mod tests {
     }
 
     #[test]
-    fn thread_start_params_carry_ephemeral_and_never() {
+    fn thread_start_params_carry_ephemeral_never_and_read_only_sandbox() {
         let params = thread_start_params("/tmp/scratch", Some("agent-x"));
         assert_eq!(params["cwd"], Value::from("/tmp/scratch"));
         assert_eq!(params["ephemeral"], Value::Bool(true));
         assert_eq!(params["approvalPolicy"], Value::from("never"));
+        assert_eq!(params["sandbox"], Value::from("read-only"));
         assert_eq!(params["model"], Value::from("agent-x"));
     }
 
@@ -915,15 +943,23 @@ mod tests {
     }
 
     #[test]
+    fn initialized_notification_carries_no_request_id() {
+        let bytes = encode_notification(INITIALIZED_METHOD, serde_json::json!({}), 4096).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["method"], Value::from(INITIALIZED_METHOD));
+        assert!(
+            value.get("id").is_none(),
+            "the client initialized notification carries no request id"
+        );
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert!(encode_notification(INITIALIZED_METHOD, serde_json::json!({}), 16).is_err());
+    }
+
+    #[test]
     fn request_encoding_respects_the_message_bound() {
-        let error =
-            encode_request(1, TURN_START_METHOD, Value::Null, 16).unwrap_err();
-        assert!(matches!(
-            error,
-            ProtocolError::MessageTooLong { .. }
-        ));
-        let bytes =
-            encode_request(1, TURN_START_METHOD, Value::Null, 4096).unwrap();
+        let error = encode_request(1, TURN_START_METHOD, Value::Null, 16).unwrap_err();
+        assert!(matches!(error, ProtocolError::MessageTooLong { .. }));
+        let bytes = encode_request(1, TURN_START_METHOD, Value::Null, 4096).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
     }
 
@@ -933,9 +969,7 @@ mod tests {
             path: "/tmp/in/a.png".to_owned(),
             sha256_hex: "AB".to_owned(),
         }]);
-        assert!(
-            match_inputs(&observed, &[("/tmp/in/a.png", "ab")]).is_ok()
-        );
+        assert!(match_inputs(&observed, &[("/tmp/in/a.png", "ab")]).is_ok());
         assert_eq!(
             match_inputs(&observed, &[("/tmp/in/a.png", "cd")]).unwrap_err(),
             ProtocolError::InputMismatch
@@ -949,8 +983,7 @@ mod tests {
 
     #[test]
     fn usage_is_unknown_when_absent_and_observed_when_present() {
-        let bare: Value =
-            serde_json::from_str(r#"{"id":"t","status":"completed"}"#).unwrap();
+        let bare: Value = serde_json::from_str(r#"{"id":"t","status":"completed"}"#).unwrap();
         assert_eq!(observe_usage(&bare), ObservedUsage::unknown());
         let with_usage: Value = serde_json::from_str(
             r#"{"id":"t","status":"completed","usage":{"input_tokens":5,"outputTokens":3}}"#,
@@ -971,15 +1004,12 @@ mod tests {
 
     #[test]
     fn turn_ids_bind_from_response_and_started_event() {
-        let response: Value =
-            serde_json::from_str(r#"{"turn":{"id":"turn-7"}}"#).unwrap();
+        let response: Value = serde_json::from_str(r#"{"turn":{"id":"turn-7"}}"#).unwrap();
         assert_eq!(extract_turn_id_from_start(&response).unwrap(), "turn-7");
         let flat: Value = serde_json::from_str(r#"{"id":"turn-8"}"#).unwrap();
         assert_eq!(extract_turn_id_from_start(&flat).unwrap(), "turn-8");
-        let started: Value = serde_json::from_str(
-            r#"{"threadId":"thread-1","turn":{"id":"turn-7"}}"#,
-        )
-        .unwrap();
+        let started: Value =
+            serde_json::from_str(r#"{"threadId":"thread-1","turn":{"id":"turn-7"}}"#).unwrap();
         assert_eq!(
             extract_turn_started(&started).unwrap(),
             ("thread-1".to_owned(), "turn-7".to_owned())
@@ -987,18 +1017,57 @@ mod tests {
     }
 
     #[test]
-    fn token_usage_last_and_total_merge_without_summing_twice() {
+    fn token_usage_last_and_total_remain_separate_without_summing_twice() {
         let params: Value = serde_json::from_str(
-            r#"{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"last":{"inputTokens":5,"outputTokens":3,"cachedInputTokens":1,"reasoningOutputTokens":2,"totalTokens":8},"total":{"inputTokens":5,"outputTokens":3,"cachedInputTokens":1,"reasoningOutputTokens":2,"totalTokens":8}}}"#,
+            r#"{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"last":{"inputTokens":5,"outputTokens":3,"cachedInputTokens":1,"reasoningOutputTokens":2,"totalTokens":8},"total":{"inputTokens":100,"outputTokens":90,"cachedInputTokens":20,"reasoningOutputTokens":30,"totalTokens":190}}}"#,
         )
         .unwrap();
         let update = extract_token_usage_update(&params).unwrap();
         assert_eq!(update.usage.input_tokens(), Some(5));
         assert_eq!(update.usage.total_tokens(), Some(8));
+        assert_eq!(update.usage.output_tokens(), Some(3));
+        assert_eq!(update.usage.cumulative_usage().input_tokens, Some(100));
+        assert_eq!(update.usage.cumulative_usage().output_tokens, Some(90));
+        assert_eq!(update.usage.cumulative_usage().total_tokens, Some(190));
         let mut merged = ObservedUsage::unknown();
         merged.merge(update.usage);
         merged.merge(update.usage);
         assert_eq!(merged.input_tokens(), Some(5));
+    }
+
+    #[test]
+    fn repeated_reordered_and_missing_breakdowns_keep_whole_counter_snapshots() {
+        let mut usage = ObservedUsage::unknown();
+        let update =
+            |last: Value, total: Value| {
+                extract_token_usage_update(&serde_json::json!({
+            "threadId":"thread-1", "turnId":"turn-1", "tokenUsage":{"last":last,"total":total}
+        })).expect("snapshot").usage
+            };
+        let first = update(
+            serde_json::json!({"inputTokens":5,"outputTokens":20,"totalTokens":25}),
+            serde_json::json!({"inputTokens":100,"outputTokens":10,"totalTokens":110}),
+        );
+        let second = update(
+            serde_json::json!({"inputTokens":30,"outputTokens":1,"totalTokens":31}),
+            serde_json::json!({"inputTokens":80,"outputTokens":40,"totalTokens":120}),
+        );
+        usage.merge(first);
+        usage.merge(second);
+        usage.merge(second);
+        usage.merge(first);
+        assert_eq!(usage.input_tokens(), Some(30));
+        assert_eq!(usage.output_tokens(), Some(1));
+        assert_eq!(usage.cumulative_usage().input_tokens, Some(80));
+        assert_eq!(usage.cumulative_usage().output_tokens, Some(40));
+        usage.merge(update(
+            Value::Null,
+            serde_json::json!({"inputTokens":90,"totalTokens":130}),
+        ));
+        assert_eq!(usage.input_tokens(), Some(30));
+        assert_eq!(usage.output_tokens(), Some(1));
+        assert_eq!(usage.cumulative_usage().input_tokens, Some(90));
+        assert_eq!(usage.cumulative_usage().output_tokens, None);
     }
 
     #[test]
@@ -1014,7 +1083,8 @@ mod tests {
     #[test]
     fn wire_debug_hides_private_result_and_params() {
         let marker = "SECRET-MARKER-9f2c";
-        let params = serde_json::json!({"tokenUsage": {"last": {"inputTokens": 1}}, "note": marker});
+        let params =
+            serde_json::json!({"tokenUsage": {"last": {"inputTokens": 1}}, "note": marker});
         let notification = Inbound::Notification {
             method: "thread/tokenUsageUpdated".to_owned(),
             params,

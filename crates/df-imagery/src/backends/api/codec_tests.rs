@@ -4,8 +4,20 @@ use super::codec::{jpeg_size, webp_facts};
 
 fn minimal_jpeg(width: u16, height: u16) -> Vec<u8> {
     vec![
-        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x08, 0x08, (height >> 8) as u8, height as u8,
-        (width >> 8) as u8, width as u8, 0x01, 0xff, 0xd9,
+        0xff,
+        0xd8,
+        0xff,
+        0xc0,
+        0x00,
+        0x08,
+        0x08,
+        (height >> 8) as u8,
+        height as u8,
+        (width >> 8) as u8,
+        width as u8,
+        0x01,
+        0xff,
+        0xd9,
     ]
 }
 

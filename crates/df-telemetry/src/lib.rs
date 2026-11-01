@@ -2,6 +2,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod configured_tests;
+mod clock;
+pub use clock::StoreClock;
 mod ownership;
 mod persistence;
 mod query;
@@ -241,13 +243,11 @@ impl Store {
     }
     /// Inject monotonic elapsed time; synthetic health has no game admission authority.
     pub fn set_time(&self, elapsed: Duration) -> Result<(), TelemetryError> {
-        let millis =
-            u64::try_from(elapsed.as_millis()).map_err(|_| TelemetryError::InvalidLimits)?;
-        self.ingress
-            .counters
-            .clock
-            .fetch_max(millis, Ordering::AcqRel);
-        Ok(())
+        self.clock().set_time(elapsed)
+    }
+    /// Clone clock injection without sharing ownership of the disk worker or Store lock.
+    pub fn clock(&self) -> StoreClock {
+        StoreClock::new(Arc::clone(&self.ingress.counters))
     }
     pub fn health(&self) -> IngestionHealth {
         let c = &self.ingress.counters;

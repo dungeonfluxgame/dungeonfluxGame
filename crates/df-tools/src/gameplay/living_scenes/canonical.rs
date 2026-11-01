@@ -4,7 +4,7 @@ use super::*;
 use crate::gameplay::{
     adventure::scene_model::{SceneModel, ScenePerson},
     hero_identity::ValidatedIdentity,
-    imagery::{self, HeroVisualIdentity, Lookup},
+    imagery::{self, HeroVisualIdentity},
 };
 use df_model::checkpoint::{Checkpoint, EntityId};
 use df_render::art_contract;
@@ -78,7 +78,91 @@ pub(super) struct Work {
     scope: String,
     binding: String,
     source: Source,
-    regenerate: bool,
+    regenerated: bool,
+}
+
+fn canonical_request_parts(
+    work: &Work,
+    rating: ContentRating,
+    binding: &str,
+    public_cast_id: Option<&str>,
+) -> Result<(ImageKind, imagery::AssembledPrompt, OutputSpec), ImageFailure> {
+    Ok(match &work.source {
+        Source::Mural(_) => return Err(ImageFailure::InvalidRequest),
+        Source::Hero {
+            identity,
+            species,
+            gear,
+            public_design,
+            portrait,
+            ..
+        } => (
+            ImageKind::CanonicalCharacter,
+            imagery::canonical_character(
+                rating,
+                HeroVisualIdentity {
+                    identity,
+                    species,
+                    held_gear: gear,
+                },
+                None,
+                public_design,
+                portrait.is_some(),
+                binding,
+            )?,
+            OutputSpec::CUTOUT,
+        ),
+        Source::Npc {
+            person,
+            gender,
+            age,
+            identity_photo,
+            identity_figure_photo,
+            canon,
+        } => (
+            ImageKind::CanonicalCharacter,
+            imagery::canonical_npc(
+                rating,
+                person,
+                (*gender, *age, canon.as_slice()).into(),
+                identity_photo.is_some(),
+                identity_figure_photo.is_some(),
+                binding,
+            )?,
+            OutputSpec::CUTOUT,
+        ),
+        Source::ReviewedRoom { .. } => return Err(ImageFailure::InvalidRequest),
+        Source::Room {
+            model,
+            place,
+            context,
+            canon,
+        } => (
+            ImageKind::CanonicalRoom,
+            imagery::canonical_room_with_context(
+                rating,
+                model,
+                place,
+                context.as_ref(),
+                canon,
+                binding,
+            )?,
+            OutputSpec::BACKDROP,
+        ),
+        Source::Cast { member, canon } => (
+            ImageKind::CanonicalCharacter,
+            imagery::canonical_cast_member(
+                rating,
+                public_cast_id.unwrap_or(&member.id),
+                &member.name,
+                member.role,
+                member.life_stage,
+                (member.gender, member.age, canon.as_slice()).into(),
+                binding,
+            )?,
+            OutputSpec::CUTOUT,
+        ),
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -163,8 +247,8 @@ impl References {
         if let Some(entry) = self.entries.get_mut(&target)
             && entry.work.binding == binding
         {
-            // Re-admission after cooldown is an explicit hub invalidation, not a side retry
-            // loop. Each generation batch still uses the hub/imagery attempt bounds.
+            // Cooldown rechecks the same durable operation; only the unified runtime may
+            // retry provider work. An uncertain send never becomes a new domain demand.
             if (matches!(target, Target::Room { .. })
                 && matches!(entry.status, Status::Failed(ImageFailure::BadOutput))
                 || matches!(target, Target::Mural)
@@ -173,18 +257,21 @@ impl References {
                     .started
                     .is_some_and(|finished| finished.elapsed() >= ROOM_RETRY_COOLDOWN)
             {
-                entry.work.regenerate = true;
                 entry.status = Status::Queued;
                 diagnostic(&entry.work, "queued", None, None);
             }
             return false;
         }
+        let regenerated = match &target {
+            Target::Npc(id) => self.regen.get(id).copied().unwrap_or(0) > 0,
+            _ => false,
+        };
         let work = Work {
             target: target.clone(),
             scope: self.scope.clone(),
             binding,
             source,
-            regenerate: false,
+            regenerated,
         };
         diagnostic(&work, "queued", None, None);
         self.entries.insert(
@@ -200,7 +287,7 @@ impl References {
 
     #[cfg(test)]
     pub(super) fn take_jobs(&mut self) -> Vec<Job> {
-        self.take_jobs_up_to(imagery::MAXIMUM_IN_FLIGHT)
+        self.take_jobs_up_to(super::MAXIMUM_OWNED_SCENE_TASKS)
     }
 
     pub(super) fn take_jobs_up_to(&mut self, available: usize) -> Vec<Job> {
@@ -774,7 +861,10 @@ impl Inner {
         }
     }
 
-    pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
+    pub(super) async fn render_canonical(
+        self: &Arc<Self>,
+        work: &Work,
+    ) -> Result<ImageKey, ImageFailure> {
         if let Source::Mural(heroes) = &work.source {
             return self.render_mural(work, heroes).await;
         }
@@ -785,8 +875,13 @@ impl Inner {
                 portrait: Some(asset),
                 ..
             } => {
-                references
-                    .push(crate::gameplay::creator_portraits::approved_reference(asset).await?);
+                let owner = self.imagery.consumer_context().await?.owner;
+                let proof = Arc::new(CommittedWorkPortrait {
+                    inner: Arc::downgrade(self),
+                    owner,
+                    work: work.clone(),
+                });
+                references.push(self.imagery.committed_portrait(asset, proof).await?);
             }
             Source::Npc {
                 identity_photo,
@@ -810,88 +905,65 @@ impl Inner {
         {
             return Err(ImageFailure::Interrupted);
         }
-        let (kind, prompt, output) = match &work.source {
-            Source::Mural(_) => return Err(ImageFailure::InvalidRequest),
-            Source::Hero {
-                identity,
-                species,
-                gear,
-                public_design,
-                portrait,
-                ..
-            } => (
-                ImageKind::CanonicalCharacter,
-                imagery::canonical_character(
-                    self.rating,
-                    HeroVisualIdentity {
-                        identity,
-                        species,
-                        held_gear: gear,
+        if let Source::ReviewedRoom { asset } = &work.source {
+            let reference = self.load(asset.clone()).await?;
+            return self
+                .imagery
+                .register_reviewed(&subject(&work.target).key(), reference)
+                .await;
+        }
+        let (kind, mut prompt, output) =
+            canonical_request_parts(work, self.rating, &work.binding, None)?;
+        if kind == ImageKind::CanonicalCharacter && !work.regenerated {
+            let (kind, public_prompt, output) = canonical_request_parts(
+                work,
+                self.rating,
+                "public-person-source-v2",
+                Some("public-cast-source-v2"),
+            )?;
+            let public = ImageRequest {
+                kind,
+                prompt: public_prompt,
+                references: references.clone(),
+                output,
+            };
+            let public_revision = imagery::central::public_artwork_revision(&public);
+            let content_key = super::super::journey::hex(&public_revision);
+            let key = |text: &str| {
+                df_imagery::ArtworkSubjectKey::new(text).map_err(|_| ImageFailure::InvalidRequest)
+            };
+            let subject = match &work.source {
+                Source::Hero { .. } => df_imagery::ArtworkSubject::Hero(key(&content_key)?),
+                Source::Npc { person, .. } => df_imagery::ArtworkSubject::Npc(key(&person.id)?),
+                Source::Cast { .. } => df_imagery::ArtworkSubject::Cast(key(&content_key)?),
+                _ => return Err(ImageFailure::InvalidRequest),
+            };
+            let df_imagery::ImageOwner::Run { campaign, run } =
+                self.imagery.consumer_context().await?.owner
+            else {
+                return Err(ImageFailure::Refused);
+            };
+            let spec = df_imagery::CampaignArtworkSpec {
+                campaign,
+                subject,
+                public_revision,
+            };
+            let public_binding = super::super::journey::hex(&spec.binding_digest());
+            let public_cast_id =
+                matches!(work.source, Source::Cast { .. }).then(|| spec.subject.key().as_str());
+            prompt = canonical_request_parts(work, self.rating, &public_binding, public_cast_id)?
+                .1
+                .with_artwork(df_imagery::ArtworkBinding {
+                    spec,
+                    selection: df_imagery::RunSelectionFence {
+                        run,
+                        binding: super::super::journey::unhex(&work.binding)
+                            .map_err(|_| ImageFailure::InvalidRequest)?
+                            .try_into()
+                            .map_err(|_| ImageFailure::InvalidRequest)?,
                     },
-                    None,
-                    public_design,
-                    portrait.is_some(),
-                    &work.binding,
-                )?,
-                OutputSpec::CUTOUT,
-            ),
-            Source::Npc {
-                person,
-                gender,
-                age,
-                identity_photo,
-                identity_figure_photo,
-                canon,
-            } => (
-                ImageKind::CanonicalCharacter,
-                imagery::canonical_npc(
-                    self.rating,
-                    person,
-                    (*gender, *age, canon.as_slice()).into(),
-                    identity_photo.is_some(),
-                    identity_figure_photo.is_some(),
-                    &work.binding,
-                )?,
-                OutputSpec::CUTOUT,
-            ),
-            Source::ReviewedRoom { asset } => {
-                let reference = self.load(asset.clone()).await?;
-                return self
-                    .imagery
-                    .register_reviewed(&subject(&work.target).key(), reference)
-                    .await;
-            }
-            Source::Room {
-                model,
-                place,
-                context,
-                canon,
-            } => (
-                ImageKind::CanonicalRoom,
-                imagery::canonical_room_with_context(
-                    self.rating,
-                    model,
-                    place,
-                    context.as_ref(),
-                    canon,
-                    &work.binding,
-                )?,
-                OutputSpec::BACKDROP,
-            ),
-            Source::Cast { member, canon } => (
-                ImageKind::CanonicalCharacter,
-                imagery::canonical_cast_member(
-                    self.rating,
-                    &member.id,
-                    &member.name,
-                    member.role,
-                    member.life_stage,
-                    (member.gender, member.age, canon.as_slice()).into(),
-                    &work.binding,
-                )?,
-                OutputSpec::CUTOUT,
-            ),
-        };
+                });
+        }
         let request = ImageRequest {
             kind,
             references,
@@ -899,24 +971,6 @@ impl Inner {
             output,
         };
         let subject_key = subject(&work.target).key();
-        if work.regenerate {
-            use crate::gameplay::resources::{
-                DepictionSpec, Invalidate, ResourceKey, ResourceStatus,
-            };
-            let image_key = self.imagery.key_for(&request);
-            let spec = DepictionSpec::new(
-                &subject_key,
-                image_key.as_str(),
-                art_contract::Neutral::Nothing,
-            );
-            let key = ResourceKey::of(&spec);
-            if matches!(
-                self.imagery.hub().status(&key),
-                ResourceStatus::Failed(_, _)
-            ) {
-                self.imagery.hub().invalidate(Invalidate::Key(&key));
-            }
-        }
         self.imagery.generate(&subject_key, request).await
     }
 
@@ -1079,10 +1133,7 @@ impl Inner {
     }
 
     async fn runtime_reference(&self, key: ImageKey) -> Option<ReferenceImage> {
-        match self.imagery.image(key.as_str()).await {
-            Lookup::Image { bytes, format } => Some(ReferenceImage::new(format, bytes)),
-            Lookup::Unregistered | Lookup::NotReady => None,
-        }
+        self.imagery.reference(&key).await.ok()
     }
 
     #[cfg(test)]
@@ -1545,5 +1596,44 @@ mod presentation_diagnostics_tests {
             (None, Some("layout"), None),
         );
         assert_eq!(warning_count(&model.people[0].id), 2);
+    }
+}
+
+/// The accepted checkpoint selected this exact Work; stale/replaced bindings cannot authorize
+/// reading or importing a private creator asset into the current Run.
+struct CommittedWorkPortrait {
+    inner: std::sync::Weak<Inner>,
+    owner: df_imagery::ImageOwner,
+    work: Work,
+}
+impl imagery::CommittedPortraitProof for CommittedWorkPortrait {
+    fn authorize(
+        &self,
+        owner: &df_imagery::ImageOwner,
+        asset: &df_model::checkpoint::AssetReference,
+    ) -> Result<(), ImageFailure> {
+        if owner != &self.owner
+            || !matches!(owner, df_imagery::ImageOwner::Run { .. })
+            || !matches!(self.work.target, Target::Hero(_))
+        {
+            return Err(ImageFailure::Refused);
+        }
+        let inner = self.inner.upgrade().ok_or(ImageFailure::Interrupted)?;
+        let state = locked(&inner.state);
+        let entry = state
+            .canonical
+            .entries
+            .get(&self.work.target)
+            .ok_or(ImageFailure::Interrupted)?;
+        if entry.work.scope != self.work.scope || entry.work.binding != self.work.binding {
+            return Err(ImageFailure::Interrupted);
+        }
+        match &entry.work.source {
+            Source::Hero {
+                portrait: Some(current),
+                ..
+            } if current == asset => Ok(()),
+            _ => Err(ImageFailure::Refused),
+        }
     }
 }

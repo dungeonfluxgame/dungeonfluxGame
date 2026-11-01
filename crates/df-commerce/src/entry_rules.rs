@@ -64,7 +64,7 @@ const MANUAL: &[AccountCode] = &[
 ];
 
 /// The allowlist of 17.6, in the order of the SQL seed.
-pub static RULES: [KindRule; 33] = [
+pub static RULES: [KindRule; 36] = [
     rule(
         EntryKind::TrialGrant,
         Some(StreamKind::Payer),
@@ -119,6 +119,27 @@ pub static RULES: [KindRule; 33] = [
         Some(StreamKind::Session),
         &[Allocated, PAllocated, ExpoOpen],
         &[Reserved, PReserved, ExpoOffset],
+        false,
+    ),
+    rule(
+        EntryKind::AccountReservation,
+        Some(StreamKind::Payer),
+        &[Available, ExpoOpen],
+        &[AccountCode::PurchasedAccountReserved, ExpoOffset],
+        false,
+    ),
+    rule(
+        EntryKind::AccountSettlement,
+        Some(StreamKind::Payer),
+        &[AccountCode::PurchasedAccountReserved, Cost, Absorbed, ExpoOffset],
+        &[RevenueAi, Available, Payable, ExpoOpen],
+        false,
+    ),
+    rule(
+        EntryKind::AccountRelease,
+        Some(StreamKind::Payer),
+        &[AccountCode::PurchasedAccountReserved, ExpoOffset],
+        &[Available, ExpoOpen],
         false,
     ),
     rule(

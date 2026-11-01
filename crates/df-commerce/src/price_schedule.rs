@@ -86,8 +86,11 @@ impl PriceVersion {
                 line.context_tier_max_tokens == 0 || quantity <= line.context_tier_max_tokens
             });
         match tier {
-            Tier::Highest => covering.max_by_key(|line| {
-                u128::from(line.nano_usd) * 1_000_000 / u128::from(line.per.max(1))
+            Tier::Highest => covering.max_by(|left, right| {
+                // Two u64 factors fit u128; compare rates before any rounding.
+                let left_rate = u128::from(left.nano_usd) * u128::from(right.per.max(1));
+                let right_rate = u128::from(right.nano_usd) * u128::from(left.per.max(1));
+                left_rate.cmp(&right_rate)
             }),
             Tier::Lowest => covering.min_by_key(|line| {
                 if line.context_tier_max_tokens == 0 {
@@ -340,5 +343,94 @@ mod tests {
             version.retail_maximum("openai", "gpt-6-luna", &units(272_001, 0)),
             Err(UnitsRefusal::CategoryUnpriced("text_input".into()))
         );
+    }
+    #[test]
+    fn maximum_compares_rates_below_one_scaled_unit_exactly_in_either_tariff_order() {
+        let mut version = version();
+        version.markup_numerator = 1;
+        version.markup_denominator = 1;
+        let high = TariffLine {
+            provider: "openai".into(),
+            model: "gpt-6-luna".into(),
+            category: "text_input".into(),
+            context_tier_max_tokens: 0,
+            nano_usd: 1,
+            per: 3_000_000_000_000_000,
+        };
+        let low = TariffLine {
+            context_tier_max_tokens: 4_000_000_000_000_000_000,
+            per: 6_000_000_000_000_000,
+            ..high.clone()
+        };
+        let units = [("text_input".to_owned(), 3_000_000_000_000_000_001)];
+        for tariff in [vec![high.clone(), low.clone()], vec![low, high]] {
+            version.tariff = tariff;
+            assert_eq!(
+                version.supplier_maximum("openai", "gpt-6-luna", &units),
+                Ok(2)
+            );
+            assert_eq!(
+                version.retail_maximum("openai", "gpt-6-luna", &units),
+                Ok(2)
+            );
+            assert_eq!(version.supplier_cost("openai", "gpt-6-luna", &units), Ok(1));
+        }
+    }
+
+    #[test]
+    fn maximum_rate_comparison_does_not_overflow_the_full_u64_tariff_domain() {
+        let mut version = version();
+        version.markup_numerator = 1;
+        version.markup_denominator = 1;
+        let high = TariffLine {
+            provider: "openai".into(),
+            model: "gpt-6-luna".into(),
+            category: "text_input".into(),
+            context_tier_max_tokens: 0,
+            nano_usd: u64::MAX,
+            per: u64::MAX,
+        };
+        let low = TariffLine {
+            context_tier_max_tokens: 1_000,
+            nano_usd: u64::MAX - 1,
+            ..high.clone()
+        };
+        version.tariff = vec![high, low];
+        assert_eq!(
+            version.supplier_exact("openai", "gpt-6-luna", &[("text_input".into(), 1_000)]),
+            Ok(Ratio {
+                numerator: 1,
+                denominator: 1
+            }),
+        );
+    }
+    #[test]
+    fn supplier_cost_rounds_a_valid_three_category_ratio_without_intermediate_overflow() {
+        let mut version = version();
+        version.markup_numerator = 1;
+        version.markup_denominator = 1;
+        version.tariff = [8_796_093_022_207, 8_796_093_022_205, 4_398_046_511_103]
+            .into_iter()
+            .enumerate()
+            .map(|(index, per)| TariffLine {
+                provider: "openai".into(),
+                model: "gpt-6-luna".into(),
+                category: format!("category_{index}"),
+                context_tier_max_tokens: 0,
+                nano_usd: 1_000,
+                per,
+            })
+            .collect();
+        let units: Vec<_> = (0..3)
+            .map(|index| (format!("category_{index}"), 1))
+            .collect();
+        assert_eq!(
+            version.supplier_exact("openai", "gpt-6-luna", &units),
+            Ok(Ratio {
+                numerator: 154_742_504_910_602_165_618_212_871,
+                denominator: 340_282_366_920_706_349_706_008_647_008_736_247_805,
+            }),
+        );
+        assert_eq!(version.supplier_cost("openai", "gpt-6-luna", &units), Ok(0));
     }
 }

@@ -251,6 +251,9 @@ fn print_help() {
          dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
          music                        place spec and cache status; explicit regenerate|clear|request|override\n\
          cost [--compare <bill.csv>]  what the run and this session cost: by provider, model and category, by cause, top spenders; --compare lines a provider,model,category,usd bill up against the run\n\
+         imagery [set --expected-revision N key=value… | reset --expected-revision N]  show or change image configuration (mode, default_backend, backends.codex-cli.enabled …); revision-fenced\n\
+         imagery events [--last <1-256>]  newest image events oldest first: event, level, failure, safe job/stage ids, elapsed\n\
+         imagery controls (HTTP)      GET /dev/imagery, GET /dev/imagery/events?last=N; POST /dev/imagery/config|reset use expected_revision; see dev describe\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
          memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
          memory entity <id> [refresh] [--audience <a>] [--superseded true]  every event naming it, and its dossier\n\
@@ -313,6 +316,71 @@ fn read_token(path: &str) -> Result<String, String> {
     Ok(token)
 }
 
+fn imagery_request(
+    positional: &[String],
+    options: &[(String, String)],
+) -> Result<Option<(&'static str, Value)>, String> {
+    let usage =
+        "usage: dev imagery [set --expected-revision N key=value… | reset --expected-revision N]";
+    let revision = || -> Result<u64, String> {
+        option_value(options, "--expected-revision")
+            .ok_or_else(|| {
+                "imagery set and reset need --expected-revision (see dev imagery)".to_owned()
+            })?
+            .parse::<u64>()
+            .map_err(|_| "--expected-revision must be a whole number".to_owned())
+    };
+    match positional.get(1).map(String::as_str) {
+        None if positional.len() == 1 => Ok(None),
+        Some("set") if positional.len() > 2 => {
+            let mut patch = serde_json::Map::new();
+            for pair in &positional[2..] {
+                let (key, text) = pair
+                    .split_once('=')
+                    .filter(|(key, _)| !key.is_empty())
+                    .ok_or_else(|| format!("imagery set takes key=value pairs, got {pair:?}"))?;
+                patch.insert(key.to_owned(), imagery_value(text));
+            }
+            Ok(Some((
+                "/dev/imagery/config",
+                json!({"expected_revision": revision()?, "patch": patch}),
+            )))
+        }
+        Some("reset") if positional.len() == 2 => Ok(Some((
+            "/dev/imagery/reset",
+            json!({"expected_revision": revision()?}),
+        ))),
+        _ => Err(usage.to_owned()),
+    }
+}
+
+/// `imagery events [--last n]` reads the newest n enabled image events; n is 1 to 256.
+fn imagery_events_path(options: &[(String, String)]) -> Result<String, String> {
+    let last = match option_value(options, "--last") {
+        None => 50,
+        Some(text) => text
+            .parse::<usize>()
+            .ok()
+            .filter(|last| (1..=256).contains(last))
+            .ok_or_else(|| {
+                "imagery events --last must be a whole number from 1 to 256".to_owned()
+            })?,
+    };
+    Ok(format!("/dev/imagery/events?last={last}"))
+}
+
+/// Booleans and whole numbers keep their JSON type; everything else stays a string.
+fn imagery_value(text: &str) -> Value {
+    match text {
+        "true" => json!(true),
+        "false" => json!(false),
+        _ => text
+            .parse::<u64>()
+            .map(|number| json!(number))
+            .unwrap_or_else(|_| json!(text)),
+    }
+}
+
 fn camera_body(
     positional: &[String],
     options: &[(String, String)],
@@ -360,6 +428,17 @@ async fn dispatch(
         "camera" => match camera_body(positional, options) {
             Ok(None) => get(client, "/dev/camera").await,
             Ok(Some(body)) => post(client, "/dev/camera", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        "imagery" if positional.get(1).map(String::as_str) == Some("events") => {
+            match imagery_events_path(options) {
+                Ok(path) => get(client, &path).await,
+                Err(message) => client.print_error(message),
+            }
+        }
+        "imagery" => match imagery_request(positional, options) {
+            Ok(None) => get(client, "/dev/imagery").await,
+            Ok(Some((path, body))) => post(client, path, &body).await,
             Err(message) => client.print_error(message),
         },
         "health" => get(client, "/dev/health").await,
@@ -1971,6 +2050,55 @@ mod battle_command_parse_tests {
 #[cfg(test)]
 mod camera_command_tests {
     use super::*;
+    #[test]
+    fn imagery_events_reads_a_bounded_window() {
+        assert_eq!(
+            imagery_events_path(&[]).unwrap(),
+            "/dev/imagery/events?last=50"
+        );
+        let flags = vec![("--last".to_owned(), "256".to_owned())];
+        assert_eq!(
+            imagery_events_path(&flags).unwrap(),
+            "/dev/imagery/events?last=256"
+        );
+        for bad in ["0", "257", "many"] {
+            let flags = vec![("--last".to_owned(), bad.to_owned())];
+            assert!(
+                imagery_events_path(&flags).is_err(),
+                "{bad} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn imagery_set_builds_a_revision_fenced_patch() {
+        let flags = [("--expected-revision".to_owned(), "7".to_owned())];
+        let (path, body) = imagery_request(
+            &words(&[
+                "imagery",
+                "set",
+                "mode=off",
+                "backends.codex-cli.enabled=true",
+            ]),
+            &flags,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(path, "/dev/imagery/config");
+        assert_eq!(
+            body,
+            json!({"expected_revision":7,"patch":{"mode":"off","backends.codex-cli.enabled":true}})
+        );
+        assert!(imagery_request(&words(&["imagery", "set", "mode=off"]), &[]).is_err());
+        assert!(imagery_request(&words(&["imagery", "set", "nokey"]), &flags).is_err());
+        assert!(imagery_request(&words(&["imagery", "reset"]), &flags).is_ok());
+        assert!(
+            imagery_request(&words(&["imagery"]), &[])
+                .unwrap()
+                .is_none()
+        );
+    }
+
     fn words(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
     }

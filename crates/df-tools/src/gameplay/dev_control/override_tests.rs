@@ -166,6 +166,9 @@ impl Fixture {
         let social = crate::gameplay::social::SocialLedger::none();
         let layout = layout::LayoutState::new();
         let service = Service {
+            imagery: crate::gameplay::imagery::Imagery::disabled(
+                crate::gameplay::startup_configuration::ImageryOff::Qualification,
+            ),
             look_ahead: Default::default(),
             portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
             actor: sender,
@@ -196,6 +199,7 @@ impl Fixture {
         };
         Self {
             state: Arc::new(Shared {
+                image_diagnostics: None,
                 service,
                 display_credential: DISPLAY,
                 token: Arc::from("override-test-token"),

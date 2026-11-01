@@ -153,6 +153,53 @@ impl PostgresMediaCatalog {
         })
     }
 
+    /// Opens an already migrated catalog without DDL, for restricted delivery readers.
+    pub async fn open_existing(
+        config: Config,
+        transport: PostgresTransport,
+        connections: usize,
+    ) -> Result<Self, MediaCatalogOpenError> {
+        crate::postgres_tls::check_transport(&config, &transport)
+            .map_err(MediaCatalogOpenError::Transport)?;
+        let pool = Pool::new(config, transport, connections);
+        {
+            let mut slot = pool
+                .checkout()
+                .await
+                .map_err(|_| MediaCatalogOpenError::Unreachable)?;
+            let client = slot
+                .client
+                .as_mut()
+                .ok_or(MediaCatalogOpenError::Unreachable)?;
+            let rows = client
+                .query("SELECT version FROM media.schema_migration", &[])
+                .await
+                .map_err(|_| MediaCatalogOpenError::MigrationFailed)?;
+            let versions = rows
+                .iter()
+                .map(|row| row.try_get::<_, i32>(0))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| MediaCatalogOpenError::MigrationFailed)?;
+            if MIGRATIONS
+                .iter()
+                .any(|(version, _)| !versions.contains(version))
+            {
+                return Err(MediaCatalogOpenError::MigrationFailed);
+            }
+            client
+                .query("SELECT asset_id FROM media.asset LIMIT 0", &[])
+                .await
+                .map_err(|_| MediaCatalogOpenError::MigrationFailed)?;
+            client
+                .query("SELECT asset_id FROM media.asset_variant LIMIT 0", &[])
+                .await
+                .map_err(|_| MediaCatalogOpenError::MigrationFailed)?;
+        }
+        Ok(Self {
+            pool: Arc::new(pool),
+        })
+    }
+
     /// Settlement reports F consumed are marked in F's transaction; the catalog only reads them.
     async fn commit(transaction: Transaction<'_>) -> Result<(), CatalogError> {
         transaction.commit().await.map_err(|error| {
@@ -165,33 +212,54 @@ impl PostgresMediaCatalog {
 /// Applies each migration once, in order, serialised by an advisory lock.
 async fn migrate(client: &mut Client) -> Result<(), tokio_postgres::Error> {
     let transaction = client.transaction().await?;
+    migrate_in(&transaction).await?;
+    transaction.commit().await
+}
+
+/// Applies catalog migrations in the caller's transaction, adopting recorded hosted history.
+pub async fn migrate_in(transaction: &Transaction<'_>) -> Result<(), tokio_postgres::Error> {
     transaction
         .batch_execute(
             "SELECT pg_advisory_xact_lock(hashtext('df_media_migration')); \
-             CREATE SCHEMA IF NOT EXISTS media; \
-             CREATE TABLE IF NOT EXISTS media.schema_migration ( \
-                 version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+         CREATE SCHEMA IF NOT EXISTS media; \
+         CREATE TABLE IF NOT EXISTS media.schema_migration ( \
+             version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
         )
         .await?;
+    let hosted_history: bool = transaction
+        .query_one("SELECT to_regclass('hosted.migration') IS NOT NULL", &[])
+        .await?
+        .get(0);
     for (version, script) in MIGRATIONS {
-        let applied = transaction
+        if transaction
             .query_opt(
                 "SELECT 1 FROM media.schema_migration WHERE version = $1",
                 &[&version],
             )
             .await?
-            .is_some();
-        if !applied {
-            transaction.batch_execute(script).await?;
-            transaction
-                .execute(
-                    "INSERT INTO media.schema_migration (version) VALUES ($1)",
+            .is_some()
+        {
+            continue;
+        }
+        let installed_by_host = hosted_history
+            && transaction
+                .query_opt(
+                    "SELECT 1 FROM hosted.migration WHERE number = $1",
                     &[&version],
                 )
-                .await?;
+                .await?
+                .is_some();
+        if !installed_by_host {
+            transaction.batch_execute(script).await?;
         }
+        transaction
+            .execute(
+                "INSERT INTO media.schema_migration(version) VALUES ($1)",
+                &[&version],
+            )
+            .await?;
     }
-    transaction.commit().await
+    Ok(())
 }
 
 /// Runs `$body` (an expression using `.await` and `?`) in one transaction bound to `$tx`; an early

@@ -1,8 +1,234 @@
 # Imagery implementation continuation
 
-Status: **paused at the user's request; unfinished checkpoint, not a release or accepted integration.**
+## Active integration checkpoint (2026-10-29)
 
-The user requested a continuation document and then a commit of the current work. No push was requested. Do not resume implementation until the user resumes it. This document records the paused state; repository instructions remain subject to the user's directions.
+This section supersedes the historical status below. Work remains active on the shared
+Desktop checkout; final acceptance has not been reached. Sol contributors own disjoint
+source scopes. Root reviews, integrates, and serializes Cargo and disposable PostgreSQL
+runs. The user authorized creator-account funding source changes and disposable tests.
+No paid provider calls, deployment, push, or new commit occurred in this continuation.
+
+Latest observed evidence in `artifacts/tmp/imagery-finish-20261029/`:
+
+- `integration-check-19.log`: native `df-tools --all-targets --offline` passed. Later
+  protocol and hosted composition changes require a new check and actual test binary.
+- `imagery-lib-12.log`: all 820 library tests passed, zero ignored. Later changes need rerun.
+- `execution/full-pg-8.log`: all 68 execution PostgreSQL tests passed, zero ignored.
+- `publication/publication-current-pg-8.log`: all 28 publication PostgreSQL tests passed.
+- `runtime/pg-default-stack-2.log`: all 11 runtime PostgreSQL tests passed on the normal
+  thread stack, including actual provider-call crash recovery and private-result visibility.
+  Production boxing reduced the run-next future from 37,872 to 152 bytes and start from
+  41,184 to 3,584 bytes; no acceptance stack-size override is used.
+- `identity/authority-pg-1.log`: all five actual current/refused/unproven authority and
+  concurrent lock-order tests passed (6.35 seconds).
+- `funded-adapter/cancellation-pg-9.log`: three of five actual funded tests passed.
+  The two failures were an incorrect campaign ledger dimension assertion and missing
+  admission-role SELECT access to source tombstone/variant facts. Narrow repairs are
+  in progress; this is not a passing funded suite.
+- Native HTTP Retry-After tests: 13 provider unit tests and three public integration tests
+  passed with all existing transport ceilings unchanged.
+- Strict image-boundary scanner and all 108 scanner regressions passed. Assets 189 tests,
+  strict assets lint, and nine byte-identical legacy transform outputs have retained evidence.
+  Current host consumer/logging/quota tests, full native/WASM builds, strict affected lint,
+  and independent integrated acceptance remain outstanding.
+
+Source mounts the unified service/runtime for generation, creator classification,
+inspection, standalone analysis, transformations, canonical publication, usage projection,
+and authorized delivery. Actual GETs recheck current source authority. Per-host quota and
+operator controls survive worker rebuilds; completed timely images remain readable after
+job deadlines, while late reconciliation remains private. These claims are bounded by the
+specific test snapshots above; source-ready changes are not runtime acceptance.
+
+Registered shared migrations: 0038 through 0047, then 0049 through 0053. 0048 is reserved
+for same-campaign/catalog cross-run artifact reuse; 0054 for machine hosted-run authority;
+0055 for durable submit-decline retry evidence. Do not infer completion from a maximum
+version or silently skip holes. 0050 protects canonical image finance protocols from
+legacy generic APIs; independent review found a multi-attempt lock-order issue, with a
+union-lock repair pending. 0051 closes proven source-denied media delivery; 0052 provides
+locked current/refused/unproven authority; 0053 grants read-only source facts to admission.
+
+Remaining source work: safe submit-decline retry with old Unknown exposure held and fresh
+independent admission; unsent quota/preflight terminal handling; atomic Book unsent marker
+and execution acknowledgement; source-denied closure; same-catalog artwork reuse; and the
+hosted composition/creator funding connection. All require actual integrated tests. No
+fabricated Ready, supplier call, zero-cost Unknown, money release, or authority proof is allowed.
+
+Two explicit approval questions are pending. The earlier shared NativeHttp ceiling relaxation
+beyond 16 MiB / 180 seconds remains unapplied after automatic approval rejection. Bounded
+Retry-After observation was separately implemented without changing those ceilings. A new
+hosted campaign-funding mount was also rejected because automatic review interpreted prior
+funding approval as creator portraits only. Its inert concrete patch and scope are retained in
+`consumers/blocked-hosted-mount/`; the user has been asked to approve source changes and
+scratch-database tests only. No rejected mount, production deployment, or paid call occurred.
+
+Only disposable PostgreSQL at 127.0.0.1:55471 is authorized. Use the existing target
+`artifacts/build/imagery-baseline`, two Cargo jobs, CARGO_INCREMENTAL=0 and test-tmp.
+Require scratch mode for every actual PG test, with explicit finance/identity port settings.
+Root serializes builds/tests and captures source snapshots before compilation; workers hold
+shared interfaces until the executable is built. Keep workflow databases, evidence and the
+latest verified build. Native Windows screenshot recorder status currently fails because its
+Python tool imports Unix-only fcntl; no current gameplay screenshot is claimed.
+
+
+Status: **current native/WASM/launcher builds and scoped runtime tests pass on 2026-10-28; full imagery integration and strict lint acceptance remain unfinished.**
+
+Checkpoint commit: `6d0ce07e1d775d8bff9f569b23826a0503e13035`. The historical pause snapshot below remains useful; resumed runtime/attempt state is recorded in the local workflow database and contributor manifest.
+
+The user resumed work and requested continuation until the project could be built. That build milestone is now verified. No push was requested. The resumed-integration record below supersedes older build/pause/process/attempt statements later in this document.
+
+## Full completion resumed (2026-10-28)
+
+The user requested completion of the crate beyond the earlier build milestone.
+Six Muse Spark 1.3 CLI contributors are active on disjoint paths: typed development
+configuration, cost projection, durable execution journal (migration 0040), authenticated
+account-draft delivery, lossy WebP, and resumable/configurable private API backends.
+Their exact sessions and scopes are retained in the contributor manifest. Root owns
+shared exports, manifests, integration and verification; no new commit or push.
+
+The prior successful builds below describe their recorded hashes, not these active edits.
+The native libwebp 1.5.0 dependency builds; a transient imagery check during configuration
+changes fails at incomplete config/codec mappings. Full execution/publication and all-consumer
+migration remain unfinished. Host account-draft funding awaits the user's payer decision;
+local execution, campaign execution and private delivery can proceed independently.
+The final draft disclosure check uses one PostgreSQL statement snapshot over session,
+account and catalog after bounded bytes load. Revocation committed before that authorization
+snapshot denies delivery; later revocation cannot retract an already authorized response.
+
+Windows Muse cross-session messaging is unavailable. Continue with recorded task handoffs
+and sequential repair turns; do not assume feedback messages were delivered.
+
+## Resumed integration after the build milestone (2026-10-28)
+
+This section supersedes the milestone attempt/status statements below. The user asked to
+continue and explicitly requires flexible development configuration. All changes remain on
+shared `main`; root owns integration/checks and Muse Spark 1.3 CLI contributors own scoped
+implementation. No new commit or push has been made since `6d0ce07e`.
+
+Verified during resumed integration:
+
+- Registered imagery suite after API A6, Codex A7, config A7 and service A4: **392 unit tests
+  and 2 external API tests pass** (`wave2/registered-service-a4-tests.log`). This is not backend
+  acceptance: independent Codex review subsequently found protocol/ownership defects.
+- Journal A8: **27 real PostgreSQL tests pass** (`wave2/store-a8-tests.log`).
+- Finance A5: **17 real PostgreSQL tests and strict all-targets Clippy pass**
+  (`wave2/finance-a5-tests.log`, `wave2/finance-a5-clippy.log`).
+- Account-draft A4: **158 asset unit tests pass** (`wave2/assets-draft-a4-tests.log`);
+  earlier real media-catalog suite **41 pass** (`wave2/draft-pg-tests.log`). Strict
+  assets/providers all-targets Clippy passes (`wave2/assets-providers-a4-clippy.log`).
+- Config A7: bounded overlay robustness independently approved; all 76 submitted tests
+  and current-contract probes pass. One preserved historical shipped-example success
+  expectation fails because unsupported typed settings are explicitly refused. Profiles,
+  quality, executable, cost and runtime-control consumption remain unfinished.
+- Raster A4: **61 registered tests pass**; lossy WebP, consumption and full lint acceptance
+  remain open. Codec prior bounded review and transport A2 evidence remain applicable.
+- Architecture guard A6: **90 unit tests pass**, default tree scan passes with 13 exact legacy
+  findings; strict scan correctly fails those 13. Independent review found three additional
+  whole-expression/dependency bypasses; A7 repair is active.
+
+New source: native-only public `ImageService` request/read/watch/cancel boundary and
+PostgreSQL composition for immutable media publication/finance admission linkage (migration
+0039). The service currently records Planning demand only. It does not dispatch providers,
+claim Ready/cache hits, schedule work, publish assets, or replace the existing callers.
+Migration 0039 requires the finance/media/journal schemas; it is deliberately separate from
+the standalone journal migration sequence and still needs runtime composition wiring.
+
+Latest verified integration snapshot:
+
+- **Native workspace, actual df-tools WASM client, and launcher all build with locked,
+  offline dependencies.** Final commands are the milestone commands below with `--locked`;
+  logs: `wave2/final-workspace-build.log`, `wave2/final-wasm-build.log`,
+  `wave2/final-launcher-build.log`. All exit 0 (35.03s, 0.47s, 0.15s final incremental
+  refresh). The preceding full current rebuild also passed (2m29s, 10.15s, 2.02s).
+  All **1,925** recorded Rust/manifest/lock/SQL file hashes stayed unchanged during the
+  final builds (`wave2/final-build-source-manifest.json`, `wave2/final-build-hash-check.json`).
+- **433 imagery unit tests and 2 external API tests pass**, including all **89 Codex
+  tests** (`wave2/registered-codex-a10-tests.log`). Independent Codex review also passes
+  all eight retained protocol/import/lifecycle probes. Root subsequently corrected only
+  the stale cleanup-deadline comment, then rebuilt. Cleanup drains started work and can
+  outlast the request deadline; the private caller must retain/await supported cooperative
+  cancellation. Arbitrary future abort/drop and the eventual service supervisor remain
+  integration gates. No live paid provider/CLI image turns were performed.
+- ConfigControl A2 is registered and publicly exported with patch/provenance types.
+  **17 owner + 76 overlay + 5 independent external API tests pass**. Independent bounded
+  review approves base/launch/runtime precedence, cumulative partial updates, revision
+  fences, reset preserving launch settings, and immutable prepared exports. Application is
+  local only; actual service/scheduler/egress and launcher file-saving bindings remain target
+  work. The parent plan deliberately adopts A7 precedence: new imagery environment wins
+  over legacy environment; explicit launch sits below runtime and survives runtime reset.
+- Service A8: **10/10 real PostgreSQL tests pass** (`wave2/service-a8-tests.log`),
+  including forced concurrent authorization races, cross-owner isolation, cancellation,
+  restart observations, and actual committed accept followed by injected Unknown and
+  recovery of a single durable receipt. Bounded independent semantics review passes;
+  this remains a demand-planning API, with no provider dispatch or Ready claim.
+- Admission A8: **41/41 tests pass against real PostgreSQL**
+  (`wave2/admission-a8-tests.log`). Independent bounded review passes audience rejection,
+  immutable historical linkage, same-transaction finance/catalog rollback and replay,
+  the NOLOGIN composition role, narrow timestamp-column privileges needed for row locks,
+  meaningful-write denial, and true PUBLIC ACL detection. Deployment role/migration
+  composition and actual run/session authority remain host integration work.
+- Guard A7: **103 unit tests + 86 independent replayed checks pass**. Default tree scan
+  passes; strict mode fails exactly **13 legacy findings**. Bounded guard repairs are
+  approved; consumer migration and complete enforcement are not implied.
+- Formatting of **all 70 changed/new Rust files passes**, as does `git diff --check`.
+  Strict all-targets Clippy still fails: `df-imagery` reports 364 library diagnostics and
+  60 test diagnostics (including overlapping unused-code and style findings).
+  `df-persistence` lint is blocked at its imagery dependency. Logs:
+  `wave2/current-imagery-clippy.log`, `wave2/current-persistence-clippy.log`.
+  No warning suppression or public executor bypass was added to force acceptance.
+  Earlier assets/providers and finance strict Clippy passes remain scoped evidence.
+- Development configuration details are in
+  [development-configuration.md](development-configuration.md), separating the implemented
+  local owner from target profiles, fixture composition, typed backend/output/cost settings
+  and full runtime disable propagation.
+
+All Muse contributors have submitted; no contributor writer remains active. Exact latest
+attempts: store A8, raster A4, codec A4, overlay A7, API A6, Codex A10, composition A3,
+consumer guard A7, transport A2, finance A5, account drafts A4, service A8, admission A8,
+development-config A1 (amended by config-control), and config-control A2. Reviews approve
+bounded semantics only where stated; required integrated lint/runtime gates still prevent
+whole-feature approval. No new commit or push has been made.
+
+Independent reviewers: `project_analysis` (admission), `review_service_boundary` (service),
+`review_recipe_key` (Codex/config), `review_imagery_plan` (guard/config design). Exact current
+attempts, CLI session ids, exclusive paths and logs are in
+`artifacts/tmp/imagery-20261027/wave2/contributors.json`; authoritative queue is
+`development/workflow.sqlite3`. Ignored evidence files must be opened by exact path rather
+than assuming a search omission means missing. The portable scratch PG is running at
+127.0.0.1:55471; inspect the retained owner metadata before management. No game DB is used.
+
+The final current build/test records above supersede the historical build below. Next work
+is actual service/scheduler/backend/publication and host configuration composition, migration
+of every consumer, cost reporting integration and strict lint completion. Preserve the existing
+passing boundary checks while doing that work. The full objective below remains open.
+
+## Historical build milestone (2026-10-28)
+
+Actual source: Desktop checkout on `main`, base commit `6d0ce07e1d775d8bff9f569b23826a0503e13035` plus **uncommitted** contributor repairs and coordinator wiring. All contributors submitted before the final build check; no task-owned Muse writer was found during verification. The source manifest covers 1,843 Rust/manifests/toolchain files; every recorded hash matched after the native build completed.
+
+Successful commands (PowerShell, from the Desktop checkout):
+
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\Users\mreca\Desktop\dungeonfluxGame\artifacts\build\imagery-baseline'
+$env:CARGO_BUILD_JOBS = '2'
+cargo build --workspace --offline
+cargo build -p df-tools --lib --target wasm32-unknown-unknown --offline
+cargo build --manifest-path crates/df-launcher/Cargo.toml --locked --offline --target-dir artifacts/build/launcher
+```
+
+- Native workspace: exit 0, finished in 3m 31s; `wave2/workspace-build-third.log`.
+- WebAssembly client: exit 0, finished in 1m 09s; `wave2/wasm-client-build.log`.
+- Desktop launcher: exit 0, finished in 1m 13s; `wave2/launcher-build.log`.
+- Outputs include `artifacts/build/imagery-baseline/debug/df-server.exe`, `artifacts/build/imagery-baseline/wasm32-unknown-unknown/debug/df_tools.wasm`, and `artifacts/build/launcher/debug/dungeonflux.exe`.
+
+All evidence paths prefixed `wave2/` are relative to `artifacts/tmp/imagery-20261027/`. Source hashes are in `wave2/build-source-manifest.json`. These ignored files are retained local evidence; the successful results and commands above are preserved here independently of them.
+
+The imagery config overlay, intent codec, native raster executor, and private native API/Codex backends are now registered. Dependency features and the assets/finance/provider integration exports are wired. Contributors repaired ownership/lifetime errors, Windows API imports/attribute types, and provider failure-type plumbing that blocked compilation. This is compilation evidence, not proof of complete runtime migration.
+
+Quality gates remain open: rustfmt check of the 31 changed Rust files exited 1 (`wave2/build-milestone-format.log`). Strict all-targets Clippy for df-imagery, df-assets, df-finance, df-persistence, and df-providers exited 101 (`wave2/build-milestone-clippy.log`), with 512 imagery diagnostics including unused, not-yet-consumed internals and style findings. No warning suppressions were added to pass the build. Native compilation emitted 483 imagery warnings. Do not claim a clean lint gate, full test pass, feature acceptance, or runtime smoke test from these builds.
+
+Latest submitted repair attempts: store A8, codec A4, config A5, raster A4, API backends A3, Codex backend A4, transport A2, finance A4, account drafts A3. Codec has 52/52 focused tests plus 59/59 independent tests; assets/drafts has 158/158 unit tests; transport has 11/11 focused tests and its scoped Clippy pass. Journal A8, finance A4, config A5, raster A4, API A3 and Codex A4 still need their latest full runtime/test gates. Real PostgreSQL media-catalog tests remain pending. The owned scratch PostgreSQL was restarted on port 55471; use the retained owner metadata before managing it.
+
+Next work: resolve formatting/lint findings, run the remaining latest-attempt tests and independent reviews, settle service composition, migrate every image-generation consumer, remove bypasses, and verify integrated behavior. The consumer guard A3 and service composition A2 remain rejected; the old paused attempt table below is historical. Do not treat this build milestone as approval of any unfinished task.
 
 ## Repository and working agreement
 
@@ -20,7 +246,7 @@ Put project-wide image generation/editing behind one `df-imagery::ImageService` 
 
 Include typed text/image inputs, resolution/format/alpha controls, configuration precedence and enable/disable/tuning, durable replay/join/cancel/recovery, asset publication and authorization, separately admitted paid stages, actual usage/cost tracking without fabricated zero cost, and deterministic image transformations. Respect the approved transition/animation plan when connecting rendering; generation and presentation remain separate responsibilities. Do not narrow completion to helper crates, local-only transforms, passing unit tests or a single consumer.
 
-Governing plans: [generation](../image-generation-architecture.md), [transformations](../image-transformations-architecture.md), the presentation/transition plan already in `planning/`, and the project's storage/finance/runtime/coding-style documents. `service-composition.md` is a **rejected draft**, not a frozen implementation contract. `operation-store.md` remains the concrete journal brief.
+Governing plans: [generation](../image-generation-architecture.md), [transformations](../image-transformations-architecture.md), the presentation/transition plan already in `planning/`, and the project's storage/finance/runtime/coding-style documents. `service-composition.md` A3 is a **partially accepted composition contract**, not implementation approval. `operation-store.md` remains the concrete journal brief.
 
 ## Accepted baseline
 
@@ -126,3 +352,21 @@ cargo clippy -p df-imagery -p df-persistence -p df-providers --offline --all-tar
 No passing all-workspace or end-to-end result exists for this checkpoint. New unregistered modules and interrupted exports can break compilation. Do not run broad rustfmt over active contributor files on resume; root formats only quiescent owned/integrated paths.
 
 The screenshot-journey recorder could not run on native Windows: development/screenshot_journey.py imports fcntl and raised ModuleNotFoundError. No screenshots were fabricated. Nonmutating cleanup inventory found no proven eligible deletion; evidence and local databases were retained.
+
+## Owner funding decision (2026-10-28)
+
+Hosted character portrait generation before campaign membership uses the creator account balance, with explicit consent and a spending limit. No platform allowance or invented campaign payer. Creator funding implementation is tracked as IMG-CREATOR-IMAGE-FUNDING-20261028; consent/quoted cap is required before paid dispatch.
+
+## Integration checkpoint: text plan and Sol work (2026-10-28)
+
+The user approved the exact creator-account funding source migration and disposable-PG tests in creator-funding-approval.md, and explicitly delegated implementation to Sol contributors with root reviewing/integrating. Muse exhausted weekly quota (429); no retries or spending bypass. Current actual source remains Desktop dungeonfluxGame shared main, HEAD6d0ce07 plus uncommitted work. No new commit/push.
+
+New text-generation request is planned in planning/text-generation-architecture.md and text-generation-surface-map.md. Dedicated Sol author and independent source reviewer completed two passes; provider/feature/test coverage, phase dependency and semantic-qualification feedback reviewed. Artifacts are artifacts/tmp/text-generation-20261028, with R1 retained. Plans only; no text application implementation.
+
+Image work remains incomplete. Current Sol owners: image_runtime (singleAPI runtime and migration0044 rawusage/results; crash ordering raw observation before complete, durable rawoutput recovery), atomic_publication (0042, byte proofs and concrete publisher; configurable proof limits, alpha requirement distinct from observed fact, output role guarded local allocation), creator_funding (0043 approved finance + catalog), identity_repair (0041 liveidentity/rootintegration), repair_execution (new recovery enumeration/claim extension0040), repair_cost (bounded cold-log reader/cost integration). Source files owned per contributors.json and workflow DB. Do not clobber these agents. Consumer migration still must be dispatched after runtime API stabilizes; strict13legacybypasses remain until actualcutover. No fullfeature/build/lint completion claim.
+
+Verified bounded evidence: API56fixtures; config221+independent strictscopedlint; raster90plusnativeallocationprobes (metadatafix last); execution baseline32PG+18units, recoveryextension pending; hosted16PG+17config+packageClippy including realHosted/narrowroles/media-ledgeradoption; finance6PG+13pure+financeClippy, expandedtests pending; cost114actualBook+6neutral, boundedreaderfinalrerun pending. Logs/sourcehashes in wave2. These are not currentwholeworkspaceresults.
+
+Root integrations now include native dependencies/exports, service legacy config-envelope regression, df-persistence media_catalog::open_existing and migrate_in shared canonicalmedia migration/adoption from historical hostedledger; hosted database delegates10..14. Root fixed delivery bodypermit field and fixture12argconstructor to DeliveryBasisFixture, portalUri/headerimports, proofexports, identitymodules+owned55471runtimeharness, financeevent/accountcode/allowlist patch (account2150 and unknown event), removed unnecessaryfinance dev-backedge. Root added outputpublisher module/native sha2, imagery runtime/draftadmission modules. Ensure currentCargo.lock refreshed by activechecks. Onlydisposable ownedPG127.0.0.1:55471postgres; never55911. SourcewriteDesktop needs require_escalated.
+
+Next root steps: integrate any remaining shared hooks from activeworkers; independent reviews of finalimmutablehashes; assemble realhost/gameplayruntime and migrate all imageproviders/consumers; strictboundaryzero and appropriate endtoend actualbytes; fullnative/WASM/build/lint with no suppression, updatechangelog/docs/workflow. Fix df-tools Service startup bindings and consumerReady handles rather than declaring helpertests sufficient. Cost startup existingwhole-log replay memory is separatelyrecorded followup, not claimedbounded.

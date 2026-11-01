@@ -66,8 +66,10 @@ pub enum NotAdmitted {
     QuotaFull(QuotaRefusal),
     /// The account is at its in-flight upload limit.
     UploadLimit,
-    /// Generated output is stored under campaign keys only until the upload round adds
-    /// character-owned keys (TODO(O2-05)); nothing is reserved or bought for it.
+    /// A no-campaign generation or library claim that is not a valid account draft
+    /// (a non-image kind or mismatched draft fields); nothing is reserved or bought.
+    /// Character-owned keys (`KeyLayout::character_asset`) still arrive in the upload
+    /// round (TODO(O2-05)).
     OwnerUnsupported,
 }
 
@@ -77,7 +79,7 @@ pub enum AdmitOutcome {
     NotAdmitted(NotAdmitted),
 }
 
-/// One field of a no-campaign generated image admission names a different account.
+/// Verifies the private account scope shared by generation and approved library claims.
 fn draft_account_of(
     charge_scope: QuotaScope,
     origin_account: Option<AccountId>,
@@ -101,8 +103,8 @@ fn draft_account_of(
 }
 
 /// The validated owner of an admission. `Some` is publishable; `None` is a legacy
-/// no-campaign non-generated row, admittable as before but never publishable. Campaign
-/// rows are returned untouched so this guard cannot tighten their semantics.
+/// no-campaign upload or reviewed row, admittable as before but never publishable.
+/// Campaign rows are returned untouched so this guard cannot tighten their semantics.
 pub fn admission_owner(admission: &Admission) -> Result<Option<StorageOwner>, NotAdmitted> {
     if let Some(campaign) = admission.campaign {
         return Ok(Some(StorageOwner::Campaign(campaign)));
@@ -110,7 +112,10 @@ pub fn admission_owner(admission: &Admission) -> Result<Option<StorageOwner>, No
     if admission.audience == Audience::Withheld {
         return Err(NotAdmitted::AudienceEmpty);
     }
-    if admission.provenance != Provenance::Generated {
+    if !matches!(
+        admission.provenance,
+        Provenance::Generated | Provenance::ClaimedLibrary
+    ) {
         return Ok(None);
     }
     if admission.kind != AssetKind::Image {
@@ -124,10 +129,9 @@ pub fn admission_owner(admission: &Admission) -> Result<Option<StorageOwner>, No
         admission.request_key.is_some(),
         admission.retention,
     )
-    .map_or(
-        Err(NotAdmitted::OwnerUnsupported),
-        |account| Ok(Some(StorageOwner::AccountDraft(account))),
-    )
+    .map_or(Err(NotAdmitted::OwnerUnsupported), |account| {
+        Ok(Some(StorageOwner::AccountDraft(account)))
+    })
 }
 
 /// The validated owner of a persisted row, rechecked on recovery. `None` keeps the
@@ -137,7 +141,10 @@ pub fn record_owner(record: &AssetRecord) -> Option<StorageOwner> {
         return Some(StorageOwner::Campaign(campaign));
     }
     if record.audience == Audience::Withheld
-        || record.provenance != Provenance::Generated
+        || !matches!(
+            record.provenance,
+            Provenance::Generated | Provenance::ClaimedLibrary
+        )
         || record.kind != AssetKind::Image
     {
         return None;

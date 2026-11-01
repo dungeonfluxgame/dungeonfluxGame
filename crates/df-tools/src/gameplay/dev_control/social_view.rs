@@ -406,6 +406,9 @@ mod tests {
             let layout = layout::LayoutState::new();
             let (shutdown, _) = watch::channel(false);
             let service = Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 look_ahead: Default::default(),
                 portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
                 actor,
@@ -422,6 +425,7 @@ mod tests {
                 layout: layout.clone(),
             };
             let state = Arc::new(Shared {
+                image_diagnostics: None,
                 service,
                 display_credential: [0x82; 32],
                 token: Arc::from("hs47-read-test"),

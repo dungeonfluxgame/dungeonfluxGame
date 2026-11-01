@@ -345,3 +345,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod image_routing_tests;

@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! The choice, judge and locator clients meter themselves: every call they send reaches the
+//! The choice client meters itself: every call it sends reaches the
 //! meter they were given, settled by what the supplier answered. A loopback server plays the
 //! supplier.
 
@@ -12,10 +12,7 @@ use std::{
     time::Duration,
 };
 
-use df_providers::{
-    AnsweredUsage, CallMeter, CallTicket, HeadLocateConfig, JudgePicture, LocateTarget,
-    NativeHeadLocator, NativePlateJudge, PlateJudgeConfig, SentCall, SystemOneChoiceProvider,
-};
+use df_providers::{AnsweredUsage, CallMeter, CallTicket, SentCall, SystemOneChoiceProvider};
 use serde_json::json;
 
 /// What the meter was told, in order.
@@ -187,117 +184,5 @@ async fn a_required_meter_does_not_change_the_choice_request() {
     assert_eq!(
         client.choose(&json!({}), "Pick one.", &criteria).await,
         Ok(0)
-    );
-}
-
-#[tokio::test]
-async fn the_judge_tells_its_meter_the_tokens_and_the_pictures() {
-    let answer = |content: &str, usage: serde_json::Value| {
-        json!({"choices": [{"message": {"content": content}}], "usage": usage}).to_string()
-    };
-    let address = supplier(vec![
-        (
-            200,
-            answer(
-                r#"{"facing":"left"}"#,
-                json!({"prompt_tokens": 90, "completion_tokens": 4}),
-            ),
-        ),
-        (200, answer("not json", json!({"prompt_tokens": 7}))),
-        (401, "{}".to_owned()),
-    ]);
-    let record = Arc::new(Record::default());
-    let judge = NativePlateJudge::new(
-        PlateJudgeConfig::loopback_fixture(address).unwrap(),
-        "key",
-        Duration::from_secs(5),
-        Arc::new(Meter(Arc::clone(&record))),
-    )
-    .unwrap();
-    let schema = json!({"type": "object", "properties": {"facing": {"type": "string"}},
-        "required": ["facing"], "additionalProperties": false});
-    let pictures = [
-        JudgePicture {
-            label: "ref-1",
-            jpeg: b"\xff\xd8a",
-        },
-        JudgePicture {
-            label: "cand-1",
-            jpeg: b"\xff\xd8b",
-        },
-    ];
-    for _ in 0..3 {
-        let _ = judge
-            .judge(
-                "Which way?",
-                &pictures,
-                "facing",
-                &schema,
-                Duration::from_secs(5),
-            )
-            .await;
-    }
-    assert_eq!(
-        lines(&record),
-        [
-            "sent PlateJudge pictures=2 bytes>0=true",
-            "answered in=Some(90) out=Some(4)",
-            "sent PlateJudge pictures=2 bytes>0=true",
-            "unusable in=Some(7)",
-            "sent PlateJudge pictures=2 bytes>0=true",
-            "refused",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn the_locator_tells_its_meter_whether_a_head_came_back() {
-    let answer = |content: &str| {
-        json!({"choices": [{"message": {"content": content}}],
-            "usage": {"prompt_tokens": 500, "completion_tokens": 30}})
-        .to_string()
-    };
-    let address = supplier(vec![
-        (
-            200,
-            answer(r#"{"heads":[{"id":"speaker","left":0.1,"top":0.1,"right":0.2,"bottom":0.3}]}"#),
-        ),
-        (200, answer(r#"{"heads":[]}"#)),
-    ]);
-    let record = Arc::new(Record::default());
-    let locator = NativeHeadLocator::new(
-        HeadLocateConfig::loopback_fixture(address).unwrap(),
-        "key",
-        Duration::from_secs(5),
-        Arc::new(Meter(Arc::clone(&record))),
-    )
-    .unwrap();
-    let targets = [LocateTarget {
-        id: "speaker",
-        description: "a woman in a blue cloak",
-    }];
-    let found = locator
-        .locate(
-            b"\xff\xd8plate",
-            Some(b"\xff\xd8face"),
-            &targets,
-            Duration::from_secs(5),
-        )
-        .await;
-    assert_eq!(found.map(|heads| heads.len()), Ok(1));
-    assert!(
-        locator
-            .locate(b"\xff\xd8plate", None, &targets, Duration::from_secs(5))
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        lines(&record),
-        [
-            "sent HeadLocator pictures=2 bytes>0=true",
-            "answered in=Some(500) out=Some(30)",
-            "sent HeadLocator pictures=1 bytes>0=true",
-            "unusable in=Some(500)",
-        ]
     );
 }

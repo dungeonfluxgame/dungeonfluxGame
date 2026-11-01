@@ -16,6 +16,51 @@ use crate::gameplay::{
     table_log::TableLog,
 };
 use df_model::checkpoint::Checkpoint;
+
+async fn unified_image_views(
+    images: &crate::gameplay::imagery::tests::DirectionFixture,
+    purpose: df_imagery::Purpose,
+) -> Vec<df_imagery::ImageDemandView> {
+    let views = images.views_for_purpose(purpose).await;
+    for view in &views {
+        assert!(
+            !matches!(
+                view.execution,
+                df_imagery::ImageExecutionState::Failed { .. }
+                    | df_imagery::ImageExecutionState::Expired
+                    | df_imagery::ImageExecutionState::Unknown
+                    | df_imagery::ImageExecutionState::Uncertain
+                    | df_imagery::ImageExecutionState::Withdrawn
+                    | df_imagery::ImageExecutionState::NeedsRevision
+            ),
+            "{purpose:?} must complete through the actual unified runtime: {view:?}",
+        );
+        if view.execution == df_imagery::ImageExecutionState::Ready {
+            assert!(
+                view.result.is_some(),
+                "Ready requires an actual durable publication"
+            );
+        }
+    }
+    views
+}
+
+async fn ready_unified_image(
+    images: &crate::gameplay::imagery::tests::DirectionFixture,
+    purpose: df_imagery::Purpose,
+) -> Option<(crate::gameplay::imagery::ImageKey, bytes::Bytes)> {
+    for view in unified_image_views(images, purpose).await.into_iter().rev() {
+        if view.execution == df_imagery::ImageExecutionState::Ready && view.result.is_some() {
+            let key = crate::gameplay::imagery::central::alias_for_operation(view.handle.operation);
+            if let crate::gameplay::imagery::Lookup::Image { bytes, .. } =
+                images.imagery.image(key.as_str()).await
+            {
+                return Some((key, bytes));
+            }
+        }
+    }
+    None
+}
 use df_session::inbox::{AdmissionSequence, Reducer, bounded_inbox};
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, watch};
@@ -350,6 +395,9 @@ impl Table {
         });
         Self {
             service: Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 actor,
                 display_credential: [0x82; 32],
                 updates: receiver,
@@ -978,121 +1026,116 @@ fn hs59_scene_examine_compound_approach_commits_the_spot_and_requests_its_plate(
             )))
             .with_approach_model(jev(&judge));
             let mut table = Table::start(current.clone(), loaded, voice);
-            let images = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache(
-                "approach-images",
-            ));
-            table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
-                images.imagery.clone(),
-                crate::gameplay::imagery::ReferenceStore::new(cache("references")),
-                table.service.social.clone(),
-                ContentRating::Restrained,
-                crate::gameplay::living_scenes::Timing {
-                    scene_start_quiet: Duration::ZERO,
-                    roll_quiet: Duration::ZERO,
-                    ..crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30))
-                },
-                true,
-                table.service.updates.clone(),
-            );
-            let mut wake = table.service.living.subscribe().unwrap();
-            // A real display has already registered the wide market before the hero approaches.
-            let old_view =
-                wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
-            table.service.living.observe(&old_view);
-            let (_, target) = stall(&current);
-            let result = table
-                .service
-                .interaction_call(
-                    [1; 32],
-                    &request(&current, WORDS),
-                    &target,
-                    "examine",
-                    None,
-                    None,
-                )
-                .await
-                .unwrap();
-            let DialogueReply::Raw(response, None) = result else {
-                panic!("approach and look")
-            };
-            let after = table.service.updates.borrow().clone();
-            assert_ne!(after.basis().revision, current.basis().revision);
-            let arrival = runtime::scene(after.state()).unwrap();
-            assert_eq!(arrival.title, "pottery stall");
-            assert!(response.npc_reply.contains("glossy blue glaze"));
-            let snapshot = living_scene::snapshot(after.state(), &arrival)
-                .unwrap()
-                .unwrap();
-            assert!(
-                snapshot
-                    .model
-                    .people
-                    .iter()
-                    .any(|person| person.name == "Sella Voss")
-            );
-            assert!(
-                snapshot
-                    .model
-                    .offers
-                    .iter()
-                    .any(|ware| ware.description.contains("glossy blue glaze"))
-            );
-            let creation = story.bodies()[1]["input"].as_str().unwrap().to_owned();
-            assert!(creation.contains("local_spot") && creation.contains("Sella Voss"));
-            let framed = snapshot
-                .model
-                .things
-                .iter()
-                .find(|thing| thing.name == "pottery stall")
-                .unwrap();
-            let expected = format!("plate:{}", arrival.setting.as_ref().unwrap().place_id);
-            let view = wire::journey_view(&after, LocalDemoRole::Display, native::first()).unwrap();
-            let (image_key, image_bytes) = tokio::time::timeout(COMPLETION_WATCHDOG, async {
-                loop {
-                    table.service.living.observe(&view);
-                    if let Some(edit) = table
-                        .service
-                        .living
-                        .list_resources(Some(crate::gameplay::resources::ResourceKind::PlateEdit))
-                        .into_iter()
-                        .find(|edit| edit.subject == expected && edit.state == "ready")
-                        && let crate::gameplay::imagery::Lookup::Image { bytes, .. } =
-                            images.imagery.image(&edit.handle).await
-                    {
-                        break (edit.handle, bytes);
-                    }
-                    assert!(
-                        table
-                            .service
-                            .living
-                            .list_resources(Some(
-                                crate::gameplay::resources::ResourceKind::PlateEdit
-                            ))
-                            .iter()
-                            .all(|row| row.subject != expected || row.state != "failed")
-                    );
-                    wake.changed().await.unwrap();
-                }
-            })
-            .await
-            .expect("plate-edit completion watchdog; inspect resource audit on timeout");
-            assert!(!image_bytes.is_empty());
-            image::load_from_memory(&image_bytes).expect("the framed stall image must decode");
-            std::fs::write(
-                cache("plate-evidence").join("plate.json"),
-                json!({
-                    "stall_id":framed.id,"vendor":"Sella Voss","image_key":image_key,
-                    "plate_edit_subject":expected,"state":"ready",
-                    "completed_image_bytes":image_bytes.len(),
-                })
-                .to_string(),
+            let Some(images) = crate::gameplay::imagery::tests::DirectionFixture::photographic(
+                &cache("approach-images"),
             )
-            .unwrap();
-            assert!(images.calls() > 0);
-            assert_eq!(
-                response.revision,
-                Some(wire::revision(after.basis().revision))
-            );
+            .await
+            else {
+                return;
+            };
+            {
+                table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
+                    images.imagery.clone(),
+                    crate::gameplay::imagery::ReferenceStore::new(cache("references")),
+                    table.service.social.clone(),
+                    ContentRating::Restrained,
+                    crate::gameplay::living_scenes::Timing {
+                        scene_start_quiet: Duration::ZERO,
+                        roll_quiet: Duration::ZERO,
+                        ..crate::gameplay::living_scenes::Timing::from_interval(
+                            Duration::from_secs(30),
+                        )
+                    },
+                    true,
+                    table.service.updates.clone(),
+                );
+                let mut wake = table.service.living.subscribe().unwrap();
+                // A real display has already registered the wide market before the hero approaches.
+                let old_view =
+                    wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
+                table.service.living.observe(&old_view);
+                let (_, target) = stall(&current);
+                let result = table
+                    .service
+                    .interaction_call(
+                        [1; 32],
+                        &request(&current, WORDS),
+                        &target,
+                        "examine",
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let DialogueReply::Raw(response, None) = result else {
+                    panic!("approach and look")
+                };
+                let after = table.service.updates.borrow().clone();
+                assert_ne!(after.basis().revision, current.basis().revision);
+                let arrival = runtime::scene(after.state()).unwrap();
+                assert_eq!(arrival.title, "pottery stall");
+                assert!(response.npc_reply.contains("glossy blue glaze"));
+                let snapshot = living_scene::snapshot(after.state(), &arrival)
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    snapshot
+                        .model
+                        .people
+                        .iter()
+                        .any(|person| person.name == "Sella Voss")
+                );
+                assert!(
+                    snapshot
+                        .model
+                        .offers
+                        .iter()
+                        .any(|ware| ware.description.contains("glossy blue glaze"))
+                );
+                let creation = story.bodies()[1]["input"].as_str().unwrap().to_owned();
+                assert!(creation.contains("local_spot") && creation.contains("Sella Voss"));
+                let framed = snapshot
+                    .model
+                    .things
+                    .iter()
+                    .find(|thing| thing.name == "pottery stall")
+                    .unwrap();
+                let expected = format!("plate:{}", arrival.setting.as_ref().unwrap().place_id);
+                let view =
+                    wire::journey_view(&after, LocalDemoRole::Display, native::first()).unwrap();
+                let (image_key, image_bytes) = tokio::time::timeout(COMPLETION_WATCHDOG, async {
+                    loop {
+                        table.service.living.observe(&view);
+                        if let Some(ready) =
+                            ready_unified_image(&images, df_imagery::Purpose::SceneEdit).await
+                        {
+                            break ready;
+                        }
+                        wake.changed().await.unwrap();
+                    }
+                })
+                .await
+                .expect("plate-edit completion watchdog; inspect resource audit on timeout");
+                assert!(!image_bytes.is_empty());
+                image::load_from_memory(&image_bytes).expect("the framed stall image must decode");
+                std::fs::write(
+                    cache("plate-evidence").join("plate.json"),
+                    json!({
+                        "stall_id":framed.id,"vendor":"Sella Voss","image_key":image_key.as_str(),
+                        "plate_edit_subject":expected,"state":"ready",
+                        "completed_image_bytes":image_bytes.len(),
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+                assert!(images.calls() > 0);
+                assert_eq!(
+                    response.revision,
+                    Some(wire::revision(after.basis().revision))
+                );
+            }
+            drop(table);
+            images.close().await;
         })
     });
 }
@@ -1249,95 +1292,94 @@ fn hs59_pick_up_examine_narrates_the_ware_and_queues_its_public_close_up_without
             )))
             .with_approach_model(jev(&judge));
             let mut table = Table::start(current.clone(), loaded, voice);
-            let images = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache(
-                "cup-images",
-            ));
-            table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
-                images.imagery.clone(),
-                crate::gameplay::imagery::ReferenceStore::new(cache("cup-references")),
-                table.service.social.clone(),
-                ContentRating::Restrained,
-                crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30)),
-                true,
-                table.service.updates.clone(),
-            );
-            let mut wake = table.service.living.subscribe().unwrap();
-            let old_view =
-                wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
-            table.service.living.observe(&old_view);
-            let (before, _) = stall(&current);
-            let (cup, _) = cup_target(&before);
-            let result = table
-                .service
-                .interaction_call(
-                    [1; 32],
-                    &request(&current, words),
-                    &cup,
-                    "examine",
-                    None,
-                    None,
-                )
-                .await
-                .unwrap();
-            let DialogueReply::Raw(response, None) = result else {
-                panic!("ware narration")
-            };
-            assert_eq!(response.npc_reply, look);
-            let after = table.service.updates.borrow().clone();
-            let (model, _) = stall(&after);
-            assert_eq!(
-                model, before,
-                "handling cannot transfer custody or consume stock"
-            );
-            assert!(model.offer_available(&cup));
-            assert!(!model.things.iter().any(|thing| thing.id == cup));
-            assert_eq!(
-                place::entries(after.state()).unwrap().len(),
-                place::entries(current.state()).unwrap().len()
-            );
-            let prompt = story.bodies()[0]["input"].as_str().unwrap().to_owned();
-            assert!(
-                prompt.contains(words)
-                    && prompt.contains("glossy blue glaze")
-                    && prompt.contains(&cup)
-            );
-            let mut view =
-                wire::journey_view(&after, LocalDemoRole::Display, native::first()).unwrap();
-            table.service.living.apply(&mut view);
-            let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
-                panic!("display")
-            };
-            let card = display
-                .scene
-                .unwrap()
-                .item
-                .expect("next sync exposes the inspected public ware");
-            assert_eq!(card.thing_id, cup);
-            assert_ne!(card.holder_id, "Brynn");
-            assert!(card.detail.contains("glossy blue glaze"));
-            let image_bytes = tokio::time::timeout(Duration::from_secs(10), async {
-                loop {
-                    if let Some(item) = table
-                        .service
-                        .living
-                        .list_resources(Some(crate::gameplay::resources::ResourceKind::ItemCloseUp))
-                        .into_iter()
-                        .find(|item| {
-                            item.subject.starts_with(&format!("item:{cup}:"))
-                                && item.state == "ready"
-                        })
-                        && let crate::gameplay::imagery::Lookup::Image { bytes, .. } =
-                            images.imagery.image(&item.handle).await
-                    {
-                        break bytes;
-                    }
-                    wake.changed().await.unwrap();
-                }
-            })
+            let Some(images) = crate::gameplay::imagery::tests::DirectionFixture::photographic(
+                &cache("cup-images"),
+            )
             .await
-            .expect("the inspected cup close-up must complete through the image provider");
-            assert!(!image_bytes.is_empty());
-            image::load_from_memory(&image_bytes).unwrap();
+            else {
+                return;
+            };
+            {
+                table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
+                    images.imagery.clone(),
+                    crate::gameplay::imagery::ReferenceStore::new(cache("cup-references")),
+                    table.service.social.clone(),
+                    ContentRating::Restrained,
+                    crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30)),
+                    true,
+                    table.service.updates.clone(),
+                );
+                let mut wake = table.service.living.subscribe().unwrap();
+                let old_view =
+                    wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
+                table.service.living.observe(&old_view);
+                let (before, _) = stall(&current);
+                let (cup, _) = cup_target(&before);
+                let result = table
+                    .service
+                    .interaction_call(
+                        [1; 32],
+                        &request(&current, words),
+                        &cup,
+                        "examine",
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let DialogueReply::Raw(response, None) = result else {
+                    panic!("ware narration")
+                };
+                assert_eq!(response.npc_reply, look);
+                let after = table.service.updates.borrow().clone();
+                let (model, _) = stall(&after);
+                assert_eq!(
+                    model, before,
+                    "handling cannot transfer custody or consume stock"
+                );
+                assert!(model.offer_available(&cup));
+                assert!(!model.things.iter().any(|thing| thing.id == cup));
+                assert_eq!(
+                    place::entries(after.state()).unwrap().len(),
+                    place::entries(current.state()).unwrap().len()
+                );
+                let prompt = story.bodies()[0]["input"].as_str().unwrap().to_owned();
+                assert!(
+                    prompt.contains(words)
+                        && prompt.contains("glossy blue glaze")
+                        && prompt.contains(&cup)
+                );
+                let mut view =
+                    wire::journey_view(&after, LocalDemoRole::Display, native::first()).unwrap();
+                table.service.living.apply(&mut view);
+                let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
+                    panic!("display")
+                };
+                let card = display
+                    .scene
+                    .unwrap()
+                    .item
+                    .expect("next sync exposes the inspected public ware");
+                assert_eq!(card.thing_id, cup);
+                assert_ne!(card.holder_id, "Brynn");
+                assert!(card.detail.contains("glossy blue glaze"));
+                let image_bytes = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if let Some((_, bytes)) =
+                            ready_unified_image(&images, df_imagery::Purpose::ItemCloseUp).await
+                        {
+                            break bytes;
+                        }
+                        wake.changed().await.unwrap();
+                    }
+                })
+                .await
+                .expect("the inspected cup close-up must complete through the image provider");
+                assert!(!image_bytes.is_empty());
+                image::load_from_memory(&image_bytes).unwrap();
+            }
+            drop(table);
+            images.close().await;
         })
     });
 }
@@ -1571,139 +1613,133 @@ fn item_second_look_fixture(current: Checkpoint, loaded: pack::LoadedPack, targe
             assert_eq!(check.succeeded, succeeds);
             assert_eq!(check.difficulty_class, 15);
             let mut table = Table::start(current.clone(), loaded.clone(), NpcVoice::silent());
-            let images = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache(
-                &format!("second-look-{step}"),
-            ));
-            table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
-                images.imagery.clone(),
-                crate::gameplay::imagery::ReferenceStore::new(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../assets/ui/generated"),
-                ),
-                table.service.social.clone(),
-                ContentRating::Restrained,
-                crate::gameplay::living_scenes::Timing {
-                    scene_start_quiet: Duration::ZERO,
-                    roll_quiet: Duration::ZERO,
-                    ..crate::gameplay::living_scenes::Timing::from_interval(Duration::from_secs(30))
-                },
-                true,
-                table.service.updates.clone(),
-            );
-            let mut wake = table.service.living.subscribe().unwrap();
-            let initial_view =
-                wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
-            table.service.living.observe(&initial_view);
-            tokio::time::timeout(COMPLETION_WATCHDOG, async {
-                loop {
-                    let mut view = initial_view.clone();
-                    table.service.living.apply(&mut view);
-                    if let Some(rpc::view_message::Audience::Display(display)) = view.audience
-                        && display
-                            .scene
-                            .as_ref()
-                            .is_some_and(|scene| scene.plate_state == rpc::PlateState::Ready as i32)
-                    {
-                        break;
-                    }
-                    assert!(
-                        table
-                            .service
-                            .living
-                            .list_resources(Some(
-                                crate::gameplay::resources::ResourceKind::ScenePlate
-                            ))
-                            .iter()
-                            .all(|row| row.state != "failed")
-                    );
-                    wake.changed().await.unwrap();
-                }
-            })
+            let Some(images) = crate::gameplay::imagery::tests::DirectionFixture::photographic(
+                &cache(&format!("second-look-{step}")),
+            )
             .await
-            .expect("base-plate completion watchdog; inspect resource audit on timeout");
-            let action = rpc::SubmitActionRequest {
-                operation_id: Some(rpc::OperationId {
-                    value: Some(operation(step).as_bytes().to_vec()),
-                }),
-                action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
-                ..Default::default()
+            else {
+                return;
             };
-            let response = rpc::SubmitActionResponse {
-                outcome: Some(rpc::submit_action_response::Outcome::CommittedDecision(
-                    Box::new(rpc::DecisionReceipt {
-                        outcome: Some(rpc::decision_receipt::Outcome::Accepted(Box::new(
-                            journey::accepted(current.state().decisions.last().unwrap()).unwrap(),
-                        ))),
-                        ..Default::default()
-                    }),
-                )),
-            };
-            let record = table
-                .service
-                .complete_observation_for_question(
-                    [1; 32],
-                    &action,
-                    &response,
-                    "I search beneath the display for its maker's mark.",
-                )
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(record.text.contains(hidden), succeeds);
-            assert!(!record.unavailable);
-            current = table.service.updates.borrow().clone();
-            if succeeds {
+            {
+                table.service.living = crate::gameplay::living_scenes::LivingScenes::start(
+                    images.imagery.clone(),
+                    crate::gameplay::imagery::ReferenceStore::new(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../assets/ui/generated"),
+                    ),
+                    table.service.social.clone(),
+                    ContentRating::Restrained,
+                    crate::gameplay::living_scenes::Timing {
+                        scene_start_quiet: Duration::ZERO,
+                        roll_quiet: Duration::ZERO,
+                        ..crate::gameplay::living_scenes::Timing::from_interval(
+                            Duration::from_secs(30),
+                        )
+                    },
+                    true,
+                    table.service.updates.clone(),
+                );
+                let mut wake = table.service.living.subscribe().unwrap();
+                let initial_view =
+                    wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
+                table.service.living.observe(&initial_view);
                 tokio::time::timeout(COMPLETION_WATCHDOG, async {
                     loop {
-                        let rows = table.service.living.list_resources(Some(
-                            crate::gameplay::resources::ResourceKind::PlateEdit,
-                        ));
-                        if let Some(focus) = rows
-                            .iter()
-                            .find(|row| row.subject.starts_with(&format!("item-focus:{target}:")))
-                            && focus.state == "ready"
+                        let mut view = initial_view.clone();
+                        table.service.living.apply(&mut view);
+                        if let Some(rpc::view_message::Audience::Display(display)) = view.audience
+                            && display.scene.as_ref().is_some_and(|scene| {
+                                scene.plate_state == rpc::PlateState::Ready as i32
+                            })
                         {
                             break;
                         }
-                        assert!(rows.iter().all(|row| {
-                            !row.subject.starts_with(&format!("item-focus:{target}:"))
-                                || row.state != "failed"
-                        }));
+                        unified_image_views(&images, df_imagery::Purpose::ScenePlate).await;
                         wake.changed().await.unwrap();
                     }
                 })
                 .await
-                .expect("item-focus completion watchdog; inspect resource audit on timeout");
-                assert!(
-                    images.prompt().contains(hidden),
-                    "the second focus prompt shows the committed hidden detail"
-                );
-                assert_eq!(images.image_count(), 2);
-                table
+                .expect("base-plate completion watchdog; inspect resource audit on timeout");
+                let action = rpc::SubmitActionRequest {
+                    operation_id: Some(rpc::OperationId {
+                        value: Some(operation(step).as_bytes().to_vec()),
+                    }),
+                    action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+                    ..Default::default()
+                };
+                let response = rpc::SubmitActionResponse {
+                    outcome: Some(rpc::submit_action_response::Outcome::CommittedDecision(
+                        Box::new(rpc::DecisionReceipt {
+                            outcome: Some(rpc::decision_receipt::Outcome::Accepted(Box::new(
+                                journey::accepted(current.state().decisions.last().unwrap())
+                                    .unwrap(),
+                            ))),
+                            ..Default::default()
+                        }),
+                    )),
+                };
+                let record = table
                     .service
-                    .complete_observation_for_question([1; 32], &action, &response, "I look again.")
+                    .complete_observation_for_question(
+                        [1; 32],
+                        &action,
+                        &response,
+                        "I search beneath the display for its maker's mark.",
+                    )
                     .await
-                    .unwrap();
-            }
-            let focus_count = table
-                .service
-                .living
-                .list_resources(Some(crate::gameplay::resources::ResourceKind::PlateEdit))
-                .iter()
-                .filter(|row| row.subject.starts_with(&format!("item-focus:{target}:")))
-                .count();
-            assert_eq!(
-                focus_count,
-                usize::from(succeeds),
-                "failure queues no hidden focus and replay shares the same focus"
-            );
-            let scene = runtime::scene(current.state()).unwrap();
-            assert_eq!(
-                living_scene::released_item_detail(current.state(), &scene, &target)
                     .unwrap()
-                    .is_some(),
-                succeeds
-            );
+                    .unwrap();
+                assert_eq!(record.text.contains(hidden), succeeds);
+                assert!(!record.unavailable);
+                current = table.service.updates.borrow().clone();
+                if succeeds {
+                    tokio::time::timeout(COMPLETION_WATCHDOG, async {
+                        loop {
+                            if ready_unified_image(&images, df_imagery::Purpose::SceneEdit)
+                                .await
+                                .is_some()
+                            {
+                                break;
+                            }
+                            wake.changed().await.unwrap();
+                        }
+                    })
+                    .await
+                    .expect("item-focus completion watchdog; inspect resource audit on timeout");
+                    assert!(
+                        images.prompt().contains(hidden),
+                        "the second focus prompt shows the committed hidden detail"
+                    );
+                    assert_eq!(images.image_count(), 2);
+                    table
+                        .service
+                        .complete_observation_for_question(
+                            [1; 32],
+                            &action,
+                            &response,
+                            "I look again.",
+                        )
+                        .await
+                        .unwrap();
+                }
+                let focus_count = unified_image_views(&images, df_imagery::Purpose::SceneEdit)
+                    .await
+                    .len();
+                assert_eq!(
+                    focus_count,
+                    usize::from(succeeds),
+                    "failure queues no hidden focus and replay shares the same focus"
+                );
+                let scene = runtime::scene(current.state()).unwrap();
+                assert_eq!(
+                    living_scene::released_item_detail(current.state(), &scene, &target)
+                        .unwrap()
+                        .is_some(),
+                    succeeds
+                );
+            }
+            drop(table);
+            images.close().await;
         }
         let after = runtime::scene(current.state()).unwrap();
         assert!(

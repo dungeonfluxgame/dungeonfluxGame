@@ -10,6 +10,10 @@ mod campaigns;
 mod checkout;
 pub mod config;
 mod database;
+mod draft_images;
+#[cfg(test)]
+#[path = "integration/draft_images_tests.rs"]
+mod draft_images_tests;
 mod finance;
 mod mail;
 mod ports;
@@ -30,3 +34,5 @@ pub use runtime::{Hosted, OpenError};
 
 #[cfg(test)]
 mod journey_tests;
+
+mod draft_composition;

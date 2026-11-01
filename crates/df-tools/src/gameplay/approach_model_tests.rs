@@ -414,16 +414,24 @@ async fn startup_jev_uses_the_run_ledger_before_the_cost_book_opens() {
     );
     assert_eq!(endpoint.bodies().len(), 1);
 
-    let imagery = crate::gameplay::dev_control::direct::start_imagery(
-        crate::gameplay::startup_configuration::ImagerySettings::Off(
-            crate::gameplay::startup_configuration::ImageryOff::Qualification,
-        ),
-        None,
-        None,
+    let mut patch = df_imagery::RuntimePatch::empty();
+    patch.mode = Some(df_imagery::GlobalMode::Off);
+    let costs = crate::gameplay::cost::port::MeteringPort::from_ledger(hub.ledger().clone());
+    let Some(host) = crate::gameplay::image_test_support::ImageHostFixture::open_with_hub(
+        endpoint.address,
+        patch,
+        costs,
         hub.clone(),
     )
-    .unwrap();
-    assert!(std::sync::Arc::ptr_eq(hub.ledger(), imagery.hub().ledger()));
+    .await
+    else {
+        return;
+    };
+    assert!(std::sync::Arc::ptr_eq(
+        hub.ledger(),
+        host.imagery().hub().ledger()
+    ));
+    assert!(!host.imagery().is_on());
 
     hub.ledger()
         .costs()
@@ -436,6 +444,8 @@ async fn startup_jev_uses_the_run_ledger_before_the_cost_book_opens() {
         )
         .unwrap();
     assert_eq!(hub.ledger().costs().totals().calls, 1);
+    assert_eq!(host.metering_port().totals().calls, 1);
+    host.close().await;
 }
 
 pub(in crate::gameplay) fn answer(option: &str) -> Reply {

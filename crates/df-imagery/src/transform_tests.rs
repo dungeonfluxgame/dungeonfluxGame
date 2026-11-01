@@ -482,3 +482,32 @@ fn step_count_honors_injected_limits() {
     };
     spec.validate(&raised).unwrap();
 }
+
+#[test]
+fn encoded_operations_use_checked_dimensions_and_existing_step_limits() {
+    let dimensions = Dimensions::new(96, 144).unwrap();
+    let steps = vec![
+        ImageTransform::EncodedResize {
+            dimensions,
+            filter: EncodedFilter::Triangle,
+        },
+        ImageTransform::EncodedThumbnail(dimensions),
+        ImageTransform::EncodedMatte {
+            fill: gray(),
+            blend: EncodedAlphaBlend::IntegerFloor,
+        },
+        ImageTransform::DiscardAlpha,
+    ];
+    let spec = TransformSpec {
+        source: TransformSource::Image(source()),
+        steps,
+    };
+    assert_eq!(spec.validate(&limits()), Ok(()));
+    let mut restricted = limits();
+    restricted.max_transform_steps = 3;
+    assert_eq!(
+        spec.validate(&restricted),
+        Err(TransformError::TooManySteps)
+    );
+    assert!(Dimensions::new(0, 144).is_err());
+}

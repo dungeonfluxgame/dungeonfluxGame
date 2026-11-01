@@ -47,7 +47,10 @@ pub use speech_adapter::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_http::{NativeHttp, NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal, NativeHttpResponse, ProviderLimits};
+pub use native_http::{
+    NativeHttp, NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal,
+    NativeHttpResponse, NativeRetryAfter, NativeRetryAfterValue, ProviderLimits,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
 #[cfg(not(target_arch = "wasm32"))]
@@ -91,25 +94,24 @@ mod media_container;
 mod native_media_fetch;
 #[cfg(not(target_arch = "wasm32"))]
 pub use fal_media::{
-    EncodedFalMedia, FalCancellationObservation, FalHttpFacts, FalImageBasis, FalImageJob,
-    FalImageProfile, FalImageRequest, FalImageSemantics, FalLoopFrames, FalMediaCompletion,
+    EncodedFalMedia, FalCancellationObservation, FalHttpFacts, FalLoopFrames, FalMediaCompletion,
     FalMediaConfig, FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame,
     FalSoundBasis, FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
     FalVideoCompletionEvent, FalVideoJob, FalVideoProfile, FalVideoRequest, FalVideoSemantics,
     KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider, PreparedFalMediaResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use media_container::{EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_png_off_worker};
+pub use media_container::{
+    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_png_off_worker,
+};
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_media_fetch::{FalCdnPin, fetch_bfl_delivery};
+pub use native_media_fetch::{BflDeliveryFailure, FalCdnPin, fetch_bfl_delivery};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_fal_media_provider;
 #[cfg(not(target_arch = "wasm32"))]
 mod head_locate;
 #[cfg(not(target_arch = "wasm32"))]
-pub use head_locate::{
-    HeadBox, HeadLocateConfig, HeadLocateError, LocateTarget, LocatedHead, NativeHeadLocator,
-};
+pub use head_locate::{HeadBox, LocatedHead};
 #[cfg(not(target_arch = "wasm32"))]
 mod embeddings;
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,20 +124,17 @@ pub use embeddings::{
 mod image_edit;
 #[cfg(not(target_arch = "wasm32"))]
 pub use image_edit::{
-    GeneratedImage, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel,
-    ImageFormat, ImageModeration, ImageQuality, ImageUsage, NativeImageEditProvider,
-    ReferenceImage,
+    GeneratedImage, ImageBackground, ImageEdit, ImageEditError, ImageEditModel, ImageFormat,
+    ImageModeration, ImageQuality, ImageUsage, ReferenceImage,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod bfl_image;
 #[cfg(not(target_arch = "wasm32"))]
 mod fal_image;
 #[cfg(not(target_arch = "wasm32"))]
-pub use bfl_image::{BFL_FLUX3_IMAGE, BflImageConfig, BflImageFailure, NativeBflImageProvider};
+pub use bfl_image::BFL_FLUX3_IMAGE;
 #[cfg(not(target_arch = "wasm32"))]
-pub use fal_image::{
-    BACKGROUND_REMOVAL, FLUX_KONTEXT_MULTI, FLUX_ULTRA, FalImageConfig, NativeFalImageProvider,
-};
+pub use fal_image::{BACKGROUND_REMOVAL, FLUX_KONTEXT_MULTI, FLUX_ULTRA};
 #[cfg(not(target_arch = "wasm32"))]
 mod eleven_music;
 #[cfg(not(target_arch = "wasm32"))]
@@ -148,8 +147,8 @@ pub use eleven_music::{
 mod fal_segment;
 #[cfg(not(target_arch = "wasm32"))]
 pub use fal_segment::{
-    FalSegmentConfig, FalSegmentError, MAXIMUM_MASKS, MaskError, MaskRows, MaskRun,
-    NativeFalSegmenter, PixelBox, SegmentAnswer, SegmentInstance, SegmentModel, SegmentRequest,
+    FalSegmentError, MAXIMUM_MASKS, MaskError, MaskRows, MaskRun, PixelBox, SegmentInstance,
+    SegmentModel,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod worldlabs;
@@ -161,11 +160,7 @@ pub use worldlabs::{
 #[cfg(not(target_arch = "wasm32"))]
 mod plate_judge;
 #[cfg(not(target_arch = "wasm32"))]
-pub use plate_judge::{
-    JudgeAnswer, JudgePicture, NativePlateJudge, PhotoDress, PhotoFrame, PhotoJudgeKind,
-    PhotoMedium, PhotoPeopleCount, PhotoQualityAnswer, PhotoSetting, PhotoText, PlateJudgeConfig,
-    PlateJudgeError,
-};
+pub use plate_judge::PhotoJudgeKind;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod image_transport_tests;

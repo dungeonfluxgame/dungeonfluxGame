@@ -461,6 +461,23 @@ impl ObjectStore for NativeFileStore {
         blocking(deadline, move || files.put(&key, None, &body, expected)).await
     }
 
+    async fn put_new_with_bound(
+        &self,
+        key: &ObjectKey,
+        body: &[u8],
+        expected: AssetManifest,
+        maximum_bytes: u64,
+        deadline: Deadline,
+    ) -> Result<StoredObject, ObjectStoreError> {
+        crate::object_store::check_write_bound(maximum_bytes, body.len(), expected)?;
+        let files = KeyedFiles {
+            root: self.root().to_path_buf(),
+            max_object_bytes: maximum_bytes,
+        };
+        let (key, body) = (key.clone(), body.to_vec());
+        blocking(deadline, move || files.put(&key, None, &body, expected)).await
+    }
+
     async fn put_if_match(
         &self,
         key: &ObjectKey,

@@ -1,6 +1,10 @@
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
-const REGISTRY_SOURCES: [(&str, &str); 13] = [
+const REGISTRY_SOURCES: [(&str, &str); 14] = [
+    (
+        "imagery installer",
+        include_str!("../src/imagery_migrations.rs"),
+    ),
     (
         "df-hosted database",
         include_str!("../../df-hosted/src/database.rs"),

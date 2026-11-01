@@ -50,12 +50,7 @@ pub struct HttpRequest {
 impl HttpRequest {
     /// Native BFL request with an `x-key` credential header.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn bfl_native(
-        method: HttpMethod,
-        endpoint: &str,
-        credential: &str,
-        body: Vec<u8>,
-    ) -> Self {
+    pub fn bfl_native(method: HttpMethod, endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
         Self {
             method,
             url: endpoint.to_owned(),
@@ -68,12 +63,7 @@ impl HttpRequest {
     }
     /// Native fal request with a `Key` credential header and no retry.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn fal_native(
-        method: HttpMethod,
-        endpoint: &str,
-        credential: &str,
-        body: Vec<u8>,
-    ) -> Self {
+    pub fn fal_native(method: HttpMethod, endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
         Self {
             method,
             url: endpoint.to_owned(),

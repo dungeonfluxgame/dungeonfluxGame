@@ -40,6 +40,7 @@ pub struct Config {
     pub(crate) trial_email_key: [u8; 32],
     pub(crate) campaign_keys: df_campaign::service::ServiceKeys,
     pub(crate) stripe: Option<crate::checkout::Settings>,
+    pub(crate) drafts: crate::draft_composition::Settings,
 }
 
 /// Configuration failures identify names only; they never retain an environment value.
@@ -199,6 +200,7 @@ impl Config {
             None if profile == Profile::Development => None,
             None => return Err(ConfigError::Missing("DF_TELEMETRY_DIR")),
         };
+        let drafts = crate::draft_composition::Settings::parse(&get, &database, &transport)?;
         Ok(Self {
             profile,
             accounts_open,
@@ -216,6 +218,7 @@ impl Config {
             proxies,
             telemetry_dir,
             stripe,
+            drafts,
         })
     }
 }

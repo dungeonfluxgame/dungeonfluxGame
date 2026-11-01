@@ -15,14 +15,14 @@ use df_commerce::admission::{AdmissionRefusal, WorkClass};
 use df_commerce::finance_ids::{AttemptId, EffectId};
 use df_finance::admit::AdmissionOutcome;
 use df_finance::held::QuoteCommand;
-use df_finance::image_stage::{
+use df_finance::ports::MediaRequest;
+use df_finance::service::{FinanceConfig, FinanceError};
+use df_finance::{
     BindingRefusal, ImageAssetId, ImageJobId, ImageStageAdmission, ImageStageBinding,
     ImageStageHookOutcome, ImageStageId, ImageStagePhase, ImageStagePort, MAX_OWNER_SCOPE_BYTES,
     OwnerScope, PublicationAttemptId, StageRefusal, image_stage_quote_digest,
     image_stage_request_digest,
 };
-use df_finance::ports::MediaRequest;
-use df_finance::service::{FinanceConfig, FinanceError};
 use support::world::{CURRENCY, Service, World, operation, payer, route};
 use tokio_postgres::Transaction;
 
@@ -98,7 +98,7 @@ impl LinkPort {
     }
 
     async fn stored(
-        transaction: &Transaction,
+        transaction: &Transaction<'_>,
         operation: &[u8; 16],
     ) -> Result<Option<Vec<Vec<u8>>>, tokio_postgres::Error> {
         let row = transaction
@@ -110,9 +110,8 @@ impl LinkPort {
             )
             .await?;
         Ok(row.map(|row| {
-            let mut link: Vec<Vec<u8>> = (0..11)
-                .map(|index| row.get::<_, Vec<u8>>(index))
-                .collect();
+            let mut link: Vec<Vec<u8>> =
+                (0..11).map(|index| row.get::<_, Vec<u8>>(index)).collect();
             link.push(row.get::<_, i64>(11).to_be_bytes().to_vec());
             link
         }))
@@ -134,10 +133,7 @@ impl LinkPort {
             binding.attempt.as_bytes().to_vec(),
             binding.effect.as_bytes().to_vec(),
             receipt.reservation.as_bytes().to_vec(),
-            receipt
-                .retail_maximum_micro_dollars
-                .to_be_bytes()
-                .to_vec(),
+            receipt.retail_maximum_micro_dollars.to_be_bytes().to_vec(),
         ]
     }
 }
@@ -163,7 +159,9 @@ impl ImageStagePort for LinkPort {
                     detail: "injected uncertainty".into(),
                 }),
                 Behavior::BrokenSql => {
-                    match transaction.query_one("SELECT * FROM image_stage_link_missing", &[]).await
+                    match transaction
+                        .query_one("SELECT * FROM image_stage_link_missing", &[])
+                        .await
                     {
                         Ok(_) => Ok(ImageStageHookOutcome::Accepted),
                         Err(error) => Err(Self::unavailable(error)),
@@ -206,9 +204,9 @@ impl ImageStagePort for LinkPort {
                                 Ok(1) => Ok(ImageStageHookOutcome::Accepted),
                                 Ok(_) => Err(FinanceError::ImageStageConflict),
                                 Err(error)
-                                    if error.as_db_error().is_some_and(|db| {
-                                        db.code().code() == "23505"
-                                    }) =>
+                                    if error
+                                        .as_db_error()
+                                        .is_some_and(|db| db.code().code() == "23505") =>
                                 {
                                     match Self::stored(transaction, binding.operation.as_bytes())
                                         .await
@@ -251,7 +249,9 @@ impl ImageStagePort for LinkPort {
                     detail: "injected uncertainty".into(),
                 }),
                 Behavior::BrokenSql => {
-                    match transaction.query_one("SELECT * FROM image_stage_link_missing", &[]).await
+                    match transaction
+                        .query_one("SELECT * FROM image_stage_link_missing", &[])
+                        .await
                     {
                         Ok(_) => Ok(ImageStageHookOutcome::Existing),
                         Err(error) => Err(Self::unavailable(error)),
@@ -281,7 +281,11 @@ struct Fixture {
     payload: [u8; 32],
 }
 
-fn binding_of(tag: u8, world: &World, admit: &df_finance::admit::AdmitCommand) -> ImageStageBinding {
+fn binding_of(
+    tag: u8,
+    world: &World,
+    admit: &df_finance::admit::AdmitCommand,
+) -> ImageStageBinding {
     ImageStageBinding {
         owner_scope: OwnerScope::new(b"owner-scope-1".to_vec()).expect("scope"),
         job: ImageJobId::new([0x10 + tag; 16]).expect("job"),
@@ -319,7 +323,13 @@ async fn fixture_with(tag: u8, config: Option<FinanceConfig>) -> Option<(Fixture
         .expect("trial")
         .expect("granted");
     service
-        .allocate(payer(1), world.session, operation(100), 10_000_000, world.consent())
+        .allocate(
+            payer(1),
+            world.session,
+            operation(100),
+            10_000_000,
+            world.consent(),
+        )
         .await
         .expect("allocate");
     let admit = world.admit_command(tag, 2_000_000, 1_000_000);
@@ -392,38 +402,57 @@ fn the_stage_digest_changes_when_any_binding_or_payload_field_changes() {
     let base = image_stage_request_digest(&binding, &payload);
     let mut changed = binding.clone();
     changed.owner_scope = OwnerScope::new(b"other".to_vec()).expect("scope");
+    assert_ne!(
+        changed.owner_scope.as_bytes(),
+        binding.owner_scope.as_bytes()
+    );
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.job = ImageJobId::new([9; 16]).expect("job");
+    assert_ne!(changed.job.as_bytes(), binding.job.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.stage = ImageStageId::new([9; 16]).expect("stage");
+    assert_ne!(changed.stage.as_bytes(), binding.stage.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.asset = ImageAssetId::new([9; 16]).expect("asset");
+    assert_ne!(changed.asset.as_bytes(), binding.asset.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.publication_attempt = PublicationAttemptId::new([9; 16]).expect("publication");
+    assert_ne!(
+        changed.publication_attempt.as_bytes(),
+        binding.publication_attempt.as_bytes()
+    );
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.tenant = df_commerce::finance_ids::TenantKey::from_array([9; 16]);
+    assert_ne!(changed.tenant.as_bytes(), binding.tenant.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.campaign = df_commerce::finance_ids::CampaignKey::from_array([9; 16]);
+    assert_ne!(changed.campaign.as_bytes(), binding.campaign.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.session = df_commerce::finance_ids::SessionKey::from_array([9; 16]);
+    assert_ne!(changed.session.as_bytes(), binding.session.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.operation = df_commerce::finance_ids::OperationKey::from_array([9; 16]);
+    assert_ne!(changed.operation.as_bytes(), binding.operation.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
-    changed.attempt = AttemptId::from_array([9; 16]);
+    changed.attempt = AttemptId::from_array([12; 16]);
+    assert_ne!(changed.attempt.as_bytes(), binding.attempt.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
     let mut changed = binding.clone();
     changed.effect = EffectId::from_array([9; 16]);
+    assert_ne!(changed.effect.as_bytes(), binding.effect.as_bytes());
     assert_ne!(image_stage_request_digest(&changed, &payload), base);
-    assert_ne!(image_stage_request_digest(&binding, &[9; 32]), base);
+    let mutated_payload = [9; 32];
+    assert_ne!(mutated_payload, payload);
+    assert_ne!(image_stage_request_digest(&binding, &mutated_payload), base);
 }
 
 #[test]
@@ -549,7 +578,11 @@ fn a_replay_verifies_the_identical_link_and_posts_nothing_new() {
         assert_eq!(reservation, first_reservation);
         assert_eq!(attempt, first_attempt);
         assert_eq!(retail_maximum_micro_dollars, first_maximum);
-        assert_eq!(counts(&fixture.world).await, settled, "a replay posts nothing");
+        assert_eq!(
+            counts(&fixture.world).await,
+            settled,
+            "a replay posts nothing"
+        );
         assert_eq!(
             port.phases(),
             vec![ImageStagePhase::New, ImageStagePhase::Replay],
@@ -577,6 +610,24 @@ fn a_replay_with_a_missing_link_fails_instead_of_repairing() {
             .execute("DELETE FROM image_stage_link", &[])
             .await
             .expect("drop the link");
+        let deleted = counts(&fixture.world).await;
+        assert_eq!(
+            deleted.0, settled.0,
+            "deleting the test link writes no journal entry"
+        );
+        assert_eq!(
+            deleted.1, settled.1,
+            "deleting the test link writes no attempt"
+        );
+        assert_eq!(
+            deleted.2, settled.2,
+            "deleting the test link writes no receipt"
+        );
+        assert_eq!(
+            deleted.3,
+            settled.3 - 1,
+            "the test deletion removed exactly the link row"
+        );
         let error = fixture
             .service
             .admit_image_stage(&fixture.command, &port)
@@ -586,7 +637,7 @@ fn a_replay_with_a_missing_link_fails_instead_of_repairing() {
             matches!(error, FinanceError::ImageStageMissingLink),
             "{error:?}"
         );
-        assert_eq!(counts(&fixture.world).await, settled, "nothing repaired");
+        assert_eq!(counts(&fixture.world).await, deleted, "nothing repaired");
         fixture.world.finish().await;
     });
 }
@@ -605,7 +656,10 @@ fn a_replay_with_a_tampered_link_conflicts() {
         fixture
             .world
             .admin
-            .execute("UPDATE image_stage_link SET asset_id = $1", &[&vec![9_u8; 16]])
+            .execute(
+                "UPDATE image_stage_link SET asset_id = $1",
+                &[&vec![9_u8; 16]],
+            )
             .await
             .expect("tamper");
         let error = fixture
@@ -613,7 +667,10 @@ fn a_replay_with_a_tampered_link_conflicts() {
             .admit_image_stage(&fixture.command, &port)
             .await
             .expect_err("conflict");
-        assert!(matches!(error, FinanceError::ImageStageConflict), "{error:?}");
+        assert!(
+            matches!(error, FinanceError::ImageStageConflict),
+            "{error:?}"
+        );
         fixture.world.finish().await;
     });
 }
@@ -781,7 +838,11 @@ fn changed_fields_conflict_on_the_same_operation() {
                 "{name}: {error:?}"
             );
         }
-        assert_eq!(counts(&fixture.world).await, settled, "conflicts write nothing");
+        assert_eq!(
+            counts(&fixture.world).await,
+            settled,
+            "conflicts write nothing"
+        );
         fixture.world.finish().await;
     });
 }
@@ -799,7 +860,9 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::TenantMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::TenantMismatch
+                ))
             ),
             "tenant must bind the admission"
         );
@@ -808,7 +871,9 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::CampaignMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::CampaignMismatch
+                ))
             ),
             "campaign must bind the admission"
         );
@@ -817,7 +882,9 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::SessionMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::SessionMismatch
+                ))
             ),
             "session must bind the admission"
         );
@@ -826,7 +893,9 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::OperationMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::OperationMismatch
+                ))
             ),
             "operation must bind the admission"
         );
@@ -835,7 +904,9 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::AttemptMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::AttemptMismatch
+                ))
             ),
             "attempt must bind the admission"
         );
@@ -844,11 +915,17 @@ fn mismatched_binding_ids_fail_preflight() {
         assert!(
             matches!(
                 fixture.service.admit_image_stage(&command, &port).await,
-                Err(FinanceError::ImageStageBinding(BindingRefusal::EffectMismatch))
+                Err(FinanceError::ImageStageBinding(
+                    BindingRefusal::EffectMismatch
+                ))
             ),
             "effect must bind the admission"
         );
-        assert_eq!(counts(&fixture.world).await, baseline, "preflight writes nothing");
+        assert_eq!(
+            counts(&fixture.world).await,
+            baseline,
+            "preflight writes nothing"
+        );
         fixture.world.finish().await;
     });
 }

@@ -1,11 +1,18 @@
 //! Phone-key library RPCs. Save snapshots only the authenticated committed seat.
+use super::imagery::{
+    ApprovedPortraitSource, ImageFailure, Imagery, ReferenceImage, TrustedReferenceOrigin,
+};
+use df_imagery::{
+    AlphaHandling, Dimensions, Encoding, ImageOwner, ImageTransform, LossyQuality, Purpose,
+    PurposedUse, RasterOutputSpec, TransformSource, TransformSpec, VariantRole,
+};
 use df_persistence::hero_library::{HeroLibrary, HeroRevision, IdentityRecord, PhoneKey};
 use df_protocol::common as rpc;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tonic::{Request, Response, Status};
@@ -781,12 +788,12 @@ impl super::Service {
         let body = request.into_inner();
         let key = PhoneKey::from_bytes(&body.key)
             .map_err(|_| Status::invalid_argument("Library key invalid"))?;
-        let snapshot = seat(self, credential, body.scope).await?;
+        let snapshot = seat(self, credential, body.scope.clone()).await?;
         let hero = snapshot
             .hero
             .ok_or_else(|| Status::failed_precondition("Accept a hero first"))?;
         let requested_origin = loaded_reference(body.loaded_hero);
-        let mut library = open().await?;
+        let library = open().await?;
         let source = if let Some(reference) = requested_origin.as_ref() {
             match library.load_revision(&key, reference).await {
                 Ok(row) => Some(row),
@@ -805,9 +812,10 @@ impl super::Service {
         } else {
             None
         };
+        drop(library);
         // Loaded portraits remain approved durable bytes even after the server/cache restarts.
         let portrait = if snapshot.portrait.is_some() {
-            portrait_bytes(snapshot.portrait).await?
+            portrait_bytes(snapshot.portrait.clone()).await?
         } else if let Some(source) = source.as_ref() {
             let previous = rpc::LibraryHeroIdentity::decode(source.record.encoded.as_slice())
                 .map_err(|_| unavailable())?;
@@ -826,7 +834,42 @@ impl super::Service {
                 .map(|choice| choice.option_id.clone())
                 .unwrap_or_default()
         };
-        let thumbnail = thumbnail(&portrait)?;
+        let thumbnail = if portrait.is_empty() {
+            Vec::new()
+        } else {
+            let origin = if let Some(attachment) = snapshot.portrait.clone() {
+                PortraitOrigin::Seat(attachment)
+            } else {
+                let reference = source
+                    .as_ref()
+                    .ok_or_else(|| unavailable_at("thumbnail"))?
+                    .reference
+                    .clone();
+                PortraitOrigin::Library {
+                    phone_key: body.key.clone(),
+                    reference,
+                }
+            };
+            let proof = Arc::new(PrivatePortrait {
+                service: self.clone(),
+                credential,
+                scope: body.scope.clone(),
+                seat: snapshot.seat.clone(),
+                hero: hero.clone(),
+                origin,
+            });
+            let image = ReferenceImage::from_trusted(
+                df_providers::ImageFormat::Jpeg,
+                portrait.clone().into(),
+                TrustedReferenceOrigin::ApprovedPortrait(proof),
+            );
+            let imagery = self
+                .imagery
+                .for_local_creator(credential)
+                .await
+                .map_err(|_| unavailable_at("thumbnail-authority"))?;
+            thumbnail(&imagery, &image).await?
+        };
         let record = IdentityRecord {
             name: hero.name.clone(),
             species: choice("species"),
@@ -843,6 +886,7 @@ impl super::Service {
         let origin = source.as_ref().map(|source| &source.reference);
         let config = config()?;
         let campaign = config.get_dbname().ok_or_else(unavailable)?.to_owned();
+        let mut library = open().await?;
         let reference = tokio::time::timeout(Duration::from_secs(20), async {
             let reference = library
                 .save_from(
@@ -1310,21 +1354,139 @@ async fn serve_portrait(
     }
 }
 
-fn thumbnail(portrait: &[u8]) -> Result<Vec<u8>, Status> {
-    if portrait.is_empty() {
+enum PortraitOrigin {
+    Seat(super::creator_portraits::Attachment),
+    Library {
+        phone_key: Vec<u8>,
+        reference: df_persistence::hero_library::RevisionRef,
+    },
+}
+
+struct PrivatePortrait {
+    service: super::Service,
+    credential: [u8; 32],
+    scope: Option<rpc::WatchViewRequest>,
+    seat: Vec<u8>,
+    hero: rpc::LibraryHeroIdentity,
+    origin: PortraitOrigin,
+}
+
+impl ApprovedPortraitSource for PrivatePortrait {
+    fn read_current<'a>(
+        &'a self,
+        work_owner: &'a ImageOwner,
+    ) -> super::imagery::central::ReferenceFuture<'a, ReferenceImage> {
+        Box::pin(async move {
+            if !matches!(work_owner, ImageOwner::Draft { .. }) {
+                return Err(ImageFailure::Refused);
+            }
+            authenticate(&self.service, self.credential)
+                .await
+                .map_err(|_| ImageFailure::Refused)?;
+            let current = seat(&self.service, self.credential, self.scope.clone())
+                .await
+                .map_err(|_| ImageFailure::Refused)?;
+            if current.seat != self.seat || current.hero.as_ref() != Some(&self.hero) {
+                return Err(ImageFailure::Refused);
+            }
+            let bytes = match &self.origin {
+                PortraitOrigin::Seat(expected) => {
+                    let attachment = current.portrait.ok_or(ImageFailure::Refused)?;
+                    if attachment.key != expected.key
+                        || attachment.digest != expected.digest
+                        || attachment.bytes != expected.bytes
+                        || attachment.revision != expected.revision
+                    {
+                        return Err(ImageFailure::Refused);
+                    }
+                    portrait_bytes(Some(attachment))
+                        .await
+                        .map_err(|_| ImageFailure::Interrupted)?
+                }
+                PortraitOrigin::Library {
+                    phone_key,
+                    reference,
+                } => {
+                    if current.portrait.is_some() {
+                        return Err(ImageFailure::Refused);
+                    }
+                    let key = PhoneKey::from_bytes(phone_key).map_err(|_| ImageFailure::Refused)?;
+                    let library = open().await.map_err(|_| ImageFailure::Interrupted)?;
+                    let row = library
+                        .load_revision(&key, reference)
+                        .await
+                        .map_err(|_| ImageFailure::Refused)?;
+                    let identity = rpc::LibraryHeroIdentity::decode(row.record.encoded.as_slice())
+                        .map_err(|_| ImageFailure::Refused)?;
+                    if !portrait_matches(&self.hero, &identity) {
+                        return Err(ImageFailure::Refused);
+                    }
+                    row.record.portrait
+                }
+            };
+            Ok(ReferenceImage::new(
+                df_providers::ImageFormat::Jpeg,
+                bytes.into(),
+            ))
+        })
+    }
+}
+
+async fn thumbnail(imagery: &Imagery, portrait: &ReferenceImage) -> Result<Vec<u8>, Status> {
+    if portrait.bytes.is_empty() {
         return Ok(Vec::new());
     }
-    let image = image::load_from_memory_with_format(portrait, image::ImageFormat::Jpeg)
-        .map_err(|_| unavailable_at("thumbnail"))?
-        .thumbnail(96, 144);
-    let mut bytes = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 65)
-        .encode_image(&image)
-        .map_err(|_| unavailable_at("thumbnail"))?;
-    if bytes.len() > 32768 {
+    if portrait.format != df_providers::ImageFormat::Jpeg {
         return Err(unavailable_at("thumbnail"));
     }
-    Ok(bytes)
+    if image::guess_format(&portrait.bytes).map_err(|_| unavailable_at("thumbnail"))?
+        != image::ImageFormat::Jpeg
+    {
+        return Err(unavailable_at("thumbnail"));
+    }
+    let header =
+        df_imagery::source_header(&portrait.bytes).map_err(|_| unavailable_at("thumbnail"))?;
+    let (width_px, height_px) = (header.dimensions.width_px(), header.dimensions.height_px());
+    let ratio = (96.0 / f64::from(width_px)).min(144.0 / f64::from(height_px));
+    // Aspect fit bounds both rounded dimensions by the fixed 96x144 thumbnail.
+    let width_px = (f64::from(width_px) * ratio).round().max(1.0) as u32;
+    let height_px = (f64::from(height_px) * ratio).round().max(1.0) as u32;
+    let dimensions =
+        Dimensions::new(width_px, height_px).map_err(|_| unavailable_at("thumbnail"))?;
+    let bounds = Dimensions::new(96, 144).map_err(|_| unavailable_at("thumbnail"))?;
+    let source = imagery
+        .pin_reference(portrait)
+        .await
+        .map_err(|_| unavailable_at("thumbnail"))?;
+    let quality = LossyQuality::new(65).map_err(|_| unavailable_at("thumbnail"))?;
+    let output = RasterOutputSpec::new(
+        dimensions,
+        AlphaHandling::Opaque,
+        Encoding::Jpeg { quality },
+    )
+    .map_err(|_| unavailable_at("thumbnail"))?;
+    let image = imagery
+        .transform(
+            "hero-library-thumbnail",
+            PurposedUse {
+                purpose: Purpose::ImportedDerivative,
+                role: VariantRole::Thumbnail,
+            },
+            TransformSpec {
+                source: TransformSource::Image(source),
+                steps: vec![
+                    ImageTransform::EncodedThumbnail(bounds),
+                    ImageTransform::DiscardAlpha,
+                ],
+            },
+            output,
+        )
+        .await
+        .map_err(|_| unavailable_at("thumbnail"))?;
+    if image.bytes.len() > 32768 {
+        return Err(unavailable_at("thumbnail"));
+    }
+    Ok(image.bytes.to_vec())
 }
 
 const RECORD_ALPHABET: &[u8; 64] =
@@ -1441,5 +1603,98 @@ mod fake_profile_tests {
             campaign.get_dbname(),
             Some("df_gameplay_demo_loadharness_library_fixture")
         );
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_thumbnail_matches_preserved_legacy_bytes_and_keeps_empty_portraits_optional() {
+        let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+        let pixels = image::RgbImage::from_fn(17, 23, |x, y| {
+            image::Rgb([
+                u8::try_from((x * 19 + y * 7) % 256).unwrap(),
+                u8::try_from((x * 3 + y * 37) % 256).unwrap(),
+                u8::try_from((x * 53 + y * 11) % 256).unwrap(),
+            ])
+        });
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90)
+            .encode_image(&pixels)
+            .unwrap();
+        let portrait = fixture
+            .reference(df_providers::ImageFormat::Jpeg, bytes.into())
+            .await;
+        let actual = thumbnail(fixture.imagery(), &portrait).await.unwrap();
+        // Measured from the full frozen legacy thumbnail function over this JPEG fixture.
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&actual)),
+            "dc0ef2ab68a0a94ce17374f5c54e7d79fff0db1fd5823801dad70fd5996a7f75"
+        );
+        assert!(actual.len() <= 32768);
+        let empty = ReferenceImage::new(df_providers::ImageFormat::Jpeg, bytes::Bytes::new());
+        assert!(
+            thumbnail(fixture.imagery(), &empty)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let broken = ReferenceImage::new(
+            df_providers::ImageFormat::Jpeg,
+            bytes::Bytes::from_static(b"invalid JPEG"),
+        );
+        assert_eq!(
+            thumbnail(fixture.imagery(), &broken)
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unavailable
+        );
+        fixture.close().await;
+    }
+    fn exif_six_jpeg() -> Vec<u8> {
+        let pixels = image::RgbImage::from_fn(17, 23, |_, y| {
+            if y < 11 {
+                image::Rgb([0, 0, 230])
+            } else {
+                image::Rgb([230, 0, 0])
+            }
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .encode_image(&pixels)
+            .unwrap();
+        let mut tagged = jpeg[..2].to_vec();
+        tagged.extend_from_slice(&[0xff, 0xe1, 0, 0x22]);
+        tagged.extend_from_slice(b"Exif\0\0");
+        tagged.extend_from_slice(&[
+            0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0,
+            0,
+        ]);
+        tagged.extend_from_slice(&jpeg[2..]);
+        tagged
+    }
+
+    #[tokio::test]
+    async fn portrait_thumbnail_sizes_after_the_executor_exif_normalization() {
+        let fixture = super::super::imagery::test_support::TransformFixture::new().await;
+        let bytes = exif_six_jpeg();
+        let normalized = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+            .unwrap()
+            .rotate90();
+        let expected = normalized.thumbnail(96, 144);
+        assert_eq!((expected.width(), expected.height()), (96, 71));
+        let mut expected_bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut expected_bytes, 65)
+            .encode_image(&expected)
+            .unwrap();
+        let source = fixture
+            .reference(df_providers::ImageFormat::Jpeg, bytes.into())
+            .await;
+        let actual = thumbnail(fixture.imagery(), &source).await.unwrap();
+        assert_eq!(actual, expected_bytes);
+        fixture.close().await;
     }
 }

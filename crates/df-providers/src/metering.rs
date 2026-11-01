@@ -1,5 +1,5 @@
 //! A hook through which a caller meters the billed calls of a client that builds and sends its
-//! own request: the choice (Jev), plate-judge and head-locator clients.
+//! own request: the choice (Jev) client.
 //!
 //! The client calls [`MeterSlot::sent`] right before it sends, and settles the returned
 //! [`CallTicket`] with what happened: [`CallTicket::answered`] when the supplier answered (the
@@ -9,8 +9,6 @@
 //! ledger, and reports sizes and the supplier's own token counts only (units, never dollars).
 
 use std::sync::Arc;
-
-use serde_json::Value;
 
 use crate::NativeHttpRefusal;
 
@@ -119,15 +117,6 @@ pub fn settle_refusal(ticket: Option<Box<dyn CallTicket>>, refusal: NativeHttpRe
     }
 }
 
-/// The token counts of a chat-completions answer (`usage.prompt_tokens`, `usage.completion_tokens`).
-pub(crate) fn chat_usage(response: &Value) -> AnsweredUsage {
-    let count = |name: &str| response.get("usage")?.get(name)?.as_u64();
-    AnsweredUsage {
-        input_tokens: count("prompt_tokens"),
-        output_tokens: count("completion_tokens"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -175,23 +164,6 @@ mod tests {
             pictures: 0,
             maximum_output_tokens: 0,
         }
-    }
-
-    #[test]
-    fn a_chat_answer_reports_its_prompt_and_completion_tokens() {
-        assert_eq!(
-            chat_usage(
-                &serde_json::json!({"usage": {"prompt_tokens": 90, "completion_tokens": 4}})
-            ),
-            AnsweredUsage {
-                input_tokens: Some(90),
-                output_tokens: Some(4)
-            }
-        );
-        assert_eq!(
-            chat_usage(&serde_json::json!({"choices": []})),
-            AnsweredUsage::default()
-        );
     }
 
     #[test]

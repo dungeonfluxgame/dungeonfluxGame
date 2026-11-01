@@ -78,17 +78,12 @@ mod tests {
 
 #[cfg(test)]
 mod photo_gate_tests {
-    use super::super::{
-        ImageKind, ImageRequest, Mode, OutputSpec, ReferenceImage, party_sheet,
-        tests::DirectionFixture,
-    };
+    use super::super::{ImageKind, ImageRequest, OutputSpec, party_sheet, tests::DirectionFixture};
     use super::*;
     use axum::{Json, Router, routing::post};
-    use df_providers::{NativePlateJudge, PlateJudgeConfig};
     use std::{
         path::PathBuf,
         sync::{Arc, Mutex},
-        time::Duration,
     };
 
     #[tokio::test]
@@ -119,24 +114,19 @@ mod photo_gate_tests {
                 "../../artifacts/tmp/lanes/HS49/photo-gate-{}-{correct_count}",
                 std::process::id()
             ));
-            let fixture = DirectionFixture::photographic(&cache);
-            let judge = NativePlateJudge::new(
-                PlateJudgeConfig::loopback_fixture(address).unwrap(),
-                "fake-mural-judge",
-                Duration::from_secs(5),
-                crate::gameplay::cost::test_meter(),
-            )
-            .unwrap();
-            let Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
-                panic!("enabled fixture")
+            let Some(mut fixture) = DirectionFixture::photographic(&cache).await else {
+                let _ = stop.send(());
+                server.await.unwrap();
+                return;
             };
-            assert!(engine.judge.set(judge).is_ok());
+            fixture.photo_judge(address).await;
             let mut encoded = std::io::Cursor::new(Vec::new());
             image::DynamicImage::new_rgb8(8, 8)
                 .write_to(&mut encoded, image::ImageFormat::Jpeg)
                 .unwrap();
-            let reference =
-                ReferenceImage::new(df_providers::ImageFormat::Jpeg, encoded.into_inner().into());
+            let (_, reference) = fixture
+                .import_bytes(df_providers::ImageFormat::Jpeg, encoded.into_inner().into())
+                .await;
             let heroes = [
                 FluxPerson {
                     name: "Brakka".into(),
@@ -153,7 +143,11 @@ mod photo_gate_tests {
                     "party-mural-photo-check-fixture",
                     ImageRequest {
                         kind: ImageKind::ScenePlate,
-                        references: vec![party_sheet(&[reference.clone(), reference]).unwrap()],
+                        references: vec![
+                            party_sheet(&fixture.imagery, &[reference.clone(), reference])
+                                .await
+                                .unwrap(),
+                        ],
                         prompt: party_mural(&heroes, "mural-roster-photo-count").unwrap(),
                         output: OutputSpec::BACKDROP,
                     },
@@ -179,6 +173,7 @@ mod photo_gate_tests {
                 assert!(instruction.contains("exactly 2 player heroes"));
                 assert!(instruction.contains("both hands empty"));
             }
+            fixture.close().await;
         }
     }
 }

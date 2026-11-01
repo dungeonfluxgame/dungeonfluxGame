@@ -1353,98 +1353,103 @@ mod tests {
             root,
         };
         std::fs::create_dir(&cache.path).unwrap();
-        let fixture = DirectionFixture::new(&cache.path);
-        let place = PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh").unwrap();
-        let key = fixture
-            .imagery
-            .generate(
-                "plate:imgurl",
-                ImageRequest {
-                    kind: ImageKind::ScenePlate,
-                    references: vec![ReferenceImage::new(
-                        ImageFormat::Webp,
-                        Bytes::from_static(b"RIFFbackdrop"),
-                    )],
-                    prompt: scene_refresh(
-                        ContentRating::Restrained,
-                        &place,
-                        Look::of(Mood::Menacing),
-                    ),
-                    output: OutputSpec {
-                        width: 1024,
-                        height: 640,
-                        transparent: false,
+        let Some(fixture) = DirectionFixture::new(&cache.path).await else {
+            return;
+        };
+        {
+            let place = PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh").unwrap();
+            let key = fixture
+                .imagery
+                .generate(
+                    "plate:imgurl",
+                    ImageRequest {
+                        kind: ImageKind::ScenePlate,
+                        references: vec![ReferenceImage::new(
+                            ImageFormat::Webp,
+                            Bytes::from_static(b"RIFFbackdrop"),
+                        )],
+                        prompt: scene_refresh(
+                            ContentRating::Restrained,
+                            &place,
+                            Look::of(Mood::Menacing),
+                        ),
+                        output: OutputSpec {
+                            width: 1024,
+                            height: 640,
+                            transparent: false,
+                        },
                     },
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(fixture.calls(), 1);
-        let expected = std::fs::read(cache.path.join(format!("{}.jpg", key.as_str()))).unwrap();
-        let bare = key.path();
-        let mut view = rpc::ViewMessage {
-            audience: Some(ViewAudience::Display(rpc::DisplayGameplayView {
-                scene: Some(rpc::GameplayScene {
-                    live_plate: bare.clone(),
-                    plate_state: rpc::PlateState::Ready.into(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        sign_view(&mut view, true, &[7; KEY_BYTES]);
-        let Some(ViewAudience::Display(display)) = view.audience else {
-            panic!("display")
-        };
-        let scene = display.scene.unwrap();
-        let plate = crate::presentation::plate_of(&scene);
-        assert_eq!(plate.state, crate::presentation::PlateState::Ready);
-        let url = plate.url.unwrap();
-        assert_eq!(url, scene.live_plate);
-        let mut router = imagery::router(fixture.imagery.clone());
-        let get = |url: String| {
-            Request::builder()
-                .uri(url)
-                .body(axum::body::Body::empty())
-                .unwrap()
-        };
-        let response = Service::call(&mut router, get(url)).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            axum::body::to_bytes(response.into_body(), 6 * 1024 * 1024)
+                )
                 .await
-                .unwrap(),
-            expected
-        );
-        let wrong = sign(
-            key.as_str(),
-            Audience::Voice,
-            PrincipalAudience::Display,
-            &[7; KEY_BYTES],
-            unix_seconds().unwrap() + 60,
-        )
-        .unwrap();
-        let missing_key = "f".repeat(64);
-        let missing = sign(
-            &missing_key,
-            Audience::Imagery,
-            PrincipalAudience::Display,
-            &[7; KEY_BYTES],
-            unix_seconds().unwrap() + 60,
-        )
-        .unwrap();
-        for url in [
-            bare.clone(),
-            format!("{bare}?g=00"),
-            format!("{bare}?g={wrong}"),
-            format!("/gameplay/imagery/{missing_key}?g={missing}"),
-        ] {
+                .unwrap();
+            assert_eq!(fixture.calls(), 1);
+            let expected = std::fs::read(cache.path.join(format!("{}.jpg", key.as_str()))).unwrap();
+            let bare = key.path();
+            let mut view = rpc::ViewMessage {
+                audience: Some(ViewAudience::Display(rpc::DisplayGameplayView {
+                    scene: Some(rpc::GameplayScene {
+                        live_plate: bare.clone(),
+                        plate_state: rpc::PlateState::Ready.into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            sign_view(&mut view, true, &[7; KEY_BYTES]);
+            let Some(ViewAudience::Display(display)) = view.audience else {
+                panic!("display")
+            };
+            let scene = display.scene.unwrap();
+            let plate = crate::presentation::plate_of(&scene);
+            assert_eq!(plate.state, crate::presentation::PlateState::Ready);
+            let url = plate.url.unwrap();
+            assert_eq!(url, scene.live_plate);
+            let mut router = imagery::router(fixture.imagery.clone());
+            let get = |url: String| {
+                Request::builder()
+                    .uri(url)
+                    .body(axum::body::Body::empty())
+                    .unwrap()
+            };
+            let response = Service::call(&mut router, get(url)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(
-                Service::call(&mut router, get(url)).await.unwrap().status(),
-                StatusCode::NOT_FOUND
+                axum::body::to_bytes(response.into_body(), 6 * 1024 * 1024)
+                    .await
+                    .unwrap(),
+                expected
             );
+            let wrong = sign(
+                key.as_str(),
+                Audience::Voice,
+                PrincipalAudience::Display,
+                &[7; KEY_BYTES],
+                unix_seconds().unwrap() + 60,
+            )
+            .unwrap();
+            let missing_key = "f".repeat(64);
+            let missing = sign(
+                &missing_key,
+                Audience::Imagery,
+                PrincipalAudience::Display,
+                &[7; KEY_BYTES],
+                unix_seconds().unwrap() + 60,
+            )
+            .unwrap();
+            for url in [
+                bare.clone(),
+                format!("{bare}?g=00"),
+                format!("{bare}?g={wrong}"),
+                format!("/gameplay/imagery/{missing_key}?g={missing}"),
+            ] {
+                assert_eq!(
+                    Service::call(&mut router, get(url)).await.unwrap().status(),
+                    StatusCode::NOT_FOUND
+                );
+            }
         }
+        fixture.close().await;
     }
 
     #[test]

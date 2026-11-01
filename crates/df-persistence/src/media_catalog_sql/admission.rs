@@ -140,25 +140,25 @@ pub(super) async fn conflicting_row(
     let row = row.ok_or(CatalogError::Unavailable)?;
     let existing = record_of(&row)?;
     let existing_owner = df_assets::record_owner(&existing);
-    let draft_involved = matches!(
-        incoming,
-        Some(df_assets::StorageOwner::AccountDraft(_))
-    ) || matches!(
-        existing_owner,
-        Some(df_assets::StorageOwner::AccountDraft(_))
-    );
+    let draft_involved = matches!(incoming, Some(df_assets::StorageOwner::AccountDraft(_)))
+        || matches!(
+            existing_owner,
+            Some(df_assets::StorageOwner::AccountDraft(_))
+        );
     if draft_involved && incoming != existing_owner {
         return Ok(AdmitOutcome::NotAdmitted(NotAdmitted::OwnerUnsupported));
     }
-    Ok(AdmitOutcome::NotAdmitted(if existing.state == df_assets::AssetState::Ready {
-        NotAdmitted::Ready {
-            asset: existing.asset,
-        }
-    } else {
-        NotAdmitted::InFlight {
-            attempt: existing.attempt,
-        }
-    }))
+    Ok(AdmitOutcome::NotAdmitted(
+        if existing.state == df_assets::AssetState::Ready {
+            NotAdmitted::Ready {
+                asset: existing.asset,
+            }
+        } else {
+            NotAdmitted::InFlight {
+                attempt: existing.attempt,
+            }
+        },
+    ))
 }
 
 pub(crate) async fn lookup_in(

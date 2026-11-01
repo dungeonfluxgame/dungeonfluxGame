@@ -140,9 +140,17 @@ pub enum RejectReason {
     StagedLost,
     /// An upload's actual bytes did not fit the quota at commit.
     QuotaExceeded,
+    /// Media delivery interest ended; supplier outcome and financial liability remain independent.
+    DemandEnded,
+    /// Current canonical source access ended; supplier and financial outcomes remain independent.
+    SourceDenied,
+    /// Actual preparation refused before supplier execution; existing liability remains independent.
+    PreflightRejected,
+    /// A retained submit decline ended delivery; existing billing uncertainty is not resolved.
+    SupplierDeclined,
 }
 
-const REASONS: [RejectReason; 13] = [
+const REASONS: [RejectReason; 17] = [
     RejectReason::ValidationFailed,
     RejectReason::ScreenRejected,
     RejectReason::Abandoned,
@@ -156,6 +164,10 @@ const REASONS: [RejectReason; 13] = [
     RejectReason::StagedExpired,
     RejectReason::StagedLost,
     RejectReason::QuotaExceeded,
+    RejectReason::DemandEnded,
+    RejectReason::SourceDenied,
+    RejectReason::PreflightRejected,
+    RejectReason::SupplierDeclined,
 ];
 
 impl RejectReason {
@@ -174,6 +186,10 @@ impl RejectReason {
             Self::StagedExpired => "staged_expired",
             Self::StagedLost => "staged_lost",
             Self::QuotaExceeded => "quota_exceeded",
+            Self::DemandEnded => "demand_ended",
+            Self::SourceDenied => "source_denied",
+            Self::PreflightRejected => "preflight_rejected",
+            Self::SupplierDeclined => "supplier_declined",
         }
     }
 
@@ -341,6 +357,14 @@ mod tests {
         assert_eq!(
             FinalizeOutcome::of_rejection(RejectReason::OutputLost),
             FinalizeOutcome::Rejected(RejectReason::OutputLost)
+        );
+        assert_eq!(
+            RejectReason::from_label("demand_ended"),
+            Some(RejectReason::DemandEnded)
+        );
+        assert_eq!(
+            FinalizeOutcome::of_rejection(RejectReason::DemandEnded),
+            FinalizeOutcome::Rejected(RejectReason::DemandEnded)
         );
     }
 

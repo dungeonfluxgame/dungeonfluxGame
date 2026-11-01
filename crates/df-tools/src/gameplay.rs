@@ -28,7 +28,6 @@ mod display_tuning;
 mod freeform_action;
 // DEVCTL-001: development-only agent control surface (off by default).
 mod creator_catalog;
-mod creator_classification;
 mod creator_portrait_startup;
 mod creator_portraits;
 mod dev_control;
@@ -44,7 +43,26 @@ mod home_theme_tests;
 mod home_video;
 #[cfg(test)]
 mod home_video_tests;
+mod image_analysis_read;
+#[cfg(test)]
+mod image_analysis_runtime_tests;
+mod image_authorization;
+mod image_configuration;
+mod image_host;
+mod image_imports;
+#[cfg(test)]
+mod image_inspection_runtime_tests;
+mod image_observability;
+mod image_references;
+mod image_sources;
+mod image_startup;
+mod image_telemetry;
+#[cfg(test)]
+mod image_test_support;
 mod imagery;
+mod imagery_identity;
+#[cfg(test)]
+mod imagery_identity_tests;
 mod inn_qualification;
 mod investigation;
 mod join_link;
@@ -146,6 +164,7 @@ use tonic::{Request, Response, Status};
 
 #[derive(Clone)]
 struct Service {
+    imagery: imagery::Imagery,
     actor: InboxHandle<actor::Call>,
     display_credential: [u8; 32],
     updates: watch::Receiver<df_model::checkpoint::Checkpoint>,
@@ -1876,6 +1895,36 @@ async fn serve_run(
         .map_err(|_| io::Error::other("saved voice identities invalid"))?;
     let player_credential = admitted.player_credential;
     let display_credential = admitted.display_credential;
+    let imagery_run_grant = df_persistence::imagery_identity::LocalRunGrant {
+        session: *initial.basis().session.as_bytes(),
+        run: *initial.basis().run.as_bytes(),
+        fence,
+        bootstrap_credential: player_credential,
+    };
+    if interactive {
+        startup.step("imagery-schema");
+        let installed: Result<(), tokio_postgres::Error> = async {
+            let transaction = grant_client.transaction().await?;
+            transaction
+                .batch_execute("SET LOCAL statement_timeout = '30s'; SET LOCAL lock_timeout = '5s'")
+                .await?;
+            df_persistence::imagery_migrations::migrate_local_in(&transaction).await?;
+            transaction.commit().await
+        }
+        .await;
+        if installed.is_err() {
+            let released = df_persistence::local_demo_scope::release_owner(
+                &grant_client,
+                initial.basis().session,
+                fence,
+            )
+            .await;
+            drop(grant_client);
+            join_grant_driver(grant_driver).await?;
+            released.map_err(|_| io::Error::other("image setup exact-fence release failed"))?;
+            return Err(io::Error::other("image schema installation failed").into());
+        }
+    }
     let runtime = tokio::runtime::Handle::current();
     startup.step("repository-connection");
     let (client, connection) = match tokio::time::timeout(
@@ -2260,7 +2309,8 @@ async fn serve_run(
     // Otherwise no history is kept anywhere. The checkpoint travels with the
     // table-log floor and the social snapshot, so a rewind restores all of
     // it or none.
-    let dev_bundle = dev_control::Bundle {
+    let mut dev_bundle = dev_control::Bundle {
+        image_diagnostics: None,
         history: dev_history,
         table: table_log.clone(),
         social: social.clone(),
@@ -2306,7 +2356,7 @@ async fn serve_run(
         imagery_inputs.credential = Ok("test-credential".to_owned());
     }
     let imagery_settings = if interactive {
-        startup_configuration::imagery_settings(imagery_inputs, &std::env::current_dir()?, rating)?
+        startup_configuration::imagery_settings(imagery_inputs, &std::env::current_dir()?)?
     } else {
         startup_configuration::ImagerySettings::Off(
             startup_configuration::ImageryOff::Qualification,
@@ -2316,15 +2366,34 @@ async fn serve_run(
         startup_configuration::ImagerySettings::On(configuration) => configuration.interval,
         startup_configuration::ImagerySettings::Off(_) => Duration::from_secs(30),
     };
+    // The cost engine: every billed call on the hub's ledger is priced and kept per run.
+    if interactive {
+        println!(
+            "{}",
+            cost::open_run(
+                resource_hub.ledger(),
+                &std::env::current_dir()?,
+                database.get_dbname().unwrap_or_default(),
+            )
+        );
+    }
     startup.step("imagery");
-    let imagery = dev_control::direct::start_imagery(
-        imagery_settings,
-        generated_adventure
+    let image_runtime = image_startup::start(image_startup::Inputs {
+        database: database.clone(),
+        run_grant: imagery_run_grant,
+        source_revision: 0,
+        legacy: &imagery_settings,
+        rating,
+        hub: resource_hub,
+        qualification: !interactive,
+        fixture: image_fixture,
+        manifest_directory: generated_adventure
             .as_ref()
             .map(|prepared| prepared.directory.as_path()),
-        image_fixture,
-        resource_hub,
-    )?;
+    })
+    .await?;
+    let imagery = image_runtime.imagery().clone();
+    dev_bundle.image_diagnostics = image_runtime.diagnostics();
     startup.step("living-scenes");
     let living = living_scenes::LivingScenes::start_with_local_lore(
         imagery.clone(),
@@ -2356,10 +2425,8 @@ async fn serve_run(
                     &df_render::art_contract::Subject::place(&place),
                 )?;
                 let key = depiction.asset.strip_prefix("/gameplay/imagery/")?;
-                match imagery.image(key).await {
-                    imagery::Lookup::Image { bytes, .. } => Some(bytes.to_vec()),
-                    imagery::Lookup::Unregistered | imagery::Lookup::NotReady => None,
-                }
+                let key = imagery::ImageKey::parse(key)?;
+                imagery.reference(&key).await.ok()
             })
         })
     };
@@ -2378,12 +2445,18 @@ async fn serve_run(
             .map_err(|_| std::io::Error::other("World Labs configuration invalid"))?;
             splat_world::SplatWorlds::new(
                 imagery.hub().clone(),
+                imagery.clone(),
                 Arc::new(maker),
                 room_photograph,
                 splat_cache,
             )
         }
-        _ => splat_world::SplatWorlds::cached(imagery.hub().clone(), room_photograph, splat_cache),
+        _ => splat_world::SplatWorlds::cached(
+            imagery.hub().clone(),
+            imagery.clone(),
+            room_photograph,
+            splat_cache,
+        ),
     };
     splat_world::install(splat_worlds);
     let clip_source: character_clips::Source = {
@@ -2404,16 +2477,12 @@ async fn serve_run(
                     &df_render::art_contract::Subject::character(subject),
                 )?;
                 if let Some(key) = depiction.asset.strip_prefix("/gameplay/imagery/") {
-                    return match imagery.image(key).await {
-                        imagery::Lookup::Image { bytes, format } => {
-                            Some(character_clips::Depiction {
-                                bytes: bytes.to_vec(),
-                                format,
-                                revision: key.to_owned(),
-                            })
-                        }
-                        imagery::Lookup::Unregistered | imagery::Lookup::NotReady => None,
-                    };
+                    let parsed = imagery::ImageKey::parse(key)?;
+                    let image = imagery.reference(&parsed).await.ok()?;
+                    return Some(character_clips::Depiction {
+                        image,
+                        revision: key.to_owned(),
+                    });
                 }
                 let reviewed = reviewed?;
                 let reference = tokio::task::spawn_blocking(move || references.load(&reviewed))
@@ -2421,16 +2490,15 @@ async fn serve_run(
                     .ok()?
                     .ok()?;
                 Some(character_clips::Depiction {
-                    bytes: reference.bytes.to_vec(),
-                    format: reference.format,
-                    revision: reference.sha256,
+                    revision: reference.sha256.clone(),
+                    image: reference,
                 })
             })
         })
     };
     startup.step("character-clips");
     let _character_clip_worker = character_clips::start(
-        imagery.hub().clone(),
+        imagery.clone(),
         clip_source,
         std::env::current_dir()?.join("artifacts/cache/character-clips"),
         interactive,
@@ -2452,23 +2520,13 @@ async fn serve_run(
         )?,
         std::path::Path::new(&asset_root),
         living.clone(),
+        imagery.clone(),
     )?;
     // The voice, the video, the text and the transcription run on the one generation hub the
     // imagery owns, so every kind's state, failures and spend are listed in one place.
     voice.attach_kit(&resource_kit);
     speech.attach_kit(&resource_kit);
     home_video::attach_kit(&resource_kit)?;
-    // The cost engine: every billed call on the hub's ledger is priced and kept per run.
-    if interactive {
-        println!(
-            "{}",
-            cost::open_run(
-                imagery.hub().ledger(),
-                &std::env::current_dir()?,
-                database.get_dbname().unwrap_or_default(),
-            )
-        );
-    }
     // The story memory: what the Dungeon Master remembers of this run, so the story stays
     // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
     startup.step("memory");
@@ -2711,14 +2769,14 @@ async fn serve_run(
         return Err(io::Error::other("actor startup handoff refused").into());
     }
     startup.step("creator-portraits");
-    let portraits =
-        creator_portrait_startup::start(imagery.hub().clone(), &std::env::current_dir()?)?;
+    let portraits = creator_portrait_startup::start(imagery.clone(), &std::env::current_dir()?)?;
     let mut restart_updates = receiver.clone();
     // Configured after the cost ledger opened: a Jev client configured before it has no meter
     // and refuses every call, so no spoken line would reach a person (#1478).
     let dialogue_judge =
         approach_model::ApproachModel::configured(if interactive { jev_settings()? } else { None });
     let service = Service {
+        imagery: imagery.clone(),
         actor: sender.clone(),
         display_credential,
         updates: receiver,
@@ -2811,7 +2869,12 @@ async fn serve_run(
         splat_lod,
         battle_grid,
     };
-    let runtime_routes = runtime_launch::router(sender.clone(), state.clone(), runtime_secret)?;
+    let runtime_routes = runtime_launch::router(
+        sender.clone(),
+        state.clone(),
+        runtime_secret,
+        runtime_launch::PlacementAuthority::Local,
+    )?;
     let player_page_run_identity = state.run_identity.clone();
     startup.step("http-router");
     let mut router = Router::new()
@@ -3191,6 +3254,8 @@ async fn serve_run(
             "failed"
         },
     );
+    shutdown.step("imagery");
+    let image_shutdown = image_runtime.shutdown().await;
     shutdown.step("actor-join");
     sender
         .stop()
@@ -3213,6 +3278,7 @@ async fn serve_run(
     closed.map_err(|_| io::Error::other("gameplay repository close failed"))?;
     grant_closed.map_err(|_| io::Error::other("gameplay grant close failed"))?;
     shutdown.finish("closed");
+    image_shutdown?;
     courier_committed?;
     courier_outcome?;
     qualification_outcome?;

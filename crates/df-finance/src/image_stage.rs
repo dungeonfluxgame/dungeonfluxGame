@@ -25,7 +25,7 @@ use df_commerce::plan::{ChangeKind, FinancePlan, Value as RowValue};
 use df_commerce::snapshot::ReceiptRow;
 use tokio_postgres::Transaction;
 
-use crate::admit::{AdmitCommand, AdmissionOutcome};
+use crate::admit::{AdmissionOutcome, AdmitCommand};
 use crate::ports::{FencePort, MediaPort, MemberPort};
 use crate::service::{FinanceError, FinanceService};
 use crate::wire::WireError;
@@ -62,7 +62,8 @@ impl OwnerScope {
 }
 
 macro_rules! stage_id {
-    ($name:ident, $zero:ident) => {
+    ($name:ident, $zero:ident, $doc:literal) => {
+        #[doc = $doc]
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         pub struct $name([u8; 16]);
 
@@ -83,14 +84,26 @@ macro_rules! stage_id {
     };
 }
 
-/// One imagery job: nonzero and opaque to finance.
-stage_id!(ImageJobId, ZeroJob);
-/// One logical stage of a job: nonzero and opaque to finance.
-stage_id!(ImageStageId, ZeroStage);
-/// One immutable asset: its bytes land in `provider_attempt.media_asset_id`.
-stage_id!(ImageAssetId, ZeroAsset);
-/// One publication attempt of the stage: nonzero and opaque to finance.
-stage_id!(PublicationAttemptId, ZeroPublicationAttempt);
+stage_id!(
+    ImageJobId,
+    ZeroJob,
+    "One imagery job: nonzero and opaque to finance."
+);
+stage_id!(
+    ImageStageId,
+    ZeroStage,
+    "One logical stage of a job: nonzero and opaque to finance."
+);
+stage_id!(
+    ImageAssetId,
+    ZeroAsset,
+    "One immutable asset: its bytes land in `provider_attempt.media_asset_id`."
+);
+stage_id!(
+    PublicationAttemptId,
+    ZeroPublicationAttempt,
+    "One publication attempt of the stage: nonzero and opaque to finance."
+);
 
 /// Why a stage binding failed before any transaction opened. Nothing was written.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -231,7 +244,7 @@ pub enum StageRefusal {
 pub trait ImageStageHook: Send + Sync {
     fn on_image_stage<'a>(
         &'a self,
-        transaction: &'a Transaction,
+        transaction: &'a Transaction<'_>,
         binding: &'a ImageStageBinding,
         phase: ImageStagePhase,
         receipt: &'a ReceiptRow,
@@ -244,14 +257,14 @@ pub trait ImageStageHook: Send + Sync {
 pub trait ImageStagePort: Send + Sync {
     fn admit_image_link<'a>(
         &'a self,
-        transaction: &'a Transaction,
+        transaction: &'a Transaction<'_>,
         binding: &'a ImageStageBinding,
         receipt: &'a ReceiptRow,
     ) -> Pin<Box<dyn Future<Output = Result<ImageStageHookOutcome, FinanceError>> + Send + 'a>>;
 
     fn verify_image_link<'a>(
         &'a self,
-        transaction: &'a Transaction,
+        transaction: &'a Transaction<'_>,
         binding: &'a ImageStageBinding,
         receipt: &'a ReceiptRow,
     ) -> Pin<Box<dyn Future<Output = Result<ImageStageHookOutcome, FinanceError>> + Send + 'a>>;
@@ -260,7 +273,7 @@ pub trait ImageStagePort: Send + Sync {
 impl<P: ImageStagePort + ?Sized> ImageStageHook for &P {
     fn on_image_stage<'a>(
         &'a self,
-        transaction: &'a Transaction,
+        transaction: &'a Transaction<'_>,
         binding: &'a ImageStageBinding,
         phase: ImageStagePhase,
         receipt: &'a ReceiptRow,
@@ -357,8 +370,197 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         port: &P,
     ) -> Result<AdmissionOutcome, FinanceError> {
         command.binding.check_against(&command.admit)?;
-        let hook: &dyn ImageStageHook = port;
-        self.admit_with_hook(&command.admit, Some((&command.binding, hook)))
-            .await
+        let hook: &dyn ImageStageHook = &port;
+        self.admit_with_hook(
+            &command.admit,
+            Some(AdmissionHook::Image {
+                binding: &command.binding,
+                hook,
+            }),
+        )
+        .await
     }
 }
+
+/// A paid campaign child can precede catalog allocation; a planned pair is never an asset.
+#[derive(Clone, Debug)]
+pub struct ProviderStageBinding {
+    pub owner_scope: OwnerScope,
+    pub call: df_commerce::draft_image::StageCall,
+    pub route_key: [u8; 32],
+    pub route: df_commerce::draft_image::StageRoute,
+    pub tenant: TenantKey,
+    pub campaign: CampaignKey,
+    pub session: SessionKey,
+    pub operation: OperationKey,
+    pub attempt: AttemptId,
+    pub effect: EffectId,
+    pub media_asset: Option<ImageAssetId>,
+}
+impl ProviderStageBinding {
+    fn check_against(&self, command: &AdmitCommand) -> Result<(), FinanceError> {
+        let fail = |reason| FinanceError::ImageStageBinding(reason);
+        if self.tenant != command.fence.tenant {
+            return Err(fail(BindingRefusal::TenantMismatch));
+        }
+        if self.campaign != command.fence.campaign {
+            return Err(fail(BindingRefusal::CampaignMismatch));
+        }
+        if self.session != command.session {
+            return Err(fail(BindingRefusal::SessionMismatch));
+        }
+        if self.operation != command.operation {
+            return Err(fail(BindingRefusal::OperationMismatch));
+        }
+        if self.attempt != command.attempt {
+            return Err(fail(BindingRefusal::AttemptMismatch));
+        }
+        if self.effect != command.effect {
+            return Err(fail(BindingRefusal::EffectMismatch));
+        }
+        if command.media.is_some() {
+            return Err(fail(BindingRefusal::LegacyMediaPresent));
+        }
+        self.route
+            .validate()
+            .map_err(|_| FinanceError::ImageStageConflict)?;
+        if self.route.key != self.route_key
+            || self.route.kind != self.call.kind
+            || self.route.provider != command.route.provider
+            || self.route.model != command.route.model
+            || self.route.route != command.route.name
+            || self.route.maximum_units != command.maximum_units
+        {
+            return Err(FinanceError::ImageStageConflict);
+        }
+        self.call
+            .validate_identity()
+            .map_err(|_| FinanceError::ImageStageConflict)?;
+        let no_media = self.call.kind == df_commerce::draft_image::PaidStageKind::Classification
+            || self.call.kind.is_standalone();
+        if self.media_asset.as_ref().map(|asset| *asset.as_bytes())
+            != if no_media {
+                None
+            } else {
+                self.call.planned_publication.map(|p| p.asset.0)
+            }
+        {
+            return Err(fail(BindingRefusal::ZeroAsset));
+        }
+
+        Ok(())
+    }
+}
+/// Campaign quote and admission must both use this exact binding digest.
+pub fn provider_stage_request_digest(
+    binding: &ProviderStageBinding,
+    payload: &[u8; 32],
+) -> [u8; 32] {
+    business_key(
+        "df-finance/provider-image-stage-v1",
+        &[
+            binding.owner_scope.as_bytes(),
+            &binding.call.digest(),
+            &binding.route.digest(),
+            &binding.route_key,
+            binding.tenant.as_bytes(),
+            binding.campaign.as_bytes(),
+            binding.session.as_bytes(),
+            binding.operation.as_bytes(),
+            binding.attempt.as_bytes(),
+            binding.effect.as_bytes(),
+            binding
+                .media_asset
+                .as_ref()
+                .map_or(&[], |asset| asset.as_bytes().as_slice()),
+            payload,
+        ],
+    )
+}
+/// The campaign fence and allocation still run before the canonical execution hook.
+#[derive(Clone, Debug)]
+pub struct ProviderStageAdmission {
+    pub admit: AdmitCommand,
+    pub binding: ProviderStageBinding,
+}
+/// No network I/O; replay checks the existing execution and optional catalog linkage only.
+pub trait ProviderStagePort: Send + Sync {
+    fn bind<'a>(
+        &'a self,
+        tx: &'a Transaction<'_>,
+        binding: &'a ProviderStageBinding,
+        phase: ImageStagePhase,
+        receipt: &'a ReceiptRow,
+    ) -> Pin<Box<dyn Future<Output = Result<ImageStageHookOutcome, FinanceError>> + Send + 'a>>;
+}
+#[derive(Clone, Copy)]
+pub(crate) enum AdmissionHook<'a> {
+    Image {
+        binding: &'a ImageStageBinding,
+        hook: &'a dyn ImageStageHook,
+    },
+    Provider {
+        binding: &'a ProviderStageBinding,
+        port: &'a dyn ProviderStagePort,
+    },
+}
+impl AdmissionHook<'_> {
+    pub(crate) fn digest(self, payload: &[u8; 32]) -> [u8; 32] {
+        match self {
+            Self::Image { binding, .. } => image_stage_request_digest(binding, payload),
+            Self::Provider { binding, .. } => provider_stage_request_digest(binding, payload),
+        }
+    }
+    pub(crate) fn asset(self) -> Option<[u8; 16]> {
+        match self {
+            Self::Image { binding, .. } => Some(*binding.asset.as_bytes()),
+            Self::Provider { binding, .. } => {
+                binding.media_asset.as_ref().map(|asset| *asset.as_bytes())
+            }
+        }
+    }
+    pub(crate) async fn bind(
+        self,
+        tx: &Transaction<'_>,
+        phase: ImageStagePhase,
+        receipt: &ReceiptRow,
+        deadline: Duration,
+    ) -> Result<ImageStageHookOutcome, FinanceError> {
+        let call = match self {
+            Self::Image { binding, hook } => hook.on_image_stage(tx, binding, phase, receipt),
+            Self::Provider { binding, port } => port.bind(tx, binding, phase, receipt),
+        };
+        bounded_hook(deadline, call).await
+    }
+}
+impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
+    pub async fn admit_provider_stage<P: ProviderStagePort>(
+        &mut self,
+        command: &ProviderStageAdmission,
+        port: &P,
+    ) -> Result<AdmissionOutcome, FinanceError> {
+        command.binding.check_against(&command.admit)?;
+        self.admit_with_hook(
+            &command.admit,
+            Some(AdmissionHook::Provider {
+                binding: &command.binding,
+                port,
+            }),
+        )
+        .await
+    }
+}
+
+#[path = "image_stage/settlement.rs"]
+mod provider_settlement;
+pub use provider_settlement::{
+    ProviderSettlementOutcome, ProviderSettlementPort, ProviderStageSettlement,
+};
+
+#[path = "image_stage/sending.rs"]
+mod provider_sending;
+pub use provider_sending::ProviderSendPort;
+
+#[path = "image_stage/cancellation.rs"]
+mod cancellation;
+pub use cancellation::{ProviderCancellationOutcome, ProviderStageCancellationPort};

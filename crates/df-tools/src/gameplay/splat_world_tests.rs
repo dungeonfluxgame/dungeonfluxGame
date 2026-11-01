@@ -107,8 +107,10 @@ async fn cached_worlds_remain_available_without_a_worldlabs_maker() {
         b"glTF",
     )
     .unwrap();
+    let images = TransformFixture::new().await;
     let service = SplatWorlds::cached(
         Hub::new(),
+        images.imagery().clone(),
         Arc::new(|_| Box::pin(async { None })),
         directory.clone(),
     );
@@ -121,6 +123,7 @@ async fn cached_worlds_remain_available_without_a_worldlabs_maker() {
     );
     let restarted = SplatWorlds::cached(
         Hub::new(),
+        images.imagery().clone(),
         Arc::new(|_| Box::pin(async { None })),
         directory.clone(),
     );
@@ -128,6 +131,9 @@ async fn cached_worlds_remain_available_without_a_worldlabs_maker() {
         restarted.ready_world("saved-shop"),
         service.ready_world("saved-shop")
     );
+    drop(service);
+    drop(restarted);
+    images.close().await;
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -158,6 +164,7 @@ struct FakeMaker {
     exports: Mutex<u32>,
     downloads: Mutex<u32>,
     prompt: Mutex<String>,
+    image_jpeg: Mutex<Vec<u8>>,
 }
 
 impl FakeMaker {
@@ -178,6 +185,7 @@ impl FakeMaker {
             exports: Mutex::new(0),
             downloads: Mutex::new(0),
             prompt: Mutex::new(String::new()),
+            image_jpeg: Mutex::new(Vec::new()),
         })
     }
 }
@@ -186,6 +194,7 @@ impl WorldMaker for FakeMaker {
     fn submit<'a>(&'a self, request: &'a WorldRequest) -> MakerFuture<'a, OperationId> {
         *self.submits.lock().unwrap() += 1;
         *self.prompt.lock().unwrap() = request.text_prompt.clone();
+        *self.image_jpeg.lock().unwrap() = request.image_jpeg.clone();
         Box::pin(async move {
             if let Some(error) = &self.submit_error {
                 return Err(error.clone());
@@ -263,10 +272,55 @@ fn metered(worlds: &SplatWorlds) -> (u64, u64, u64) {
     )
 }
 
-fn service(maker: Arc<FakeMaker>, cache_dir: PathBuf) -> SplatWorlds {
-    let photograph: RoomPhotograph = Arc::new(|_place| Box::pin(async { Some(jpeg_fixture()) }));
-    SplatWorlds::with_timing(
-        priced_hub(),
+type TransformFixture = crate::gameplay::imagery::test_support::TransformFixture;
+struct TestWorlds {
+    worlds: SplatWorlds,
+    images: TransformFixture,
+}
+impl std::ops::Deref for TestWorlds {
+    type Target = SplatWorlds;
+    fn deref(&self) -> &Self::Target {
+        &self.worlds
+    }
+}
+impl TestWorlds {
+    async fn close(self) {
+        let Self { worlds, images } = self;
+        for row in worlds.hub().list(None) {
+            worlds
+                .hub()
+                .invalidate(crate::gameplay::resources::Invalidate::Key(&row.key));
+        }
+        drop(worlds);
+        images.close().await;
+    }
+}
+async fn service(maker: Arc<FakeMaker>, cache_dir: PathBuf) -> TestWorlds {
+    service_on(priced_hub(), maker, cache_dir, false).await
+}
+async fn service_on(
+    hub: Hub,
+    maker: Arc<FakeMaker>,
+    cache_dir: PathBuf,
+    missing: bool,
+) -> TestWorlds {
+    let images = TransformFixture::new().await;
+    let reference = if missing {
+        None
+    } else {
+        Some(
+            images
+                .reference(df_providers::ImageFormat::Jpeg, jpeg_fixture().into())
+                .await,
+        )
+    };
+    let photograph: RoomPhotograph = Arc::new(move |_| {
+        let reference = reference.clone();
+        Box::pin(async move { reference })
+    });
+    let worlds = SplatWorlds::with_timing(
+        hub,
+        images.imagery().clone(),
         maker,
         photograph,
         cache_dir,
@@ -274,7 +328,8 @@ fn service(maker: Arc<FakeMaker>, cache_dir: PathBuf) -> SplatWorlds {
             interval: Duration::ZERO,
             timeout: Duration::from_secs(5),
         },
-    )
+    );
+    TestWorlds { worlds, images }
 }
 
 fn cloth_shop() -> SplatWorldSpec {
@@ -314,7 +369,7 @@ fn store_does_not_replace_an_existing_incomplete_key() {
 async fn generator_submits_polls_stores_and_reuses_by_key() {
     let cache_dir = scratch("generate");
     let maker = FakeMaker::succeeding(2);
-    let worlds = service(maker.clone(), cache_dir.clone());
+    let worlds = service(maker.clone(), cache_dir.clone()).await;
     let spec = cloth_shop();
     let key = worlds.request_world(&spec);
     assert!(worlds.ready_world("place-mareks-cloth-shop").is_none());
@@ -332,6 +387,10 @@ async fn generator_submits_polls_stores_and_reuses_by_key() {
     assert_eq!(*maker.exports.lock().unwrap(), 1);
     assert_eq!(*maker.downloads.lock().unwrap(), 2);
     assert!(maker.prompt.lock().unwrap().contains("photographic"));
+    assert_eq!(
+        *maker.image_jpeg.lock().unwrap(),
+        legacy_source_image(&jpeg_fixture())
+    );
     assert_eq!(
         worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
         1580
@@ -358,11 +417,13 @@ async fn generator_submits_polls_stores_and_reuses_by_key() {
     assert_eq!(*maker.submits.lock().unwrap(), 1);
 
     // A fresh hub also adopts the stored files under their existing resource key.
-    let restarted = service(maker.clone(), cache_dir.clone());
+    let restarted = service(maker.clone(), cache_dir.clone()).await;
     restarted.request_world(&spec);
     restarted.run_queued().await;
     assert_eq!(*maker.submits.lock().unwrap(), 1);
     assert!(restarted.ready_world("place-mareks-cloth-shop").is_some());
+    restarted.close().await;
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
@@ -375,7 +436,7 @@ async fn generator_maps_failures_and_never_stores_them() {
             .into_iter()
             .collect(),
     );
-    let worlds = service(maker, cache_dir.clone());
+    let worlds = service(maker, cache_dir.clone()).await;
     let key = worlds.request_world(&cloth_shop());
     worlds.run_queued().await;
     assert!(worlds.ready_world("place-mareks-cloth-shop").is_none());
@@ -390,6 +451,7 @@ async fn generator_maps_failures_and_never_stores_them() {
         worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
         1580
     );
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
@@ -399,7 +461,7 @@ async fn a_world_the_supplier_refused_is_not_billed_and_its_credits_are_given_ba
     let mut maker = FakeMaker::succeeding(0);
     Arc::get_mut(&mut maker).unwrap().submit_error =
         Some(WorldMakerError::permanent("insufficient_credits").refused());
-    let worlds = service(maker, cache_dir.clone());
+    let worlds = service(maker, cache_dir.clone()).await;
     worlds.request_world(&cloth_shop());
     worlds.run_queued().await;
     assert_eq!(metered(&worlds).0, 0, "a refusal is not billed");
@@ -407,6 +469,7 @@ async fn a_world_the_supplier_refused_is_not_billed_and_its_credits_are_given_ba
         worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
         0
     );
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
@@ -424,29 +487,20 @@ async fn generator_maps_transient_provider_errors_into_the_hub_failure() {
             attempts: 1,
         },
     );
-    let photograph: RoomPhotograph = Arc::new(|_place| Box::pin(async { Some(jpeg_fixture()) }));
-    let worlds = SplatWorlds::with_timing(
-        hub,
-        maker,
-        photograph,
-        cache_dir.clone(),
-        PollTiming {
-            interval: Duration::ZERO,
-            timeout: Duration::from_secs(5),
-        },
-    );
+    let worlds = service_on(hub, maker, cache_dir.clone(), false).await;
     worlds.request_world(&cloth_shop());
     worlds.run_queued().await;
     let rows = worlds.hub().list(None);
     assert_eq!(rows[0].last_error, "rate_limited");
     assert_eq!(rows[0].state, "failed");
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
-#[test]
-fn a_place_request_keeps_one_resource_key_even_if_later_facts_change() {
+#[tokio::test]
+async fn a_place_request_keeps_one_resource_key_even_if_later_facts_change() {
     let cache_dir = scratch("place-idempotent");
-    let worlds = service(FakeMaker::succeeding(0), cache_dir.clone());
+    let worlds = service(FakeMaker::succeeding(0), cache_dir.clone()).await;
     let original = cloth_shop();
     let first_key = worlds.request_world(&original);
     let changed = SplatWorldSpec::new(
@@ -456,6 +510,7 @@ fn a_place_request_keeps_one_resource_key_even_if_later_facts_change() {
     );
     assert_eq!(worlds.request_world(&changed), first_key);
     assert_eq!(worlds.hub().list(None).len(), 1);
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
@@ -463,44 +518,189 @@ fn a_place_request_keeps_one_resource_key_even_if_later_facts_change() {
 async fn generator_reports_a_missing_photograph_as_permanent() {
     let cache_dir = scratch("no-photo");
     let maker = FakeMaker::succeeding(0);
-    let photograph: RoomPhotograph = Arc::new(|_place| Box::pin(async { None }));
-    let worlds = SplatWorlds::with_timing(
-        Hub::new(),
-        maker,
-        photograph,
-        cache_dir.clone(),
-        PollTiming {
-            interval: Duration::ZERO,
-            timeout: Duration::from_secs(5),
-        },
-    );
+    let worlds = service_on(Hub::new(), maker, cache_dir.clone(), true).await;
     worlds.request_world(&cloth_shop());
     worlds.run_queued().await;
     let rows = worlds.hub().list(None);
     assert_eq!(rows[0].last_error, "no_room_photograph");
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
-#[test]
-fn prompt_and_source_image_stay_photographic_and_bounded() {
+fn legacy_source_image(bytes: &[u8]) -> Vec<u8> {
+    let image = image::load_from_memory(bytes).unwrap();
+    let image = if image.width() > MAXIMUM_SOURCE_PIXELS || image.height() > MAXIMUM_SOURCE_PIXELS {
+        image.thumbnail(MAXIMUM_SOURCE_PIXELS, MAXIMUM_SOURCE_PIXELS)
+    } else {
+        image
+    };
+    let mut jpeg = Vec::new();
+    image
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    jpeg
+}
+
+#[tokio::test]
+async fn prompt_and_source_image_stay_photographic_and_bounded() {
+    use sha2::{Digest, Sha256};
     let prompt = build_text_prompt(&["A cloth shop.".to_owned()]);
     assert!(prompt.chars().count() <= 1_000);
     for word in crate::gameplay::imagery::NON_PHOTOGRAPHIC_WORDS {
         assert!(!prompt.contains(word), "{word}");
     }
-    let jpeg = prepare_source_image(&jpeg_fixture()).unwrap();
-    assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+    let images = TransformFixture::new().await;
     let mut oversized = Vec::new();
-    image::DynamicImage::new_rgb8(2400, 1200)
-        .write_to(
-            &mut std::io::Cursor::new(&mut oversized),
-            image::ImageFormat::Png,
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(2400, 1200, |x, y| {
+        image::Rgb([(x % 251) as u8, (y % 241) as u8, 99])
+    }))
+    .write_to(
+        &mut std::io::Cursor::new(&mut oversized),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let mut alpha = Vec::new();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(803, 2401, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, 99, (x % 255) as u8])
+    }))
+    .write_to(
+        &mut std::io::Cursor::new(&mut alpha),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/imagery-finish-20261029/world-source-transform/golden");
+    std::fs::create_dir_all(&evidence).unwrap();
+    let mut proofs = Vec::new();
+    for (label, format, bytes, expected) in [
+        (
+            "already-small",
+            df_providers::ImageFormat::Jpeg,
+            jpeg_fixture(),
+            (32, 24),
+        ),
+        (
+            "wide",
+            df_providers::ImageFormat::Png,
+            oversized,
+            (1600, 800),
+        ),
+        (
+            "portrait-alpha",
+            df_providers::ImageFormat::Png,
+            alpha,
+            (535, 1600),
+        ),
+    ] {
+        let reference = images.reference(format, bytes.clone().into()).await;
+        let legacy = legacy_source_image(&bytes);
+        let unified = prepare_source_image(images.imagery(), &reference)
+            .await
+            .unwrap();
+        assert_eq!(
+            unified, legacy,
+            "{label}: unified CPU runtime must preserve exact old JPEG bytes"
+        );
+        assert_eq!(&unified[..2], &[0xff, 0xd8]);
+        let dimensions = image::ImageReader::with_format(
+            std::io::Cursor::new(&unified),
+            image::ImageFormat::Jpeg,
         )
+        .into_dimensions()
         .unwrap();
-    let resized = image::load_from_memory(&prepare_source_image(&oversized).unwrap()).unwrap();
-    assert_eq!((resized.width(), resized.height()), (1600, 800));
+        assert_eq!(dimensions, expected);
+        std::fs::write(evidence.join(format!("{label}.source")), &bytes).unwrap();
+        std::fs::write(evidence.join(format!("{label}.legacy.jpg")), &legacy).unwrap();
+        std::fs::write(evidence.join(format!("{label}.unified.jpg")), &unified).unwrap();
+        proofs.push(serde_json::json!({"case":label,"width":dimensions.0,"height":dimensions.1,
+            "source_sha256":format!("{:x}",Sha256::digest(&bytes)),"legacy_sha256":format!("{:x}",Sha256::digest(&legacy)),"unified_sha256":format!("{:x}",Sha256::digest(&unified))}));
+    }
+    std::fs::write(
+        evidence.join("proof.json"),
+        serde_json::to_vec_pretty(&proofs).unwrap(),
+    )
+    .unwrap();
     assert_eq!(ply_splat_count(&ply_fixture(500_000)), Some(500_000));
     assert_eq!(ResourceFailure::Permanent("x").label(), "x");
+    images.close().await;
+}
+
+#[tokio::test]
+async fn unbound_world_source_is_rejected_before_transform_or_paid_world_submission() {
+    let cache_dir = scratch("unbound-photo");
+    let maker = FakeMaker::succeeding(0);
+    let mut worlds = service(maker.clone(), cache_dir.clone()).await;
+    let unbound = crate::gameplay::imagery::ReferenceImage::new(
+        df_providers::ImageFormat::Jpeg,
+        jpeg_fixture().into(),
+    );
+    worlds.worlds.photograph = Arc::new(move |_| {
+        let unbound = unbound.clone();
+        Box::pin(async move { Some(unbound) })
+    });
+    worlds.request_world(&cloth_shop());
+    worlds.run_queued().await;
+    assert_eq!(
+        worlds.hub().list(None)[0].last_error,
+        "source_image_unreadable"
+    );
+    assert_eq!(*maker.submits.lock().unwrap(), 0);
+    assert_eq!(
+        worlds.hub().ledger().snapshot(Unit::SplatCredit).committed,
+        0
+    );
+    assert_eq!(metered(&worlds).0, 0);
+    worlds.close().await;
+    std::fs::remove_dir_all(cache_dir).unwrap();
+}
+
+#[tokio::test]
+async fn world_source_dimensions_follow_the_same_jpeg_orientation_as_the_runtime() {
+    use sha2::{Digest, Sha256};
+    let images = TransformFixture::new().await;
+    let original = jpeg_fixture();
+    let exif = [
+        b'E', b'x', b'i', b'f', 0, 0, b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0,
+        0, 6, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let mut oriented = vec![0xff, 0xd8, 0xff, 0xe1, 0, 34];
+    oriented.extend_from_slice(&exif);
+    oriented.extend_from_slice(&original[2..]);
+    let reference = images
+        .reference(df_providers::ImageFormat::Jpeg, oriented.clone().into())
+        .await;
+    let unified = prepare_source_image(images.imagery(), &reference)
+        .await
+        .unwrap();
+    let dimensions =
+        image::ImageReader::with_format(std::io::Cursor::new(&unified), image::ImageFormat::Jpeg)
+            .into_dimensions()
+            .unwrap();
+    assert_eq!(dimensions, (24, 32));
+    let normalized = image::load_from_memory(&original).unwrap().rotate90();
+    let mut normalized_jpeg = Vec::new();
+    normalized
+        .write_to(
+            &mut std::io::Cursor::new(&mut normalized_jpeg),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    assert_eq!(unified, normalized_jpeg);
+    let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/imagery-finish-20261029/world-source-transform/golden");
+    std::fs::create_dir_all(&evidence).unwrap();
+    std::fs::write(evidence.join("orientation6.source.jpg"), &oriented).unwrap();
+    std::fs::write(
+        evidence.join("orientation6.normalized.jpg"),
+        &normalized_jpeg,
+    )
+    .unwrap();
+    std::fs::write(evidence.join("orientation6.unified.jpg"), &unified).unwrap();
+    std::fs::write(evidence.join("orientation6-proof.json"),serde_json::to_vec_pretty(&serde_json::json!({"width":24,"height":32,"normalized_sha256":format!("{:x}",Sha256::digest(&normalized_jpeg)),"unified_sha256":format!("{:x}",Sha256::digest(&unified)),"policy":"Root-approved core JPEG EXIF normalization; non-EXIF legacy fixtures remain byte-identical"})).unwrap()).unwrap();
+    images.close().await;
 }
 
 #[tokio::test]
@@ -559,8 +759,8 @@ async fn asset_route_serves_a_world_stored_after_startup() {
     std::fs::remove_dir_all(empty).unwrap();
 }
 
-#[test]
-fn seed_import_copies_the_proof_world_only_when_named() {
+#[tokio::test]
+async fn seed_import_copies_the_proof_world_only_when_named() {
     let cache_dir = scratch("seed-cache");
     // A stand-in for artifacts/tmp/worldlabs/out/m11 (gitignored, absent from a clean checkout):
     // the same file names with a small readable PLY and collider.
@@ -595,12 +795,13 @@ fn seed_import_copies_the_proof_world_only_when_named() {
         .len(),
         ply.len() as u64
     );
-    let worlds = service(FakeMaker::succeeding(0), cache_dir.clone());
+    let worlds = service(FakeMaker::succeeding(0), cache_dir.clone()).await;
     assert_eq!(
         worlds.ready_world(PROOF_PLACE_ID),
         Some(ready.clone()),
         "the seeded world is discoverable before any generation request"
     );
+    worlds.close().await;
     std::fs::remove_dir_all(cache_dir).unwrap();
     std::fs::remove_dir_all(proof).unwrap();
 }

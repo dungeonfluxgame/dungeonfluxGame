@@ -6,6 +6,9 @@
 
 mod support;
 
+#[path = "flows/protocol_guard.rs"]
+mod protocol_guard;
+
 use df_commerce::finance_ids::{AllocationId, AttemptId, LotId, UsageEventId};
 use df_commerce::lifecycle::Deadlines;
 use df_commerce::settlement::{ReleaseReason, UsageSource};
@@ -997,6 +1000,107 @@ fn allocation_ids_are_per_session_and_a_raised_allocation_keeps_its_id() {
             world.count("funding_epoch").await,
             3,
             "the opening epoch and one per change"
+        );
+        world.finish().await;
+    });
+}
+
+#[test]
+fn finance_only_schema_keeps_ordinary_attempt_protocol_and_record_event_cas() {
+    support::run(async {
+        let Some(world) = World::open().await else {
+            return;
+        };
+        assert!(
+            !world
+                .admin
+                .query_one(
+                    "SELECT to_regclass('imagery.image_finance_admission_binding') IS NOT NULL",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+        );
+        assert!(world.admin.query_one(
+            "SELECT ('4294967297'::xid8)::xid='1'::xid AND ('8589934591'::xid8)::xid='4294967295'::xid", &[],
+        ).await.unwrap().get::<_, bool>(0), "own-row xid comparison must retain low32 bits across xid epochs");
+        let mut service = world.service().await;
+        service
+            .grant_trial(payer(1), key(1), CURRENCY)
+            .await
+            .unwrap();
+        service
+            .allocate(
+                payer(1),
+                world.session,
+                operation(1),
+                TRIAL,
+                world.consent(),
+            )
+            .await
+            .unwrap();
+        let command = world.admit_command(1, 2_000_000, 1_000_000);
+        service.admit(&command).await.unwrap();
+        assert!(
+            !service
+                .client()
+                .query_one(
+                    "SELECT finance.image_stage_protocol_required($1)",
+                    &[&command.attempt.as_bytes().as_slice()],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+        );
+        let document: String = service
+            .client()
+            .query_one(
+                "SELECT finance.lock_flow('attempt',jsonb_build_object('attempt',$1::text))::text",
+                &[&command.attempt.hex()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let document: serde_json::Value = serde_json::from_str(&document).unwrap();
+        let row = df_finance::wire::parse_attempt_row(&document["attempt"]).unwrap();
+        let plan = df_commerce::lifecycle::plan_prepare_dispatch(
+            df_commerce::finance_ids::EventId::from_array([0xe1; 16]),
+            &row,
+            Deadlines::default(),
+            service.now_ms(),
+        )
+        .unwrap();
+        service.record_event(&plan).await.unwrap();
+        let events = world.count("event_marker").await;
+        let stale = service
+            .record_event(&plan)
+            .await
+            .expect_err("raw plans preserve their revision CAS");
+        assert_eq!(stale.sqlstate(), Some("FN001"));
+        assert_eq!(world.count("event_marker").await, events);
+        service
+            .mark_attempt_sent(command.attempt, [9; 16], Deadlines::default())
+            .await
+            .unwrap();
+        assert!(
+            service
+                .settle_unusable(
+                    command.attempt,
+                    vec![("text_input".into(), 100), ("text_output".into(), 100)],
+                    UsageSource::Reported,
+                    df_commerce::settlement::UnusableOutcome::FailedNoOutput,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(world.natural(2230, None, None, None).await, 0);
+        assert_eq!(world.line_sum(9100).await, 0);
+        assert_eq!(
+            world.count("usage_event").await,
+            0,
+            "unusable output never creates a customer charge"
         );
         world.finish().await;
     });

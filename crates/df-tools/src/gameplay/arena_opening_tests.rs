@@ -124,6 +124,9 @@ fn fight_table(
     let (sender, inbox): (_, ActorLoop<actor::Call>) = bounded_inbox();
     let table = TableLog::new();
     let service = Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         look_ahead: Default::default(),
         portraits: crate::gameplay::creator_portraits::Portraits::disabled(),
         display_credential: [0x82; 32],

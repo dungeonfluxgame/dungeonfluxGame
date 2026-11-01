@@ -14,6 +14,14 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-27T20:50:26-04:00 to 2026-10-27T22:14:33-04:00
+
+Range: 703267289d580d933e07b623fbea6fbba4ec4578..6d0ce07e1d775d8bff9f569b23826a0503e13035
+
+- 6d0ce07e1d775d8bff9f569b23826a0503e13035 - WIP: checkpoint unified imagery implementation and pause handoff
+
+Explicit user-requested checkpoint of incomplete work; known compiler/test failures and remaining integration are recorded in planning/imagery-implementation/CONTINUATION.md. This block does not claim implementation approval.
+
 ## 2026-10-27T18:00:00-04:00 to 2026-10-27T20:50:26-04:00
 
 Range: 6c6c0d4a797fe817a474fb5dcae548a834879f4f..703267289d580d933e07b623fbea6fbba4ec4578

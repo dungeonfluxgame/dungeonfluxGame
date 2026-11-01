@@ -1,6 +1,9 @@
 //! Owned native HTTPS execution. No redirects, proxies, resends, or detached tasks.
 
-use std::{future::Future, time::Duration};
+use std::{
+    future::Future,
+    time::{Duration, Instant, SystemTime},
+};
 
 use crate::{HttpMethod, HttpRequest, ProviderFailureClass, ProviderRequestId};
 
@@ -156,6 +159,80 @@ pub struct NativeHttpFailure {
     pub metadata: Box<NativeHttpMetadata>,
 }
 
+/// Exact bounded Retry-After field values exposed by the HTTP response parser.
+/// This observation alone never grants billing or resend authority.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct NativeRetryAfter {
+    raw_values: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeRetryAfterValue {
+    Absent,
+    Invalid,
+    Duplicate,
+    DelaySeconds(u64),
+    HttpDate(SystemTime),
+}
+
+impl std::fmt::Debug for NativeRetryAfter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeRetryAfter")
+            .field("field_count", &self.raw_values.len())
+            .finish()
+    }
+}
+
+impl NativeRetryAfter {
+    /// Reconstructs retained evidence; callers enforce their receipt byte bounds.
+    pub fn from_raw_values(raw_values: Vec<Vec<u8>>) -> Self {
+        Self { raw_values }
+    }
+
+    pub fn raw_values(&self) -> &[Vec<u8>] {
+        &self.raw_values
+    }
+
+    pub fn value(&self) -> NativeRetryAfterValue {
+        let raw = match self.raw_values.as_slice() {
+            [] => return NativeRetryAfterValue::Absent,
+            [raw] => raw,
+            _ => return NativeRetryAfterValue::Duplicate,
+        };
+        let Ok(text) = std::str::from_utf8(raw) else {
+            return NativeRetryAfterValue::Invalid;
+        };
+        let text = text.trim_matches([' ', '\t']);
+        if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return text.parse().map_or(
+                NativeRetryAfterValue::Invalid,
+                NativeRetryAfterValue::DelaySeconds,
+            );
+        }
+        httpdate::parse_http_date(text).map_or(
+            NativeRetryAfterValue::Invalid,
+            NativeRetryAfterValue::HttpDate,
+        )
+    }
+
+    /// Returns the supplier minimum, or None when it cannot safely schedule a retry.
+    /// A caller must additionally apply its backoff, attempt budget and absolute deadline.
+    pub fn minimum_delay(&self, now: SystemTime) -> Option<Duration> {
+        let delay = match self.value() {
+            NativeRetryAfterValue::Absent => Duration::ZERO,
+            NativeRetryAfterValue::DelaySeconds(seconds) => Duration::from_secs(seconds),
+            NativeRetryAfterValue::HttpDate(date) => {
+                date.duration_since(now).unwrap_or(Duration::ZERO)
+            }
+            NativeRetryAfterValue::Invalid | NativeRetryAfterValue::Duplicate => return None,
+        };
+        now.checked_add(delay)?;
+        Instant::now().checked_add(delay)?;
+        Some(delay)
+    }
+}
+
 /// Retained supplier facts, never billing or resend authority.
 #[derive(Clone, Default)]
 pub struct NativeHttpMetadata {
@@ -163,6 +240,7 @@ pub struct NativeHttpMetadata {
     pub transport_request_id: Option<ProviderRequestId>,
     pub trace_id: Option<String>,
     pub character_cost: Option<String>,
+    pub retry_after: NativeRetryAfter,
 }
 
 #[derive(Clone, Copy)]
@@ -177,7 +255,8 @@ impl NativeHttp {
     pub fn limits(&self) -> NativeHttpLimits {
         self.limits
     }
-    /// Builds a bounded transport; `loopback_fixture` allows plain HTTP.
+    /// Builds a bounded transport; `loopback_fixture` only allows plain HTTP.
+    /// It does not restrict endpoints to loopback; the wrapper must enforce that.
     pub fn new(
         limits: NativeHttpLimits,
         loopback_fixture: bool,
@@ -368,6 +447,14 @@ impl NativeHttp {
         if header_bytes > self.limits.maximum_header_bytes {
             return Err(NativeHttpRefusal::HeadersTooLarge);
         }
+        captured.retry_after = NativeRetryAfter::from_raw_values(
+            response
+                .headers()
+                .get_all(reqwest::header::RETRY_AFTER)
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect(),
+        );
         let mut content_types = response
             .headers()
             .get_all(reqwest::header::CONTENT_TYPE)

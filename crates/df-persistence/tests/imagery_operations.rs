@@ -937,21 +937,21 @@ fn no_public_access_to_journal_tables() {
             return;
         };
         let (client, _driver) = raw_client(&pg_config(&fixture.database).expect("config")).await;
-        // No ACL entry grants the PUBLIC pseudo-role (grantee 0): an empty grantee prefix in
-        // any relacl item means PUBLIC. Tables are created grant-free, so relacl stays null.
+        // No ACL entry grants the PUBLIC pseudo-role (grantee 0). Tables are created
+        // grant-free, so relacl stays null and the probe below finds no row.
         for table in ["image_job", "image_operation", "image_interest"] {
-            let relacl: Option<Vec<String>> = client
+            let public_grants: i64 = client
                 .query_one(
-                    "SELECT relacl FROM pg_class WHERE oid = $1::text::regclass",
+                    "SELECT COUNT(*) FROM pg_class c, LATERAL aclexplode(c.relacl) a \
+                     WHERE c.oid = $1::text::regclass AND a.grantee = 0",
                     &[&format!("imagery.{table}")],
                 )
                 .await
                 .expect("relacl read")
                 .get(0);
-            let items = relacl.unwrap_or_default();
-            assert!(
-                items.iter().all(|item| !item.starts_with('=')),
-                "PUBLIC pseudo-role must hold no grant on {table}: {items:?}"
+            assert_eq!(
+                public_grants, 0,
+                "PUBLIC pseudo-role must hold no grant on {table}"
             );
         }
         // An actual unprivileged login is denied every statement for real.
@@ -980,9 +980,7 @@ fn no_public_access_to_journal_tables() {
                     .query(probe, &[])
                     .await
                     .expect_err("unprivileged login must be denied");
-                let state = error
-                    .as_db_error()
-                    .map(|db| db.code().code().to_owned());
+                let state = error.as_db_error().map(|db| db.code().code().to_owned());
                 assert_eq!(
                     state.as_deref(),
                     Some("42501"),
@@ -1326,7 +1324,10 @@ fn phantom_extra_interest_for_committed_operation_same_job_fails_commit() {
         )
         .await
         .expect("stage phantom interest");
-        let commit = tx.commit().await.expect_err("phantom interest commit must fail");
+        let commit = tx
+            .commit()
+            .await
+            .expect_err("phantom interest commit must fail");
         assert_eq!(
             commit.as_db_error().map(|db| db.code().code()),
             Some("23503"),
@@ -1377,7 +1378,10 @@ fn phantom_extra_interest_for_committed_operation_other_job_fails_commit() {
         )
         .await
         .expect("stage phantom interest");
-        let commit = tx.commit().await.expect_err("phantom interest commit must fail");
+        let commit = tx
+            .commit()
+            .await
+            .expect_err("phantom interest commit must fail");
         assert_eq!(
             commit.as_db_error().map(|db| db.code().code()),
             Some("23503"),

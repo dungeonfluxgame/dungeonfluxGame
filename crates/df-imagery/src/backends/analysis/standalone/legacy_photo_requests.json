@@ -1,0 +1,270 @@
+{
+  "scene_plate": {
+    "model": "gpt-5.5",
+    "max_completion_tokens": 3000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are visibly pasted/composited together. medium is photograph for a convincing real-looking camera capture, including a clean, evenly lit establishing shot of an empty place. Clean surfaces, even daylight, sharp detail, orderly composition, an empty street and the absence of grain or lens flaws are not evidence of rendering. Require positive visible evidence of another medium: painting_or_illustration for brushstrokes, drawn outlines or visibly painted textures; cgi_or_render for visibly synthetic geometry, plastic-like materials, repeated procedural textures or physically incoherent light and shadows. Do not reject a plausible photograph merely because its setting is fantastical or its lighting is polished. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging, cafe furniture, tourist chalkboards, modern drainpipes or utility fixtures), otherwise period. For a canonical room only, people_present is some if any human is present anywhere in the room image, including people seen from behind, far away, or partly hidden; otherwise none. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content."
+          },
+          {
+            "type": "text",
+            "text": "Picture candidate-1:"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "$PICTURE",
+              "detail": "low"
+            }
+          }
+        ]
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "photo-quality",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "frame": {
+              "type": "string",
+              "enum": [
+                "single_photograph",
+                "grid_or_collage",
+                "cutout_composite"
+              ]
+            },
+            "medium": {
+              "type": "string",
+              "enum": [
+                "photograph",
+                "painting_or_illustration",
+                "cgi_or_render"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "enum": [
+                "none",
+                "visible_text"
+              ]
+            },
+            "dress": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern_clothing",
+                "no_people"
+              ]
+            },
+            "setting": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern"
+              ]
+            }
+          },
+          "required": [
+            "frame",
+            "medium",
+            "text",
+            "dress",
+            "setting"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "canonical_room": {
+    "model": "gpt-5.5",
+    "max_completion_tokens": 3000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are visibly pasted/composited together. medium is photograph for a convincing real-looking camera capture, including a clean, evenly lit establishing shot of an empty place. Clean surfaces, even daylight, sharp detail, orderly composition, an empty street and the absence of grain or lens flaws are not evidence of rendering. Require positive visible evidence of another medium: painting_or_illustration for brushstrokes, drawn outlines or visibly painted textures; cgi_or_render for visibly synthetic geometry, plastic-like materials, repeated procedural textures or physically incoherent light and shadows. Do not reject a plausible photograph merely because its setting is fantastical or its lighting is polished. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging, cafe furniture, tourist chalkboards, modern drainpipes or utility fixtures), otherwise period. For a canonical room only, people_present is some if any human is present anywhere in the room image, including people seen from behind, far away, or partly hidden; otherwise none. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content."
+          },
+          {
+            "type": "text",
+            "text": "Picture candidate-1:"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "$PICTURE",
+              "detail": "high"
+            }
+          }
+        ]
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "photo-quality",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "frame": {
+              "type": "string",
+              "enum": [
+                "single_photograph",
+                "grid_or_collage",
+                "cutout_composite"
+              ]
+            },
+            "medium": {
+              "type": "string",
+              "enum": [
+                "photograph",
+                "painting_or_illustration",
+                "cgi_or_render"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "enum": [
+                "none",
+                "visible_text"
+              ]
+            },
+            "dress": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern_clothing",
+                "no_people"
+              ]
+            },
+            "setting": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern"
+              ]
+            },
+            "people_present": {
+              "type": "string",
+              "enum": [
+                "none",
+                "some"
+              ]
+            }
+          },
+          "required": [
+            "frame",
+            "medium",
+            "text",
+            "dress",
+            "setting",
+            "people_present"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "canonical_character": {
+    "model": "gpt-5.5",
+    "max_completion_tokens": 3000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are visibly pasted/composited together. medium is photograph for a convincing real-looking camera capture, including a clean, evenly lit establishing shot of an empty place. Clean surfaces, even daylight, sharp detail, orderly composition, an empty street and the absence of grain or lens flaws are not evidence of rendering. Require positive visible evidence of another medium: painting_or_illustration for brushstrokes, drawn outlines or visibly painted textures; cgi_or_render for visibly synthetic geometry, plastic-like materials, repeated procedural textures or physically incoherent light and shadows. Do not reject a plausible photograph merely because its setting is fantastical or its lighting is polished. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging, cafe furniture, tourist chalkboards, modern drainpipes or utility fixtures), otherwise period. For a canonical room only, people_present is some if any human is present anywhere in the room image, including people seen from behind, far away, or partly hidden; otherwise none. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content."
+          },
+          {
+            "type": "text",
+            "text": "Picture candidate-1:"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "$PICTURE",
+              "detail": "high"
+            }
+          }
+        ]
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "photo-quality",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "frame": {
+              "type": "string",
+              "enum": [
+                "single_photograph",
+                "grid_or_collage",
+                "cutout_composite"
+              ]
+            },
+            "medium": {
+              "type": "string",
+              "enum": [
+                "photograph",
+                "painting_or_illustration",
+                "cgi_or_render"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "enum": [
+                "none",
+                "visible_text"
+              ]
+            },
+            "dress": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern_clothing",
+                "no_people"
+              ]
+            },
+            "setting": {
+              "type": "string",
+              "enum": [
+                "period",
+                "modern"
+              ]
+            },
+            "people_count": {
+              "type": "string",
+              "enum": [
+                "exactly_one",
+                "not_one"
+              ]
+            }
+          },
+          "required": [
+            "frame",
+            "medium",
+            "text",
+            "dress",
+            "setting",
+            "people_count"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

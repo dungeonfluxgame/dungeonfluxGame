@@ -185,6 +185,9 @@ impl NativeMediaFetch {
         let host = url
             .host_str()
             .ok_or((NativeHttpRefusal::InvalidEndpoint, "missing_host"))?;
+        // Validate transport bounds before DNS so unsupported limits never cause network I/O.
+        crate::native_http::NativeHttp::new(limits, fixture.is_some())
+            .map_err(|error| (error, "transport_configuration"))?;
         let addresses = if fixture.is_some() {
             vec![]
         } else {
@@ -206,8 +209,6 @@ impl NativeMediaFetch {
                 .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "dns_target_refused"))?;
             addresses
         };
-        crate::native_http::NativeHttp::new(limits, fixture.is_some())
-            .map_err(|error| (error, "transport_configuration"))?;
         if fixture.is_some_and(|socket| !socket.ip().is_loopback() || socket.port() == 0) {
             return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
         }
@@ -288,11 +289,12 @@ impl NativeMediaFetch {
         cancellation: impl Future<Output = ()>,
     ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
         let allowed = if self.bfl {
-            strict_bfl_delivery(locator) || self.fixture.is_some_and(|address| {
-                locator.len() <= 8192
-                    && locator.starts_with(&format!("http://{address}/"))
-                    && !locator.contains(['\\', '\0', '@', '#'])
-            })
+            strict_bfl_delivery(locator)
+                || self.fixture.is_some_and(|address| {
+                    locator.len() <= 8192
+                        && locator.starts_with(&format!("http://{address}/"))
+                        && !locator.contains(['\\', '\0', '@', '#'])
+                })
         } else {
             strict_fal_locator(locator)
         };
@@ -446,43 +448,82 @@ impl NativeMediaFetch {
     }
 }
 
+/// Credential-free delivery failure; closed refusal, static reason, observed status.
+/// Carries no locator, credential, or body bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BflDeliveryFailure {
+    pub refusal: NativeHttpRefusal,
+    pub reason: &'static str,
+    pub http_status: Option<u16>,
+}
+
 /// Credential-free BFL delivery over one total `remaining` deadline.
 ///
-/// Reuses the pinned allowlisted [`NativeMediaFetch::bfl`] construction, the
-/// bounded [`NativeMediaFetch::fetch_bfl_image`] read and
-/// [`NativeMediaFetch::observed_status`]. No credential is accepted or
-/// forwarded, redirects and fallbacks are refused by the helpers.
+/// Builds dedicated credential-free delivery limits from the caller transport
+/// with `maximum_response_bytes` set to validated `max_bytes`; the caller
+/// transport keeps its submit/poll JSON limits unchanged.
 pub async fn fetch_bfl_delivery(
     http: &crate::native_http::NativeHttp,
     locator: &str,
     max_bytes: usize,
     remaining: Duration,
     fixture: Option<SocketAddr>,
-) -> Result<(Vec<u8>, String, Option<u16>), (NativeHttpRefusal, &'static str)> {
+) -> Result<(Vec<u8>, String, Option<u16>), BflDeliveryFailure> {
     if remaining.is_zero() {
-        return Err((NativeHttpRefusal::Deadline, "deadline"));
+        return Err(BflDeliveryFailure {
+            refusal: NativeHttpRefusal::Deadline,
+            reason: "deadline",
+            http_status: None,
+        });
     }
-    if max_bytes == 0 {
-        return Err((NativeHttpRefusal::InvalidEndpoint, "request_bounds"));
+    if max_bytes == 0 || max_bytes > 16_777_216 {
+        return Err(BflDeliveryFailure {
+            refusal: NativeHttpRefusal::InvalidLimits,
+            reason: "request_bounds",
+            http_status: None,
+        });
     }
+    let delivery_limits = NativeHttpLimits {
+        maximum_response_bytes: max_bytes,
+        ..http.limits()
+    };
     let started = std::time::Instant::now();
     let constructed = tokio::time::timeout(
         remaining,
-        NativeMediaFetch::bfl(http.limits(), locator, fixture),
+        NativeMediaFetch::bfl(delivery_limits, locator, fixture),
     )
     .await
-    .map_err(|_| (NativeHttpRefusal::Deadline, "deadline"))??;
+    .map_err(|_| BflDeliveryFailure {
+        refusal: NativeHttpRefusal::Deadline,
+        reason: "deadline",
+        http_status: None,
+    })?
+    .map_err(|(refusal, reason)| BflDeliveryFailure {
+        refusal,
+        reason,
+        http_status: None,
+    })?;
     let elapsed = started.elapsed();
-    let left = remaining
-        .checked_sub(elapsed)
-        .ok_or((NativeHttpRefusal::Deadline, "deadline"))?;
+    let left = remaining.checked_sub(elapsed).ok_or(BflDeliveryFailure {
+        refusal: NativeHttpRefusal::Deadline,
+        reason: "deadline",
+        http_status: None,
+    })?;
     if left.is_zero() {
-        return Err((NativeHttpRefusal::Deadline, "deadline"));
+        return Err(BflDeliveryFailure {
+            refusal: NativeHttpRefusal::Deadline,
+            reason: "deadline",
+            http_status: None,
+        });
     }
     let (bytes, mime) = constructed
         .fetch_bfl_image(locator, max_bytes, left)
         .await
-        .map_err(|reason| (reason, fetch_reason(reason)))?;
+        .map_err(|refusal| BflDeliveryFailure {
+            refusal,
+            reason: fetch_reason(refusal),
+            http_status: constructed.observed_status(),
+        })?;
     let observed = constructed.observed_status();
     Ok((bytes, mime, observed))
 }

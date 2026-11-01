@@ -16,6 +16,8 @@ use df_commerce::settlement::{
 };
 use serde_json::{Value, json};
 
+mod protocol;
+
 use crate::ports::{FencePort, MediaPort, MemberPort};
 use crate::service::{Committed, FinanceError, FinanceService};
 use crate::wire::{parse_attempt_row, parse_credit_snapshot, parse_held_snapshot, parse_quote_row};
@@ -61,18 +63,14 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
             usage_source,
             now_ms: self.clock.now_ms(),
         };
-        self.run_flow(
-            "settlement",
-            json!({"attempt": attempt.hex()}),
-            |document| {
-                let Some(snapshot) = parse_held_snapshot(document)? else {
-                    return Ok(None);
-                };
-                plan_settlement(&snapshot, &request)
-                    .map(Some)
-                    .map_err(FinanceError::Settle)
-            },
-        )
+        self.run_unbound_attempt_flow("settlement", attempt, |document| {
+            let Some(snapshot) = parse_held_snapshot(document)? else {
+                return Ok(None);
+            };
+            plan_settlement(&snapshot, &request)
+                .map(Some)
+                .map_err(FinanceError::Settle)
+        })
         .await
     }
 
@@ -94,18 +92,14 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
             outcome,
             now_ms: self.clock.now_ms(),
         };
-        self.run_flow(
-            "settlement",
-            json!({"attempt": attempt.hex()}),
-            |document| {
-                let Some(snapshot) = parse_held_snapshot(document)? else {
-                    return Ok(None);
-                };
-                plan_unusable_settlement(&snapshot, &request)
-                    .map(Some)
-                    .map_err(FinanceError::Settle)
-            },
-        )
+        self.run_unbound_attempt_flow("settlement", attempt, |document| {
+            let Some(snapshot) = parse_held_snapshot(document)? else {
+                return Ok(None);
+            };
+            plan_unusable_settlement(&snapshot, &request)
+                .map(Some)
+                .map_err(FinanceError::Settle)
+        })
         .await
     }
 
@@ -121,15 +115,22 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
             reason,
             now_ms: self.clock.now_ms(),
         };
-        self.run_flow("release", json!({"attempt": attempt.hex()}), |document| {
+        let decide = |document: &Value| {
             let Some(snapshot) = parse_held_snapshot(document)? else {
                 return Ok(None);
             };
             plan_release(&snapshot, &request)
                 .map(Some)
                 .map_err(FinanceError::Settle)
-        })
-        .await
+        };
+        if reason == ReleaseReason::NotDispatched {
+            self.run_unbound_attempt_flow("release", attempt, decide)
+                .await
+        } else {
+            // The existing customer-hold deadline policy also applies to canonical stages.
+            self.run_flow("release", json!({"attempt":attempt.hex()}), decide)
+                .await
+        }
     }
 
     /// 12.5: an operator credit of a charge, returned to its original lots.
@@ -157,6 +158,25 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         committed.ok_or(FinanceError::Stale)
     }
 
+    /// Generic attempt mutations cannot bypass the canonical stage's durable protocol proof.
+    async fn run_unbound_attempt_flow(
+        &mut self,
+        flow: &str,
+        attempt: AttemptId,
+        decide: impl FnOnce(&Value) -> Result<Option<df_commerce::plan::FinancePlan>, FinanceError>,
+    ) -> Result<Option<Committed>, FinanceError> {
+        let transaction = self.begin().await?;
+        let document = Self::lock(&transaction, flow, json!({"attempt":attempt.hex()})).await?;
+        Self::refuse_stage_protocol_bypass(&transaction, attempt).await?;
+        let Some(plan) = decide(&document)? else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+        let committed = Self::commit_plan(&transaction, &plan).await?;
+        transaction.commit().await?;
+        Ok(Some(committed))
+    }
+
     async fn run_attempt_flow(
         &mut self,
         attempt: AttemptId,
@@ -168,7 +188,7 @@ impl<F: FencePort, M: MediaPort, S: MemberPort> FinanceService<F, M, S> {
         >,
     ) -> Result<Committed, FinanceError> {
         let committed = self
-            .run_flow("attempt", json!({"attempt": attempt.hex()}), |document| {
+            .run_unbound_attempt_flow("attempt", attempt, |document| {
                 let row = document
                     .get("attempt")
                     .filter(|row| !row.is_null())

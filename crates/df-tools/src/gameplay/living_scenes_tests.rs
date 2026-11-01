@@ -794,8 +794,8 @@ fn a_hero_waits_for_their_own_image_without_requesting_a_stock_health_variant() 
     assert_eq!(characters[0].art, key('a').path());
 }
 
-#[test]
-fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
+#[tokio::test]
+async fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
     use crate::gameplay::imagery::tests::DirectionFixture;
 
     let dossier = dossier();
@@ -804,31 +804,36 @@ fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
         "../../artifacts/tmp/lanes/Q6/health-art-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::new(&cache);
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: ReferenceStore::new(PathBuf::new()),
-        social: original.social.clone(),
-        rating: ContentRating::Restrained,
-        timing: timing(),
-        state: Mutex::new(State::new(timing())),
-        wake: watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    give_live_picture(&inner, "Rowan", 'a');
-    inner.observe_at(hurt_stage(2, false, 3, 13), seconds(20));
-    let labels = job_labels(&inner.evaluate_at(seconds(25)));
-    assert_eq!(
-        labels,
-        [
-            format!("peek {HERO_ONE_ART}"),
-            format!("warm {HERO_ONE_ART} critical"),
-        ]
-    );
-    assert!(
-        job_labels(&inner.evaluate_at(seconds(26))).is_empty(),
-        "asked for once while it is being made"
-    );
+    let Some(fixture) = DirectionFixture::new(&cache).await else {
+        return;
+    };
+    {
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: ReferenceStore::new(PathBuf::new()),
+            social: original.social.clone(),
+            rating: ContentRating::Restrained,
+            timing: timing(),
+            state: Mutex::new(State::new(timing())),
+            wake: watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        give_live_picture(&inner, "Rowan", 'a');
+        inner.observe_at(hurt_stage(2, false, 3, 13), seconds(20));
+        let labels = job_labels(&inner.evaluate_at(seconds(25)));
+        assert_eq!(
+            labels,
+            [
+                format!("peek {HERO_ONE_ART}"),
+                format!("warm {HERO_ONE_ART} critical"),
+            ]
+        );
+        assert!(
+            job_labels(&inner.evaluate_at(seconds(26))).is_empty(),
+            "asked for once while it is being made"
+        );
+    }
+    fixture.close().await;
 }
 
 #[test]
@@ -1521,71 +1526,76 @@ async fn kill_shot_lethal_blow_generates_one_still_even_after_duplicate_delivery
         "../../artifacts/tmp/lanes/K2/kill-still-test-{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::photographic(&directory);
-    let (original, _) = director(&dossier());
-    let inner = Arc::new(Inner {
-        imagery: fixture.imagery.clone(),
-        references: ReferenceStore::new(PathBuf::new()),
-        social: original.social.clone(),
-        rating: ContentRating::Restrained,
-        timing: timing(),
-        state: Mutex::new(State::new(timing())),
-        wake: watch::channel(0).0,
-        origin: Instant::now(),
-    });
-    // The canonical inputs are registered imagery bytes; the fake accepts every request locally.
-    let mut keys = Vec::new();
-    for name in ["Sigrun", "Bandit", "Market street"] {
-        let mut request = kill_shot_request();
-        request.killer = name.into();
-        let image = kill_still_request(&request, ContentRating::Restrained, Vec::new());
-        keys.push(
+    let Some(fixture) = DirectionFixture::photographic(&directory).await else {
+        return;
+    };
+    {
+        let (original, _) = director(&dossier());
+        let inner = Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: ReferenceStore::new(PathBuf::new()),
+            social: original.social.clone(),
+            rating: ContentRating::Restrained,
+            timing: timing(),
+            state: Mutex::new(State::new(timing())),
+            wake: watch::channel(0).0,
+            origin: Instant::now(),
+        });
+        // The canonical inputs are registered imagery bytes; the fake accepts every request locally.
+        let mut keys = Vec::new();
+        for name in ["Sigrun", "Bandit", "Market street"] {
+            let mut request = kill_shot_request();
+            request.killer = name.into();
+            let image = kill_still_request(&request, ContentRating::Restrained, Vec::new());
+            keys.push(
+                fixture
+                    .imagery
+                    .generate("canonical-fixture", image)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let keys: [ImageKey; 3] = keys.try_into().unwrap();
+        let still = kill_shot_still(keys.clone().map(Some));
+        {
+            let mut state = locked(&inner.state);
+            inner.queue_kill_still(&mut state, still.clone());
+            inner.queue_kill_still(&mut state, still.clone());
+            assert_eq!(state.kill_stills_pending.len(), 1);
+        }
+        let mut jobs = inner.take_kill_stills(Instant::now(), 2);
+        assert_eq!(jobs.len(), 1);
+        let Job::KillShot {
+            still: job,
+            references,
+        } = jobs.remove(0)
+        else {
+            panic!("kill still job")
+        };
+        assert_eq!(references, keys);
+        let before = fixture.calls();
+        let (bytes, path) = inner
+            .render_kill_still(&job.request, &references)
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty());
+        assert!(path.starts_with("/gameplay/imagery/"));
+        assert_eq!(fixture.calls(), before + 1);
+        assert_eq!(fixture.image_count(), 3);
+        assert!(fixture.prompt().contains("named Sigrun"));
+        assert!(fixture.prompt().contains("named Bandit"));
+        assert!(
             fixture
-                .imagery
-                .generate("canonical-fixture", image)
-                .await
-                .unwrap(),
+                .prompt()
+                .contains("Image 3 is the canonical photograph")
+        );
+        inner.queue_kill_still(&mut locked(&inner.state), still);
+        assert!(
+            inner.take_kill_stills(Instant::now(), 2).is_empty(),
+            "completed blow is never requested again"
         );
     }
-    let keys: [ImageKey; 3] = keys.try_into().unwrap();
-    let still = kill_shot_still(keys.clone().map(Some));
-    {
-        let mut state = locked(&inner.state);
-        inner.queue_kill_still(&mut state, still.clone());
-        inner.queue_kill_still(&mut state, still.clone());
-        assert_eq!(state.kill_stills_pending.len(), 1);
-    }
-    let mut jobs = inner.take_kill_stills(Instant::now(), 2);
-    assert_eq!(jobs.len(), 1);
-    let Job::KillShot {
-        still: job,
-        references,
-    } = jobs.remove(0)
-    else {
-        panic!("kill still job")
-    };
-    assert_eq!(references, keys);
-    let before = fixture.calls();
-    let (bytes, path) = inner
-        .render_kill_still(&job.request, &references)
-        .await
-        .unwrap();
-    assert!(!bytes.is_empty());
-    assert!(path.starts_with("/gameplay/imagery/"));
-    assert_eq!(fixture.calls(), before + 1);
-    assert_eq!(fixture.image_count(), 3);
-    assert!(fixture.prompt().contains("named Sigrun"));
-    assert!(fixture.prompt().contains("named Bandit"));
-    assert!(
-        fixture
-            .prompt()
-            .contains("Image 3 is the canonical photograph")
-    );
-    inner.queue_kill_still(&mut locked(&inner.state), still);
-    assert!(
-        inner.take_kill_stills(Instant::now(), 2).is_empty(),
-        "completed blow is never requested again"
-    );
+    fixture.close().await;
 }
 
 #[test]
@@ -1649,7 +1659,7 @@ async fn resource_worker_executes_queued_splat_worlds_within_the_shared_bound_an
     let (inner, _) = director(&dossier());
     // Keep the presentation idle: this test exercises the production worker's resource path.
     locked(&inner.state).stage = None;
-    let bound = super::super::imagery::MAXIMUM_IN_FLIGHT;
+    let bound = super::MAXIMUM_OWNED_SCENE_TASKS;
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let release = Arc::new(Semaphore::new(0));

@@ -53,6 +53,7 @@ pub enum AccountCode {
     PurchasedAvailable,
     PurchasedAllocated,
     PurchasedReserved,
+    PurchasedAccountReserved,
     PurchasedFrozen,
     SupplierPayable,
     SupplierAccrued,
@@ -79,7 +80,7 @@ pub enum AccountCode {
 }
 
 impl AccountCode {
-    pub const ALL: [AccountCode; 30] = [
+    pub const ALL: [AccountCode; 31] = [
         Self::BankOperating,
         Self::ProcessorClearing,
         Self::SupplierPrepaid,
@@ -87,6 +88,7 @@ impl AccountCode {
         Self::PurchasedAvailable,
         Self::PurchasedAllocated,
         Self::PurchasedReserved,
+        Self::PurchasedAccountReserved,
         Self::PurchasedFrozen,
         Self::SupplierPayable,
         Self::SupplierAccrued,
@@ -121,6 +123,7 @@ impl AccountCode {
             Self::PurchasedAvailable => 2110,
             Self::PurchasedAllocated => 2120,
             Self::PurchasedReserved => 2130,
+            Self::PurchasedAccountReserved => 2150,
             Self::PurchasedFrozen => 2140,
             Self::SupplierPayable => 2300,
             Self::SupplierAccrued => 2310,
@@ -187,6 +190,7 @@ impl AccountCode {
             Self::PurchasedAvailable
                 | Self::PurchasedAllocated
                 | Self::PurchasedReserved
+                | Self::PurchasedAccountReserved
                 | Self::PurchasedFrozen
                 | Self::RefundPayable
                 | Self::PromotionalAvailable
@@ -216,7 +220,9 @@ impl AccountCode {
             | Self::CostOfServicesPromotional
             | Self::SupplierExposureOpen
             | Self::SupplierExposureOffset => &[Provider],
-            Self::PurchasedAvailable | Self::PromotionalAvailable => &[Payer, Lot],
+            Self::PurchasedAvailable
+            | Self::PurchasedAccountReserved
+            | Self::PromotionalAvailable => &[Payer, Lot],
             Self::PurchasedAllocated
             | Self::PurchasedReserved
             | Self::PromotionalAllocated
@@ -430,6 +436,9 @@ pub enum EntryKind {
     Allocation,
     AllocationRelease,
     Reservation,
+    AccountReservation,
+    AccountSettlement,
+    AccountRelease,
     MeterHold,
     Release,
     Settlement,
@@ -468,6 +477,9 @@ impl EntryKind {
             Self::Allocation => "allocation",
             Self::AllocationRelease => "allocation_release",
             Self::Reservation => "reservation",
+            Self::AccountReservation => "account_reservation",
+            Self::AccountSettlement => "account_settlement",
+            Self::AccountRelease => "account_release",
             Self::MeterHold => "meter_hold",
             Self::Release => "release",
             Self::Settlement => "settlement",

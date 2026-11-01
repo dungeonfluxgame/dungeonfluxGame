@@ -72,7 +72,7 @@ impl RequestLimits {
 }
 
 /// Who the claimed work belongs to. Drafts need no already-created hero.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ImageOwner {
     Run { campaign: CampaignId, run: RunId },
     Draft { account: AccountId },
@@ -233,6 +233,217 @@ pub enum Urgency {
     Speculative,
 }
 
+/// Private recipe text. Debug exposes its length, never appearance or scene facts.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PrivateImageText(String);
+
+impl PrivateImageText {
+    pub fn new(text: &str) -> Self {
+        Self(text.to_owned())
+    }
+    pub fn text(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PrivateImageText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateImageText")
+            .field("len_bytes", &self.0.len())
+            .finish()
+    }
+}
+
+/// Frozen nonsecret analysis route; credentials are resolved by account at execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisRoute {
+    pub account: crate::config::AccountHandle,
+    pub model: crate::config::ModelName,
+    pub endpoint: crate::config::ApiEndpoint,
+    pub maximum_output_tokens: u64,
+}
+
+/// The creator's versioned paid classification uses public appearance as quoted data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreatorClassification {
+    pub route: AnalysisRoute,
+    pub contract_revision: u32,
+    pub public_appearance: PrivateImageText,
+    pub general_prompt: Option<PrivateImageText>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InspectionKind {
+    ScenePlate,
+    CanonicalRoom,
+    CanonicalCharacter,
+}
+
+/// Technical provider moderation, separate from the application's content rating.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderModeration {
+    Auto,
+    Low,
+}
+
+/// Legacy scene quality checks keep a useful image when the judge is unavailable.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InspectionRequirement {
+    #[default]
+    BestEffort,
+    Required,
+}
+
+/// Exact public identities whose spatial ordering the photograph must preserve.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedIdentity {
+    pub locator_id: PrivateImageText,
+    pub reference_id: PrivateImageText,
+    pub public_name: PrivateImageText,
+    pub hero: bool,
+}
+
+/// Frozen quality/custody policy; corrections are separate paid children, never hidden retries.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImageInspection {
+    pub route: AnalysisRoute,
+    pub requirement: InspectionRequirement,
+    pub contract_revision: u32,
+    pub kind: InspectionKind,
+    pub expected_heroes: Option<u8>,
+    pub party_reference: Option<u32>,
+    pub hand_custody: PrivateImageText,
+    pub staging: Vec<StagedIdentity>,
+    pub maximum_corrections: u32,
+    pub allow_visible_text: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageContentRating {
+    Restrained,
+    Mature,
+}
+
+/// Additional semantic stages frozen with the original caller intent before paid execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImagePipeline {
+    pub revision: u32,
+    pub moderation: Option<ProviderModeration>,
+    pub rating: ImageContentRating,
+    pub creator: Option<CreatorClassification>,
+    pub inspection: Option<ImageInspection>,
+}
+
+/// Invalid stage metadata carries field names only, never private values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PipelineError {
+    ZeroRevision,
+    OutputTokens,
+    EmptyAppearance,
+    EmptyGeneralPrompt,
+    PartyMetadata,
+    Corrections,
+    Staging,
+    UnsupportedContract,
+    TextTooLong { field: &'static str },
+}
+
+/// Creator classifier payload schemas this build reads and writes. A request naming any other
+/// revision is refused as invalid pipeline input; it is never guessed, coerced or remapped.
+pub const CREATOR_CLASSIFICATION_CONTRACTS: &[u32] = &[3];
+
+impl ImagePipeline {
+    fn validate_structure(&self) -> Result<(), RequestError> {
+        let invalid = |error| RequestError::InvalidPipeline(error);
+        if self.revision == 0 {
+            return Err(invalid(PipelineError::ZeroRevision));
+        }
+        if let Some(creator) = &self.creator {
+            if creator.route.maximum_output_tokens == 0 {
+                return Err(invalid(PipelineError::OutputTokens));
+            }
+            if creator.contract_revision == 0 {
+                return Err(invalid(PipelineError::ZeroRevision));
+            }
+            if !CREATOR_CLASSIFICATION_CONTRACTS.contains(&creator.contract_revision) {
+                return Err(invalid(PipelineError::UnsupportedContract));
+            }
+            if creator.public_appearance.text().trim().is_empty() {
+                return Err(invalid(PipelineError::EmptyAppearance));
+            }
+            if creator
+                .general_prompt
+                .as_ref()
+                .is_some_and(|text| text.text().trim().is_empty())
+            {
+                return Err(invalid(PipelineError::EmptyGeneralPrompt));
+            }
+        }
+        if let Some(inspection) = &self.inspection {
+            if inspection.route.maximum_output_tokens == 0 {
+                return Err(invalid(PipelineError::OutputTokens));
+            }
+            if inspection.contract_revision == 0 {
+                return Err(invalid(PipelineError::ZeroRevision));
+            }
+            match (inspection.expected_heroes, inspection.party_reference) {
+                (None, None) => {}
+                (Some(1..=6), Some(reference)) if reference > 0 => {}
+                _ => return Err(invalid(PipelineError::PartyMetadata)),
+            }
+            // Compatibility v1 supports the existing one-correction quality policy.
+            if inspection.maximum_corrections > 1 {
+                return Err(invalid(PipelineError::Corrections));
+            }
+            if inspection.staging.len() > 24
+                || inspection.staging.iter().any(|identity| {
+                    identity.locator_id.text().is_empty()
+                        || identity.reference_id.text().is_empty()
+                        || identity.public_name.text().is_empty()
+                })
+            {
+                return Err(invalid(PipelineError::Staging));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate(&self, limits: &RequestLimits) -> Result<(), RequestError> {
+        self.validate_structure()?;
+        let check = |text: &PrivateImageText, field| {
+            if text.text().chars().count() > limits.max_prompt_chars {
+                Err(RequestError::InvalidPipeline(PipelineError::TextTooLong {
+                    field,
+                }))
+            } else {
+                Ok(())
+            }
+        };
+        if let Some(creator) = &self.creator {
+            // The deployed creator-content-v3 contract bounds public appearance in bytes.
+            if creator.public_appearance.text().len() > 8 * 1024 {
+                return Err(RequestError::InvalidPipeline(PipelineError::TextTooLong {
+                    field: "public_appearance",
+                }));
+            }
+            check(&creator.public_appearance, "public_appearance")?;
+            if let Some(prompt) = &creator.general_prompt {
+                check(prompt, "general_prompt")?;
+            }
+        }
+        if let Some(inspection) = &self.inspection {
+            check(&inspection.hand_custody, "hand_custody")?;
+            for identity in &inspection.staging {
+                check(&identity.locator_id, "locator_id")?;
+                check(&identity.reference_id, "reference_id")?;
+                check(&identity.public_name, "public_name")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Bounded prompt text plus the template version that framed it. The text
 /// field stays private and `Debug` reports only its length: prompts are
 /// private descriptions and must never reach logs or diagnostics.
@@ -240,6 +451,8 @@ pub enum Urgency {
 pub struct TextPrompt {
     text: String,
     pub template_version: u32,
+    pipeline: Option<ImagePipeline>,
+    artwork: Option<crate::ArtworkBinding>,
 }
 
 impl TextPrompt {
@@ -253,7 +466,29 @@ impl TextPrompt {
         Ok(Self {
             text: trimmed.to_owned(),
             template_version,
+            pipeline: None,
+            artwork: None,
         })
+    }
+
+    /// Retains typed public identity and the actual run fence without altering supplier text.
+    pub fn with_artwork(mut self, artwork: crate::ArtworkBinding) -> Self {
+        self.artwork = Some(artwork);
+        self
+    }
+
+    pub fn artwork(&self) -> Option<&crate::ArtworkBinding> {
+        self.artwork.as_ref()
+    }
+
+    pub fn with_pipeline(mut self, pipeline: ImagePipeline) -> Result<Self, RequestError> {
+        pipeline.validate_structure()?;
+        self.pipeline = Some(pipeline);
+        Ok(self)
+    }
+
+    pub fn pipeline(&self) -> Option<&ImagePipeline> {
+        self.pipeline.as_ref()
     }
 
     pub fn text(&self) -> &str {
@@ -297,6 +532,66 @@ pub enum ImageOperation {
     Transform(TransformSpec),
 }
 
+impl ImageOperation {
+    /// Complete ordered source claims, including transformation masks and coverage lineage.
+    pub fn sources(&self) -> Vec<&SourceRef> {
+        fn transform_source<'a>(source: &'a crate::TransformSource, pins: &mut Vec<&'a SourceRef>) {
+            match source {
+                crate::TransformSource::Image(source) => pins.push(source),
+                crate::TransformSource::SegmentationMask { analyzed, .. } => pins.push(analyzed),
+                crate::TransformSource::Canvas(_) => {}
+                crate::TransformSource::Coverage(coverage) => {
+                    pins.push(&coverage.coverage);
+                    pins.push(&coverage.analyzed);
+                }
+            }
+        }
+        let mut pins = Vec::new();
+        match self {
+            Self::Generate(spec) => pins.extend(&spec.references),
+            Self::Edit(spec) => {
+                pins.push(&spec.base);
+                pins.extend(&spec.references);
+            }
+            Self::Transform(spec) => {
+                transform_source(&spec.source, &mut pins);
+                for step in &spec.steps {
+                    match step {
+                        crate::ImageTransform::Mask(mask) => match mask.source() {
+                            crate::MaskSource::Asset(source) => pins.push(source),
+                            crate::MaskSource::Coverage(coverage) => {
+                                pins.push(&coverage.coverage);
+                                pins.push(&coverage.analyzed);
+                            }
+                        },
+                        crate::ImageTransform::Composite(layers) => {
+                            pins.extend(layers.iter().map(|layer| layer.source()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        pins
+    }
+
+    pub fn artwork(&self) -> Option<&crate::ArtworkBinding> {
+        match self {
+            Self::Generate(spec) => spec.prompt.artwork(),
+            Self::Edit(spec) => spec.prompt.artwork(),
+            Self::Transform(_) => None,
+        }
+    }
+
+    pub fn pipeline(&self) -> Option<&ImagePipeline> {
+        match self {
+            Self::Generate(spec) => spec.prompt.pipeline(),
+            Self::Edit(spec) => spec.prompt.pipeline(),
+            Self::Transform(_) => None,
+        }
+    }
+}
+
 /// The one caller-submitted request shape entering the later image service,
 /// pending service authorization of scope, audience and source pins.
 #[derive(Clone, Debug, PartialEq)]
@@ -322,6 +617,11 @@ impl ImageRequest {
         limits.validate()?;
         if matches!(self.audience, Audience::Withheld) {
             return Err(RequestError::WithheldAudience);
+        }
+        if let Some(artwork) = self.operation.artwork() {
+            artwork
+                .validate_for(&self.identity.owner, self.purpose, &self.audience)
+                .map_err(RequestError::InvalidArtwork)?;
         }
         match &self.operation {
             ImageOperation::Generate(spec) => {
@@ -351,6 +651,9 @@ impl ImageRequest {
 }
 
 fn check_prompt(prompt: &TextPrompt, limits: &RequestLimits) -> Result<(), RequestError> {
+    if let Some(pipeline) = prompt.pipeline() {
+        pipeline.validate(limits)?;
+    }
     let len_chars = prompt.len_chars();
     if len_chars > limits.max_prompt_chars {
         return Err(RequestError::PromptTooLong {
@@ -380,4 +683,6 @@ pub enum RequestError {
     InvalidLimit { field: &'static str },
     ProfileMismatch,
     InvalidTransform(crate::transform::TransformError),
+    InvalidPipeline(PipelineError),
+    InvalidArtwork(crate::ArtworkError),
 }

@@ -1,10 +1,10 @@
 //! The call specs and settlements of the routes metered outside the storyteller, voice and
-//! picture paths: transcription, embeddings, segmentation, music, video and generated worlds.
+//! picture paths: transcription, embeddings, music, video and generated worlds.
 //! Each spec states its maxima in the route's own categories, so a call of unknown outcome is
 //! booked at what it could have used and a prepaid admission holds a figure for every category.
 
 use df_providers::{
-    ELEVEN_STT_MODEL, ElevenMusicError, FalSegmentError, MUSIC_MODEL, SOUND_MODEL, WorldLabsError,
+    ELEVEN_STT_MODEL, ElevenMusicError, MUSIC_MODEL, SOUND_MODEL, WorldLabsError,
     refusal_may_be_billed, status_may_be_billed,
 };
 
@@ -25,12 +25,6 @@ pub(in crate::gameplay) fn stt_call(seconds: u64) -> CallSpec {
 pub(in crate::gameplay) fn embedding_call(model: &str, tokens: u64) -> CallSpec {
     CallSpec::new(Provider::OpenAi, model, Cause::Embedding, "story_memory")
         .with_maxima(vec![(Category::TextInput, tokens)])
-}
-
-/// The spec of one segmentation request to the fal endpoint `endpoint`, named `detail`.
-pub(in crate::gameplay) fn segment_call(endpoint: &str, detail: &str) -> CallSpec {
-    CallSpec::new(Provider::Fal, endpoint, Cause::Segmentation, detail)
-        .with_maxima(vec![(Category::Calls, 1)])
 }
 
 /// The spec of one music layer (`layer` names it) of `seconds` of source audio.
@@ -74,16 +68,6 @@ pub(in crate::gameplay) const fn music_error_may_be_billed(error: ElevenMusicErr
         ElevenMusicError::Provider(status) => status_may_be_billed(status),
         ElevenMusicError::Transport(refusal) => refusal_may_be_billed(refusal),
         ElevenMusicError::Output => true,
-    }
-}
-
-/// Whether a failed segmentation request may have been billed.
-pub(in crate::gameplay) const fn segment_error_may_be_billed(error: FalSegmentError) -> bool {
-    match error {
-        FalSegmentError::InvalidRequest | FalSegmentError::Unauthorized => false,
-        FalSegmentError::Provider(status) => status_may_be_billed(status),
-        FalSegmentError::Transport(refusal) => refusal_may_be_billed(refusal),
-        FalSegmentError::Queue | FalSegmentError::Failed | FalSegmentError::Output => true,
     }
 }
 

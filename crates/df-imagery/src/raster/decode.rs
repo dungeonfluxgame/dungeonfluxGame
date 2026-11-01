@@ -6,13 +6,13 @@
 
 use std::io::Cursor;
 
-use image::{ImageFormat, ImageReader, RgbaImage};
+use image::{ImageDecoder, ImageFormat, ImageReader, RgbaImage};
 use sha2::{Digest, Sha256};
 
 use super::RasterError;
 use super::bounds::LiveBudget;
 use super::geometry::{
-    flip_horizontal, flip_vertical, rotate_180, rotate_270_counter_clockwise, rotate_90_clockwise,
+    flip_horizontal, flip_vertical, rotate_90_clockwise, rotate_180, rotate_270_counter_clockwise,
 };
 use crate::request::{AssetDigest, SourceRef};
 
@@ -46,6 +46,41 @@ pub(crate) fn sniff_format(bytes: &[u8]) -> Result<ImageFormat, RasterError> {
     }
 }
 
+/// Readonly header facts after the same JPEG-only orientation policy used by the executor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceHeader {
+    pub dimensions: crate::Dimensions,
+    pub has_alpha: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceHeaderError {
+    UnsupportedFormat,
+    UnsupportedColorProfile,
+    DecodeFailed,
+    InvalidDimensions,
+}
+
+/// Inspects bounded container headers without decoding pixels or granting source authority.
+pub fn source_header(bytes: &[u8]) -> Result<SourceHeader, SourceHeaderError> {
+    let format = sniff_format(bytes).map_err(|_| SourceHeaderError::UnsupportedFormat)?;
+    if has_icc_profile(bytes, format) {
+        return Err(SourceHeaderError::UnsupportedColorProfile);
+    }
+    let decoder = ImageReader::with_format(Cursor::new(bytes), format)
+        .into_decoder()
+        .map_err(|_| SourceHeaderError::DecodeFailed)?;
+    let (mut width_px, mut height_px) = decoder.dimensions();
+    if format == ImageFormat::Jpeg && (5..=8).contains(&parse_exif_orientation(bytes)) {
+        std::mem::swap(&mut width_px, &mut height_px);
+    }
+    Ok(SourceHeader {
+        dimensions: crate::Dimensions::new(width_px, height_px)
+            .map_err(|_| SourceHeaderError::InvalidDimensions)?,
+        has_alpha: decoder.color_type().has_alpha(),
+    })
+}
+
 /// Decodes authorized bytes to the canonical working RGBA raster. Header
 /// dimensions bound the allocation; corrupt pixels fail without a default.
 /// Embedded ICC profiles are refused instead of silently discarded because
@@ -59,8 +94,8 @@ pub(crate) fn decode_bounded(bytes: &[u8], budget: &LiveBudget) -> Result<RgbaIm
         .into_dimensions()
         .map_err(|_| RasterError::DecodeFailed)?;
     budget.check_pixels(width_px, height_px)?;
-    let decoded =
-        image::load_from_memory_with_format(bytes, format).map_err(|_| RasterError::DecodeFailed)?;
+    let decoded = image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| RasterError::DecodeFailed)?;
     let mut rgba = decoded.to_rgba8();
     if format == ImageFormat::Jpeg {
         rgba = apply_orientation(rgba, parse_exif_orientation(bytes));
@@ -125,7 +160,10 @@ fn has_jpeg_icc(bytes: &[u8]) -> bool {
             return false;
         }
         let data_start = pos + 4;
-        let Some(data_end) = pos.checked_add(2).and_then(|end| end.checked_add(segment_len)) else {
+        let Some(data_end) = pos
+            .checked_add(2)
+            .and_then(|end| end.checked_add(segment_len))
+        else {
             return false;
         };
         if data_end > bytes.len() {
@@ -143,17 +181,18 @@ fn has_jpeg_icc(bytes: &[u8]) -> bool {
 }
 
 fn has_webp_iccp(bytes: &[u8]) -> bool {
-    if bytes.len() < 12
-        || &bytes[..4] != b"RIFF"
-        || &bytes[8..12] != b"WEBP"
-    {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
         return false;
     }
     let mut pos = 12_usize;
     while pos + 8 <= bytes.len() {
         let kind = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]])
-            as usize;
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
         if kind == b"ICCP" {
             return true;
         }
@@ -189,7 +228,9 @@ pub(crate) fn parse_exif_orientation(bytes: &[u8]) -> u8 {
             return 1;
         }
         let data_start = pos + 4;
-        let data_end = pos.checked_add(2).and_then(|end| end.checked_add(segment_len));
+        let data_end = pos
+            .checked_add(2)
+            .and_then(|end| end.checked_add(segment_len));
         let Some(data_end) = data_end else {
             return 1;
         };
@@ -240,7 +281,9 @@ fn parse_exif_segment(segment: &[u8]) -> u8 {
     let ifd_offset = read_u32(4).unwrap_or(0) as usize;
     let entry_count = read_u16(ifd_offset).unwrap_or(0) as usize;
     for index in 0..entry_count {
-        let entry = ifd_offset.checked_add(2).and_then(|at| at.checked_add(index * 12));
+        let entry = ifd_offset
+            .checked_add(2)
+            .and_then(|at| at.checked_add(index * 12));
         let Some(entry) = entry else {
             return 1;
         };

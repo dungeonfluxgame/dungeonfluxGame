@@ -4,10 +4,12 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::config::{AccountHandle, BackendId, GlobalMode, ImageConfig};
-use crate::intent_codec::{
-    CodecError, decode_config, decode_intent, encode_config, encode_intent,
+use crate::config::{
+    AccountHandle, AccountingMode, ApiEndpoint, BackendId, CliProfileRevision, CodexExecutable,
+    GlobalMode, ImageConfig, JobWorkDir, ModelName, NamedOutputProfile, OutputProfileName,
+    PriceFileRef,
 };
+use crate::intent_codec::{CodecError, decode_config, decode_intent, encode_config, encode_intent};
 use crate::output::{
     AlphaHandling, Dimensions, Encoding, LossyQuality, OutputProfile, RasterOutputSpec, Rgb,
 };
@@ -203,7 +205,7 @@ fn full_coverage_request() -> ImageRequest {
                 },
                 Interpolation::Bicubic,
                 true,
-                Some(fill),
+                None,
             )
             .unwrap(),
         ),
@@ -353,19 +355,64 @@ fn transform_intent_fingerprint_is_the_digest_of_the_pinned_bytes() {
 }
 
 #[test]
-fn config_snapshot_bytes_match_the_pinned_literal() {
+fn config_snapshot_encodes_at_version_twelve() {
     let snapshot = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
-    assert_eq!(snapshot.version(), 1);
-    assert_eq!(snapshot.bytes().len(), 204);
-    assert_eq!(snapshot.bytes(), CONFIG_GOLDEN);
+    assert_eq!(snapshot.version(), 12);
+    assert!(snapshot.bytes().len() > CONFIG_GOLDEN.len());
+    assert_ne!(snapshot.bytes(), CONFIG_GOLDEN);
+    assert_eq!(snapshot.bytes()[0], 12);
 }
 
 #[test]
-fn config_snapshot_fingerprint_is_the_digest_of_the_pinned_bytes() {
+fn config_snapshot_fingerprint_is_the_digest_of_its_bytes() {
     let snapshot = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
-    let pinned: [u8; 32] = Sha256::digest(CONFIG_GOLDEN).into();
+    let pinned: [u8; 32] = Sha256::digest(snapshot.bytes()).into();
     assert_eq!(snapshot.fingerprint(), &pinned);
     assert_ne!(snapshot.fingerprint(), &[0_u8; 32]);
+}
+
+#[test]
+fn version_one_snapshot_still_decodes_to_current_defaults() {
+    let decoded = decode_config(CONFIG_GOLDEN, MAX_BYTES).unwrap();
+    let defaults = ImageConfig::defaults().unwrap();
+    assert_eq!(decoded.mode, defaults.mode);
+    assert_eq!(
+        decoded.default_backend,
+        BackendId::OpenAi,
+        "CONFIG_GOLDEN was recorded under the OpenAI default"
+    );
+    assert_eq!(decoded.purposes, defaults.purposes);
+    let mut historical = defaults.backends.clone();
+    historical[BackendId::OpenAi.index()].enabled = true;
+    historical[BackendId::CodexCli.index()].enabled = false;
+    assert_eq!(
+        decoded.backends, historical,
+        "CONFIG_GOLDEN predates the Codex default"
+    );
+    assert_eq!(decoded.transforms, defaults.transforms);
+    assert_eq!(decoded.scheduler, defaults.scheduler);
+    assert_eq!(decoded.request_limits, defaults.request_limits);
+    assert_eq!(decoded.codex, defaults.codex);
+    assert_eq!(
+        decoded.default_output_profile,
+        defaults.default_output_profile
+    );
+    assert_eq!(decoded.output_profiles, defaults.output_profiles);
+    assert_eq!(decoded.retry, defaults.retry);
+    assert_eq!(decoded.accounting, defaults.accounting);
+    assert_eq!(decoded.quality, defaults.quality);
+    let mut recorded = defaults.clone();
+    recorded.default_backend = BackendId::OpenAi;
+    recorded.backends = historical;
+    assert_eq!(decoded, recorded);
+}
+
+#[test]
+fn version_two_bytes_do_not_collide_with_version_one() {
+    let snapshot = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
+    assert_ne!(snapshot.bytes()[0], CONFIG_GOLDEN[0]);
+    assert!(decode_config(CONFIG_GOLDEN, MAX_BYTES).is_ok());
+    assert!(decode_config(snapshot.bytes(), MAX_BYTES).is_ok());
 }
 
 fn assert_intent_round_trip(request: &ImageRequest) {
@@ -382,6 +429,10 @@ fn assert_intent_round_trip(request: &ImageRequest) {
         request.expected_source_revision
     );
     assert_eq!(decoded.output, request.output);
+    let reencoded =
+        crate::intent_codec::encode::encode_decoded_intent(&decoded, MAX_BYTES).unwrap();
+    assert_eq!(reencoded.bytes(), encoded.bytes());
+    assert_eq!(reencoded.fingerprint(), encoded.fingerprint());
 }
 
 #[test]
@@ -617,13 +668,15 @@ fn member_set_order_is_canonical() {
 fn negative_zero_floats_canonicalize() {
     let mut positive = transform_request();
     if let ImageOperation::Transform(spec) = &mut positive.operation {
-        spec.steps
-            .push(ImageTransform::Brighten(BrightnessOffset::new(0.0).unwrap()));
+        spec.steps.push(ImageTransform::Brighten(
+            BrightnessOffset::new(0.0).unwrap(),
+        ));
     }
     let mut negative = transform_request();
     if let ImageOperation::Transform(spec) = &mut negative.operation {
-        spec.steps
-            .push(ImageTransform::Brighten(BrightnessOffset::new(-0.0).unwrap()));
+        spec.steps.push(ImageTransform::Brighten(
+            BrightnessOffset::new(-0.0).unwrap(),
+        ));
     }
     let first = encode_intent(&positive, &limits(), MAX_BYTES).unwrap();
     let second = encode_intent(&negative, &limits(), MAX_BYTES).unwrap();
@@ -771,7 +824,7 @@ fn every_resize_field_changes_the_bytes() {
         ResizeSpec::new(
             32,
             32,
-            ResizeMode::Contain,
+            ResizeMode::Pad,
             center,
             Interpolation::Bilinear,
             false,
@@ -880,8 +933,12 @@ fn brightness_and_exposure_values_change_the_bytes() {
         }
         encode_intent(&request, &limits(), MAX_BYTES).unwrap()
     };
-    let dim = step_case(ImageTransform::Brighten(BrightnessOffset::new(0.5).unwrap()));
-    let dimmer = step_case(ImageTransform::Brighten(BrightnessOffset::new(-0.5).unwrap()));
+    let dim = step_case(ImageTransform::Brighten(
+        BrightnessOffset::new(0.5).unwrap(),
+    ));
+    let dimmer = step_case(ImageTransform::Brighten(
+        BrightnessOffset::new(-0.5).unwrap(),
+    ));
     assert_ne!(dim.bytes(), dimmer.bytes());
 
     let up = step_case(ImageTransform::Expose(ExposureStops::new(1.0).unwrap()));
@@ -911,13 +968,9 @@ fn color_effect_variants_change_the_bytes() {
     ));
     assert_ne!(contrast.bytes(), shifted_pivot.bytes());
 
-    let saturation = step_case(ImageTransform::Color(
-        ColorEffect::saturation(0.5).unwrap(),
-    ));
+    let saturation = step_case(ImageTransform::Color(ColorEffect::saturation(0.5).unwrap()));
     assert_ne!(contrast.bytes(), saturation.bytes());
-    let hue = step_case(ImageTransform::Color(
-        ColorEffect::hue_shift(90.0).unwrap(),
-    ));
+    let hue = step_case(ImageTransform::Color(ColorEffect::hue_shift(90.0).unwrap()));
     assert_ne!(saturation.bytes(), hue.bytes());
     let gray = step_case(ImageTransform::Color(ColorEffect::Grayscale));
     assert_ne!(hue.bytes(), gray.bytes());
@@ -990,7 +1043,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(coverage_mask).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(coverage_mask).bytes()
+    );
 
     let luminance = ImageTransform::Mask(
         MaskSpec::new(
@@ -1004,7 +1060,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(luminance).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(luminance).bytes()
+    );
 
     let inverted = ImageTransform::Mask(
         MaskSpec::new(
@@ -1018,7 +1077,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(inverted).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(inverted).bytes()
+    );
 
     let replaced = ImageTransform::Mask(
         MaskSpec::new(
@@ -1032,7 +1094,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(replaced).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(replaced).bytes()
+    );
 
     let softer = ImageTransform::Mask(
         MaskSpec::new(
@@ -1046,7 +1111,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(softer).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(softer).bytes()
+    );
 
     let smaller = ImageTransform::Mask(
         MaskSpec::new(
@@ -1060,7 +1128,10 @@ fn mask_fields_change_the_bytes() {
         )
         .unwrap(),
     );
-    assert_ne!(step_case(asset_mask.clone()).bytes(), step_case(smaller.clone()).bytes());
+    assert_ne!(
+        step_case(asset_mask.clone()).bytes(),
+        step_case(smaller.clone()).bytes()
+    );
     let mut both = transform_request();
     if let ImageOperation::Transform(spec) = &mut both.operation {
         spec.steps = vec![asset_mask, smaller];
@@ -1100,10 +1171,14 @@ fn composite_layers_change_the_bytes() {
 }
 
 fn raster_case(alpha: AlphaHandling, encoding: Encoding) -> Vec<u8> {
-    let delivered = RasterOutputSpec::new(Dimensions::new(64, 64).unwrap(), alpha, encoding).unwrap();
+    let delivered =
+        RasterOutputSpec::new(Dimensions::new(64, 64).unwrap(), alpha, encoding).unwrap();
     let mut request = generate_request();
     request.output = OutputProfile::provider(Dimensions::new(1024, 1024).unwrap(), delivered);
-    encode_intent(&request, &limits(), MAX_BYTES).unwrap().bytes().to_vec()
+    encode_intent(&request, &limits(), MAX_BYTES)
+        .unwrap()
+        .bytes()
+        .to_vec()
 }
 
 #[test]
@@ -1160,12 +1235,18 @@ fn output_profile_fields_change_the_bytes() {
     assert_ne!(matte, matte_other);
 
     let smaller = {
-        let delivered =
-            RasterOutputSpec::new(Dimensions::new(48, 64).unwrap(), AlphaHandling::Opaque, Encoding::Png)
-                .unwrap();
+        let delivered = RasterOutputSpec::new(
+            Dimensions::new(48, 64).unwrap(),
+            AlphaHandling::Opaque,
+            Encoding::Png,
+        )
+        .unwrap();
         let mut request = generate_request();
         request.output = OutputProfile::provider(Dimensions::new(1024, 1024).unwrap(), delivered);
-        encode_intent(&request, &limits(), MAX_BYTES).unwrap().bytes().to_vec()
+        encode_intent(&request, &limits(), MAX_BYTES)
+            .unwrap()
+            .bytes()
+            .to_vec()
     };
     assert_ne!(png, smaller);
 
@@ -1225,12 +1306,18 @@ fn prompt_too_long_is_refused_on_encode_and_decode() {
 fn overfull_counts_are_refused_on_encode_and_decode() {
     let mut many_refs = generate_request();
     if let ImageOperation::Generate(spec) = &mut many_refs.operation {
-        spec.references = (0..9).map(source_ref).collect();
+        spec.references = (1..10).map(source_ref).collect();
     }
     assert!(encode_intent(&many_refs, &limits(), MAX_BYTES).is_err());
     assert!(matches!(
-        decode_intent(&patched(GENERATE_GOLDEN, 45, &[0, 0, 0, 9]), &limits(), MAX_BYTES),
-        Err(CodecError::Request(RequestError::TooManyReferences { count: 9 }))
+        decode_intent(
+            &patched(GENERATE_GOLDEN, 45, &[0, 0, 0, 9]),
+            &limits(),
+            MAX_BYTES
+        ),
+        Err(CodecError::Request(RequestError::TooManyReferences {
+            count: 9
+        }))
     ));
 
     let mut many_steps = transform_request();
@@ -1242,10 +1329,9 @@ fn overfull_counts_are_refused_on_encode_and_decode() {
     let mut many_layers = transform_request();
     if let ImageOperation::Transform(spec) = &mut many_layers.operation {
         spec.steps = vec![ImageTransform::Composite(
-            (0..9)
+            (1..10)
                 .map(|byte| {
-                    CompositeLayer::new(source_ref(byte), 0, 0, 500, BlendMode::SourceOver)
-                        .unwrap()
+                    CompositeLayer::new(source_ref(byte), 0, 0, 500, BlendMode::SourceOver).unwrap()
                 })
                 .collect(),
         )];
@@ -1264,7 +1350,11 @@ fn overfull_counts_are_refused_on_encode_and_decode() {
     ));
 
     assert!(matches!(
-        decode_intent(&patched(TRANSFORM_GOLDEN, 49, &[0, 0, 0, 33]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(TRANSFORM_GOLDEN, 49, &[0, 0, 0, 33]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::Request(RequestError::InvalidTransform(
             TransformError::TooManySteps
         )))
@@ -1278,13 +1368,21 @@ fn overfull_counts_are_refused_on_encode_and_decode() {
     }
     let encoded = encode_intent(&one_layer, &limits(), MAX_BYTES).unwrap();
     assert!(matches!(
-        decode_intent(&patched(encoded.bytes(), 54, &[0, 0, 0, 9]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(encoded.bytes(), 54, &[0, 0, 0, 9]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::Request(RequestError::InvalidTransform(
             TransformError::TooManyLayers
         )))
     ));
     assert!(matches!(
-        decode_intent(&patched(encoded.bytes(), 54, &[0, 0, 0, 0]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(encoded.bytes(), 54, &[0, 0, 0, 0]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::Request(RequestError::InvalidTransform(
             TransformError::EmptyLayers
         )))
@@ -1342,9 +1440,118 @@ fn full_field_config_round_trips() {
     config.request_limits.max_references = 3;
     config.request_limits.max_transform_steps = 9;
     config.request_limits.max_composite_layers = 2;
+    config.backends[BackendId::OpenAi.index()].model = Some(ModelName::new("gpt-image-1").unwrap());
+    config.backends[BackendId::Fal.index()].endpoint =
+        Some(ApiEndpoint::new("http://127.0.0.1:8080/v1").unwrap());
+    config.purposes[Purpose::ScenePlate.index()].output_profile =
+        Some(OutputProfileName::new("default").unwrap());
+    config.codex.executable = CodexExecutable::new("/usr/local/bin/codex").unwrap();
+    config.codex.workdir = JobWorkDir::new("artifacts/tmp/jobs").unwrap();
+    config.codex.cli_profile = CliProfileRevision::new("codex-images-v2").unwrap();
+    config.codex.agent_model = Some(ModelName::new("gpt-5").unwrap());
+    config.retry.max_attempts = 3;
+    config.retry.retry_deadline_secs = 200;
+    config.retry.backoff_secs = 5;
+    config.accounting.mode = AccountingMode::Hosted;
+    config.accounting.price_file = Some(PriceFileRef::new("content/pricing.json").unwrap());
+    config.quality.jpeg_quality = LossyQuality::new(70).unwrap();
+    config.quality.provider_quality = Some(crate::config::GenerationQuality::High);
     let snapshot = encode_config(&config, MAX_BYTES).unwrap();
     let decoded = decode_config(snapshot.bytes(), MAX_BYTES).unwrap();
     assert_eq!(decoded, config);
+}
+
+#[test]
+fn every_new_setting_changes_the_snapshot() {
+    use crate::output::OutputFormat;
+
+    let base = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
+    let mut each = ImageConfig::defaults().unwrap();
+    each.backends[BackendId::OpenAi.index()].model = Some(ModelName::new("gpt-image-1").unwrap());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.backends[BackendId::Fal.index()].endpoint =
+        Some(ApiEndpoint::new("http://127.0.0.1:8080/v1").unwrap());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.purposes[Purpose::ScenePlate.index()].output_profile =
+        Some(OutputProfileName::new("default").unwrap());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.codex.executable = CodexExecutable::new("/usr/local/bin/codex").unwrap();
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.codex.agent_model = Some(ModelName::new("gpt-5").unwrap());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.output_profiles.push(NamedOutputProfile::new(
+        OutputProfileName::new("hero-thumbnail").unwrap(),
+        OutputProfile::local(
+            RasterOutputSpec::new(
+                Dimensions::new(48, 64).unwrap(),
+                AlphaHandling::Opaque,
+                Encoding::Png,
+            )
+            .unwrap(),
+        ),
+    ));
+    let recoded = encode_config(&each, MAX_BYTES).unwrap();
+    assert_ne!(base.bytes(), recoded.bytes());
+    let decoded = decode_config(recoded.bytes(), MAX_BYTES).unwrap();
+    assert_eq!(decoded, each);
+    each = ImageConfig::defaults().unwrap();
+    each.retry.max_attempts += 1;
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.accounting.mode = AccountingMode::Hosted;
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    each = ImageConfig::defaults().unwrap();
+    each.quality.jpeg_quality = LossyQuality::new(60).unwrap();
+    let recoded = encode_config(&each, MAX_BYTES).unwrap();
+    assert_ne!(base.bytes(), recoded.bytes());
+    let decoded = decode_config(recoded.bytes(), MAX_BYTES).unwrap();
+    assert_eq!(decoded, each);
+    each = ImageConfig::defaults().unwrap();
+    each.quality.provider_quality = Some(crate::config::GenerationQuality::High);
+    let recoded = encode_config(&each, MAX_BYTES).unwrap();
+    assert_ne!(base.bytes(), recoded.bytes());
+    let decoded = decode_config(recoded.bytes(), MAX_BYTES).unwrap();
+    assert_eq!(decoded, each);
+    each = ImageConfig::defaults().unwrap();
+    each.quality.provider_quality = None;
+    assert_eq!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
+    assert!(matches!(
+        each.output_profile_for(Purpose::ScenePlate)
+            .unwrap()
+            .delivered()
+            .encoding()
+            .format(),
+        OutputFormat::Jpeg
+    ));
 }
 
 #[test]
@@ -1366,7 +1573,9 @@ fn config_mode_and_backend_change_the_snapshot() {
             config.mode = mode;
             config.default_backend = backend;
             let recoded = encode_config(&config, MAX_BYTES).unwrap();
-            if mode == GlobalMode::Live && backend == BackendId::OpenAi {
+            if mode == GlobalMode::Live
+                && backend == ImageConfig::defaults().unwrap().default_backend
+            {
                 assert_eq!(base.bytes(), recoded.bytes());
             } else {
                 assert_ne!(base.bytes(), recoded.bytes());
@@ -1423,44 +1632,83 @@ fn every_transform_and_scheduler_bound_changes_the_snapshot() {
     let base = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
     let mut each = ImageConfig::defaults().unwrap();
     each.transforms.enabled = false;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.transforms.max_concurrency += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.transforms.max_decoded_bytes += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.transforms.max_output_bytes += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.transforms.queue_capacity += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.transforms.deadline_secs += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
 
     each = ImageConfig::defaults().unwrap();
     each.scheduler.foreground_limit += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.presence_limit += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.background_limit += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.max_pending_jobs += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.max_pending_bytes += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.queue_age_secs += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.job_deadline_secs += 1;
-    assert_ne!(base.bytes(), encode_config(&each, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&each, MAX_BYTES).unwrap().bytes()
+    );
     each = ImageConfig::defaults().unwrap();
     each.scheduler.stage_deadline_secs += 1;
     let recoded = encode_config(&each, MAX_BYTES).unwrap();
@@ -1474,13 +1722,22 @@ fn every_request_limit_changes_the_snapshot() {
     let base = encode_config(&ImageConfig::defaults().unwrap(), MAX_BYTES).unwrap();
     let mut chars = ImageConfig::defaults().unwrap();
     chars.request_limits.max_prompt_chars += 1;
-    assert_ne!(base.bytes(), encode_config(&chars, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&chars, MAX_BYTES).unwrap().bytes()
+    );
     let mut refs = ImageConfig::defaults().unwrap();
     refs.request_limits.max_references += 1;
-    assert_ne!(base.bytes(), encode_config(&refs, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&refs, MAX_BYTES).unwrap().bytes()
+    );
     let mut steps = ImageConfig::defaults().unwrap();
     steps.request_limits.max_transform_steps += 1;
-    assert_ne!(base.bytes(), encode_config(&steps, MAX_BYTES).unwrap().bytes());
+    assert_ne!(
+        base.bytes(),
+        encode_config(&steps, MAX_BYTES).unwrap().bytes()
+    );
     let mut layers = ImageConfig::defaults().unwrap();
     layers.request_limits.max_composite_layers += 1;
     let recoded = encode_config(&layers, MAX_BYTES).unwrap();
@@ -1511,10 +1768,10 @@ fn config_rejects_bounds_versions_and_trailing_bytes() {
     trailing.push(0);
     assert!(decode_config(&trailing, MAX_BYTES).is_err());
     let mut versioned = snapshot.bytes().to_vec();
-    versioned[0] = 2;
+    versioned[0] = 255;
     assert!(matches!(
         decode_config(&versioned, MAX_BYTES),
-        Err(CodecError::BadVersion { actual: 2 })
+        Err(CodecError::BadVersion { actual: 255 })
     ));
     let mut tagged = snapshot.bytes().to_vec();
     tagged[1] = 9;
@@ -1578,7 +1835,10 @@ fn deep_step_tags_are_rejected() {
         if let ImageOperation::Transform(spec) = &mut request.operation {
             spec.steps = vec![step];
         }
-        encode_intent(&request, &limits(), MAX_BYTES).unwrap().bytes().to_vec()
+        encode_intent(&request, &limits(), MAX_BYTES)
+            .unwrap()
+            .bytes()
+            .to_vec()
     };
     let rotate = step_case(ImageTransform::Rotate(RotateSpec::QuarterTurns(1)));
     assert!(decode_intent(&patched(&rotate, 38, &[9]), &limits(), MAX_BYTES).is_err());
@@ -1660,8 +1920,8 @@ fn trailing_bytes_are_rejected_with_the_extra_count() {
 #[test]
 fn version_mismatch_names_the_bad_version() {
     assert!(matches!(
-        decode_intent(&patched(GENERATE_GOLDEN, 0, &[2]), &limits(), MAX_BYTES),
-        Err(CodecError::BadVersion { actual: 2 })
+        decode_intent(&patched(GENERATE_GOLDEN, 0, &[255]), &limits(), MAX_BYTES),
+        Err(CodecError::BadVersion { actual: 255 })
     ));
     assert!(decode_intent(&[], &limits(), MAX_BYTES).is_err());
 }
@@ -1669,7 +1929,11 @@ fn version_mismatch_names_the_bad_version() {
 #[test]
 fn unproven_vector_counts_are_refused_before_allocation() {
     assert!(matches!(
-        decode_intent(&patched(GENERATE_GOLDEN, 45, &[0, 0, 0, 8]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(GENERATE_GOLDEN, 45, &[0, 0, 0, 8]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::TooLong)
     ));
     let generous = RequestLimits {
@@ -1702,7 +1966,11 @@ fn unproven_vector_counts_are_refused_before_allocation() {
         Err(CodecError::TooLong)
     ));
     assert!(matches!(
-        decode_intent(&patched(encoded.bytes(), 117, &[0, 0, 0, 8]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(encoded.bytes(), 117, &[0, 0, 0, 8]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::TooLong)
     ));
 
@@ -1729,16 +1997,30 @@ fn non_finite_floats_are_rejected() {
         account: account(0x11),
     };
     if let ImageOperation::Transform(spec) = &mut request.operation {
-        spec.steps = vec![ImageTransform::Brighten(BrightnessOffset::new(1.5).unwrap())];
+        spec.steps = vec![ImageTransform::Brighten(
+            BrightnessOffset::new(1.5).unwrap(),
+        )];
     }
     let encoded = encode_intent(&request, &limits(), MAX_BYTES).unwrap();
     assert!(matches!(
-        decode_intent(&patched(encoded.bytes(), 38, &[0x7f, 0xc0, 0, 0]), &limits(), MAX_BYTES),
-        Err(CodecError::NonFinite { field: "brightness" })
+        decode_intent(
+            &patched(encoded.bytes(), 38, &[0x7f, 0xc0, 0, 0]),
+            &limits(),
+            MAX_BYTES
+        ),
+        Err(CodecError::NonFinite {
+            field: "brightness"
+        })
     ));
     assert!(matches!(
-        decode_intent(&patched(encoded.bytes(), 38, &[0x7f, 0x80, 0, 0]), &limits(), MAX_BYTES),
-        Err(CodecError::NonFinite { field: "brightness" })
+        decode_intent(
+            &patched(encoded.bytes(), 38, &[0x7f, 0x80, 0, 0]),
+            &limits(),
+            MAX_BYTES
+        ),
+        Err(CodecError::NonFinite {
+            field: "brightness"
+        })
     ));
 }
 
@@ -1749,7 +2031,11 @@ fn invalid_text_and_ids_are_rejected() {
         Err(CodecError::InvalidText)
     ));
     assert!(matches!(
-        decode_intent(&patched(GENERATE_GOLDEN, 25, &[0, 0, 0, 0]), &limits(), MAX_BYTES),
+        decode_intent(
+            &patched(GENERATE_GOLDEN, 25, &[0, 0, 0, 0]),
+            &limits(),
+            MAX_BYTES
+        ),
         Err(CodecError::Request(RequestError::EmptyPrompt))
     ));
     assert!(matches!(
@@ -1798,4 +2084,267 @@ fn edit_intent_with_base_and_members_round_trips() {
     };
     request.execution = ExecutionMode::PreparedOnly;
     assert_intent_round_trip(&request);
+}
+
+#[test]
+fn version_one_snapshot_with_a_short_job_deadline_stays_valid() {
+    let short = patched(
+        &patched(CONFIG_GOLDEN, 156, &60_u64.to_be_bytes()),
+        164,
+        &45_u64.to_be_bytes(),
+    );
+    let decoded = decode_config(&short, MAX_BYTES).unwrap();
+    assert_eq!(decoded.scheduler.job_deadline_secs, 60);
+    assert_eq!(decoded.scheduler.stage_deadline_secs, 45);
+    assert_eq!(decoded.effective_retry_deadline_secs(), 60);
+    assert_eq!(decoded.quality.provider_quality, None);
+    assert_eq!(decoded.codex, ImageConfig::defaults().unwrap().codex);
+}
+
+#[test]
+fn version_one_snapshot_with_a_nondefault_deadline_preserves_it() {
+    let edited = patched(CONFIG_GOLDEN, 156, &300_u64.to_be_bytes());
+    let decoded = decode_config(&edited, MAX_BYTES).unwrap();
+    assert_eq!(decoded.scheduler.job_deadline_secs, 300);
+    assert_eq!(decoded.scheduler.stage_deadline_secs, 170);
+    assert_eq!(decoded.effective_retry_deadline_secs(), 170);
+}
+
+fn local_png_profile(name: &str) -> NamedOutputProfile {
+    let delivered = RasterOutputSpec::new(
+        Dimensions::new(32, 32).unwrap(),
+        AlphaHandling::Opaque,
+        Encoding::Png,
+    )
+    .unwrap();
+    NamedOutputProfile::new(
+        OutputProfileName::new(name).unwrap(),
+        OutputProfile::local(delivered),
+    )
+}
+
+#[test]
+fn profile_order_alone_does_not_change_the_recipe_bytes() {
+    let mut first = ImageConfig::defaults().unwrap();
+    first.output_profiles.push(local_png_profile("zulu-thumb"));
+    first.output_profiles.push(local_png_profile("alpha-thumb"));
+    let mut second = ImageConfig::defaults().unwrap();
+    second
+        .output_profiles
+        .push(local_png_profile("alpha-thumb"));
+    second.output_profiles.push(local_png_profile("zulu-thumb"));
+    let first_bytes = encode_config(&first, MAX_BYTES).unwrap();
+    let second_bytes = encode_config(&second, MAX_BYTES).unwrap();
+    assert_eq!(first_bytes.bytes(), second_bytes.bytes());
+    assert_eq!(first_bytes.fingerprint(), second_bytes.fingerprint());
+    let decoded = decode_config(first_bytes.bytes(), MAX_BYTES).unwrap();
+    let names: Vec<&str> = decoded
+        .output_profiles
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["alpha-thumb", "default", "zulu-thumb"]);
+}
+
+#[test]
+fn more_than_sixteen_profiles_round_trip() {
+    let mut config = ImageConfig::defaults().unwrap();
+    for index in 0..20 {
+        config
+            .output_profiles
+            .push(local_png_profile(&format!("extra-{index:02}")));
+    }
+    assert_eq!(config.output_profiles.len(), 21);
+    let snapshot = encode_config(&config, MAX_BYTES).unwrap();
+    let mut normalized = config.clone();
+    normalized
+        .output_profiles
+        .sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    let decoded = decode_config(snapshot.bytes(), MAX_BYTES).unwrap();
+    assert_eq!(decoded, normalized);
+}
+
+#[test]
+fn unknown_provider_quality_flag_is_rejected() {
+    let mut config = ImageConfig::defaults().unwrap();
+    config.quality.provider_quality = None;
+    let snapshot = encode_config(&config, MAX_BYTES).unwrap();
+    // Default v9 adds purpose moderation flags and three preparation bounds after v7.
+    let quality_flag = snapshot.bytes().len() - 140 - 1;
+    assert_eq!(snapshot.bytes()[quality_flag], 0);
+    assert!(matches!(
+        decode_config(&patched(snapshot.bytes(), quality_flag, &[9]), MAX_BYTES),
+        Err(CodecError::Malformed)
+    ));
+}
+
+#[test]
+fn version_three_preserves_each_generation_quality_and_operation_model() {
+    use crate::config::GenerationQuality;
+    for quality in [
+        GenerationQuality::Low,
+        GenerationQuality::Medium,
+        GenerationQuality::High,
+        GenerationQuality::Auto,
+        GenerationQuality::LegacyNumeric(LossyQuality::new(90).unwrap()),
+    ] {
+        let mut config = ImageConfig::defaults().unwrap();
+        config.quality.provider_quality = Some(quality);
+        let backend = &mut config.backends[BackendId::Fal.index()];
+        backend.generation_model = Some(ModelName::new("generation").unwrap());
+        backend.edit_model = Some(ModelName::new("edit").unwrap());
+        backend.alpha_model = Some(ModelName::new("alpha").unwrap());
+        config.codex.workdir =
+            JobWorkDir::new(&format!("C:/Users/Jos\u{e9}/{}", "a".repeat(300))).unwrap();
+        let snapshot = encode_config(&config, MAX_BYTES).unwrap();
+        assert_eq!(snapshot.version(), 12);
+        assert_eq!(decode_config(snapshot.bytes(), MAX_BYTES).unwrap(), config);
+    }
+}
+
+#[test]
+fn version_two_numeric_quality_is_preserved_without_mapping() {
+    use crate::config::GenerationQuality;
+    let config = ImageConfig::defaults().unwrap();
+    let encoded = encode_config(&config, MAX_BYTES).unwrap();
+    let mut historical = encoded.bytes()[..encoded.bytes().len() - 140].to_vec();
+    // Versions before 4 did not include the final two receipt-byte bounds.
+    // Default gates encode 3 bytes per purpose and 21 bytes per backend in v3.
+    let backend_start = 3 + Purpose::COUNT * 3;
+    for index in (0..BackendId::COUNT).rev() {
+        let offset = backend_start + index * 21 + 18;
+        assert_eq!(&historical[offset..offset + 3], &[0, 0, 0]);
+        historical.drain(offset..offset + 3);
+    }
+    historical[0] = 2;
+    // Snapshots before the Codex line bounds decode to their frozen legacy limits, not today's defaults.
+    let mut frozen = config.clone();
+    frozen.codex.max_message_bytes = 1_048_576;
+    frozen.codex.max_stdout_bytes = 4_194_304;
+    assert_eq!(decode_config(&historical, MAX_BYTES).unwrap(), frozen);
+    *historical.last_mut().unwrap() = 1;
+    historical.push(90);
+    let decoded = decode_config(&historical, MAX_BYTES).unwrap();
+    assert_eq!(
+        decoded.quality.provider_quality,
+        Some(GenerationQuality::LegacyNumeric(
+            LossyQuality::new(90).unwrap()
+        ))
+    );
+    let migrated = encode_config(&decoded, MAX_BYTES).unwrap();
+    assert_eq!(decode_config(migrated.bytes(), MAX_BYTES).unwrap(), decoded);
+}
+
+#[test]
+fn encoded_pixel_compatibility_algorithms_bind_revision_and_parameters() {
+    use crate::{EncodedAlphaBlend, EncodedFilter};
+    let dimensions = Dimensions::new(32, 32).unwrap();
+    let cases = [
+        (
+            12,
+            ImageTransform::EncodedResize {
+                dimensions,
+                filter: EncodedFilter::Triangle,
+            },
+        ),
+        (
+            12,
+            ImageTransform::EncodedResize {
+                dimensions,
+                filter: EncodedFilter::Lanczos3,
+            },
+        ),
+        (13, ImageTransform::EncodedThumbnail(dimensions)),
+        (
+            14,
+            ImageTransform::EncodedMatte {
+                fill: Rgb {
+                    red: 128,
+                    green: 127,
+                    blue: 126,
+                },
+                blend: EncodedAlphaBlend::IntegerFloor,
+            },
+        ),
+        (
+            14,
+            ImageTransform::EncodedMatte {
+                fill: Rgb {
+                    red: 128,
+                    green: 127,
+                    blue: 126,
+                },
+                blend: EncodedAlphaBlend::ImageSourceOver,
+            },
+        ),
+        (15, ImageTransform::DiscardAlpha),
+    ];
+    let mut fingerprints = std::collections::HashSet::new();
+    for (tag, step) in cases {
+        let mut request = transform_request();
+        if let ImageOperation::Transform(spec) = &mut request.operation {
+            spec.steps = vec![step];
+        }
+        let encoded = encode_intent(&request, &limits(), MAX_BYTES).unwrap();
+        assert!(fingerprints.insert(*encoded.fingerprint()));
+        assert_intent_round_trip(&request);
+        let matches = encoded
+            .bytes()
+            .windows(5)
+            .enumerate()
+            .filter_map(|(index, bytes)| (bytes == [tag, 0, 0, 0, 1]).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1);
+        let at = matches[0];
+        assert!(matches!(
+            decode_intent(
+                &patched(encoded.bytes(), at + 1, &2u32.to_be_bytes()),
+                &limits(),
+                MAX_BYTES
+            ),
+            Err(CodecError::Malformed)
+        ));
+    }
+}
+
+#[test]
+fn segmentation_mask_codec_binds_the_real_dependency_source_prompt_and_index() {
+    let mut request = transform_request();
+    for prompt in [
+        crate::SegmentationPrompt::Person,
+        crate::SegmentationPrompt::Head,
+    ] {
+        request.operation = ImageOperation::Transform(TransformSpec {
+            source: TransformSource::SegmentationMask {
+                analyzed: source_ref(0x72),
+                segmentation: crate::OperationHandle {
+                    owner: request.identity.owner.clone(),
+                    operation: operation(0x73),
+                },
+                prompt,
+                mask_index: 3,
+                contract_revision: 1,
+            },
+            steps: Vec::new(),
+        });
+        assert_intent_round_trip(&request);
+    }
+    let encoded = encode_intent(&request, &limits(), MAX_BYTES).unwrap();
+    for end in 0..encoded.bytes().len() {
+        assert!(decode_intent(&encoded.bytes()[..end], &limits(), MAX_BYTES).is_err());
+    }
+    let ImageOperation::Transform(spec) = &mut request.operation else {
+        unreachable!()
+    };
+    let TransformSource::SegmentationMask {
+        contract_revision, ..
+    } = &mut spec.source
+    else {
+        unreachable!()
+    };
+    *contract_revision = 2;
+    assert!(matches!(
+        encode_intent(&request, &limits(), MAX_BYTES),
+        Err(CodecError::Request(RequestError::InvalidTransform(_)))
+    ));
 }

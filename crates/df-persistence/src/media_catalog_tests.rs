@@ -313,6 +313,90 @@ fn the_database_itself_refuses_a_second_live_row_for_one_request_key() {
     });
 }
 
+fn draft_admission(asset: u8, attempt: u8, key: u8, account: u8) -> Admission {
+    let owner = df_types::AccountId::from_bytes(&[account; 16]).unwrap();
+    Admission {
+        asset: contract::asset_id(asset),
+        attempt: contract::attempt_id(attempt),
+        kind: AssetKind::Image,
+        provenance: df_assets::Provenance::Generated,
+        charge_scope: QuotaScope::Account(owner),
+        origin_account: Some(owner),
+        campaign: None,
+        audience: Audience::OwnerPrivate(owner),
+        dedupe_scope: DedupeScope::account(&owner),
+        request_key: Some(contract::request_key(key)),
+        retention: RetentionClass::Personal,
+        reserve_bytes: contract::RESERVE_BYTES,
+        byte_limit: contract::LIMIT_BYTES,
+        in_flight_upload_limit: None,
+    }
+}
+
+#[test]
+fn an_account_draft_admits_on_postgres_and_a_mismatch_is_refused() {
+    runtime().block_on(async {
+        let Some(fixture) = Fixture::open().await else {
+            return;
+        };
+        assert_eq!(
+            fixture
+                .catalog
+                .admit(&draft_admission(1, 1, 1, 7), 0)
+                .await
+                .unwrap(),
+            AdmitOutcome::Admitted
+        );
+        let row = fixture
+            .catalog
+            .asset(contract::asset_id(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.campaign, None);
+        let mut mismatched = draft_admission(2, 2, 2, 7);
+        mismatched.retention = RetentionClass::CampaignMedia;
+        assert_eq!(
+            fixture.catalog.admit(&mismatched, 1).await.unwrap(),
+            AdmitOutcome::NotAdmitted(NotAdmitted::OwnerUnsupported)
+        );
+        fixture.finish().await;
+    });
+}
+
+#[test]
+fn a_forced_identical_account_campaign_id_never_leaks_on_postgres() {
+    runtime().block_on(async {
+        let Some(fixture) = Fixture::open().await else {
+            return;
+        };
+        assert_eq!(
+            fixture
+                .catalog
+                .admit(&contract::admission(1), 0)
+                .await
+                .unwrap(),
+            AdmitOutcome::Admitted
+        );
+        // An actual uniqueness collision: the same 16 raw bytes as the campaign id, so the
+        // (dedupe_scope, request_key) pair collides with the live campaign row while the
+        // owner kind differs (account draft vs campaign).
+        let raw = *contract::campaign().as_bytes();
+        let owner = df_types::AccountId::from_bytes(&raw).unwrap();
+        let mut draft = draft_admission(2, 2, 1, 7);
+        draft.charge_scope = QuotaScope::Account(owner);
+        draft.origin_account = Some(owner);
+        draft.audience = Audience::OwnerPrivate(owner);
+        draft.dedupe_scope = DedupeScope::account(&owner);
+        draft.request_key = Some(contract::request_key(1));
+        assert_eq!(
+            fixture.catalog.admit(&draft, 1).await.unwrap(),
+            AdmitOutcome::NotAdmitted(NotAdmitted::OwnerUnsupported)
+        );
+        fixture.finish().await;
+    });
+}
+
 #[test]
 fn a_live_reference_refuses_the_tombstone_and_leaves_the_quota_alone() {
     runtime().block_on(async {

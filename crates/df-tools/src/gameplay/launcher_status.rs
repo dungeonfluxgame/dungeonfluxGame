@@ -318,6 +318,9 @@ mod tests {
                 })
             });
             let service = Service {
+                imagery: crate::gameplay::imagery::Imagery::disabled(
+                    crate::gameplay::startup_configuration::ImageryOff::Qualification,
+                ),
                 look_ahead: Default::default(),
                 actor: actor.clone(),
                 display_credential: [11; 32],

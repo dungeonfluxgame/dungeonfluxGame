@@ -7,7 +7,7 @@
 //! integrates in linear light with premultiplied alpha so transparent edges
 //! do not fringe; encoded-space averaging would halo.
 
-use image::{GenericImageView, Rgba, RgbaImage, imageops::FilterType};
+use image::{Rgba, RgbaImage, imageops::FilterType};
 
 use super::CancelCheck;
 use super::RasterError;
@@ -41,8 +41,7 @@ pub(crate) fn apply_resize(
         ResizeMode::Contain => {
             let (scaled_width_px, scaled_height_px) =
                 contain_size(width_px, height_px, target_width_px, target_height_px);
-            if !spec.allow_upscale()
-                && (scaled_width_px > width_px || scaled_height_px > height_px)
+            if !spec.allow_upscale() && (scaled_width_px > width_px || scaled_height_px > height_px)
             {
                 return Ok(image);
             }
@@ -58,8 +57,7 @@ pub(crate) fn apply_resize(
         ResizeMode::Cover => {
             let (scaled_width_px, scaled_height_px) =
                 cover_size(width_px, height_px, target_width_px, target_height_px);
-            if !spec.allow_upscale()
-                && (scaled_width_px > width_px || scaled_height_px > height_px)
+            if !spec.allow_upscale() && (scaled_width_px > width_px || scaled_height_px > height_px)
             {
                 return Ok(image);
             }
@@ -71,10 +69,8 @@ pub(crate) fn apply_resize(
                 budget,
                 check_cancel,
             )?;
-            let offset_x_px =
-                cover_offset(scaled_width_px, target_width_px, spec.anchor().x);
-            let offset_y_px =
-                cover_offset(scaled_height_px, target_height_px, spec.anchor().y);
+            let offset_x_px = cover_offset(scaled_width_px, target_width_px, spec.anchor().x);
+            let offset_y_px = cover_offset(scaled_height_px, target_height_px, spec.anchor().y);
             crop_pixels(
                 &scaled,
                 offset_x_px,
@@ -86,8 +82,7 @@ pub(crate) fn apply_resize(
             )
         }
         ResizeMode::Stretch => {
-            if !spec.allow_upscale()
-                && (target_width_px > width_px || target_height_px > height_px)
+            if !spec.allow_upscale() && (target_width_px > width_px || target_height_px > height_px)
             {
                 return Ok(image);
             }
@@ -109,7 +104,9 @@ pub(crate) fn apply_resize(
             }
             // `ResizeSpec::new` refuses `Pad` without a fill, so this is a
             // proven construction invariant, never a caller default.
-            let fill = spec.pad_fill().expect("pad fill is enforced by ResizeSpec::new");
+            let fill = spec
+                .pad_fill()
+                .expect("pad fill is enforced by ResizeSpec::new");
             budget.check_pixels(target_width_px, target_height_px)?;
             budget.check_retained(
                 bounds::rgba_bytes(width_px, height_px),
@@ -175,8 +172,8 @@ fn crop_pixels(
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
     let (image_width_px, image_height_px) = image.dimensions();
-    let end_x_px = x_px.checked_add(width_px).unwrap_or(u32::MAX);
-    let end_y_px = y_px.checked_add(height_px).unwrap_or(u32::MAX);
+    let end_x_px = x_px.saturating_add(width_px);
+    let end_y_px = y_px.saturating_add(height_px);
     if end_x_px > image_width_px || end_y_px > image_height_px {
         return Err(RasterError::CropOutOfBounds);
     }
@@ -305,8 +302,7 @@ pub(crate) fn apply_rotate(
                     || normalized_degrees == 270.0)
             {
                 let (width_px, height_px) = image.dimensions();
-                let swapped =
-                    normalized_degrees == 90.0 || normalized_degrees == 270.0;
+                let swapped = normalized_degrees == 90.0 || normalized_degrees == 270.0;
                 let (out_width_px, out_height_px) = if swapped {
                     (height_px, width_px)
                 } else {
@@ -489,10 +485,7 @@ fn scale_dimension(value_px: u32, numerator: u32, denominator: u32) -> u32 {
         return 1;
     }
     let scaled = u64::from(value_px).saturating_mul(u64::from(numerator));
-    let rounded = scaled
-        .checked_add(u64::from(denominator) / 2)
-        .unwrap_or(u64::MAX)
-        / u64::from(denominator);
+    let rounded = scaled.saturating_add(u64::from(denominator) / 2) / u64::from(denominator);
     rounded.min(u64::from(u32::MAX)) as u32
 }
 
@@ -523,8 +516,9 @@ fn resample_linear_checked(
         if row % 16 == 0 {
             check_cancel()?;
         }
-        let source_y =
-            (bounds::dim_to_f32(row) + 0.5) * bounds::dim_to_f32(source_height_px) / bounds::dim_to_f32(height_px) - 0.5;
+        let source_y = (bounds::dim_to_f32(row) + 0.5) * bounds::dim_to_f32(source_height_px)
+            / bounds::dim_to_f32(height_px)
+            - 0.5;
         for col in 0..width_px {
             let source_x = (bounds::dim_to_f32(col) + 0.5) * bounds::dim_to_f32(source_width_px)
                 / bounds::dim_to_f32(width_px)
@@ -536,7 +530,10 @@ fn resample_linear_checked(
     Ok(out)
 }
 
-#[allow(clippy::too_many_arguments, reason = "rotation carries its full canvas policy")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "rotation carries its full canvas policy"
+)]
 fn rotate_arbitrary(
     image: &RgbaImage,
     degrees: f32,
@@ -561,11 +558,26 @@ fn rotate_arbitrary(
                 sine,
             ),
         ];
-        let min_x = corners.iter().map(|corner| corner.0).fold(f32::INFINITY, f32::min);
-        let max_x = corners.iter().map(|corner| corner.0).fold(f32::NEG_INFINITY, f32::max);
-        let min_y = corners.iter().map(|corner| corner.1).fold(f32::INFINITY, f32::min);
-        let max_y = corners.iter().map(|corner| corner.1).fold(f32::NEG_INFINITY, f32::max);
-        ((max_x - min_x).ceil().max(1.0) as u32, (max_y - min_y).ceil().max(1.0) as u32)
+        let min_x = corners
+            .iter()
+            .map(|corner| corner.0)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|corner| corner.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = corners
+            .iter()
+            .map(|corner| corner.1)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = corners
+            .iter()
+            .map(|corner| corner.1)
+            .fold(f32::NEG_INFINITY, f32::max);
+        (
+            (max_x - min_x).ceil().max(1.0) as u32,
+            (max_y - min_y).ceil().max(1.0) as u32,
+        )
     } else {
         (width_px, height_px)
     };
@@ -612,9 +624,8 @@ fn rotate_point(x: f32, y: f32, cosine: f32, sine: f32) -> (f32, f32) {
 /// transparent samples contribute nothing.
 fn sample_source(image: &RgbaImage, x: f32, y: f32, filter: FilterType) -> Rgba<u8> {
     let (width_px, height_px) = image.dimensions();
-    let clamp_index = |value: i64, bound: u32| -> u32 {
-        value.clamp(0, i64::from(bound) - 1) as u32
-    };
+    let clamp_index =
+        |value: i64, bound: u32| -> u32 { value.clamp(0, i64::from(bound) - 1) as u32 };
     if filter == FilterType::Nearest {
         let pixel = image.get_pixel(
             clamp_index(x.round() as i64, width_px),
@@ -684,13 +695,12 @@ fn kernel_weight(distance: f32, filter: FilterType) -> f32 {
             // Lanczos with a window of 3; the Gaussian resampler shares it.
             if distance < 3.0 {
                 let pi_distance = std::f32::consts::PI * distance;
-                let sinc = if distance < f32::EPSILON {
+                if distance < f32::EPSILON {
                     1.0
                 } else {
                     let window = (pi_distance / 3.0).sin() / (pi_distance / 3.0);
                     (pi_distance.sin() / pi_distance) * window
-                };
-                sinc
+                }
             } else {
                 0.0
             }

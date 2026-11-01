@@ -8,24 +8,27 @@
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
-    net::SocketAddr,
     time::Duration,
 };
+
+#[cfg(test)]
+use std::net::SocketAddr;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
-use super::{
-    ApiError, GeneratedImage, IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS, ImageBackground, ImageEdit,
-    ImageFormat, ImageModeration, ImageQuality, ImageUsage, OperationalBounds, check_credential,
-};
 use super::codec::{jpeg_size, webp_facts};
+use super::{
+    ApiError, ApiExchange, ApiFailure, DeclineContract, GeneratedImage,
+    IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS, ImageBackground, ImageEdit, ImageFormat, ImageModeration,
+    ImageUsage, OperationalBounds, check_credential, check_credentialed_origin, check_model_id,
+};
 use df_providers::{
     EncodedMediaFacts, HttpRequest, NativeHttp, NativeHttpLimits, TextSchemaLimits,
     inspect_png_off_worker, parse_unique_json,
 };
 
-const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/images/edits";
+pub(crate) const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/images/edits";
 const LIVE_GENERATIONS_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 const MAXIMUM_REFERENCES: usize = 4;
 const MAXIMUM_REFERENCE_BYTES: usize = 4 * 1024 * 1024;
@@ -34,23 +37,53 @@ const MAXIMUM_PIXELS: u64 = 4_194_304;
 const JPEG_COMPRESSION: &str = "88";
 const JPEG_COMPRESSION_PERCENT: u8 = 88;
 
-/// Fixture socket for loopback tests; `None` selects the live endpoint.
+/// Explicit endpoint selection. `live` selects the credential destination;
+/// `loopback_fixture` pins a loopback socket; `operator` accepts validated
+/// nonsecret endpoint URLs (https, or loopback http). URLs never appear in
+/// diagnostics.
 pub(crate) struct OpenAiConfig {
-    fixture: Option<SocketAddr>,
+    edits: String,
+    generations: String,
+    allow_http: bool,
 }
 
 impl OpenAiConfig {
     pub(crate) fn live() -> Self {
-        Self { fixture: None }
+        Self {
+            edits: LIVE_ENDPOINT.to_owned(),
+            generations: LIVE_GENERATIONS_ENDPOINT.to_owned(),
+            allow_http: false,
+        }
     }
 
+    #[cfg(test)]
     pub(crate) fn loopback_fixture(address: SocketAddr) -> Result<Self, ApiError> {
         if !address.ip().is_loopback() || address.port() == 0 {
             return Err(ApiError::InvalidRequest);
         }
         Ok(Self {
-            fixture: Some(address),
+            edits: format!("http://{address}/v1/images/edits"),
+            generations: format!("http://{address}/v1/images/generations"),
+            allow_http: true,
         })
+    }
+
+    pub(crate) fn operator(edits_url: &str, generations_url: &str) -> Result<Self, ApiError> {
+        let edits_http = check_credentialed_origin(edits_url, "api.openai.com")?;
+        let generations_http = check_credentialed_origin(generations_url, "api.openai.com")?;
+        Ok(Self {
+            edits: edits_url.trim_end_matches('/').to_owned(),
+            generations: generations_url.trim_end_matches('/').to_owned(),
+            allow_http: edits_http || generations_http,
+        })
+    }
+}
+
+impl std::fmt::Debug for OpenAiConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenAiConfig")
+            .finish_non_exhaustive()
     }
 }
 
@@ -90,29 +123,34 @@ impl OpenAiExecutor {
             maximum_chunks: 65_536,
         };
         let http =
-            NativeHttp::new(limits, config.fixture.is_some()).map_err(|_| ApiError::InvalidRequest)?;
+            NativeHttp::new(limits, config.allow_http).map_err(|_| ApiError::InvalidRequest)?;
         Ok(Self {
-            endpoint: config.fixture.map_or_else(
-                || LIVE_ENDPOINT.to_owned(),
-                |address| format!("http://{address}/v1/images/edits"),
-            ),
-            generations_endpoint: config.fixture.map_or_else(
-                || LIVE_GENERATIONS_ENDPOINT.to_owned(),
-                |address| format!("http://{address}/v1/images/generations"),
-            ),
+            endpoint: config.edits,
+            generations_endpoint: config.generations,
             credential: credential.to_owned(),
             http,
             bounds,
         })
     }
 
-    /// One edit or generation within `deadline`; typed outcome or refusal.
+    #[cfg(test)]
     pub(crate) async fn edit(
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
     ) -> Result<GeneratedImage, ApiError> {
-        validate(edit)?;
+        self.edit_observed(edit, deadline)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// One edit or generation, preserving exact bounded failure response evidence.
+    pub(crate) async fn edit_observed(
+        &self,
+        edit: &ImageEdit<'_>,
+        deadline: Duration,
+    ) -> Result<GeneratedImage, ApiFailure> {
+        validate(edit).map_err(ApiFailure::before_transport)?;
         let (endpoint, content_type, body) = if edit.references.is_empty() {
             (
                 &self.generations_endpoint,
@@ -128,28 +166,54 @@ impl OpenAiExecutor {
             .http
             .execute(request, deadline, std::future::pending())
             .await
-            .map_err(|failure| ApiError::Transport(failure.reason))?;
-        match response.status {
-            200 => {}
-            401 | 403 => return Err(ApiError::Unauthorized),
-            400 if is_moderation_block(&response.body) => return Err(ApiError::Refused),
-            429 if is_quota_exhaustion(&response.body) => return Err(ApiError::QuotaExhausted),
-            status => return Err(ApiError::Provider(status)),
+            .map_err(|failure| ApiFailure::transport(failure.reason, ApiExchange::Submit))?;
+        let error = match response.status {
+            200 => None,
+            401 | 403 => Some(ApiError::Unauthorized),
+            400 if is_moderation_block(&response.body) => Some(ApiError::Refused),
+            429 if is_quota_exhaustion(&response.body) => Some(ApiError::QuotaExhausted),
+            429 => Some(ApiError::RateLimited),
+            status => Some(ApiError::Provider(status)),
+        };
+        if let Some(error) = error {
+            return Err(ApiFailure::response(
+                error,
+                ApiExchange::Submit,
+                DeclineContract::OpenAiImages429V1,
+                response,
+            ));
         }
-        let value = parse_unique_json(
+        let value = match parse_unique_json(
             &response.body,
             TextSchemaLimits {
                 maximum_schema_bytes: self.bounds.openai_max_response_bytes,
                 maximum_depth: 32,
                 maximum_nodes: 65_536,
             },
-        )
-        .map_err(|_| ApiError::Output)?;
-        decode(&value, edit).await
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(ApiFailure::response(
+                    ApiError::Output,
+                    ApiExchange::Submit,
+                    DeclineContract::OpenAiImages429V1,
+                    response,
+                ));
+            }
+        };
+        decode(&value, edit).await.map_err(|error| {
+            ApiFailure::response(
+                error,
+                ApiExchange::Submit,
+                DeclineContract::OpenAiImages429V1,
+                response,
+            )
+        })
     }
 }
 
 fn validate(edit: &ImageEdit<'_>) -> Result<(), ApiError> {
+    check_model_id(edit.model.model_id())?;
     let pixels = u64::from(edit.width) * u64::from(edit.height);
     let sides_ok = edit.width.is_multiple_of(16)
         && edit.height.is_multiple_of(16)
@@ -187,7 +251,7 @@ fn is_moderation_block(body: &[u8]) -> bool {
         .any(|needle| body.windows(needle.len()).any(|window| window == *needle))
 }
 
-fn is_quota_exhaustion(body: &[u8]) -> bool {
+pub(crate) fn is_quota_exhaustion(body: &[u8]) -> bool {
     serde_json::from_slice::<Value>(body).is_ok_and(|value| {
         let error = &value["error"];
         error["code"]
@@ -196,7 +260,9 @@ fn is_quota_exhaustion(body: &[u8]) -> bool {
             .is_some_and(|reason| {
                 matches!(
                     reason,
-                    "insufficient_quota" | "billing_hard_limit_reached" | "credit_balance_exhausted"
+                    "insufficient_quota"
+                        | "billing_hard_limit_reached"
+                        | "credit_balance_exhausted"
                 )
             })
     })
@@ -277,8 +343,10 @@ fn multipart(edit: &ImageEdit<'_>) -> (String, Vec<u8>) {
     let mut body = Vec::new();
     for (name, value) in &fields {
         body.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
-                .as_bytes(),
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
         );
     }
     for (index, reference) in edit.references.iter().enumerate() {
@@ -298,18 +366,42 @@ fn multipart(edit: &ImageEdit<'_>) -> (String, Vec<u8>) {
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
-fn tokens(value: &Value, path: &[&str]) -> u64 {
+fn tokens(value: &Value, path: &[&str]) -> Option<u64> {
     path.iter()
         .try_fold(value, |current, key| current.get(key))
         .and_then(Value::as_u64)
-        .unwrap_or(0)
 }
-
+fn image_usage(value: &Value) -> [Option<u64>; 3] {
+    [
+        tokens(value, &["usage", "input_tokens_details", "text_tokens"]),
+        tokens(value, &["usage", "input_tokens_details", "image_tokens"]),
+        tokens(value, &["usage", "output_tokens"]),
+    ]
+}
+/// Complete supplier image-token facts, independent of whether its artifact was usable.
+pub(crate) fn reported_image_usage(body: &[u8]) -> Option<ImageUsage> {
+    let value = parse_unique_json(
+        body,
+        TextSchemaLimits {
+            maximum_schema_bytes: body.len(),
+            maximum_depth: 32,
+            maximum_nodes: 65_536,
+        },
+    )
+    .ok()?;
+    let [text, image, output] = image_usage(&value);
+    Some(ImageUsage {
+        text_input_tokens: text?,
+        image_input_tokens: image?,
+        output_tokens: output?,
+    })
+}
 async fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ApiError> {
+    let [text, image, output] = image_usage(value);
     let usage = ImageUsage {
-        text_input_tokens: tokens(value, &["usage", "input_tokens_details", "text_tokens"]),
-        image_input_tokens: tokens(value, &["usage", "input_tokens_details", "image_tokens"]),
-        output_tokens: tokens(value, &["usage", "output_tokens"]),
+        text_input_tokens: text.unwrap_or(0),
+        image_input_tokens: image.unwrap_or(0),
+        output_tokens: output.unwrap_or(0),
     };
     let encoded = value
         .get("data")
@@ -323,8 +415,9 @@ async fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, A
     let bytes = STANDARD.decode(encoded).map_err(|_| ApiError::Output)?;
     let (bytes, width, height, has_alpha_channel) = match edit.output {
         ImageFormat::Png => {
-            let (bytes, EncodedMediaFacts::Png { width, height }) =
-                inspect_png_off_worker(bytes).await.map_err(|_| ApiError::Output)?
+            let (bytes, EncodedMediaFacts::Png { width, height }) = inspect_png_off_worker(bytes)
+                .await
+                .map_err(|_| ApiError::Output)?
             else {
                 return Err(ApiError::Output);
             };
@@ -336,8 +429,7 @@ async fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, A
             (bytes, width, height, false)
         }
         ImageFormat::Webp => {
-            let (width, height, has_alpha_channel) =
-                webp_facts(&bytes).ok_or(ApiError::Output)?;
+            let (width, height, has_alpha_channel) = webp_facts(&bytes).ok_or(ApiError::Output)?;
             (bytes, width, height, has_alpha_channel)
         }
     };

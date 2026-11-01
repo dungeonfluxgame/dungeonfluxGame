@@ -1,8 +1,8 @@
 //! Operator-run live checks of the image service against the real provider. Ignored by default:
 //! they spend money. `DF_L01_PLAN` names a JSON plan, `DF_L01_OUT` the directory results are
 //! copied to, and `OPENAI_API_KEY` the credential (read from the environment by the launcher
-//! script, never from this file). The cache lives in `DF_L01_OUT/cache`, so a repeated plan
-//! costs nothing.
+//! script, never from this file). Results are copied before the disposable host is closed.
+//! Reuse within one retained host is durable; a new disposable owner starts a new run.
 
 use std::time::Instant;
 
@@ -13,7 +13,6 @@ use super::{
         npc_dossier_tests::adventure,
         pack::{CastRole, SceneKey},
         scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
-        startup_configuration::{ImageryCredential, ImagerySettings},
     },
     *,
 };
@@ -50,29 +49,57 @@ fn pick<T: Copy>(all: &[T], label: impl Fn(T) -> &'static str, wanted: &str) -> 
         .unwrap_or_else(|| panic!("unknown label {wanted}"))
 }
 
-fn service(rating: ContentRating, out: &Path) -> Imagery {
-    let credential = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY");
-    Imagery::start(
-        ImagerySettings::On(ImageryConfiguration {
-            credential: Some(ImageryCredential::for_test(&credential)),
-            model: ImageEditModel::from_model_id(
-                &std::env::var("DF_L01_MODEL").unwrap_or_else(|_| "gpt-image-2.5-flare".to_owned()),
-            )
-            .unwrap(),
-            quality: match std::env::var("DF_L01_QUALITY").as_deref() {
-                Ok("low") => ImageQuality::Low,
-                Ok("high") => ImageQuality::High,
-                _ => ImageQuality::Medium,
-            },
-            profile: Default::default(),
-            interval: Duration::from_secs(30),
-            deadline: Duration::from_secs(90),
-            cache_dir: out.join("cache"),
-            rating,
-        }),
-        Some(out),
-    )
-    .unwrap()
+fn live_patch(backend: df_imagery::BackendId, deadline_secs: u64) -> df_imagery::RuntimePatch {
+    let mut patch = df_imagery::RuntimePatch::empty();
+    patch.mode = Some(df_imagery::GlobalMode::Live);
+    patch.accounting_mode = Some(df_imagery::AccountingMode::RecordOnly);
+    patch.backend_enabled = [Some(false); df_imagery::BackendId::COUNT];
+    patch.backend_enabled[backend.index()] = Some(true);
+    patch.backend_account[backend.index()] =
+        Some(df_imagery::AccountHandle::new("default").unwrap());
+    patch.default_backend = Some(backend);
+    patch.retry_max_attempts = Some(1);
+    patch.scheduler_stage_deadline_secs = Some(deadline_secs);
+    patch.scheduler_job_deadline_secs = Some(deadline_secs + 30);
+    for purpose in 0..df_imagery::Purpose::COUNT {
+        patch.purpose_model_override[purpose] = Some(None);
+        patch.purpose_quality_override[purpose] = Some(None);
+    }
+    patch
+}
+
+fn live_costs() -> super::super::cost::port::MeteringPort {
+    let costs = super::super::cost::port::MeteringPort::new();
+    costs
+        .open(
+            "operator-live-images",
+            include_str!("../../../../content/pricing.json"),
+        )
+        .unwrap();
+    costs
+}
+
+async fn service(rating: ContentRating) -> super::super::image_test_support::ImageHostFixture {
+    use super::super::image_test_support::{ImageHostFixture, LiveImageOptIn};
+    let mut patch = live_patch(df_imagery::BackendId::OpenAi, 90);
+    let model = std::env::var("DF_L01_MODEL").unwrap_or_else(|_| "gpt-image-2.5-flare".to_owned());
+    patch.backend_model[df_imagery::BackendId::OpenAi.index()] =
+        Some(Some(df_imagery::ModelName::new(&model).unwrap()));
+    patch.backend_endpoint[df_imagery::BackendId::OpenAi.index()] = Some(Some(
+        df_imagery::ApiEndpoint::new("https://api.openai.com").unwrap(),
+    ));
+    patch.quality_provider_quality = Some(Some(match std::env::var("DF_L01_QUALITY").as_deref() {
+        Ok("low") => df_imagery::GenerationQuality::Low,
+        Ok("high") => df_imagery::GenerationQuality::High,
+        _ => df_imagery::GenerationQuality::Medium,
+    }));
+    let rating = match rating {
+        ContentRating::Mature => df_imagery::ImageContentRating::Mature,
+        ContentRating::Restrained => df_imagery::ImageContentRating::Restrained,
+    };
+    ImageHostFixture::open_live(patch, live_costs(), rating, LiveImageOptIn::Plan)
+        .await
+        .expect("operator local PG bootstrap")
 }
 
 #[tokio::test]
@@ -85,18 +112,19 @@ async fn live_plan() {
     let store = ReferenceStore::new(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
     );
-    let mature = service(ContentRating::Mature, &out);
-    let restrained = service(ContentRating::Restrained, &out);
+    let mature = service(ContentRating::Mature).await;
+    let restrained = service(ContentRating::Restrained).await;
     for job in jobs {
         let rating = match job.rating.as_deref() {
             Some("restrained") => ContentRating::Restrained,
             _ => ContentRating::Mature,
         };
-        let service = if rating == ContentRating::Mature {
+        let selected = if rating == ContentRating::Mature {
             &mature
         } else {
             &restrained
         };
+        let service = selected.imagery();
         let generated = adventure(job.seed);
         let scene_key: SceneKey =
             serde_json::from_value(serde_json::Value::String(job.scene.clone()))
@@ -192,19 +220,19 @@ async fn live_plan() {
             other => panic!("kind {other}"),
         };
         let started = Instant::now();
-        let before = service.stats();
+        let before = selected.metering_port().totals();
         let result = service.render(request).await;
         let seconds = started.elapsed().as_secs_f32();
-        let after = service.stats();
+        let after = selected.metering_port().totals();
         match result {
             Ok(key) => {
                 let Lookup::Image { bytes, format } = service.image(key.as_str()).await else {
                     panic!("cached");
                 };
-                let extension = if format == ImageFormat::Png {
-                    "png"
-                } else {
-                    "jpg"
+                let extension = match format {
+                    ImageFormat::Png => "png",
+                    ImageFormat::Jpeg => "jpg",
+                    ImageFormat::Webp => "webp",
                 };
                 std::fs::write(
                     out.join("live").join(format!("{}.{extension}", job.name)),
@@ -216,7 +244,7 @@ async fn live_plan() {
                     job.name,
                     seconds,
                     after.calls - before.calls,
-                    (after.micro_dollars - before.micro_dollars) as f64 / 1e6,
+                    (after.micro_usd - before.micro_usd) as f64 / 1e6,
                     bytes.len()
                 );
             }
@@ -228,12 +256,17 @@ async fn live_plan() {
             ),
         }
     }
-    let (a, b) = (mature.stats(), restrained.stats());
+    let (a, b) = (
+        mature.metering_port().totals(),
+        restrained.metering_port().totals(),
+    );
     println!(
         "LIVE totals calls={} cost=${:.4}",
         a.calls + b.calls,
-        (a.micro_dollars + b.micro_dollars) as f64 / 1e6
+        (a.micro_usd + b.micro_usd) as f64 / 1e6
     );
+    mature.close().await;
+    restrained.close().await;
 }
 
 #[test]
@@ -282,38 +315,40 @@ fn live_candidates() {
     }
 }
 
-/// One FLUX Kontext call for a plate prompt, through the provider the game uses. Each frame is one
-/// provider call (no hub retry), so the operator's budget is exact.
+/// One admitted opaque FLUX plate; the actual native host owns send, usage and publication.
 async fn flux_frame(
-    provider: &df_providers::NativeFalImageProvider,
+    host: &super::super::image_test_support::ImageHostFixture,
     prompt: &AssembledPrompt,
     references: &[ReferenceImage],
 ) -> Vec<u8> {
-    let provider_references: Vec<df_providers::ReferenceImage<'_>> = references
-        .iter()
-        .map(|reference| df_providers::ReferenceImage {
-            format: reference.format,
-            bytes: &reference.bytes,
+    let key = host
+        .imagery()
+        .render(ImageRequest {
+            kind: ImageKind::ScenePlate,
+            prompt: prompt.clone(),
+            references: references.to_vec(),
+            output: OutputSpec::PLATE,
         })
-        .collect();
-    let edit = df_providers::ImageEdit {
-        model: ImageEditModel::Gpt25Flare,
-        prompt: prompt.as_str(),
-        references: &provider_references,
-        width: 2560,
-        height: 1440,
-        quality: ImageQuality::Medium,
-        background: ImageBackground::Opaque,
-        output: ImageFormat::Jpeg,
-        moderation: ImageModeration::Low,
-    };
-    edit.validate().expect("the FLUX request is valid");
-    let generated = provider
-        .edit(&edit, Duration::from_secs(300))
         .await
-        .expect("the FLUX plate call succeeds");
-    assert_eq!(generated.format, ImageFormat::Jpeg);
-    generated.bytes
+        .expect("the admitted FLUX plate call succeeds");
+    let Lookup::Image { bytes, format } = host.imagery().image(key.as_str()).await else {
+        panic!("published FLUX plate")
+    };
+    assert_eq!(format, ImageFormat::Jpeg);
+    bytes.to_vec()
+}
+
+async fn photo(
+    host: &super::super::image_test_support::ImageHostFixture,
+    repo: &Path,
+    relative: &str,
+    format: ImageFormat,
+) -> ReferenceImage {
+    let bytes = std::fs::read(repo.join(relative)).expect("a reference photograph");
+    host.import_bytes(format, bytes.into())
+        .await
+        .expect("checked authored photograph")
+        .1
 }
 
 /// Operator-run proof (spends three FLUX calls): a fresh merchant plate, then two refreshes that
@@ -321,16 +356,30 @@ async fn flux_frame(
 #[tokio::test]
 #[ignore = "spends money against the real FLUX provider; run once by the operator"]
 async fn flux_plate_sequence_keeps_the_merchant_cast_and_changes_the_shot() {
-    let key = std::env::var("DF_FAL_KEY").expect("DF_FAL_KEY");
+    std::env::var("DF_FAL_KEY").expect("DF_FAL_KEY");
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = repo.join("artifacts/tmp/plate-identity");
     std::fs::create_dir_all(&out).expect("the proof directory");
-    let provider = df_providers::NativeFalImageProvider::new(
-        df_providers::FalImageConfig::live(),
-        &key,
-        Duration::from_secs(120),
+    use super::super::image_test_support::{ImageHostFixture, LiveImageOptIn};
+    let mut patch = live_patch(df_imagery::BackendId::Fal, 300);
+    let index = df_imagery::BackendId::Fal.index();
+    patch.backend_endpoint[index] = Some(Some(
+        df_imagery::ApiEndpoint::new("https://queue.fal.run").unwrap(),
+    ));
+    patch.backend_generation_model[index] = Some(Some(
+        df_imagery::ModelName::new("fal-ai/flux-pro/v1.1-ultra").unwrap(),
+    ));
+    patch.backend_edit_model[index] = Some(Some(
+        df_imagery::ModelName::new("fal-ai/flux-pro/kontext/max/multi").unwrap(),
+    ));
+    let host = ImageHostFixture::open_live(
+        patch,
+        live_costs(),
+        df_imagery::ImageContentRating::Mature,
+        LiveImageOptIn::FluxPlateSequence,
     )
-    .expect("the FLUX provider");
+    .await
+    .expect("operator local PG bootstrap");
 
     let model: super::super::adventure::scene_model::SceneModel = serde_json::from_slice(
         include_bytes!("../../../../content/merchant-shop/scene-model.json"),
@@ -354,26 +403,41 @@ async fn flux_plate_sequence_keeps_the_merchant_cast_and_changes_the_shot() {
         })
         .collect();
 
-    let photo = |relative: &str, format: ImageFormat| {
-        let bytes = std::fs::read(repo.join(relative)).expect("a reference photograph");
-        ReferenceImage::new(format, Bytes::from(bytes))
-    };
-    let room = photo("artifacts/tmp/play-r6/room.jpg", ImageFormat::Jpeg);
-    let marek = photo("artifacts/tmp/play-r6/marek.jpg", ImageFormat::Jpeg);
+    let room = photo(
+        &host,
+        &repo,
+        "artifacts/tmp/play-r6/room.jpg",
+        ImageFormat::Jpeg,
+    )
+    .await;
+    let marek = photo(
+        &host,
+        &repo,
+        "artifacts/tmp/play-r6/marek.jpg",
+        ImageFormat::Jpeg,
+    )
+    .await;
     let jessa = photo(
+        &host,
+        &repo,
         "assets/ui/generated/sprite-shop-soldier-documentary-photo.png",
         ImageFormat::Png,
-    );
-    let (sheet_image, legend) = cast_sheet(vec![
-        CastIdentity {
-            id: "npc:merchant".to_owned(),
-            figure: marek.clone(),
-        },
-        CastIdentity {
-            id: "npc:shop-soldier".to_owned(),
-            figure: jessa.clone(),
-        },
-    ])
+    )
+    .await;
+    let (sheet_image, legend) = cast_sheet(
+        host.imagery(),
+        vec![
+            CastIdentity {
+                id: "npc:merchant".to_owned(),
+                figure: marek.clone(),
+            },
+            CastIdentity {
+                id: "npc:shop-soldier".to_owned(),
+                figure: jessa.clone(),
+            },
+        ],
+    )
+    .await
     .expect("the identity sheet");
     assert!(legend.starts_with("slot 1 = npc:merchant"));
     let place = PlaceFacts::new("Marek's Cloth Shop", "").expect("the shop name passes vetting");
@@ -421,7 +485,7 @@ async fn flux_plate_sequence_keeps_the_merchant_cast_and_changes_the_shot() {
         std::fs::write(out.join(format!("{name}.prompt.txt")), prompt.as_str())
             .expect("the prompt is kept beside the image");
         let references = [room.clone(), sheet_image.clone(), portrait.clone()];
-        let bytes = flux_frame(&provider, &prompt, &references).await;
+        let bytes = flux_frame(&host, &prompt, &references).await;
         std::fs::write(out.join(name), &bytes).expect("the frame is saved");
         println!(
             "PLATE_FRAME {name} bytes={} chars={}",
@@ -429,4 +493,5 @@ async fn flux_plate_sequence_keeps_the_merchant_cast_and_changes_the_shot() {
             prompt.character_count()
         );
     }
+    host.close().await;
 }

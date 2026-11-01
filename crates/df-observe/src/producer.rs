@@ -31,7 +31,6 @@ use std::{
 pub use opentelemetry::logs::{AnyValue, Severity};
 pub use opentelemetry_sdk::trace::SpanData as NativeSpanData;
 /// Safe synthetic/native capture input. The owner supplies explicit timestamps and correlation.
-#[derive(Debug)]
 pub struct LogInput {
     pub timestamp: SystemTime,
     pub observed_timestamp: SystemTime,
@@ -39,6 +38,23 @@ pub struct LogInput {
     pub body: AnyValue,
     pub attributes: Vec<(String, AnyValue)>,
     pub trace: Option<opentelemetry::trace::SpanContext>,
+}
+
+impl std::fmt::Debug for LogInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LogInput")
+            .field("timestamp", &self.timestamp)
+            .field("observed_timestamp", &self.observed_timestamp)
+            .field("severity", &self.severity)
+            .field("body", &self.body)
+            .field("attributes", &self.attributes)
+            .field(
+                "trace",
+                &self.trace.as_ref().map(crate::DiagnosticTrace::from),
+            )
+            .finish()
+    }
 }
 #[derive(Debug)]
 pub struct SpanInput {
@@ -299,6 +315,23 @@ impl NativeProducer {
         key: CaptureKey,
         input: LogInput,
     ) -> Result<CapturedBatch, TelemetryError> {
+        self.emit_named_log(key, "native.capture", input)
+    }
+    /// Preserve the emitting subsystem's event name through the shared SDK capture path.
+    pub fn emit_named_log(
+        &mut self,
+        key: CaptureKey,
+        event_name: &'static str,
+        input: LogInput,
+    ) -> Result<CapturedBatch, TelemetryError> {
+        if event_name.is_empty()
+            || event_name.len() > 128
+            || !event_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(TelemetryError::InvalidIdentity);
+        }
         if key.producer != self.source || input.attributes.len() > 64 {
             return Err(TelemetryError::InvalidIdentity);
         }
@@ -322,7 +355,7 @@ impl NativeProducer {
         record.set_observed_timestamp(input.observed_timestamp);
         record.set_severity_number(input.severity);
         record.set_severity_text(input.severity.name());
-        record.set_event_name("native.capture");
+        record.set_event_name(event_name);
         record.set_body(input.body);
         record.add_attributes(input.attributes);
         record.add_attribute("df.producer_id", key.producer.hex());
@@ -485,11 +518,12 @@ impl NativeProducer {
         self.take_submission()
     }
     pub fn shutdown(self, timeout: Duration) -> Result<(), TelemetryError> {
+        let started = std::time::Instant::now();
         self.logs
             .shutdown_with_timeout(timeout)
             .map_err(|_| TelemetryError::Internal)?;
         self.traces
-            .shutdown_with_timeout(timeout)
+            .shutdown_with_timeout(timeout.saturating_sub(started.elapsed()))
             .map_err(|_| TelemetryError::Internal)
     }
 }

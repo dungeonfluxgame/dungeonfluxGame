@@ -23,7 +23,7 @@ impl Harness {
         let mut config = tokio_postgres::Config::new();
         config
             .host("127.0.0.1")
-            .port(55911)
+            .port(55471)
             .user("postgres")
             .dbname("postgres")
             .connect_timeout(std::time::Duration::from_secs(3));
@@ -72,7 +72,7 @@ impl Harness {
             code: super::super::journey::room_code().into(),
             slot: Arc::new(Mutex::new(None)),
             supervisor: None,
-            room_join: false,
+            authority: PlacementAuthority::BindingProbe(super::tests::SessionScopedBinder::shared()),
         };
         Self {
             state,
@@ -251,6 +251,9 @@ fn service(
 ) -> super::super::Service {
     use super::super::*;
     Service {
+        imagery: crate::gameplay::imagery::Imagery::disabled(
+            crate::gameplay::startup_configuration::ImageryOff::Qualification,
+        ),
         actor,
         display_credential: [0x52; 32],
         updates,

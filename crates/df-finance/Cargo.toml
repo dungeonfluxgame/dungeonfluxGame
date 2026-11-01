@@ -16,3 +16,5 @@ sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-postgres = { version = "=0.7.15", default-features = true }
 tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

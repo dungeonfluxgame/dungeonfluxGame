@@ -12,6 +12,8 @@ use axum::{
 };
 use df_campaign::session_link::runtime_protocol::*;
 use df_protocol::common as rpc;
+#[cfg(test)]
+use std::{future::Future, pin::Pin};
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -32,6 +34,154 @@ struct Slot {
     seats: Vec<AssignedSeat>,
 }
 
+/// The validated allocation plus the gameplay session, run and generation its
+/// joins produced. The trusted tenant and owner fence are not request
+/// parameters: the root-installed binder captures them at construction from
+/// the trusted startup configuration.
+#[cfg(test)]
+#[derive(Clone)]
+pub struct HostBindingCommand {
+    pub allocation: Allocation,
+    pub gameplay_session: [u8; 16],
+    pub gameplay_run: [u8; 16],
+    pub generation: String,
+    pub seats: Vec<HostSeatJoin>,
+}
+
+/// Exact canonical-to-gameplay relation produced by a completed authenticated join.
+#[cfg(test)]
+#[derive(Clone)]
+pub struct HostSeatJoin {
+    pub account: [u8; 16],
+    pub member: [u8; 16],
+    pub gameplay_member: [u8; 16],
+    pub gameplay_credential: [u8; 32],
+}
+
+/// A refused mapping or unavailable acknowledgement; exact retries reconcile the retained slot.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinderError {
+    /// Another binding already holds this run under a different allocation.
+    Occupied,
+    /// The mapping store was unreachable; the slot is retained so an exact
+    /// replay reconciles the same owner operations.
+    Unavailable,
+}
+
+#[cfg(test)]
+impl BinderError {
+    fn refusal(self) -> Refusal {
+        match self {
+            Self::Occupied => Refusal::Occupied,
+            Self::Unavailable => Refusal::Unavailable,
+        }
+    }
+}
+
+/// The injected durable-ownership sink. Each allocation attempt calls it after
+/// the retained joins land and before the reply goes out.
+/// Implementations bind the allocation through the imagery-identity store
+/// atomically; an exact replay must succeed so retries reconcile.
+#[cfg(test)]
+pub trait AllocationBinder: Send + Sync {
+    fn bind_host_allocation<'a>(
+        &'a self,
+        command: &'a HostBindingCommand,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BinderError>> + Send + 'a>>;
+}
+
+/// Local placement is explicit; allocation sink probes are confined to the test build.
+#[derive(Clone)]
+pub(super) enum PlacementAuthority {
+    Local,
+    #[cfg(test)]
+    BindingProbe(Arc<dyn AllocationBinder>),
+}
+#[cfg(test)]
+fn gameplay_bytes(value: &[u8]) -> Option<[u8; 16]> {
+    value.try_into().ok()
+}
+
+/// Submits the durable binding for one allocated slot after its joins land.
+/// Every seat must prove its actual member and credential in the same gameplay run.
+#[cfg(test)]
+async fn submit_host_binding(
+    state: &LaunchState,
+    allocation: &Allocation,
+    seats: &[AssignedSeat],
+) -> Result<(), BinderError> {
+    let PlacementAuthority::BindingProbe(binder) = &state.authority else {
+        return Ok(());
+    };
+    let Some(joined) = seats.first().and_then(|seat| seat.joined.as_ref()) else {
+        return Err(BinderError::Unavailable);
+    };
+    let (Some(session), Some(run)) = (
+        joined.session_id.as_ref().and_then(|id| id.value.as_ref()),
+        joined.run_id.as_ref().and_then(|id| id.value.as_ref()),
+    ) else {
+        return Err(BinderError::Unavailable);
+    };
+    let (Some(gameplay_session), Some(gameplay_run)) =
+        (gameplay_bytes(session), gameplay_bytes(run))
+    else {
+        return Err(BinderError::Unavailable);
+    };
+    let mut mappings = Vec::with_capacity(seats.len());
+    for seat in seats {
+        let joined = seat.joined.as_ref().ok_or(BinderError::Unavailable)?;
+        if joined.session_id.as_ref().and_then(|id| id.value.as_ref()) != Some(session)
+            || joined.run_id.as_ref().and_then(|id| id.value.as_ref()) != Some(run)
+        {
+            return Err(BinderError::Occupied);
+        }
+        let canonical = allocation
+            .roster
+            .iter()
+            .find(|candidate| candidate.member == seat.member)
+            .ok_or(BinderError::Occupied)?;
+        let gameplay_member = joined
+            .client_binding_id
+            .as_ref()
+            .and_then(|id| id.value.as_ref())
+            .and_then(|id| gameplay_bytes(id))
+            .ok_or(BinderError::Unavailable)?;
+        let credential = super::journey::unhex(&joined.local_binding)
+            .map_err(|_| BinderError::Unavailable)?
+            .try_into()
+            .map_err(|_| BinderError::Unavailable)?;
+        if mappings
+            .iter()
+            .any(|existing: &HostSeatJoin| existing.gameplay_member == gameplay_member)
+        {
+            return Err(BinderError::Occupied);
+        }
+        mappings.push(HostSeatJoin {
+            account: canonical.account,
+            member: canonical.member,
+            gameplay_member,
+            gameplay_credential: credential,
+        });
+    }
+    if mappings.len() != allocation.roster.len() {
+        return Err(BinderError::Occupied);
+    }
+    let command = HostBindingCommand {
+        allocation: allocation.clone(),
+        gameplay_session,
+        gameplay_run,
+        generation: state.generation.to_string(),
+        seats: mappings,
+    };
+    tokio::time::timeout(
+        super::timing::active().reply,
+        binder.bind_host_allocation(&command),
+    )
+    .await
+    .map_err(|_| BinderError::Unavailable)?
+}
+
 #[derive(Clone)]
 struct LaunchState {
     actor: super::InboxHandle<actor::Call>,
@@ -41,7 +191,8 @@ struct LaunchState {
     code: Arc<str>,
     slot: Arc<Mutex<Option<Slot>>>,
     supervisor: Option<Arc<supervisor::Supervisor>>,
-    room_join: bool,
+    #[cfg(test)]
+    authority: PlacementAuthority,
 }
 
 pub(super) fn secret_from_environment() -> Result<Option<LaunchSecret>, std::io::Error> {
@@ -72,16 +223,31 @@ pub(super) fn router(
     actor: super::InboxHandle<actor::Call>,
     page: PageState,
     secret: Option<LaunchSecret>,
+    authority: PlacementAuthority,
 ) -> Result<Router, std::io::Error> {
     let Some(secret) = secret else {
-        return Ok(Router::new());
+        return match authority {
+            PlacementAuthority::Local => Ok(Router::new()),
+            #[cfg(test)]
+            PlacementAuthority::BindingProbe(_) => Err(std::io::Error::other(
+                "allocation probe requires a runtime launch secret",
+            )),
+        };
     };
+    #[cfg(not(test))]
+    let PlacementAuthority::Local = authority;
     let is_child = std::env::var_os("DF_RUNTIME_CHILD").is_some();
     let supervisor = if is_child || std::env::var_os("DF_RUNTIME_SUPERVISOR").is_none() {
         None
     } else {
         Some(Arc::new(supervisor::Supervisor::new(secret.clone())?))
     };
+    #[cfg(test)]
+    if supervisor.is_some() && matches!(authority, PlacementAuthority::BindingProbe(_)) {
+        return Err(std::io::Error::other(
+            "allocation probe cannot use the local process supervisor",
+        ));
+    }
     let state = LaunchState {
         actor,
         page,
@@ -97,7 +263,8 @@ pub(super) fn router(
         code: super::journey::room_code().into(),
         slot: Arc::new(Mutex::new(None)),
         supervisor,
-        room_join: is_child,
+        #[cfg(test)]
+        authority,
     };
     Ok(routes(state))
 }
@@ -202,12 +369,19 @@ async fn allocate(
         return refusal(Refusal::Unavailable);
     };
     for seat in &mut slot.seats {
-        if seat.joined.is_none() && !state.room_join {
+        if seat.joined.is_none() {
             match join(&state.actor, seat.request.clone()).await {
                 Ok(joined) => seat.joined = Some(joined),
                 Err(_) => return refusal(Refusal::Unavailable),
             }
         }
+    }
+    // The durable binding lands after the joins and before the reply: an
+    // exact replay succeeds, so a retry reconciles the same owner operations
+    // instead of forking a dummy in-memory mapping.
+    #[cfg(test)]
+    if let Err(error) = submit_host_binding(&state, &slot.allocation, &slot.seats).await {
+        return refusal(error.refusal());
     }
     actor::record_audit_line(
         "session.runtime_attached",

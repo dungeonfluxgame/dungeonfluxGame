@@ -19,9 +19,8 @@ pub(crate) use leases::{
     claim_step_in, intend_variant_in, mark_validated_in, mark_variant_written_in, record_staged_in,
     renew_step_in,
 };
-#[cfg(test)]
 pub(crate) use locks::lock_quota;
-pub(crate) use locks::quota_usage_in;
+pub(crate) use locks::{lock_quota_then_asset, quota_usage_in};
 pub(crate) use rows::record_failure;
 pub(crate) use sweep::{
     begin_variant_deletion_in, due_rows_in, forget_staged_in, forget_variant_in, orphan_staged_in,

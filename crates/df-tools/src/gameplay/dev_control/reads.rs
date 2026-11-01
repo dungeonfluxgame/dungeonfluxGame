@@ -28,7 +28,7 @@ pub(super) struct PhotoCheckQuery {
 }
 
 /// `GET /dev/photo-check?path=...&kind=...`: one fresh judgement of saved bytes.
-/// It neither regenerates an image nor changes the hub/cache or the game's state.
+/// Source import and inspection use the durable image owners; gameplay state stays unchanged.
 pub(super) async fn photo_check(
     State(state): State<Arc<Shared>>,
     headers: HeaderMap,
@@ -48,28 +48,153 @@ pub(super) async fn photo_check(
             "photo judge off: pictures are off for this run",
         ));
     }
-    let credential = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| super::failed("photo judge credential unavailable"))?;
-    let ledger = crate::gameplay::cost::current()
-        .ok_or_else(|| super::failed("photo judge cost ledger unavailable"))?;
-    let judge = df_providers::NativePlateJudge::new(
-        df_providers::PlateJudgeConfig::live(),
-        &credential,
-        std::time::Duration::from_secs(30),
-        crate::gameplay::cost::LedgerMeter::shared(&ledger, "dev_photo_check"),
-    )
-    .map_err(|error| super::failed(error.label()))?;
-    let outcome = crate::gameplay::imagery::Imagery::check_saved_photo(
-        &judge,
-        kind,
-        std::path::Path::new(&query.path),
-    )
-    .await
-    .map_err(|error| super::failed(error.label()))?;
+    let imagery = &state.service.imagery;
+    let maximum_bytes = imagery
+        .reviewed_input_limit()
+        .map_err(|error| super::failed(error.label()))?;
+    let source = Arc::new(DevelopmentSavedPhoto {
+        headers,
+        token: state.token.clone(),
+        path: std::path::PathBuf::from(&query.path),
+        maximum_bytes,
+    });
+    let outcome = imagery
+        .check_saved_photo(kind, std::path::Path::new(&query.path), source)
+        .await
+        .map_err(|error| super::failed(error.label()))?;
     Ok((
         StatusCode::OK,
         Json(json!({"kind": query.kind, "verdict": outcome.verdict(), "reason": outcome.reason()})),
     ))
+}
+
+/// The actual authenticated dev request is rechecked whenever the host imports this source.
+struct DevelopmentSavedPhoto {
+    headers: HeaderMap,
+    token: Arc<str>,
+    path: std::path::PathBuf,
+    maximum_bytes: u64,
+}
+impl crate::gameplay::imagery::DevelopmentSavedPhotoSource for DevelopmentSavedPhoto {
+    fn read_current<'a>(
+        &'a self,
+        owner: &'a df_imagery::ImageOwner,
+    ) -> crate::gameplay::imagery::central::ReferenceFuture<
+        'a,
+        crate::gameplay::imagery::ReferenceImage,
+    > {
+        Box::pin(async move {
+            authorized(&self.headers, &self.token)
+                .map_err(|_| crate::gameplay::imagery::ImageFailure::Refused)?;
+            if !matches!(owner, df_imagery::ImageOwner::Run { .. }) {
+                return Err(crate::gameplay::imagery::ImageFailure::Refused);
+            }
+            crate::gameplay::imagery::Imagery::read_saved_photo(&self.path, self.maximum_bytes)
+                .await
+                .map_err(|_| crate::gameplay::imagery::ImageFailure::BadOutput)
+        })
+    }
+}
+
+#[cfg(test)]
+mod saved_photo_source_tests {
+    use super::*;
+    use crate::gameplay::imagery::DevelopmentSavedPhotoSource;
+    fn run_owner() -> df_imagery::ImageOwner {
+        df_imagery::ImageOwner::Run {
+            campaign: df_types::CampaignId::from_bytes(&[1; 16]).unwrap(),
+            run: df_types::RunId::from_bytes(&[2; 16]).unwrap(),
+        }
+    }
+    fn proof(path: std::path::PathBuf) -> DevelopmentSavedPhoto {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer saved-photo-token".parse().unwrap(),
+        );
+        DevelopmentSavedPhoto {
+            headers,
+            token: Arc::from("saved-photo-token"),
+            path,
+            maximum_bytes: 16 * 1024 * 1024,
+        }
+    }
+    #[tokio::test]
+    async fn saved_photo_source_rechecks_operator_token_and_run_owner_before_file_read() {
+        let missing = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/imagery-finish-20261029/standalone-analysis/missing-auth-source.image");
+        let mut source = proof(missing);
+        source.headers.clear();
+        assert!(matches!(
+            source.read_current(&run_owner()).await,
+            Err(crate::gameplay::imagery::ImageFailure::Refused)
+        ));
+        source.headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer saved-photo-token".parse().unwrap(),
+        );
+        let draft = df_imagery::ImageOwner::Draft {
+            account: df_types::AccountId::from_bytes(&[3; 16]).unwrap(),
+        };
+        assert!(matches!(
+            source.read_current(&draft).await,
+            Err(crate::gameplay::imagery::ImageFailure::Refused)
+        ));
+    }
+    #[tokio::test]
+    async fn saved_photo_source_rereads_actual_bytes_and_enforces_the_configured_file_bound() {
+        fn png(pixel: [u8; 3]) -> Vec<u8> {
+            let image = image::RgbImage::from_pixel(2, 2, image::Rgb(pixel));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            bytes.into_inner()
+        }
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp/imagery-finish-20261029/standalone-analysis/dev-source-fixture")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.image");
+        let first = png([10, 20, 30]);
+        let second = png([100, 120, 140]);
+        std::fs::write(&path, &first).unwrap();
+        let mut source = proof(path.clone());
+        assert_eq!(
+            source
+                .read_current(&run_owner())
+                .await
+                .unwrap()
+                .bytes
+                .as_ref(),
+            first
+        );
+        std::fs::write(&path, &second).unwrap();
+        assert_eq!(
+            source
+                .read_current(&run_owner())
+                .await
+                .unwrap()
+                .bytes
+                .as_ref(),
+            second
+        );
+        source.maximum_bytes = u64::MAX;
+        assert_eq!(
+            source
+                .read_current(&run_owner())
+                .await
+                .unwrap()
+                .bytes
+                .as_ref(),
+            second
+        );
+        source.maximum_bytes = 1;
+        assert!(matches!(
+            source.read_current(&run_owner()).await,
+            Err(crate::gameplay::imagery::ImageFailure::BadOutput)
+        ));
+    }
 }
 
 /// `GET /dev/state`: everything a script needs in one document: room, phase,
@@ -1546,9 +1671,10 @@ fn describe_json() -> Value {
         .collect::<Vec<_>>();
     let mut commands = describe_commands();
     commands.extend(super::roleplay::commands());
+    commands.extend(super::imagery::commands());
     json!({
         "auth": "every request carries Authorization: Bearer <token from the run's dev-control-token file>",
-        "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; a revoked local seat binding is HTTP 409 rejoin_required; server failures are HTTP 502/500 JSON {error}",
+        "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; imagery configuration commits are HTTP 202 applied_local with separate runtime acknowledgement; malformed dev requests are HTTP 400 JSON {error}; imagery CAS conflicts are HTTP 409 without changes; a revoked local seat binding is HTTP 409 rejoin_required; server failures are HTTP 502/500 JSON {error}",
         "refusals": "a refused action reports the server's own reason code: stale-offer, wrong-turn, invalid-selection, paused, resource-missing, capability-unavailable, recovery-required, revision-conflict, operation-conflict, operation-expired",
         "phases": ["room", "creation", "opening", "dialogue", "combat", "complete", "ended (adventure_ended)"],
         "views": ["tv", "each joined seat or hero name; a hero whose phone is not on a CLI seat is read from the checkpoint, read-only; a revoked local binding returns an explicit rejoin_required result and never falls back to another audience"],
