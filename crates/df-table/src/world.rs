@@ -1,8 +1,9 @@
 //! The world: every element on the canvas as an entity with components, and the rules that keep
 //! the components consistent.
 //!
-//! Components are `Name`, `Kind`, `Position` and `Fields`, which every element has, and `Motion`,
-//! which an element has while it travels. A name is unique and is how everything outside the
+//! Components are `Name`, `Kind`, `Position` and `Fields`, which every element has, `Motion`,
+//! which an element has while it travels, and the appearance components `Rotation` (a `Degrees`)
+//! and `Pivot`, which an element has once it has been turned. A name is unique and is how everything outside the
 //! world refers to an element; the entity handle never leaves this crate's internals. The world
 //! owns the structure (who exists, who moves) and never judges whether a value is valid for a
 //! kind: `canvas.rs` checks that before it changes the world.
@@ -13,7 +14,9 @@
 use std::collections::BTreeMap;
 
 use crate::ecs::{Entities, Entity, Store};
-use crate::element::{Element, ElementId, FieldName, FieldValue, KindName, Position};
+use crate::element::{
+    Appearance, Degrees, Element, ElementId, FieldName, FieldValue, KindName, Pivot, Position,
+};
 use crate::motion::{self, Motion};
 
 /// The fields of one element.
@@ -34,6 +37,8 @@ pub struct World {
     positions: Store<Position>,
     fields: Store<Fields>,
     motions: Store<Motion>,
+    rotations: Store<Degrees>,
+    pivots: Store<Pivot>,
     /// Name to entity, in name order. The one place a name is turned into a handle.
     by_name: BTreeMap<ElementId, Entity>,
 }
@@ -81,6 +86,8 @@ impl World {
         self.positions.remove(entity);
         self.fields.remove(entity);
         self.motions.remove(entity);
+        self.rotations.remove(entity);
+        self.pivots.remove(entity);
         self.entities.despawn(entity);
         true
     }
@@ -126,6 +133,25 @@ impl World {
         Some(self.motions.remove(entity).is_some())
     }
 
+    /// Turns an element to `rotation`, about `pivot` when one is given and about the pivot it had
+    /// otherwise. Travel goes on: turning never moves the element.
+    pub fn rotate(&mut self, id: &ElementId, rotation: Degrees, pivot: Option<Pivot>) -> bool {
+        let Some(&entity) = self.by_name.get(id) else {
+            return false;
+        };
+        self.rotations.insert(entity, rotation);
+        if let Some(pivot) = pivot {
+            self.pivots.insert(entity, pivot);
+        }
+        true
+    }
+
+    /// How many elements have been turned, so a test can see that a removal took the component.
+    #[cfg(test)]
+    pub(crate) fn rotation_count(&self) -> usize {
+        self.rotations.len()
+    }
+
     /// Whether any element is travelling, so a host can skip ticking an idle canvas.
     pub fn is_moving(&self) -> bool {
         !self.motions.is_empty()
@@ -153,6 +179,10 @@ impl World {
             position: *self.positions.get(entity)?,
             fields: self.fields.get(entity)?.clone(),
             motion: self.motions.get(entity).copied(),
+            appearance: Appearance {
+                rotation: self.rotations.get(entity).copied().unwrap_or_default(),
+                pivot: self.pivots.get(entity).copied().unwrap_or_default(),
+            },
         })
     }
 

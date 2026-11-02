@@ -84,6 +84,8 @@ mod report_tests;
 #[cfg(test)]
 mod request_tests;
 #[cfg(test)]
+mod rotation_command_tests;
+#[cfg(test)]
 mod scene_command_tests;
 #[cfg(test)]
 mod scene_transition_tests;

@@ -1,7 +1,7 @@
 //! A playground for gameplay display: the shared screen and a phone, drawn in the browser from
 //! fixture files, so the table experience can be designed and judged without the engine.
 //!
-//! The model (`fixture`, `copy`, `choices`, `layout`) is plain Rust that native tests cover. The
+//! The model (`fixture`, `copy`, `choices`, `layout`, `figure`) is plain Rust that native tests cover. The
 //! drawing (`dom`, `net`, `app` and the views) is browser-only and thin: it turns the model into
 //! elements, and it reloads styles and fixtures when their files change, so a visual change needs
 //! no rebuild. Browser crates do not depend on the engine, so this crate holds its own view data.
@@ -11,6 +11,7 @@ pub mod camera;
 pub mod choices;
 pub mod controls;
 pub mod copy;
+pub mod figure;
 pub mod fixture;
 pub mod layout;
 pub mod media;
@@ -40,6 +41,8 @@ mod choices_tests;
 mod controls_tests;
 #[cfg(test)]
 mod copy_tests;
+#[cfg(test)]
+mod figure_tests;
 #[cfg(test)]
 mod fixture_tests;
 #[cfg(test)]

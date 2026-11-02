@@ -11,8 +11,8 @@
 //!
 //! How the built crate differs from section O, so nobody is surprised:
 //!
-//! - There is no `envelope`, `owner_queue`, `machine`, `registry`, `pipeline`, `pending`,
-//!   `effects`, `table_state`, `projection` or `inspect` yet (C1 to C7).
+//! - There is no `machine`, `registry`, `pipeline`, `pending`, `effects`, `table_state`,
+//!   `projection` or `inspect` yet (C2 to C7). `envelope` and `owner_queue` are built (C1).
 //! - `CanvasEffect` is the first `TableEffect` (O.3 `effects`); it lives in `canvas.rs` until a
 //!   second kind of table state needs the same pattern.
 //! - The canvas events keep their bare `revision` counter. `SessionRevision`, `OperationId` and the
@@ -44,6 +44,7 @@ pub mod canvas;
 pub mod config;
 pub mod ecs;
 pub mod element;
+pub mod envelope;
 pub mod event;
 pub mod event_field;
 pub mod field_type;
@@ -53,6 +54,7 @@ pub mod kind_file;
 mod listed;
 pub mod motion;
 pub mod outcome;
+pub mod owner_queue;
 pub mod ports;
 pub mod private_data;
 #[cfg(any(test, feature = "testkit"))]
@@ -72,6 +74,8 @@ mod ecs_tests;
 #[cfg(test)]
 mod element_tests;
 #[cfg(test)]
+mod envelope_tests;
+#[cfg(test)]
 mod event_tests;
 #[cfg(test)]
 mod field_type_tests;
@@ -83,6 +87,10 @@ mod kind_tests;
 mod motion_tests;
 #[cfg(test)]
 mod outcome_tests;
+#[cfg(test)]
+mod owner_queue_property_tests;
+#[cfg(test)]
+mod owner_queue_tests;
 #[cfg(test)]
 mod ports_tests;
 #[cfg(test)]

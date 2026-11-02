@@ -1,7 +1,7 @@
 //! The camera: what it frames, held on the screen, and how a move is blended.
 
 use crate::camera::{Framing, framing, progress};
-use crate::fixture::{Camera, ElementShape, StageElement};
+use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
 
 fn figure(id: &str, x: f32, y: f32) -> StageElement {
     StageElement {
@@ -15,6 +15,8 @@ fn figure(id: &str, x: f32, y: f32) -> StageElement {
         width_units: 9.0,
         height_units: 9.0,
         fields: serde_json::Map::new(),
+        rotation_degrees: 0,
+        pivot: StagePivot::default(),
     }
 }
 

@@ -120,7 +120,25 @@ pub enum EffectRequest {
     Stop {
         id: String,
     },
+    /// Turns the element clockwise to `rotation_degrees` (0 to 359) about `pivot`, or about the
+    /// pivot it already has when none is given. The numbers are wide on purpose, so a value out of
+    /// range is refused with its range instead of failing to read.
+    Transform {
+        id: String,
+        rotation_degrees: i64,
+        #[serde(default)]
+        pivot: Option<PivotRequest>,
+    },
     Clear {},
+}
+
+/// The point an element turns about, as whole percent of its own width and height (0 to 100;
+/// 50 and 50 is the centre).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PivotRequest {
+    pub x_percent: i64,
+    pub y_percent: i64,
 }
 
 /// The answer to a request that changes something.

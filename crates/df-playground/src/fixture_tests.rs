@@ -1,4 +1,4 @@
-use crate::fixture::{ElementSource, Fixture, Status};
+use crate::fixture::{ElementSource, Fixture, StageElement, StagePivot, Status};
 
 const MINIMAL: &str = r#"{
     "name": "Minimal",
@@ -82,4 +82,61 @@ fn a_missing_required_key_is_refused_by_name() {
     let text = MINIMAL.replace(r#""hero": "Pip", "#, "");
     let error = Fixture::parse(&text).expect_err("refused");
     assert!(error.message.contains("hero"), "got: {}", error.message);
+}
+
+fn inline_element(extra: &str) -> StageElement {
+    let text = MINIMAL.replace(
+        r#""elements": "live""#,
+        &format!(
+            r##""elements": [
+                {{"id": "door", "kind": "set_piece", "label": "Door", "x": 20, "y": 30,
+                  "color": null, "shape": "rect", "width_units": 4, "height_units": 8{extra}}}
+            ]"##
+        ),
+    );
+    let ElementSource::Inline(mut elements) = Fixture::parse(&text).expect("parses").tv.elements
+    else {
+        panic!("expected inline elements");
+    };
+    elements.remove(0)
+}
+
+#[test]
+fn an_element_without_a_rotation_or_pivot_is_unturned_about_its_centre() {
+    let element = inline_element("");
+    assert_eq!(element.rotation_degrees, 0);
+    assert_eq!(element.pivot, StagePivot::default());
+    assert_eq!((element.pivot.x_percent, element.pivot.y_percent), (50, 50));
+}
+
+#[test]
+fn an_element_with_a_rotation_and_a_pivot_keeps_both() {
+    let element =
+        inline_element(r#", "rotation_degrees": 270, "pivot": {"x_percent": 0, "y_percent": 50}"#);
+    assert_eq!(element.rotation_degrees, 270);
+    assert_eq!(
+        element.pivot,
+        StagePivot {
+            x_percent: 0,
+            y_percent: 50
+        }
+    );
+}
+
+#[test]
+fn a_pivot_with_one_coordinate_takes_the_centre_for_the_other_and_a_misspelt_key_is_refused() {
+    let element = inline_element(r#", "pivot": {"x_percent": 10}"#);
+    assert_eq!(
+        element.pivot,
+        StagePivot {
+            x_percent: 10,
+            y_percent: 50
+        }
+    );
+    let text = MINIMAL.replace(
+        r#""elements": "live""#,
+        r##""elements": [{"id": "d", "kind": "k", "label": "D", "x": 1, "y": 1, "color": null,
+            "shape": "rect", "width_units": 1, "height_units": 1, "pivot": {"x": 10}}]"##,
+    );
+    assert!(Fixture::parse(&text).is_err());
 }

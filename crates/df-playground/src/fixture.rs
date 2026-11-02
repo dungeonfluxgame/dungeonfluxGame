@@ -50,6 +50,30 @@ pub struct StageElement {
     /// media library draws that picture in the figure.
     #[serde(default)]
     pub fields: serde_json::Map<String, serde_json::Value>,
+    /// Clockwise turn in degrees, 0 to 359 (180 shows it upside down). Defaults to 0.
+    #[serde(default)]
+    pub rotation_degrees: u16,
+    /// The point the figure turns about. Defaults to its centre.
+    #[serde(default)]
+    pub pivot: StagePivot,
+}
+
+/// The point a figure turns about, in whole percent of its own width and height from its top left
+/// corner: 50 and 50 is the centre, 0 and 50 a hinge on the left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StagePivot {
+    pub x_percent: u8,
+    pub y_percent: u8,
+}
+
+impl Default for StagePivot {
+    fn default() -> Self {
+        Self {
+            x_percent: 50,
+            y_percent: 50,
+        }
+    }
 }
 
 impl StageElement {

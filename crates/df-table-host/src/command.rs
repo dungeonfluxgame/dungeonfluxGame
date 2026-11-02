@@ -16,14 +16,16 @@ use df_playground::scene::{
     ImageSlot, MAXIMUM_CAMERA_MS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME,
     MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange, Target,
 };
+use df_table::element::{Degrees, Percent};
 
-use crate::wire::{EffectRequest, ValueForm};
+use crate::wire::{EffectRequest, PivotRequest, ValueForm};
 
 const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
 const MOVE_USAGE: &str = "move <id> <x> <y>";
 const TRAVEL_USAGE: &str = "travel <id> <x> <y> [speed=N]";
 const STOP_USAGE: &str = "stop <id> [<id> ...]";
+const ROTATE_USAGE: &str = "rotate <id> <degrees> [pivot=X,Y]";
 /// Canvas units per second when `travel` is given no speed: the canvas in about five seconds.
 pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
@@ -183,6 +185,7 @@ pub fn usage_text() -> String {
          \n  {MOVE_USAGE}\n      move an element at once (x 0 to 100, y 0 to 56.25)\n\
          \n  {TRAVEL_USAGE}\n      send an element toward a point; the host moves it a little every tick, so it\n      glides there on its own (speed in canvas units per second, default 20)\n\
          \n  {STOP_USAGE}\n      end travel where the element stands\n\
+         \n  {ROTATE_USAGE}\n      turn an element clockwise to a whole number of degrees, 0 to 359 (180 is upside\n      down), about its centre or about pivot=X,Y, each a whole percent of its own width and\n      height from its top left corner (0,50 is a hinge on the left edge); without pivot= it\n      keeps the pivot it has\n\
          \n  repl\n      read commands from standard input, one per line, until quit; a command costs\n      about a millisecond instead of a process start\n\
          \n  {DESPAWN_USAGE}\n      remove elements\n\
          \n  clear\n      remove every element\n\
@@ -337,6 +340,57 @@ fn travel(words: &[String]) -> Result<Command, CommandError> {
         y: number("y", y)?,
         speed,
     }]))
+}
+
+const ROTATION_RANGE: &str =
+    "a whole number of degrees from 0 to 359 clockwise (180 is upside down)";
+const PIVOT_RANGE: &str = concat!(
+    "two whole numbers of percent from 0 to 100 as X,Y ",
+    "(50,50 is the centre, 0,50 a hinge on the left edge)"
+);
+
+fn rotate(words: &[String]) -> Result<Command, CommandError> {
+    let [id, degrees, rest @ ..] = words else {
+        return Err(CommandError::Usage(ROTATE_USAGE));
+    };
+    let bad_rotation = || CommandError::BadChoice {
+        key: "degrees".to_owned(),
+        text: degrees.clone(),
+        allowed: ROTATION_RANGE,
+    };
+    let rotation_degrees = degrees
+        .parse::<i64>()
+        .ok()
+        .filter(|degrees| Degrees::new(*degrees).is_ok())
+        .ok_or_else(bad_rotation)?;
+    let mut pivot = None;
+    for (_, value) in keyed(rest, "pivot=X,Y", &["pivot"])? {
+        pivot = Some(pivot_request(value)?);
+    }
+    Ok(Command::Effects(vec![EffectRequest::Transform {
+        id: id.clone(),
+        rotation_degrees,
+        pivot,
+    }]))
+}
+
+fn pivot_request(value: &str) -> Result<PivotRequest, CommandError> {
+    let bad_pivot = || CommandError::BadChoice {
+        key: "pivot".to_owned(),
+        text: value.to_owned(),
+        allowed: PIVOT_RANGE,
+    };
+    let (x, y) = value.split_once(',').ok_or_else(bad_pivot)?;
+    let share = |text: &str| {
+        text.parse::<i64>()
+            .ok()
+            .filter(|percent| Percent::new(*percent).is_ok())
+            .ok_or_else(bad_pivot)
+    };
+    Ok(PivotRequest {
+        x_percent: share(x)?,
+        y_percent: share(y)?,
+    })
 }
 
 fn events(words: &[String]) -> Result<Command, CommandError> {
@@ -957,6 +1011,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "set" => set(rest),
         "move" => move_element(rest),
         "travel" => travel(rest),
+        "rotate" => rotate(rest),
         "stop" => {
             if rest.is_empty() {
                 return Err(CommandError::Usage(STOP_USAGE));

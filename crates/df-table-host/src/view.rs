@@ -5,7 +5,7 @@
 //! after it is released.
 
 use df_table::canvas::Canvas;
-use df_table::element::{Color, FieldValue};
+use df_table::element::{Color, FieldValue, Pivot};
 use df_table::field_type::FieldType;
 use df_table::kind::{KindDefinition, Shape};
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,29 @@ pub struct TravelView {
     pub speed: f32,
 }
 
+/// The point an element turns about, in whole percent of its own width and height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PivotView {
+    pub x_percent: u8,
+    pub y_percent: u8,
+}
+
+impl Default for PivotView {
+    /// The centre, which is also what a frame from before pivots existed means.
+    fn default() -> Self {
+        Self::from(Pivot::CENTER)
+    }
+}
+
+impl From<Pivot> for PivotView {
+    fn from(pivot: Pivot) -> Self {
+        Self {
+            x_percent: pivot.x.get(),
+            y_percent: pivot.y.get(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ElementView {
     pub id: String,
@@ -71,6 +94,11 @@ pub struct ElementView {
     /// Where the element is heading, while it travels.
     #[serde(default)]
     pub travelling: Option<TravelView>,
+    /// Clockwise turn, 0 to 359; a frame from before rotation existed reads as 0.
+    #[serde(default)]
+    pub rotation_degrees: u16,
+    #[serde(default)]
+    pub pivot: PivotView,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +194,8 @@ impl CanvasView {
                         y: motion.target.y,
                         speed: motion.speed.units_per_second(),
                     }),
+                    rotation_degrees: element.appearance.rotation.get(),
+                    pivot: element.appearance.pivot.into(),
                 }
             })
             .collect();

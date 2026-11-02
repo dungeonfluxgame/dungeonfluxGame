@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::event_log::LoggedLine;
 use crate::render::{MAXIMUM_LABEL_CHARACTERS, escape, page, shorten_label};
-use crate::view::{CanvasView, ElementView};
+use crate::view::{CanvasView, ElementView, PivotView};
 use crate::wire::EffectRequest;
 
 fn spawn(canvas: &mut Canvas, request: serde_json::Value) {
@@ -122,6 +122,8 @@ fn hostile_element() -> ElementView {
         fields: serde_json::Map::from_iter([("note".to_owned(), json!("<i>"))]),
         problem: Some("<problem>".into()),
         travelling: None,
+        rotation_degrees: 0,
+        pivot: PivotView::default(),
     }
 }
 

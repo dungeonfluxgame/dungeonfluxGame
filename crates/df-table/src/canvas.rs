@@ -12,10 +12,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::element::{
-    CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, Element, ElementId, FieldName, FieldValue, KindName,
-    Position,
+    Appearance, CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, Degrees, Element, ElementId, FieldName,
+    FieldValue, KindName, Pivot, Position,
 };
-use crate::event::{EffectKind, RejectionCause, TableEvent};
+use crate::event::{EffectKind, RejectionCause, TableEvent, TransformKind};
 use crate::field_type::{FieldType, ValueError};
 use crate::kind::KindRegistry;
 use crate::motion::{Motion, Speed, SpeedError};
@@ -57,6 +57,13 @@ pub enum CanvasEffect {
     Stop {
         id: ElementId,
     },
+    /// Turns the element to `rotation` about `pivot`, or about the pivot it already has when none
+    /// is given. It draws differently and moves nothing, so travel goes on.
+    Transform {
+        id: ElementId,
+        rotation: Degrees,
+        pivot: Option<Pivot>,
+    },
     Clear,
 }
 
@@ -69,6 +76,7 @@ impl CanvasEffect {
             Self::Move { .. } => EffectKind::Move,
             Self::Travel { .. } => EffectKind::Travel,
             Self::Stop { .. } => EffectKind::Stop,
+            Self::Transform { .. } => EffectKind::Transform,
             Self::Clear => EffectKind::Clear,
         }
     }
@@ -81,6 +89,7 @@ impl CanvasEffect {
             | Self::Set { id, .. }
             | Self::Move { id, .. }
             | Self::Travel { id, .. }
+            | Self::Transform { id, .. }
             | Self::Stop { id } => Some(id),
             Self::Clear => None,
         }
@@ -358,6 +367,11 @@ impl Canvas {
             CanvasEffect::Move { id, position } => self.move_element(id, position),
             CanvasEffect::Travel { id, to, speed } => self.travel(id, to, speed),
             CanvasEffect::Stop { id } => self.stop(id),
+            CanvasEffect::Transform {
+                id,
+                rotation,
+                pivot,
+            } => self.transform(id, rotation, pivot),
             CanvasEffect::Clear => {
                 let removed = self.world.clear();
                 let revision = self.advance();
@@ -404,6 +418,7 @@ impl Canvas {
             position,
             fields,
             motion: None,
+            appearance: Appearance::default(),
         };
         check_element(&self.registry, &element)?;
         self.world
@@ -502,6 +517,24 @@ impl Canvas {
         let revision = self.advance();
         Ok(TableEvent::ElementStopped {
             element: id,
+            revision,
+        })
+    }
+
+    fn transform(
+        &mut self,
+        id: ElementId,
+        rotation: Degrees,
+        pivot: Option<Pivot>,
+    ) -> Result<TableEvent, CanvasError> {
+        if !self.world.rotate(&id, rotation, pivot) {
+            return Err(CanvasError::UnknownElement(id));
+        }
+        let revision = self.advance();
+        Ok(TableEvent::ElementTransformed {
+            element: id,
+            kind: TransformKind::Rotate,
+            degrees: rotation,
             revision,
         })
     }

@@ -1,8 +1,8 @@
 use crate::config::{SettingFault, SettingName};
-use crate::element::{ElementId, FieldName, KindName};
+use crate::element::{Degrees, ElementId, FieldName, KindName};
 use crate::event::{
     AUDIT_LINE_CAPACITY_BYTES, EffectKind, EventClass, FailureCause, PipelineStep, RejectionCause,
-    TableEvent,
+    TableEvent, TransformKind,
 };
 use crate::identity::{
     Correlation, EvidenceRef, MachineId, OperationId, RecoveryEpoch, SceneId, SessionRevision,
@@ -60,6 +60,35 @@ fn an_audit_line_is_the_area_then_a_verb_and_key_value_pairs() {
             revision: 7
         }),
         "CANVAS clear removed=2 revision=7"
+    );
+}
+
+#[test]
+fn a_transform_line_names_the_element_the_kind_the_degrees_and_the_revision() {
+    let turned = TableEvent::ElementTransformed {
+        element: id("pip"),
+        kind: TransformKind::Rotate,
+        degrees: Degrees::new(90).expect("valid degrees"),
+        revision: 7,
+    };
+    assert_eq!(
+        line(&turned),
+        "CANVAS transform element=pip kind=rotate degrees=90 revision=7"
+    );
+    assert_eq!(turned.class(), EventClass::Always);
+    assert_eq!(turned.area(), "CANVAS");
+}
+
+#[test]
+fn a_rejected_transform_names_the_effect_and_an_out_of_range_cause() {
+    let refused = TableEvent::EffectRejected {
+        effect: Some(EffectKind::Transform),
+        element: Some(id("pip")),
+        cause: RejectionCause::InvalidTransform,
+    };
+    assert_eq!(
+        line(&refused),
+        "CANVAS reject effect=transform cause=invalid_transform element=pip"
     );
 }
 
@@ -127,6 +156,7 @@ fn every_rejection_cause_has_a_distinct_key() {
         RejectionCause::MissingRequiredField,
         RejectionCause::TooManyElements,
         RejectionCause::OutOfBounds,
+        RejectionCause::InvalidTransform,
         RejectionCause::MalformedRequest,
         RejectionCause::ForbiddenRequest,
     ];
@@ -243,6 +273,12 @@ fn canvas_events() -> Vec<TableEvent> {
             revision: 11,
         },
         TableEvent::KindsRejected { errors: 2 },
+        TableEvent::ElementTransformed {
+            element: id("pip"),
+            kind: TransformKind::Rotate,
+            degrees: Degrees::new(359).expect("valid degrees"),
+            revision: 12,
+        },
     ]
 }
 

@@ -14,8 +14,9 @@ use crate::camera::framing;
 use crate::controls::Controls;
 use crate::copy::{caption_dwell_ms, status_blocks_input, status_copy, word_count};
 use crate::dom::{append, camera_style, element, picture, set_style, text_element};
+use crate::figure::{figure_style, first_turn, label_style, next_turn};
 use crate::fixture::{Camera, ElementShape, PartyMember, StageElement, Status, TvScene};
-use crate::layout::{hit_point_permille, stage_percent, stage_size_percent};
+use crate::layout::hit_point_permille;
 use crate::media::{MediaKind, media_kind};
 use crate::style::css_color;
 
@@ -32,36 +33,20 @@ fn figure_class(item: &StageElement) -> &'static str {
     }
 }
 
-/// The inline style of a figure: its place, size, layer and colour, from numbers and a checked
-/// colour only.
-fn figure_style(item: &StageElement) -> String {
-    let (left, top) = stage_percent(item.x, item.y);
-    let height = match item.shape {
-        ElementShape::Circle => item.width_units,
-        ElementShape::Rect => item.height_units,
-    };
-    let (width, height) = stage_size_percent(item.width_units, height);
-    // Lower things on the stage draw over higher ones, as they would stand in front.
-    let layer = (top * 10.0) as i32;
-    let color = item
-        .color
-        .as_deref()
-        .and_then(css_color)
-        .map_or_else(String::new, |color| format!("background:{color};"));
-    format!(
-        "left:{left:.2}%;top:{top:.2}%;width:{width:.2}%;height:{height:.2}%;z-index:{layer};{color}"
-    )
-}
+/// The attribute that remembers the turn a figure is drawn at, so the next frame can go the short
+/// way round to a new rotation.
+const TURN_ATTRIBUTE: &str = "data-turn";
 
 fn figure(document: &Document, item: &StageElement) -> Result<Element, JsValue> {
     let node = element(document, "div", figure_class(item))?;
     node.set_attribute("data-id", &item.id)?;
-    set_style(&node, &figure_style(item))?;
+    let turn = first_turn(item);
+    node.set_attribute(TURN_ATTRIBUTE, &turn.to_string())?;
+    set_style(&node, &figure_style(item, turn))?;
     node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
-    append(
-        &node,
-        &text_element(document, "span", "figure-label", &item.label)?,
-    )?;
+    let label = text_element(document, "span", "figure-label", &item.label)?;
+    set_style(&label, &label_style(turn))?;
+    append(&node, &label)?;
     sync_portrait(document, &node, item)?;
     Ok(node)
 }
@@ -96,13 +81,22 @@ fn sync_portrait(document: &Document, node: &Element, item: &StageElement) -> Re
 /// Brings an existing figure up to date without replacing it, so the browser can glide it from
 /// where it was to where it is now.
 fn update_figure(document: &Document, node: &Element, item: &StageElement) -> Result<(), JsValue> {
-    set_style(node, &figure_style(item))?;
+    let turn = match node
+        .get_attribute(TURN_ATTRIBUTE)
+        .and_then(|drawn| drawn.parse::<i64>().ok())
+    {
+        Some(drawn) => next_turn(drawn, item.rotation_degrees),
+        None => first_turn(item),
+    };
+    node.set_attribute(TURN_ATTRIBUTE, &turn.to_string())?;
+    set_style(node, &figure_style(item, turn))?;
     node.set_attribute("class", figure_class(item))?;
     node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
-    if let Some(label) = node.first_element_child()
-        && label.text_content().as_deref() != Some(item.label.as_str())
-    {
-        label.set_text_content(Some(&item.label));
+    if let Some(label) = node.first_element_child() {
+        set_style(&label, &label_style(turn))?;
+        if label.text_content().as_deref() != Some(item.label.as_str()) {
+            label.set_text_content(Some(&item.label));
+        }
     }
     sync_portrait(document, node, item)
 }

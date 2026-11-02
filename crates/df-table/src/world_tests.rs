@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::element::{ElementId, FieldName, FieldValue, KindName, Position};
+use crate::element::{
+    Appearance, Degrees, ElementId, FieldName, FieldValue, KindName, Percent, Pivot, Position,
+};
 use crate::motion::{Motion, Speed};
 use crate::world::{Fields, World};
 
@@ -168,4 +170,44 @@ fn fields_can_be_changed_through_the_world_and_a_missing_element_has_none() {
     assert!(world.fields_mut(&id("ghost")).is_none());
     assert_eq!(world.kind(&id("pip")), Some(&kind()));
     assert_eq!(world.kind(&id("ghost")), None);
+}
+
+fn quarter_turn() -> Degrees {
+    Degrees::new(90).expect("valid degrees")
+}
+
+#[test]
+fn rotating_gives_the_element_a_rotation_and_a_pivot_that_the_snapshot_carries() {
+    let mut world = world_with(&["pip", "vex"]);
+    let hinge = Pivot {
+        x: Percent::new(0).expect("valid percent"),
+        y: Percent::new(50).expect("valid percent"),
+    };
+    assert!(world.rotate(&id("pip"), quarter_turn(), Some(hinge)));
+    let turned = world.element(&id("pip")).expect("exists").appearance;
+    assert_eq!((turned.rotation, turned.pivot), (quarter_turn(), hinge));
+    assert_eq!(
+        world.element(&id("vex")).expect("exists").appearance,
+        Appearance::default()
+    );
+}
+
+#[test]
+fn rotating_an_unknown_element_changes_nothing() {
+    let mut world = world_with(&["pip"]);
+    assert!(!world.rotate(&id("ghost"), quarter_turn(), Some(Pivot::CENTER)));
+    assert_eq!(world.rotation_count(), 0);
+}
+
+#[test]
+fn despawning_and_clearing_remove_the_rotation_component() {
+    let mut world = world_with(&["pip", "vex", "ash"]);
+    for name in ["pip", "vex", "ash"] {
+        world.rotate(&id(name), quarter_turn(), Some(Pivot::CENTER));
+    }
+    assert_eq!(world.rotation_count(), 3);
+    assert!(world.despawn(&id("pip")));
+    assert_eq!(world.rotation_count(), 2, "the component went with it");
+    world.clear();
+    assert_eq!(world.rotation_count(), 0);
 }

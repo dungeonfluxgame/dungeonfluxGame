@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use crate::canvas::{Canvas, CanvasEffect, CanvasError, ElementProblem, MAXIMUM_ELEMENTS};
 use crate::element::{
-    CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, ElementId, FieldName, FieldValue, KindName, Position,
+    Appearance, CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, Degrees, ElementId, FieldName, FieldValue,
+    KindName, Percent, Pivot, Position,
 };
-use crate::event::{EffectKind, RejectionCause, TableEvent};
+use crate::event::{EffectKind, RejectionCause, TableEvent, TransformKind};
 use crate::field_type::ValueError;
+use crate::motion::Speed;
 use crate::testkit::{CHARACTER_KIND, MARKER_KIND, RecordingSink, registry_from};
 
 fn canvas() -> Canvas {
@@ -516,4 +518,134 @@ fn a_canvas_error_says_what_is_wrong_in_plain_words() {
         "'pip' already exists"
     );
     assert!(CanvasError::OutOfBounds.to_string().contains("56.25"));
+}
+
+fn turn(
+    canvas: &mut Canvas,
+    sink: &RecordingSink,
+    name: &str,
+    degrees: i64,
+    pivot: Option<Pivot>,
+) -> Result<(), CanvasError> {
+    canvas.apply(
+        CanvasEffect::Transform {
+            id: id(name),
+            rotation: Degrees::new(degrees).expect("valid degrees"),
+            pivot,
+        },
+        sink,
+    )
+}
+
+fn hinge() -> Pivot {
+    Pivot {
+        x: Percent::new(0).expect("valid percent"),
+        y: Percent::new(50).expect("valid percent"),
+    }
+}
+
+#[test]
+fn turning_an_element_changes_its_appearance_and_records_one_event() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 90, Some(hinge())).expect("turns");
+    let appearance = canvas.element(&id("pip")).expect("exists").appearance;
+    assert_eq!(appearance.rotation.get(), 90);
+    assert_eq!(appearance.pivot, hinge());
+    assert_eq!(
+        sink.events().split_off(1),
+        vec![TableEvent::ElementTransformed {
+            element: id("pip"),
+            kind: TransformKind::Rotate,
+            degrees: Degrees::new(90).expect("valid degrees"),
+            revision: 2,
+        }]
+    );
+    assert_eq!(canvas.revision(), 2);
+}
+
+#[test]
+fn an_element_that_was_never_turned_is_unturned_about_its_centre() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    assert_eq!(
+        canvas.element(&id("pip")).expect("exists").appearance,
+        Appearance::default()
+    );
+    assert_eq!(Appearance::default().pivot, Pivot::CENTER);
+}
+
+#[test]
+fn turning_without_a_pivot_keeps_the_pivot_the_element_had() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 45, Some(hinge())).expect("turns");
+    turn(&mut canvas, &sink, "pip", 0, None).expect("turns back");
+    let appearance = canvas.element(&id("pip")).expect("exists").appearance;
+    assert_eq!(appearance.rotation, Degrees::default());
+    assert_eq!(appearance.pivot, hinge(), "a door keeps its hinge");
+}
+
+#[test]
+fn turning_an_unknown_element_is_refused_records_the_rejection_and_changes_nothing() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    assert_eq!(
+        turn(&mut canvas, &sink, "ghost", 90, Some(hinge())),
+        Err(CanvasError::UnknownElement(id("ghost")))
+    );
+    assert_eq!(canvas.revision(), 1);
+    assert_eq!(
+        sink.events().split_off(1),
+        vec![rejected(
+            EffectKind::Transform,
+            Some("ghost"),
+            RejectionCause::UnknownElement
+        )]
+    );
+    assert_eq!(
+        canvas.element(&id("pip")).expect("exists").appearance,
+        Appearance::default()
+    );
+}
+
+#[test]
+fn a_turn_leaves_the_position_and_a_journey_alone() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    canvas
+        .apply(
+            CanvasEffect::Travel {
+                id: id("pip"),
+                to: Position::new(50.0, 10.0),
+                speed: Speed::new(10.0).expect("valid speed"),
+            },
+            &sink,
+        )
+        .expect("starts");
+    turn(&mut canvas, &sink, "pip", 180, None).expect("turns");
+    let element = canvas.element(&id("pip")).expect("exists");
+    assert_eq!(element.position, Position::new(10.0, 10.0));
+    assert!(element.motion.is_some() && canvas.is_moving());
+}
+
+#[test]
+fn a_turned_element_that_is_removed_leaves_no_rotation_for_the_next_one_of_that_name() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 270, Some(hinge())).expect("turns");
+    canvas
+        .apply(CanvasEffect::Despawn { id: id("pip") }, &sink)
+        .expect("despawns");
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns again");
+    assert_eq!(
+        canvas.element(&id("pip")).expect("exists").appearance,
+        Appearance::default()
+    );
 }

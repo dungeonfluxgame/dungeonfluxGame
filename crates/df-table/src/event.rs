@@ -19,11 +19,12 @@ use std::fmt::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{SettingFault, SettingName};
-use crate::element::{ElementId, FieldName, KindName};
+use crate::element::{Degrees, ElementId, FieldName, KindName};
 use crate::event_field::LineWriter;
 use crate::identity::{Correlation, EvidenceRef, TableScope};
 use crate::listed::listed_enum;
 use crate::outcome::{DeclineCode, OutcomeKind};
+use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::ports::PortName;
 use crate::private_data::LengthClass;
 
@@ -53,6 +54,7 @@ pub enum EffectKind {
     Travel,
     Stop,
     Clear,
+    Transform,
 }
 
 impl EffectKind {
@@ -66,6 +68,25 @@ impl EffectKind {
             Self::Travel => "travel",
             Self::Stop => "stop",
             Self::Clear => "clear",
+            Self::Transform => "transform",
+        }
+    }
+}
+
+listed_enum! {
+    /// Which appearance a transform changed, named for the audit line.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TransformKind {
+        Rotate,
+    }
+}
+
+impl TransformKind {
+    /// The closed key written into an audit line.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Rotate => "rotate",
         }
     }
 }
@@ -84,6 +105,8 @@ pub enum RejectionCause {
     TooManyElements,
     OutOfBounds,
     InvalidSpeed,
+    /// A rotation or pivot outside its range.
+    InvalidTransform,
     /// A request that could not be read as an effect at all.
     MalformedRequest,
     /// A request that did not come from the local machine, or not as JSON.
@@ -104,6 +127,7 @@ impl RejectionCause {
             Self::TooManyElements => "too_many_elements",
             Self::OutOfBounds => "out_of_bounds",
             Self::InvalidSpeed => "invalid_speed",
+            Self::InvalidTransform => "invalid_transform",
             Self::MalformedRequest => "malformed_request",
             Self::ForbiddenRequest => "forbidden_request",
         }
@@ -278,6 +302,28 @@ pub enum TableEvent {
     SettingKeysIgnored {
         count: usize,
     },
+    /// An element's appearance changed (`transform`). `kind` says which appearance, and `degrees`
+    /// is the rotation it now has.
+    ElementTransformed {
+        element: ElementId,
+        kind: TransformKind,
+        degrees: Degrees,
+        revision: u64,
+    },
+    /// An input was refused without a decline code (a duplicate, a seat that is not at the table,
+    /// a full engine lane). The causes with a code are `InputDeclined`.
+    InputRefused {
+        scope: TableScope,
+        correlation: Correlation,
+        cause: NotDeclinedCause,
+    },
+    /// The owner took an input from a lane and gave it its `turn_seq`; `ms` is admit to serve.
+    InputServed {
+        scope: TableScope,
+        correlation: Correlation,
+        lane: Lane,
+        ms: u64,
+    },
 }
 
 impl TableEvent {
@@ -299,7 +345,10 @@ impl TableEvent {
             | Self::TurnApplied { .. }
             | Self::BoundaryFailed { .. }
             | Self::SettingRejected { .. }
-            | Self::SettingKeysIgnored { .. } => EventClass::Always,
+            | Self::SettingKeysIgnored { .. }
+            | Self::ElementTransformed { .. }
+            | Self::InputRefused { .. }
+            | Self::InputServed { .. } => EventClass::Always,
         }
     }
 
@@ -317,8 +366,12 @@ impl TableEvent {
             | Self::CanvasCleared { .. }
             | Self::EffectRejected { .. }
             | Self::KindsReloaded { .. }
-            | Self::KindsRejected { .. } => "CANVAS",
-            Self::InputReceived { .. } | Self::InputDeclined { .. } => "INPUT",
+            | Self::KindsRejected { .. }
+            | Self::ElementTransformed { .. } => "CANVAS",
+            Self::InputReceived { .. }
+            | Self::InputDeclined { .. }
+            | Self::InputRefused { .. }
+            | Self::InputServed { .. } => "INPUT",
             Self::StepFinished { .. } => "STEP",
             Self::TurnApplied { .. } => "TURN",
             Self::BoundaryFailed { .. } => "BOUNDARY",
@@ -471,6 +524,38 @@ impl TableEvent {
             Self::SettingKeysIgnored { count } => {
                 let mut line = LineWriter::start(out, "keys_ignored")?;
                 line.field("count", count)
+            }
+            Self::ElementTransformed {
+                element,
+                kind,
+                degrees,
+                revision,
+            } => {
+                let mut line = LineWriter::start(out, "transform")?;
+                line.field("element", element)?;
+                line.field("kind", kind)?;
+                line.field("degrees", degrees)?;
+                line.field("revision", revision)
+            }
+            Self::InputRefused {
+                scope,
+                correlation,
+                cause,
+            } => {
+                let mut line = LineWriter::start(out, "refused")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("cause", cause)
+            }
+            Self::InputServed {
+                scope,
+                correlation,
+                lane,
+                ms,
+            } => {
+                let mut line = LineWriter::start(out, "served")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("lane", lane)?;
+                line.field("ms", ms)
             }
         }
     }

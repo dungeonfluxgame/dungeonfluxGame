@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::element::{Element, ElementId, FieldName, FieldValue, KindName, Position};
+use crate::element::{Appearance, Element, ElementId, FieldName, FieldValue, KindName, Position};
 use crate::field_type::ValueError;
 use crate::kind::KindRegistry;
 use crate::kind_file::{
@@ -299,6 +299,7 @@ fn element_with(field: &str, value: Option<&str>) -> Element {
         position: Position::CENTER,
         fields,
         motion: None,
+        appearance: Appearance::default(),
     }
 }
 

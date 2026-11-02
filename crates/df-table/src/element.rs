@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::motion::Motion;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Longest identifier accepted for an element, a kind or a field.
@@ -152,6 +153,142 @@ impl Position {
     }
 }
 
+/// Largest rotation, in degrees: a full turn is the same as none.
+pub const MAXIMUM_ROTATION_DEGREES: u16 = 359;
+/// Largest share, in percent.
+pub const MAXIMUM_PERCENT: u8 = 100;
+
+/// A clockwise turn in whole degrees, 0 to 359 (180 is upside down). It is the value of an
+/// element's rotation component and is checked once, where it is made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "i64", into = "u16")]
+pub struct Degrees(u16);
+
+/// A rotation that is not a whole number of degrees from 0 to 359.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DegreesError(pub i64);
+
+impl fmt::Display for DegreesError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a rotation is a whole number of degrees from 0 to {MAXIMUM_ROTATION_DEGREES} \
+             clockwise (180 is upside down), not {}",
+            self.0
+        )
+    }
+}
+
+impl Degrees {
+    pub fn new(degrees: i64) -> Result<Self, DegreesError> {
+        u16::try_from(degrees)
+            .ok()
+            .filter(|degrees| *degrees <= MAXIMUM_ROTATION_DEGREES)
+            .map(Self)
+            .ok_or(DegreesError(degrees))
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for Degrees {
+    type Error = DegreesError;
+
+    fn try_from(degrees: i64) -> Result<Self, DegreesError> {
+        Self::new(degrees)
+    }
+}
+
+impl From<Degrees> for u16 {
+    fn from(degrees: Degrees) -> Self {
+        degrees.0
+    }
+}
+
+impl fmt::Display for Degrees {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+/// A whole share from 0 to 100 percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "i64", into = "u8")]
+pub struct Percent(u8);
+
+/// A share that is not a whole number of percent from 0 to 100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PercentError(pub i64);
+
+impl fmt::Display for PercentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "a share is a whole number of percent from 0 to {MAXIMUM_PERCENT}, not {}",
+            self.0
+        )
+    }
+}
+
+impl Percent {
+    pub fn new(percent: i64) -> Result<Self, PercentError> {
+        u8::try_from(percent)
+            .ok()
+            .filter(|percent| *percent <= MAXIMUM_PERCENT)
+            .map(Self)
+            .ok_or(PercentError(percent))
+    }
+
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for Percent {
+    type Error = PercentError;
+
+    fn try_from(percent: i64) -> Result<Self, PercentError> {
+        Self::new(percent)
+    }
+}
+
+impl From<Percent> for u8 {
+    fn from(percent: Percent) -> Self {
+        percent.0
+    }
+}
+
+/// The point of an element that its rotation turns about, as a share of the element's own width
+/// and height from its top left corner: 50 and 50 is the centre, 0 and 50 a hinge on the left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Pivot {
+    pub x: Percent,
+    pub y: Percent,
+}
+
+impl Pivot {
+    pub const CENTER: Self = Self {
+        x: Percent(MAXIMUM_PERCENT / 2),
+        y: Percent(MAXIMUM_PERCENT / 2),
+    };
+}
+
+impl Default for Pivot {
+    fn default() -> Self {
+        Self::CENTER
+    }
+}
+
+/// How an element is drawn, which no rule reads (O.13): a snapshot of its appearance components.
+/// An element with none set has the default, which draws it unturned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Appearance {
+    pub rotation: Degrees,
+    pub pivot: Pivot,
+}
+
 /// A color as red, green and blue bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color(u32);
@@ -205,4 +342,6 @@ pub struct Element {
     pub fields: BTreeMap<FieldName, FieldValue>,
     /// Where the element is heading, while it travels.
     pub motion: Option<Motion>,
+    /// How the element is turned, drawn by the viewer and never read by a rule.
+    pub appearance: Appearance,
 }

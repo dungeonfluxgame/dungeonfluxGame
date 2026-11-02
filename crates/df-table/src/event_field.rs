@@ -11,10 +11,11 @@
 use std::fmt;
 
 use crate::config::{SettingFault, SettingName};
-use crate::element::{ElementId, FieldName, KindName};
-use crate::event::{EffectKind, FailureCause, PipelineStep, RejectionCause};
+use crate::element::{Degrees, ElementId, FieldName, KindName};
+use crate::event::{EffectKind, FailureCause, PipelineStep, RejectionCause, TransformKind};
 use crate::identity::{EvidenceRef, MachineId, OperationId, SceneId, TableId, TurnSeq};
 use crate::outcome::{DeclineCode, OutcomeKind};
+use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::ports::PortName;
 use crate::private_data::LengthClass;
 
@@ -58,6 +59,7 @@ macro_rules! event_field_by_key {
 event_field_by_display!(
     u64,
     usize,
+    Degrees,
     ElementId,
     KindName,
     FieldName,
@@ -80,6 +82,9 @@ event_field_by_key!(
     FailureCause,
     SettingFault,
     LengthClass,
+    TransformKind,
+    Lane,
+    NotDeclinedCause,
 );
 
 /// Writes one audit line piece by piece: the verb, then ` key=value` pairs.

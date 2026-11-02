@@ -8,12 +8,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use df_table::canvas::{Canvas, CanvasEffect, CanvasError};
-use df_table::element::{Color, ElementId, FieldName, FieldValue, KindName, NameError, Position};
+use df_table::element::{
+    Color, Degrees, DegreesError, ElementId, FieldName, FieldValue, KindName, NameError, Percent,
+    PercentError, Pivot, Position,
+};
 use df_table::event::{EffectKind, RejectionCause};
 use df_table::field_type::{FieldType, ValueError};
 use df_table::motion::{Speed, SpeedError};
 
-use crate::wire::{EffectRequest, ValueForm};
+use crate::wire::{EffectRequest, PivotRequest, ValueForm};
 
 /// Which kind of name was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,8 @@ pub enum RequestError {
         error: ValueError,
     },
     Speed(SpeedError),
+    Rotation(DegreesError),
+    Pivot(PercentError),
     Canvas(CanvasError),
 }
 
@@ -54,6 +59,7 @@ impl RequestError {
             Self::Name { .. } => RejectionCause::InvalidName,
             Self::Value { .. } => RejectionCause::InvalidValue,
             Self::Speed(_) => RejectionCause::InvalidSpeed,
+            Self::Rotation(_) | Self::Pivot(_) => RejectionCause::InvalidTransform,
             Self::Canvas(error) => error.cause(),
         }
     }
@@ -65,6 +71,8 @@ impl fmt::Display for RequestError {
             Self::Name { name_kind, error } => write!(formatter, "{name_kind}: {error}"),
             Self::Value { field, error } => write!(formatter, "field '{field}': {error}"),
             Self::Speed(error) => write!(formatter, "{error}"),
+            Self::Rotation(error) => write!(formatter, "{error}"),
+            Self::Pivot(error) => write!(formatter, "pivot: {error}"),
             Self::Canvas(error) => write!(formatter, "{error}"),
         }
     }
@@ -137,6 +145,14 @@ fn read_value(
     }
 }
 
+fn read_pivot(request: PivotRequest) -> Result<Pivot, RequestError> {
+    let share = |percent| Percent::new(percent).map_err(RequestError::Pivot);
+    Ok(Pivot {
+        x: share(request.x_percent)?,
+        y: share(request.y_percent)?,
+    })
+}
+
 impl EffectRequest {
     pub fn effect_kind(&self) -> EffectKind {
         match self {
@@ -146,6 +162,7 @@ impl EffectRequest {
             Self::Move { .. } => EffectKind::Move,
             Self::Travel { .. } => EffectKind::Travel,
             Self::Stop { .. } => EffectKind::Stop,
+            Self::Transform { .. } => EffectKind::Transform,
             Self::Clear {} => EffectKind::Clear,
         }
     }
@@ -158,6 +175,7 @@ impl EffectRequest {
             | Self::Set { id, .. }
             | Self::Move { id, .. }
             | Self::Travel { id, .. }
+            | Self::Transform { id, .. }
             | Self::Stop { id } => ElementId::new(id).ok(),
             Self::Clear {} => None,
         }
@@ -222,6 +240,15 @@ impl EffectRequest {
             }),
             Self::Stop { id } => Ok(CanvasEffect::Stop {
                 id: element_id(&id)?,
+            }),
+            Self::Transform {
+                id,
+                rotation_degrees,
+                pivot,
+            } => Ok(CanvasEffect::Transform {
+                id: element_id(&id)?,
+                rotation: Degrees::new(rotation_degrees).map_err(RequestError::Rotation)?,
+                pivot: pivot.map(read_pivot).transpose()?,
             }),
             Self::Clear {} => Ok(CanvasEffect::Clear),
         }
