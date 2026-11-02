@@ -12,8 +12,13 @@ pub mod current_responses;
 pub mod influence;
 pub mod preconditions;
 
+pub mod coins;
+#[cfg(test)]
+mod coins_tests;
+pub mod creation_build;
 pub mod local_journey;
 pub mod species;
+pub mod srd_equipment_prices;
 
 mod srd_creatures;
 pub use srd_creatures::{
