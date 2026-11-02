@@ -69,7 +69,7 @@ body {
   background-image: linear-gradient(#ffffff14 1px, transparent 1px), linear-gradient(90deg, #ffffff14 1px, transparent 1px);
   background-size: 10% 17.78%;
 }
-.tv-place { position: absolute; left: 2.4cqw; top: 2cqw; font: italic 1.9cqw/1.2 var(--serif); color: var(--brass); letter-spacing: .02em; }
+.tv-place { position: absolute; left: 2.4cqw; top: 2cqw; font: italic 1.9cqw/1.2 var(--serif); color: var(--brass); letter-spacing: .02em; text-shadow: 0 1px 4px #000, 0 0 10px #000a; }
 .tv-figures { position: absolute; inset: 0; z-index: 0; }
 /* A figure keeps its element while it moves, so a change of place glides: about as long as the
    host's tick, so steady travel looks continuous and a single move eases in. */

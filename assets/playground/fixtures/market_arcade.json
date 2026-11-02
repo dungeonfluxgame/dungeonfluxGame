@@ -1,0 +1,41 @@
+{
+  "name": "Shelter in the arcade",
+  "description": "Lines from the game's text service (Codex storyteller), portraits from its image service (Codex image backend), generated 2026-11-02. The party looks for shelter.",
+  "tv": {
+    "place": "The market square",
+    "status": { "kind": "ok" },
+    "caption": {
+      "speaker": "Finn Alder",
+      "text": "The market square has a covered arcade where we can shelter for the night. It's up the slope beyond the lantern post."
+    },
+    "card": { "media": "sigrun.webp", "caption": "Sigrun, scouting ahead" },
+    "party": [
+      { "name": "Brakka", "hit_points": 13, "maximum_hit_points": 13, "color": "#c6a36b" },
+      { "name": "Sigrun", "hit_points": 13, "maximum_hit_points": 13, "color": "#7da35b" }
+    ],
+    "elements": [
+      { "id": "arcade", "kind": "set_piece", "label": "Covered arcade", "x": 70, "y": 14, "color": "#6b5a44", "shape": "rect", "width_units": 36, "height_units": 8 },
+      { "id": "lantern", "kind": "marker", "label": "Lantern post", "x": 40, "y": 24, "color": "#e5b84a", "shape": "circle", "width_units": 2, "height_units": 2 },
+      { "id": "finn", "kind": "character", "label": "Finn", "x": 34, "y": 40, "color": "#d9a441", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "brakka", "kind": "character", "label": "Brakka", "x": 22, "y": 44, "color": "#c6a36b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 46, "y": 32, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "phone": {
+    "hero": "Sigrun",
+    "goal": "Keep the packet safe",
+    "status": { "kind": "ok" },
+    "image": { "media": "sigrun.webp", "caption": "Sigrun" },
+    "narration": [
+      "Finn leads you up the slope toward the market square. \"I'd hoped to reach the covered arcade before the rain got worse.\""
+    ],
+    "suggested": [
+      { "label": "Scout the arcade" },
+      { "label": "Keep watch behind" }
+    ],
+    "groups": [
+      { "name": "Move", "choices": [{ "label": "Climb the slope" }] },
+      { "name": "Talk", "choices": [{ "label": "Ask what he wants" }] }
+    ]
+  }
+}

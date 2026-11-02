@@ -3163,6 +3163,20 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   forgotten. A report is a reading, not a change: it is not an audit line and wakes no other page.
   Measured: pictures loaded and were reported on both screens; sound cues were taken in and played with
   no error; a missing or mistyped name was refused with the list of what exists.
+- **Assets made by the project's own services.** The playground's newest pictures and lines were not
+  made by hand: the game was started as the Codex live-test runbook describes (Codex for text and
+  images, accounting record-only), two heroes were created, and the storyteller was asked in-scene
+  questions. Its answers are the captions of `harbour_courier`, `bandit_at_the_quay` and `market_arcade`;
+  its image service (Codex image backend, 117 to 196 s each) made the portraits of Finn Alder, Dain Rusk,
+  Brakka and Sigrun and a rainy night refresh of the quay (123 s). The pictures are read back from the
+  game's own `/gameplay/imagery/<key>` addresses and resized into `assets/playground/media`; the
+  authored room picture and any local transform (about 1,955,472 bytes) are not counted as generations.
+  Observed limits, for whoever builds the real provider port: `dev direct plate` is cancelled
+  (`interrupted`) while the scene's own plate jobs run and refused (`invalid_request`) until its base
+  plate exists; the line judge withholds a question that is not about the scene; leaving a scene needs
+  its threat settled; and the new engine has no host for these services yet, so the playground can only
+  be filled from a running game. A native provider port that the playground host calls (so `media
+  generate` is a verb) is the next step and needs the services' durable store.
 - **Where it goes next.** The same pattern carries the real engine: a `TableEffect` applied by one
   function and recorded as one event; machines and the DM pipeline added behind the same CLI verbs
   (`spawn machine`, `input <seat> <text>`, `viable <seat>`, `projection show <audience>`); the scene

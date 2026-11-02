@@ -1,0 +1,43 @@
+{
+  "name": "The courier on the quay",
+  "description": "Finn Alder's lines come from the game's text service (Codex storyteller) and the portraits from its image service (Codex image backend), generated 2026-11-02 (the quay backdrop is a Codex refresh of the game's quay picture). A portrait card on the screen and a portrait on the phone.",
+  "tv": {
+    "place": "Salt Quay, in the rain",
+    "status": { "kind": "ok" },
+    "caption": {
+      "speaker": "Finn Alder",
+      "text": "The harbour stays busy even in the rain. At dusk the quay turns slick under the lanterns, while merchants drift up toward the market road."
+    },
+    "backdrop": { "media": "quay-in-the-rain.webp", "caption": "The quay in the rain" },
+    "card": { "media": "finn-alder.webp", "caption": "Finn Alder, courier" },
+    "party": [
+      { "name": "Brakka", "hit_points": 13, "maximum_hit_points": 13, "color": "#c6a36b" },
+      { "name": "Sigrun", "hit_points": 13, "maximum_hit_points": 13, "color": "#7da35b" }
+    ],
+    "elements": [
+      { "id": "finn", "kind": "character", "label": "Finn", "x": 52, "y": 38, "color": "#d9a441", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "dain", "kind": "character", "label": "Dain", "x": 70, "y": 40, "color": "#b84a4a", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "brakka", "kind": "character", "label": "Brakka", "x": 22, "y": 40, "color": "#c6a36b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 32, "y": 46, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "phone": {
+    "hero": "Brakka",
+    "goal": "Find out who the packet is for",
+    "status": { "kind": "ok" },
+    "image": { "media": "brakka.webp", "caption": "Brakka" },
+    "narration": [
+      "Finn won't say who sealed the packet. \"I can't tell you that, friend. Not with a hand already resting on a scimitar nearby.\"",
+      "He fears whoever followed him from an unlisted ship."
+    ],
+    "suggested": [
+      { "label": "Ask who sealed it" },
+      { "label": "Offer to guard him" },
+      { "label": "Watch the bandit" }
+    ],
+    "groups": [
+      { "name": "Talk", "choices": [{ "label": "Ask about shelter" }, { "label": "Ask the road ahead" }] },
+      { "name": "Look", "choices": [{ "label": "Study the seal" }, { "label": "Study the quay" }] }
+    ]
+  }
+}
