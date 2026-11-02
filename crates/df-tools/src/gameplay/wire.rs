@@ -1922,6 +1922,14 @@ pub(super) fn project_journey(
                 |finding| finding.sentence.clone(),
             );
     }
+    // A talk-down tells its outcome once and empties the scene's story so the TV does not voice
+    // the intro again, but a phone draws nothing without campaign text and never speaks it.
+    if role == LocalDemoRole::Player && narration.trim().is_empty() {
+        narration = stage(
+            "view-authored-story",
+            super::beat_script_runtime::authored_story(state),
+        )?;
+    }
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
             narration: narration.clone(),

@@ -910,6 +910,22 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     Ok(scene)
 }
 
+/// The story text the beat's own scene carries, which `scene` empties once a talk-down has told
+/// its outcome. A phone cannot draw a scene with no campaign text, so its view falls back to this.
+pub(super) fn authored_story(state: &GameState) -> Result<String, RepositoryError> {
+    beat_script::with_script(|script| {
+        let beat = script.current(state)?;
+        match shown_variant(script, beat, state)? {
+            Some(variant) => script
+                .scenes
+                .get(&variant)
+                .map(|authored| authored.narration.clone())
+                .ok_or_else(|| refusal("AuthoredSceneVariantMissing")),
+            None => Ok(pack::scene(beat.scene).narration),
+        }
+    })
+}
+
 fn derived_scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(state)?;
@@ -2513,6 +2529,46 @@ pub(super) mod opening_social_tests {
                 );
                 super::super::beat_script_variety_tests::persisted(&talked);
             }
+        });
+    }
+    #[test]
+    fn a_phone_view_keeps_the_scene_story_after_a_talk_down_empties_the_scene_text() {
+        use df_persistence::local_demo_scope::LocalDemoRole;
+        with_harbor(|| {
+            let opening = opening(1);
+            let member = journey::participants(&opening)[0].member;
+            let settled = stage_opening_social(
+                &opening,
+                operation(80),
+                OpeningSocialAttempt {
+                    member,
+                    skill: OpeningSkill::Persuasion,
+                    attitude: Attitude::Hostile,
+                    willingness: Willingness::Hesitant,
+                    faces: &[20, 20],
+                    changed_after: None,
+                },
+            )
+            .unwrap();
+            let state = settled.checkpoint.state();
+            assert!(scene(state).unwrap().narration.is_empty());
+            let story = authored_story(state).unwrap();
+            assert!(!story.trim().is_empty());
+            let view = |role| {
+                super::super::wire::journey_view(&settled.checkpoint, role, member)
+                    .unwrap()
+                    .audience
+                    .unwrap()
+            };
+            let rpc::view_message::Audience::Player(phone) = view(LocalDemoRole::Player) else {
+                panic!("player projection");
+            };
+            assert_eq!(phone.narration, story);
+            let rpc::view_message::Audience::Display(television) = view(LocalDemoRole::Display)
+            else {
+                panic!("display projection");
+            };
+            assert!(television.narration.is_empty());
         });
     }
     #[test]
