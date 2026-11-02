@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::copy::{ReadingPace, status_from_key};
 use crate::fixture::Status;
+use crate::scene::SceneOverlay;
 
 /// The key of the menu entry that keeps the fixture's own status.
 pub const FIXTURE_STATUS_KEY: &str = "fixture";
@@ -76,12 +77,15 @@ impl Default for Controls {
     }
 }
 
-/// The controls and how many changes they have had, as the host answers: a reader that has the
+/// The controls, the scene changes and how many changes there have been, as the host answers: a reader that has the
 /// same revision has nothing new to draw.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlsReply {
     pub revision: u64,
     pub controls: Controls,
+    /// Live changes to the scene, drawn on top of the fixture.
+    #[serde(default)]
+    pub scene: SceneOverlay,
 }
 
 /// One change to the controls, as the page and the dev CLI both send it.

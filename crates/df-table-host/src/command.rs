@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use df_playground::controls::{ControlsChange, Device};
 use df_playground::copy::ReadingPace;
+use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
+use df_playground::scene::SceneChange;
 
 use crate::wire::{EffectRequest, ValueForm};
 
@@ -20,6 +22,11 @@ const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
 const EVENTS_USAGE: &str = "events [after]";
 const SCRIPT_USAGE: &str = "script <file>";
 const PLAYGROUND_USAGE: &str = "playground [set <key>=<value> ...]";
+const SCENE_USAGE: &str =
+    "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | reset";
+const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
+const PARTY_USAGE: &str = "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear";
+const CHOICES_USAGE: &str = "scene choices suggested [<label>[=<explanation>] ...] | group <name> [<label> ...] | unavailable [<label>=<reason> ...] | clear";
 const FIXTURE_USAGE: &str =
     "fixture show <name> | fixture write <name> <file> | fixture remove <name>";
 /// The keys `playground set` accepts and what each takes.
@@ -41,6 +48,8 @@ pub enum Command {
     Playground,
     /// Change what the playground shows, in order.
     PlaygroundSet(Vec<ControlsChange>),
+    /// One live change to the caption, the party or the phone's choices.
+    Scene(SceneChange),
     /// The names of the fixture files.
     Fixtures,
     FixtureShow(String),
@@ -73,6 +82,11 @@ pub enum CommandError {
         text: String,
         allowed: &'static str,
     },
+    /// A hit-point or similar count that is not a whole number from 0.
+    BadCount {
+        what: &'static str,
+        text: String,
+    },
     UnclosedQuote,
     /// `script` and `help` mean nothing inside a script.
     NotAllowedInScript(&'static str),
@@ -93,6 +107,12 @@ impl fmt::Display for CommandError {
                 write!(
                     formatter,
                     "'{text}' is not a choice for {key}; use {allowed}"
+                )
+            }
+            Self::BadCount { what, text } => {
+                write!(
+                    formatter,
+                    "{what} must be a whole number from 0, not '{text}'"
                 )
             }
             Self::UnclosedQuote => formatter.write_str("a quote is not closed"),
@@ -117,6 +137,7 @@ pub fn usage_text() -> String {
          \n  {EVENTS_USAGE}\n      print the newest events, or those after a sequence\n\
          \n  reload\n      re-read the kind files without a restart\n\
          \n  {PLAYGROUND_USAGE}\n      show or change what the playground page shows; keys: {PLAYGROUND_KEYS}\n\
+         \n  {SCENE_USAGE}\n      change the playground's caption, party strip or phone choices live;\n      {PARTY_USAGE}\n      {CHOICES_USAGE}\n      a fixture is not changed; scene reset or another fixture goes back to the file\n\
          \n  fixtures\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
@@ -254,6 +275,182 @@ fn events(words: &[String]) -> Result<Command, CommandError> {
     }
 }
 
+fn count(what: &'static str, text: &str) -> Result<u32, CommandError> {
+    text.parse::<u32>().map_err(|_| CommandError::BadCount {
+        what,
+        text: text.to_owned(),
+    })
+}
+
+/// Reads `key=value` words, refusing a key given twice and any key not in `allowed`.
+fn keyed<'a>(
+    words: &'a [String],
+    allowed: &'static str,
+    keys: &[&str],
+) -> Result<Vec<(&'a str, &'a str)>, CommandError> {
+    let mut seen = BTreeSet::new();
+    let mut pairs = Vec::new();
+    for text in words {
+        let (key, value) = pair(text)?;
+        if !keys.contains(&key) {
+            return Err(CommandError::BadChoice {
+                key: "this command".to_owned(),
+                text: key.to_owned(),
+                allowed,
+            });
+        }
+        if !seen.insert(key) {
+            return Err(CommandError::DuplicateKey(key.to_owned()));
+        }
+        pairs.push((key, value));
+    }
+    Ok(pairs)
+}
+
+fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn caption(words: &[String]) -> Result<Command, CommandError> {
+    let [text, rest @ ..] = words else {
+        return Err(CommandError::Usage(CAPTION_USAGE));
+    };
+    let mut speaker = None;
+    for (_, value) in keyed(rest, "speaker=NAME", &["speaker"])? {
+        speaker = Some(value.to_owned());
+    }
+    Ok(Command::Scene(SceneChange::Caption {
+        speaker,
+        text: text.clone(),
+    }))
+}
+
+fn party(words: &[String]) -> Result<Command, CommandError> {
+    const MEMBER_KEYS: [&str; 4] = ["hp", "max", "color", "conditions"];
+    match words {
+        [verb] if verb == "clear" => Ok(Command::Scene(SceneChange::PartyClear {})),
+        [verb, name] if verb == "remove" => Ok(Command::Scene(SceneChange::PartyRemove {
+            name: name.clone(),
+        })),
+        [verb, name, pairs @ ..] if verb == "add" => {
+            let mut member = PartyMember {
+                name: name.clone(),
+                hit_points: 0,
+                maximum_hit_points: 0,
+                conditions: Vec::new(),
+                color: None,
+            };
+            let mut has_hit_points = false;
+            let mut has_maximum = false;
+            for (key, value) in keyed(
+                pairs,
+                "hp=N, max=N, color=#rrggbb, conditions=a,b",
+                &MEMBER_KEYS,
+            )? {
+                match key {
+                    "hp" => {
+                        member.hit_points = count("hp", value)?;
+                        has_hit_points = true;
+                    }
+                    "max" => {
+                        member.maximum_hit_points = count("max", value)?;
+                        has_maximum = true;
+                    }
+                    "color" => member.color = Some(value.to_owned()),
+                    _ => member.conditions = split_list(value),
+                }
+            }
+            if !has_hit_points {
+                return Err(CommandError::Usage(PARTY_USAGE));
+            }
+            if !has_maximum {
+                member.maximum_hit_points = member.hit_points;
+            }
+            Ok(Command::Scene(SceneChange::PartyAdd { member }))
+        }
+        [verb, name, pairs @ ..] if verb == "set" && !pairs.is_empty() => {
+            let (mut hit_points, mut maximum_hit_points, mut conditions) = (None, None, None);
+            for (key, value) in keyed(
+                pairs,
+                "hp=N, max=N, conditions=a,b",
+                &["hp", "max", "conditions"],
+            )? {
+                match key {
+                    "hp" => hit_points = Some(count("hp", value)?),
+                    "max" => maximum_hit_points = Some(count("max", value)?),
+                    _ => conditions = Some(split_list(value)),
+                }
+            }
+            Ok(Command::Scene(SceneChange::PartySet {
+                name: name.clone(),
+                hit_points,
+                maximum_hit_points,
+                conditions,
+            }))
+        }
+        _ => Err(CommandError::Usage(PARTY_USAGE)),
+    }
+}
+
+/// A choice as `label` or `label=explanation`.
+fn choice(text: &str) -> Choice {
+    match text.split_once('=') {
+        Some((label, explain)) => Choice {
+            label: label.to_owned(),
+            explain: Some(explain.to_owned()),
+        },
+        None => Choice {
+            label: text.to_owned(),
+            explain: None,
+        },
+    }
+}
+
+fn choices(words: &[String]) -> Result<Command, CommandError> {
+    match words {
+        [verb] if verb == "clear" => Ok(Command::Scene(SceneChange::ClearChoices {})),
+        [verb, labels @ ..] if verb == "suggested" => Ok(Command::Scene(SceneChange::Suggested {
+            choices: labels.iter().map(|text| choice(text)).collect(),
+        })),
+        [verb, name, labels @ ..] if verb == "group" => Ok(Command::Scene(SceneChange::Group {
+            name: name.clone(),
+            choices: labels.iter().map(|text| choice(text)).collect(),
+        })),
+        [verb, entries @ ..] if verb == "unavailable" => {
+            let mut choices = Vec::new();
+            for text in entries {
+                let (label, reason) = pair(text)?;
+                choices.push(UnavailableChoice {
+                    label: label.to_owned(),
+                    reason: reason.to_owned(),
+                });
+            }
+            Ok(Command::Scene(SceneChange::Unavailable { choices }))
+        }
+        _ => Err(CommandError::Usage(CHOICES_USAGE)),
+    }
+}
+
+fn scene(words: &[String]) -> Result<Command, CommandError> {
+    match words.split_first() {
+        Some((verb, rest)) if verb == "caption" => caption(rest),
+        Some((verb, rest)) if verb == "caption-clear" && rest.is_empty() => {
+            Ok(Command::Scene(SceneChange::ClearCaption {}))
+        }
+        Some((verb, rest)) if verb == "party" => party(rest),
+        Some((verb, rest)) if verb == "choices" => choices(rest),
+        Some((verb, rest)) if verb == "reset" && rest.is_empty() => {
+            Ok(Command::Scene(SceneChange::Reset {}))
+        }
+        _ => Err(CommandError::Usage(SCENE_USAGE)),
+    }
+}
+
 fn truth(key: &str, text: &str) -> Result<bool, CommandError> {
     match text {
         "true" | "on" => Ok(true),
@@ -348,6 +545,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "events" => events(rest),
         "reload" => Ok(Command::Reload),
         "playground" => playground(rest),
+        "scene" => scene(rest),
         "fixtures" => {
             if rest.is_empty() {
                 Ok(Command::Fixtures)

@@ -54,6 +54,7 @@ body {
 /* Notes */
 .notes h2 { margin: 0 0 6px; font: 400 20px/1.25 var(--serif); color: var(--ivory); }
 .notes p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.notes .note-live { padding: 6px 10px; border-left: 2px solid var(--brass); background: #17343c; color: var(--ivory); }
 .notes .warnings { margin: 0; padding-left: 18px; color: var(--ember); font-size: 13px; }
 .note-error { margin: 0 0 14px; padding: 10px 12px; border-left: 2px solid var(--alarm); background: #3a1f22; color: var(--ivory); font-size: 13px; white-space: pre-wrap; }
 

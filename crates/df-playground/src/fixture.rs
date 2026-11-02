@@ -4,10 +4,10 @@
 //! position of the mistake, so an author sees it on the page instead of a blank panel. It never
 //! draws anything and never decides what a status or a choice means: `copy` and `choices` do.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Where the stage gets its elements from.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ElementSource {
     /// The elements listed in the fixture.
@@ -17,13 +17,13 @@ pub enum ElementSource {
 }
 
 /// The only text accepted where a fixture asks for the live canvas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveMarker {
     Live,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElementShape {
     Circle,
@@ -32,7 +32,7 @@ pub enum ElementShape {
 
 /// One thing drawn on the stage. The host's `/canvas.json` elements have this shape (plus fields
 /// the stage ignores), so a live element and an inline one are drawn the same way.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StageElement {
     pub id: String,
     pub kind: String,
@@ -47,7 +47,7 @@ pub struct StageElement {
 }
 
 /// What the table is waiting for or showing. Each value has fixed plain-language copy (`copy`).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Status {
     Ok,
@@ -61,14 +61,14 @@ pub enum Status {
     WaitingFor { who: String, what: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Caption {
     pub speaker: Option<String>,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartyMember {
     pub name: String,
@@ -80,7 +80,7 @@ pub struct PartyMember {
 }
 
 /// What the shared screen shows.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TvScene {
     pub place: String,
@@ -91,14 +91,14 @@ pub struct TvScene {
     pub elements: ElementSource,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Choice {
     pub label: String,
     pub explain: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChoiceGroup {
     pub name: String,
@@ -106,7 +106,7 @@ pub struct ChoiceGroup {
 }
 
 /// A choice the hero cannot take now, and why.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnavailableChoice {
     pub label: String,
@@ -114,14 +114,14 @@ pub struct UnavailableChoice {
 }
 
 /// A private note shown to one seat only.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoteCard {
     pub text: String,
 }
 
 /// What one player's phone shows.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PhoneScene {
     pub hero: String,
@@ -139,7 +139,7 @@ pub struct PhoneScene {
 }
 
 /// One complete scenario: the shared screen and one phone, drawn together.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
     pub name: String,

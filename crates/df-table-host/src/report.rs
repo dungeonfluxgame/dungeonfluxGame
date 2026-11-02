@@ -83,6 +83,7 @@ pub fn format_playground(reply: &ControlsReply, fixtures: &[String]) -> String {
     let device = controls.device.key();
     let pace = controls.pace.key();
     let fixture = controls.fixture.as_deref().unwrap_or("(none)");
+    let scene = changed_parts(&reply.scene);
     let listed = if fixtures.is_empty() {
         "(none)".to_owned()
     } else {
@@ -95,8 +96,28 @@ pace: {pace}
 status: {}
 unavailable: {}
 grid: {}
+scene: {scene}
 revision: {}
 fixtures: {listed}",
         controls.status_key, controls.show_unavailable, controls.show_grid, reply.revision
     )
+}
+
+/// Which parts of the scene have live changes on top of the fixture.
+fn changed_parts(scene: &df_playground::scene::SceneOverlay) -> String {
+    let parts: Vec<&str> = [
+        ("caption", scene.caption.is_some()),
+        ("party", scene.party.is_some()),
+        ("suggested", scene.suggested.is_some()),
+        ("groups", scene.groups.is_some()),
+        ("unavailable", scene.unavailable.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, changed)| changed.then_some(name))
+    .collect();
+    if parts.is_empty() {
+        "as the fixture has it".to_owned()
+    } else {
+        format!("changed: {}", parts.join(", "))
+    }
 }

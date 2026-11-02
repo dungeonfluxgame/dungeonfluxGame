@@ -223,6 +223,17 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             )
             .await
         }
+        Command::Scene(change) => {
+            let body = to_body(&change)?;
+            send_each(
+                port,
+                route::DEV_PLAYGROUND_SCENE,
+                "change",
+                &[body],
+                read_controls_reply,
+            )
+            .await
+        }
         Command::Fixtures => Ok(fetch_fixture_names(port).await?.join(
             "
 ",

@@ -11,6 +11,7 @@ pub mod controls;
 pub mod copy;
 pub mod fixture;
 pub mod layout;
+pub mod scene;
 pub mod style;
 
 #[cfg(target_arch = "wasm32")]
@@ -34,6 +35,8 @@ mod copy_tests;
 mod fixture_tests;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod scene_tests;
 #[cfg(test)]
 mod shipped_fixtures_tests;
 #[cfg(test)]

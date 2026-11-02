@@ -20,6 +20,7 @@ use crate::copy::{ReadingPace, STATUS_KEYS};
 use crate::dom::{append, clear, document, element, set_action, text_element};
 use crate::fixture::{ElementSource, Fixture, StageElement};
 use crate::net::{fetch_text, post_json};
+use crate::scene::SceneOverlay;
 use crate::{view_phone, view_tv};
 
 /// Milliseconds between looks at the server for changed files and a changed canvas.
@@ -51,6 +52,8 @@ struct App {
     live: Option<LiveCanvas>,
     asset_revision: String,
     controls: Controls,
+    /// Live changes to the scene, drawn on top of the loaded fixture.
+    scene: SceneOverlay,
     /// The host's count of changes to the controls when `controls` was read.
     controls_revision: Option<u64>,
     /// Set while the server cannot be reached.
@@ -126,6 +129,7 @@ fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
         let fixture_changed =
             app.controls.fixture != reply.controls.fixture || app.controls_revision.is_none();
         app.controls = reply.controls;
+        app.scene = reply.scene;
         app.controls_revision = Some(reply.revision);
         ControlsUpdate {
             changed: true,
@@ -334,6 +338,16 @@ fn button(document: &Document, action: &str, label: &str, on: bool) -> Result<El
     Ok(button)
 }
 
+/// The loaded fixture with the live scene changes drawn on top of it.
+fn shown_fixture(app: &App) -> Option<Result<Fixture, String>> {
+    app.fixture.as_ref().map(|loaded| {
+        loaded.clone().map(|mut fixture| {
+            app.scene.apply_to(&mut fixture);
+            fixture
+        })
+    })
+}
+
 fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
     let bar = element(document, "header", "toolbar")?;
     append(
@@ -424,7 +438,12 @@ fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
     Ok(bar)
 }
 
-fn notes(document: &Document, app: &App, warnings: &[String]) -> Result<Element, JsValue> {
+fn notes(
+    document: &Document,
+    app: &App,
+    shown: &Option<Result<Fixture, String>>,
+    warnings: &[String],
+) -> Result<Element, JsValue> {
     let panel = element(document, "aside", "notes")?;
     if let Some(problem) = &app.connection_problem {
         append(
@@ -432,9 +451,20 @@ fn notes(document: &Document, app: &App, warnings: &[String]) -> Result<Element,
             &text_element(document, "div", "note note-error", problem)?,
         )?;
     }
-    match &app.fixture {
+    match shown {
         Some(Ok(fixture)) => {
             append(&panel, &text_element(document, "h2", "", &fixture.name)?)?;
+            if !app.scene.is_empty() {
+                append(
+                    &panel,
+                    &text_element(
+                        document,
+                        "p",
+                        "note note-live",
+                        "Live changes are drawn on top of this scenario (scene reset removes them).",
+                    )?,
+                )?;
+            }
             if !fixture.description.is_empty() {
                 append(
                     &panel,
@@ -476,10 +506,14 @@ fn notes(document: &Document, app: &App, warnings: &[String]) -> Result<Element,
     Ok(panel)
 }
 
-fn devices(document: &Document, app: &App) -> Result<(Element, Vec<String>), JsValue> {
+fn devices(
+    document: &Document,
+    app: &App,
+    shown: &Option<Result<Fixture, String>>,
+) -> Result<(Element, Vec<String>), JsValue> {
     let stage = element(document, "main", "devices")?;
     let mut warnings = Vec::new();
-    let Some(Ok(fixture)) = &app.fixture else {
+    let Some(Ok(fixture)) = shown else {
         return Ok((stage, warnings));
     };
     if app.controls.device.shows_tv() {
@@ -508,10 +542,11 @@ fn devices(document: &Document, app: &App) -> Result<(Element, Vec<String>), JsV
 fn build_page(document: &Document, app: &App) -> Result<Element, JsValue> {
     let shell = element(document, "div", "shell")?;
     append(&shell, &toolbar(document, app)?)?;
-    let (stage, warnings) = devices(document, app)?;
+    let shown = shown_fixture(app);
+    let (stage, warnings) = devices(document, app, &shown)?;
     let body = element(document, "div", "body")?;
     append(&body, &stage)?;
-    append(&body, &notes(document, app, &warnings)?)?;
+    append(&body, &notes(document, app, &shown, &warnings)?)?;
     append(&shell, &body)?;
     Ok(shell)
 }

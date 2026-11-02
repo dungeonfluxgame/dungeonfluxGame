@@ -32,6 +32,8 @@ pub mod route {
     pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
     /// Changes what the playground shows (POST a `ControlsChange`).
     pub const DEV_PLAYGROUND_CONTROLS: &str = "/dev/playground/controls";
+    /// Changes the live scene: caption, party, choices (POST a `SceneChange`).
+    pub const DEV_PLAYGROUND_SCENE: &str = "/dev/playground/scene";
     /// Writes a fixture file (POST a `FixtureWrite`).
     pub const DEV_FIXTURE_WRITE: &str = "/dev/playground/fixture";
     /// Deletes a fixture file (POST a `FixtureRemove`).

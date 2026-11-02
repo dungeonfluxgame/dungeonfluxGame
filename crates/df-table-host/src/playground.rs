@@ -20,6 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use df_playground::controls::{Controls, ControlsChange};
 use df_playground::fixture::Fixture;
+use df_playground::scene::{SceneChange, SceneOverlay};
 use df_table::event::RejectionCause;
 
 use crate::state::AppState;
@@ -72,6 +73,7 @@ impl PlaygroundState {
             shown: Mutex::new(ControlsReply {
                 revision: 0,
                 controls: Controls::default(),
+                scene: SceneOverlay::default(),
             }),
         }
     }
@@ -88,6 +90,29 @@ impl PlaygroundState {
         self.lock().revision
     }
 
+    /// The name of the fixture being shown, if one is.
+    pub fn current_fixture(&self) -> Option<String> {
+        self.lock().controls.fixture.clone()
+    }
+
+    /// Makes one change to the live scene on top of `base`, the fixture being shown. A change
+    /// that alters nothing does not count.
+    pub fn change_scene(
+        &self,
+        change: SceneChange,
+        base: &Fixture,
+    ) -> Result<ControlsReply, String> {
+        let mut shown = self.lock();
+        let mut next = shown.scene.clone();
+        next.apply(change, base)
+            .map_err(|error| error.to_string())?;
+        if next != shown.scene {
+            shown.scene = next;
+            shown.revision += 1;
+        }
+        Ok(shown.clone())
+    }
+
     /// What is shown now, with the fixture replaced by the first of `names` when the chosen one
     /// is missing from them. That replacement counts as a change.
     pub fn reconciled(&self, names: &[String]) -> ControlsReply {
@@ -99,6 +124,7 @@ impl PlaygroundState {
             .is_some_and(|chosen| names.contains(chosen));
         if !present && shown.controls.fixture != names.first().cloned() {
             shown.controls.fixture = names.first().cloned();
+            shown.scene = SceneOverlay::default();
             shown.revision += 1;
         }
         shown.clone()
@@ -126,6 +152,10 @@ impl PlaygroundState {
         let mut next = shown.controls.clone();
         next.apply(change).map_err(|error| error.to_string())?;
         if next != shown.controls {
+            // Another scenario starts from its own file, without the last one's live changes.
+            if next.fixture != shown.controls.fixture {
+                shown.scene = SceneOverlay::default();
+            }
             shown.controls = next;
             shown.revision += 1;
         }
@@ -463,6 +493,72 @@ async fn change_controls(State(state): State<Arc<AppState>>, body: Bytes) -> Res
     response
 }
 
+async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let change: SceneChange = match serde_json::from_slice(&body) {
+        Ok(change) => change,
+        Err(error) => return reject_malformed(&state, &error),
+    };
+    let Some(name) = state.playground().current_fixture() else {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "no fixture is shown; write one with `fixture write` first".to_owned(),
+        );
+    };
+    let directory = state.playground().files().assets.join(FIXTURE_DIRECTORY);
+    let read_name = name.clone();
+    let loaded =
+        tokio::task::spawn_blocking(move || read_file(&directory, &read_name, &FIXTURE_EXTENSIONS))
+            .await
+            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
+    let base = match loaded {
+        Ok(bytes) => match Fixture::parse(&String::from_utf8_lossy(&bytes)) {
+            Ok(base) => base,
+            Err(error) => {
+                return refused(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "{name}, line {}, column {}: {}",
+                        error.line, error.column, error.message
+                    ),
+                );
+            }
+        },
+        Err(problem) => return refused(problem.status(), problem.message()),
+    };
+    let verb = scene_change_name(&change);
+    let response = match state.playground().change_scene(change, &base) {
+        Ok(reply) => {
+            state.record_line(playground_line(
+                "scene",
+                &[("change", verb), ("revision", reply.revision.to_string())],
+            ));
+            Json(reply).into_response()
+        }
+        Err(message) => {
+            state.record_line(playground_line(
+                "reject",
+                &[("cause", RejectionCause::InvalidValue.key().to_owned())],
+            ));
+            refused(StatusCode::BAD_REQUEST, message)
+        }
+    };
+    state.echo_new_lines();
+    response
+}
+
+/// The name of a scene change, for the log.
+fn scene_change_name(change: &SceneChange) -> String {
+    serde_json::to_value(change)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("change")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 /// A change as `key` and `value`, for the log.
 fn describe_change(change: &ControlsChange) -> (String, String) {
     let value = serde_json::to_value(change).unwrap_or(serde_json::Value::Null);
@@ -612,6 +708,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(route::PLAYGROUND_PACKAGE_FILE, get(package_file))
         .route(route::PLAYGROUND_CONTROLS, get(controls_json))
         .route(route::DEV_PLAYGROUND_CONTROLS, post(change_controls))
+        .route(route::DEV_PLAYGROUND_SCENE, post(change_scene))
         .route(route::DEV_FIXTURE_WRITE, post(write_fixture))
         .route(route::DEV_FIXTURE_REMOVE, post(remove_fixture))
         .with_state(state)

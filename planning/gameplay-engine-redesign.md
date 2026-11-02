@@ -3037,7 +3037,12 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
   unavailable=BOOL grid=BOOL` changes it; `fixtures`, `fixture show NAME`, `fixture write NAME FILE`
   (the text is checked as a fixture first, with the line and column of a mistake) and `fixture remove
-  NAME` manage the files; a `script` may mix canvas and playground commands. Every change is an audit
+  NAME` manage the files. `scene caption TEXT [speaker=NAME]`, `scene caption-clear`, `scene party
+  add|set|remove|clear`, `scene choices suggested|group|unavailable|clear` and `scene reset` change the
+  caption, the party strip and the phone's choices live, as an overlay on the chosen fixture (the file is
+  not edited; choosing another fixture drops the overlay). A change that breaks the choice-list rule is
+  accepted and shown as a warning, only size limits are refused. A `script` may mix canvas, playground
+  and scene commands. Every change is an audit
   line (`PLAYGROUND set device=tv revision=5`) in the same log. Rule for what comes next: anything a
   person can do in a browser surface must also be a CLI verb, and a surface never keeps state the CLI
   cannot read.
