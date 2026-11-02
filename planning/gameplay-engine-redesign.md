@@ -1416,8 +1416,12 @@ and D45.
 **D.7 Items and money (M12, M13, M14, E22).** Item and coin state is one rules-owned record in table
 state (R12). `money-arithmetic-contract.md` is billing arithmetic and does not cover in-game coin. An in-game
 `Coins` type in `df-rules` (denominations cp, sp, ep, gp and pp; checked subtract with change; price in copper
-for the SRD equipment list; an atomic item-and-coin move) is a tracked work item that no row owns yet, and it is
-a named prerequisite of the shop and inventory machines (O.16). The shop machine holds the offer flow and the
+for the SRD equipment list; an atomic item-and-coin move) is a tracked work item and a named prerequisite of
+the shop and inventory machines (O.16). Decided 2026-11-02 (#1599): row R12 (Equipment, items and money) owns
+`Coins`, and M.5 lists it under Equipment as thin until built. The type and its checked arithmetic (subtract
+with change, price in copper, no negative balance) belong to `df-rules`; the atomic item-and-coin move is not
+a rules call but a table effect (RES18, a versioned `TableEffect` variant keyed by an `AwardId`) whose applier
+uses `Coins` and the inventory record and applies both or neither, so the shop machine only proposes the deal. The shop machine holds the offer flow and the
 inventory machine holds placement, and carrying a purchase across places is an acceptance case. A completed deal is one
 effect keyed by an `AwardId` that moves item and coin together or neither. Item pictures are made
 from the presented description only; true properties follow `SecretPolicy` until a rules-legal
