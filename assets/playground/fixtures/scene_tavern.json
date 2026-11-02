@@ -20,7 +20,6 @@
       { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 74, "y": 36, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
     ]
   },
-  "music": { "media": "ambience.wav", "target": "both", "volume": 30, "looping": true },
   "phone": {
     "hero": "Sigrun",
     "goal": "Keep the packet safe",

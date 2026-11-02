@@ -1,6 +1,6 @@
 {
   "name": "Scene one: the quay in the rain",
-  "description": "The first of two scenes to move between (try: playground cycle scene_quay scene_tavern). A generated rainy quay behind the stage, Finn's portrait, his line from the game's storyteller, and the sound of rain. The picture, portrait and line were made by the project's image and text services.",
+  "description": "The first of two scenes to move between (try: playground cycle scene_quay scene_tavern). A generated rainy quay behind the stage, Finn's portrait, and his line from the game's storyteller. The picture, portrait and line were made by the project's image and text services.",
   "tv": {
     "place": "Salt Quay, in the rain",
     "status": { "kind": "ok" },
@@ -20,7 +20,6 @@
       { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 32, "y": 44, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
     ]
   },
-  "music": { "media": "rain.wav", "target": "both", "volume": 35, "looping": true },
   "phone": {
     "hero": "Brakka",
     "goal": "Get the courier out of the rain",
