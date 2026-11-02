@@ -16,6 +16,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Document, Element, Event, HtmlImageElement, HtmlSelectElement};
 
 use crate::audio;
+use crate::backoff::retry_delay_ms;
 use crate::controls::{
     Controls, ControlsChange, ControlsReply, Device, FIXTURE_STATUS_KEY, Transition,
     TransitionStyle,
@@ -32,8 +33,6 @@ use crate::{view_phone, view_tv};
 /// fixture list. The canvas and the controls do not wait for this: a frame request is held by the
 /// host and answered the moment something changes.
 const POLL_MS: u32 = 1_000;
-/// Milliseconds to wait before asking again after a frame request failed.
-const RETRY_MS: u32 = 1_000;
 const REVISION_ADDRESS: &str = "/playground/revision";
 const THEME_ADDRESS: &str = "/playground/theme.css";
 const FIXTURE_LIST_ADDRESS: &str = "/playground/fixtures.json";
@@ -80,6 +79,8 @@ struct App {
     /// The text of the last report sent, so an unchanged report is not sent again.
     last_report: Option<String>,
     polls_since_report: u32,
+    /// How many times in a row the host could not be reached, for the retry wait.
+    failures: u32,
     asset_revision: String,
     controls: Controls,
     /// Live changes to the scene, drawn on top of the loaded fixture.
@@ -322,14 +323,21 @@ async fn follow_frames() {
                 .map_err(|error| format!("{FRAME_ADDRESS} is not a frame: {error}"))
         });
         match answer {
-            Ok(frame) => apply_frame(frame).await,
+            Ok(frame) => {
+                with_app_mut(|app| app.failures = 0);
+                apply_frame(frame).await;
+            }
             Err(message) => {
+                let failures = with_app_mut(|app| {
+                    app.failures = app.failures.saturating_add(1);
+                    app.failures
+                });
                 let first_failure = with_app(|app| app.connection_problem.is_none());
                 with_app_mut(|app| app.connection_problem = Some(message));
                 if first_failure {
                     render();
                 }
-                TimeoutFuture::new(RETRY_MS).await;
+                TimeoutFuture::new(retry_delay_ms(failures)).await;
             }
         }
     }
@@ -391,7 +399,8 @@ async fn run() {
     render();
     spawn_local(follow_frames());
     loop {
-        TimeoutFuture::new(POLL_MS).await;
+        let wait = POLL_MS.max(retry_delay_ms(with_app(|app| app.failures)));
+        TimeoutFuture::new(wait).await;
         poll().await;
     }
 }

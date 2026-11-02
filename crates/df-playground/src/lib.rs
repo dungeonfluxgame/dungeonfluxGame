@@ -6,6 +6,7 @@
 //! elements, and it reloads styles and fixtures when their files change, so a visual change needs
 //! no rebuild. Browser crates do not depend on the engine, so this crate holds its own view data.
 
+pub mod backoff;
 pub mod choices;
 pub mod controls;
 pub mod copy;
@@ -28,6 +29,8 @@ mod view_phone;
 #[cfg(target_arch = "wasm32")]
 mod view_tv;
 
+#[cfg(test)]
+mod backoff_tests;
 #[cfg(test)]
 mod choices_tests;
 #[cfg(test)]
