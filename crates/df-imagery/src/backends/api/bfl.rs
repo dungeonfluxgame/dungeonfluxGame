@@ -282,7 +282,12 @@ impl BflExecutor {
         bounds.validate()?;
         check_model_slug(&config.model_route)?;
         let http = NativeHttp::new(
-            df_providers::ProviderLimits::new(total_timeout, 64 * 1024, 64 * 1024).build(),
+            df_providers::ProviderLimits::new(
+                total_timeout.min(super::HTTP_TIMEOUT_CEILING),
+                64 * 1024,
+                64 * 1024,
+            )
+            .build(),
             config.allow_http,
         )
         .map_err(|_| ApiError::InvalidRequest)?;

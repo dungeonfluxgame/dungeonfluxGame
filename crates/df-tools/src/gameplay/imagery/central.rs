@@ -893,9 +893,7 @@ impl CentralImages {
         request: &df_imagery::ImageRequest,
     ) -> Result<(ReferenceImage, ImageKey), ImageFailure> {
         let principal = self.references.authorize(request).await?;
-        let mut view = match demand
-            .service
-            .request(&principal, request)
+        let mut view = match retry_unknown(|| demand.service.request(&principal, request))
             .await
             .map_err(failure)?
         {
@@ -953,11 +951,13 @@ impl CentralImages {
             }
             tokio::time::sleep(self.settings.poll_interval).await;
             let principal = self.references.authorize(request).await?;
-            match demand
-                .service
-                .watch(&principal, &view.handle, view.job_revision)
-                .await
-                .map_err(failure)?
+            match retry_unknown(|| {
+                demand
+                    .service
+                    .watch(&principal, &view.handle, view.job_revision)
+            })
+            .await
+            .map_err(failure)?
             {
                 WatchObservation::Changed(changed) => view = *changed,
                 WatchObservation::Unchanged { .. } => {}
@@ -1082,6 +1082,31 @@ fn owner_audience(owner: &ImageOwner) -> Audience {
         ImageOwner::Draft { account } => Audience::OwnerPrivate(*account),
     }
 }
+/// How often a call that ended `Unknown` is asked again, and how long it waits between asks.
+const UNKNOWN_RETRIES: u32 = 4;
+const UNKNOWN_BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// `Unknown` means a read saw the job move between two reads, or a commit's outcome was not seen.
+/// Requests and watches are idempotent by operation identity, so asking again returns the stored
+/// state; the runtime moves jobs often, and one miss must not fail the image.
+pub(in crate::gameplay) async fn retry_unknown<T, Call, Pending>(
+    mut call: Call,
+) -> Result<T, ImageServiceError>
+where
+    Call: FnMut() -> Pending,
+    Pending: std::future::Future<Output = Result<T, ImageServiceError>>,
+{
+    let mut result = call().await;
+    for _ in 0..UNKNOWN_RETRIES {
+        if !matches!(result, Err(ImageServiceError::Unknown { .. })) {
+            break;
+        }
+        tokio::time::sleep(UNKNOWN_BACKOFF).await;
+        result = call().await;
+    }
+    result
+}
+
 fn operation(bytes: &[u8]) -> Result<OperationId, ImageFailure> {
     let digest = Sha256::digest(bytes);
     let mut id = [0; 16];
@@ -1101,6 +1126,7 @@ pub(super) fn semantic_failure(cause: df_imagery::execution::FailureCause) -> Im
 }
 
 fn failure(error: ImageServiceError) -> ImageFailure {
+    df_observe::record_audit_line("IMAGERY", format!("IMAGERY service_error {error:?}"));
     match error {
         ImageServiceError::InvalidRequest(_) | ImageServiceError::Conflict => {
             ImageFailure::InvalidRequest

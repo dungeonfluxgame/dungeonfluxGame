@@ -27,3 +27,30 @@ web-sys = "0.3"
 
 [patch.crates-io]
 h2 = { path = "crates/df-rpc-bridge/vendor/h2" }
+
+# Debug builds hash and decode multi-megabyte images on every image poll; unoptimized SHA-256 and
+# codecs run at about 1 MB/s there and starve the async workers. df-imagery instantiates the
+# generic `image` resize code itself, so a 2560x1440 Lanczos resize needs its own optimization.
+# Release builds are unaffected.
+[profile.dev.package.df-imagery]
+opt-level = 2
+[profile.dev.package."sha2@0.10.9"]
+opt-level = 3
+[profile.dev.package."sha2@0.11.0"]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package."miniz_oxide@0.8.9"]
+opt-level = 3
+[profile.dev.package."miniz_oxide@0.9.1"]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3

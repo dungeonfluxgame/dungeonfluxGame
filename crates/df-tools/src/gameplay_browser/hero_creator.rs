@@ -135,6 +135,17 @@ pub(super) enum CreationEvent {
     Confirm(HeroDraft),
 }
 
+/// The full-screen portrait review: the picture at its real shape with Keep and Reroll beneath.
+#[derive(Clone)]
+struct PortraitReview {
+    root: Element,
+    title: Element,
+    image: Element,
+    close: HtmlButtonElement,
+    reroll: HtmlButtonElement,
+    keep: HtmlButtonElement,
+}
+
 struct Listener {
     element: Element,
     event: &'static str,
@@ -184,7 +195,10 @@ struct Controls {
     incoming_preview: Rc<RefCell<Option<Element>>>,
     portrait_shadow: Element,
     portrait_status: Element,
+    portrait_hint: Element,
     portrait_button: HtmlButtonElement,
+    portrait_open: HtmlButtonElement,
+    review: PortraitReview,
     portrait_version: Rc<Cell<Option<u64>>>,
     portrait_pending: Rc<Cell<bool>>,
     portrait_operation: Rc<Cell<u64>>,
@@ -217,6 +231,9 @@ fn choices(controls: &[(rpc::JourneyGroup, HtmlSelectElement)]) -> Vec<rpc::Jour
     selected
 }
 
+/// A signed portrait address is the path, a 64-character key and a hex grant token (about 350
+/// bytes); the bound only keeps a malformed server answer from becoming an image source.
+const MAXIMUM_PORTRAIT_URI_BYTES: usize = 512;
 const NAME_HELP: &str =
     "One name or several, up to 32 letters. Spaces, apostrophes and hyphens are welcome.";
 const NAME_RULE: &str = "Use letters for your hero's name, with single spaces, apostrophes or hyphens between them (up to 32)";
@@ -291,9 +308,34 @@ impl Controls {
         }
         if shown.image {
             let _ = self.stage_preview.borrow().remove_attribute("hidden");
+            let _ = self.portrait_open.remove_attribute("hidden");
+            let _ = self.portrait_hint.remove_attribute("hidden");
         } else {
             let _ = self.stage_preview.borrow().set_attribute("hidden", "");
+            let _ = self.portrait_open.set_attribute("hidden", "");
+            let _ = self.portrait_hint.set_attribute("hidden", "");
         }
+    }
+
+    /// Shows the current portrait full screen so it can be kept or rerolled.
+    fn open_review(&self) {
+        let Some(source) = self.stage_preview.borrow().get_attribute("src") else {
+            return;
+        };
+        let name = self.stage_name.text_content().unwrap_or_default();
+        self.review.title.set_text_content(Some(&name));
+        let _ = self.review.image.set_attribute("src", &source);
+        self.review.reroll.set_disabled(
+            self.pending.get() || self.portrait_pending.get() || self.portrait_button.disabled(),
+        );
+        let _ = self.review.root.remove_attribute("hidden");
+        self.review.keep.focus().ok();
+    }
+
+    fn close_review(&self) {
+        let _ = self.review.root.set_attribute("hidden", "");
+        let _ = self.review.image.remove_attribute("src");
+        self.portrait_open.focus().ok();
     }
     fn draft(&self) -> HeroDraft {
         HeroDraft {
@@ -861,6 +903,54 @@ pub(super) struct HeroCreator {
     pagehide: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
+impl PortraitReview {
+    fn build(document: &Document, parent: &Element) -> Result<Self, JsValue> {
+        let root = node(document, parent, "div", "hero-review", "")?;
+        root.set_attribute("role", "dialog")?;
+        root.set_attribute("aria-modal", "true")?;
+        root.set_attribute("aria-label", "Review your portrait")?;
+        root.set_attribute("hidden", "")?;
+        let bar = node(document, &root, "div", "hero-review-bar", "")?;
+        let title = node(document, &bar, "h2", "hero-review-title", "")?;
+        let close = node(document, &bar, "button", "hero-review-close", "Close")?
+            .dyn_into::<HtmlButtonElement>()?;
+        close.set_type("button");
+        close.set_attribute("aria-label", "Close portrait review")?;
+        let figure = node(document, &root, "div", "hero-review-figure", "")?;
+        let image = node(document, &figure, "img", "hero-review-image", "")?;
+        image.set_attribute("alt", "Your generated character portrait, full size")?;
+        let foot = node(document, &root, "div", "hero-review-foot", "")?;
+        let actions = node(document, &foot, "div", "hero-review-actions", "")?;
+        let reroll = node(document, &actions, "button", "hero-review-reroll", "Reroll")?
+            .dyn_into::<HtmlButtonElement>()?;
+        reroll.set_type("button");
+        let keep = node(
+            document,
+            &actions,
+            "button",
+            "hero-review-keep",
+            "Keep portrait",
+        )?
+        .dyn_into::<HtmlButtonElement>()?;
+        keep.set_type("button");
+        node(
+            document,
+            &foot,
+            "p",
+            "hero-review-note",
+            "Reroll makes a new portrait from the same look. If it fails, you keep this one.",
+        )?;
+        Ok(Self {
+            root,
+            title,
+            image,
+            close,
+            reroll,
+            keep,
+        })
+    }
+}
+
 fn node(
     document: &Document,
     parent: &Element,
@@ -995,12 +1085,13 @@ impl HeroCreator {
         let layout = node(document, &root, "div", "hero-layout", "")?;
         let stage = node(document, &layout, "aside", "hero-stage", "")?;
         stage.set_attribute("aria-label", "Character portrait")?;
-        let frame = node(document, &stage, "div", "hero-ritual-frame", "")?;
+        let niche = node(document, &stage, "div", "hero-niche", "")?;
+        let frame = node(document, &niche, "div", "hero-ritual-frame", "")?;
         frame.set_attribute("aria-hidden", "true")?;
-        let stage_preview = node(document, &stage, "img", "hero-figure", "")?;
+        let stage_preview = node(document, &niche, "img", "hero-figure", "")?;
         stage_preview.set_attribute("alt", "Your generated character portrait")?;
         stage_preview.set_attribute("hidden", "")?;
-        let portrait_shadow = node(document, &stage, "div", "hero-portrait-shadow", "")?;
+        let portrait_shadow = node(document, &niche, "div", "hero-portrait-shadow", "")?;
         portrait_shadow.set_attribute("aria-hidden", "true")?;
         let placeholder_bytes = js_sys::Uint8Array::from(
             include_bytes!("../../../../assets/ui/generated/creator-shadow-placeholder.png")
@@ -1016,6 +1107,11 @@ impl HeroCreator {
         placeholder.set_attribute("src", &placeholder_url)?;
         placeholder.set_attribute("alt", "")?;
         node(document, &portrait_shadow, "div", "hero-portrait-orbit", "")?;
+        let portrait_open = node(document, &niche, "button", "hero-portrait-open", "")?
+            .dyn_into::<HtmlButtonElement>()?;
+        portrait_open.set_type("button");
+        portrait_open.set_attribute("aria-label", "Review your portrait full screen")?;
+        portrait_open.set_attribute("hidden", "")?;
         let caption = node(document, &stage, "div", "hero-stage-caption", "")?;
         let stage_name = node(document, &caption, "h2", "", "Your adventurer")?;
         node(
@@ -1040,6 +1136,14 @@ impl HeroCreator {
             "Choose your appearance, then generate a portrait.",
         )?;
         portrait_status.set_attribute("aria-live", "polite")?;
+        let portrait_hint = node(
+            document,
+            &caption,
+            "p",
+            "hero-art-hint",
+            "Tap the portrait to see it full size.",
+        )?;
+        portrait_hint.set_attribute("hidden", "")?;
         let portrait_button = node(
             document,
             &caption,
@@ -1049,6 +1153,7 @@ impl HeroCreator {
         )?
         .dyn_into::<HtmlButtonElement>()?;
         portrait_button.set_type("button");
+        let review = PortraitReview::build(document, &root)?;
         let editor = node(document, &layout, "div", "hero-editor", "")?;
         node(document, &editor, "h1", "", "Bring your hero to life")?;
         node(
@@ -1396,7 +1501,10 @@ impl HeroCreator {
             incoming_preview: Rc::new(RefCell::new(None)),
             portrait_shadow,
             portrait_status,
+            portrait_hint,
             portrait_button,
+            portrait_open,
+            review,
             portrait_version: Rc::new(Cell::new(None)),
             portrait_pending: Rc::new(Cell::new(false)),
             portrait_operation: Rc::new(Cell::new(0)),
@@ -1637,6 +1745,47 @@ impl HeroCreator {
                 });
             },
         )?;
+        let controls = surface.controls.clone();
+        surface.listen(
+            controls.portrait_open.clone().unchecked_into(),
+            "click",
+            move |_| controls.open_review(),
+        )?;
+        let controls = surface.controls.clone();
+        surface.listen(
+            controls.review.close.clone().unchecked_into(),
+            "click",
+            move |_| controls.close_review(),
+        )?;
+        let controls = surface.controls.clone();
+        surface.listen(
+            controls.review.keep.clone().unchecked_into(),
+            "click",
+            move |_| {
+                controls.close_review();
+                controls
+                    .portrait_status
+                    .set_text_content(Some("Portrait kept. You can keep editing."));
+            },
+        )?;
+        let controls = surface.controls.clone();
+        surface.listen(
+            controls.review.reroll.clone().unchecked_into(),
+            "click",
+            move |_| {
+                controls.close_review();
+                // The ordinary Regenerate button owns the request, so a reroll cannot differ
+                // from pressing it.
+                controls.portrait_button.click();
+            },
+        )?;
+        let controls = surface.controls.clone();
+        surface.listen(controls.review.root.clone(), "keydown", move |event| {
+            let pressed = event.dyn_ref::<web_sys::KeyboardEvent>();
+            if pressed.is_some_and(|key| key.key() == "Escape") {
+                controls.close_review();
+            }
+        })?;
         let controls = surface.controls.clone();
         let event = Rc::clone(&on_event);
         surface.listen(read, "click", move |_| {
@@ -1884,7 +2033,10 @@ impl HeroCreator {
             );
             return;
         }
-        if state == "ready" && uri.starts_with("/gameplay/creator-portrait/") && uri.len() <= 128 {
+        if state == "ready"
+            && uri.starts_with("/gameplay/creator-portrait/")
+            && uri.len() <= MAXIMUM_PORTRAIT_URI_BYTES
+        {
             super::presentation_timing::diagnostic(
                 &self.root,
                 crate::client_diagnostics::Diagnostic::PortraitApplied,

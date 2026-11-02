@@ -830,6 +830,12 @@ impl LocalImageHost {
         let supervisor = tokio::spawn(async move {
             let result = supervise(running.clone(), stopped).await;
             running.running.store(false, Ordering::Release);
+            if let Err(error) = &result {
+                df_observe::record_audit_line(
+                    "IMAGERY",
+                    format!("IMAGERY runtime_stopped error={error:?}"),
+                );
+            }
             if result.is_err() {
                 let revision = running.applied.swap(0, Ordering::AcqRel);
                 df_imagery::telemetry::ImageObserver::observe(
@@ -946,41 +952,51 @@ async fn supervise(
         let snapshot = super::image_configuration::snapshot(&shared.control)?;
         configure_resources(&shared, &snapshot.config).await?;
         apply_gate(&shared, &snapshot.config, snapshot.provenance.revision).await?;
-        let runtime = NativeImageRuntime {
-            journal: shared
-                .journal
-                .with_config_revision(
-                    snapshot.provenance.revision,
-                    shared.accounting == AccountingMode::RecordOnly,
-                )
-                .map_err(|_| failure("image journal config refused"))?,
-            execution: shared.execution.clone(),
-            sources: shared.sources.clone(),
-            publisher: shared.publisher.clone(),
-            admission: shared.publisher.clone(),
-            clock: NativeClock,
-            ids: shared.ids.clone(),
-            credentials: HostCredentials {
-                control: shared.control.clone(),
-                fixture: shared.fixture,
-                analysis_fixture: shared.analysis_fixture,
-                custody: shared.custody.clone(),
-                quota: shared.quota.clone(),
-            },
-            costs: shared.costs.clone(),
-            cost_policy: GameplayImageCostPolicy,
-            usage: shared.usage.clone(),
-            telemetry: shared.observer.clone(),
-            settings: RuntimeSettings {
-                config: snapshot.config,
-                active_config_revision: snapshot.provenance.revision,
-                capacity: shared.capacity.clone(),
-                poll_interval: shared.poll_interval,
-            },
-        };
-        let (handle, future) = runtime.start();
+        // Workers claim stages through the database, so several can run at once. One worker runs a
+        // slow image call to the end before it looks at the next stage; the foreground limit says
+        // how many overlap.
+        let worker_count = usize::try_from(snapshot.config.scheduler.foreground_limit)
+            .unwrap_or(1)
+            .clamp(1, 4);
+        let mut handles = Vec::with_capacity(worker_count);
         let mut workers = tokio::task::JoinSet::new();
-        workers.spawn(future);
+        for _ in 0..worker_count {
+            let runtime = NativeImageRuntime {
+                journal: shared
+                    .journal
+                    .with_config_revision(
+                        snapshot.provenance.revision,
+                        shared.accounting == AccountingMode::RecordOnly,
+                    )
+                    .map_err(|_| failure("image journal config refused"))?,
+                execution: shared.execution.clone(),
+                sources: shared.sources.clone(),
+                publisher: shared.publisher.clone(),
+                admission: shared.publisher.clone(),
+                clock: NativeClock,
+                ids: shared.ids.clone(),
+                credentials: HostCredentials {
+                    control: shared.control.clone(),
+                    fixture: shared.fixture,
+                    analysis_fixture: shared.analysis_fixture,
+                    custody: shared.custody.clone(),
+                    quota: shared.quota.clone(),
+                },
+                costs: shared.costs.clone(),
+                cost_policy: GameplayImageCostPolicy,
+                usage: shared.usage.clone(),
+                telemetry: shared.observer.clone(),
+                settings: RuntimeSettings {
+                    config: snapshot.config.clone(),
+                    active_config_revision: snapshot.provenance.revision,
+                    capacity: shared.capacity.clone(),
+                    poll_interval: shared.poll_interval,
+                },
+            };
+            let (handle, future) = runtime.start();
+            handles.push(handle);
+            workers.spawn(future);
+        }
         let mut finished = false;
         let changed = loop {
             tokio::select! {
@@ -997,7 +1013,16 @@ async fn supervise(
                             shared.applied.store(0, Ordering::Release);
                             finished = true;
                         },
-                        _ => return Err(failure("image runtime stopped without shutdown")),
+                        other => {
+                            df_observe::record_audit_line(
+                                "IMAGERY",
+                                format!(
+                                    "IMAGERY runtime_worker_ended error={:?}",
+                                    other.as_ref().err()
+                                ),
+                            );
+                            return Err(failure("image runtime stopped without shutdown"));
+                        }
                     }
                 }
                 _=tokio::time::sleep(shared.poll_interval)=>{
@@ -1027,36 +1052,40 @@ async fn supervise(
             continue;
         }
         let drained = tokio::time::timeout(shared.shutdown_timeout, async {
-            handle
-                .shutdown()
-                .await
-                .map_err(|_| failure("image runtime shutdown failed"))?;
-            workers
-                .join_next()
-                .await
-                .ok_or_else(|| failure("image runtime owner lost worker"))?
-                .map_err(|_| failure("image runtime join failed"))
+            let mut results = Vec::with_capacity(handles.len());
+            for handle in handles {
+                handle
+                    .shutdown()
+                    .await
+                    .map_err(|_| failure("image runtime shutdown failed"))?;
+            }
+            while let Some(joined) = workers.join_next().await {
+                results.push(joined.map_err(|_| failure("image runtime join failed"))?);
+            }
+            Ok::<_, io::Error>(results)
         })
         .await;
-        let result = match drained {
-            Ok(result) => result?,
+        let results = match drained {
+            Ok(results) => results?,
             Err(_) => {
                 workers.abort_all();
                 while workers.join_next().await.is_some() {}
                 return Err(failure("image runtime shutdown deadline"));
             }
         };
-        if let Err(error) = result
-            && !matches!(
-                error,
-                RuntimeError::Disabled
-                    | RuntimeError::Execution(
-                        df_imagery::execution::ExecutionError::ConfigFenced { .. }
-                            | df_imagery::execution::ExecutionError::Disabled
-                    )
-            )
-        {
-            return Err(failure("image runtime ended with failure"));
+        for result in results {
+            if let Err(error) = result
+                && !matches!(
+                    error,
+                    RuntimeError::Disabled
+                        | RuntimeError::Execution(
+                            df_imagery::execution::ExecutionError::ConfigFenced { .. }
+                                | df_imagery::execution::ExecutionError::Disabled
+                        )
+                )
+            {
+                return Err(failure("image runtime ended with failure"));
+            }
         }
         if !changed {
             return Ok(());

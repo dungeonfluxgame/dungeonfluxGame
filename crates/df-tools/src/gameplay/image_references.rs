@@ -116,18 +116,34 @@ pub(super) struct CatalogReferenceAuthority<J, S> {
 
 impl<J: ImageJournal, S: ObjectStore + 'static> CatalogReferenceAuthority<J, S> {
     async fn read(&self, pin: &SourceRef) -> Result<ReferenceImage, ImageFailure> {
+        let source = self.verified_source(pin).await?;
+        let format = format_of(&source.bytes)?;
+        ReferenceImage::from_catalog(format, Bytes::from(source.bytes), pin.clone())
+    }
+
+    /// Re-checks the current grant and catalog for a retained source without building the image
+    /// value again; polling a job only needs the authorization evidence.
+    async fn verify(&self, pin: &SourceRef) -> Result<(), ImageFailure> {
+        let source = self.verified_source(pin).await?;
+        format_of(&source.bytes)?;
+        Ok(())
+    }
+
+    async fn verified_source(
+        &self,
+        pin: &SourceRef,
+    ) -> Result<df_imagery::runtime::AuthorizedImageSource, ImageFailure> {
         let source = self
             .sources
             .read_source(&self.owner, pin)
             .await
             .map_err(source_failure)?;
-        let format = format_of(&source.bytes)?;
         // Byte delivery already checked the current grant/catalog. Only an active service
         // authorization call collects evidence for its following synchronous authorizer.
         if self.facts.is_verifying() {
             self.facts.retain(pin.clone())?;
         }
-        ReferenceImage::from_catalog(format, Bytes::from(source.bytes), pin.clone())
+        Ok(source)
     }
 
     async fn read_dependency(
@@ -475,7 +491,7 @@ impl<J: ImageJournal, S: ObjectStore + 'static> ReferenceAuthority
                 .map_err(|_| ImageFailure::Interrupted)?
                 .ok_or(ImageFailure::Refused)?;
             for pin in retained_sources(&stored.job).map_err(source_failure)? {
-                self.read(&pin).await?;
+                self.verify(&pin).await?;
             }
             for (handle, source) in df_imagery::runtime::retained_analysis_dependencies(&stored.job)
                 .map_err(source_failure)?

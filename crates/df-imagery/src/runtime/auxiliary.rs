@@ -131,7 +131,7 @@ where
             .await
             .map_err(RuntimeError::Journal)?
             .ok_or(RuntimeError::InvalidRecord)?;
-        let context = PublicationContext {
+        let mut context = PublicationContext {
             job,
             stage,
             dispatch,
@@ -173,6 +173,9 @@ where
             )
             .await
             .map_err(RuntimeError::Execution)?;
+        // The dispatch row was created after the context was built; later writes must not stamp
+        // an earlier time than its creation.
+        context.now_ms = self.clock.now_ms();
         self.emit(
             crate::telemetry::EventKind::Admitted,
             &context.job,
@@ -660,11 +663,7 @@ where
         self.telemetry.observe(event);
         let config = super::retained_config(&job)?;
         let selection = self.compose_selection(&job, candidate, None).await?;
-        let kind = if dispatch::backend(&config, &intent) == crate::BackendId::Fal
-            && matches!(
-                intent.output.delivered().alpha(),
-                crate::AlphaHandling::PreserveAlpha
-            ) {
+        let kind = if dispatch::extracts_alpha(&config, &intent) {
             StageKind::Extraction
         } else {
             StageKind::LocalTransform
@@ -753,7 +752,7 @@ where
             Some(candidate.clone()),
         )
         .await?;
-        self.project_usage(raw).await?;
+        self.project_usage_or_pending(raw).await?;
         let intent = crate::intent_codec::decode_intent(
             context.job.intent.bytes(),
             &crate::service::PROTOCOL_LIMITS,
@@ -796,12 +795,7 @@ where
                     .reconcile_selected_output(context, intent, config, candidate)
                     .await;
             }
-            if dispatch::backend(config, intent) == crate::BackendId::Fal
-                && matches!(
-                    intent.output.delivered().alpha(),
-                    crate::AlphaHandling::PreserveAlpha
-                )
-            {
+            if dispatch::extracts_alpha(config, intent) {
                 self.enqueue_inspected_alpha(context, candidate, decision)
                     .await?;
                 return Ok(());

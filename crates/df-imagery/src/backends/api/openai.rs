@@ -113,6 +113,7 @@ impl OpenAiExecutor {
     ) -> Result<Self, ApiError> {
         check_credential(credential)?;
         bounds.validate()?;
+        let total_timeout = total_timeout.min(super::HTTP_TIMEOUT_CEILING);
         let limits = NativeHttpLimits {
             connect_timeout: Duration::from_secs(5).min(total_timeout),
             read_timeout: total_timeout,

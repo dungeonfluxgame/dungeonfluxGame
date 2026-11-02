@@ -111,7 +111,11 @@ where
                             | RuntimeError::SupplierQuotaExhausted
                             | RuntimeError::SupplierRateLimited
                             | RuntimeError::SupplierFailure(_)
-                            | RuntimeError::CostProjectionPending,
+                            | RuntimeError::CostProjectionPending
+                            // Another worker holds or has finished this stage.
+                            | RuntimeError::Execution(
+                                ExecutionError::LostClaim | ExecutionError::Superseded,
+                            ),
                         ) => {}
                         Err(error) => return Err(error),
                     }
@@ -1274,6 +1278,18 @@ where
 
     pub(super) async fn project_usage(&self, usage: &RuntimeUsage) -> Result<(), RuntimeError> {
         self.project_usage_observed(usage, true).await
+    }
+
+    /// A projection that is not yet durable is finished by the cost log's own acknowledgement, so
+    /// it must not abort a pipeline that still has to queue its next stage.
+    pub(super) async fn project_usage_or_pending(
+        &self,
+        usage: &RuntimeUsage,
+    ) -> Result<(), RuntimeError> {
+        match self.project_usage(usage).await {
+            Ok(()) | Err(RuntimeError::CostProjectionPending) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
     async fn project_usage_observed(
         &self,

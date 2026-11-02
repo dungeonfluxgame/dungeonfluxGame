@@ -99,20 +99,39 @@ where
                     .ok_or(RuntimeError::InvalidConfiguration)?,
             }
         };
-        let recovery_completed = matches!(disposition, RecoveryDisposition::Completed);
-        self.execution
-            .finish_recovery(&FinishRecoveryCommand {
-                owner: entry.owner.clone(),
-                job: entry.job,
-                stage: entry.stage,
-                dispatch: entry.current.dispatch,
-                claim: lease.token,
-                claim_generation: lease.generation,
-                disposition,
-                now_ms: self.clock.now_ms(),
+        let mut recovery_completed = matches!(disposition, RecoveryDisposition::Completed);
+        let finish = |disposition| FinishRecoveryCommand {
+            owner: entry.owner.clone(),
+            job: entry.job,
+            stage: entry.stage,
+            dispatch: entry.current.dispatch,
+            claim: lease.token,
+            claim_generation: lease.generation,
+            disposition,
+            now_ms: self.clock.now_ms(),
+        };
+        let retry_later = || -> Result<RecoveryDisposition, RuntimeError> {
+            Ok(RecoveryDisposition::RetryAt {
+                next_at_ms: self
+                    .clock
+                    .now_ms()
+                    .checked_add(lease_ms)
+                    .ok_or(RuntimeError::InvalidConfiguration)?,
             })
-            .await
-            .map_err(RuntimeError::Execution)?;
+        };
+        match self.execution.finish_recovery(&finish(disposition)).await {
+            Ok(()) => {}
+            // The stored receipts do not yet prove the stage complete (for example a dispatch
+            // still `sent`). Defer this stage rather than stopping the runtime for all stages.
+            Err(ExecutionError::OperationConflict) if recovery_completed => {
+                recovery_completed = false;
+                self.execution
+                    .finish_recovery(&finish(retry_later()?))
+                    .await
+                    .map_err(RuntimeError::Execution)?;
+            }
+            Err(error) => return Err(RuntimeError::Execution(error)),
+        }
         if let Some(context) = recovery_context {
             let kind = match &result {
                 Ok(_) if recovery_completed => crate::telemetry::EventKind::RecoveryCompleted,
@@ -141,6 +160,9 @@ where
                     | ExecutionError::Superseded
                     | ExecutionError::CapacityFull
                     | ExecutionError::OutputSealed
+                    // `finish_recovery` has already deferred this stage; one stage disagreeing
+                    // with its stored state must not stop the runtime for every other stage.
+                    | ExecutionError::OperationConflict
                     | ExecutionError::Stale { .. },
                 ),
             ) => Ok(None),

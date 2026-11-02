@@ -8,7 +8,7 @@ use df_assets::{
 use df_imagery::execution::{DispatchId, DispatchMode, StageKind};
 use df_imagery::publication::FrozenOutput;
 use df_imagery::runtime::{
-    DispatchAdmission, DispatchDecisionSettlement, DispatchNoOutputSettlement,
+    ArtifactAdmission, DispatchAdmission, DispatchDecisionSettlement, DispatchNoOutputSettlement,
     ImageDispatchAdmission, RuntimeError, RuntimeIds, SendAuthorization, retained_audience,
     retained_config,
 };
@@ -247,6 +247,16 @@ impl<S: ObjectStore + 'static, I: RuntimeIds, C: Clock> NativeImagePublisher<S, 
 impl<S: ObjectStore + 'static, I: RuntimeIds, C: Clock> ImageDispatchAdmission
     for NativeImagePublisher<S, I, C>
 {
+    /// Local, record-only accounting has no election owner: the producer election in
+    /// `artifact.rs` is not compiled into this build. Campaign artwork is admitted like any
+    /// other local request, so identical artwork is generated per job instead of shared.
+    async fn admit_with_artifact(
+        &self,
+        input: &DispatchAdmission<'_>,
+    ) -> Result<ArtifactAdmission, RuntimeError> {
+        self.admit(input).await.map(ArtifactAdmission::Admitted)
+    }
+
     async fn outcome_no_output(
         &self,
         input: &DispatchNoOutputSettlement<'_>,

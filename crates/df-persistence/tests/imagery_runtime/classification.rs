@@ -57,7 +57,8 @@ fn classification_server() -> (
             assert!(raw.len() < 1_048_576);
         };
         assert_eq!(request["model"], "fixture-analysis-model");
-        assert_eq!(request["max_output_tokens"], 3000);
+        // The live SystemOne API answers HTTP 400 to this field, so the request must not carry it.
+        assert!(request.get("max_output_tokens").is_none());
         assert_eq!(
             request["state"]["public_appearance"],
             "An adult fictional dwarf in work clothes"

@@ -6,7 +6,7 @@ use crate::intent_codec::DecodedIntent;
 use crate::publication::{
     FinalDecisionRef, FinalOutputSelection, FrozenOutput, PublishedImage, recipe_digest,
 };
-use crate::{AlphaHandling, ImageConfig, ImageJob, ImageJournal, JobState, ServiceClock};
+use crate::{BackendId, ImageConfig, ImageJob, ImageJournal, JobState, ServiceClock};
 use df_assets::{AssetVariant, ImageAlphaRequirement, ImageIntent, ImageProofLimits};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -46,16 +46,24 @@ where
             .output
             .generated()
             .ok_or(RuntimeError::InvalidRecord)?;
-        let image_intent = ImageIntent::new(
-            mime,
-            size.width_px(),
-            size.height_px(),
-            ImageAlphaRequirement::Preserve,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let (width_px, height_px) = if dispatch::backend(config, intent) == BackendId::CodexCli {
+            // The Codex image tool chooses its own picture size and the later local transform
+            // resizes it to the delivered profile, so the candidate keeps its real dimensions.
+            image::ImageReader::new(std::io::Cursor::new(&bytes))
+                .with_guessed_format()
+                .ok()
+                .and_then(|reader| reader.into_dimensions().ok())
+                .unwrap_or((size.width_px(), size.height_px()))
+        } else {
+            (size.width_px(), size.height_px())
+        };
+        let image_intent =
+            ImageIntent::new(mime, width_px, height_px, ImageAlphaRequirement::Preserve)
+                .map_err(|_| RuntimeError::InvalidRecord)?;
         let limits = ImageProofLimits::new(
             config.transforms.max_output_bytes,
-            size.pixel_count(),
+            size.pixel_count()
+                .max(u64::from(width_px) * u64::from(height_px)),
             config.transforms.max_decoded_bytes,
         )
         .map_err(|_| RuntimeError::InvalidConfiguration)?;
@@ -109,7 +117,7 @@ where
         .await?;
         // The candidate is technically valid; customer usability is settled from actual delivery.
         let _held = mode;
-        self.project_usage(raw).await?;
+        self.project_usage_or_pending(raw).await?;
         self.advance_candidate(context, intent, config, &candidate)
             .await
     }
@@ -139,12 +147,7 @@ where
                 .await?;
             return Ok(());
         }
-        if candidate.basis.kind != StageKind::Extraction
-            && dispatch::backend(config, intent) == crate::BackendId::Fal
-            && matches!(
-                intent.output.delivered().alpha(),
-                AlphaHandling::PreserveAlpha
-            )
+        if candidate.basis.kind != StageKind::Extraction && dispatch::extracts_alpha(config, intent)
         {
             self.enqueue_candidate_dependency(context, candidate, StageKind::Extraction, None)
                 .await?;
@@ -616,7 +619,7 @@ where
             .await?;
         self.record_settlement(job, dispatch.dispatch, dispatch.stage)
             .await;
-        self.project_usage(&usage).await?;
+        self.project_usage_or_pending(&usage).await?;
         Ok(true)
     }
 

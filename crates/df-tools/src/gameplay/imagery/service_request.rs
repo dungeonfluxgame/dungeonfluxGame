@@ -32,6 +32,15 @@ pub(in crate::gameplay) struct PipelinePolicy {
 
 /// Pins must describe the exact ordered bytes admitted by the reference catalog bridge.
 /// The service computes and sets the canonical fingerprint after this conversion.
+/// A request refused before the service sees it names its reason in the audit log.
+fn invalid(reason: &'static str) -> ImageFailure {
+    df_observe::record_audit_line(
+        "IMAGERY",
+        format!("IMAGERY invalid_request reason={reason}"),
+    );
+    ImageFailure::InvalidRequest
+}
+
 pub(in crate::gameplay) fn prepare(
     request: &ImageRequest,
     scope: RequestScope,
@@ -47,16 +56,16 @@ pub(in crate::gameplay) fn prepare(
                 *pin.digest.as_bytes() != <[u8; 32]>::from(Sha256::digest(&reference.bytes))
             })
     {
-        return Err(ImageFailure::InvalidRequest);
+        return Err(invalid("reference_pins"));
     }
     let delivered = output.delivered();
     let dimensions = Dimensions::new(request.output.width, request.output.height)
-        .map_err(|_| ImageFailure::InvalidRequest)?;
-    if delivered.dimensions() != dimensions
-        || (request.output.transparent
-            && delivered.alpha() != df_imagery::AlphaHandling::PreserveAlpha)
-    {
-        return Err(ImageFailure::InvalidRequest);
+        .map_err(|_| invalid("output_dimensions"))?;
+    if delivered.dimensions() != dimensions {
+        return Err(invalid("output_dimensions_differ_from_profile"));
+    }
+    if request.output.transparent && delivered.alpha() != df_imagery::AlphaHandling::PreserveAlpha {
+        return Err(invalid("transparent_output_without_alpha_profile"));
     }
     let is_creator = policy.creator.is_some();
     let inspection = inspection(request, policy.inspection)?;
@@ -64,7 +73,7 @@ pub(in crate::gameplay) fn prepare(
         match request.kind {
             ImageKind::CanonicalCharacter => 0xDF02_0001,
             ImageKind::ArtifactCloseUp => 0xDF02_0005,
-            _ => return Err(ImageFailure::InvalidRequest),
+            _ => return Err(invalid("artwork_on_other_kind")),
         }
     } else {
         request.kind.template_revision()
@@ -79,7 +88,7 @@ pub(in crate::gameplay) fn prepare(
                 inspection,
             })
         })
-        .map_err(|_| ImageFailure::InvalidRequest)?;
+        .map_err(|_| invalid("prompt_rejected"))?;
     if let Some(artwork) = request.prompt.artwork() {
         prompt = prompt.with_artwork(artwork.clone());
     }
@@ -99,7 +108,7 @@ pub(in crate::gameplay) fn prepare(
         let mut pins = pins.into_iter();
         ImageOperation::Edit(EditSpec {
             prompt,
-            base: pins.next().ok_or(ImageFailure::InvalidRequest)?,
+            base: pins.next().ok_or_else(|| invalid("edit_without_base"))?,
             references: pins.collect(),
         })
     } else {

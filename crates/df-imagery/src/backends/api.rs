@@ -50,6 +50,9 @@ pub(crate) enum ApiError {
 
 /// Default OpenAI edit models. Preserved constants; requests may also carry a
 /// validated configured identifier for a schema-compatible model.
+/// `NativeHttp` refuses a total timeout above this. A stage budget can be longer, because every
+/// exchange is bounded by the transport and the budget is spent across exchanges.
+pub(crate) const HTTP_TIMEOUT_CEILING: std::time::Duration = std::time::Duration::from_secs(180);
 pub(crate) const GPT_25_FLARE_MODEL_ID: &str = "gpt-image-2.5-flare";
 pub(crate) const GPT_25_SUNBURST_MODEL_ID: &str = "gpt-image-2.5-sunburst";
 /// Longest configured model identifier accepted; bounds a nonsecret string.

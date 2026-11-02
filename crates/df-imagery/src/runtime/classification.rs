@@ -527,7 +527,7 @@ where
         .await?;
         self.settle_decision(context, mode, raw, observation, None)
             .await?;
-        self.project_usage(raw).await?;
+        self.project_usage_or_pending(raw).await?;
         let intent = crate::intent_codec::decode_intent(
             context.job.intent.bytes(),
             &crate::service::PROTOCOL_LIMITS,

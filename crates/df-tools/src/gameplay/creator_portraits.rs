@@ -787,7 +787,14 @@ async fn handle_inner(
             owner: context.owner.clone(),
             operation: operation_id,
         };
-        let view = match context.service.request(&context.principal, &request).await {
+        // The first read after the commit can miss the job moving between two reads; asking
+        // again is idempotent by operation, so it returns the stored state instead of a
+        // phantom "unknown" that would stop the phone polling a job that is running.
+        let outcome = imagery::central::retry_unknown(|| {
+            context.service.request(&context.principal, &request)
+        })
+        .await;
+        let view = match outcome {
             Ok(
                 RequestOutcome::Recorded(view)
                 | RequestOutcome::Replayed(view)

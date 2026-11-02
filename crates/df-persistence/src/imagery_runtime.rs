@@ -93,7 +93,21 @@ macro_rules! transaction {
             .await
             .map_err(|_| JournalError::Unavailable)?;
         let value = $body;
-        $tx.commit().await.map_err(|_| JournalError::Unknown)?;
+        $tx.commit().await.map_err(|error| {
+            // A failed commit may or may not have taken effect; the cause must not be silent.
+            df_observe::record_audit_line(
+                "IMAGERY",
+                format!(
+                    "IMAGERY journal_commit_failed sqlstate={} constraint={}",
+                    error.code().map_or("none", |code| code.code()),
+                    error
+                        .as_db_error()
+                        .and_then(|db| db.constraint())
+                        .unwrap_or("none")
+                ),
+            );
+            JournalError::Unknown
+        })?;
         Ok(value)
     }};
 }

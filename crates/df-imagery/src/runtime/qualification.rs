@@ -533,12 +533,13 @@ pub fn qualify_publication(
     } else {
         super::dispatch::backend(&config, &intent)
     };
-    if selected_backend == crate::BackendId::Fal
-        && matches!(
-            intent.output.delivered().alpha(),
-            crate::AlphaHandling::PreserveAlpha
-        )
-        && candidate.basis.kind != StageKind::Extraction
+    if matches!(
+        selected_backend,
+        crate::BackendId::Fal | crate::BackendId::CodexCli
+    ) && matches!(
+        intent.output.delivered().alpha(),
+        crate::AlphaHandling::PreserveAlpha
+    ) && candidate.basis.kind != StageKind::Extraction
     {
         return Err(RuntimeError::InvalidRecord);
     }

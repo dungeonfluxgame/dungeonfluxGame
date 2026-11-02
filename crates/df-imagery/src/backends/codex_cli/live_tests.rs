@@ -46,6 +46,18 @@ async fn live_codex_generates_one_png() {
         .unwrap()
         .with_max_stderr_bytes(defaults.codex.max_stderr_bytes)
         .unwrap();
+    // `DF_LIVE_CODEX_FORMAT` (png, jpeg, webp) and `DF_LIVE_CODEX_ALPHA=preserve` ask for the
+    // profile a game purpose delivers, so a mismatch shows up as the typed error.
+    let format = match std::env::var("DF_LIVE_CODEX_FORMAT").as_deref() {
+        Ok("jpeg") => OutputFormat::Jpeg,
+        Ok("webp") => OutputFormat::WebP,
+        _ => OutputFormat::Png,
+    };
+    let alpha = if std::env::var("DF_LIVE_CODEX_ALPHA").as_deref() == Ok("preserve") {
+        AlphaRequirement::PreserveAlpha
+    } else {
+        AlphaRequirement::Either
+    };
     let request = CodexImageRequest::new(
         TextPrompt::new(
             "A plain solid red square on a white background, 1024 by 1024 pixels.",
@@ -55,8 +67,8 @@ async fn live_codex_generates_one_png() {
         ImageKind::Generate,
         Vec::new(),
         Dimensions::new(1024, 1024).unwrap(),
-        AlphaRequirement::Either,
-        OutputFormat::Png,
+        alpha,
+        format,
     );
     let attempt = AttemptDirs::new(
         root.join("scratch"),
@@ -88,7 +100,7 @@ async fn live_codex_generates_one_png() {
             );
             // The image tool picks its own size; the worker resizes to the delivered profile.
             assert!(receipt.width_px() > 0 && receipt.height_px() > 0);
-            assert_eq!(receipt.mime(), "image/png");
+            assert_eq!(receipt.mime(), format.mime());
             assert_eq!(receipt.byte_len(), bytes.len());
         }
         other => panic!("live Codex turn did not produce an image: {other:?}"),

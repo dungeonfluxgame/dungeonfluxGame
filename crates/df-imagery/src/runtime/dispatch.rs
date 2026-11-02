@@ -56,6 +56,18 @@ pub(super) fn backend(config: &ImageConfig, intent: &DecodedIntent) -> BackendId
         .unwrap_or(config.default_backend)
 }
 
+/// Whether the delivered image needs its transparency extracted by a separate stage. Fal and
+/// Codex generate an opaque picture; only the OpenAI and BFL paths ask the generator for alpha.
+pub(super) fn extracts_alpha(config: &ImageConfig, intent: &DecodedIntent) -> bool {
+    matches!(
+        backend(config, intent),
+        BackendId::Fal | BackendId::CodexCli
+    ) && matches!(
+        intent.output.delivered().alpha(),
+        AlphaHandling::PreserveAlpha
+    )
+}
+
 pub(super) fn model(config: &ImageConfig, intent: &DecodedIntent) -> Result<String, RuntimeError> {
     let selected = backend(config, intent);
     let gate = config.backend(selected);
@@ -1130,15 +1142,11 @@ async fn codex(
             .output
             .generated()
             .ok_or(RuntimeError::InvalidRecord)?,
-        if matches!(
-            intent.output.delivered().alpha(),
-            AlphaHandling::PreserveAlpha
-        ) {
-            codex_cli::AlphaRequirement::PreserveAlpha
-        } else {
-            codex_cli::AlphaRequirement::Either
-        },
-        intent.output.delivered().encoding().format(),
+        // Codex cannot write transparency; the extraction stage after it cuts the figure out.
+        codex_cli::AlphaRequirement::Either,
+        // Codex writes PNG whatever format is asked for, so a JPEG or WebP delivery would fail
+        // verification. `normalize_output` re-encodes the PNG to the delivered encoding.
+        OutputFormat::Png,
     );
     telemetry.observe(crate::telemetry::ImageEvent::new(
         crate::telemetry::EventKind::CodexStarted,

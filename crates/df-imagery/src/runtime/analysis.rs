@@ -49,9 +49,10 @@ impl PreparedClassification {
             .enumerate()
             .map(|(index, criterion)| (format!("o{}", index + 1), json!(criterion)))
             .collect::<serde_json::Map<String, Value>>();
+        // The SystemOne API rejects `max_output_tokens` with HTTP 400 at any value, so the route's
+        // output bound is not sent; a choice answer is already one option id.
         let body = json!({
             "model": creator.route.model.as_str(),
-            "max_output_tokens": creator.route.maximum_output_tokens,
             "questions": {"q1":{"type":"choice", "instructions": CLASSIFICATION_INSTRUCTIONS, "criteria": criteria}},
             "state":{"public_appearance": creator.public_appearance.text(),
                 "classification_contract":CLASSIFICATION_CONTRACT,
@@ -62,7 +63,12 @@ impl PreparedClassification {
             return Err(RuntimeError::UnsupportedCapability);
         }
         let http = NativeHttp::new(
-            ProviderLimits::new(timeout, NATIVE_HTTP_MAXIMUM_BYTES, maximum_response_bytes).build(),
+            ProviderLimits::new(
+                timeout.min(crate::backends::api::HTTP_TIMEOUT_CEILING),
+                NATIVE_HTTP_MAXIMUM_BYTES,
+                maximum_response_bytes,
+            )
+            .build(),
             allow_http,
         )
         .map_err(|_| RuntimeError::InvalidConfiguration)?;
