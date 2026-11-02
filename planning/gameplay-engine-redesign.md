@@ -3032,7 +3032,9 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   screen can show the running canvas live. The table-experience contract is code here, so a fixture that
   breaks it shows the break: the status copy, the caption dwell, and the choice-list rule (at most four
   suggested choices, fixed groups, labels of at most four words).
-- **The dev CLI has full access.** The host, not the page, owns what the playground shows, so the CLI and
+- **The dev CLI has full access (local builds only).** Hosted builds expose only the operator-safe
+  verbs of H.3 and H.16, and driven changes will carry `driven=true` once sessions exist. The host, not
+  the page, owns what the playground shows, so the CLI and
   the browser change the same state and see each other's changes within a poll. `df-table dev playground`
   prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
   unavailable=BOOL grid=BOOL` changes it; `fixtures`, `fixture show NAME`, `fixture write NAME FILE`
@@ -3046,6 +3048,27 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   line (`PLAYGROUND set device=tv revision=5`) in the same log. Rule for what comes next: anything a
   person can do in a browser surface must also be a CLI verb, and a surface never keeps state the CLI
   cannot read.
+- **Elements are entities in an ECS.** `df-table` keeps the canvas in a small dependency-free
+  entity-component world: `ecs` (generational handles that go stale on removal, dense component
+  stores), `world` (the components: name, kind, position, fields, and a motion while travelling, plus
+  the name index), and `motion` (the system that moves travellers each tick). Systems are plain
+  functions over the stores, `Canvas` turns an effect into a change of the world and one typed event,
+  and a read leaves the world as an `Element` snapshot, so no reader holds a borrow into the stores.
+  The machines of later steps add components and systems to the same world instead of new maps.
+- **Motion is the host's clock, not a page animation.** `travel ID X Y [speed=N]` sets a motion
+  (speed 0.1 to 400 canvas units per second) and the host ticks the canvas about 30 times a second;
+  `move` is the instant version and `stop ID` ends a journey. A tick is one revision, only an arrival
+  is an audit line (`CANVAS arrive element=pip`), and a tick is cut to 0.25 s so a stalled host cannot
+  teleport things. The canvas never reads time: the clock lives in the host and passes seconds in.
+- **The page is pushed, not polled.** `/playground/frame?after=N` is a long poll: the host holds it
+  until something changed (a canvas effect, a tick that moved something, a control, a scene change, a
+  fixture write) and answers with the whole canvas and controls, so a missed frame never matters. The
+  page keeps each figure's element and only changes its style, with a 90 ms linear transition, so
+  steady travel and fast moves both look continuous. `dev repl` reads commands from standard input in
+  one process, about a millisecond each. Measured in the browser (debug build): a command reaches the
+  screen in about 50 ms including the CLI's process start; a 70-unit travel produced about 32 updates
+  a second and about 120 rendered frames a second with 2.4 to 2.7 px steps; 200 travelling elements
+  cost about 3 ms per frame on the host and the page kept up with 6,000 style updates a second.
 - **Where it goes next.** The same pattern carries the real engine: a `TableEffect` applied by one
   function and recorded as one event; machines and the DM pipeline added behind the same CLI verbs
   (`spawn machine`, `input <seat> <text>`, `viable <seat>`, `projection show <audience>`); the scene

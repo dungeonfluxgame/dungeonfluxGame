@@ -16,6 +16,8 @@
 //! - `EventClass` has two values (always, verbose), not the plan's classes A and B, and an event
 //!   has no `Correlation` or `OperationId` yet.
 //! - Only one of the plan's eight ports exists: `EventSink`.
+//! - Elements are entities in an entity-component world (`ecs`, `world`, `motion`), which section O
+//!   does not describe; later machines are meant to add components and systems to it.
 //! - The vocabulary says "canvas" where the plan says "table": a canvas is the dev workbench's
 //!   table. The names converge when the first machine is built.
 //!

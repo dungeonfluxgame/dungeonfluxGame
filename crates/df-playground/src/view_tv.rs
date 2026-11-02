@@ -5,6 +5,8 @@
 //! wording and timing come from `copy`, all the geometry from `layout`, and every colour passes
 //! `style::css_color` before it reaches a style.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
@@ -15,18 +17,25 @@ use crate::fixture::{ElementShape, PartyMember, StageElement, Status, TvScene};
 use crate::layout::{hit_point_permille, stage_percent, stage_size_percent};
 use crate::style::css_color;
 
-fn figure(document: &Document, item: &StageElement) -> Result<Element, JsValue> {
+/// The class of the layer that holds the figures. The page finds it again to move figures in place.
+pub const FIGURE_LAYER_CLASS: &str = "tv-figures";
+
+fn figure_class(item: &StageElement) -> &'static str {
+    match item.shape {
+        ElementShape::Circle => "figure figure-circle",
+        ElementShape::Rect => "figure figure-rect",
+    }
+}
+
+/// The inline style of a figure: its place, size, layer and colour, from numbers and a checked
+/// colour only.
+fn figure_style(item: &StageElement) -> String {
     let (left, top) = stage_percent(item.x, item.y);
     let height = match item.shape {
         ElementShape::Circle => item.width_units,
         ElementShape::Rect => item.height_units,
     };
     let (width, height) = stage_size_percent(item.width_units, height);
-    let shape = match item.shape {
-        ElementShape::Circle => "figure figure-circle",
-        ElementShape::Rect => "figure figure-rect",
-    };
-    let node = element(document, "div", shape)?;
     // Lower things on the stage draw over higher ones, as they would stand in front.
     let layer = (top * 10.0) as i32;
     let color = item
@@ -34,18 +43,67 @@ fn figure(document: &Document, item: &StageElement) -> Result<Element, JsValue> 
         .as_deref()
         .and_then(css_color)
         .map_or_else(String::new, |color| format!("background:{color};"));
-    set_style(
-        &node,
-        &format!(
-            "left:{left:.2}%;top:{top:.2}%;width:{width:.2}%;height:{height:.2}%;z-index:{layer};{color}"
-        ),
-    )?;
+    format!(
+        "left:{left:.2}%;top:{top:.2}%;width:{width:.2}%;height:{height:.2}%;z-index:{layer};{color}"
+    )
+}
+
+fn figure(document: &Document, item: &StageElement) -> Result<Element, JsValue> {
+    let node = element(document, "div", figure_class(item))?;
+    node.set_attribute("data-id", &item.id)?;
+    set_style(&node, &figure_style(item))?;
     node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
     append(
         &node,
         &text_element(document, "span", "figure-label", &item.label)?,
     )?;
     Ok(node)
+}
+
+/// Brings an existing figure up to date without replacing it, so the browser can glide it from
+/// where it was to where it is now.
+fn update_figure(node: &Element, item: &StageElement) -> Result<(), JsValue> {
+    set_style(node, &figure_style(item))?;
+    node.set_attribute("class", figure_class(item))?;
+    node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
+    if let Some(label) = node.first_element_child()
+        && label.text_content().as_deref() != Some(item.label.as_str())
+    {
+        label.set_text_content(Some(&item.label));
+    }
+    Ok(())
+}
+
+/// Makes the figures in `layer` match `items`: new ones are added, gone ones are removed, and the
+/// rest are updated in place. The page calls it for every frame of a moving scene, so it touches
+/// only what changed and never rebuilds the layer.
+pub fn sync_figures(
+    document: &Document,
+    layer: &Element,
+    items: &[StageElement],
+) -> Result<(), JsValue> {
+    let mut existing: BTreeMap<String, Element> = BTreeMap::new();
+    let children = layer.children();
+    for index in 0..children.length() {
+        if let Some(child) = children.item(index)
+            && let Some(id) = child.get_attribute("data-id")
+        {
+            existing.insert(id, child);
+        }
+    }
+    let wanted: BTreeSet<&str> = items.iter().map(|item| item.id.as_str()).collect();
+    for (id, node) in &existing {
+        if !wanted.contains(id.as_str()) {
+            node.remove();
+        }
+    }
+    for item in items {
+        match existing.get(&item.id) {
+            Some(node) => update_figure(node, item)?,
+            None => append(layer, &figure(document, item)?)?,
+        }
+    }
+    Ok(())
 }
 
 fn grid(document: &Document) -> Result<Element, JsValue> {
@@ -149,9 +207,9 @@ pub fn render(
     if controls.show_grid {
         append(&stage, &grid(document)?)?;
     }
-    for item in elements {
-        append(&stage, &figure(document, item)?)?;
-    }
+    let layer = element(document, "div", FIGURE_LAYER_CLASS)?;
+    sync_figures(document, &layer, elements)?;
+    append(&stage, &layer)?;
     if let Some(banner) = status_banner(document, status)? {
         append(&stage, &banner)?;
     }

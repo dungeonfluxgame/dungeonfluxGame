@@ -70,10 +70,15 @@ body {
   background-size: 10% 17.78%;
 }
 .tv-place { position: absolute; left: 2.4cqw; top: 2cqw; font: italic 1.9cqw/1.2 var(--serif); color: var(--brass); letter-spacing: .02em; }
+.tv-figures { position: absolute; inset: 0; z-index: 0; }
+/* A figure keeps its element while it moves, so a change of place glides: about as long as the
+   host's tick, so steady travel looks continuous and a single move eases in. */
 .figure {
   position: absolute; transform: translate(-50%, -50%);
   border: 0.2cqw solid #0d1117; background: #8a94a6;
+  transition: left 90ms linear, top 90ms linear, width 150ms ease-out, height 150ms ease-out, background-color 200ms;
 }
+@media (prefers-reduced-motion: reduce) { .figure { transition: none; } }
 .figure-circle { border-radius: 50%; }
 .figure-rect { border-radius: 0.5cqw; }
 .figure-label {

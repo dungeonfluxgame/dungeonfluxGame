@@ -23,13 +23,17 @@ use crate::net::{fetch_text, post_json};
 use crate::scene::SceneOverlay;
 use crate::{view_phone, view_tv};
 
-/// Milliseconds between looks at the server for changed files and a changed canvas.
-const POLL_MS: u32 = 600;
+/// Milliseconds between looks at the server for changed files, a rebuilt package and a changed
+/// fixture list. The canvas and the controls do not wait for this: a frame request is held by the
+/// host and answered the moment something changes.
+const POLL_MS: u32 = 1_000;
+/// Milliseconds to wait before asking again after a frame request failed.
+const RETRY_MS: u32 = 1_000;
 const REVISION_ADDRESS: &str = "/playground/revision";
 const THEME_ADDRESS: &str = "/playground/theme.css";
 const FIXTURE_LIST_ADDRESS: &str = "/playground/fixtures.json";
 const FIXTURE_DIRECTORY_ADDRESS: &str = "/playground/fixtures/";
-const CANVAS_ADDRESS: &str = "/canvas.json";
+const FRAME_ADDRESS: &str = "/playground/frame";
 const CONTROLS_ADDRESS: &str = "/playground/controls.json";
 const CHANGE_ADDRESS: &str = "/dev/playground/controls";
 const ROOT_ID: &str = "playground";
@@ -42,6 +46,14 @@ struct LiveCanvas {
     elements: Vec<StageElement>,
 }
 
+/// One frame from the host: the canvas and what the playground is showing, at one moment.
+#[derive(Debug, Deserialize)]
+struct LiveFrame {
+    frame: u64,
+    canvas: LiveCanvas,
+    controls: ControlsReply,
+}
+
 #[derive(Default)]
 struct App {
     fixture_names: Vec<String>,
@@ -50,6 +62,8 @@ struct App {
     /// The loaded fixture, or the words that say why it could not be read.
     fixture: Option<Result<Fixture, String>>,
     live: Option<LiveCanvas>,
+    /// The count of the newest frame drawn, which the next frame request names.
+    frame: Option<u64>,
     asset_revision: String,
     controls: Controls,
     /// Live changes to the scene, drawn on top of the loaded fixture.
@@ -173,7 +187,6 @@ async fn send_change(change: ControlsChange) {
             if update.fixture_changed {
                 load_selected_fixture().await;
             }
-            refresh_live_canvas().await;
         }
         Err(message) => with_app_mut(|app| app.connection_problem = Some(message)),
     }
@@ -204,33 +217,94 @@ async fn load_selected_fixture() {
     });
 }
 
-/// Reads the live canvas when the fixture asks for it, and reports whether it changed.
-async fn refresh_live_canvas() -> bool {
-    let wants_live = with_app(|app| {
-        matches!(
-            &app.fixture,
-            Some(Ok(fixture)) if matches!(fixture.tv.elements, ElementSource::Live(_))
-        )
+/// Whether the loaded fixture draws the running canvas on its stage.
+fn wants_live(app: &App) -> bool {
+    matches!(
+        &app.fixture,
+        Some(Ok(fixture)) if matches!(fixture.tv.elements, ElementSource::Live(_))
+    )
+}
+
+/// Draws only the stage's figures from the newest canvas, leaving everything else as it is. The
+/// figures already on the page are moved, not replaced, so the browser glides them. A page that
+/// has no stage yet is drawn in full.
+fn render_stage() {
+    let drawn = document().and_then(|document| {
+        let Some(layer) = document
+            .query_selector(&format!(".{}", view_tv::FIGURE_LAYER_CLASS))
+            .ok()
+            .flatten()
+        else {
+            render();
+            return Ok(());
+        };
+        with_app(|app| match &app.live {
+            Some(live) => view_tv::sync_figures(&document, &layer, &live.elements),
+            None => Ok(()),
+        })
     });
-    if !wants_live {
-        return with_app_mut(|app| app.live.take().is_some());
+    if let Err(error) = drawn {
+        log_error(&format!("could not move the figures: {error:?}"));
     }
-    let Ok(text) = fetch_text(CANVAS_ADDRESS).await else {
-        return false;
-    };
-    let Ok(canvas) = serde_json::from_str::<LiveCanvas>(&text) else {
-        return false;
-    };
-    with_app_mut(|app| {
+}
+
+/// Takes one frame from the host as the page's own and draws what it changed.
+async fn apply_frame(frame: LiveFrame) {
+    let was_down = with_app(|app| app.connection_problem.is_some());
+    let update = apply_controls(frame.controls);
+    let canvas_changed = with_app_mut(|app| {
+        app.frame = Some(frame.frame);
         let changed = app
             .live
             .as_ref()
-            .is_none_or(|known| known.revision != canvas.revision);
+            .is_none_or(|known| known.revision != frame.canvas.revision);
         if changed {
-            app.live = Some(canvas);
+            app.live = Some(frame.canvas);
         }
         changed
-    })
+    });
+    if was_down {
+        with_app_mut(|app| app.connection_problem = None);
+    }
+    let mut reloaded = false;
+    if update.fixture_changed
+        || with_app(|app| app.fixture.is_none() && app.controls.fixture.is_some())
+    {
+        load_selected_fixture().await;
+        reloaded = true;
+    }
+    if was_down || update.changed || reloaded {
+        render();
+    } else if canvas_changed && with_app(|app| wants_live(app) && app.controls.device.shows_tv()) {
+        render_stage();
+    }
+}
+
+/// Asks the host for the next frame, over and over. The host holds each request until something
+/// has changed, so a change reaches the page as it happens; if the host cannot be reached the
+/// page says so and tries again.
+async fn follow_frames() {
+    loop {
+        let address = match with_app(|app| app.frame) {
+            Some(count) => format!("{FRAME_ADDRESS}?after={count}"),
+            None => FRAME_ADDRESS.to_owned(),
+        };
+        let answer = fetch_text(&address).await.and_then(|text| {
+            serde_json::from_str::<LiveFrame>(&text)
+                .map_err(|error| format!("{FRAME_ADDRESS} is not a frame: {error}"))
+        });
+        match answer {
+            Ok(frame) => apply_frame(frame).await,
+            Err(message) => {
+                let first_failure = with_app(|app| app.connection_problem.is_none());
+                with_app_mut(|app| app.connection_problem = Some(message));
+                if first_failure {
+                    render();
+                }
+                TimeoutFuture::new(RETRY_MS).await;
+            }
+        }
+    }
 }
 
 /// The package half of a revision (`<assets>.<package>`).
@@ -238,17 +312,11 @@ fn package_part(revision: &str) -> Option<&str> {
     revision.split_once('.').map(|(_, package)| package)
 }
 
-/// One look at the server: a rebuilt package reloads the page, changed files reload everything,
-/// a changed canvas redraws the stage.
+/// One slow look at the server: a rebuilt package reloads the page, changed files reload the
+/// theme, the fixture list and the fixture, and the chosen fixture is checked against the files.
 async fn poll() {
     let Ok(revision) = fetch_text(REVISION_ADDRESS).await else {
-        let already_known = with_app(|app| app.connection_problem.is_some());
-        with_app_mut(|app| {
-            app.connection_problem = Some("The playground server is not answering.".to_owned());
-        });
-        if !already_known {
-            render();
-        }
+        // The frame loop reports the host being unreachable.
         return;
     };
     let package_changed = with_app(|app| {
@@ -264,16 +332,14 @@ async fn poll() {
         return;
     }
     let files_changed = with_app(|app| app.asset_revision != revision);
-    let was_down = with_app(|app| app.connection_problem.is_some());
-    if files_changed || was_down {
+    if files_changed {
         refresh_assets().await;
     }
     let update = refresh_controls().await;
-    if files_changed || was_down || update.fixture_changed {
+    if files_changed || update.fixture_changed {
         load_selected_fixture().await;
     }
-    let canvas_changed = refresh_live_canvas().await;
-    if files_changed || was_down || update.changed || canvas_changed {
+    if files_changed || update.changed {
         render();
     }
 }
@@ -282,8 +348,8 @@ async fn run() {
     refresh_assets().await;
     refresh_controls().await;
     load_selected_fixture().await;
-    refresh_live_canvas().await;
     render();
+    spawn_local(follow_frames());
     loop {
         TimeoutFuture::new(POLL_MS).await;
         poll().await;
